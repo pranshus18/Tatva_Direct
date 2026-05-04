@@ -1,0 +1,11 @@
+{
+  "name": "Tatva Direct",
+  "short_name": "Tatva",
+  "description": "Offline + online procurement and POS platform",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#111827",
+  "icons": []
+}
+

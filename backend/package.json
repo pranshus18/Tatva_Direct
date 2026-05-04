@@ -1,0 +1,36 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "test": "node --test tests/**/*.test.js",
+    "test-server": "node test-server.js",
+    "backfill-product-identity": "node scripts/backfillProductCatalogIdentity.js",
+    "backfill-tsin": "node scripts/backfillTsinCodes.js",
+    "phase2-load-test": "node scripts/phase2LoadTest.js",
+    "phase3-reliability-jobs": "node scripts/phase3ReliabilityJobs.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.39.0",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "fs-extra": "^11.3.3",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.10.1",
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.16.0",
+    "razorpay": "^2.9.6",
+    "uuid": "^9.0.1",
+    "xlsx": "^0.18.5",
+    "zod": "^4.3.6"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

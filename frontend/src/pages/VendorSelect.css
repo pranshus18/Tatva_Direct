@@ -1,0 +1,131 @@
+.vendor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+
+.vendor-section {
+  background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  border: 1px solid #e2e8f0;
+}
+
+.item-title {
+  margin-bottom: 1rem;
+  color: #1e293b;
+  font-size: 1.125rem;
+}
+
+.vendor-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.vendor-card {
+  border: 2px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  outline: none;
+}
+
+.vendor-card:focus {
+  outline: 2px solid #4f46e5;
+  outline-offset: 2px;
+}
+
+.vendor-card:hover {
+  border-color: #4f46e5;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.1);
+}
+
+.vendor-card.selected {
+  border-color: #4f46e5;
+  background: #eef2ff;
+  border-width: 3px;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.2);
+}
+
+.vendor-card.selected::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border: 2px solid #4f46e5;
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.vendor-name {
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+  color: #1e293b;
+}
+
+.vendor-details {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  pointer-events: none;
+}
+
+.vendor-header {
+  pointer-events: none;
+}
+
+.vendor-product-info {
+  pointer-events: none;
+}
+
+.detail {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  color: #64748b;
+  font-size: 0.875rem;
+}
+
+.badge {
+  position: absolute;
+  top: 0.75rem;
+  right: 0.75rem;
+  background: #10b981;
+  color: white;
+  padding: 0.25rem 0.625rem;
+  border-radius: 12px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  pointer-events: none;
+  z-index: 1;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Spinning animation for refresh button */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}

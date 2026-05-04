@@ -1,0 +1,294 @@
+import express from 'express';
+import {
+  requireAuthentication as authenticateToken,
+  requireServiceProvider as isServiceProvider
+} from '../middleware/authMiddleware.js';
+import { supabase } from '../config/supabase.js';
+import {
+  getAllowedSellerRoleForBrand,
+  loadAdminBrandTerminalRoleMap,
+  supplierMatchesBrandTerminalRole
+} from '../utils/adminBrandSupplyChain.js';
+import {
+  buildNameSearchPatterns,
+  detectItemBrand,
+  detectProductBrandKey,
+  fuzzyNameCompatible,
+  hasModelTokenConflict
+} from '../services/vendorRankingHelpersService.js';
+import { inferMaterialCategory } from '../services/materialClassificationService.js';
+import {
+  assignSequentialRank,
+  computeUrgencyBonus,
+  filterTopValidVendors,
+  prioritizeApprovedThenRankScore,
+  sortVendorsByGeoThenRankScore
+} from '../services/vendorRankingScoringService.js';
+import { enrichItemVendorsWithLatestScorecards } from '../services/vendorScorecardService.js';
+import { buildFallbackVendorFromReferenceProduct } from '../services/vendorReferenceFallbackService.js';
+import { loadBuyerCovMetrics } from '../services/vendorBuyerMetricsService.js';
+import {
+  loadBoqContextForRanking,
+  loadServiceProviderLocationContext
+} from '../services/vendorRequestContextService.js';
+import { loadReferenceProductForItem } from '../services/vendorReferenceProductService.js';
+import {
+  reconcileWithSupplierOffers,
+  searchRankableProductsForItem
+} from '../services/vendorProductDiscoveryService.js';
+import { buildSupplierProductsForRanking } from '../services/vendorSupplierAggregationService.js';
+import { computeSupplierDistances } from '../services/vendorDistanceService.js';
+import { mapSupplierProductsToRankedVendors } from '../services/vendorFinalRankingService.js';
+import {
+  logItemVendorResult,
+  logNoVendorsDebug,
+  logVendorRankingSummary
+} from '../services/vendorRankingLoggingService.js';
+import { vendorRankSchema } from '../contracts/vendorContracts.js';
+import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
+
+const router = express.Router();
+
+router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const payload = parseWithSchema(vendorRankSchema, req.body || {});
+    const { items, boqId, _timestamp, _random } = payload;
+    const itemBrandCandidates = (items || [])
+      .flatMap((item) => [
+        item?.brand,
+        item?.brandName,
+        item?.brandModel,
+        item?.specifications?.brand,
+        item?.specifications?.brandModel
+      ])
+      .filter(Boolean);
+    const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, itemBrandCandidates);
+
+    const { siteGeoFromBoq, boqProjectCity, boqProjectState, requiredDateFromBoq } =
+      await loadBoqContextForRanking({
+        supabase,
+        boqId,
+        userId: req.userId
+      });
+    
+    console.log(`\n[Vendor Ranking] ==========================================`);
+    console.log(`[Vendor Ranking] Vendor ranking request received at ${new Date().toISOString()}`);
+    console.log(`[Vendor Ranking] Timestamp: ${_timestamp}, Random: ${_random}`);
+    console.log(`[Vendor Ranking] Items received: ${items?.length || 0}`);
+    console.log(`[Vendor Ranking] Items structure:`, items?.map(item => ({
+      id: item.id,
+      normalizedName: item.normalizedName,
+      rawName: item.rawName,
+      productId: item.productId,
+      availableSuppliers: item.availableSuppliers
+    })));
+    console.log(`[Vendor Ranking] ==========================================\n`);
+    
+    // Detect service provider location from profile/address for proximity-based ranking
+    const { serviceProviderCity, serviceProviderState } = await loadServiceProviderLocationContext({
+      supabase,
+      userId: req.userId
+    });
+
+    const itemVendors = {};
+    const { platformCov, supplierCovById, brandCovByBrand } = await loadBuyerCovMetrics({
+      supabase,
+      userId: req.userId
+    });
+
+    // For each item, find matching products from database based on product name (and brand when available),
+    // then list suppliers whose role matches the terminal role in admin-defined brand supply chain.
+    for (const item of items) {
+      const itemId = item.id?.toString() || String(item.id);
+      // Try multiple possible field names for item name
+      const itemName = item.normalizedName || item.rawName || item.name || item.description || item.itemName || '';
+      
+      console.log(`[Vendor Ranking] Processing item ID: ${itemId}, Name: "${itemName}", Full item:`, JSON.stringify(item, null, 2));
+      
+      if (!itemName || itemName.trim() === '') {
+        console.log(`[Vendor Ranking] Skipping item ${itemId}: No name found`);
+        itemVendors[itemId] = [];
+        continue;
+      }
+
+      // Determine category from item name
+      const itemNameLower = itemName.toLowerCase();
+      const itemCategory = inferMaterialCategory(itemNameLower);
+
+      // BOQ normalization attaches productId; load that row for fallbacks and prioritization.
+      let referenceProduct = null;
+      if (item.productId) {
+        const { referenceProduct: refProduct, error: refErr } = await loadReferenceProductForItem({
+          supabase,
+          productId: item.productId
+        });
+        if (refErr) {
+          console.error(`[Vendor Ranking] Reference product fetch error for productId ${item.productId}:`, refErr);
+        } else {
+          referenceProduct = refProduct;
+        }
+      }
+
+      const targetBrand = detectItemBrand(item, referenceProduct);
+      if (targetBrand) {
+        console.log(`[Vendor Ranking] Target retailer brand for item ${itemId}: ${targetBrand}`);
+      }
+
+      // Search products purely by name (and approximate category) to collect ALL supplier offers,
+      // regardless of the specific normalized product_id.
+      console.log(`[Vendor Ranking] Searching products by name only: "${itemNameLower}" (category: ${itemCategory})`);
+      let products = await searchRankableProductsForItem({
+        supabase,
+        item,
+        itemId,
+        itemName,
+        itemNameLower,
+        itemCategory,
+        referenceProduct,
+        buildNameSearchPatterns,
+        fuzzyNameCompatible
+      });
+
+      products = await reconcileWithSupplierOffers({
+        supabase,
+        products,
+        item,
+        itemId,
+        itemName,
+        targetBrand,
+        detectProductBrandKey,
+        fuzzyNameCompatible,
+        hasModelTokenConflict
+      });
+
+      const preRetailCount = (products || []).length;
+      products = (products || []).filter((p) => {
+        const supplierProfile = p?.supplier?.profile;
+        return supplierMatchesBrandTerminalRole(supplierProfile, targetBrand, terminalRoleByBrandMap);
+      });
+      if (preRetailCount !== (products || []).length) {
+        console.log(
+          `[Vendor Ranking] Terminal-role + brand filter for item ${itemId}: ${products.length}/${preRetailCount} offers kept`
+        );
+      }
+
+      console.log(`[Vendor Ranking] Item "${itemName}": Found ${products?.length || 0} products`);
+      if (products && products.length > 0) {
+        console.log(`[Vendor Ranking] Sample product structure:`, {
+          id: products[0].id,
+          name: products[0].name,
+          hasSupplier: !!products[0].supplier,
+          supplierId: products[0].supplier?.id,
+          supplierName: products[0].supplier?.name,
+          supplier_id: products[0].supplier_id,
+          status: products[0].status
+        });
+      }
+
+      const supplierProducts = await buildSupplierProductsForRanking({
+        supabase,
+        products,
+        itemName,
+        itemCategory,
+        targetBrand,
+        platformCov,
+        supplierCovById,
+        brandCovByBrand
+      });
+
+      const { distanceBySupplier, distanceSourceLocationBySupplier } = await computeSupplierDistances({
+        supabase,
+        supplierProducts,
+        siteGeoFromBoq
+      });
+
+      const urgencyBonus = computeUrgencyBonus(requiredDateFromBoq);
+
+      // Convert to array and calculate ranking score
+      const vendors = mapSupplierProductsToRankedVendors({
+        supplierProducts,
+        siteGeoFromBoq,
+        distanceBySupplier,
+        distanceSourceLocationBySupplier,
+        boqProjectCity,
+        serviceProviderCity,
+        boqProjectState,
+        serviceProviderState,
+        urgencyBonus,
+        itemName,
+        itemCategory
+      });
+
+      // Sort primarily by proximity when site geo is known, then by overall rank score.
+      // This ensures the nearest suppliers appear first when the BOQ has a mapped location.
+      sortVendorsByGeoThenRankScore(vendors, siteGeoFromBoq);
+      assignSequentialRank(vendors);
+
+      // Sort approved products first, then by rank score
+      prioritizeApprovedThenRankScore(vendors);
+      
+      // Only return vendors with available products and valid data
+      // Include both approved and pending vendors (approved are prioritized by sort)
+      let validVendors = filterTopValidVendors(vendors, 10);
+      
+      // CRITICAL: If we have a reference product with a supplier but no vendors were found,
+      // create a vendor entry from the reference product to ensure it's shown
+      if (validVendors.length === 0 && referenceProduct && referenceProduct.supplier && referenceProduct.supplier.id) {
+        const refSupplierProfile = referenceProduct.supplier.profile;
+        const refBrandAllowed = supplierMatchesBrandTerminalRole(
+          refSupplierProfile,
+          targetBrand,
+          terminalRoleByBrandMap
+        );
+        if (!refBrandAllowed) {
+          const requiredRole = getAllowedSellerRoleForBrand(targetBrand, terminalRoleByBrandMap);
+          const requiredRoleText = requiredRole || 'admin chain terminal role is not configured';
+          console.log(
+            `[Vendor Ranking] Reference product supplier is not eligible for terminal role "${requiredRoleText}" and brand "${targetBrand || 'n/a'}"; skipping synthetic vendor for item ${itemId}`
+          );
+        } else {
+        console.log(`[Vendor Ranking] No vendors found but reference product has supplier, creating vendor entry...`);
+        const fallbackVendor = buildFallbackVendorFromReferenceProduct({ referenceProduct, itemCategory });
+        if (fallbackVendor) {
+          validVendors = [fallbackVendor];
+          console.log(`[Vendor Ranking] Created vendor entry from reference product: ${validVendors[0].name}`);
+        } else {
+          console.log(`[Vendor Ranking] Reference product has invalid stock/price, cannot create vendor entry`);
+        }
+        }
+      }
+      
+      itemVendors[itemId] = validVendors;
+      
+      logItemVendorResult({ itemId, itemName, validVendors });
+      if (validVendors.length === 0) {
+        logNoVendorsDebug({ itemId, itemName, vendors, referenceProduct });
+      }
+    }
+
+    // Attach latest vendor scorecards (if available) to influence procurement decisions.
+    try {
+      await enrichItemVendorsWithLatestScorecards({ supabase, itemVendors });
+    } catch (scoreErr) {
+      console.error('[Vendor Ranking] scorecard enrichment failed:', scoreErr);
+    }
+
+    // Log summary before returning
+    logVendorRankingSummary({ items, itemVendors });
+    
+    res.json({ itemVendors });
+  } catch (error) {
+    if (String(error?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+    }
+    console.error('[Vendor Ranking] Vendor ranking error:', error);
+    console.error('[Vendor Ranking] Error stack:', error.stack);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to rank vendors',
+      error: error.message
+    });
+  }
+});
+
+export { router as vendorRouter };

@@ -1,0 +1,28 @@
+.upstream-select-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.upstream-select-card-info {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.upstream-select-card-status {
+  position: static;
+  margin-left: auto;
+  flex: 0 1 240px;
+  width: 100%;
+  max-width: 240px;
+  text-align: right;
+}
+
+@media (max-width: 900px) {
+  .upstream-select-card-status {
+    margin-left: 0;
+    max-width: none;
+    text-align: left;
+  }
+}

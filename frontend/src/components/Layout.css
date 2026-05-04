@@ -1,0 +1,244 @@
+.layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 260px;
+  min-width: 260px;
+  background: white;
+  border-right: 1px solid #e2e8f0;
+  padding: 2rem 0;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+.logo {
+  padding: 0 1.5rem 2rem;
+  border-bottom: 1px solid #e2e8f0;
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  height: auto;
+}
+
+.logo-image {
+  height: 32px;
+  width: auto;
+  object-fit: contain;
+}
+
+.logo h2 {
+  color: #4f46e5;
+  font-size: 1.25rem;
+}
+
+.nav-steps {
+  padding: 1.5rem 0;
+}
+
+.nav-step-wrapper {
+  width: 100%;
+}
+
+.nav-step {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1.5rem;
+  color: #64748b;
+  text-decoration: none;
+  transition: all 0.2s;
+  width: 100%;
+  box-sizing: border-box;
+  position: relative;
+}
+
+.nav-step:hover {
+  background: #f8fafc;
+  color: #4f46e5;
+}
+
+.nav-step:hover svg {
+  color: #4f46e5;
+}
+
+.nav-step.active,
+a.nav-step.active {
+  background: #eef2ff !important;
+  color: #4f46e5 !important;
+  border-right: 3px solid #4f46e5 !important;
+  font-weight: 600 !important;
+}
+
+.nav-step.active svg,
+a.nav-step.active svg {
+  color: #4f46e5 !important;
+  stroke: #4f46e5 !important;
+}
+
+.nav-step.sub-nav {
+  padding-left: 2.5rem;
+  font-size: 0.875rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+  margin-left: 0;
+  align-items: center;
+}
+
+.nav-step.sub-nav:hover {
+  background: #f1f5f9;
+  color: #4f46e5;
+}
+
+.nav-step.sub-nav.active,
+a.nav-step.sub-nav.active {
+  background: #eef2ff !important;
+  color: #4f46e5 !important;
+  border-right: 3px solid #4f46e5 !important;
+  font-weight: 600 !important;
+}
+
+.nav-step.sub-nav.active svg,
+a.nav-step.sub-nav.active svg {
+  color: #4f46e5 !important;
+  stroke: #4f46e5 !important;
+}
+
+.nav-step.sub-nav svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.content {
+  flex: 1;
+  padding: 2rem;
+  overflow-y: auto;
+}
+/* User Profile Section */
+.user-section {
+  margin-top: auto;
+  padding: 1.5rem;
+  border-top: 1px solid #e2e8f0;
+  position: relative;
+  overflow: visible;
+}
+
+.user-profile {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  background: rgba(248, 250, 252, 0.5);
+  overflow: visible;
+}
+
+.user-profile:hover {
+  background: rgba(79, 70, 229, 0.1);
+}
+
+.user-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4f46e5, #7c3aed);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  flex-shrink: 0;
+}
+
+.user-info {
+  flex: 1;
+  min-width: 0;
+  overflow: visible;
+}
+
+.user-name {
+  font-weight: 600;
+  color: #1e293b;
+  font-size: 0.875rem;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-wrap: break-word;
+  line-height: 1.4;
+}
+
+.user-company {
+  color: #64748b;
+  font-size: 0.75rem;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-wrap: break-word;
+  line-height: 1.4;
+  margin-top: 0.125rem;
+}
+
+.chevron {
+  color: #64748b;
+  transition: transform 0.2s ease;
+  flex-shrink: 0;
+}
+
+.chevron.rotated {
+  transform: rotate(180deg);
+}
+
+.user-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 1.5rem;
+  right: 1.5rem;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+  animation: slideUp 0.2s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.user-menu-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border: none;
+  background: none;
+  color: #64748b;
+  font-size: 0.875rem;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+}
+
+.user-menu-item:hover {
+  background: rgba(79, 70, 229, 0.1);
+  color: #4f46e5;
+}
+
+.user-menu-item:last-child:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}

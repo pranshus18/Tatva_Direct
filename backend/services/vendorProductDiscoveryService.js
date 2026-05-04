@@ -1,0 +1,215 @@
+export async function searchRankableProductsForItem({
+  supabase,
+  item,
+  itemId,
+  itemName,
+  itemNameLower,
+  itemCategory,
+  referenceProduct,
+  buildNameSearchPatterns,
+  fuzzyNameCompatible
+}) {
+  let products = [];
+
+  const searchPatterns = buildNameSearchPatterns(itemNameLower);
+  let query = supabase
+    .from('products')
+    .select(`
+      *,
+      supplier:users!products_supplier_id_fkey (id, name, company, email, phone, address, profile)
+    `)
+    .in('status', ['approved', 'pending'])
+    .or(
+      searchPatterns.length > 0
+        ? searchPatterns.map((pattern) => `name.ilike.${pattern},description.ilike.${pattern}`).join(',')
+        : `name.ilike.%${itemNameLower}%,description.ilike.%${itemNameLower}%`
+    );
+
+  if (itemCategory !== 'other') {
+    query = query.eq('category', itemCategory);
+  }
+
+  query = query.order('price', { ascending: true }).order('average_rating', { ascending: false }).limit(100);
+  const { data: productsByName, error: errorByName } = await query;
+  products = productsByName || [];
+
+  if (errorByName) {
+    console.error(`[Vendor Ranking] Products query error for "${itemName}":`, errorByName);
+    products = [];
+  } else {
+    console.log(`[Vendor Ranking] Found ${products?.length || 0} products for "${itemName}"`);
+  }
+
+  if (!item.productId && Array.isArray(products) && products.length > 0) {
+    const before = products.length;
+    products = products.filter((p) => fuzzyNameCompatible(itemName, p?.name));
+    if (before !== products.length) {
+      console.log(`[Vendor Ranking] Fuzzy guard for item ${itemId}: kept ${products.length}/${before} name-compatible products`);
+    }
+  }
+
+  if (item.productId && products && products.length > 0) {
+    const exactMatchIndex = products.findIndex((p) => p.id === item.productId);
+    if (exactMatchIndex > 0) {
+      const exactMatch = products.splice(exactMatchIndex, 1)[0];
+      products.unshift(exactMatch);
+    } else if (exactMatchIndex === -1 && referenceProduct) {
+      products.unshift(referenceProduct);
+    }
+  } else if (item.productId && referenceProduct && (!products || products.length === 0)) {
+    console.log(`[Vendor Ranking] No products found in search, using reference product: ${referenceProduct.name}`);
+    products = [referenceProduct];
+  }
+
+  if ((!products || products.length === 0) && itemCategory !== 'other') {
+    console.log(`[Vendor Ranking] No products found, trying category search: ${itemCategory}`);
+    const { data: categoryProducts } = await supabase
+      .from('products')
+      .select(`
+        *,
+        supplier:users!products_supplier_id_fkey (id, name, company, email, phone, address, profile)
+      `)
+      .eq('category', itemCategory)
+      .in('status', ['approved', 'pending'])
+      .order('price', { ascending: true })
+      .order('average_rating', { ascending: false })
+      .limit(50);
+
+    products = categoryProducts || [];
+    if ((!products || products.length === 0) && referenceProduct) {
+      console.log(`[Vendor Ranking] No category products found, using reference product: ${referenceProduct.name}`);
+      products = [referenceProduct];
+    }
+  } else if ((!products || products.length === 0) && referenceProduct) {
+    console.log(`[Vendor Ranking] No products found in any search, using reference product: ${referenceProduct.name}`);
+    products = [referenceProduct];
+  }
+
+  return products;
+}
+
+export async function reconcileWithSupplierOffers({
+  supabase,
+  products,
+  item,
+  itemId,
+  itemName,
+  targetBrand,
+  detectProductBrandKey,
+  fuzzyNameCompatible,
+  hasModelTokenConflict
+}) {
+  let updatedProducts = products;
+  try {
+    const candidateProductIds = item.productId
+      ? [
+          ...new Set(
+            (updatedProducts || [])
+              .filter((p) => {
+                if (!p?.id) return false;
+                if (p.id === item.productId) return true;
+                const productBrand = detectProductBrandKey(p);
+                if (targetBrand && productBrand && productBrand !== targetBrand) return false;
+                if (!fuzzyNameCompatible(itemName, p.name)) return false;
+                if (hasModelTokenConflict(itemName, p.name)) return false;
+                return true;
+              })
+              .map((p) => p.id)
+          )
+        ]
+      : [...new Set((updatedProducts || []).map((p) => p?.id).filter(Boolean))];
+
+    if (candidateProductIds.length > 0) {
+      const productMetaById = {};
+      for (const p of updatedProducts || []) {
+        if (!p?.id) continue;
+        productMetaById[p.id] = {
+          name: p.name,
+          description: p.description,
+          category: p.category,
+          unit: p.unit,
+          images: Array.isArray(p.images) ? p.images.filter(Boolean) : [],
+          average_rating: p.average_rating,
+          status: p.status,
+          location: p.location,
+          specifications: p.specifications || {}
+        };
+      }
+
+      const { data: offerRows, error: offerRowsError } = await supabase
+        .from('supplier_products')
+        .select(`
+          product_id,
+          price,
+          stock,
+          min_order_quantity,
+          location,
+          attributes,
+          status,
+          is_active,
+          supplier:users!supplier_products_supplier_id_fkey
+            (id, name, company, email, phone, address, profile)
+        `)
+        .in('product_id', candidateProductIds)
+        .in('status', ['approved', 'pending']);
+
+      if (!offerRowsError && Array.isArray(offerRows) && offerRows.length > 0) {
+        console.log(
+          `[Vendor Ranking] supplier_products offers sample for item ${itemId}:`,
+          offerRows.slice(0, 5).map((r) => ({
+            product_id: r.product_id,
+            supplier_id: r.supplier_id,
+            price: r.price,
+            stock: r.stock,
+            status: r.status,
+            is_active: r.is_active
+          }))
+        );
+
+        updatedProducts = offerRows
+          .map((row) => {
+            const supplier = row?.supplier;
+            if (!supplier?.id) return null;
+            const meta = productMetaById[row.product_id] || {};
+            return {
+              ...meta,
+              id: row.product_id,
+              name: meta.name,
+              description: meta.description,
+              category: meta.category,
+              unit: meta.unit || 'nos',
+              images:
+                Array.isArray(row?.attributes?.images) && row.attributes.images.length > 0
+                  ? row.attributes.images.filter(Boolean)
+                  : (Array.isArray(meta.images) ? meta.images : []),
+              productImage:
+                Array.isArray(row?.attributes?.images) && row.attributes.images.length > 0
+                  ? row.attributes.images.find(Boolean) || null
+                  : (Array.isArray(meta.images) ? meta.images.find(Boolean) || null : null),
+              attributes: row.attributes || {},
+              supplier,
+              supplier_id: supplier.id,
+              price: Number.isFinite(parseFloat(row.price)) ? parseFloat(row.price) : 0,
+              stock: Number.isFinite(parseInt(row.stock, 10)) ? parseInt(row.stock, 10) : 0,
+              location: (row.location || meta.location || '').toString(),
+              status: row.status,
+              is_active: row.is_active
+            };
+          })
+          .filter(Boolean);
+
+        console.log(
+          `[Vendor Ranking] Reconciled products using supplier_products for item ${itemId}: ${updatedProducts.length} offers`
+        );
+      } else {
+        console.log(
+          `[Vendor Ranking] No supplier_products offers found for candidate product ids; keeping legacy products. item ${itemId}`
+        );
+      }
+    }
+  } catch (e) {
+    console.error('[Vendor Ranking] supplier_products reconciliation failed:', e?.message || e);
+  }
+
+  return updatedProducts;
+}
