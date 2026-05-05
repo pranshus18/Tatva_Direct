@@ -166,8 +166,9 @@ router.use(createAdminWriteNotifyMiddleware({ supabase, notifyAdminsForPortalAct
 // Service Provider Dashboard
 router.get('/service-provider', authenticateToken, async (req, res) => {
   try {
-    const userType = String(req.user?.user_type || '').toLowerCase();
-    if (userType !== 'service_provider' && userType !== 'admin') {
+    const userType = String(req.user?.user_type || '').trim().toLowerCase();
+    const normalizedUserType = userType.replace(/[\s-]+/g, '_');
+    if (normalizedUserType !== 'service_provider' && normalizedUserType !== 'admin') {
       return res.status(403).json({
         status: 'error',
         message: 'Access denied. Service provider privileges required.'

@@ -85,7 +85,8 @@ export const requireServiceProvider = async (req, res, next) => {
       });
     }
 
-    if (user.user_type === 'service_provider') {
+    const normalizedUserType = String(user.user_type || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    if (normalizedUserType === 'service_provider') {
       next();
     } else {
       res.status(403).json({
