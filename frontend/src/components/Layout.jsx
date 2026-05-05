@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
@@ -43,6 +43,7 @@ const routePrefetchers = {
 };
 
 const prefetchedRoutes = new Set();
+const idleHandleFallback = { id: null };
 
 const Layout = ({ user, onLogout, children }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
@@ -59,7 +60,7 @@ const Layout = ({ user, onLogout, children }) => {
   };
   
 
-  const steps = [
+  const steps = useMemo(() => [
     ...(userType === 'admin' ? [
       {
         path: '/admin-dashboard', 
@@ -200,7 +201,33 @@ const Layout = ({ user, onLogout, children }) => {
       { path: '/your-orders', label: 'Your Orders', icon: ShoppingCart },
       { path: '/returns', label: 'Returns', icon: RefreshCw }
     ] : [])
-  ];
+  ], [userType]);
+  const stepPaths = useMemo(() => steps.map((step) => step.path).filter(Boolean), [steps]);
+
+  useEffect(() => {
+    const visiblePaths = stepPaths.filter((path) => path !== location.pathname);
+
+    if (!visiblePaths.length) return undefined;
+
+    const warmVisibleTabs = () => {
+      // Stagger requests a bit to avoid network burst while still warming quickly.
+      visiblePaths.forEach((path, idx) => {
+        window.setTimeout(() => prefetchRoute(path), idx * 120);
+      });
+    };
+
+    if (typeof window.requestIdleCallback === 'function') {
+      const idleId = window.requestIdleCallback(warmVisibleTabs, { timeout: 1200 });
+      return () => window.cancelIdleCallback(idleId);
+    }
+
+    idleHandleFallback.id = window.setTimeout(warmVisibleTabs, 250);
+    return () => {
+      if (idleHandleFallback.id) {
+        clearTimeout(idleHandleFallback.id);
+      }
+    };
+  }, [location.pathname, stepPaths]);
 
   return (
     <div className="layout">
@@ -222,6 +249,7 @@ const Layout = ({ user, onLogout, children }) => {
                   className={`nav-step ${isActive ? 'active' : ''}`}
                   onMouseEnter={() => prefetchRoute(path)}
                   onFocus={() => prefetchRoute(path)}
+                  onMouseDown={() => prefetchRoute(path)}
                 >
                   <Icon size={20} />
                   <span>{label}</span>
