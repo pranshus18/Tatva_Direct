@@ -80,7 +80,8 @@ const corsOptions = {
       'https://project-frontend-git-main-pranshus-projects-2ecfd5c2.vercel.app',
       'https://tatvadirect.onrender.com',
       'https://tatva-direct.vercel.app',
-      'https://tatva-direct.netlify.app'
+      'https://tatva-direct.netlify.app',
+      'https://*.vercel.app'
     ];
     
     const allowedOrigins = process.env.ALLOWED_ORIGINS 

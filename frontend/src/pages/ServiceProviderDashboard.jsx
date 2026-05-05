@@ -43,6 +43,7 @@ const ServiceProviderDashboard = ({ user }) => {
   const [feedback, setFeedback] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [dashboardError, setDashboardError] = useState('');
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -63,9 +64,11 @@ const ServiceProviderDashboard = ({ user }) => {
 
   const fetchDashboardData = async () => {
     try {
+      setDashboardError('');
       const token = localStorage.getItem('token');
       if (!token) {
         console.error('[Dashboard] No token found');
+        setDashboardError('Your session is missing. Please log in again.');
         return;
       }
       
@@ -94,6 +97,25 @@ const ServiceProviderDashboard = ({ user }) => {
         console.error('[Dashboard] Response not OK:', response.status, response.statusText);
         const errorText = await response.text();
         console.error('[Dashboard] Error response:', errorText);
+        let backendMessage = 'Failed to fetch dashboard data. Please refresh and try again.';
+        try {
+          const parsed = JSON.parse(errorText);
+          backendMessage = parsed?.message || backendMessage;
+        } catch (_e) {
+          if (errorText && String(errorText).trim()) {
+            backendMessage = String(errorText).trim();
+          }
+        }
+
+        if (response.status === 401 || response.status === 403) {
+          setDashboardError('Your session expired or access is denied. Please log in again.');
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          navigate('/login');
+          return;
+        }
+
+        setDashboardError(backendMessage);
         return;
       }
       
@@ -119,6 +141,7 @@ const ServiceProviderDashboard = ({ user }) => {
         message: error.message,
         stack: error.stack
       });
+      setDashboardError('Network error while loading dashboard data. Please check your connection and try again.');
     }
   };
 
@@ -833,6 +856,21 @@ const ServiceProviderDashboard = ({ user }) => {
       </div>
 
       {/* Stats Cards */}
+      {dashboardError && (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.75rem 1rem',
+            borderRadius: '8px',
+            border: '1px solid #fecaca',
+            backgroundColor: '#fef2f2',
+            color: '#b91c1c',
+            fontWeight: 500
+          }}
+        >
+          {dashboardError}
+        </div>
+      )}
       <div className="stats-grid">
         <div className="stat-card">
           <div className="stat-icon boq">
