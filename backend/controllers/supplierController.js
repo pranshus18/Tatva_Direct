@@ -1379,15 +1379,67 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       });
     }
 
+    // Enrich product specs with the latest approved supplier-entered spec values.
+    // This ensures dropdown selection returns filled key-value pairs, not only template keys.
+    const matchedProductIds = [...new Set((matchedProducts || []).map((p) => p.id).filter(Boolean))];
+    const bestSpecsByProductId = new Map();
+    if (matchedProductIds.length > 0) {
+      const { data: approvedOffers } = await supabase
+        .from('supplier_products')
+        .select('product_id, attributes, updated_at')
+        .in('product_id', matchedProductIds)
+        .eq('status', 'approved')
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false });
+
+      const nonEmptyValueCount = (specsObj) =>
+        Object.values(specsObj || {}).filter((v) => String(v ?? '').trim() !== '').length;
+
+      for (const row of approvedOffers || []) {
+        const pid = row?.product_id;
+        const specs =
+          row?.attributes?.specifications &&
+          typeof row.attributes.specifications === 'object' &&
+          !Array.isArray(row.attributes.specifications)
+            ? row.attributes.specifications
+            : null;
+        if (!pid || !specs) continue;
+        const existing = bestSpecsByProductId.get(pid);
+        if (!existing) {
+          bestSpecsByProductId.set(pid, specs);
+          continue;
+        }
+        // Prefer the specs payload that contains more non-empty values.
+        if (nonEmptyValueCount(specs) > nonEmptyValueCount(existing)) {
+          bestSpecsByProductId.set(pid, specs);
+        }
+      }
+    }
+
+    const resolveSuggestionSpecifications = (product) => {
+      const baseSpecs =
+        product.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
+          ? product.specifications
+          : {};
+      const supplierSpecs = bestSpecsByProductId.get(product.id) || {};
+      const merged = { ...baseSpecs };
+      Object.keys(supplierSpecs || {}).forEach((k) => {
+        const supplierValue = supplierSpecs[k];
+        if (String(supplierValue ?? '').trim() !== '') {
+          merged[k] = supplierValue;
+        } else if (!Object.prototype.hasOwnProperty.call(merged, k)) {
+          merged[k] = supplierValue;
+        }
+      });
+      return merged;
+    };
+
     if (!query) {
       const discoverySuggestions = matchedProducts
         .slice(0, limit)
         .map((product) => ({
           ...product,
-          specifications:
-            product.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
-              ? product.specifications
-              : {}
+          specifications: resolveSuggestionSpecifications(product)
         }));
       return res.json({
         status: 'success',
@@ -1436,10 +1488,7 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       .slice(0, 20)
       .map(({ score, ...product }) => ({
         ...product,
-        specifications:
-          product.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
-            ? product.specifications
-            : {}
+        specifications: resolveSuggestionSpecifications(product)
       }));
 
     // Deduplicate by id (or fallback key) and return top 10.
