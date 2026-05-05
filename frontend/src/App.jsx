@@ -1,47 +1,48 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import ServiceProviderRoute from './components/ServiceProviderRoute';
 import AdminRoute from './components/AdminRoute';
-import Login from './pages/Login';
-import AdminLogin from './pages/AdminLogin';
-import Signup from './pages/Signup';
-import Profile from './pages/Profile';
-import ServiceProviderDashboard from './pages/ServiceProviderDashboard';
-import SupplierDashboard from './pages/SupplierDashboard';
-import SupplierPOS from './pages/SupplierPOS';
-import SupplierProductSetup from './pages/SupplierProductSetup';
-import SupplierBCOV from './pages/SupplierBCOV';
-import ProductManagement from './pages/ProductManagement';
-import SupplierReturns from './pages/SupplierReturns';
-import SupplierUpstream from './pages/SupplierUpstream';
-import SupplierSelectYourself from './pages/SupplierSelectYourself';
-import SupplierDiscountInsights from './pages/SupplierDiscountInsights';
-import SupplierBuyerPurchases from './pages/SupplierBuyerPurchases';
-import SupplierTotalPurchasePlatformCov from './pages/SupplierTotalPurchasePlatformCov';
-import SupplierPurchaseTotal from './pages/SupplierPurchaseTotal';
-import ServiceProviderReturns from './pages/ServiceProviderReturns';
-import ProductDiscovery from './pages/ProductDiscovery';
-import AdminDashboardOverview from './pages/AdminDashboardOverview';
-import AdminAnalytics from './pages/AdminAnalytics';
-import AdminUsers from './pages/AdminUsers';
-import AdminTransactions from './pages/AdminTransactions';
-import AdminSuppliers from './pages/AdminSuppliers';
-import AdminServiceProviders from './pages/AdminServiceProviders';
-import AdminProductStatus from './pages/AdminProductStatus';
-import AdminBrandApprovals from './pages/AdminBrandApprovals';
-import AdminProfileChainApprovals from './pages/AdminProfileChainApprovals';
-import AdminFinance from './pages/AdminFinance';
-import AdminSupplyChain from './pages/AdminSupplyChain';
-import BOQNormalize from './pages/BOQNormalize';
-import VendorSelect from './pages/VendorSelect';
-import Substitution from './pages/Substitution';
-import CreatePO from './pages/CreatePO';
-import YourOrders from './pages/YourOrders';
-import Cart from './pages/Cart';
 import { getApiUrl } from './config/api';
 import { normalizeUser, normalizeUserType } from './utils/userType';
+
+const Login = lazy(() => import('./pages/Login'));
+const AdminLogin = lazy(() => import('./pages/AdminLogin'));
+const Signup = lazy(() => import('./pages/Signup'));
+const Profile = lazy(() => import('./pages/Profile'));
+const ServiceProviderDashboard = lazy(() => import('./pages/ServiceProviderDashboard'));
+const SupplierDashboard = lazy(() => import('./pages/SupplierDashboard'));
+const SupplierPOS = lazy(() => import('./pages/SupplierPOS'));
+const SupplierProductSetup = lazy(() => import('./pages/SupplierProductSetup'));
+const SupplierBCOV = lazy(() => import('./pages/SupplierBCOV'));
+const ProductManagement = lazy(() => import('./pages/ProductManagement'));
+const SupplierReturns = lazy(() => import('./pages/SupplierReturns'));
+const SupplierUpstream = lazy(() => import('./pages/SupplierUpstream'));
+const SupplierSelectYourself = lazy(() => import('./pages/SupplierSelectYourself'));
+const SupplierDiscountInsights = lazy(() => import('./pages/SupplierDiscountInsights'));
+const SupplierBuyerPurchases = lazy(() => import('./pages/SupplierBuyerPurchases'));
+const SupplierTotalPurchasePlatformCov = lazy(() => import('./pages/SupplierTotalPurchasePlatformCov'));
+const SupplierPurchaseTotal = lazy(() => import('./pages/SupplierPurchaseTotal'));
+const ServiceProviderReturns = lazy(() => import('./pages/ServiceProviderReturns'));
+const ProductDiscovery = lazy(() => import('./pages/ProductDiscovery'));
+const AdminDashboardOverview = lazy(() => import('./pages/AdminDashboardOverview'));
+const AdminAnalytics = lazy(() => import('./pages/AdminAnalytics'));
+const AdminUsers = lazy(() => import('./pages/AdminUsers'));
+const AdminTransactions = lazy(() => import('./pages/AdminTransactions'));
+const AdminSuppliers = lazy(() => import('./pages/AdminSuppliers'));
+const AdminServiceProviders = lazy(() => import('./pages/AdminServiceProviders'));
+const AdminProductStatus = lazy(() => import('./pages/AdminProductStatus'));
+const AdminBrandApprovals = lazy(() => import('./pages/AdminBrandApprovals'));
+const AdminProfileChainApprovals = lazy(() => import('./pages/AdminProfileChainApprovals'));
+const AdminFinance = lazy(() => import('./pages/AdminFinance'));
+const AdminSupplyChain = lazy(() => import('./pages/AdminSupplyChain'));
+const BOQNormalize = lazy(() => import('./pages/BOQNormalize'));
+const VendorSelect = lazy(() => import('./pages/VendorSelect'));
+const Substitution = lazy(() => import('./pages/Substitution'));
+const CreatePO = lazy(() => import('./pages/CreatePO'));
+const YourOrders = lazy(() => import('./pages/YourOrders'));
+const Cart = lazy(() => import('./pages/Cart'));
 
 function App() {
   const WORKFLOW_STORAGE_KEY = 'spBoqWorkflow';
@@ -209,8 +210,15 @@ function App() {
     );
   }
 
+  const routeLoader = (
+    <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      <div style={{ color: '#334155', fontSize: '1rem' }}>Loading page...</div>
+    </div>
+  );
+
   return (
     <BrowserRouter>
+      <Suspense fallback={routeLoader}>
       <Routes>
         {/* Public Routes */}
         {/* Supplier Portal - always go directly to supplier dashboard */}
@@ -614,6 +622,7 @@ function App() {
         {/* Redirect to login if not authenticated */}
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

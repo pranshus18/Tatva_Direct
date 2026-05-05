@@ -68,12 +68,14 @@ const SupplierDashboard = ({ user }) => {
   useEffect(() => {
     const initializeDashboard = async () => {
       try {
-        // Directly load dashboard + notifications; do NOT redirect to supplier-setup anymore
-        await fetchDashboardData();
-        await fetchNotifications();
-        await fetchInventorySummary();
-        await fetchRestockSuggestions();
-        await fetchSettlementReport();
+        // Load all dashboard dependencies in parallel to reduce tab-switch buffering time.
+        await Promise.allSettled([
+          fetchDashboardData(),
+          fetchNotifications(),
+          fetchInventorySummary(),
+          fetchRestockSuggestions(),
+          fetchSettlementReport()
+        ]);
       } catch (error) {
         console.error('Error initializing dashboard:', error);
         setLoading(false);

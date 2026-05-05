@@ -147,8 +147,10 @@ const SupplierUpstream = ({ user }) => {
 
   useEffect(() => {
     const init = async () => {
-      await fetchMyProducts();
-      await fetchUpstreamOrders();
+      await Promise.allSettled([
+        fetchMyProducts(),
+        fetchUpstreamOrders()
+      ]);
     };
     init();
   }, []);

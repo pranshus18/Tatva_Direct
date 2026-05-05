@@ -5,10 +5,58 @@ import tatvaLogo from '../images/tatva_d.png';
 import { normalizeUserType } from '../utils/userType';
 import './Layout.css';
 
+const routePrefetchers = {
+  '/dashboard': () => import('../pages/ServiceProviderDashboard'),
+  '/boq-normalize': () => import('../pages/BOQNormalize'),
+  '/product-discovery': () => import('../pages/ProductDiscovery'),
+  '/supplier-select': () => import('../pages/VendorSelect'),
+  '/substitution': () => import('../pages/Substitution'),
+  '/cart': () => import('../pages/Cart'),
+  '/create-po': () => import('../pages/CreatePO'),
+  '/your-orders': () => import('../pages/YourOrders'),
+  '/returns': () => import('../pages/ServiceProviderReturns'),
+  '/supplier-dashboard': () => import('../pages/SupplierDashboard'),
+  '/product-management': () => import('../pages/ProductManagement'),
+  '/manage-inventory': () => import('../pages/ProductManagement'),
+  '/supplier-bcov': () => import('../pages/SupplierBCOV'),
+  '/supplier-upstream': () => import('../pages/SupplierUpstream'),
+  '/supplier-cart': () => import('../pages/Cart'),
+  '/supplier-pos': () => import('../pages/SupplierPOS'),
+  '/supplier-returns': () => import('../pages/SupplierReturns'),
+  '/supplier-select-yourself': () => import('../pages/SupplierSelectYourself'),
+  '/supplier-discount-insights': () => import('../pages/SupplierDiscountInsights'),
+  '/supplier-buyer-purchases': () => import('../pages/SupplierBuyerPurchases'),
+  '/supplier-total-purchase-platform-cov': () => import('../pages/SupplierTotalPurchasePlatformCov'),
+  '/supplier-purchase-total': () => import('../pages/SupplierPurchaseTotal'),
+  '/admin-dashboard': () => import('../pages/AdminDashboardOverview'),
+  '/admin-users': () => import('../pages/AdminUsers'),
+  '/admin-transactions': () => import('../pages/AdminTransactions'),
+  '/admin-suppliers': () => import('../pages/AdminSuppliers'),
+  '/admin-service-providers': () => import('../pages/AdminServiceProviders'),
+  '/admin-product-status': () => import('../pages/AdminProductStatus'),
+  '/admin-brand-approvals': () => import('../pages/AdminBrandApprovals'),
+  '/admin-profile-chain-approvals': () => import('../pages/AdminProfileChainApprovals'),
+  '/admin-analytics': () => import('../pages/AdminAnalytics'),
+  '/admin-finance': () => import('../pages/AdminFinance'),
+  '/admin-supply-chain': () => import('../pages/AdminSupplyChain'),
+  '/profile': () => import('../pages/Profile')
+};
+
+const prefetchedRoutes = new Set();
+
 const Layout = ({ user, onLogout, children }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const location = useLocation();
   const userType = normalizeUserType(user?.userType);
+
+  const prefetchRoute = (path) => {
+    const loader = routePrefetchers[path];
+    if (!loader || prefetchedRoutes.has(path)) return;
+    prefetchedRoutes.add(path);
+    loader().catch(() => {
+      prefetchedRoutes.delete(path);
+    });
+  };
   
 
   const steps = [
@@ -172,6 +220,8 @@ const Layout = ({ user, onLogout, children }) => {
                 <NavLink 
                   to={path} 
                   className={`nav-step ${isActive ? 'active' : ''}`}
+                  onMouseEnter={() => prefetchRoute(path)}
+                  onFocus={() => prefetchRoute(path)}
                 >
                   <Icon size={20} />
                   <span>{label}</span>
@@ -208,6 +258,8 @@ const Layout = ({ user, onLogout, children }) => {
                 to="/profile" 
                 className="user-menu-item"
                 onClick={() => setShowUserMenu(false)}
+                onMouseEnter={() => prefetchRoute('/profile')}
+                onFocus={() => prefetchRoute('/profile')}
               >
                 <User size={16} />
                 <span>Profile</span>

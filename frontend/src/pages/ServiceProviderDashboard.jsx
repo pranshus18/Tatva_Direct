@@ -64,16 +64,17 @@ const ServiceProviderDashboard = ({ user }) => {
       // Ignore cache parsing/storage issues.
     }
 
-    fetchDashboardData();
-    fetchNotifications();
-    
+    Promise.allSettled([fetchDashboardData(), fetchNotifications()]);
+  }, []);
+
+  useEffect(() => {
     const handleClickOutside = (event) => {
       if (showNotifications && !event.target.closest('[data-sp-notification-container]')) {
         setShowNotifications(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
-    
+
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };

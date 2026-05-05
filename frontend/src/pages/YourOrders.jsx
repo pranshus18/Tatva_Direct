@@ -280,8 +280,10 @@ const YourOrders = () => {
                 ? 'Payment successful. Your invoice PDF is ready — use the link below.'
                 : 'Payment successful and verified.'
             );
-            await fetchDashboard();
-            await fetchOrderDetails(orderDetails.orderNumber || orderDetails.id);
+            await Promise.allSettled([
+              fetchDashboard(),
+              fetchOrderDetails(orderDetails.orderNumber || orderDetails.id)
+            ]);
             if (confirmData.invoice?.invoicePdfUrl) {
               setOrderDetails((prev) =>
                 prev ? { ...prev, invoicePdfUrl: confirmData.invoice.invoicePdfUrl } : prev
@@ -491,8 +493,10 @@ const YourOrders = () => {
         throw new Error(data.message || 'Failed to update order');
       }
       setPaymentNotice('Order updated successfully.');
-      await fetchDashboard();
-      await fetchOrderDetails(orderDetails.orderNumber);
+      await Promise.allSettled([
+        fetchDashboard(),
+        fetchOrderDetails(orderDetails.orderNumber)
+      ]);
       setEditMode(false);
     } catch (e) {
       setPaymentNotice(e.message || 'Failed to update order');
@@ -522,8 +526,10 @@ const YourOrders = () => {
         throw new Error(data.message || 'Failed to cancel order');
       }
       setPaymentNotice('Order cancelled successfully.');
-      await fetchDashboard();
-      await fetchOrderDetails(orderDetails.orderNumber);
+      await Promise.allSettled([
+        fetchDashboard(),
+        fetchOrderDetails(orderDetails.orderNumber)
+      ]);
     } catch (e) {
       setPaymentNotice(e.message || 'Failed to cancel order');
     } finally {
