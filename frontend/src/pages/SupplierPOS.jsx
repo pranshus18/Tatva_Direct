@@ -416,8 +416,8 @@ const SupplierPOS = () => {
 
     const title = receiptData.mode === 'offline_queued' ? 'POS Receipt (Queued)' : 'POS Receipt';
     const numberLine = receiptData.mode === 'offline_queued'
-      ? `Queued ID: ${receiptData.queuedId || '-'}`
-      : `Order: ${receiptData.orderNumber || '-'}<br/>Invoice: ${receiptData.invoiceNumber || '-'}<br/>Receipt: ${receiptData.receiptNumber || '-'}${receiptData.invoicePdfUrl ? `<br/><a href="${receiptData.invoicePdfUrl}" target="_blank" rel="noopener">Download full invoice (PDF)</a>` : ''}`;
+      ? `Queued ID: ${receiptData.queuedId || '/'}`
+      : `Order: ${receiptData.orderNumber || '/'}<br/>Invoice: ${receiptData.invoiceNumber || '/'}<br/>Receipt: ${receiptData.receiptNumber || '/'}${receiptData.invoicePdfUrl ? `<br/><a href="${receiptData.invoicePdfUrl}" target="_blank" rel="noopener">Download full invoice (PDF)</a>` : ''}`;
 
     const w = window.open('', '_blank', 'width=420,height=700');
     if (!w) return;
