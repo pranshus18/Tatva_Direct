@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getApiUrl } from '../config/api';
+import { getApiUrl, authFetch } from '../config/api';
 import { 
   FileText, 
   Users, 
@@ -102,11 +102,10 @@ const ServiceProviderDashboard = ({ user }) => {
       const fullUrl = `${apiUrl}?_t=${timestamp}`;
       console.log('[Dashboard] Fetching dashboard data from:', fullUrl);
       
-      const response = await fetch(fullUrl, {
+      const response = await authFetch(fullUrl, {
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache'
+          Pragma: 'no-cache'
         }
       });
       
@@ -180,12 +179,7 @@ const ServiceProviderDashboard = ({ user }) => {
     try {
       const token = localStorage.getItem('token');
       if (!token) return;
-
-      const response = await fetch(getApiUrl('/api/supplier/notifications'), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await authFetch('/api/supplier/notifications');
       const data = await response.json();
       if (data.status === 'success') {
         setNotifications(data.notifications || []);
@@ -263,11 +257,10 @@ const ServiceProviderDashboard = ({ user }) => {
       console.log('[Order Details] Fetching order details from:', fullUrl);
       console.log('[Order Details] Order ID:', orderId, 'Encoded:', encodedOrderId);
       
-      const response = await fetch(fullUrl, {
+      const response = await authFetch(fullUrl, {
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache'
+          Pragma: 'no-cache'
         }
       });
       

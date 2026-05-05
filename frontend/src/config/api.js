@@ -95,3 +95,51 @@ export const apiFetch = async (endpoint, options = {}) => {
 
   return response.json();
 };
+
+/**
+ * Auth-aware fetch for portal pages:
+ * - Adds bearer token automatically.
+ * - Applies a timeout so loaders don't spin forever on stuck requests.
+ * - Forces relogin on 401/403 by clearing stale auth state.
+ */
+export const authFetch = async (endpoint, options = {}) => {
+  const token = localStorage.getItem('token');
+  const timeoutMs = Number(options.timeoutMs || 15000);
+  const externalSignal = options.signal;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = externalSignal || controller.signal;
+
+  const headers = {
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(options.headers || {})
+  };
+
+  const targetUrl = /^https?:\/\//i.test(String(endpoint || ''))
+    ? String(endpoint)
+    : resolveApiPath(endpoint);
+
+  try {
+    const response = await fetch(targetUrl, {
+      ...options,
+      headers,
+      signal
+    });
+
+    if (response.status === 401 || response.status === 403) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      if (typeof window !== 'undefined') {
+        window.location.replace('/login');
+      }
+      const authError = new Error('Session expired. Please log in again.');
+      authError.status = response.status;
+      throw authError;
+    }
+
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+};

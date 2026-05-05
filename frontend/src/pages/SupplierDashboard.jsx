@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getApiUrl } from '../config/api';
+import { getApiUrl, authFetch } from '../config/api';
 import { useNavigate } from 'react-router-dom';
 import { 
   Package,
@@ -108,12 +108,7 @@ const SupplierDashboard = ({ user }) => {
 
   const fetchDashboardData = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/dashboard/supplier'), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await authFetch('/api/dashboard/supplier');
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
@@ -155,12 +150,7 @@ const SupplierDashboard = ({ user }) => {
 
   const fetchInventorySummary = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/supplier/inventory/summary'), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const res = await authFetch('/api/supplier/inventory/summary');
       const data = await res.json();
       if (data.status === 'success') {
         setInventorySummary(data);
@@ -172,12 +162,7 @@ const SupplierDashboard = ({ user }) => {
 
   const fetchRestockSuggestions = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/supplier/inventory/restock-suggestions?threshold=10&limit=3'), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const res = await authFetch('/api/supplier/inventory/restock-suggestions?threshold=10&limit=3');
       const data = await res.json();
       if (data.status === 'success') {
         setRestockSuggestions(data);
@@ -189,10 +174,7 @@ const SupplierDashboard = ({ user }) => {
 
   const fetchSettlementReport = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/payments/settlement/report'), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      const res = await authFetch('/api/payments/settlement/report');
       const data = await res.json();
       if (data.status === 'success') {
         setSettlementReport(data.report || null);
@@ -470,12 +452,7 @@ const SupplierDashboard = ({ user }) => {
 
   const fetchNotifications = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/supplier/notifications'), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
+      const response = await authFetch('/api/supplier/notifications');
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);

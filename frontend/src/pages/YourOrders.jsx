@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getApiUrl, resolveApiPath } from '../config/api';
+import { getApiUrl, resolveApiPath, authFetch } from '../config/api';
 import { Eye, ShoppingCart, CheckCircle, Clock, AlertCircle, X, FileText } from 'lucide-react';
 import { formatDateIST, formatDateTimeIST, parseServerDate } from '../utils/dateTime';
 import './Dashboard.css';
@@ -83,9 +83,8 @@ const YourOrders = () => {
         : getApiUrl('/api/dashboard/service-provider');
 
       const fullUrl = `${apiUrl}?_t=${timestamp}`;
-      const response = await fetch(fullUrl, {
+      const response = await authFetch(fullUrl, {
         headers: {
-          Authorization: `Bearer ${token}`,
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           Pragma: 'no-cache'
         }
@@ -165,9 +164,8 @@ const YourOrders = () => {
         : getApiUrl(`/api/dashboard/service-provider/orders/${encodedOrderId}`);
 
       const fullUrl = `${apiUrl}?_t=${timestamp}`;
-      const response = await fetch(fullUrl, {
+      const response = await authFetch(fullUrl, {
         headers: {
-          Authorization: `Bearer ${token}`,
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           Pragma: 'no-cache'
         }

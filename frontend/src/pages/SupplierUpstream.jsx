@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getApiUrl } from '../config/api';
+import { getApiUrl, authFetch } from '../config/api';
 import './Dashboard.css';
 import './SupplierUpstream.css';
 import {
@@ -108,9 +108,7 @@ const SupplierUpstream = ({ user }) => {
 
   const fetchMyProducts = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/supplier/products'), {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await authFetch('/api/supplier/products', {
         cache: 'no-cache'
       });
       const data = await res.json();
@@ -124,9 +122,7 @@ const SupplierUpstream = ({ user }) => {
 
   const fetchUpstreamOrders = async () => {
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/supplier/upstream/orders'), {
-        headers: { Authorization: `Bearer ${token}` },
+      const res = await authFetch('/api/supplier/upstream/orders', {
         cache: 'no-cache'
       });
       const data = await res.json();
