@@ -22,6 +22,9 @@ import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import './Dashboard.css';
 
+const DASHBOARD_CACHE_KEY = 'sp_dashboard_cache_v1';
+const DASHBOARD_CACHE_TTL_MS = 60 * 1000;
+
 const ServiceProviderDashboard = ({ user }) => {
   const [stats, setStats] = useState({
     totalBOQs: 0,
@@ -47,6 +50,20 @@ const ServiceProviderDashboard = ({ user }) => {
   const navigate = useNavigate();
 
   useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(DASHBOARD_CACHE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        if (cached?.savedAt && Date.now() - Number(cached.savedAt) <= DASHBOARD_CACHE_TTL_MS) {
+          if (cached.stats) setStats(cached.stats);
+          if (Array.isArray(cached.recentBOQs)) setRecentBOQs(cached.recentBOQs);
+          if (Array.isArray(cached.recentPOs)) setRecentPOs(cached.recentPOs);
+        }
+      }
+    } catch (_e) {
+      // Ignore cache parsing/storage issues.
+    }
+
     fetchDashboardData();
     fetchNotifications();
     
@@ -125,12 +142,26 @@ const ServiceProviderDashboard = ({ user }) => {
       console.log('[Dashboard] Recent BOQs count:', data.recentBOQs?.length || 0);
       
       if (data.stats) {
-        setStats({
+        const nextStats = {
           totalBOQs: data.stats.totalBOQs || 0,
           activePOs: data.stats.activePOs || 0,
           totalSpent: data.stats.totalSpent || 0,
           pendingApprovals: data.stats.pendingApprovals || 0
-        });
+        };
+        setStats(nextStats);
+        try {
+          sessionStorage.setItem(
+            DASHBOARD_CACHE_KEY,
+            JSON.stringify({
+              savedAt: Date.now(),
+              stats: nextStats,
+              recentBOQs: data.recentBOQs || [],
+              recentPOs: data.recentPOs || []
+            })
+          );
+        } catch (_e) {
+          // Ignore cache write issues.
+        }
       }
       setRecentBOQs(data.recentBOQs || []);
       setRecentPOs(data.recentPOs || []);

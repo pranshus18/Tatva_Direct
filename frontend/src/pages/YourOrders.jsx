@@ -6,6 +6,9 @@ import { formatDateIST, formatDateTimeIST, parseServerDate } from '../utils/date
 import './Dashboard.css';
 import './YourOrders.css';
 
+const YOUR_ORDERS_CACHE_KEY = 'sp_your_orders_cache_v1';
+const YOUR_ORDERS_CACHE_TTL_MS = 60 * 1000;
+
 const formatDate = (dateString) => {
   return formatDateTimeIST(dateString, 'N/A');
 };
@@ -104,7 +107,16 @@ const YourOrders = () => {
 
       const data = await response.json();
       if (data.status === 'success') {
-        setYourOrders(data.yourOrders || []);
+        const nextOrders = data.yourOrders || [];
+        setYourOrders(nextOrders);
+        try {
+          sessionStorage.setItem(
+            YOUR_ORDERS_CACHE_KEY,
+            JSON.stringify({ savedAt: Date.now(), yourOrders: nextOrders })
+          );
+        } catch (_e) {
+          // Ignore cache write failures.
+        }
       } else {
         setLoadError(data?.message || 'Failed to load your orders.');
         setYourOrders([]);
@@ -119,6 +131,19 @@ const YourOrders = () => {
   };
 
   useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(YOUR_ORDERS_CACHE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        const isFresh = cached?.savedAt && Date.now() - Number(cached.savedAt) <= YOUR_ORDERS_CACHE_TTL_MS;
+        if (isFresh && Array.isArray(cached.yourOrders)) {
+          setYourOrders(cached.yourOrders);
+          setLoading(false);
+        }
+      }
+    } catch (_e) {
+      // Ignore cache parsing failures.
+    }
     fetchDashboard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
