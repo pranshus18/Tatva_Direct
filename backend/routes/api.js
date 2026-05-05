@@ -15,7 +15,7 @@ import { corePhase2Router } from './corePhase2.js';
 import { paymentsRouter } from './payments.js';
 import { adminSupplyChainRouter } from './adminSupplyChain.js';
 import { vendorRequestLogger } from '../middleware/vendorRequestLogger.js';
-import { distanceDebug, getEnvDebug, getHealth } from '../controllers/systemController.js';
+import { distanceDebug, getEnvDebug, getHealth, getRuntimeDebug } from '../controllers/systemController.js';
 
 const apiRouter = express.Router();
 
@@ -36,6 +36,7 @@ apiRouter.use('/core-phase2', corePhase2Router);
 apiRouter.use('/payments', paymentsRouter);
 
 apiRouter.get('/health', getHealth);
+apiRouter.get('/debug/runtime', getRuntimeDebug);
 if (process.env.NODE_ENV !== 'production') {
   apiRouter.get('/debug/env', getEnvDebug);
   apiRouter.get('/debug/distance-test', distanceDebug);

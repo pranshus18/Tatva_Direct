@@ -1,6 +1,22 @@
 import { supabase } from '../config/supabase.js';
 import { geocodeAddressNominatim, getDrivingDistanceMatrixKm } from '../utils/geoUtils.js';
 
+function maskEmail(email) {
+  const value = String(email || '').trim();
+  if (!value.includes('@')) return null;
+  const [name, domain] = value.split('@');
+  const safeName = name.length <= 2 ? `${name[0] || '*'}*` : `${name.slice(0, 2)}***`;
+  return `${safeName}@${domain}`;
+}
+
+function getSupabaseHost(url) {
+  try {
+    return new URL(String(url || '')).host || null;
+  } catch {
+    return null;
+  }
+}
+
 export function getApiInfo(req, res) {
   return res.status(200).json({
     status: 'success',
@@ -65,6 +81,29 @@ export function getEnvDebug(req, res) {
       adminEmail: process.env.ADMIN_EMAIL || null,
       hasAdminPassword: !!process.env.ADMIN_PASSWORD,
       adminPasswordLength: process.env.ADMIN_PASSWORD ? process.env.ADMIN_PASSWORD.length : 0
+    }
+  });
+}
+
+export function getRuntimeDebug(req, res) {
+  const commitSha = process.env.RENDER_GIT_COMMIT || process.env.COMMIT_SHA || null;
+  const serviceName = process.env.RENDER_SERVICE_NAME || null;
+  const serviceId = process.env.RENDER_SERVICE_ID || null;
+  const deployId = process.env.RENDER_DEPLOY_ID || null;
+  const supabaseHost = getSupabaseHost(process.env.SUPABASE_URL);
+  const adminEmailMasked = maskEmail(process.env.ADMIN_EMAIL);
+
+  return res.status(200).json({
+    status: 'success',
+    runtime: {
+      nodeEnv: process.env.NODE_ENV || null,
+      serviceName,
+      serviceId,
+      deployId,
+      commitSha,
+      supabaseHost,
+      hasSupabaseServiceRoleKey: Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY),
+      adminEmailMasked
     }
   });
 }
