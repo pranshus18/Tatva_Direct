@@ -95,7 +95,6 @@ const BOQNormalize = ({ onComplete }) => {
         headers: {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
-          'Expires': '0',
           'X-Request-ID': `${timestamp}-${random}`,
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
