@@ -1018,7 +1018,7 @@ const ProductDetailsModal = ({ product, supplierName, canEditInventory = false, 
 
 const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, showAdditionSteps = false }) => {
   const [formData, setFormData] = useState({
-    catalogProductId: product?.catalogProductId || '',
+    catalogProductId: product?.catalogProductId || product?.id || '',
     name: product?.name || '',
     brand: product?.brand || '',
     gtin: product?.gtin || '',
@@ -3197,6 +3197,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                 
                 {/* Show message when category is selected but no admin specs found */}
                 {formData.category && formData.category.trim() &&
+                 !formData.catalogProductId &&
                  !loadingSpecs &&
                  (!specifications || Object.keys(specifications).length === 0) && 
                  (!product || (product && (product.status || 'pending') === 'pending')) && (
