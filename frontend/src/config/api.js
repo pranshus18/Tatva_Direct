@@ -1,24 +1,37 @@
-// API Base URL - automatically detects local development vs production
-// Priority: 1. Environment variable, 2. Local development (localhost), 3. Production URL
+// API Base URL - automatically detects local development vs production.
+// Priority: 1. Valid environment variable, 2. Local development (localhost), 3. Production URL fallback.
+const DEFAULT_PRODUCTION_API_URL = 'https://tatvadirect.onrender.com';
 const envApiUrl = import.meta.env.VITE_API_BASE_URL;
 const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
-const isLocalhost = typeof window !== 'undefined' && 
-  (window.location.hostname === 'localhost' || 
+const isLocalhost = typeof window !== 'undefined' &&
+  (window.location.hostname === 'localhost' ||
    window.location.hostname === '127.0.0.1' ||
    window.location.hostname === '');
+
+const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
+const isLocalApiUrl = (url) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalizeUrl(url));
 
 // Determine API URL
 let apiBaseUrl;
 if (envApiUrl && envApiUrl.trim() !== '') {
-  // Use environment variable if set
-  apiBaseUrl = envApiUrl.trim().replace(/\/$/, '');
+  // Prevent broken production deploys when env var is set to localhost.
+  const normalizedEnvApiUrl = normalizeUrl(envApiUrl);
+  if (!isLocalhost && isLocalApiUrl(normalizedEnvApiUrl)) {
+    apiBaseUrl = DEFAULT_PRODUCTION_API_URL;
+    console.warn(
+      '[API] Ignoring localhost VITE_API_BASE_URL in production. Falling back to',
+      DEFAULT_PRODUCTION_API_URL
+    );
+  } else {
+    apiBaseUrl = normalizedEnvApiUrl;
+  }
 } else if (isDevelopment || isLocalhost) {
   // Use localhost for local development
   const backendPort = import.meta.env.VITE_BACKEND_PORT || '8081';
   apiBaseUrl = `http://localhost:${backendPort}`;
 } else {
   // Fallback to production URL
-  apiBaseUrl = 'https://tatvadirect.onrender.com';
+  apiBaseUrl = DEFAULT_PRODUCTION_API_URL;
 }
 
 export const API_BASE_URL = apiBaseUrl;
