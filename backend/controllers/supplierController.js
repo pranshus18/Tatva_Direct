@@ -1683,6 +1683,32 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
       }
     }
 
+    // Backward-compat fallback: if model profile is missing, try approved catalog product
+    // with the same category + name/model text and use its specifications.
+    if (Object.keys(specs).length === 0 && modelIdentifier) {
+      const { data: productMatch, error: productMatchError } = await supabase
+        .from('products')
+        .select('name, specifications, updated_at')
+        .eq('category', categoryName)
+        .eq('status', 'approved')
+        .ilike('name', modelIdentifier)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (productMatchError) {
+        console.error('❌ [GET SPECS] Product fallback fetch error:', productMatchError);
+      } else if (
+        productMatch &&
+        productMatch.specifications &&
+        typeof productMatch.specifications === 'object' &&
+        !Array.isArray(productMatch.specifications) &&
+        Object.keys(productMatch.specifications).length > 0
+      ) {
+        specs = productMatch.specifications;
+        source = 'approved_product';
+      }
+    }
+
     // Fallback to admin category defaults when no model-specific profile exists.
     if (Object.keys(specs).length === 0) {
     if (category.default_specifications && 
@@ -1969,7 +1995,7 @@ router.post('/products', authenticateToken, async (req, res) => {
     if (gtinInput) {
       const { data: byGtin } = await supabase
         .from('products')
-        .select('id, status, brand, gtin, barcode, name, category')
+        .select('id, status, brand, gtin, barcode, name, category, specifications')
         .eq('gtin', gtinInput)
         .maybeSingle();
       if (byGtin) canonicalProductFromIdentifier = byGtin;
@@ -1977,7 +2003,7 @@ router.post('/products', authenticateToken, async (req, res) => {
     if (!canonicalProductFromIdentifier && resolvedBarcodeForPos) {
       const { data: byBarcode } = await supabase
         .from('products')
-        .select('id, status, brand, gtin, barcode, name, category')
+        .select('id, status, brand, gtin, barcode, name, category, specifications')
         .eq('barcode', resolvedBarcodeForPos)
         .maybeSingle();
       if (byBarcode) canonicalProductFromIdentifier = byBarcode;
@@ -2157,7 +2183,7 @@ router.post('/products', authenticateToken, async (req, res) => {
     if (selectedCatalogProductId) {
       const { data: bySelectedId } = await supabase
         .from('products')
-        .select('id, status, brand, gtin, barcode, name, category, asin, catalog_key')
+        .select('id, status, brand, gtin, barcode, name, category, asin, catalog_key, specifications')
         .eq('id', selectedCatalogProductId)
         .maybeSingle();
       if (bySelectedId) {
@@ -2403,7 +2429,22 @@ router.post('/products', authenticateToken, async (req, res) => {
       .eq('is_active', true)
       .limit(1)
       .maybeSingle();
-    const shouldBeApproved = Boolean(approvedVariantOffer);
+    const selectedCatalogSpecs =
+      existingProduct?.specifications &&
+      typeof existingProduct.specifications === 'object' &&
+      !Array.isArray(existingProduct.specifications)
+        ? existingProduct.specifications
+        : {};
+    const selectedCatalogIsApproved = String(existingProduct?.status || '').toLowerCase() === 'approved';
+    const selectedProductSpecsChanged = !!selectedCatalogProductId && shouldMoveToPendingForSpecChange({
+      specificationsProvided: true,
+      currentSpecs: selectedCatalogSpecs,
+      nextSpecs: normalizedSpecs
+    });
+    const shouldBeApproved = Boolean(
+      approvedVariantOffer ||
+      (selectedCatalogProductId && selectedCatalogIsApproved && !selectedProductSpecsChanged)
+    );
     const variantAsin = buildVariantAsinLikeId(catalogAsin || identityBundle.asinLikeId, identityBundle.variantKey);
 
     const supplierProductData = {

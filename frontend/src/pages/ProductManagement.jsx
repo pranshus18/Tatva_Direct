@@ -1066,6 +1066,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   
   // Track previous category to detect actual changes
   const previousCategoryRef = useRef(null);
+  const preserveSpecsOnNextCategoryLoadRef = useRef(false);
   
   // Extract Specifications state
   const [extracting, setExtracting] = useState(false); // For extracting specs from description
@@ -1247,6 +1248,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       unit: suggestion.unit || formData.unit
     });
     if (nextSpecs) {
+      preserveSpecsOnNextCategoryLoadRef.current = true;
       setSpecifications(nextSpecs);
     }
     setSuggestions([]);
@@ -1456,8 +1458,10 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
       if (matchedCategory) {
         const modelHint = String(formData?.name || '').trim();
+        const preserveExistingValues = preserveSpecsOnNextCategoryLoadRef.current;
+        preserveSpecsOnNextCategoryLoadRef.current = false;
         console.log('🔄 Category changed to:', matchedCategory.name, '- loading category/model specs with model hint:', modelHint || '(none)');
-        loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues: false });
+        loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues });
       } else {
         // Category doesn't match - specs already cleared above
         console.log('🔄 Category does not match any existing category - Specs cleared');

@@ -14,6 +14,7 @@ import { registerAdminUserManagementRoutes } from './admin/userManagementRoutes.
 import { registerAdminProductModerationRoutes } from './admin/productModerationRoutes.js';
 import { adminUpdateProductSchema } from '../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
+import { normalizeModelIdentifier, sanitizeSpecifications } from '../services/supplierCatalogHelpersService.js';
 
 const router = express.Router();
 const console = {
@@ -1239,9 +1240,9 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, requireAdminPri
       }
     }
 
-    // If admin has set specifications for this product, sync them as
-    // default specifications template for this category so suppliers
-    // can automatically get these keys when they choose the category.
+    // If admin has set specifications for this product, sync them as:
+    // 1) category default template (broad fallback), and
+    // 2) model profile (exact same product match for all suppliers).
     try {
       const hasCategory = !!productResponse.category;
       const hasSpecs = !!productResponse.specifications;
@@ -1297,6 +1298,7 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, requireAdminPri
 
         // Only update if we actually have some keys
         if (Object.keys(templateSpecs).length > 0) {
+          const safeSpecs = sanitizeSpecifications(productResponse.specifications || {});
           const { data: updatedCategory } = await supabase
             .from('categories')
             .update({
@@ -1326,6 +1328,33 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, requireAdminPri
           } else {
             console.error(`❌ [ADMIN SYNC] Verification failed: Category "${categoryName}" defaultSpecifications not found after save`);
             console.error(`❌ [ADMIN SYNC] Verify category object:`, verifyCategory);
+          }
+
+          // Also persist model-level profile so "same product name/model"
+          // in supplier portal resolves to this exact spec set.
+          const modelRaw =
+            String(productResponse.mpn || '').trim() ||
+            String(productResponse.name || '').trim();
+          const modelIdentifier = normalizeModelIdentifier(modelRaw);
+          if (modelIdentifier) {
+            const { error: modelSyncError } = await supabase
+              .from('model_spec_profiles')
+              .upsert(
+                {
+                  category: categoryName,
+                  model_identifier: modelIdentifier,
+                  display_model: modelRaw,
+                  specifications: Object.keys(safeSpecs).length > 0 ? safeSpecs : templateSpecs,
+                  updated_by: req.userId,
+                  updated_at: new Date().toISOString()
+                },
+                { onConflict: 'category,model_identifier' }
+              );
+            if (modelSyncError) {
+              console.error('❌ [ADMIN SYNC] Failed to sync model_spec_profiles:', modelSyncError);
+            } else {
+              console.log(`✅ [ADMIN SYNC] Synced model profile for "${modelIdentifier}" in category "${categoryName}"`);
+            }
           }
         } else {
           console.log(`ℹ️ [ADMIN SYNC] No valid keys to save for category "${categoryName}"`);

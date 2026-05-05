@@ -35,6 +35,8 @@ const SupplierProductSetup = ({ user }) => {
   const [recommendedPrice, setRecommendedPrice] = useState(null);
   const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
   const [priceTouched, setPriceTouched] = useState(false);
+  const [specifications, setSpecifications] = useState({});
+  const [loadingSpecs, setLoadingSpecs] = useState(false);
   const navigate = useNavigate();
 
   const handleChange = (e) => {
@@ -46,6 +48,47 @@ const SupplierProductSetup = ({ user }) => {
       [e.target.name]: e.target.value
     });
     setError('');
+  };
+
+  const addSpecificationKey = () => {
+    setSpecifications((prev) => {
+      const next = { ...(prev || {}) };
+      let idx = 1;
+      let candidate = 'new_spec';
+      while (Object.prototype.hasOwnProperty.call(next, candidate)) {
+        idx += 1;
+        candidate = `new_spec_${idx}`;
+      }
+      next[candidate] = '';
+      return next;
+    });
+  };
+
+  const renameSpecificationKey = (oldKey, nextKeyRaw) => {
+    const nextKey = String(nextKeyRaw || '').trim();
+    if (!nextKey || nextKey === oldKey) return;
+    setSpecifications((prev) => {
+      const current = { ...(prev || {}) };
+      if (!Object.prototype.hasOwnProperty.call(current, oldKey)) return prev;
+      const oldValue = current[oldKey];
+      delete current[oldKey];
+      if (Object.prototype.hasOwnProperty.call(current, nextKey)) {
+        const existingValue = current[nextKey];
+        current[nextKey] = existingValue === '' || existingValue == null ? oldValue : existingValue;
+      } else {
+        current[nextKey] = oldValue;
+      }
+      return current;
+    });
+  };
+
+  const removeSpecificationKey = (keyToRemove) => {
+    setSpecifications((prev) => {
+      if (!prev || !Object.prototype.hasOwnProperty.call(prev, keyToRemove)) return prev;
+      const next = { ...prev };
+      delete next[keyToRemove];
+      return next;
+    });
   };
 
   // Fetch locations from profile on mount
@@ -109,6 +152,51 @@ const SupplierProductSetup = ({ user }) => {
     return () => clearTimeout(timeout);
   }, [formData.name, formData.category]);
 
+  // Load admin-defined specs for selected category + product/model hint.
+  useEffect(() => {
+    const category = String(formData.category || '').trim().toLowerCase();
+    const modelHint = String(formData.name || '').trim();
+    if (!category) {
+      setSpecifications({});
+      return;
+    }
+    const timeout = setTimeout(async () => {
+      try {
+        setLoadingSpecs(true);
+        const token = localStorage.getItem('token');
+        const query = modelHint ? `?model=${encodeURIComponent(modelHint)}` : '';
+        const resp = await fetch(
+          getApiUrl(`/api/supplier/categories/${encodeURIComponent(category)}/specifications${query}`),
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-cache'
+          }
+        );
+        if (!resp.ok) {
+          setSpecifications({});
+          return;
+        }
+        const data = await resp.json();
+        const specsObj =
+          data?.status === 'success' && data?.specifications && typeof data.specifications === 'object'
+            ? data.specifications
+            : {};
+        setSpecifications((prev) => {
+          const next = {};
+          Object.keys(specsObj || {}).forEach((k) => {
+            next[k] = Object.prototype.hasOwnProperty.call(prev || {}, k) ? prev[k] : specsObj[k];
+          });
+          return next;
+        });
+      } catch (_err) {
+        setSpecifications({});
+      } finally {
+        setLoadingSpecs(false);
+      }
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [formData.category, formData.name]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
@@ -154,6 +242,8 @@ const SupplierProductSetup = ({ user }) => {
           cgst_rate: parseFloat(formData.cgst_rate),
           sgst_rate: parseFloat(formData.sgst_rate),
           description: formData.description || ''
+          ,
+          specifications
         })
       });
 
@@ -539,6 +629,46 @@ const SupplierProductSetup = ({ user }) => {
                 rows="3"
                 className="textarea-input"
               />
+            </div>
+          </div>
+
+          <div className="form-group">
+            <label>Specifications</label>
+            <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '0.75rem', background: '#f9fafb' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <span style={{ fontSize: '0.85rem', color: '#334155' }}>
+                  Admin/product template keys are auto-loaded when available.
+                </span>
+                <button type="button" className="btn-secondary" onClick={addSpecificationKey}>
+                  + Add key
+                </button>
+              </div>
+              {formData.category && !loadingSpecs && Object.keys(specifications || {}).length === 0 && (
+                <p style={{ margin: '0 0 0.5rem 0', color: '#92400e', fontSize: '0.82rem' }}>
+                  No pre-defined specification template found yet. Add keys manually.
+                </p>
+              )}
+              <div style={{ display: 'grid', gap: '0.55rem' }}>
+                {Object.keys(specifications || {}).map((key) => (
+                  <div key={key} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <input
+                      type="text"
+                      defaultValue={key}
+                      onBlur={(e) => renameSpecificationKey(key, e.target.value)}
+                      placeholder="Specification key"
+                    />
+                    <input
+                      type="text"
+                      value={specifications[key] || ''}
+                      onChange={(e) => setSpecifications((prev) => ({ ...(prev || {}), [key]: e.target.value }))}
+                      placeholder="Value"
+                    />
+                    <button type="button" className="btn-secondary" onClick={() => removeSpecificationKey(key)}>
+                      Remove
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
 
