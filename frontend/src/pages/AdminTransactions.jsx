@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { getApiUrl } from '../config/api';
+import { authFetch } from '../config/api';
 import { 
   ShoppingCart, 
   AlertTriangle,
@@ -13,38 +13,40 @@ import {
 import AdminNotifications from '../components/AdminNotifications';
 import './AdminDashboard.css';
 
+const ADMIN_DASHBOARD_CACHE_KEY = 'admin_dashboard_cache_v1';
+const ADMIN_DASHBOARD_CACHE_TTL_MS = 60 * 1000;
+
 const AdminTransactions = ({ user }) => {
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedTransaction, setSelectedTransaction] = useState(null);
 
   useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(ADMIN_DASHBOARD_CACHE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        const isFresh = cached?.savedAt && Date.now() - Number(cached.savedAt) <= ADMIN_DASHBOARD_CACHE_TTL_MS;
+        if (isFresh && Array.isArray(cached?.data?.transactions)) {
+          setTransactions(cached.data.transactions);
+          setLoading(false);
+          fetchAdminData({ silent: true });
+          return;
+        }
+      }
+    } catch (_e) {
+      // Ignore cache parse errors and fallback to network fetch.
+    }
     fetchAdminData();
   }, []);
 
-  const fetchAdminData = async () => {
-    setLoading(true);
+  const fetchAdminData = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        console.error('[Admin Transactions] No token found');
-        setLoading(false);
-        return;
-      }
-      
-      // Use proxy in development, full URL in production
-      const isDevelopment = import.meta.env.DEV || window.location.hostname === 'localhost';
-      const apiUrl = isDevelopment 
-        ? '/api/admin/dashboard'
-        : getApiUrl('/api/admin/dashboard');
-      
-      console.log('[Admin Transactions] Fetching data from:', apiUrl);
-      
-      const response = await fetch(apiUrl, {
+      const response = await authFetch('/api/admin/dashboard', {
         headers: {
-          'Authorization': `Bearer ${token}`,
           'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache'
+          Pragma: 'no-cache'
         }
       });
       
@@ -72,6 +74,14 @@ const AdminTransactions = ({ user }) => {
           });
         }
         setTransactions(transactions);
+        try {
+          sessionStorage.setItem(
+            ADMIN_DASHBOARD_CACHE_KEY,
+            JSON.stringify({ savedAt: Date.now(), data })
+          );
+        } catch (_e) {
+          // Ignore cache write failures.
+        }
       } else {
         console.error('[Admin Transactions] Failed to fetch admin data:', result.message);
       }
@@ -82,7 +92,7 @@ const AdminTransactions = ({ user }) => {
         stack: error.stack
       });
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 

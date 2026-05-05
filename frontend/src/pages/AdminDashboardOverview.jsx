@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getApiUrl } from '../config/api';
+import { authFetch } from '../config/api';
 import { 
   Users, 
   Building, 
@@ -11,6 +11,9 @@ import {
 } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
 import './AdminDashboard.css';
+
+const ADMIN_DASHBOARD_CACHE_KEY = 'admin_dashboard_cache_v1';
+const ADMIN_DASHBOARD_CACHE_TTL_MS = 60 * 1000;
 
 const AdminDashboardOverview = ({ user }) => {
   const [stats, setStats] = useState({
@@ -26,16 +29,31 @@ const AdminDashboardOverview = ({ user }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(ADMIN_DASHBOARD_CACHE_KEY);
+      if (raw) {
+        const cached = JSON.parse(raw);
+        const isFresh = cached?.savedAt && Date.now() - Number(cached.savedAt) <= ADMIN_DASHBOARD_CACHE_TTL_MS;
+        if (isFresh && cached?.data?.stats) {
+          setStats(cached.data.stats);
+          setLoading(false);
+          fetchAdminData({ silent: true });
+          return;
+        }
+      }
+    } catch (_e) {
+      // Ignore cache parse errors and fallback to network fetch.
+    }
     fetchAdminData();
   }, []);
 
-  const fetchAdminData = async () => {
-    setLoading(true);
+  const fetchAdminData = async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/admin/dashboard'), {
+      const response = await authFetch('/api/admin/dashboard', {
         headers: {
-          'Authorization': `Bearer ${token}`
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          Pragma: 'no-cache'
         }
       });
       const result = await response.json();
@@ -43,13 +61,21 @@ const AdminDashboardOverview = ({ user }) => {
       if (result.status === 'success') {
         const data = result.data;
         setStats(data.stats);
+        try {
+          sessionStorage.setItem(
+            ADMIN_DASHBOARD_CACHE_KEY,
+            JSON.stringify({ savedAt: Date.now(), data })
+          );
+        } catch (_e) {
+          // Ignore cache write failures.
+        }
       } else {
         console.error('Failed to fetch admin data:', result.message);
       }
     } catch (error) {
       console.error('Failed to fetch admin data:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
