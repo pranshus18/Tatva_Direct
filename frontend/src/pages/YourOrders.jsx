@@ -48,6 +48,7 @@ const getSelfServeLockReason = (order) => {
 const YourOrders = () => {
   const [yourOrders, setYourOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [selectedOrderId, setSelectedOrderId] = useState(null);
   const [orderDetails, setOrderDetails] = useState(null);
   const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
@@ -67,6 +68,7 @@ const YourOrders = () => {
 
   const fetchDashboard = async () => {
     setLoading(true);
+    setLoadError('');
     try {
       const token = localStorage.getItem('token');
       if (!token) return;
@@ -82,17 +84,35 @@ const YourOrders = () => {
         headers: {
           Authorization: `Bearer ${token}`,
           'Cache-Control': 'no-cache, no-store, must-revalidate',
-          Pragma: 'no-cache',
-          Expires: '0'
+          Pragma: 'no-cache'
         }
       });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        let message = 'Failed to load your orders.';
+        try {
+          const parsed = JSON.parse(errorText);
+          message = parsed?.message || message;
+        } catch (_e) {
+          if (errorText && String(errorText).trim()) message = String(errorText).trim();
+        }
+        setLoadError(message);
+        setYourOrders([]);
+        return;
+      }
 
       const data = await response.json();
       if (data.status === 'success') {
         setYourOrders(data.yourOrders || []);
+      } else {
+        setLoadError(data?.message || 'Failed to load your orders.');
+        setYourOrders([]);
       }
     } catch (e) {
       console.error('[YourOrders] Failed to load:', e);
+      setLoadError('Network error while loading your orders.');
+      setYourOrders([]);
     } finally {
       setLoading(false);
     }
@@ -124,8 +144,7 @@ const YourOrders = () => {
         headers: {
           Authorization: `Bearer ${token}`,
           'Cache-Control': 'no-cache, no-store, must-revalidate',
-          Pragma: 'no-cache',
-          Expires: '0'
+          Pragma: 'no-cache'
         }
       });
 
@@ -550,6 +569,21 @@ const YourOrders = () => {
         <h1>Your orders</h1>
         <p>Track purchase orders, delivery milestones, and payment documents in one place.</p>
       </header>
+      {loadError ? (
+        <div
+          style={{
+            marginBottom: '1rem',
+            padding: '0.75rem 1rem',
+            borderRadius: '8px',
+            border: '1px solid #fecaca',
+            backgroundColor: '#fef2f2',
+            color: '#b91c1c',
+            fontWeight: 500
+          }}
+        >
+          {loadError}
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="your-orders-loading-wrap">
