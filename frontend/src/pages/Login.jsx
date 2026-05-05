@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Eye, EyeOff, Mail, Lock, LogIn } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { getApiUrl } from '../config/api';
+import { normalizeUser } from '../utils/userType';
 import './Auth.css';
 
 const Login = ({ onLogin }) => {
@@ -40,16 +41,17 @@ const Login = ({ onLogin }) => {
       const data = await response.json();
 
       if (response.ok && data.status === 'success') {
+        const normalizedUser = normalizeUser(data.user);
         localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
-        onLogin(data.user);
+        localStorage.setItem('user', JSON.stringify(normalizedUser));
+        onLogin(normalizedUser);
         
         // Redirect based on user type
-        if (data.user.userType === 'admin') {
+        if (normalizedUser.userType === 'admin') {
           navigate('/admin-dashboard');
-        } else if (data.user.userType === 'service_provider') {
+        } else if (normalizedUser.userType === 'service_provider') {
           navigate('/dashboard');
-        } else if (data.user.userType === 'supplier') {
+        } else if (normalizedUser.userType === 'supplier') {
           navigate('/supplier-dashboard');
         } else {
           navigate('/boq-normalize');

@@ -2,15 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
+import { normalizeUserType } from '../utils/userType';
 import './Layout.css';
 
 const Layout = ({ user, onLogout, children }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const location = useLocation();
+  const userType = normalizeUserType(user?.userType);
   
 
   const steps = [
-    ...(user?.userType === 'admin' ? [
+    ...(userType === 'admin' ? [
       {
         path: '/admin-dashboard', 
         label: 'Admin Dashboard', 
@@ -66,13 +68,13 @@ const Layout = ({ user, onLogout, children }) => {
         label: 'Supply chain',
         icon: Network
       }
-    ] : user?.userType === 'service_provider' ? [
+    ] : userType === 'service_provider' ? [
       {
         path: '/dashboard',
         label: 'Dashboard',
         icon: BarChart3
       }
-    ] : user?.userType === 'supplier' ? [
+    ] : userType === 'supplier' ? [
       {
         path: '/supplier-dashboard', 
         label: 'Dashboard', 
@@ -140,7 +142,7 @@ const Layout = ({ user, onLogout, children }) => {
       }
     ] : []),
     // Only show workflow steps for service providers
-    ...(user?.userType === 'service_provider' ? [
+    ...(userType === 'service_provider' ? [
       { path: '/boq-normalize', label: 'BOQ Normalize', icon: FileText },
       { path: '/product-discovery', label: 'Product Discovery', icon: Search },
       { path: '/supplier-select', label: 'Supplier Select', icon: Users },
@@ -191,9 +193,9 @@ const Layout = ({ user, onLogout, children }) => {
             <div className="user-info">
               <div className="user-name">{user?.name}</div>
               <div className="user-company">
-                {user?.userType === 'admin' ? '🔐 Admin' :
-                 user?.userType === 'service_provider' ? '🏢 Service Provider' : 
-                 user?.userType === 'supplier' ? '🚛 Supplier' : 
+                {userType === 'admin' ? '🔐 Admin' :
+                 userType === 'service_provider' ? '🏢 Service Provider' : 
+                 userType === 'supplier' ? '🚛 Supplier' : 
                  '👤 User'}
               </div>
             </div>

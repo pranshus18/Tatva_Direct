@@ -1,5 +1,6 @@
 import React from 'react';
 import { Navigate } from 'react-router-dom';
+import { normalizeUserType } from '../utils/userType';
 
 const AdminRoute = ({ children, user, isAuthenticated }) => {
   // Check if user is authenticated
@@ -8,7 +9,7 @@ const AdminRoute = ({ children, user, isAuthenticated }) => {
   }
 
   // Check if user is admin
-  if (user?.userType !== 'admin') {
+  if (normalizeUserType(user?.userType) !== 'admin') {
     return <Navigate to="/" replace />;
   }
 

@@ -89,23 +89,33 @@ const parseExcel = async (filePath) => {
       throw new Error('Excel file contains no sheets');
     }
     
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    
-    if (!worksheet) {
-      throw new Error('Could not read worksheet from Excel file');
-    }
-    
-    const data = xlsx.utils.sheet_to_json(worksheet, {
-      defval: '',
-      blankrows: false
+    const keywordRegex = /(description|item|material|product|qty|quantity|unit|uom|rate|price)/i;
+    const sheetCandidates = workbook.SheetNames.map((name) => {
+      const worksheet = workbook.Sheets[name];
+      if (!worksheet) return { name, rows: [], score: -1 };
+
+      const rows = xlsx.utils.sheet_to_json(worksheet, {
+        defval: '',
+        blankrows: false
+      });
+
+      const firstRowKeys = rows[0] ? Object.keys(rows[0]) : [];
+      const keywordMatches = firstRowKeys.filter((k) => keywordRegex.test(String(k))).length;
+      // Prefer sheets with more row data and with BOQ-like headers.
+      const score = rows.length * 10 + keywordMatches * 100;
+      return { name, rows, score };
     });
-    
-    if (!data || data.length === 0) {
+
+    const bestSheet = sheetCandidates
+      .filter((s) => Array.isArray(s.rows) && s.rows.length > 0)
+      .sort((a, b) => b.score - a.score)[0];
+
+    if (!bestSheet || !bestSheet.rows || bestSheet.rows.length === 0) {
       throw new Error('Excel file appears to be empty or contains no data');
     }
-    
-    return data;
+
+    console.log(`[BOQ Parse] Selected Excel sheet: ${bestSheet.name} (rows: ${bestSheet.rows.length})`);
+    return bestSheet.rows;
   } catch (error) {
     console.error('Excel parsing error:', error);
     throw new Error(`Failed to parse Excel file: ${error.message}. Please ensure the file is a valid Excel format (.xlsx or .xls) and contains data.`);

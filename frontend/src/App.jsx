@@ -41,6 +41,7 @@ import CreatePO from './pages/CreatePO';
 import YourOrders from './pages/YourOrders';
 import Cart from './pages/Cart';
 import { getApiUrl } from './config/api';
+import { normalizeUser, normalizeUserType } from './utils/userType';
 
 function App() {
   const WORKFLOW_STORAGE_KEY = 'spBoqWorkflow';
@@ -63,7 +64,7 @@ function App() {
     
     if (token && savedUser) {
       try {
-        const parsedUser = JSON.parse(savedUser);
+        const parsedUser = normalizeUser(JSON.parse(savedUser));
         setUser(parsedUser);
         setIsAuthenticated(true);
 
@@ -85,7 +86,7 @@ function App() {
         }
         
         // Check supplier setup status if user is a supplier
-        if (parsedUser.userType === 'supplier') {
+        if (normalizeUserType(parsedUser.userType) === 'supplier') {
           checkSupplierSetupStatus(token);
         }
       } catch (error) {
@@ -151,11 +152,12 @@ function App() {
   };
 
   const handleLogin = async (userData) => {
-    setUser(userData);
+    const normalizedUser = normalizeUser(userData);
+    setUser(normalizedUser);
     setIsAuthenticated(true);
     
     // Check supplier setup status if user is a supplier
-    if (userData.userType === 'supplier') {
+    if (normalizeUserType(normalizedUser.userType) === 'supplier') {
       const token = localStorage.getItem('token');
       if (token) {
         await checkSupplierSetupStatus(token);
@@ -365,9 +367,9 @@ function App() {
           path="/login" 
           element={
             isAuthenticated ? 
-            (user?.userType === 'admin' ? <Navigate to="/admin-dashboard" replace /> :
-             user?.userType === 'service_provider' ? <Navigate to="/dashboard" replace /> :
-             user?.userType === 'supplier' ? <Navigate to="/supplier-dashboard" replace /> :
+            (normalizeUserType(user?.userType) === 'admin' ? <Navigate to="/admin-dashboard" replace /> :
+             normalizeUserType(user?.userType) === 'service_provider' ? <Navigate to="/dashboard" replace /> :
+             normalizeUserType(user?.userType) === 'supplier' ? <Navigate to="/supplier-dashboard" replace /> :
              <Navigate to="/dashboard" replace />) : 
             <Login onLogin={handleLogin} />
           } 
@@ -386,9 +388,9 @@ function App() {
           path="/signup" 
           element={
             isAuthenticated ? 
-            (user?.userType === 'admin' ? <Navigate to="/admin-dashboard" replace /> :
-             user?.userType === 'service_provider' ? <Navigate to="/dashboard" replace /> :
-             user?.userType === 'supplier' ? <Navigate to="/supplier-dashboard" replace /> :
+            (normalizeUserType(user?.userType) === 'admin' ? <Navigate to="/admin-dashboard" replace /> :
+             normalizeUserType(user?.userType) === 'service_provider' ? <Navigate to="/dashboard" replace /> :
+             normalizeUserType(user?.userType) === 'supplier' ? <Navigate to="/supplier-dashboard" replace /> :
              <Navigate to="/dashboard" replace />) : 
             <Signup onLogin={handleLogin} />
           } 
@@ -406,11 +408,11 @@ function App() {
           <Route 
             index 
             element={
-              user?.userType === 'admin' ?
+              normalizeUserType(user?.userType) === 'admin' ?
               <Navigate to="/admin-dashboard" replace /> :
-              user?.userType === 'service_provider' ? 
+              normalizeUserType(user?.userType) === 'service_provider' ? 
               <Navigate to="/dashboard" replace /> : 
-              user?.userType === 'supplier' ?
+              normalizeUserType(user?.userType) === 'supplier' ?
                 <Navigate to="/supplier-dashboard" replace /> :
               <Navigate to="/boq-normalize" replace />
             } 
