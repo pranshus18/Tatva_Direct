@@ -1069,6 +1069,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   
   // Extract Specifications state
   const [extracting, setExtracting] = useState(false); // For extracting specs from description
+  const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [aiProvider, setAiProvider] = useState('auto'); // 'auto', 'openai', 'gemini', 'claude' - for extract specs only
   // Initialize specifications: for existing products, use their specs; for new products, start empty
   const [specifications, setSpecifications] = useState(() => {
@@ -1135,6 +1136,47 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     console.log('📊 [SPECS STATE] Keys:', Object.keys(specifications));
     console.log('📊 [SPECS STATE] Will display:', specifications && Object.keys(specifications).length > 0);
   }, [specifications]);
+
+  const addSpecificationKey = () => {
+    setSpecifications((prev) => {
+      const next = { ...(prev || {}) };
+      let idx = 1;
+      let candidate = 'new_spec';
+      while (Object.prototype.hasOwnProperty.call(next, candidate)) {
+        idx += 1;
+        candidate = `new_spec_${idx}`;
+      }
+      next[candidate] = '';
+      return next;
+    });
+  };
+
+  const renameSpecificationKey = (oldKey, nextKeyRaw) => {
+    const nextKey = String(nextKeyRaw || '').trim();
+    if (!nextKey || nextKey === oldKey) return;
+    setSpecifications((prev) => {
+      const current = { ...(prev || {}) };
+      if (!Object.prototype.hasOwnProperty.call(current, oldKey)) return prev;
+      const oldValue = current[oldKey];
+      delete current[oldKey];
+      if (Object.prototype.hasOwnProperty.call(current, nextKey)) {
+        const existingValue = current[nextKey];
+        current[nextKey] = existingValue === '' || existingValue == null ? oldValue : existingValue;
+      } else {
+        current[nextKey] = oldValue;
+      }
+      return current;
+    });
+  };
+
+  const removeSpecificationKey = (keyToRemove) => {
+    setSpecifications((prev) => {
+      if (!prev || !Object.prototype.hasOwnProperty.call(prev, keyToRemove)) return prev;
+      const next = { ...prev };
+      delete next[keyToRemove];
+      return next;
+    });
+  };
 
   const fetchSuggestions = async (query) => {
     if (!query || query.trim().length === 0) {
@@ -1413,8 +1455,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       );
 
       if (matchedCategory) {
-        console.log('🔄 Category changed to:', matchedCategory.name, '- loading category/model specs');
-        loadCategorySpecifications(matchedCategory.name, '', { preserveExistingValues: false });
+        const modelHint = String(formData?.name || '').trim();
+        console.log('🔄 Category changed to:', matchedCategory.name, '- loading category/model specs with model hint:', modelHint || '(none)');
+        loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues: false });
       } else {
         // Category doesn't match - specs already cleared above
         console.log('🔄 Category does not match any existing category - Specs cleared');
@@ -1594,6 +1637,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       console.error('❌ Failed to load specifications:', normalizedCategoryName, normalizedModel, err);
       // On error, ensure specs are cleared
       setSpecifications({});
+    } finally {
+      setLoadingSpecs(false);
     }
   };
 
@@ -1800,7 +1845,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           }));
 
           setTimeout(async () => {
-            await loadCategorySpecifications(data.category, '', { preserveExistingValues: true });
+            await loadCategorySpecifications(data.category, data.productName || formData.name || '', { preserveExistingValues: true });
           }, 100);
         }
 
@@ -3130,7 +3175,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                 </div>
                 
                 {/* Show message when category is selected but no admin specs found */}
-                {formData.category && formData.category.trim() && 
+                {formData.category && formData.category.trim() &&
+                 !loadingSpecs &&
                  (!specifications || Object.keys(specifications).length === 0) && 
                  (!product || (product && (product.status || 'pending') === 'pending')) && (
                   <div className="form-group span-2" style={{
@@ -3149,22 +3195,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     }}>
                       <span>ℹ️</span>
                       <span>
-                        <strong>Category "{formData.category}" selected:</strong> No admin-defined specifications found for this category. 
-                        Admin needs to set specifications for a product in this category first. 
-                        You can write specifications in the description and use "Extract Specifications", or add them manually.
+                        <strong>Category "{formData.category}" selected:</strong> No pre-defined specification template found for this product/category yet.
+                        You can add specification keys and values manually below, or use "Extract Specifications".
                       </span>
                     </div>
                   </div>
                 )}
                 
                 {/* Specifications Display Section - Show keys with input fields for manual entry */}
-                {specifications && Object.keys(specifications).length > 0 && (() => {
+                {(() => {
                   // Get all specification keys (we only want the keys, not values)
                   // Remove duplicates (case-insensitive) and filter out empty keys
                   const specKeys = [];
                   const seenKeys = new Set();
                   
-                  Object.keys(specifications).forEach(key => {
+                  Object.keys(specifications || {}).forEach(key => {
                     const keyLower = key.toLowerCase().trim();
                     // Skip if already seen (case-insensitive) or if key is empty
                     if (!seenKeys.has(keyLower) && key.trim() !== '') {
@@ -3172,8 +3217,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       specKeys.push(key);
                     }
                   });
-                  
-                  if (specKeys.length === 0) return null;
                   
                   return (
                     <div className="form-group span-2" style={{
@@ -3183,9 +3226,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       borderRadius: '8px',
                       border: '1px solid #e5e7eb'
                     }}>
-                      <label style={{ marginBottom: '0.75rem', fontWeight: '600', color: '#1e293b', fontSize: '0.875rem' }}>
-                        Specifications (from Admin) - Enter values manually
-                      </label>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+                        <label style={{ marginBottom: 0, fontWeight: '600', color: '#1e293b', fontSize: '0.875rem' }}>
+                          Specifications - edit keys and values
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={addSpecificationKey}
+                          style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                        >
+                          + Add key
+                        </button>
+                      </div>
                       <div style={{
                         display: 'flex',
                         flexDirection: 'column',
@@ -3197,6 +3250,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                         borderRadius: '6px',
                         border: '1px solid #e5e7eb'
                       }}>
+                        {specKeys.length === 0 && (
+                          <div style={{ fontSize: '0.85rem', color: '#64748b', padding: '0.5rem' }}>
+                            No keys yet. Click <strong>Add key</strong> to create specifications.
+                          </div>
+                        )}
                         {specKeys.map((key, index) => (
                           <div key={key} style={{
                             display: 'flex',
@@ -3207,15 +3265,23 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                             borderRadius: '6px',
                             borderLeft: '3px solid #4f46e5'
                           }}>
-                            <label style={{
-                              fontSize: '0.875rem',
-                              color: '#1e293b',
-                              fontWeight: '600',
-                              minWidth: '180px',
-                              flexShrink: 0
-                            }}>
-                              {key}:
-                            </label>
+                            <input
+                              type="text"
+                              defaultValue={key}
+                              onBlur={(e) => renameSpecificationKey(key, e.target.value)}
+                              placeholder="Specification key"
+                              style={{
+                                fontSize: '0.875rem',
+                                color: '#1e293b',
+                                fontWeight: '600',
+                                minWidth: '180px',
+                                maxWidth: '260px',
+                                border: '1px solid #d1d5db',
+                                borderRadius: '6px',
+                                padding: '0.45rem 0.6rem',
+                                background: 'white'
+                              }}
+                            />
                             <input
                               type="text"
                               value={specifications[key] || ''}
@@ -3245,6 +3311,14 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                                 e.target.style.boxShadow = 'none';
                               }}
                             />
+                            <button
+                              type="button"
+                              onClick={() => removeSpecificationKey(key)}
+                              className="btn-secondary"
+                              style={{ padding: '0.35rem 0.6rem', fontSize: '0.78rem', color: '#b91c1c' }}
+                            >
+                              Remove
+                            </button>
                           </div>
                         ))}
                       </div>

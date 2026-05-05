@@ -85,7 +85,7 @@ async function resolveChainRoleOptionsForBrands(brandInputs = []) {
 
   const { data: chainRows, error: chainError } = await supabase
     .from('category_supply_chains')
-    .select('category_name, stages');
+    .select('category_name, stages, updated_at');
   if (chainError) throw chainError;
 
   const brandByKey = new Map();
@@ -96,7 +96,27 @@ async function resolveChainRoleOptionsForBrands(brandInputs = []) {
   const chainByKey = new Map();
   for (const row of chainRows || []) {
     const key = normalizeBrandKey(row?.category_name);
-    if (key && !chainByKey.has(key)) chainByKey.set(key, row);
+    if (!key) continue;
+    const existing = chainByKey.get(key);
+    if (!existing) {
+      chainByKey.set(key, row);
+      continue;
+    }
+    const existingRoles = normalizeChainRolesFromStages(existing?.stages);
+    const nextRoles = normalizeChainRolesFromStages(row?.stages);
+    // Prefer rows that actually contain a valid chain. If both are valid/invalid,
+    // keep the most recently updated row to avoid stale duplicates.
+    if (nextRoles.length > existingRoles.length) {
+      chainByKey.set(key, row);
+      continue;
+    }
+    if (nextRoles.length === existingRoles.length) {
+      const existingTs = Date.parse(existing?.updated_at || 0) || 0;
+      const nextTs = Date.parse(row?.updated_at || 0) || 0;
+      if (nextTs > existingTs) {
+        chainByKey.set(key, row);
+      }
+    }
   }
 
   const perBrand = [];

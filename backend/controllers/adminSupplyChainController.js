@@ -16,6 +16,7 @@ import {
   adminSupplyChainSuggestSchema
 } from '../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
+import { normalizeBrandKey } from '../services/supplyChainSharedService.js';
 
 const router = express.Router();
 
@@ -241,10 +242,7 @@ router.put('/definitions', authenticateToken, requireAdminPrivileges, async (req
     // Keep brands table in sync by ensuring this brand is approved.
     try {
       const nowIso = new Date().toISOString();
-      const normalizedBrand = String(brand || '')
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '')
-        .trim();
+      const normalizedBrand = normalizeBrandKey(brand);
       if (normalizedBrand) {
         const { data: existingBrand } = await supabase
           .from('brands')
