@@ -1067,6 +1067,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   // Track previous category to detect actual changes
   const previousCategoryRef = useRef(null);
   const preserveSpecsOnNextCategoryLoadRef = useRef(false);
+  const selectedSuggestionSpecsRef = useRef(null);
   
   // Extract Specifications state
   const [extracting, setExtracting] = useState(false); // For extracting specs from description
@@ -1249,6 +1250,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     });
     if (nextSpecs) {
       preserveSpecsOnNextCategoryLoadRef.current = true;
+      selectedSuggestionSpecsRef.current = { ...nextSpecs };
       setSpecifications(nextSpecs);
     }
     setSuggestions([]);
@@ -1542,10 +1544,20 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
 
     // Snapshot existing specs before clear (only when preserving values).
-    const existingSpecsSnapshot =
-      preserveExistingValues && specifications && typeof specifications === 'object' && !Array.isArray(specifications)
-        ? { ...specifications }
-        : {};
+    const existingSpecsSnapshot = (() => {
+      if (!preserveExistingValues) return {};
+      if (
+        selectedSuggestionSpecsRef.current &&
+        typeof selectedSuggestionSpecsRef.current === 'object' &&
+        !Array.isArray(selectedSuggestionSpecsRef.current)
+      ) {
+        return { ...selectedSuggestionSpecsRef.current };
+      }
+      if (specifications && typeof specifications === 'object' && !Array.isArray(specifications)) {
+        return { ...specifications };
+      }
+      return {};
+    })();
 
     if (!categoryName || !categoryName.trim()) {
       // If category is cleared, clear specs too
@@ -1613,6 +1625,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             console.log('✅ Specs keys count:', Object.keys(newSpecs).length);
             console.log('✅ Full specs object:', JSON.stringify(newSpecs, null, 2));
             setSpecifications(newSpecs);
+            selectedSuggestionSpecsRef.current = null;
             
             // Force a small delay to ensure state update is processed
             setTimeout(() => {
@@ -1622,16 +1635,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             console.log('ℹ️ No specifications found for category/model:', normalizedCategoryName, normalizedModel || '(none)');
             console.log('ℹ️ Specs object was:', specsObj);
             setSpecifications({});
+            selectedSuggestionSpecsRef.current = null;
           }
         } else {
           // API returned error status - clear specs
           console.log('ℹ️ API returned error status - Clearing specs');
           setSpecifications({});
+          selectedSuggestionSpecsRef.current = null;
         }
       } else if (resp.status === 404) {
         // Category not found - clear specs
         console.log('ℹ️ Category not found (404) for:', normalizedCategoryName, '- Keeping specs empty');
         setSpecifications({});
+        selectedSuggestionSpecsRef.current = null;
       } else {
         console.error('❌ API error:', resp.status, resp.statusText);
         // On API error, keep specs empty
@@ -1641,6 +1657,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       console.error('❌ Failed to load specifications:', normalizedCategoryName, normalizedModel, err);
       // On error, ensure specs are cleared
       setSpecifications({});
+      selectedSuggestionSpecsRef.current = null;
     } finally {
       setLoadingSpecs(false);
     }
