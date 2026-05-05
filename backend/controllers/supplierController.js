@@ -1389,7 +1389,6 @@ router.get('/products/search', authenticateToken, async (req, res) => {
         .select('product_id, attributes, updated_at')
         .in('product_id', matchedProductIds)
         .eq('status', 'approved')
-        .eq('is_active', true)
         .order('updated_at', { ascending: false });
 
       const nonEmptyValueCount = (specsObj) =>
