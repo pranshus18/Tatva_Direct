@@ -1258,6 +1258,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.name, formData.category]);
 
+  // Keep specification template aligned with admin-defined model profiles while typing product name.
+  useEffect(() => {
+    const category = String(formData.category || '').trim();
+    const modelHint = String(formData.name || '').trim();
+    if (!category) return;
+    if (product && (product.status || 'pending') !== 'pending') return;
+
+    const timeout = setTimeout(async () => {
+      await loadCategorySpecifications(category, modelHint, { preserveExistingValues: true });
+    }, 350);
+
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.name, formData.category]);
+
   const handleSubmit = (e) => {
     e.preventDefault();
     setSuggestions([]);
@@ -1599,19 +1614,20 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
 
     // If user manually types a category name that matches an existing category,
-    // load specs for that category (product name is completely ignored)
+    // load specs for that category and current product/model hint.
     if (value.trim().length > 0 && (!product || (product && (product.status || 'pending') === 'pending'))) {
-      // Check if the typed value exactly matches a category name
-      // Product name is NOT checked - only category matters
+      // Check if the typed value exactly matches a category name.
       const matchedCategory = categories.find(cat => 
         cat.name.toLowerCase() === value.trim().toLowerCase() ||
         (cat.displayName || cat.name).toLowerCase() === value.trim().toLowerCase()
       );
       
       if (matchedCategory) {
-        // User typed a valid category name - load its specs (product name irrelevant)
-        console.log('📝 Category typed:', matchedCategory.name, '- Loading specs for this category only...');
-        await loadCategorySpecifications(matchedCategory.name, '', { preserveExistingValues: false });
+        // User typed a valid category name - include product name as model hint so
+        // admin-defined model spec profiles are shown while adding products.
+        const modelHint = String(formData?.name || '').trim();
+        console.log('📝 Category typed:', matchedCategory.name, '- Loading specs with model hint:', modelHint || '(none)');
+        await loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues: false });
       } else {
         // User is typing but hasn't matched a category yet - clear specs
         setSpecifications({});
@@ -1623,23 +1639,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   };
 
   const handleCategorySelect = async (category) => {
-    // Use the actual category name (lowercase) from the database, not displayName
-    // IMPORTANT: Product name is completely ignored - only category matters
+    // Use the actual category name (lowercase) from the database, not displayName.
     const updatedCategory = category.name || category.displayName || category;
     
     // Reset previous category ref to ensure useEffect detects the change
     previousCategoryRef.current = null;
     
     // Update form data first - this will trigger the useEffect
-    // Store the actual category name (lowercase) in formData
-    // Product name in formData is NOT used for loading specs
+    // Store the actual category name (lowercase) in formData.
     setFormData({...formData, category: updatedCategory});
     setShowCategorySuggestions(false);
 
-    // ALWAYS load admin-defined specs for the selected category (new products + pending edits)
-    // This loads specs based ONLY on category - product name is irrelevant
-    console.log('📋 Category selected:', updatedCategory, '- Loading admin specs for this category only (product name ignored)...');
-    await loadCategorySpecifications(updatedCategory, '', { preserveExistingValues: false });
+    // ALWAYS load admin-defined specs for selected category + current model hint.
+    const modelHint = String(formData?.name || '').trim();
+    console.log('📋 Category selected:', updatedCategory, '- Loading admin specs with model hint:', modelHint || '(none)');
+    await loadCategorySpecifications(updatedCategory, modelHint, { preserveExistingValues: false });
   };
 
   const handleCategoryCreate = async () => {
@@ -1663,8 +1677,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         setFormData({...formData, category: createdCategoryName});
         setShowCategorySuggestions(false);
         
-        // Load admin-defined specs for this category (if any exist)
-        await loadCategorySpecifications(createdCategoryName, '', { preserveExistingValues: false });
+        // Load admin-defined specs for this category (if any exist), with model hint.
+        const modelHint = String(formData?.name || '').trim();
+        await loadCategorySpecifications(createdCategoryName, modelHint, { preserveExistingValues: false });
       }
     } catch (error) {
       console.error('Failed to create category:', error);

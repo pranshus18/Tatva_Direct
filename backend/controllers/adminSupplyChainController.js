@@ -236,6 +236,54 @@ router.put('/definitions', authenticateToken, requireAdminPrivileges, async (req
       if (error) throw error;
       row = data;
     }
+
+    // Admin-defined chain should immediately unlock supplier portal gating for the brand.
+    // Keep brands table in sync by ensuring this brand is approved.
+    try {
+      const nowIso = new Date().toISOString();
+      const normalizedBrand = String(brand || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '')
+        .trim();
+      if (normalizedBrand) {
+        const { data: existingBrand } = await supabase
+          .from('brands')
+          .select('id, status')
+          .eq('normalized_name', normalizedBrand)
+          .maybeSingle();
+
+        if (existingBrand?.id) {
+          if (String(existingBrand.status || '').toLowerCase() !== 'approved') {
+            await supabase
+              .from('brands')
+              .update({
+                status: 'approved',
+                approved_by: req.userId,
+                approved_at: nowIso,
+                rejection_reason: null,
+                updated_at: nowIso
+              })
+              .eq('id', existingBrand.id);
+          }
+        } else {
+          await supabase.from('brands').insert({
+            name: brand,
+            normalized_name: normalizedBrand,
+            status: 'approved',
+            requested_by: req.userId,
+            requested_at: nowIso,
+            approved_by: req.userId,
+            approved_at: nowIso,
+            rejection_reason: null,
+            created_at: nowIso,
+            updated_at: nowIso
+          });
+        }
+      }
+    } catch (brandSyncErr) {
+      console.error('[adminSupplyChain] brand approval sync failed:', brandSyncErr);
+    }
+
     res.json({ status: 'success', definition: row });
   } catch (e) {
     if (String(e?.name || '') === 'ZodError') {

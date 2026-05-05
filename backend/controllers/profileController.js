@@ -108,13 +108,15 @@ async function resolveChainRoleOptionsForBrands(brandInputs = []) {
   for (const b of normalizedBrands) {
     const brandRow = brandByKey.get(b.normalized) || null;
     const brandStatus = String(brandRow?.status || 'missing');
-    if (brandStatus !== 'approved') {
-      blockedReason = 'brand_not_approved';
-      notApprovedBrands.push(brandRow?.name || b.original);
-    }
 
     const chainRow = chainByKey.get(b.normalized) || null;
     const roles = normalizeChainRolesFromStages(chainRow?.stages);
+    // If admin already defined a chain for this brand, treat it as eligible for role resolution
+    // even when the legacy brands.status is still pending/rejected due to older data.
+    if (brandStatus !== 'approved' && roles.length === 0) {
+      blockedReason = 'brand_not_approved';
+      notApprovedBrands.push(brandRow?.name || b.original);
+    }
     if (roles.length === 0) {
       if (!blockedReason) blockedReason = 'supply_chain_not_defined';
       missingChainBrands.push(brandRow?.name || b.original);
