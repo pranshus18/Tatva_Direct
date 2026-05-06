@@ -1403,10 +1403,55 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       const toObject = (value) => {
         if (!value) return null;
         if (typeof value === 'object' && !Array.isArray(value)) return value;
+        if (Array.isArray(value)) {
+          const out = {};
+          for (const item of value) {
+            if (!item) continue;
+            if (Array.isArray(item) && item.length >= 2) {
+              const k = String(item[0] ?? '').trim();
+              if (!k) continue;
+              out[k] = item[1];
+              continue;
+            }
+            if (typeof item === 'object') {
+              const k = String(item.key ?? item.name ?? '').trim();
+              if (!k) continue;
+              out[k] = item.value;
+            }
+          }
+          return Object.keys(out).length > 0 ? out : null;
+        }
         if (typeof value === 'string') {
           try {
-            const parsed = JSON.parse(value);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+            let parsed = JSON.parse(value);
+            if (typeof parsed === 'string') {
+              try {
+                parsed = JSON.parse(parsed);
+              } catch {
+                // keep as-is
+              }
+            }
+            if (parsed && typeof parsed === 'object') {
+              if (!Array.isArray(parsed)) return parsed;
+              if (Array.isArray(parsed)) {
+                const out = {};
+                for (const item of parsed) {
+                  if (!item) continue;
+                  if (Array.isArray(item) && item.length >= 2) {
+                    const k = String(item[0] ?? '').trim();
+                    if (!k) continue;
+                    out[k] = item[1];
+                    continue;
+                  }
+                  if (typeof item === 'object') {
+                    const k = String(item.key ?? item.name ?? '').trim();
+                    if (!k) continue;
+                    out[k] = item.value;
+                  }
+                }
+                return Object.keys(out).length > 0 ? out : null;
+              }
+            }
           } catch {
             return null;
           }
@@ -1421,7 +1466,8 @@ router.get('/products/search', authenticateToken, async (req, res) => {
         .order('updated_at', { ascending: false });
 
       for (const row of approvedOffers || []) {
-        const status = String(row?.status || '').toLowerCase();
+        // In production, DB rows can contain "Approved " / " APPROVED" etc.
+        const status = String(row?.status || '').trim().toLowerCase();
         if (status !== 'approved') continue;
         const pid = row?.product_id;
         const attributesObj = toObject(row?.attributes);
@@ -1584,11 +1630,69 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     const product = products && products.length > 0 ? products[0] : null;
     const toObject = (value) => {
       if (!value) return null;
-      if (typeof value === 'object' && !Array.isArray(value)) return value;
+      if (typeof value === 'object') {
+        // If it's already a plain object (most common case), keep it.
+        if (!Array.isArray(value)) return value;
+
+        // Handle legacy formats where specifications are stored as an array of key/value items.
+        // Examples that we attempt:
+        //   [{ key: "brandModel", value: "X" }]
+        //   [{ name: "brandModel", value: "X" }]
+        //   [["brandModel","X"], ...]
+        if (Array.isArray(value)) {
+          const out = {};
+          for (const item of value) {
+            if (!item) continue;
+            if (Array.isArray(item) && item.length >= 2) {
+              const k = String(item[0] ?? '').trim();
+              if (!k) continue;
+              out[k] = item[1];
+              continue;
+            }
+            if (typeof item === 'object') {
+              const k = String(item.key ?? item.name ?? '').trim();
+              if (!k) continue;
+              const v = item.value;
+              out[k] = v;
+            }
+          }
+          return Object.keys(out).length > 0 ? out : null;
+        }
+      }
       if (typeof value === 'string') {
         try {
-          const parsed = JSON.parse(value);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+          // Some production rows are double-encoded JSON strings.
+          let parsed = JSON.parse(value);
+          if (typeof parsed === 'string') {
+            try {
+              parsed = JSON.parse(parsed);
+            } catch {
+              // keep as-is
+            }
+          }
+          if (parsed && typeof parsed === 'object') {
+            if (!Array.isArray(parsed)) return parsed;
+
+            // If parsed into an array, try converting to object (same logic as above).
+            if (Array.isArray(parsed)) {
+              const out = {};
+              for (const item of parsed) {
+                if (!item) continue;
+                if (Array.isArray(item) && item.length >= 2) {
+                  const k = String(item[0] ?? '').trim();
+                  if (!k) continue;
+                  out[k] = item[1];
+                  continue;
+                }
+                if (typeof item === 'object') {
+                  const k = String(item.key ?? item.name ?? '').trim();
+                  if (!k) continue;
+                  out[k] = item.value;
+                }
+              }
+              return Object.keys(out).length > 0 ? out : null;
+            }
+          }
         } catch {
           return null;
         }
@@ -1597,9 +1701,7 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     };
 
     let mergedSpecifications =
-      product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
-        ? { ...product.specifications }
-        : {};
+      toObject(product?.specifications) ? { ...toObject(product.specifications) } : {};
 
     if (product?.id) {
       const { data: approvedSpecOffers } = await supabase
@@ -1622,7 +1724,7 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
 
       let bestSpecs = null;
       for (const row of approvedSpecOffers || []) {
-        const status = String(row?.status || '').toLowerCase();
+        const status = String(row?.status || '').trim().toLowerCase();
         if (status !== 'approved') continue;
         const attributesObj = toObject(row?.attributes);
         const specs = toObject(attributesObj?.specifications);
