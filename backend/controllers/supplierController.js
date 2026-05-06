@@ -1727,7 +1727,18 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
         const status = String(row?.status || '').trim().toLowerCase();
         if (status !== 'approved') continue;
         const attributesObj = toObject(row?.attributes);
-        const specs = toObject(attributesObj?.specifications);
+        let specs = toObject(attributesObj?.specifications ?? attributesObj?.specs ?? attributesObj?.specification);
+
+        // Backward-compat: some older rows can carry spec keys directly in attributes.
+        if (!specs && attributesObj && typeof attributesObj === 'object' && !Array.isArray(attributesObj)) {
+          const direct = {};
+          Object.keys(attributesObj || {}).forEach((k) => {
+            if (['description', 'name', 'images', 'brandModel', 'lsa', 'hsnCode'].includes(k)) return;
+            direct[k] = attributesObj[k];
+          });
+          if (Object.keys(direct).length > 0) specs = direct;
+        }
+
         if (!specs) continue;
         if (!bestSpecs || nonEmptyValueCount(specs) > nonEmptyValueCount(bestSpecs)) {
           bestSpecs = specs;
