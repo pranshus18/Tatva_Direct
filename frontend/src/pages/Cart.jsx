@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, Boxes, Building2, CalendarClock, ShoppingCart, Trash2 } from 'lucide-react';
+import { AlertTriangle, Boxes, Building2, CalendarClock, Clipboard, Mail, MessageCircle, Share2, ShoppingCart, Trash2, X } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { formatDateTimeIST } from '../utils/dateTime';
 import './Cart.css';
@@ -20,6 +20,11 @@ const Cart = ({ onLoadCart }) => {
   const [cart, setCart] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareLink, setShareLink] = useState('');
+  const [shareError, setShareError] = useState('');
+  const [shareCopied, setShareCopied] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [qtyBusyByItem, setQtyBusyByItem] = useState({});
   const [qtyDraftByItem, setQtyDraftByItem] = useState({});
   const qtySaveTimersRef = useRef({});
@@ -229,6 +234,81 @@ const Cart = ({ onLoadCart }) => {
       alert(e.message || 'Failed to clear cart');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const ensureShareLink = async () => {
+    if (shareLink) return shareLink;
+    setShareBusy(true);
+    setShareError('');
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(getApiUrl('/api/cart-share'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ttlDays: 7 })
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to create share link');
+      }
+      const url = data.shareUrl || (typeof window !== 'undefined'
+        ? `${window.location.origin}/c/${encodeURIComponent(data.token)}`
+        : '');
+      setShareLink(url);
+      return url;
+    } catch (e) {
+      setShareError(e.message || 'Failed to create share link');
+      throw e;
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const handleCopyShareLink = async () => {
+    try {
+      const url = await ensureShareLink();
+      await navigator.clipboard.writeText(url);
+      setShareCopied(true);
+      setTimeout(() => setShareCopied(false), 1200);
+    } catch (e) {
+      alert(e.message || 'Copy failed');
+    }
+  };
+
+  const handleOpenShare = async () => {
+    if (!hasCart) return;
+    setShareOpen(true);
+    try {
+      await ensureShareLink();
+    } catch {
+      // errors are shown inside modal
+    }
+  };
+
+  const handleShareWhatsApp = async () => {
+    try {
+      const url = await ensureShareLink();
+      const message = `Here is my cart from Tatva Direct:\n${url}`;
+      const waUrl = `https://wa.me/?text=${encodeURIComponent(message)}`;
+      window.open(waUrl, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      alert(e.message || 'Failed to share');
+    }
+  };
+
+  const handleShareGmail = async () => {
+    try {
+      const url = await ensureShareLink();
+      const subject = 'Shared cart - Tatva Direct';
+      const body = `Hi,\n\nSharing my cart with you:\n${url}\n\nRegards`;
+      const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+      window.open(gmailUrl, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      alert(e.message || 'Failed to share');
     }
   };
 
@@ -559,11 +639,78 @@ const Cart = ({ onLoadCart }) => {
                 {isSupplierCart ? 'Continue Upstream Ordering' : 'Continue to Supplier Selection'}
               </button>
             ) : null}
+
+            <button
+              className="btn-secondary cart-share-btn"
+              onClick={handleOpenShare}
+              disabled={shareBusy || !hasCart}
+              title={!hasCart ? 'No cart to share' : 'Share this cart'}
+              type="button"
+            >
+              <Share2 size={16} />
+              {shareBusy ? 'Preparing...' : 'Share'}
+            </button>
+
             <button className="btn-secondary" onClick={handleClearCart} disabled={busy}>
               <Trash2 size={16} />
               {busy ? 'Clearing...' : 'Clear Cart'}
             </button>
           </div>
+
+          {shareOpen ? (
+            <div
+              className="cart-share-modal-backdrop"
+              role="presentation"
+              onClick={() => setShareOpen(false)}
+            >
+              <div
+                className="cart-share-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Share cart"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="cart-share-modal__head">
+                  <div>
+                    <h3>Share cart</h3>
+                    <p>Send this cart link on WhatsApp or Gmail.</p>
+                  </div>
+                  <button type="button" className="cart-share-modal__close" onClick={() => setShareOpen(false)}>
+                    <X size={18} />
+                  </button>
+                </div>
+
+                {shareError ? (
+                  <div className="cart-alert cart-alert--error" style={{ marginBottom: '0.75rem' }}>
+                    <AlertTriangle size={18} />
+                    <span>{shareError}</span>
+                  </div>
+                ) : null}
+
+                <div className="cart-share-link-row">
+                  <span className="cart-share-link-label">Link</span>
+                  <a className="cart-share-link" href={shareLink || '#'} target="_blank" rel="noreferrer">
+                    {shareLink || (shareBusy ? 'Preparing link…' : '-')}
+                  </a>
+                  <button type="button" className="btn-secondary cart-share-copy-mini" onClick={handleCopyShareLink} disabled={!shareLink}>
+                    <Clipboard size={16} />
+                    {shareCopied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+
+                <div className="cart-share-modal__actions">
+                  <button type="button" className="btn-secondary" onClick={handleShareWhatsApp} disabled={!shareLink}>
+                    <MessageCircle size={16} />
+                    WhatsApp
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={handleShareGmail} disabled={!shareLink}>
+                    <Mail size={16} />
+                    Gmail
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </div>

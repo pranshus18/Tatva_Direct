@@ -43,6 +43,7 @@ const Substitution = lazy(() => import('./pages/Substitution'));
 const CreatePO = lazy(() => import('./pages/CreatePO'));
 const YourOrders = lazy(() => import('./pages/YourOrders'));
 const Cart = lazy(() => import('./pages/Cart'));
+const SharedCart = lazy(() => import('./pages/SharedCart'));
 
 function App() {
   const WORKFLOW_STORAGE_KEY = 'spBoqWorkflow';
@@ -221,6 +222,8 @@ function App() {
       <Suspense fallback={routeLoader}>
       <Routes>
         {/* Public Routes */}
+        <Route path="/shared-cart/:token" element={<SharedCart />} />
+        <Route path="/c/:token" element={<SharedCart />} />
         {/* Supplier Portal - always go directly to supplier dashboard */}
         <Route 
           path="/supplier-portal" 

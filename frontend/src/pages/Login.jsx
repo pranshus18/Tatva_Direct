@@ -45,6 +45,29 @@ const Login = ({ onLogin }) => {
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(normalizedUser));
         onLogin(normalizedUser);
+
+        // If user came from a shared cart link, apply it now.
+        const pendingSharedCartToken = localStorage.getItem('pendingSharedCartToken');
+        const isCartUser = normalizedUser.userType === 'service_provider' || normalizedUser.userType === 'supplier';
+        if (pendingSharedCartToken && isCartUser) {
+          try {
+            const applyRes = await fetch(
+              getApiUrl(`/api/cart-share/${encodeURIComponent(pendingSharedCartToken)}/apply`),
+              {
+                method: 'POST',
+                headers: { Authorization: `Bearer ${data.token}` }
+              }
+            );
+            const applyData = await applyRes.json().catch(() => ({}));
+            if (applyRes.ok && applyData.status === 'success') {
+              localStorage.removeItem('pendingSharedCartToken');
+              navigate(normalizedUser.userType === 'supplier' ? '/supplier-cart' : '/cart');
+              return;
+            }
+          } catch {
+            // Ignore apply errors; continue normal redirect.
+          }
+        }
         
         // Redirect based on user type
         if (normalizedUser.userType === 'admin') {
