@@ -1386,22 +1386,32 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     if (matchedProductIds.length > 0) {
       const { data: approvedOffers } = await supabase
         .from('supplier_products')
-        .select('product_id, attributes, updated_at')
+        .select('product_id, attributes, updated_at, status')
         .in('product_id', matchedProductIds)
-        .eq('status', 'approved')
         .order('updated_at', { ascending: false });
 
       const nonEmptyValueCount = (specsObj) =>
         Object.values(specsObj || {}).filter((v) => String(v ?? '').trim() !== '').length;
 
       for (const row of approvedOffers || []) {
+        const status = String(row?.status || '').toLowerCase();
+        if (status !== 'approved') continue;
         const pid = row?.product_id;
-        const specs =
+        let specs =
           row?.attributes?.specifications &&
           typeof row.attributes.specifications === 'object' &&
           !Array.isArray(row.attributes.specifications)
             ? row.attributes.specifications
             : null;
+        // Backward-compat: some older rows can carry spec keys directly in attributes.
+        if (!specs && row?.attributes && typeof row.attributes === 'object' && !Array.isArray(row.attributes)) {
+          const direct = {};
+          Object.keys(row.attributes || {}).forEach((k) => {
+            if (['description', 'name', 'images', 'brandModel', 'lsa', 'hsnCode'].includes(k)) return;
+            direct[k] = row.attributes[k];
+          });
+          if (Object.keys(direct).length > 0) specs = direct;
+        }
         if (!pid || !specs) continue;
         const existing = bestSpecsByProductId.get(pid);
         if (!existing) {
