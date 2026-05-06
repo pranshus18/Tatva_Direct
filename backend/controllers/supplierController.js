@@ -1775,6 +1775,58 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       }
     }
 
+    // Ensure admin-defined spec keys are present even if product/supplier specs are empty.
+    // This makes the UI deterministic on selection (no dependency on a separate template fetch).
+    if (product?.category) {
+      const categoryName = String(product.category || '').trim().toLowerCase();
+      const modelIdentifier = normalizeModelIdentifier(product.name || '');
+
+      let templateSpecs = null;
+
+      // Prefer model-specific profile template if it exists.
+      if (categoryName && modelIdentifier) {
+        const { data: profile, error: profileError } = await supabase
+          .from('model_spec_profiles')
+          .select('specifications')
+          .eq('category', categoryName)
+          .eq('model_identifier', modelIdentifier)
+          .maybeSingle();
+        if (profileError) {
+          console.error('Product lookup model profile fetch error:', profileError);
+        } else {
+          const parsed = toObject(profile?.specifications);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length > 0) {
+            templateSpecs = parsed;
+          }
+        }
+      }
+
+      // Fallback to category defaults.
+      if (!templateSpecs && categoryName) {
+        const { data: catRow, error: catError } = await supabase
+          .from('categories')
+          .select('default_specifications')
+          .eq('name', categoryName)
+          .maybeSingle();
+        if (catError) {
+          console.error('Product lookup category specs fetch error:', catError);
+        } else {
+          const parsed = toObject(catRow?.default_specifications);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length > 0) {
+            templateSpecs = parsed;
+          }
+        }
+      }
+
+      if (templateSpecs) {
+        Object.keys(templateSpecs).forEach((k) => {
+          if (!Object.prototype.hasOwnProperty.call(mergedSpecifications, k)) {
+            mergedSpecifications[k] = templateSpecs[k];
+          }
+        });
+      }
+    }
+
     // If product exists, calculate recommended price as average of all suppliers' prices
     // Prefer excluding the current supplier (so they see market average) when possible.
     let recommendedPrice = null;
