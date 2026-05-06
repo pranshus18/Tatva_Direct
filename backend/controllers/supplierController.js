@@ -1348,11 +1348,12 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const query = String(q || '').trim();
 
     // Return existing approved catalog products with enough fields for rich dropdown details.
+    // Production has legacy rows where `is_active` can be null/false even for approved products,
+    // so do NOT hard-filter on is_active here (we still enforce approved status).
     let productsQuery = supabase
       .from('products')
       .select('id, name, category, unit, description, brand, gtin, barcode, specifications, status, is_active, updated_at')
-      .eq('is_active', true)
-      .eq('status', 'approved');
+      .in('status', ['approved', 'APPROVED']);
     if (normalizedCategory) {
       productsQuery = productsQuery.eq('category', normalizedCategory);
     }
