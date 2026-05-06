@@ -1386,6 +1386,17 @@ router.get('/products/search', authenticateToken, async (req, res) => {
 
     // Enrich product specs with the latest approved supplier-entered spec values.
     // This ensures dropdown selection returns filled key-value pairs, not only template keys.
+    const isMeaningfullyFilled = (v) => {
+      if (v === null || v === undefined) return false;
+      if (Array.isArray(v)) return v.length > 0;
+      if (typeof v === 'object') return Object.keys(v).length > 0;
+      if (typeof v === 'number') return Number.isFinite(v);
+      if (typeof v === 'boolean') return true;
+      return String(v).trim() !== '';
+    };
+    const nonEmptyValueCount = (specsObj) =>
+      Object.values(specsObj || {}).filter(isMeaningfullyFilled).length;
+
     const matchedProductIds = [...new Set((matchedProducts || []).map((p) => p.id).filter(Boolean))];
     const bestSpecsByProductId = new Map();
     if (matchedProductIds.length > 0) {
@@ -1408,17 +1419,6 @@ router.get('/products/search', authenticateToken, async (req, res) => {
         .select('product_id, attributes, updated_at, status')
         .in('product_id', matchedProductIds)
         .order('updated_at', { ascending: false });
-
-      const isMeaningfullyFilled = (v) => {
-        if (v === null || v === undefined) return false;
-        if (Array.isArray(v)) return v.length > 0;
-        if (typeof v === 'object') return Object.keys(v).length > 0;
-        if (typeof v === 'number') return Number.isFinite(v);
-        if (typeof v === 'boolean') return true;
-        return String(v).trim() !== '';
-      };
-      const nonEmptyValueCount = (specsObj) =>
-        Object.values(specsObj || {}).filter(isMeaningfullyFilled).length;
 
       for (const row of approvedOffers || []) {
         const status = String(row?.status || '').toLowerCase();
