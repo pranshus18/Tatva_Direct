@@ -1404,8 +1404,16 @@ router.get('/products/search', authenticateToken, async (req, res) => {
         .in('product_id', matchedProductIds)
         .order('updated_at', { ascending: false });
 
+      const isMeaningfullyFilled = (v) => {
+        if (v === null || v === undefined) return false;
+        if (Array.isArray(v)) return v.length > 0;
+        if (typeof v === 'object') return Object.keys(v).length > 0;
+        if (typeof v === 'number') return Number.isFinite(v);
+        if (typeof v === 'boolean') return true;
+        return String(v).trim() !== '';
+      };
       const nonEmptyValueCount = (specsObj) =>
-        Object.values(specsObj || {}).filter((v) => String(v ?? '').trim() !== '').length;
+        Object.values(specsObj || {}).filter(isMeaningfullyFilled).length;
 
       for (const row of approvedOffers || []) {
         const status = String(row?.status || '').toLowerCase();
@@ -1444,8 +1452,11 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       const merged = { ...baseSpecs };
       Object.keys(supplierSpecs || {}).forEach((k) => {
         const supplierValue = supplierSpecs[k];
-        if (String(supplierValue ?? '').trim() !== '') {
-          merged[k] = supplierValue;
+        if (supplierValue !== undefined && supplierValue !== null) {
+          // Prefer supplier-entered values even when they are arrays/objects.
+          if (isMeaningfullyFilled(supplierValue) || !Object.prototype.hasOwnProperty.call(merged, k)) {
+            merged[k] = supplierValue;
+          }
         } else if (!Object.prototype.hasOwnProperty.call(merged, k)) {
           merged[k] = supplierValue;
         }
@@ -1593,8 +1604,16 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
         .order('updated_at', { ascending: false })
         .limit(200);
 
+      const isMeaningfullyFilled = (v) => {
+        if (v === null || v === undefined) return false;
+        if (Array.isArray(v)) return v.length > 0;
+        if (typeof v === 'object') return Object.keys(v).length > 0;
+        if (typeof v === 'number') return Number.isFinite(v);
+        if (typeof v === 'boolean') return true;
+        return String(v).trim() !== '';
+      };
       const nonEmptyValueCount = (specsObj) =>
-        Object.values(specsObj || {}).filter((v) => String(v ?? '').trim() !== '').length;
+        Object.values(specsObj || {}).filter(isMeaningfullyFilled).length;
 
       let bestSpecs = null;
       for (const row of approvedSpecOffers || []) {
@@ -1611,8 +1630,10 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       if (bestSpecs) {
         Object.keys(bestSpecs).forEach((k) => {
           const v = bestSpecs[k];
-          if (String(v ?? '').trim() !== '') {
-            mergedSpecifications[k] = v;
+          if (v !== undefined && v !== null) {
+            if (isMeaningfullyFilled(v) || !Object.prototype.hasOwnProperty.call(mergedSpecifications, k)) {
+              mergedSpecifications[k] = v;
+            }
           } else if (!Object.prototype.hasOwnProperty.call(mergedSpecifications, k)) {
             mergedSpecifications[k] = v;
           }
