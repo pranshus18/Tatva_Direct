@@ -1273,7 +1273,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       try {
         const token = localStorage.getItem('token');
         const res = await fetch(
-          `/api/supplier/products/lookup?name=${encodeURIComponent(name)}&category=${encodeURIComponent(category)}`,
+          getApiUrl(
+            `/api/supplier/products/lookup?name=${encodeURIComponent(name)}&category=${encodeURIComponent(category)}`
+          ),
           { headers: { 'Authorization': `Bearer ${token}` } }
         );
         const data = await res.json();
