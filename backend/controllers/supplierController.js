@@ -1348,12 +1348,12 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const query = String(q || '').trim();
 
     // Return existing approved catalog products with enough fields for rich dropdown details.
-    // Production has legacy rows where `is_active` can be null/false even for approved products,
-    // so do NOT hard-filter on is_active here (we still enforce approved status).
+    // Production has legacy rows where `is_active` can be null/false and `status` casing/whitespace
+    // varies (e.g. "Approved", "APPROVED ", null). Fetch broadly then filter in code.
     let productsQuery = supabase
       .from('products')
       .select('id, name, category, unit, description, brand, gtin, barcode, specifications, status, is_active, updated_at')
-      .in('status', ['approved', 'APPROVED']);
+      .limit(query ? 200 : limit);
     if (normalizedCategory) {
       productsQuery = productsQuery.eq('category', normalizedCategory);
     }
@@ -1361,9 +1361,8 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       const ilikeQuery = `%${query.replace(/\s+/g, '%')}%`;
       productsQuery = productsQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`);
     }
-    const { data: matchedProducts, error } = await productsQuery
-      .order('updated_at', { ascending: false })
-      .limit(query ? 50 : limit);
+    const { data: rawProducts, error } = await productsQuery
+      .order('updated_at', { ascending: false });
     
     if (error) {
       console.error('Error fetching products for search:', error);
@@ -1372,6 +1371,11 @@ router.get('/products/search', authenticateToken, async (req, res) => {
         message: 'Internal server error'
       });
     }
+
+    const matchedProducts = (rawProducts || []).filter((p) => {
+      const st = String(p?.status ?? '').trim().toLowerCase();
+      return st === 'approved';
+    });
 
     if (!matchedProducts || matchedProducts.length === 0) {
       return res.json({
