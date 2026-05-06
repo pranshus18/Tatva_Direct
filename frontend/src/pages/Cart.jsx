@@ -119,6 +119,26 @@ const Cart = ({ onLoadCart }) => {
       boqId: group.boqId || null,
       boqProject: group.boqProject || null
     };
+
+    // Persist immediately so Supplier Selection always gets this BOQ, even if route changes
+    // before parent state propagation completes.
+    try {
+      localStorage.setItem('spBoqWorkflow', JSON.stringify({
+        normalizedItems: workflowDraft.items,
+        selectedVendors: workflowDraft.selectedVendors,
+        substitutions: workflowDraft.substitutions,
+        boqId: workflowDraft.boqId,
+        boqProject: workflowDraft.boqProject
+      }));
+      if (workflowDraft.boqId) {
+        localStorage.setItem('lastBoqId', workflowDraft.boqId);
+      } else {
+        localStorage.removeItem('lastBoqId');
+      }
+    } catch {
+      // Best effort; continue navigation even if storage write fails.
+    }
+
     if (typeof onLoadCart === 'function') {
       onLoadCart(workflowDraft);
     }

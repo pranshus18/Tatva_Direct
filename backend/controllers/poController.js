@@ -1235,6 +1235,91 @@ router.put('/cart', authenticateToken, isServiceProvider, async (req, res) => {
   }
 });
 
+router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const productId = String(req.body?.productId || '').trim();
+    const rawQty = Number(req.body?.quantity);
+    const quantity = Number.isFinite(rawQty) ? Math.max(1, Math.floor(rawQty)) : 1;
+
+    if (!productId) {
+      return res.status(400).json({ status: 'error', message: 'productId is required' });
+    }
+
+    const { data: product, error: productError } = await supabase
+      .from('products')
+      .select('id, name, unit, brand, specifications, status')
+      .eq('id', productId)
+      .maybeSingle();
+    if (productError) throw productError;
+    if (!product || String(product.status || '').toLowerCase() !== 'approved') {
+      return res.status(404).json({ status: 'error', message: 'Product not found' });
+    }
+
+    const { data: cartRow, error: cartError } = await supabase
+      .from('po_carts')
+      .select('id, draft_payload')
+      .eq('service_provider_id', req.userId)
+      .maybeSingle();
+    if (cartError) throw cartError;
+
+    const currentDraft = normalizePoCartDraft(
+      cartRow?.draft_payload && typeof cartRow.draft_payload === 'object' ? cartRow.draft_payload : {}
+    );
+
+    const discoveryItem = {
+      id: `pd-item-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      normalizedName: product.name || 'Unnamed Product',
+      rawName: product.name || 'Unnamed Product',
+      name: product.name || 'Unnamed Product',
+      quantity,
+      unit: product.unit || 'nos',
+      productId: product.id,
+      brand: product.brand || undefined,
+      specifications: product.specifications || undefined
+    };
+
+    const groupId = `pd-group-${newPoCartGroupId()}`;
+    const existingGroups = Array.isArray(currentDraft.boqGroups) ? currentDraft.boqGroups : [];
+    const nextGroups = [
+      ...existingGroups,
+      {
+        groupId,
+        boqId: null,
+        boqName: `Discovery - ${product.name || 'Product'}`,
+        boqProject: { source: 'product_discovery' },
+        selectedVendors: {},
+        substitutions: [],
+        items: [discoveryItem]
+      }
+    ];
+
+    const nextDraftPayload = normalizePoCartDraft({
+      ...currentDraft,
+      boqGroups: nextGroups
+    });
+
+    const { error: saveError } = await supabase
+      .from('po_carts')
+      .upsert(
+        {
+          service_provider_id: req.userId,
+          draft_payload: nextDraftPayload
+        },
+        { onConflict: 'service_provider_id' }
+      );
+    if (saveError) throw saveError;
+
+    return res.json({
+      status: 'success',
+      message: 'Product added to cart',
+      groupId
+    });
+  } catch (error) {
+    console.error('Add discovery product to cart error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to add product to cart' });
+  }
+});
+
 router.patch('/cart/items/:itemId/quantity', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const rawQuantity = Number(req.body?.quantity);

@@ -1344,16 +1344,40 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const limit = Number.isFinite(parsedLimit)
       ? Math.min(Math.max(parsedLimit, 1), 50)
       : 20;
+    const parsedPage = Number.parseInt(String(req.query.page || ''), 10);
+    const page = Number.isFinite(parsedPage) ? Math.max(parsedPage, 1) : 1;
+    const parsedOffset = Number.parseInt(String(req.query.offset || ''), 10);
+    const offset = Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : (page - 1) * limit;
     const normalizedCategory = String(category || '').trim().toLowerCase();
     const query = String(q || '').trim();
 
-    // Return existing approved catalog products with enough fields for rich dropdown details.
-    // Production has legacy rows where `is_active` can be null/false and `status` casing/whitespace
-    // varies (e.g. "Approved", "APPROVED ", null). Fetch broadly then filter in code.
+    // Product Discovery should show products that are actually LISTED by suppliers (supplier_products),
+    // not just the raw catalog table. We fetch approved products that have at least one active,
+    // approved supplier listing. We also return total count for pagination.
     let productsQuery = supabase
       .from('products')
-      .select('id, name, category, unit, description, brand, gtin, barcode, specifications, status, is_active, updated_at')
-      .limit(query ? 200 : limit);
+      .select(
+        `
+          id,
+          name,
+          category,
+          unit,
+          description,
+          brand,
+          gtin,
+          barcode,
+          specifications,
+          status,
+          is_active,
+          updated_at,
+          supplier_products!inner(count)
+        `,
+        { count: 'exact' }
+      )
+      .eq('status', 'approved')
+      .eq('supplier_products.status', 'approved')
+      .eq('supplier_products.is_active', true);
+
     if (normalizedCategory) {
       productsQuery = productsQuery.eq('category', normalizedCategory);
     }
@@ -1361,8 +1385,10 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       const ilikeQuery = `%${query.replace(/\s+/g, '%')}%`;
       productsQuery = productsQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`);
     }
-    const { data: rawProducts, error } = await productsQuery
-      .order('updated_at', { ascending: false });
+
+    const { data: rawProducts, error, count } = await productsQuery
+      .order('updated_at', { ascending: false })
+      .range(offset, offset + limit - 1);
     
     if (error) {
       console.error('Error fetching products for search:', error);
@@ -1372,20 +1398,26 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       });
     }
 
-    const matchedProducts = (rawProducts || []).filter((p) => {
-      const st = String(p?.status ?? '').trim().toLowerCase();
-      return st === 'approved';
+    const suggestions = (rawProducts || []).map((p) => {
+      const supplierCount = Array.isArray(p?.supplier_products) && p.supplier_products[0] && Number.isFinite(p.supplier_products[0].count)
+        ? p.supplier_products[0].count
+        : null;
+      return {
+        ...p,
+        supplierCount
+      };
     });
 
-    if (!matchedProducts || matchedProducts.length === 0) {
-      return res.json({
-        status: 'success',
-        suggestions: []
-      });
-    }
+    return res.json({
+      status: 'success',
+      suggestions,
+      total: Number.isFinite(count) ? count : suggestions.length,
+      limit,
+      offset
+    });
 
-    // Enrich product specs with the latest approved supplier-entered spec values.
-    // This ensures dropdown selection returns filled key-value pairs, not only template keys.
+    // (Legacy enrichment logic below is kept for compatibility with other flows that may rely
+    // on filled specs; Product Discovery now returns supplier-listed products above.)
     const isMeaningfullyFilled = (v) => {
       if (v === null || v === undefined) return false;
       if (Array.isArray(v)) return v.length > 0;

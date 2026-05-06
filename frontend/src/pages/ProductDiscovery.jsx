@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, Package } from 'lucide-react';
+import { Check, Package, Search, ShoppingCart } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import './ProductDiscovery.css';
 
@@ -7,8 +7,13 @@ const ProductDiscovery = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [products, setProducts] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [cartBusyByProductId, setCartBusyByProductId] = useState({});
+  const [cartAddedByProductId, setCartAddedByProductId] = useState({});
+  const pageSize = 24;
 
   const categories = useMemo(() => {
     const unique = new Set();
@@ -33,7 +38,8 @@ const ProductDiscovery = () => {
         const params = new URLSearchParams();
         if (searchQuery.trim()) params.set('q', searchQuery.trim());
         if (selectedCategory.trim()) params.set('category', selectedCategory.trim());
-        params.set('limit', '30');
+        params.set('limit', String(pageSize));
+        params.set('page', String(page));
 
         const response = await fetch(getApiUrl(`/api/supplier/products/search?${params.toString()}`), {
           headers: {
@@ -45,8 +51,10 @@ const ProductDiscovery = () => {
           throw new Error(data.message || 'Failed to fetch products');
         }
         setProducts(Array.isArray(data.suggestions) ? data.suggestions : []);
+        setTotal(Number.isFinite(Number(data.total)) ? Number(data.total) : 0);
       } catch (fetchError) {
         setProducts([]);
+        setTotal(0);
         setError(fetchError.message || 'Failed to fetch products');
       } finally {
         setLoading(false);
@@ -54,13 +62,71 @@ const ProductDiscovery = () => {
     }, 300);
 
     return () => clearTimeout(timeoutId);
+  }, [searchQuery, selectedCategory, page]);
+
+  useEffect(() => {
+    setPage(1);
   }, [searchQuery, selectedCategory]);
+
+  const pageCount = useMemo(() => {
+    if (!total || total < 1) return 1;
+    return Math.max(1, Math.ceil(total / pageSize));
+  }, [total]);
+
+  const safePage = Math.min(Math.max(page, 1), pageCount);
+
+  const addToCart = async (product) => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setError('Please log in again to add items to cart.');
+      return;
+    }
+    const productId = product?.id;
+    if (!productId) {
+      setError('This product cannot be added because its id is missing.');
+      return;
+    }
+
+    setCartBusyByProductId((prev) => ({ ...prev, [String(productId)]: true }));
+    setError('');
+    try {
+      const saveRes = await fetch(getApiUrl('/api/po/cart/discovery-item'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          productId: String(productId),
+          quantity: 1
+        })
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.status !== 'success') {
+        throw new Error(saveData.message || 'Failed to save cart');
+      }
+      setCartAddedByProductId((prev) => ({ ...prev, [String(productId)]: true }));
+      setTimeout(() => {
+        setCartAddedByProductId((prev) => {
+          const { [String(productId)]: _removed, ...rest } = prev;
+          return rest;
+        });
+      }, 1400);
+    } catch (e) {
+      setError(e.message || 'Failed to add to cart');
+    } finally {
+      setCartBusyByProductId((prev) => {
+        const { [String(productId)]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
+  };
 
   return (
     <div className="product-discovery-container">
       <div className="product-discovery-header">
         <h1>Product Discovery</h1>
-        <p>Search approved catalog products by name, brand, or description.</p>
+        <p>Browse products listed by suppliers. You can add items directly to cart without a BOQ.</p>
       </div>
 
       <div className="product-discovery-controls">
@@ -88,6 +154,33 @@ const ProductDiscovery = () => {
 
       {error ? <div className="product-discovery-error">{error}</div> : null}
 
+      <div className="product-discovery-summary">
+        <div>
+          <strong>{Number.isFinite(total) ? total : 0}</strong> product{total === 1 ? '' : 's'} listed by suppliers
+        </div>
+        <div className="product-discovery-pager">
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={loading || safePage <= 1}
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+          >
+            Prev
+          </button>
+          <span>
+            Page <strong>{safePage}</strong> / {pageCount}
+          </span>
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={loading || safePage >= pageCount}
+            onClick={() => setPage((p) => p + 1)}
+          >
+            Next
+          </button>
+        </div>
+      </div>
+
       {loading ? (
         <div className="product-discovery-state">Loading products...</div>
       ) : products.length === 0 ? (
@@ -108,6 +201,31 @@ const ProductDiscovery = () => {
               <div className="product-card-footer">
                 <span>Unit: {product.unit || 'N/A'}</span>
                 {product.barcode ? <span>Barcode: {product.barcode}</span> : null}
+              </div>
+              <div className="product-card-actions">
+                <div className="product-card-actions__meta">
+                  {Number.isFinite(Number(product?.supplierCount)) ? (
+                    <span>{Number(product.supplierCount)} supplier{Number(product.supplierCount) === 1 ? '' : 's'}</span>
+                  ) : (
+                    <span />
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={() => addToCart(product)}
+                  disabled={Boolean(cartBusyByProductId[String(product?.id || '')])}
+                >
+                  {cartAddedByProductId[String(product?.id || '')] ? (
+                    <>
+                      <Check size={16} /> Added as new BOQ
+                    </>
+                  ) : (
+                    <>
+                      <ShoppingCart size={16} /> Add to cart
+                    </>
+                  )}
+                </button>
               </div>
             </article>
           ))}

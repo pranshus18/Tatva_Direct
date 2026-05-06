@@ -73,6 +73,22 @@
   gap: 0.9rem;
 }
 
+.product-discovery-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  color: #334155;
+}
+
+.product-discovery-pager {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  color: #475569;
+}
+
 .product-card {
   border: 1px solid #e2e8f0;
   border-radius: 12px;
@@ -107,6 +123,19 @@
   display: flex;
   justify-content: space-between;
   gap: 0.65rem;
+  font-size: 0.8rem;
+  color: #64748b;
+}
+
+.product-card-actions {
+  margin-top: 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.product-card-actions__meta {
   font-size: 0.8rem;
   color: #64748b;
 }
