@@ -1914,6 +1914,27 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
 
     console.log(`✅ [GET SPECS] Category "${categoryName}" found`);
 
+    const toPlainObject = (value) => {
+      if (!value) return null;
+      if (typeof value === 'object' && !Array.isArray(value)) return value;
+      if (typeof value === 'string') {
+        try {
+          let parsed = JSON.parse(value);
+          if (typeof parsed === 'string') {
+            try {
+              parsed = JSON.parse(parsed);
+            } catch {
+              // keep as-is
+            }
+          }
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    };
+
     // Ensure we return an empty object if defaultSpecifications is null/undefined
     let specs = {};
     let source = 'category';
@@ -1930,16 +1951,21 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
         .maybeSingle();
       if (profileError) {
         console.error('❌ [GET SPECS] Model profile fetch error:', profileError);
-      } else if (profile && profile.specifications && typeof profile.specifications === 'object' && !Array.isArray(profile.specifications)) {
-        const profileKeys = Object.keys(profile.specifications);
+      } else {
+        const profileSpecs = toPlainObject(profile?.specifications);
+        if (!profileSpecs) {
+          // nothing
+        } else {
+          const profileKeys = Object.keys(profileSpecs);
         if (profileKeys.length > 0) {
-          specs = profile.specifications;
+            specs = profileSpecs;
           source = 'model_profile';
           modelProfile = {
             modelIdentifier: profile.model_identifier,
             displayModel: profile.display_model,
             updatedAt: profile.updated_at
           };
+        }
         }
       }
     }
@@ -1949,26 +1975,22 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
     if (Object.keys(specs).length === 0 && modelIdentifier) {
       const { data: productMatches, error: productMatchError } = await supabase
         .from('products')
-        .select('name, specifications, updated_at')
+        .select('name, specifications, status, updated_at')
         .eq('category', categoryName)
-        .eq('status', 'approved')
         .order('updated_at', { ascending: false })
         .limit(200);
       if (productMatchError) {
         console.error('❌ [GET SPECS] Product fallback fetch error:', productMatchError);
       } else {
         const productMatch = (productMatches || []).find((row) => {
+          const st = String(row?.status ?? '').trim().toLowerCase();
+          if (st && st !== 'approved') return false;
           const normalizedName = normalizeModelIdentifier(row?.name || '');
           return normalizedName && normalizedName === modelIdentifier;
         });
-        if (
-          productMatch &&
-          productMatch.specifications &&
-          typeof productMatch.specifications === 'object' &&
-          !Array.isArray(productMatch.specifications) &&
-          Object.keys(productMatch.specifications).length > 0
-        ) {
-          specs = productMatch.specifications;
+        const matchSpecs = toPlainObject(productMatch?.specifications);
+        if (matchSpecs && Object.keys(matchSpecs).length > 0) {
+          specs = matchSpecs;
           source = 'approved_product';
         }
       }
@@ -1976,15 +1998,14 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
 
     // Fallback to admin category defaults when no model-specific profile exists.
     if (Object.keys(specs).length === 0) {
-    if (category.default_specifications && 
-        typeof category.default_specifications === 'object' && 
-        !Array.isArray(category.default_specifications)) {
-      const specKeys = Object.keys(category.default_specifications);
+      const defaultSpecs = toPlainObject(category?.default_specifications);
+      if (defaultSpecs) {
+        const specKeys = Object.keys(defaultSpecs);
       if (specKeys.length > 0) {
-        specs = category.default_specifications;
+          specs = defaultSpecs;
           source = 'category';
       }
-    }
+      }
     }
 
     return res.json({
