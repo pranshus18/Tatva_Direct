@@ -1350,6 +1350,7 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const offset = Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : (page - 1) * limit;
     const normalizedCategory = String(category || '').trim().toLowerCase();
     const query = String(q || '').trim();
+    const rankingPoolLimit = query ? 250 : 500;
 
     // Product Discovery should show products that are actually LISTED by suppliers (supplier_products),
     // not just the raw catalog table. We fetch approved products that have at least one active,
@@ -1388,7 +1389,7 @@ router.get('/products/search', authenticateToken, async (req, res) => {
 
     const { data: rawProducts, error, count } = await productsQuery
       .order('updated_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .limit(rankingPoolLimit);
     
     if (error) {
       console.error('Error fetching products for search:', error);
@@ -1398,22 +1399,76 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       });
     }
 
+    const { data: recentOrders } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('service_provider_id', req.userId)
+      .neq('status', 'cancelled')
+      .order('created_at', { ascending: false })
+      .limit(200);
+
+    const recentOrderIds = (recentOrders || []).map((order) => order?.id).filter(Boolean);
+    const categoryAffinity = new Map();
+
+    if (recentOrderIds.length > 0) {
+      const { data: orderItems } = await supabase
+        .from('order_items')
+        .select(`
+          product_id,
+          quantity,
+          product:products (
+            category
+          )
+        `)
+        .in('order_id', recentOrderIds)
+        .limit(3000);
+
+      for (const item of orderItems || []) {
+        const quantity = Math.max(1, Number.parseInt(String(item?.quantity || '1'), 10) || 1);
+        const categoryKey = String(item?.product?.category || '').trim().toLowerCase();
+        if (categoryKey) {
+          categoryAffinity.set(categoryKey, (categoryAffinity.get(categoryKey) || 0) + quantity);
+        }
+      }
+    }
+
     const suggestions = (rawProducts || []).map((p) => {
       const supplierCount = Array.isArray(p?.supplier_products) && p.supplier_products[0] && Number.isFinite(p.supplier_products[0].count)
         ? p.supplier_products[0].count
         : null;
+      const categoryKey = String(p?.category || '').trim().toLowerCase();
+      const affinityScore = categoryAffinity.get(categoryKey) || 0;
+      const recommendationScore = Number(affinityScore.toFixed(3));
       return {
         ...p,
-        supplierCount
+        supplierCount,
+        recommendationScore
       };
     });
 
+    suggestions.sort((a, b) => {
+      const scoreDiff = (b.recommendationScore || 0) - (a.recommendationScore || 0);
+      if (scoreDiff !== 0) return scoreDiff;
+
+      const supplierDiff = (Number(b.supplierCount) || 0) - (Number(a.supplierCount) || 0);
+      if (supplierDiff !== 0) return supplierDiff;
+
+      const aUpdated = Date.parse(a?.updated_at || 0) || 0;
+      const bUpdated = Date.parse(b?.updated_at || 0) || 0;
+      if (bUpdated !== aUpdated) return bUpdated - aUpdated;
+
+      return String(a?.name || '').localeCompare(String(b?.name || ''));
+    });
+
+    const paginatedSuggestions = suggestions.slice(offset, offset + limit);
+
     return res.json({
       status: 'success',
-      suggestions,
+      suggestions: paginatedSuggestions,
       total: Number.isFinite(count) ? count : suggestions.length,
       limit,
-      offset
+      offset,
+      recommendationMode: 'personalized-order-affinity'
     });
 
     // (Legacy enrichment logic below is kept for compatibility with other flows that may rely

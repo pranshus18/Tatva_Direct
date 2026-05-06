@@ -11,6 +11,7 @@ const ProductDiscovery = () => {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [recommendationMode, setRecommendationMode] = useState('');
   const [cartBusyByProductId, setCartBusyByProductId] = useState({});
   const [cartAddedByProductId, setCartAddedByProductId] = useState({});
   const pageSize = 24;
@@ -52,9 +53,11 @@ const ProductDiscovery = () => {
         }
         setProducts(Array.isArray(data.suggestions) ? data.suggestions : []);
         setTotal(Number.isFinite(Number(data.total)) ? Number(data.total) : 0);
+        setRecommendationMode(String(data.recommendationMode || ''));
       } catch (fetchError) {
         setProducts([]);
         setTotal(0);
+        setRecommendationMode('');
         setError(fetchError.message || 'Failed to fetch products');
       } finally {
         setLoading(false);
@@ -157,6 +160,9 @@ const ProductDiscovery = () => {
       <div className="product-discovery-summary">
         <div>
           <strong>{Number.isFinite(total) ? total : 0}</strong> product{total === 1 ? '' : 's'} listed by suppliers
+          {recommendationMode ? (
+            <span className="recommendation-pill">Recommended by your past orders</span>
+          ) : null}
         </div>
         <div className="product-discovery-pager">
           <button

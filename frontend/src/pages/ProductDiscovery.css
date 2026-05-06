@@ -82,6 +82,17 @@
   color: #334155;
 }
 
+.recommendation-pill {
+  display: inline-flex;
+  margin-left: 0.6rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: #e0f2fe;
+  color: #075985;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
 .product-discovery-pager {
   display: flex;
   align-items: center;
