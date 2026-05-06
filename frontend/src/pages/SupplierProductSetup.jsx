@@ -129,6 +129,15 @@ const SupplierProductSetup = ({ user }) => {
         if (data.status === 'success' && data.found && data.unit) {
           setFormData(prev => ({ ...prev, unit: data.unit }));
         }
+        if (
+          data.status === 'success' &&
+          data.found &&
+          data.specifications &&
+          typeof data.specifications === 'object' &&
+          !Array.isArray(data.specifications)
+        ) {
+          setSpecifications(data.specifications);
+        }
         if (data.status === 'success' && data.found) {
           setRecommendedPrice(
             typeof data.recommendedPrice === 'number' ? data.recommendedPrice : null

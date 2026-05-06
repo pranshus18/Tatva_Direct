@@ -1551,7 +1551,7 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
 
     const { data: products, error } = await supabase
       .from('products')
-      .select('id, name, category, unit')
+      .select('id, name, category, unit, specifications')
       .eq('category', category)
       .ilike('name', name)
       .order('updated_at', { ascending: false })
@@ -1566,6 +1566,49 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     }
 
     const product = products && products.length > 0 ? products[0] : null;
+    let mergedSpecifications =
+      product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
+        ? { ...product.specifications }
+        : {};
+
+    if (product?.id) {
+      const { data: approvedSpecOffers } = await supabase
+        .from('supplier_products')
+        .select('attributes, updated_at, status')
+        .eq('product_id', product.id)
+        .order('updated_at', { ascending: false })
+        .limit(200);
+
+      const nonEmptyValueCount = (specsObj) =>
+        Object.values(specsObj || {}).filter((v) => String(v ?? '').trim() !== '').length;
+
+      let bestSpecs = null;
+      for (const row of approvedSpecOffers || []) {
+        const status = String(row?.status || '').toLowerCase();
+        if (status !== 'approved') continue;
+        const specs =
+          row?.attributes?.specifications &&
+          typeof row.attributes.specifications === 'object' &&
+          !Array.isArray(row.attributes.specifications)
+            ? row.attributes.specifications
+            : null;
+        if (!specs) continue;
+        if (!bestSpecs || nonEmptyValueCount(specs) > nonEmptyValueCount(bestSpecs)) {
+          bestSpecs = specs;
+        }
+      }
+
+      if (bestSpecs) {
+        Object.keys(bestSpecs).forEach((k) => {
+          const v = bestSpecs[k];
+          if (String(v ?? '').trim() !== '') {
+            mergedSpecifications[k] = v;
+          } else if (!Object.prototype.hasOwnProperty.call(mergedSpecifications, k)) {
+            mergedSpecifications[k] = v;
+          }
+        });
+      }
+    }
 
     // If product exists, calculate recommended price as average of all suppliers' prices
     // Prefer excluding the current supplier (so they see market average) when possible.
@@ -1620,7 +1663,8 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       product: product
         ? { id: product.id, name: product.name, category: product.category, unit: product.unit }
         : null,
-      unit: product?.unit || null
+      unit: product?.unit || null,
+      specifications: mergedSpecifications
       ,
       // Price recommendation (average across suppliers for this product)
       recommendedPrice: recommendedPrice,
@@ -1751,29 +1795,33 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
       }
     }
 
-    // Backward-compat fallback: if model profile is missing, try approved catalog product
-    // with the same category + name/model text and use its specifications.
+    // Backward-compat fallback: if model profile is missing, try approved catalog products
+    // in this category and match by normalized name/model text.
     if (Object.keys(specs).length === 0 && modelIdentifier) {
-      const { data: productMatch, error: productMatchError } = await supabase
+      const { data: productMatches, error: productMatchError } = await supabase
         .from('products')
         .select('name, specifications, updated_at')
         .eq('category', categoryName)
         .eq('status', 'approved')
-        .ilike('name', modelIdentifier)
         .order('updated_at', { ascending: false })
-        .limit(1)
-        .maybeSingle();
+        .limit(200);
       if (productMatchError) {
         console.error('❌ [GET SPECS] Product fallback fetch error:', productMatchError);
-      } else if (
-        productMatch &&
-        productMatch.specifications &&
-        typeof productMatch.specifications === 'object' &&
-        !Array.isArray(productMatch.specifications) &&
-        Object.keys(productMatch.specifications).length > 0
-      ) {
-        specs = productMatch.specifications;
-        source = 'approved_product';
+      } else {
+        const productMatch = (productMatches || []).find((row) => {
+          const normalizedName = normalizeModelIdentifier(row?.name || '');
+          return normalizedName && normalizedName === modelIdentifier;
+        });
+        if (
+          productMatch &&
+          productMatch.specifications &&
+          typeof productMatch.specifications === 'object' &&
+          !Array.isArray(productMatch.specifications) &&
+          Object.keys(productMatch.specifications).length > 0
+        ) {
+          specs = productMatch.specifications;
+          source = 'approved_product';
+        }
       }
     }
 
