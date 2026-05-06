@@ -1611,13 +1611,19 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       });
     }
 
+    // In production, product names often contain extra spaces / casing differences
+    // (and sometimes trailing whitespace). Using an exact ilike() match can fail,
+    // which then prevents spec prefill. Fetch a small candidate set and pick
+    // the closest normalized name.
+    const nameNeedle = name.replace(/\s+/g, ' ').trim();
+    const ilikeNeedle = `%${nameNeedle.replace(/\s+/g, '%')}%`;
     const { data: products, error } = await supabase
       .from('products')
-      .select('id, name, category, unit, specifications')
+      .select('id, name, category, unit, specifications, updated_at')
       .eq('category', category)
-      .ilike('name', name)
+      .ilike('name', ilikeNeedle)
       .order('updated_at', { ascending: false })
-      .limit(1);
+      .limit(10);
 
     if (error) {
       console.error('Product lookup error:', error);
@@ -1627,7 +1633,17 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       });
     }
 
-    const product = products && products.length > 0 ? products[0] : null;
+    const normalizeName = (v) =>
+      String(v || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ');
+
+    const productCandidates = products || [];
+    const needleNorm = normalizeName(nameNeedle);
+    let product = productCandidates.length > 0 ? productCandidates[0] : null;
+    const exact = productCandidates.find((p) => normalizeName(p?.name) === needleNorm);
+    if (exact) product = exact;
     const toObject = (value) => {
       if (!value) return null;
       if (typeof value === 'object') {
