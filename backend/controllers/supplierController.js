@@ -1384,6 +1384,20 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const matchedProductIds = [...new Set((matchedProducts || []).map((p) => p.id).filter(Boolean))];
     const bestSpecsByProductId = new Map();
     if (matchedProductIds.length > 0) {
+      const toObject = (value) => {
+        if (!value) return null;
+        if (typeof value === 'object' && !Array.isArray(value)) return value;
+        if (typeof value === 'string') {
+          try {
+            const parsed = JSON.parse(value);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+          } catch {
+            return null;
+          }
+        }
+        return null;
+      };
+
       const { data: approvedOffers } = await supabase
         .from('supplier_products')
         .select('product_id, attributes, updated_at, status')
@@ -1397,18 +1411,14 @@ router.get('/products/search', authenticateToken, async (req, res) => {
         const status = String(row?.status || '').toLowerCase();
         if (status !== 'approved') continue;
         const pid = row?.product_id;
-        let specs =
-          row?.attributes?.specifications &&
-          typeof row.attributes.specifications === 'object' &&
-          !Array.isArray(row.attributes.specifications)
-            ? row.attributes.specifications
-            : null;
+        const attributesObj = toObject(row?.attributes);
+        let specs = toObject(attributesObj?.specifications);
         // Backward-compat: some older rows can carry spec keys directly in attributes.
-        if (!specs && row?.attributes && typeof row.attributes === 'object' && !Array.isArray(row.attributes)) {
+        if (!specs && attributesObj) {
           const direct = {};
-          Object.keys(row.attributes || {}).forEach((k) => {
+          Object.keys(attributesObj || {}).forEach((k) => {
             if (['description', 'name', 'images', 'brandModel', 'lsa', 'hsnCode'].includes(k)) return;
-            direct[k] = row.attributes[k];
+            direct[k] = attributesObj[k];
           });
           if (Object.keys(direct).length > 0) specs = direct;
         }
