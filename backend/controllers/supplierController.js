@@ -1566,6 +1566,20 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     }
 
     const product = products && products.length > 0 ? products[0] : null;
+    const toObject = (value) => {
+      if (!value) return null;
+      if (typeof value === 'object' && !Array.isArray(value)) return value;
+      if (typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    };
+
     let mergedSpecifications =
       product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
         ? { ...product.specifications }
@@ -1586,12 +1600,8 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       for (const row of approvedSpecOffers || []) {
         const status = String(row?.status || '').toLowerCase();
         if (status !== 'approved') continue;
-        const specs =
-          row?.attributes?.specifications &&
-          typeof row.attributes.specifications === 'object' &&
-          !Array.isArray(row.attributes.specifications)
-            ? row.attributes.specifications
-            : null;
+        const attributesObj = toObject(row?.attributes);
+        const specs = toObject(attributesObj?.specifications);
         if (!specs) continue;
         if (!bestSpecs || nonEmptyValueCount(specs) > nonEmptyValueCount(bestSpecs)) {
           bestSpecs = specs;

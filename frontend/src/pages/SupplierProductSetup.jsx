@@ -190,15 +190,21 @@ const SupplierProductSetup = ({ user }) => {
           data?.status === 'success' && data?.specifications && typeof data.specifications === 'object'
             ? data.specifications
             : {};
+        // IMPORTANT: never wipe existing filled specs when template is empty.
         setSpecifications((prev) => {
-          const next = {};
-          Object.keys(specsObj || {}).forEach((k) => {
-            next[k] = Object.prototype.hasOwnProperty.call(prev || {}, k) ? prev[k] : specsObj[k];
+          const prevObj = prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {};
+          const keys = Object.keys(specsObj || {});
+          if (keys.length === 0) return { ...prevObj };
+          const next = { ...prevObj };
+          keys.forEach((k) => {
+            if (!Object.prototype.hasOwnProperty.call(next, k)) {
+              next[k] = specsObj[k];
+            }
           });
           return next;
         });
       } catch (_err) {
-        setSpecifications({});
+        // Keep whatever we already have (e.g. from lookup); don't wipe on network/template errors.
       } finally {
         setLoadingSpecs(false);
       }
