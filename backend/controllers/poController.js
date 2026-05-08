@@ -41,7 +41,8 @@ import {
   poCreateRequestSchema,
   poGroupRequestSchema,
   poRatingSchema,
-  poSelfServePatchSchema
+  poSelfServePatchSchema,
+  poTransportConfirmSchema
 } from '../contracts/poContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
 import { randomUUID } from 'node:crypto';
@@ -1172,6 +1173,80 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       status: 'error',
       message: statusCode === 400 ? error.message : 'Failed to create purchase orders',
       error: error.message 
+    });
+  }
+});
+
+router.post('/transport/confirm', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const payload = parseWithSchema(poTransportConfirmSchema, req.body || {});
+    const {
+      orderIds,
+      shippingProvider,
+      trackingNumber = null,
+      trackingUrl = null,
+      transportNotes = null
+    } = payload;
+
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('id, status_history')
+      .in('id', orderIds)
+      .eq('service_provider_id', req.userId);
+    if (ordersError) throw ordersError;
+
+    const foundIds = new Set((orders || []).map((row) => row.id));
+    const missingIds = orderIds.filter((id) => !foundIds.has(id));
+    if (missingIds.length > 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Some orders were not found for this service provider',
+        missingOrderIds: missingIds
+      });
+    }
+
+    const updatedOrders = [];
+    for (const row of orders || []) {
+      const history = Array.isArray(row.status_history) ? [...row.status_history] : [];
+      history.push({
+        status: 'confirmed',
+        timestamp: new Date().toISOString(),
+        updatedBy: req.userId,
+        notes: `Transport selected: ${shippingProvider}${transportNotes ? ` | ${transportNotes}` : ''}`
+      });
+
+      const { data: updated, error: updateError } = await supabase
+        .from('orders')
+        .update({
+          shipping_provider: shippingProvider,
+          tracking_number: trackingNumber || null,
+          tracking_url: trackingUrl || null,
+          notes: transportNotes || null,
+          transport_confirmed_at: new Date().toISOString(),
+          status_history: history
+        })
+        .eq('id', row.id)
+        .eq('service_provider_id', req.userId)
+        .select('id, order_number, shipping_provider, tracking_number, tracking_url, transport_confirmed_at, notes')
+        .single();
+      if (updateError) throw updateError;
+      updatedOrders.push(updated);
+    }
+
+    return res.json({
+      status: 'success',
+      message: `Transport details updated for ${updatedOrders.length} order(s)`,
+      orders: updatedOrders
+    });
+  } catch (error) {
+    if (String(error?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+    }
+    logger.error('Transport confirm error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to confirm transport details',
+      error: error.message
     });
   }
 });

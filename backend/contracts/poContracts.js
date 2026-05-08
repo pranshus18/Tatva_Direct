@@ -62,6 +62,14 @@ export const poCreateRequestSchema = z.object({
   gstin: z.string().optional().nullable()
 });
 
+export const poTransportConfirmSchema = z.object({
+  orderIds: z.array(z.string().uuid()).min(1),
+  shippingProvider: z.string().min(1).max(120),
+  trackingNumber: z.string().max(120).optional().nullable(),
+  trackingUrl: z.string().url().optional().nullable(),
+  transportNotes: z.string().max(1000).optional().nullable()
+});
+
 const poCartBoqGroupSchema = z.object({
   groupId: z.string().min(1),
   boqId: z.string().uuid().optional().nullable(),

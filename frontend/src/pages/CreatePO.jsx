@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Check, X } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -39,6 +39,7 @@ const addressPreview = (address = {}) =>
 
 const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const navigate = useNavigate();
+  const location = useLocation();
   const [poGroups, setPoGroups] = useState([]);
   const [confirmed, setConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -56,6 +57,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [billingAddressBook, setBillingAddressBook] = useState([]);
   const [selectedBillingAddressId, setSelectedBillingAddressId] = useState('');
   const [deliveryDestination, setDeliveryDestination] = useState('shipping');
+  const [createdTransportOrders, setCreatedTransportOrders] = useState([]);
+  const [selectedTransport, setSelectedTransport] = useState(null);
 
   const grandTotalAllPos = useMemo(
     () => poGroups.reduce((sum, g) => sum + (Number(g.total) || 0), 0),
@@ -134,6 +137,23 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       setBillingAddress(shippingAddress);
     }
   }, [hasGstin, shippingAddress]);
+
+  useEffect(() => {
+    const routeState = location.state || {};
+    const incomingOrders = Array.isArray(routeState.createdOrders) ? routeState.createdOrders : [];
+    const incomingTransport = routeState.transportSelection && typeof routeState.transportSelection === 'object'
+      ? routeState.transportSelection
+      : null;
+    if (incomingOrders.length > 0) {
+      setCreatedTransportOrders(incomingOrders);
+    }
+    if (incomingTransport) {
+      setSelectedTransport(incomingTransport);
+    }
+    if (incomingOrders.length > 0 || incomingTransport) {
+      navigate(location.pathname, { replace: true, state: null });
+    }
+  }, [location.pathname, location.state, navigate]);
 
   const handleSelectBillingAddress = (id) => {
     setSelectedBillingAddressId(id);
@@ -230,61 +250,105 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     };
   }, [showOnlineQrModal, grandTotalAllPos]);
 
-  const submitPurchaseOrders = async () => {
+  const createPurchaseOrders = async () => {
     const token = localStorage.getItem('token');
 
+    console.log('Creating POs with groups:', poGroups, 'Required date:', requiredDate);
+
+    const res = await fetch(getApiUrl('/api/po/create'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        poGroups,
+        boqId,
+        requiredDate,
+        paymentMethod: poPaymentMethod,
+        deliveryDestination,
+        shippingAddress,
+        billingAddress: hasGstin ? billingAddress : shippingAddress,
+        gstin: serviceProviderGstin || null
+      })
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      let errorMessage = 'Failed to create purchase orders';
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.message || errorData.error || errorMessage;
+      } catch (e) {
+        errorMessage = errorText || errorMessage;
+      }
+      throw new Error(errorMessage);
+    }
+
+    const text = await res.text();
+    if (!text || text.trim().length === 0) {
+      throw new Error('Empty response from server');
+    }
+
+    const data = JSON.parse(text);
+    if (!data.success) {
+      throw new Error(data.message || 'Failed to create purchase orders');
+    }
+    return data;
+  };
+
+  const finalizeTransportDetails = async () => {
+    const token = localStorage.getItem('token');
+    const orderIds = createdTransportOrders
+      .map((order) => order?.id)
+      .filter(Boolean);
+    if (orderIds.length === 0) {
+      throw new Error('No transport-stage orders found. Please click Transport suggestion first.');
+    }
+    if (!selectedTransport?.shippingProvider) {
+      throw new Error('Please select transport details first.');
+    }
+
+    const res = await fetch(getApiUrl('/api/po/transport/confirm'), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: JSON.stringify({
+        orderIds,
+        shippingProvider: selectedTransport.shippingProvider,
+        trackingNumber: selectedTransport.trackingNumber || null,
+        trackingUrl: selectedTransport.trackingUrl || null,
+        transportNotes: selectedTransport.transportNotes || null
+      })
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      let errorMessage = 'Failed to update transport details';
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.message || errorData.error || errorMessage;
+      } catch (e) {
+        errorMessage = errorText || errorMessage;
+      }
+      throw new Error(errorMessage);
+    }
+    return res.json();
+  };
+
+  const completeOrderFlow = async () => {
     try {
       setCreatingOrders(true);
-      console.log('Creating POs with groups:', poGroups, 'Required date:', requiredDate);
-
-      const res = await fetch(getApiUrl('/api/po/create'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {})
-        },
-        body: JSON.stringify({
-          poGroups,
-          boqId,
-          requiredDate,
-          paymentMethod: poPaymentMethod,
-          deliveryDestination,
-          shippingAddress,
-          billingAddress: hasGstin ? billingAddress : shippingAddress,
-          gstin: serviceProviderGstin || null
-        })
-      });
-
-      if (!res.ok) {
-        const errorText = await res.text();
-        let errorMessage = 'Failed to create purchase orders';
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMessage = errorData.message || errorData.error || errorMessage;
-        } catch (e) {
-          errorMessage = errorText || errorMessage;
-        }
-        throw new Error(errorMessage);
-      }
-
-      const text = await res.text();
-      if (!text || text.trim().length === 0) {
-        throw new Error('Empty response from server');
-      }
-
-      const data = JSON.parse(text);
-
-      if (data.success) {
-        setConfirmed(true);
-        setTimeout(() => {
-          window.location.href = '/your-orders';
-        }, 2000);
-      } else {
-        alert(data.message || 'Failed to create purchase orders');
-      }
+      await finalizeTransportDetails();
+      setConfirmed(true);
+      setTimeout(() => {
+        window.location.href = '/your-orders';
+      }, 2000);
     } catch (err) {
-      console.error('Failed to create POs:', err);
-      alert(err.message || 'Failed to create purchase orders. Please try again.');
+      console.error('Failed to finalize transport flow:', err);
+      alert(err.message || 'Failed to finalize purchase orders. Please try again.');
     } finally {
       setCreatingOrders(false);
     }
@@ -331,12 +395,55 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       return;
     }
 
-    await submitPurchaseOrders();
+    await completeOrderFlow();
   };
 
   const handlePlaceOrderAfterPlatformQr = async () => {
     setShowOnlineQrModal(false);
-    await submitPurchaseOrders();
+    await completeOrderFlow();
+  };
+
+  const handleTransportSuggestion = async () => {
+    if (creatingOrders) return;
+    if (!poGroups || poGroups.length === 0) {
+      alert('No purchase order groups available. Please ensure all items have selected suppliers.');
+      return;
+    }
+    if (createdTransportOrders.length > 0) {
+      navigate('/transport-suggestion', {
+        state: {
+          poGroups,
+          grandTotalAllPos,
+          requiredDate,
+          hasGstin,
+          deliveryDestination,
+          createdOrders: createdTransportOrders
+        }
+      });
+      return;
+    }
+
+    try {
+      setCreatingOrders(true);
+      const data = await createPurchaseOrders();
+      const createdOrders = Array.isArray(data.orders) ? data.orders : [];
+      setCreatedTransportOrders(createdOrders);
+      navigate('/transport-suggestion', {
+        state: {
+          poGroups,
+          grandTotalAllPos,
+          requiredDate,
+          hasGstin,
+          deliveryDestination,
+          createdOrders
+        }
+      });
+    } catch (err) {
+      console.error('Failed to run transport suggestion flow:', err);
+      alert(err.message || 'Failed to prepare transport suggestion.');
+    } finally {
+      setCreatingOrders(false);
+    }
   };
 
   if (confirmed) {
@@ -717,29 +824,28 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             <button
               type="button"
               className="btn-secondary btn-large"
-              onClick={() =>
-                navigate('/transport-suggestion', {
-                  state: {
-                    poGroups,
-                    grandTotalAllPos,
-                    requiredDate,
-                    hasGstin,
-                    deliveryDestination
-                  }
-                })
-              }
+              onClick={handleTransportSuggestion}
               disabled={poGroups.length === 0 || creatingOrders}
             >
-              Transport suggestion
+              {creatingOrders ? 'Saving POs...' : 'Transport suggestion'}
             </button>
             <button
               className="btn-primary btn-large"
               onClick={handleConfirm}
-              disabled={poGroups.length === 0 || creatingOrders}
+              disabled={poGroups.length === 0 || creatingOrders || createdTransportOrders.length === 0 || !selectedTransport?.shippingProvider}
             >
-              {creatingOrders ? 'Creating Orders...' : 'Confirm & Create All POs'}
+              {creatingOrders ? 'Finalizing...' : 'Confirm & Create All POs'}
             </button>
           </div>
+          <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#64748b' }}>
+            Step 1: Click Transport suggestion to create order rows and choose transport. Step 2: Confirm & Create All POs will update transport fields on those same orders.
+          </p>
+          {selectedTransport?.shippingProvider ? (
+            <p style={{ marginTop: '0.2rem', fontSize: '0.8rem', color: '#334155' }}>
+              Selected transport: <strong>{selectedTransport.shippingProvider}</strong>
+              {selectedTransport.trackingNumber ? ` | Tracking: ${selectedTransport.trackingNumber}` : ''}
+            </p>
+          ) : null}
         </>
       )}
 
