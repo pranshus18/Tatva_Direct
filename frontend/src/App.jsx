@@ -84,6 +84,7 @@ const BOQNormalize = safeLazy(() => import('./pages/BOQNormalize'), 'BOQ Normali
 const VendorSelect = safeLazy(() => import('./pages/VendorSelect'), 'Vendor Select page');
 const Substitution = safeLazy(() => import('./pages/Substitution'), 'Substitution page');
 const CreatePO = safeLazy(() => import('./pages/CreatePO'), 'Create PO page');
+const TransportSuggestion = safeLazy(() => import('./pages/TransportSuggestion'), 'Transport Suggestion page');
 const YourOrders = safeLazy(() => import('./pages/YourOrders'), 'Your Orders page');
 const Cart = safeLazy(() => import('./pages/Cart'), 'Cart page');
 const SharedCart = safeLazy(() => import('./pages/SharedCart'), 'Shared Cart page');
@@ -638,6 +639,14 @@ function App() {
                 />
               </ServiceProviderRoute>
             } 
+          />
+          <Route
+            path="transport-suggestion"
+            element={
+              <ServiceProviderRoute user={user}>
+                <TransportSuggestion />
+              </ServiceProviderRoute>
+            }
           />
           <Route
             path="cart"

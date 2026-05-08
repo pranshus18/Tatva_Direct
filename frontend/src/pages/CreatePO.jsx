@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Check, X } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -37,6 +38,7 @@ const addressPreview = (address = {}) =>
     .join(', ');
 
 const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
+  const navigate = useNavigate();
   const [poGroups, setPoGroups] = useState([]);
   const [confirmed, setConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -711,13 +713,33 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             ))}
           </div>
 
-          <button
-            className="btn-primary btn-large"
-            onClick={handleConfirm}
-            disabled={poGroups.length === 0 || creatingOrders}
-          >
-            {creatingOrders ? 'Creating Orders...' : 'Confirm & Create All POs'}
-          </button>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              type="button"
+              className="btn-secondary btn-large"
+              onClick={() =>
+                navigate('/transport-suggestion', {
+                  state: {
+                    poGroups,
+                    grandTotalAllPos,
+                    requiredDate,
+                    hasGstin,
+                    deliveryDestination
+                  }
+                })
+              }
+              disabled={poGroups.length === 0 || creatingOrders}
+            >
+              Transport suggestion
+            </button>
+            <button
+              className="btn-primary btn-large"
+              onClick={handleConfirm}
+              disabled={poGroups.length === 0 || creatingOrders}
+            >
+              {creatingOrders ? 'Creating Orders...' : 'Confirm & Create All POs'}
+            </button>
+          </div>
         </>
       )}
 
