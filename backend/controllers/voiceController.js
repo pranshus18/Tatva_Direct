@@ -52,10 +52,12 @@ function scoreProductMatch(product, queryTokens) {
   return score;
 }
 
-async function searchPlatformDiscoveryProducts({ query, category, limit }) {
+async function searchPlatformDiscoveryProducts({ query, category, limit, page }) {
   const normalizedQuery = String(query || '').trim();
-  const normalizedCategory = String(category || '').trim().toLowerCase();
-  const rankingPoolLimit = normalizedQuery ? 120 : 40;
+  const normalizedCategory = String(category || '').trim();
+  const normalizedLimit = Math.min(Math.max(Number(limit || 6) || 6, 1), 50);
+  const normalizedPage = Math.max(Number.parseInt(String(page || 1), 10) || 1, 1);
+  const offset = (normalizedPage - 1) * normalizedLimit;
 
   let productsQuery = supabase
     .from('products')
@@ -66,61 +68,73 @@ async function searchPlatformDiscoveryProducts({ query, category, limit }) {
         category,
         unit,
         brand,
+        description,
+        barcode,
         updated_at,
         supplier_products!inner(count)
-      `
+      `,
+      { count: 'exact' }
     )
     .eq('status', 'approved')
     .eq('supplier_products.status', 'approved')
     .eq('supplier_products.is_active', true)
     .order('updated_at', { ascending: false })
-    .limit(rankingPoolLimit);
+    .range(offset, offset + normalizedLimit - 1);
 
   if (normalizedCategory) {
-    productsQuery = productsQuery.eq('category', normalizedCategory);
+    productsQuery = productsQuery.ilike('category', normalizedCategory);
   }
   if (normalizedQuery) {
     const ilikeQuery = `%${normalizedQuery.replace(/\s+/g, '%')}%`;
-    productsQuery = productsQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery}`);
+    productsQuery = productsQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`);
   }
 
-  const { data, error } = await productsQuery;
+  const { data, error, count } = await productsQuery;
   if (error) throw error;
+  return {
+    products: Array.isArray(data) ? data : [],
+    total: Number.isFinite(count) ? count : 0,
+    page: normalizedPage,
+    limit: normalizedLimit
+  };
+}
 
-  const rawProducts = Array.isArray(data) ? data : [];
-  if (!normalizedQuery) return rawProducts.slice(0, limit);
+async function resolveDiscoveryProductIdByName(productName) {
+  const normalizedName = String(productName || '').trim();
+  if (!normalizedName) return '';
 
-  if (rawProducts.length > 0) return rawProducts.slice(0, limit);
-
-  // Fallback pass: fetch latest listed products and rank by token overlap for STT variation.
-  const { data: fallbackData, error: fallbackError } = await supabase
+  const ilikeQuery = `%${normalizedName.replace(/\s+/g, '%')}%`;
+  const { data, error } = await supabase
     .from('products')
     .select(
       `
         id,
         name,
         category,
-        unit,
         brand,
-        updated_at,
         supplier_products!inner(count)
       `
     )
     .eq('status', 'approved')
     .eq('supplier_products.status', 'approved')
     .eq('supplier_products.is_active', true)
+    .or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`)
     .order('updated_at', { ascending: false })
-    .limit(200);
-  if (fallbackError) throw fallbackError;
+    .limit(50);
+  if (error) throw error;
 
-  const tokens = tokenizeSearchText(normalizedQuery);
-  const ranked = (Array.isArray(fallbackData) ? fallbackData : [])
+  const candidates = Array.isArray(data) ? data : [];
+  if (!candidates.length) return '';
+  const exactName = candidates.find(
+    (item) => String(item?.name || '').trim().toLowerCase() === normalizedName.toLowerCase()
+  );
+  if (exactName?.id) return String(exactName.id);
+
+  const tokens = tokenizeSearchText(normalizedName);
+  const ranked = candidates
     .map((product) => ({ product, score: scoreProductMatch(product, tokens) }))
-    .filter((entry) => entry.score > 0)
-    .sort((a, b) => b.score - a.score)
-    .map((entry) => entry.product);
-
-  return ranked.slice(0, limit);
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.product?.id ? String(ranked[0].product.id) : '';
 }
 
 function getInternalApiBaseUrl() {
@@ -447,18 +461,30 @@ async function runTool(userId, toolName, args) {
 
     const startedAt = Date.now();
     let items = [];
+    let total = 0;
+    let page = Math.max(Number(args.page || 1), 1);
+    let limit = Math.min(Math.max(Number(args.limit || 6), 1), 20);
     let degraded = false;
     try {
-      const products = await searchPlatformDiscoveryProducts({
+      const result = await searchPlatformDiscoveryProducts({
         query: normalizedQuery,
         category: args.category,
-        limit: Number(args.limit || 6)
+        limit,
+        page
       });
-      items = (products || []).slice(0, args.limit).map((p) => ({
+      total = Number(result?.total || 0) || 0;
+      page = Number(result?.page || page) || page;
+      limit = Number(result?.limit || limit) || limit;
+      items = (result?.products || []).map((p) => ({
         productId: p.id,
         name: p.name,
         brand: p.brand || null,
-        unit: p.unit || 'nos'
+        category: p.category || null,
+        unit: p.unit || 'nos',
+        supplierCount:
+          Array.isArray(p?.supplier_products) && p.supplier_products[0] && Number.isFinite(p.supplier_products[0].count)
+            ? p.supplier_products[0].count
+            : null
       }));
     } catch (searchError) {
       degraded = true;
@@ -482,11 +508,12 @@ async function runTool(userId, toolName, args) {
         .eq('supplier_products.status', 'approved')
         .eq('supplier_products.is_active', true)
         .order('updated_at', { ascending: false })
-        .limit(Math.max(6, Number(args.limit || 6)));
-      items = (fallbackProducts || []).slice(0, args.limit).map((p) => ({
+        .range((page - 1) * limit, (page - 1) * limit + limit - 1);
+      items = (fallbackProducts || []).map((p) => ({
         productId: p.id,
         name: p.name,
         brand: p.brand || null,
+        category: p.category || null,
         unit: p.unit || 'nos'
       }));
     }
@@ -497,6 +524,10 @@ async function runTool(userId, toolName, args) {
       degraded,
       elapsedMs: Date.now() - startedAt,
       items,
+      total,
+      page,
+      limit,
+      hasMore: total > page * limit,
       flowStep: flow.step,
       nextStep: FLOW_STEPS.discovery,
       message:
@@ -515,19 +546,20 @@ async function runTool(userId, toolName, args) {
   if (toolName === 'add_discovery_line') {
     let resolvedProductId = String(args.productId || args.id || '').trim();
     if (!resolvedProductId && args.productName) {
+      resolvedProductId = await resolveDiscoveryProductIdByName(args.productName);
+    }
+    if (!resolvedProductId && args.productName) {
       const lookup = await callInternalApi({
         userId,
         path: '/api/supplier/products/search',
         query: {
           q: String(args.productName).trim(),
-          limit: 1,
+          limit: 3,
           page: 1
         }
       });
       const best = Array.isArray(lookup?.suggestions) ? lookup.suggestions[0] : null;
-      if (best?.id) {
-        resolvedProductId = String(best.id);
-      }
+      if (best?.id) resolvedProductId = String(best.id);
     }
     if (!resolvedProductId) {
       throw new Error('Could not resolve product to add. Please provide product id or clearer product name.');
