@@ -141,3 +141,54 @@ Order creation is already centralized in controllers (e.g. **PO** via `/api/po/c
 - **Provider**: Vapi vs Retell AI (pick one for v1).
 
 Once those are fixed, you can define exact tool/function names, JSON schemas, and minimal `/api/voice/...` routes that wrap existing controllers.
+
+---
+
+## Vapi runbook for this repo (B2B PO)
+
+### Required env vars
+
+Backend (`backend/.env`):
+
+- `VAPI_ASSISTANT_ID` — assistant id used by web calls
+- `VAPI_PUBLIC_KEY` — safe to send to frontend for web SDK initialization
+- `VAPI_WEBHOOK_SECRET` — shared secret checked on `/api/voice/vapi/tool`
+- `VOICE_SESSION_SECRET` — optional; defaults to `JWT_SECRET` if not provided
+- `VOICE_SESSION_TTL_SECONDS` — optional; defaults to `900`
+- `INTERNAL_API_BASE_URL` — optional; defaults to `http://127.0.0.1:${PORT}`
+
+### Exposed endpoints
+
+- `POST /api/voice/vapi/session` (auth required, service_provider only)
+  - Returns `voiceSessionToken`, `expiresAt`, `assistantId`, `publicKey`
+- `POST /api/voice/vapi/tool` (Vapi webhook)
+  - Expects `x-vapi-secret` header when `VAPI_WEBHOOK_SECRET` is set
+  - Reads `metadata.voiceSessionToken` and dispatches tools
+
+### Tool names expected by backend
+
+- `search_products`
+- `add_discovery_line`
+- `get_po_cart`
+- `list_suppliers_for_cart`
+- `set_supplier_selections`
+- `build_po_preview`
+- `get_checkout_defaults`
+- `place_purchase_orders`
+
+### Assistant prompt guardrails
+
+- Mandatory flow order: Product Discovery search -> add to cart -> supplier selection -> place-order details -> order review -> explicit confirmation -> place
+- Always confirm selected items, suppliers, totals, and payment method before place
+- Call `place_purchase_orders` only when user explicitly confirms
+- Ask and capture all place-order fields before placement: `requiredDate`, `paymentMethod`, `shippingAddress`, `billingAddress`
+- Enforce supplier picks strictly from Tatva platform-ranked supplier options per cart item
+- If cart is empty, ask user to add products first
+
+### Local testing checklist
+
+1. Start backend and frontend.
+2. Open Product Discovery or Cart and click **Start Voice**.
+3. Verify Vapi call metadata contains `voiceSessionToken`.
+4. Confirm tool calls hit `/api/voice/vapi/tool` and return `results`.
+5. Run full path: discovery search -> add to cart -> supplier selection -> collect date/payment/shipping/billing -> review -> explicit confirm -> place.

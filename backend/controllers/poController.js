@@ -1254,6 +1254,23 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
     if (!product || String(product.status || '').toLowerCase() !== 'approved') {
       return res.status(404).json({ status: 'error', message: 'Product not found' });
     }
+    // Keep cart add behavior aligned with Product Discovery:
+    // allow only products that are actively listed by at least one approved supplier listing.
+    const { data: activeListing, error: listingError } = await supabase
+      .from('supplier_products')
+      .select('id')
+      .eq('product_id', productId)
+      .eq('status', 'approved')
+      .eq('is_active', true)
+      .limit(1)
+      .maybeSingle();
+    if (listingError) throw listingError;
+    if (!activeListing) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'This product is not currently listed on the platform.'
+      });
+    }
 
     const { data: cartRow, error: cartError } = await supabase
       .from('po_carts')

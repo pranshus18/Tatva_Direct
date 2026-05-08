@@ -7,43 +7,86 @@ import AdminRoute from './components/AdminRoute';
 import { getApiUrl } from './config/api';
 import { normalizeUser, normalizeUserType } from './utils/userType';
 
-const Login = lazy(() => import('./pages/Login'));
-const AdminLogin = lazy(() => import('./pages/AdminLogin'));
-const Signup = lazy(() => import('./pages/Signup'));
-const Profile = lazy(() => import('./pages/Profile'));
-const ServiceProviderDashboard = lazy(() => import('./pages/ServiceProviderDashboard'));
-const SupplierDashboard = lazy(() => import('./pages/SupplierDashboard'));
-const SupplierPOS = lazy(() => import('./pages/SupplierPOS'));
-const SupplierProductSetup = lazy(() => import('./pages/SupplierProductSetup'));
-const SupplierBCOV = lazy(() => import('./pages/SupplierBCOV'));
-const ProductManagement = lazy(() => import('./pages/ProductManagement'));
-const SupplierReturns = lazy(() => import('./pages/SupplierReturns'));
-const SupplierUpstream = lazy(() => import('./pages/SupplierUpstream'));
-const SupplierSelectYourself = lazy(() => import('./pages/SupplierSelectYourself'));
-const SupplierDiscountInsights = lazy(() => import('./pages/SupplierDiscountInsights'));
-const SupplierBuyerPurchases = lazy(() => import('./pages/SupplierBuyerPurchases'));
-const SupplierTotalPurchasePlatformCov = lazy(() => import('./pages/SupplierTotalPurchasePlatformCov'));
-const SupplierPurchaseTotal = lazy(() => import('./pages/SupplierPurchaseTotal'));
-const ServiceProviderReturns = lazy(() => import('./pages/ServiceProviderReturns'));
-const ProductDiscovery = lazy(() => import('./pages/ProductDiscovery'));
-const AdminDashboardOverview = lazy(() => import('./pages/AdminDashboardOverview'));
-const AdminAnalytics = lazy(() => import('./pages/AdminAnalytics'));
-const AdminUsers = lazy(() => import('./pages/AdminUsers'));
-const AdminTransactions = lazy(() => import('./pages/AdminTransactions'));
-const AdminSuppliers = lazy(() => import('./pages/AdminSuppliers'));
-const AdminServiceProviders = lazy(() => import('./pages/AdminServiceProviders'));
-const AdminProductStatus = lazy(() => import('./pages/AdminProductStatus'));
-const AdminBrandApprovals = lazy(() => import('./pages/AdminBrandApprovals'));
-const AdminProfileChainApprovals = lazy(() => import('./pages/AdminProfileChainApprovals'));
-const AdminFinance = lazy(() => import('./pages/AdminFinance'));
-const AdminSupplyChain = lazy(() => import('./pages/AdminSupplyChain'));
-const BOQNormalize = lazy(() => import('./pages/BOQNormalize'));
-const VendorSelect = lazy(() => import('./pages/VendorSelect'));
-const Substitution = lazy(() => import('./pages/Substitution'));
-const CreatePO = lazy(() => import('./pages/CreatePO'));
-const YourOrders = lazy(() => import('./pages/YourOrders'));
-const Cart = lazy(() => import('./pages/Cart'));
-const SharedCart = lazy(() => import('./pages/SharedCart'));
+const buildLazyErrorFallback = (label) => () => (
+  <div style={{ padding: '1rem', color: '#b91c1c' }}>
+    Failed to load {label}. Please refresh the page.
+  </div>
+);
+
+const safeLazy = (importer, label) =>
+  lazy(async () => {
+    try {
+      return await importer();
+    } catch (error) {
+      console.error(`Lazy load failed for ${label}:`, error);
+      return { default: buildLazyErrorFallback(label) };
+    }
+  });
+
+const Login = safeLazy(() => import('./pages/Login'), 'Login page');
+const AdminLogin = safeLazy(() => import('./pages/AdminLogin'), 'Admin Login page');
+const Signup = safeLazy(() => import('./pages/Signup'), 'Signup page');
+const Profile = safeLazy(() => import('./pages/Profile'), 'Profile page');
+const ServiceProviderDashboard = safeLazy(
+  () => import('./pages/ServiceProviderDashboard'),
+  'Service Provider Dashboard page'
+);
+const SupplierDashboard = safeLazy(() => import('./pages/SupplierDashboard'), 'Supplier Dashboard page');
+const SupplierPOS = safeLazy(() => import('./pages/SupplierPOS'), 'Supplier POS page');
+const SupplierProductSetup = safeLazy(() => import('./pages/SupplierProductSetup'), 'Supplier Product Setup page');
+const SupplierBCOV = safeLazy(() => import('./pages/SupplierBCOV'), 'Supplier BCOV page');
+const ProductManagement = safeLazy(() => import('./pages/ProductManagement'), 'Product Management page');
+const SupplierReturns = safeLazy(() => import('./pages/SupplierReturns'), 'Supplier Returns page');
+const SupplierUpstream = safeLazy(() => import('./pages/SupplierUpstream'), 'Supplier Upstream page');
+const SupplierSelectYourself = safeLazy(
+  () => import('./pages/SupplierSelectYourself'),
+  'Supplier Select Yourself page'
+);
+const SupplierDiscountInsights = safeLazy(
+  () => import('./pages/SupplierDiscountInsights'),
+  'Supplier Discount Insights page'
+);
+const SupplierBuyerPurchases = safeLazy(
+  () => import('./pages/SupplierBuyerPurchases'),
+  'Supplier Buyer Purchases page'
+);
+const SupplierTotalPurchasePlatformCov = safeLazy(
+  () => import('./pages/SupplierTotalPurchasePlatformCov'),
+  'Supplier Total Purchase Platform COV page'
+);
+const SupplierPurchaseTotal = safeLazy(() => import('./pages/SupplierPurchaseTotal'), 'Supplier Purchase Total page');
+const ServiceProviderReturns = safeLazy(
+  () => import('./pages/ServiceProviderReturns'),
+  'Service Provider Returns page'
+);
+const ProductDiscovery = safeLazy(() => import('./pages/ProductDiscovery'), 'Product Discovery page');
+const AdminDashboardOverview = safeLazy(
+  () => import('./pages/AdminDashboardOverview'),
+  'Admin Dashboard Overview page'
+);
+const AdminAnalytics = safeLazy(() => import('./pages/AdminAnalytics'), 'Admin Analytics page');
+const AdminUsers = safeLazy(() => import('./pages/AdminUsers'), 'Admin Users page');
+const AdminTransactions = safeLazy(() => import('./pages/AdminTransactions'), 'Admin Transactions page');
+const AdminSuppliers = safeLazy(() => import('./pages/AdminSuppliers'), 'Admin Suppliers page');
+const AdminServiceProviders = safeLazy(
+  () => import('./pages/AdminServiceProviders'),
+  'Admin Service Providers page'
+);
+const AdminProductStatus = safeLazy(() => import('./pages/AdminProductStatus'), 'Admin Product Status page');
+const AdminBrandApprovals = safeLazy(() => import('./pages/AdminBrandApprovals'), 'Admin Brand Approvals page');
+const AdminProfileChainApprovals = safeLazy(
+  () => import('./pages/AdminProfileChainApprovals'),
+  'Admin Profile Chain Approvals page'
+);
+const AdminFinance = safeLazy(() => import('./pages/AdminFinance'), 'Admin Finance page');
+const AdminSupplyChain = safeLazy(() => import('./pages/AdminSupplyChain'), 'Admin Supply Chain page');
+const BOQNormalize = safeLazy(() => import('./pages/BOQNormalize'), 'BOQ Normalize page');
+const VendorSelect = safeLazy(() => import('./pages/VendorSelect'), 'Vendor Select page');
+const Substitution = safeLazy(() => import('./pages/Substitution'), 'Substitution page');
+const CreatePO = safeLazy(() => import('./pages/CreatePO'), 'Create PO page');
+const YourOrders = safeLazy(() => import('./pages/YourOrders'), 'Your Orders page');
+const Cart = safeLazy(() => import('./pages/Cart'), 'Cart page');
+const SharedCart = safeLazy(() => import('./pages/SharedCart'), 'Shared Cart page');
 
 function App() {
   const WORKFLOW_STORAGE_KEY = 'spBoqWorkflow';

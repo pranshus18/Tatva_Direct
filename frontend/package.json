@@ -8,6 +8,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@vapi-ai/web": "^2.5.2",
     "lucide-react": "^0.294.0",
     "qrcode": "^1.5.4",
     "react": "^18.2.0",
