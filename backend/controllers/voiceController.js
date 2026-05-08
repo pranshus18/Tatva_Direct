@@ -318,6 +318,25 @@ function getVoicePageContext(userId) {
   return rest;
 }
 
+function resolveUiContextProductIdByName(userId, productName) {
+  const normalizedName = String(productName || '').trim().toLowerCase();
+  if (!normalizedName) return '';
+  const context = getVoicePageContext(userId);
+  const visibleProducts = Array.isArray(context?.visibleProducts) ? context.visibleProducts : [];
+  if (!visibleProducts.length) return '';
+
+  const exact = visibleProducts.find(
+    (product) => String(product?.name || '').trim().toLowerCase() === normalizedName
+  );
+  if (exact?.id) return String(exact.id);
+
+  const tokens = tokenizeSearchText(normalizedName);
+  const ranked = visibleProducts
+    .map((product) => ({ product, score: scoreProductMatch(product, tokens) }))
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.score > 0 && ranked[0]?.product?.id ? String(ranked[0].product.id) : '';
+}
+
 function extractDraftItems(draft) {
   const groupItems = Array.isArray(draft?.boqGroups)
     ? draft.boqGroups.flatMap((group) => (Array.isArray(group?.items) ? group.items : []))
@@ -444,8 +463,9 @@ async function runTool(userId, toolName, args) {
   const flow = getFlowState(userId);
 
   if (toolName === 'search_products') {
+    const uiContext = getVoicePageContext(userId);
     const normalizedQuery = String(
-      args.query || args.productName || args.name || args.term || ''
+      args.query || args.productName || args.name || args.term || uiContext?.searchQuery || ''
     ).trim();
     const cacheKey = JSON.stringify({
       userId: String(userId || ''),
@@ -491,7 +511,7 @@ async function runTool(userId, toolName, args) {
       console.warn('[voice] search_products degraded fallback', {
         reason: searchError?.message || 'unknown'
       });
-      const { data: fallbackProducts } = await supabase
+      let fallbackQuery = supabase
         .from('products')
         .select(
           `
@@ -507,9 +527,19 @@ async function runTool(userId, toolName, args) {
         .eq('status', 'approved')
         .eq('supplier_products.status', 'approved')
         .eq('supplier_products.is_active', true)
-        .order('updated_at', { ascending: false })
-        .range((page - 1) * limit, (page - 1) * limit + limit - 1);
-      items = (fallbackProducts || []).map((p) => ({
+        .order('updated_at', { ascending: false });
+      if (args.category) {
+        fallbackQuery = fallbackQuery.ilike('category', String(args.category || '').trim());
+      }
+      if (normalizedQuery) {
+        const ilikeQuery = `%${normalizedQuery.replace(/\s+/g, '%')}%`;
+        fallbackQuery = fallbackQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`);
+      }
+      const { data: fallbackProductsFiltered } = await fallbackQuery.range(
+        (page - 1) * limit,
+        (page - 1) * limit + limit - 1
+      );
+      items = (fallbackProductsFiltered || []).map((p) => ({
         productId: p.id,
         name: p.name,
         brand: p.brand || null,
@@ -545,6 +575,9 @@ async function runTool(userId, toolName, args) {
 
   if (toolName === 'add_discovery_line') {
     let resolvedProductId = String(args.productId || args.id || '').trim();
+    if (!resolvedProductId && args.productName) {
+      resolvedProductId = resolveUiContextProductIdByName(userId, args.productName);
+    }
     if (!resolvedProductId && args.productName) {
       resolvedProductId = await resolveDiscoveryProductIdByName(args.productName);
     }
