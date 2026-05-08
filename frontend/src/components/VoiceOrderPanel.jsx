@@ -1,12 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Vapi from '@vapi-ai/web';
 import { Mic, MicOff, PhoneOff } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { getApiUrl } from '../config/api';
 import './VoiceOrderPanel.css';
 
-const VoiceOrderPanel = ({ showCartShortcut = false }) => {
-  const navigate = useNavigate();
+const VoiceOrderPanel = () => {
   const vapiRef = useRef(null);
   const sessionRef = useRef(null);
   const isManualEndRef = useRef(false);
@@ -174,11 +172,6 @@ const VoiceOrderPanel = ({ showCartShortcut = false }) => {
             </button>
           </>
         )}
-        {showCartShortcut ? (
-          <button type="button" className="btn-secondary" onClick={() => navigate('/cart')}>
-            Go to Cart
-          </button>
-        ) : null}
       </div>
     </div>
   );

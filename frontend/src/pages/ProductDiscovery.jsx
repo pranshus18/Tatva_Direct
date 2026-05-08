@@ -132,7 +132,7 @@ const ProductDiscovery = () => {
         <h1>Product Discovery</h1>
         <p>Browse products listed by suppliers. You can add items directly to cart without a BOQ.</p>
       </div>
-      <VoiceOrderPanel showCartShortcut />
+      <VoiceOrderPanel />
 
       <div className="product-discovery-controls">
         <div className="search-input-wrapper">
