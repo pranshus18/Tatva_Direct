@@ -11,7 +11,33 @@ const addressSchema = z.object({
 });
 
 export const voiceSessionRequestSchema = z.object({
-  channel: z.enum(['web']).optional().default('web')
+  channel: z.enum(['web']).optional().default('web'),
+  pageContext: z
+    .object({
+      page: z.literal('product_discovery'),
+      searchQuery: z.string().optional(),
+      selectedCategory: z.string().optional(),
+      currentPage: z.number().int().min(1).optional(),
+      pageSize: z.number().int().min(1).max(200).optional(),
+      total: z.number().int().min(0).optional(),
+      pageCount: z.number().int().min(1).optional(),
+      recommendationMode: z.string().optional(),
+      visibleProducts: z
+        .array(
+          z.object({
+            id: z.union([z.string(), z.number()]).optional(),
+            name: z.string().optional(),
+            brand: z.string().optional(),
+            category: z.string().optional(),
+            unit: z.string().optional(),
+            supplierCount: z.number().int().min(0).optional(),
+            barcode: z.string().optional(),
+            description: z.string().optional()
+          })
+        )
+        .optional()
+    })
+    .optional()
 });
 
 const searchProductsArgsSchema = z.object({

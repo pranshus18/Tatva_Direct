@@ -24,6 +24,7 @@ const searchProductsCache = new Map();
 const recentVoiceSessions = [];
 const callIdToVoiceUserId = new Map();
 const voiceFlowByUserId = new Map();
+const voicePageContextByUserId = new Map();
 
 const FLOW_STEPS = {
   discovery: 'discovery',
@@ -254,6 +255,53 @@ function getFlowState(userId) {
 function setFlowState(userId, step) {
   const uid = String(userId || '');
   voiceFlowByUserId.set(uid, { step, updatedAt: Date.now() });
+}
+
+function sanitizeVoicePageContext(rawContext) {
+  if (!rawContext || typeof rawContext !== 'object') return null;
+  if (rawContext.page !== 'product_discovery') return null;
+  const visibleProducts = Array.isArray(rawContext.visibleProducts)
+    ? rawContext.visibleProducts.slice(0, 40).map((product) => ({
+        id: String(product?.id || ''),
+        name: String(product?.name || ''),
+        brand: String(product?.brand || ''),
+        category: String(product?.category || ''),
+        unit: String(product?.unit || ''),
+        supplierCount: Number(product?.supplierCount || 0) || 0,
+        barcode: String(product?.barcode || ''),
+        description: String(product?.description || '')
+      }))
+    : [];
+  return {
+    page: 'product_discovery',
+    searchQuery: String(rawContext.searchQuery || ''),
+    selectedCategory: String(rawContext.selectedCategory || ''),
+    currentPage: Number(rawContext.currentPage || 1) || 1,
+    pageSize: Number(rawContext.pageSize || 24) || 24,
+    total: Number(rawContext.total || 0) || 0,
+    pageCount: Number(rawContext.pageCount || 1) || 1,
+    recommendationMode: String(rawContext.recommendationMode || ''),
+    visibleProducts,
+    capturedAt: new Date().toISOString()
+  };
+}
+
+function rememberVoicePageContext(userId, rawContext) {
+  const uid = String(userId || '');
+  const sanitized = sanitizeVoicePageContext(rawContext);
+  if (!sanitized) return;
+  voicePageContextByUserId.set(uid, {
+    ...sanitized,
+    updatedAtMs: Date.now()
+  });
+}
+
+function getVoicePageContext(userId) {
+  const uid = String(userId || '');
+  const context = voicePageContextByUserId.get(uid);
+  if (!context) return null;
+  const { updatedAtMs: _updatedAtMs, ...rest } = context;
+  return rest;
 }
 
 function extractDraftItems(draft) {
@@ -796,9 +844,10 @@ async function runTool(userId, toolName, args) {
 
 router.post('/session', authenticateToken, isServiceProvider, async (req, res) => {
   try {
-    parseWithSchema(voiceSessionRequestSchema, req.body || {});
+    const parsedRequest = parseWithSchema(voiceSessionRequestSchema, req.body || {});
     const { token, expiresAt } = issueVoiceSessionToken(req.userId);
     rememberVoiceSession(req.userId, token, expiresAt);
+    rememberVoicePageContext(req.userId, parsedRequest?.pageContext);
     console.info('[voice] session created', {
       userId: req.userId,
       assistantConfigured: Boolean(VAPI_ASSISTANT_ID),
@@ -894,10 +943,17 @@ router.post('/tool', async (req, res) => {
       try {
         const args = schema.parse(parseToolArguments(rawArgs));
         const toolResult = await runTool(userId, fnName, args);
+        const responsePayload =
+          toolResult && typeof toolResult === 'object'
+            ? {
+                ...toolResult,
+                uiContext: getVoicePageContext(userId)
+              }
+            : toolResult;
         results.push({
           name: fnName,
           toolCallId,
-          result: JSON.stringify(toolResult)
+          result: JSON.stringify(responsePayload)
         });
       } catch (toolError) {
         results.push({

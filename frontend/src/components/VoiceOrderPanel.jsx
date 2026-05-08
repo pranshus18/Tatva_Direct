@@ -4,7 +4,7 @@ import { Mic, MicOff, PhoneOff } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import './VoiceOrderPanel.css';
 
-const VoiceOrderPanel = () => {
+const VoiceOrderPanel = ({ pageContext = null }) => {
   const vapiRef = useRef(null);
   const sessionRef = useRef(null);
   const isManualEndRef = useRef(false);
@@ -87,7 +87,10 @@ const VoiceOrderPanel = () => {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ channel: 'web' })
+        body: JSON.stringify({
+          channel: 'web',
+          pageContext: pageContext || undefined
+        })
       });
       const sessionData = await sessionRes.json();
       if (!sessionRes.ok || sessionData.status !== 'success') {

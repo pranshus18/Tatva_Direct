@@ -78,6 +78,29 @@ const ProductDiscovery = () => {
   }, [total]);
 
   const safePage = Math.min(Math.max(page, 1), pageCount);
+  const voicePageContext = useMemo(
+    () => ({
+      page: 'product_discovery',
+      searchQuery: searchQuery.trim(),
+      selectedCategory: selectedCategory.trim(),
+      currentPage: safePage,
+      pageSize,
+      total: Number.isFinite(total) ? total : 0,
+      pageCount,
+      recommendationMode,
+      visibleProducts: products.map((product) => ({
+        id: product?.id ? String(product.id) : '',
+        name: String(product?.name || ''),
+        brand: String(product?.brand || ''),
+        category: String(product?.category || ''),
+        unit: String(product?.unit || ''),
+        supplierCount: Number(product?.supplierCount || 0) || 0,
+        barcode: String(product?.barcode || ''),
+        description: String(product?.description || '')
+      }))
+    }),
+    [searchQuery, selectedCategory, safePage, pageSize, total, pageCount, recommendationMode, products]
+  );
 
   const addToCart = async (product) => {
     const token = localStorage.getItem('token');
@@ -132,7 +155,7 @@ const ProductDiscovery = () => {
         <h1>Product Discovery</h1>
         <p>Browse products listed by suppliers. You can add items directly to cart without a BOQ.</p>
       </div>
-      <VoiceOrderPanel />
+      <VoiceOrderPanel pageContext={voicePageContext} />
 
       <div className="product-discovery-controls">
         <div className="search-input-wrapper">
