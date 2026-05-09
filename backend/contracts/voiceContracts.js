@@ -17,10 +17,10 @@ export const voiceSessionRequestSchema = z.object({
       page: z.literal('product_discovery'),
       searchQuery: z.string().optional(),
       selectedCategory: z.string().optional(),
-      currentPage: z.number().int().min(1).optional(),
-      pageSize: z.number().int().min(1).max(200).optional(),
-      total: z.number().int().min(0).optional(),
-      pageCount: z.number().int().min(1).optional(),
+      currentPage: z.coerce.number().int().min(1).optional(),
+      pageSize: z.coerce.number().int().min(1).max(200).optional(),
+      total: z.coerce.number().int().min(0).optional(),
+      pageCount: z.coerce.number().int().min(1).optional(),
       recommendationMode: z.string().optional(),
       visibleProducts: z
         .array(
@@ -30,7 +30,7 @@ export const voiceSessionRequestSchema = z.object({
             brand: z.string().optional(),
             category: z.string().optional(),
             unit: z.string().optional(),
-            supplierCount: z.number().int().min(0).optional(),
+            supplierCount: z.coerce.number().int().min(0).optional(),
             barcode: z.string().optional(),
             description: z.string().optional()
           })
@@ -134,24 +134,32 @@ const toolCallSchema = z.object({
   arguments: z.union([z.string(), z.record(z.string(), z.any())]).optional()
 });
 
-const vapiMessageSchema = z.object({
-  type: z.string(),
-  call: z
-    .object({
-      id: z.string().optional(),
-      metadata: z.record(z.string(), z.any()).optional()
-    })
-    .optional(),
-  toolCallList: z.array(toolCallSchema).optional(),
-  toolWithToolCallList: z
-    .array(
-      z.object({
-        toolCallList: z.array(toolCallSchema).optional()
+const vapiMessageSchema = z
+  .object({
+    type: z.string().optional().default('unknown'),
+    call: z
+      .object({
+        id: z.string().optional(),
+        metadata: z.record(z.string(), z.any()).optional()
       })
-    )
-    .optional()
-});
+      .passthrough()
+      .optional(),
+    metadata: z.record(z.string(), z.any()).optional(),
+    toolCallList: z.array(toolCallSchema).optional(),
+    toolCalls: z.array(toolCallSchema).optional(),
+    toolWithToolCallList: z
+      .array(
+        z.object({
+          toolCallList: z.array(toolCallSchema).optional()
+        })
+      )
+      .optional()
+  })
+  .passthrough();
 
-export const vapiServerMessageSchema = z.object({
-  message: vapiMessageSchema
-});
+export const vapiServerMessageSchema = z
+  .object({
+    message: vapiMessageSchema.optional(),
+    call: z.record(z.string(), z.any()).optional()
+  })
+  .passthrough();

@@ -34,6 +34,20 @@ const FLOW_STEPS = {
   review_ready: 'review_ready'
 };
 
+/**
+ * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` splits on commas — commas/parens inside the
+ * pattern break the filter and Supabase returns an error ("technical issue" in Vapi).
+ * Also strip LIKE wildcards so user input cannot broaden matches unexpectedly.
+ */
+function sanitizeVoiceSearchForOrFilter(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  s = s.replace(/[,()[\]]/g, ' ').replace(/%/g, ' ').replace(/_/g, ' ');
+  s = s.replace(/\s+/g, ' ').trim();
+  if (s.length > 200) s = s.slice(0, 200);
+  return s;
+}
+
 function tokenizeSearchText(value) {
   return String(value || '')
     .toLowerCase()
@@ -53,7 +67,7 @@ function scoreProductMatch(product, queryTokens) {
 }
 
 async function searchPlatformDiscoveryProducts({ query, category, limit, page }) {
-  const normalizedQuery = String(query || '').trim();
+  const normalizedQuery = sanitizeVoiceSearchForOrFilter(query);
   const normalizedCategory = String(category || '').trim();
   const normalizedLimit = Math.min(Math.max(Number(limit || 6) || 6, 1), 50);
   const normalizedPage = Math.max(Number.parseInt(String(page || 1), 10) || 1, 1);
@@ -86,7 +100,9 @@ async function searchPlatformDiscoveryProducts({ query, category, limit, page })
   }
   if (normalizedQuery) {
     const ilikeQuery = `%${normalizedQuery.replace(/\s+/g, '%')}%`;
-    productsQuery = productsQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`);
+    productsQuery = productsQuery.or(
+      `name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`
+    );
   }
 
   const { data, error, count } = await productsQuery;
@@ -100,7 +116,7 @@ async function searchPlatformDiscoveryProducts({ query, category, limit, page })
 }
 
 async function resolveDiscoveryProductIdByName(productName) {
-  const normalizedName = String(productName || '').trim();
+  const normalizedName = sanitizeVoiceSearchForOrFilter(productName);
   if (!normalizedName) return '';
 
   const ilikeQuery = `%${normalizedName.replace(/\s+/g, '%')}%`;
@@ -126,7 +142,7 @@ async function resolveDiscoveryProductIdByName(productName) {
   const candidates = Array.isArray(data) ? data : [];
   if (!candidates.length) return '';
   const exactName = candidates.find(
-    (item) => String(item?.name || '').trim().toLowerCase() === normalizedName.toLowerCase()
+    (item) => String(item?.name || '').trim().toLowerCase() === String(productName || '').trim().toLowerCase()
   );
   if (exactName?.id) return String(exactName.id);
 
@@ -138,9 +154,27 @@ async function resolveDiscoveryProductIdByName(productName) {
 }
 
 function getInternalApiBaseUrl() {
-  if (process.env.INTERNAL_API_BASE_URL) return process.env.INTERNAL_API_BASE_URL;
+  const candidates = [
+    process.env.INTERNAL_API_BASE_URL,
+    process.env.API_BASE_URL,
+    process.env.BACKEND_URL,
+    process.env.PUBLIC_API_URL,
+    process.env.RENDER_EXTERNAL_URL,
+    process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null,
+    process.env.FLY_APP_NAME ? `https://${process.env.FLY_APP_NAME}.fly.dev` : null
+  ]
+    .filter(Boolean)
+    .map((u) => String(u).replace(/\/$/, ''));
+  if (candidates.length) return candidates[0];
+
   const port = process.env.PORT || '8081';
-  return `http://127.0.0.1:${port}`;
+  const loopback = `http://127.0.0.1:${port}`;
+  if (process.env.NODE_ENV === 'production') {
+    console.warn(
+      '[voice] No INTERNAL_API_BASE_URL / API_BASE_URL set; using loopback for internal API calls. Set INTERNAL_API_BASE_URL to your public API origin in production if cart/supplier lookups fail.'
+    );
+  }
+  return loopback;
 }
 
 function buildAppJwtForUser(userId) {
@@ -211,6 +245,23 @@ function collectToolCalls(message) {
     Array.isArray(entry?.toolCallList) ? entry.toolCallList : []
   );
   return [...direct, ...directAlt, ...nested];
+}
+
+/** Vapi may send tool calls under body.message or flattened on the webhook root */
+function normalizeVapiWebhookMessage(payload, rawBody) {
+  const raw = rawBody || {};
+  const nested = raw.message && typeof raw.message === 'object' ? raw.message : null;
+  const fromPayload = payload?.message && typeof payload.message === 'object' ? payload.message : null;
+  const picked = nested || fromPayload;
+  if (picked && Object.keys(picked).length > 0) return picked;
+  if (
+    Array.isArray(raw.toolCallList) ||
+    Array.isArray(raw.toolCalls) ||
+    Array.isArray(raw.toolWithToolCallList)
+  ) {
+    return raw;
+  }
+  return {};
 }
 
 function extractVoiceSessionToken(reqBody, message) {
@@ -464,9 +515,10 @@ async function runTool(userId, toolName, args) {
 
   if (toolName === 'search_products') {
     const uiContext = getVoicePageContext(userId);
-    const normalizedQuery = String(
+    const rawQuery = String(
       args.query || args.productName || args.name || args.term || uiContext?.searchQuery || ''
     ).trim();
+    const normalizedQuery = sanitizeVoiceSearchForOrFilter(rawQuery);
     const cacheKey = JSON.stringify({
       userId: String(userId || ''),
       q: normalizedQuery,
@@ -952,7 +1004,7 @@ router.post('/tool', async (req, res) => {
     }
 
     const payload = parseWithSchema(vapiServerMessageSchema, req.body || {});
-    const message = payload.message || {};
+    const message = normalizeVapiWebhookMessage(payload, req.body || {});
     const toolCalls = collectToolCalls(message);
     if (toolCalls.length === 0) {
       console.info('[voice] no tool calls in message', {
