@@ -150,10 +150,6 @@ const VoiceOrderPanel = ({ pageContext = null }) => {
     <div className="voice-order-panel">
       <div className="voice-order-panel__content">
         <h3>Voice Order (Vapi)</h3>
-        <p>Voice flow: Product Discovery search → add to cart → supplier selection → place order details (required date, payment mode, shipping and billing addresses) → final order review → explicit place order confirmation.</p>
-        <p className="voice-order-panel__note">
-          Local dev note: tool calls (search/add cart) require Vapi webhook to reach your backend from the internet.
-        </p>
         <span className={`voice-order-panel__status voice-order-panel__status--${safeStatus}`}>
           {statusLabelMap[safeStatus] || safeStatus}
         </span>
