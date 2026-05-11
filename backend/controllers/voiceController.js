@@ -265,14 +265,41 @@ function normalizeVapiWebhookMessage(payload, rawBody) {
 }
 
 function extractVoiceSessionToken(reqBody, message) {
-  return String(
+  const explicit =
     message?.call?.metadata?.voiceSessionToken ||
-      message?.metadata?.voiceSessionToken ||
-      reqBody?.message?.metadata?.voiceSessionToken ||
-      reqBody?.call?.metadata?.voiceSessionToken ||
-      reqBody?.metadata?.voiceSessionToken ||
-      ''
-  );
+    message?.metadata?.voiceSessionToken ||
+    reqBody?.message?.call?.metadata?.voiceSessionToken ||
+    reqBody?.message?.metadata?.voiceSessionToken ||
+    reqBody?.call?.metadata?.voiceSessionToken ||
+    reqBody?.metadata?.voiceSessionToken;
+  if (explicit) return String(explicit);
+
+  // Be resilient to provider payload shape changes by scanning common metadata containers.
+  const scanQueue = [message, reqBody?.message, reqBody];
+  for (const candidate of scanQueue) {
+    if (!candidate || typeof candidate !== 'object') continue;
+    const metadata = candidate?.metadata;
+    if (metadata && typeof metadata === 'object' && metadata.voiceSessionToken) {
+      return String(metadata.voiceSessionToken);
+    }
+    const callMetadata = candidate?.call?.metadata;
+    if (callMetadata && typeof callMetadata === 'object' && callMetadata.voiceSessionToken) {
+      return String(callMetadata.voiceSessionToken);
+    }
+  }
+
+  return '';
+}
+
+function rememberCallUserFromMetadata(reqBody, message) {
+  const token = extractVoiceSessionToken(reqBody, message);
+  if (!token) return null;
+  const parsed = parseVoiceSessionToken(token);
+  const callId = String(message?.call?.id || reqBody?.message?.call?.id || reqBody?.call?.id || '').trim();
+  if (callId) {
+    callIdToVoiceUserId.set(callId, parsed.userId);
+  }
+  return parsed.userId;
 }
 
 function resolveUserIdFromToolRequest(reqBody, message) {
@@ -1031,6 +1058,13 @@ router.post('/tool', async (req, res) => {
 
     const payload = parseWithSchema(vapiServerMessageSchema, req.body || {});
     const message = normalizeVapiWebhookMessage(payload, req.body || {});
+    try {
+      rememberCallUserFromMetadata(req.body || {}, message);
+    } catch (metadataError) {
+      console.warn('[voice] failed to map call user from metadata', {
+        reason: metadataError?.message || 'unknown'
+      });
+    }
     const toolCalls = collectToolCalls(message);
     if (toolCalls.length === 0) {
       console.info('[voice] no tool calls in message', {
