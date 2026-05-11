@@ -1336,6 +1336,20 @@ router.get('/locations', authenticateToken, async (req, res) => {
   }
 });
 
+/**
+ * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` treats commas as delimiters; commas/parens in the
+ * pattern can break the filter. Strip LIKE wildcards so user input cannot broaden matches.
+ * Matches voiceController `sanitizeVoiceSearchForOrFilter` so UI and voice search behave the same.
+ */
+function sanitizeDiscoverySearchQuery(raw) {
+  let s = String(raw || '').trim();
+  if (!s) return '';
+  s = s.replace(/[,()[\]]/g, ' ').replace(/%/g, ' ').replace(/_/g, ' ');
+  s = s.replace(/\s+/g, ' ').trim();
+  if (s.length > 200) s = s.slice(0, 200);
+  return s;
+}
+
 // Search for product name suggestions (autocomplete) with fuzzy matching
 router.get('/products/search', authenticateToken, async (req, res) => {
   try {
@@ -1349,7 +1363,7 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const parsedOffset = Number.parseInt(String(req.query.offset || ''), 10);
     const offset = Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : (page - 1) * limit;
     const normalizedCategory = String(category || '').trim().toLowerCase();
-    const query = String(q || '').trim();
+    const query = sanitizeDiscoverySearchQuery(q);
     const rankingPoolLimit = query ? 250 : 500;
 
     // Product Discovery should show products that are actually LISTED by suppliers (supplier_products),

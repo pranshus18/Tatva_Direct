@@ -35,7 +35,17 @@ export const voiceSessionRequestSchema = z.object({
             description: z.string().optional()
           })
         )
+        .optional(),
+      /** Set by Product Discovery after add-to-cart; helps resolve productName when listing scrolls. */
+      lastCartAddFromDiscovery: z
+        .object({
+          productId: z.string().optional(),
+          name: z.string().optional(),
+          brand: z.string().optional(),
+          at: z.coerce.number().optional()
+        })
         .optional()
+        .nullable()
     })
     .optional()
 });

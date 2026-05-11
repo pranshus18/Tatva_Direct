@@ -4,6 +4,8 @@ import { getApiUrl } from '../config/api';
 import VoiceOrderPanel from '../components/VoiceOrderPanel';
 import './ProductDiscovery.css';
 
+const VOICE_LAST_ADDED_KEY = 'voiceDiscoveryLastAdded';
+
 const ProductDiscovery = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
@@ -15,7 +17,21 @@ const ProductDiscovery = () => {
   const [recommendationMode, setRecommendationMode] = useState('');
   const [cartBusyByProductId, setCartBusyByProductId] = useState({});
   const [cartAddedByProductId, setCartAddedByProductId] = useState({});
+  const [lastDiscoveryCartAdd, setLastDiscoveryCartAdd] = useState(null);
   const pageSize = 24;
+
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(VOICE_LAST_ADDED_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && parsed.productId) {
+        setLastDiscoveryCartAdd(parsed);
+      }
+    } catch {
+      // Ignore invalid storage.
+    }
+  }, []);
 
   const categories = useMemo(() => {
     const unique = new Set();
@@ -97,21 +113,39 @@ const ProductDiscovery = () => {
         supplierCount: Number(product?.supplierCount || 0) || 0,
         barcode: String(product?.barcode || ''),
         description: String(product?.description || '')
-      }))
+      })),
+      lastCartAddFromDiscovery: lastDiscoveryCartAdd
+        ? {
+            productId: String(lastDiscoveryCartAdd.productId || ''),
+            name: String(lastDiscoveryCartAdd.name || ''),
+            brand: String(lastDiscoveryCartAdd.brand || ''),
+            at: lastDiscoveryCartAdd.at
+          }
+        : null
     }),
-    [searchQuery, selectedCategory, safePage, pageSize, total, pageCount, recommendationMode, products]
+    [
+      searchQuery,
+      selectedCategory,
+      safePage,
+      pageSize,
+      total,
+      pageCount,
+      recommendationMode,
+      products,
+      lastDiscoveryCartAdd
+    ]
   );
 
   const addToCart = async (product) => {
     const token = localStorage.getItem('token');
     if (!token) {
       setError('Please log in again to add items to cart.');
-      return;
+      return false;
     }
     const productId = product?.id;
     if (!productId) {
       setError('This product cannot be added because its id is missing.');
-      return;
+      return false;
     }
 
     setCartBusyByProductId((prev) => ({ ...prev, [String(productId)]: true }));
@@ -132,6 +166,18 @@ const ProductDiscovery = () => {
       if (!saveRes.ok || saveData.status !== 'success') {
         throw new Error(saveData.message || 'Failed to save cart');
       }
+      const cartHint = {
+        productId: String(productId),
+        name: String(product?.name || ''),
+        brand: String(product?.brand || ''),
+        at: Date.now()
+      };
+      try {
+        sessionStorage.setItem(VOICE_LAST_ADDED_KEY, JSON.stringify(cartHint));
+      } catch {
+        // Ignore storage failures.
+      }
+      setLastDiscoveryCartAdd(cartHint);
       setCartAddedByProductId((prev) => ({ ...prev, [String(productId)]: true }));
       setTimeout(() => {
         setCartAddedByProductId((prev) => {
@@ -139,8 +185,10 @@ const ProductDiscovery = () => {
           return rest;
         });
       }, 1400);
+      return true;
     } catch (e) {
       setError(e.message || 'Failed to add to cart');
+      return false;
     } finally {
       setCartBusyByProductId((prev) => {
         const { [String(productId)]: _removed, ...rest } = prev;
@@ -243,7 +291,7 @@ const ProductDiscovery = () => {
                 </div>
                 <button
                   type="button"
-                  className="btn-primary"
+                  className="btn-primary product-card-actions__cart"
                   onClick={() => addToCart(product)}
                   disabled={Boolean(cartBusyByProductId[String(product?.id || '')])}
                 >

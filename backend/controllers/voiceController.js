@@ -337,6 +337,19 @@ function sanitizeVoicePageContext(rawContext) {
         description: String(product?.description || '')
       }))
     : [];
+  const lastAddRaw = rawContext.lastCartAddFromDiscovery;
+  let lastCartAddFromDiscovery = null;
+  if (lastAddRaw && typeof lastAddRaw === 'object') {
+    const pid = String(lastAddRaw.productId || '').trim();
+    if (pid) {
+      lastCartAddFromDiscovery = {
+        productId: pid,
+        name: String(lastAddRaw.name || ''),
+        brand: String(lastAddRaw.brand || ''),
+        at: Number.isFinite(Number(lastAddRaw.at)) ? Number(lastAddRaw.at) : Date.now()
+      };
+    }
+  }
   return {
     page: 'product_discovery',
     searchQuery: String(rawContext.searchQuery || ''),
@@ -347,6 +360,7 @@ function sanitizeVoicePageContext(rawContext) {
     pageCount: Number(rawContext.pageCount || 1) || 1,
     recommendationMode: String(rawContext.recommendationMode || ''),
     visibleProducts,
+    lastCartAddFromDiscovery,
     capturedAt: new Date().toISOString()
   };
 }
@@ -374,18 +388,30 @@ function resolveUiContextProductIdByName(userId, productName) {
   if (!normalizedName) return '';
   const context = getVoicePageContext(userId);
   const visibleProducts = Array.isArray(context?.visibleProducts) ? context.visibleProducts : [];
-  if (!visibleProducts.length) return '';
 
-  const exact = visibleProducts.find(
-    (product) => String(product?.name || '').trim().toLowerCase() === normalizedName
-  );
-  if (exact?.id) return String(exact.id);
+  if (visibleProducts.length) {
+    const exact = visibleProducts.find(
+      (product) => String(product?.name || '').trim().toLowerCase() === normalizedName
+    );
+    if (exact?.id) return String(exact.id);
 
-  const tokens = tokenizeSearchText(normalizedName);
-  const ranked = visibleProducts
-    .map((product) => ({ product, score: scoreProductMatch(product, tokens) }))
-    .sort((a, b) => b.score - a.score);
-  return ranked[0]?.score > 0 && ranked[0]?.product?.id ? String(ranked[0].product.id) : '';
+    const tokens = tokenizeSearchText(normalizedName);
+    const ranked = visibleProducts
+      .map((product) => ({ product, score: scoreProductMatch(product, tokens) }))
+      .sort((a, b) => b.score - a.score);
+    if (ranked[0]?.score > 0 && ranked[0]?.product?.id) return String(ranked[0].product.id);
+  }
+
+  const last = context?.lastCartAddFromDiscovery;
+  if (last?.productId) {
+    const lastName = String(last.name || '').trim().toLowerCase();
+    const lastBrand = String(last.brand || '').trim().toLowerCase();
+    const blob = `${lastName} ${lastBrand}`.trim();
+    if (blob && (blob.includes(normalizedName) || (lastName && normalizedName.includes(lastName)))) {
+      return String(last.productId);
+    }
+  }
+  return '';
 }
 
 function extractDraftItems(draft) {
