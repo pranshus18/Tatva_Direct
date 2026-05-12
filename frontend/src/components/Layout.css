@@ -3,6 +3,37 @@
   min-height: 100vh;
 }
 
+.layout--service-provider-theme {
+  background-attachment: fixed;
+  background-size: cover;
+  background-position: center;
+}
+
+.layout--service-provider-theme .content {
+  background: rgba(248, 250, 252, 0.82);
+  backdrop-filter: blur(2px);
+}
+
+.layout--service-provider-theme-default {
+  background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+}
+
+.layout--service-provider-theme-sunset {
+  background: linear-gradient(135deg, #ffe5d4 0%, #ffd2dd 40%, #dbeafe 100%);
+}
+
+.layout--service-provider-theme-ocean {
+  background: linear-gradient(135deg, #dbeafe 0%, #cffafe 45%, #e0f2fe 100%);
+}
+
+.layout--service-provider-theme-forest {
+  background: linear-gradient(135deg, #dcfce7 0%, #d1fae5 45%, #e2e8f0 100%);
+}
+
+.layout--service-provider-theme-slate {
+  background: linear-gradient(135deg, #e2e8f0 0%, #dbeafe 45%, #f1f5f9 100%);
+}
+
 .sidebar {
   width: 260px;
   min-width: 260px;

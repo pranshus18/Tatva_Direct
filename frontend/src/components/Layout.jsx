@@ -1,8 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search } from 'lucide-react';
+import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search, Paintbrush } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { normalizeUserType } from '../utils/userType';
+import {
+  getServiceProviderThemePrefs,
+  loadServiceProviderThemePrefsFromApi,
+  resolveServiceProviderThemeBackground
+} from '../utils/serviceProviderTheme';
 import './Layout.css';
 
 const routePrefetchers = {
@@ -28,6 +33,7 @@ const routePrefetchers = {
   '/supplier-buyer-purchases': () => import('../pages/SupplierBuyerPurchases'),
   '/supplier-total-purchase-platform-cov': () => import('../pages/SupplierTotalPurchasePlatformCov'),
   '/supplier-purchase-total': () => import('../pages/SupplierPurchaseTotal'),
+  '/portal-theme': () => import('../pages/ServiceProviderThemeSettings'),
   '/admin-dashboard': () => import('../pages/AdminDashboardOverview'),
   '/admin-users': () => import('../pages/AdminUsers'),
   '/admin-transactions': () => import('../pages/AdminTransactions'),
@@ -44,9 +50,12 @@ const routePrefetchers = {
 
 const prefetchedRoutes = new Set();
 const idleHandleFallback = { id: null };
-
 const Layout = ({ user, onLogout, children }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [serviceProviderThemePrefs, setServiceProviderThemePrefs] = useState(() => ({
+    themeId: 'default',
+    customImageDataUrl: ''
+  }));
   const location = useLocation();
   const userType = normalizeUserType(user?.userType);
 
@@ -199,7 +208,8 @@ const Layout = ({ user, onLogout, children }) => {
       { path: '/cart', label: 'Cart', icon: ShoppingCart },
       { path: '/create-po', label: 'Create PO', icon: ShoppingCart },
       { path: '/your-orders', label: 'Your Orders', icon: ShoppingCart },
-      { path: '/returns', label: 'Returns', icon: RefreshCw }
+      { path: '/returns', label: 'Returns', icon: RefreshCw },
+      { path: '/portal-theme', label: 'Portal Theme', icon: Paintbrush }
     ] : [])
   ], [userType]);
   const stepPaths = useMemo(() => steps.map((step) => step.path).filter(Boolean), [steps]);
@@ -229,8 +239,47 @@ const Layout = ({ user, onLogout, children }) => {
     };
   }, [location.pathname, stepPaths]);
 
+  useEffect(() => {
+    if (userType !== 'service_provider') return undefined;
+    setServiceProviderThemePrefs(getServiceProviderThemePrefs());
+    let cancelled = false;
+    loadServiceProviderThemePrefsFromApi()
+      .then((remotePrefs) => {
+        if (!cancelled && remotePrefs) {
+          setServiceProviderThemePrefs(remotePrefs);
+        }
+      })
+      .catch(() => {
+        // Ignore remote sync errors and keep local theme.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userType]);
+
+  useEffect(() => {
+    const refreshTheme = () => {
+      setServiceProviderThemePrefs(getServiceProviderThemePrefs());
+    };
+    window.addEventListener('storage', refreshTheme);
+    window.addEventListener('service-provider-theme-updated', refreshTheme);
+    return () => {
+      window.removeEventListener('storage', refreshTheme);
+      window.removeEventListener('service-provider-theme-updated', refreshTheme);
+    };
+  }, []);
+
+  const layoutThemeClass =
+    userType === 'service_provider'
+      ? 'layout--service-provider-theme'
+      : '';
+  const layoutStyle =
+    userType === 'service_provider'
+      ? { backgroundImage: resolveServiceProviderThemeBackground(serviceProviderThemePrefs) }
+      : undefined;
+
   return (
-    <div className="layout">
+    <div className={`layout ${layoutThemeClass}`.trim()} style={layoutStyle}>
       <nav className="sidebar">
         <div className="logo">
           <img src={tatvaLogo} alt="Tatva Direct" className="logo-image" />

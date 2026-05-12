@@ -24,7 +24,26 @@ import { getContractErrorMessage, parseWithSchema } from '../utils/contractValid
 
 const router = express.Router();
 const upload = multer({ dest: 'uploads/' });
+const SERVICE_PROVIDER_THEME_IDS = new Set(['default', 'sunset', 'ocean', 'forest', 'city-lights', 'blueprint', 'custom']);
+const MAX_THEME_IMAGE_DATA_URL_LENGTH = 3_500_000;
 // ================= Brand approval helpers (global) =================
+
+function sanitizeServiceProviderThemePrefs(rawTheme) {
+  const themeId = String(rawTheme?.themeId || 'default').trim() || 'default';
+  const safeThemeId = SERVICE_PROVIDER_THEME_IDS.has(themeId) ? themeId : 'default';
+  const customImageDataUrl =
+    safeThemeId === 'custom' ? String(rawTheme?.customImageDataUrl || '').trim() : '';
+  if (customImageDataUrl.length > MAX_THEME_IMAGE_DATA_URL_LENGTH) {
+    throw new Error('Custom wallpaper image is too large. Please upload a smaller image.');
+  }
+  if (customImageDataUrl && !customImageDataUrl.startsWith('data:image/')) {
+    throw new Error('Custom wallpaper must be an image.');
+  }
+  return {
+    themeId: safeThemeId,
+    customImageDataUrl
+  };
+}
 
 function parseBrandTokens(str) {
   if (!str || !String(str).trim()) return [];
@@ -467,6 +486,63 @@ router.get('/', authenticateToken, async (req, res) => {
     res.status(500).json({ 
       status: 'error',
       message: 'Internal server error' 
+    });
+  }
+});
+
+router.get('/service-provider/theme', authenticateToken, async (req, res) => {
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, user_type, profile')
+      .eq('id', req.userId)
+      .single();
+    if (error || !user) {
+      return res.status(404).json({ status: 'error', message: 'User not found' });
+    }
+    if (String(user.user_type) !== 'service_provider') {
+      return res.status(403).json({ status: 'error', message: 'Only service providers can access portal theme.' });
+    }
+    const theme = sanitizeServiceProviderThemePrefs(user?.profile?.serviceProviderPortalTheme || {});
+    return res.json({ status: 'success', theme });
+  } catch (error) {
+    return res.status(500).json({ status: 'error', message: 'Failed to load portal theme.' });
+  }
+});
+
+router.put('/service-provider/theme', authenticateToken, async (req, res) => {
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('id, user_type, profile')
+      .eq('id', req.userId)
+      .single();
+    if (error || !user) {
+      return res.status(404).json({ status: 'error', message: 'User not found' });
+    }
+    if (String(user.user_type) !== 'service_provider') {
+      return res.status(403).json({ status: 'error', message: 'Only service providers can update portal theme.' });
+    }
+    const theme = sanitizeServiceProviderThemePrefs(req.body || {});
+    const nextProfile = {
+      ...(user.profile || {}),
+      serviceProviderPortalTheme: {
+        ...theme,
+        updatedAt: new Date().toISOString()
+      }
+    };
+    const { error: updateError } = await supabase
+      .from('users')
+      .update({ profile: nextProfile })
+      .eq('id', req.userId);
+    if (updateError) {
+      throw updateError;
+    }
+    return res.json({ status: 'success', theme });
+  } catch (error) {
+    return res.status(400).json({
+      status: 'error',
+      message: error?.message || 'Failed to save portal theme.'
     });
   }
 });
@@ -957,6 +1033,14 @@ async function createProfileResponse(user) {
 
   if (user.user_type === 'service_provider') {
     const purchaseSummary = await computePurchaseSummary(user.id);
+    let serviceProviderPortalTheme = { themeId: 'default', customImageDataUrl: '' };
+    try {
+      serviceProviderPortalTheme = sanitizeServiceProviderThemePrefs(
+        user.profile?.serviceProviderPortalTheme || {}
+      );
+    } catch {
+      serviceProviderPortalTheme = { themeId: 'default', customImageDataUrl: '' };
+    }
 
     return {
       ...baseProfile,
@@ -965,7 +1049,8 @@ async function createProfileResponse(user) {
       totalOrdersPlaced: purchaseSummary.totalOrdersPlaced,
       totalAmountPlaced: purchaseSummary.totalAmountPlaced,
       totalAmountPaid: purchaseSummary.totalAmountPaid,
-      topPurchasedBrand: purchaseSummary.topPurchasedBrand
+      topPurchasedBrand: purchaseSummary.topPurchasedBrand,
+      serviceProviderPortalTheme
     };
   } else if (user.user_type === 'supplier') {
     const base = user.profile || {};

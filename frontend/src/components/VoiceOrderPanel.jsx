@@ -1,14 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import Vapi from '@vapi-ai/web';
+import { RetellWebClient } from 'retell-client-js-sdk';
 import { Mic, MicOff, PhoneOff } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import './VoiceOrderPanel.css';
 
 const VoiceOrderPanel = ({ pageContext = null }) => {
-  const vapiRef = useRef(null);
+  const retellRef = useRef(null);
   const sessionRef = useRef(null);
-  const isManualEndRef = useRef(false);
-  const reconnectAttemptedRef = useRef(false);
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
   const [muted, setMuted] = useState(false);
@@ -26,49 +24,28 @@ const VoiceOrderPanel = ({ pageContext = null }) => {
     }
   };
 
-  const setupVapiEvents = (vapi) => {
-    vapi.on('call-start', () => setStatus('in_call'));
-    vapi.on('call-end', async () => {
+  const setupRetellEvents = (retell) => {
+    retell.on('call_started', () => {
+      setStatus('in_call');
+      setError('');
+    });
+    retell.on('call_ended', () => {
       setStatus('idle');
       setMuted(false);
-      if (!isManualEndRef.current && sessionRef.current && !reconnectAttemptedRef.current) {
-        reconnectAttemptedRef.current = true;
-        setError('Voice call ended unexpectedly. Reconnecting once...');
-        try {
-          await vapi.start(sessionRef.current.assistantId, {
-            metadata: {
-              voiceSessionToken: sessionRef.current.voiceSessionToken
-            }
-          });
-          setStatus('in_call');
-          setError('');
-          return;
-        } catch (reconnectError) {
-          setStatus('error');
-          setError(
-            safeText(reconnectError?.message, '') ||
-              'Call ended unexpectedly and reconnect failed. Please click Start Voice again.'
-          );
-        }
-      }
-      isManualEndRef.current = false;
     });
-    vapi.on('speech-start', () => setStatus('listening'));
-    vapi.on('speech-end', () => setStatus('thinking'));
-    vapi.on('error', (evt) => {
-      const errorText =
-        safeText(evt?.error, '') ||
-        safeText(evt?.message, '') ||
-        'Voice call failed';
+    retell.on('agent_start_talking', () => setStatus('thinking'));
+    retell.on('agent_stop_talking', () => setStatus('listening'));
+    retell.on('error', (evt) => {
+      const errorText = safeText(evt?.error, '') || safeText(evt?.message, '') || safeText(evt, '') || 'Voice call failed';
       setError(errorText);
       setStatus('error');
     });
   };
 
   useEffect(() => () => {
-    if (vapiRef.current) {
+    if (retellRef.current) {
       try {
-        vapiRef.current.stop();
+        retellRef.current.stopCall();
       } catch {
         // Ignore cleanup stop failure.
       }
@@ -81,7 +58,7 @@ const VoiceOrderPanel = ({ pageContext = null }) => {
     try {
       const token = localStorage.getItem('token');
       if (!token) throw new Error('Please log in again before using voice ordering.');
-      const sessionRes = await fetch(getApiUrl('/api/voice/vapi/session'), {
+      const sessionRes = await fetch(getApiUrl('/api/voice/session'), {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
@@ -96,23 +73,20 @@ const VoiceOrderPanel = ({ pageContext = null }) => {
       if (!sessionRes.ok || sessionData.status !== 'success') {
         throw new Error(sessionData.message || 'Failed to initialize voice session.');
       }
-      if (!sessionData.publicKey || !sessionData.assistantId) {
-        throw new Error('Voice is not configured yet. Missing Vapi public key or assistant id.');
+      if (!sessionData.retellAccessToken || !sessionData.agentId) {
+        throw new Error('Voice is not configured yet. Missing Retell access token or agent id.');
       }
-      if (!vapiRef.current) {
-        vapiRef.current = new Vapi(sessionData.publicKey);
-        setupVapiEvents(vapiRef.current);
+      if (!retellRef.current) {
+        retellRef.current = new RetellWebClient();
+        setupRetellEvents(retellRef.current);
       }
       sessionRef.current = {
-        assistantId: sessionData.assistantId,
-        voiceSessionToken: sessionData.voiceSessionToken
+        retellAccessToken: sessionData.retellAccessToken,
+        voiceSessionToken: sessionData.voiceSessionToken,
+        agentId: sessionData.agentId
       };
-      isManualEndRef.current = false;
-      reconnectAttemptedRef.current = false;
-      await vapiRef.current.start(sessionData.assistantId, {
-        metadata: {
-          voiceSessionToken: sessionData.voiceSessionToken
-        }
+      await retellRef.current.startCall({
+        accessToken: sessionData.retellAccessToken
       });
       setStatus('in_call');
     } catch (e) {
@@ -122,17 +96,20 @@ const VoiceOrderPanel = ({ pageContext = null }) => {
   };
 
   const handleEnd = async () => {
-    if (!vapiRef.current) return;
-    isManualEndRef.current = true;
-    await vapiRef.current.stop();
+    if (!retellRef.current) return;
+    await retellRef.current.stopCall();
     setStatus('idle');
     setMuted(false);
   };
 
   const handleToggleMute = async () => {
-    if (!vapiRef.current) return;
+    if (!retellRef.current) return;
     const next = !muted;
-    await vapiRef.current.setMuted(next);
+    if (next) {
+      retellRef.current.mute();
+    } else {
+      retellRef.current.unmute();
+    }
     setMuted(next);
   };
 
@@ -141,7 +118,7 @@ const VoiceOrderPanel = ({ pageContext = null }) => {
     connecting: 'Connecting...',
     in_call: 'Voice order active',
     listening: 'Listening...',
-    thinking: 'Processing...',
+    thinking: 'Agent speaking...',
     error: 'Error'
   };
   const safeStatus = safeText(status, 'idle');
@@ -149,7 +126,7 @@ const VoiceOrderPanel = ({ pageContext = null }) => {
   return (
     <div className="voice-order-panel">
       <div className="voice-order-panel__content">
-        <h3>Voice Order (Vapi)</h3>
+        <h3>Voice Order (Retell)</h3>
         <span className={`voice-order-panel__status voice-order-panel__status--${safeStatus}`}>
           {statusLabelMap[safeStatus] || safeStatus}
         </span>

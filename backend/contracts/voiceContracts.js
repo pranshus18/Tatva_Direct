@@ -64,12 +64,16 @@ const addDiscoveryLineArgsSchema = z.object({
   productId: z.union([uuidLike, z.number()]).optional(),
   id: z.union([uuidLike, z.number()]).optional(),
   productName: z.string().optional(),
+  name: z.string().optional(),
+  term: z.string().optional(),
+  query: z.string().optional(),
+  optionIndex: z.coerce.number().int().min(1).max(50).optional(),
   quantity: z.coerce.number().int().min(1).max(10000).optional().default(1)
 }).superRefine((value, ctx) => {
-  if (!value.productId && !value.id && !value.productName) {
+  if (!value.productId && !value.id && !value.productName && !value.name && !value.term && !value.query && !value.optionIndex) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'Provide one of productId, id, or productName'
+      message: 'Provide one of productId, id, productName, name, term, query, or optionIndex'
     });
   }
 });
@@ -144,7 +148,7 @@ const toolCallSchema = z.object({
   arguments: z.union([z.string(), z.record(z.string(), z.any())]).optional()
 });
 
-const vapiMessageSchema = z
+const providerMessageSchema = z
   .object({
     type: z.string().optional().default('unknown'),
     call: z
@@ -167,9 +171,18 @@ const vapiMessageSchema = z
   })
   .passthrough();
 
-export const vapiServerMessageSchema = z
+export const voiceServerMessageSchema = z
   .object({
-    message: vapiMessageSchema.optional(),
+    message: providerMessageSchema.optional(),
     call: z.record(z.string(), z.any()).optional()
+  })
+  .passthrough();
+
+export const retellServerMessageSchema = z
+  .object({
+    event: z.string().optional(),
+    call: z.record(z.string(), z.any()).optional(),
+    data: z.record(z.string(), z.any()).optional(),
+    message: providerMessageSchema.optional()
   })
   .passthrough();

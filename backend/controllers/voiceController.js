@@ -5,7 +5,8 @@ import { supabase } from '../config/supabase.js';
 import { requireAuthentication as authenticateToken, requireServiceProvider as isServiceProvider } from '../middleware/authMiddleware.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
 import {
-  vapiServerMessageSchema,
+  retellServerMessageSchema,
+  voiceServerMessageSchema,
   voiceSessionRequestSchema,
   voiceToolArgsByName
 } from '../contracts/voiceContracts.js';
@@ -13,14 +14,15 @@ import {
 const router = express.Router();
 const VOICE_SESSION_TTL_SECONDS = Number.parseInt(process.env.VOICE_SESSION_TTL_SECONDS || '900', 10);
 const VOICE_SESSION_SECRET = process.env.VOICE_SESSION_SECRET || process.env.JWT_SECRET;
-const VAPI_ASSISTANT_ID = process.env.VAPI_ASSISTANT_ID || '';
-const VAPI_PUBLIC_KEY = process.env.VAPI_PUBLIC_KEY || '';
-const VAPI_WEBHOOK_SECRET = process.env.VAPI_WEBHOOK_SECRET || '';
-const ALLOW_INSECURE_VAPI_WEBHOOK =
+const RETELL_AGENT_ID = process.env.RETELL_AGENT_ID || '';
+const RETELL_API_KEY = process.env.RETELL_API_KEY || '';
+const RETELL_WEBHOOK_SECRET = process.env.RETELL_WEBHOOK_SECRET || '';
+const ALLOW_INSECURE_VOICE_WEBHOOK =
   String(process.env.VOICE_ALLOW_INSECURE_WEBHOOK || '').trim().toLowerCase() === 'true' ||
   process.env.NODE_ENV !== 'production';
 const idempotencyCache = new Map();
 const searchProductsCache = new Map();
+const lastSearchResultsByUserId = new Map();
 const recentVoiceSessions = [];
 const callIdToVoiceUserId = new Map();
 const voiceFlowByUserId = new Map();
@@ -36,7 +38,7 @@ const FLOW_STEPS = {
 
 /**
  * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` splits on commas — commas/parens inside the
- * pattern break the filter and Supabase returns an error ("technical issue" in Vapi).
+ * pattern break the filter and Supabase returns provider-side query errors.
  * Also strip LIKE wildcards so user input cannot broaden matches unexpectedly.
  */
 function sanitizeVoiceSearchForOrFilter(raw) {
@@ -64,6 +66,46 @@ function scoreProductMatch(product, queryTokens) {
     if (haystack.includes(token)) score += 1;
   });
   return score;
+}
+
+function getUiContextSearchFallbackItems({ userId, normalizedQuery, category, limit }) {
+  const context = getVoicePageContext(userId);
+  const visibleProducts = Array.isArray(context?.visibleProducts) ? context.visibleProducts : [];
+  if (!visibleProducts.length) return [];
+
+  const normalizedCategory = String(category || '').trim().toLowerCase();
+  const queryTokens = tokenizeSearchText(normalizedQuery);
+  const scored = visibleProducts
+    .filter((product) => {
+      if (!normalizedCategory) return true;
+      const productCategory = String(product?.category || '').trim().toLowerCase();
+      return productCategory.includes(normalizedCategory);
+    })
+    .map((product) => {
+      const productName = String(product?.name || '').trim().toLowerCase();
+      const productBrand = String(product?.brand || '').trim().toLowerCase();
+      const haystack = `${productName} ${productBrand}`.trim();
+      const tokenScore = scoreProductMatch(product, queryTokens);
+      const substringBoost =
+        normalizedQuery &&
+        (haystack.includes(normalizedQuery) || normalizedQuery.includes(productName))
+          ? 2
+          : 0;
+      return { product, score: tokenScore + substringBoost };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  const positive = normalizedQuery ? scored.filter((entry) => entry.score > 0) : scored;
+  const limited = positive.slice(0, Math.min(Math.max(Number(limit || 6) || 6, 1), 20));
+  return limited.map(({ product }) => ({
+    productId: product?.id ? String(product.id) : '',
+    name: String(product?.name || ''),
+    brand: String(product?.brand || '') || null,
+    category: String(product?.category || '') || null,
+    unit: String(product?.unit || 'nos'),
+    supplierCount: Number(product?.supplierCount || 0) || null,
+    source: 'ui_context_visible_products'
+  }));
 }
 
 async function searchPlatformDiscoveryProducts({ query, category, limit, page }) {
@@ -96,7 +138,7 @@ async function searchPlatformDiscoveryProducts({ query, category, limit, page })
     .range(offset, offset + normalizedLimit - 1);
 
   if (normalizedCategory) {
-    productsQuery = productsQuery.ilike('category', normalizedCategory);
+    productsQuery = productsQuery.ilike('category', `%${normalizedCategory}%`);
   }
   if (normalizedQuery) {
     const ilikeQuery = `%${normalizedQuery.replace(/\s+/g, '%')}%`;
@@ -247,8 +289,7 @@ function collectToolCalls(message) {
   return [...direct, ...directAlt, ...nested];
 }
 
-/** Vapi may send tool calls under body.message or flattened on the webhook root */
-function normalizeVapiWebhookMessage(payload, rawBody) {
+function normalizeVoiceWebhookMessage(payload, rawBody) {
   const raw = rawBody || {};
   const nested = raw.message && typeof raw.message === 'object' ? raw.message : null;
   const fromPayload = payload?.message && typeof payload.message === 'object' ? payload.message : null;
@@ -262,6 +303,67 @@ function normalizeVapiWebhookMessage(payload, rawBody) {
     return raw;
   }
   return {};
+}
+
+function collectRetellToolCalls(reqBody) {
+  const directToolCallId = String(reqBody?.tool_call_id || reqBody?.data?.tool_call_id || '').trim();
+  const directName = String(reqBody?.name || reqBody?.data?.name || '').trim();
+  if (directToolCallId && directName) {
+    return [
+      {
+        toolCallId: directToolCallId,
+        name: directName,
+        arguments: reqBody?.arguments ?? reqBody?.data?.arguments ?? {}
+      }
+    ];
+  }
+
+  const transcript = Array.isArray(reqBody?.data?.transcript_with_tool_calls)
+    ? reqBody.data.transcript_with_tool_calls
+    : [];
+  return transcript
+    .filter((entry) => String(entry?.role || '').trim() === 'tool_call_invocation' && entry?.tool_call_id && entry?.name)
+    .map((entry) => ({
+      toolCallId: String(entry.tool_call_id),
+      name: String(entry.name),
+      arguments: entry.arguments ?? {}
+    }));
+}
+
+async function createRetellWebCall({ userId, voiceSessionToken }) {
+  if (!RETELL_API_KEY || !RETELL_AGENT_ID) {
+    return { accessToken: null, callId: null };
+  }
+
+  const response = await fetch('https://api.retellai.com/v2/create-web-call', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${RETELL_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      agent_id: RETELL_AGENT_ID,
+      metadata: {
+        userId: String(userId),
+        voiceSessionToken: String(voiceSessionToken)
+      }
+    })
+  });
+
+  const text = await response.text();
+  let parsed = {};
+  try {
+    parsed = text ? JSON.parse(text) : {};
+  } catch {
+    parsed = { message: text || 'Invalid Retell response' };
+  }
+  if (!response.ok) {
+    throw new Error(parsed?.message || 'Failed to create Retell web call');
+  }
+  return {
+    accessToken: String(parsed?.access_token || '').trim() || null,
+    callId: String(parsed?.call_id || '').trim() || null
+  };
 }
 
 function extractVoiceSessionToken(reqBody, message) {
@@ -317,8 +419,8 @@ function resolveUserIdFromToolRequest(reqBody, message) {
   }
 
   // Fallback for providers that omit metadata on tool-calls.
-  // Restricted to local/dev via ALLOW_INSECURE_VAPI_WEBHOOK.
-  if (ALLOW_INSECURE_VAPI_WEBHOOK) {
+  // Restricted to local/dev via ALLOW_INSECURE_VOICE_WEBHOOK.
+  if (ALLOW_INSECURE_VOICE_WEBHOOK) {
     const now = Date.now();
     const candidates = recentVoiceSessions.filter((entry) => entry.expiresAtMs > now);
     if (candidates.length === 1) {
@@ -417,10 +519,23 @@ function resolveUiContextProductIdByName(userId, productName) {
   const visibleProducts = Array.isArray(context?.visibleProducts) ? context.visibleProducts : [];
 
   if (visibleProducts.length) {
+    const normalizedQuery = sanitizeVoiceSearchForOrFilter(normalizedName);
     const exact = visibleProducts.find(
       (product) => String(product?.name || '').trim().toLowerCase() === normalizedName
     );
     if (exact?.id) return String(exact.id);
+
+    const contains = visibleProducts.find((product) => {
+      const productName = String(product?.name || '').trim().toLowerCase();
+      const productBrand = String(product?.brand || '').trim().toLowerCase();
+      const haystack = `${productName} ${productBrand}`.trim();
+      return (
+        haystack.includes(normalizedName) ||
+        normalizedName.includes(productName) ||
+        (normalizedQuery && haystack.includes(normalizedQuery))
+      );
+    });
+    if (contains?.id) return String(contains.id);
 
     const tokens = tokenizeSearchText(normalizedName);
     const ranked = visibleProducts
@@ -439,6 +554,47 @@ function resolveUiContextProductIdByName(userId, productName) {
     }
   }
   return '';
+}
+
+function resolveProductIdFromLastSearch(userId, value, optionIndex) {
+  const key = String(userId || '');
+  const recent = Array.isArray(lastSearchResultsByUserId.get(key))
+    ? lastSearchResultsByUserId.get(key)
+    : [];
+  if (!recent.length) return '';
+
+  const explicitOption = Number(optionIndex || 0);
+  if (Number.isFinite(explicitOption) && explicitOption > 0 && explicitOption <= recent.length) {
+    return String(recent[explicitOption - 1]?.productId || '');
+  }
+
+  const normalized = String(value || '').trim();
+  if (!normalized) return '';
+
+  const numeric = Number(normalized);
+  if (Number.isFinite(numeric) && numeric >= 1 && numeric <= recent.length) {
+    return String(recent[numeric - 1]?.productId || '');
+  }
+
+  const normalizedName = normalized.toLowerCase();
+  const exact = recent.find(
+    (item) => String(item?.name || '').trim().toLowerCase() === normalizedName
+  );
+  if (exact?.productId) return String(exact.productId);
+
+  const includes = recent.find((item) => {
+    const name = String(item?.name || '').trim().toLowerCase();
+    const brand = String(item?.brand || '').trim().toLowerCase();
+    const haystack = `${name} ${brand}`.trim();
+    return haystack.includes(normalizedName) || normalizedName.includes(name);
+  });
+  if (includes?.productId) return String(includes.productId);
+
+  const tokens = tokenizeSearchText(normalized);
+  const ranked = recent
+    .map((item) => ({ item, score: scoreProductMatch(item, tokens) }))
+    .sort((a, b) => b.score - a.score);
+  return ranked[0]?.score > 0 ? String(ranked[0].item?.productId || '') : '';
 }
 
 function extractDraftItems(draft) {
@@ -653,6 +809,18 @@ async function runTool(userId, toolName, args) {
       }));
     }
 
+    if (items.length === 0) {
+      const contextItems = getUiContextSearchFallbackItems({
+        userId,
+        normalizedQuery,
+        category: args.category,
+        limit
+      });
+      if (contextItems.length > 0) {
+        items = contextItems;
+      }
+    }
+
     const payload = {
       ok: true,
       source: 'platform_product_discovery',
@@ -663,6 +831,7 @@ async function runTool(userId, toolName, args) {
       page,
       limit,
       hasMore: total > page * limit,
+      usedUiContextFallback: items.some((item) => item?.source === 'ui_context_visible_products'),
       flowStep: flow.step,
       nextStep: FLOW_STEPS.discovery,
       message:
@@ -670,6 +839,17 @@ async function runTool(userId, toolName, args) {
           ? 'Products found. Tell me which product and quantity to add to cart.'
           : 'No exact match found. Ask user to choose from currently listed products in discovery.'
     };
+    lastSearchResultsByUserId.set(
+      String(userId || ''),
+      items
+        .map((item) => ({
+          productId: String(item?.productId || ''),
+          name: String(item?.name || ''),
+          brand: String(item?.brand || '')
+        }))
+        .filter((item) => Boolean(item.productId))
+        .slice(0, 50)
+    );
     searchProductsCache.set(cacheKey, { savedAt: Date.now(), payload });
     if (searchProductsCache.size > 200) {
       const firstKey = searchProductsCache.keys().next().value;
@@ -680,18 +860,24 @@ async function runTool(userId, toolName, args) {
 
   if (toolName === 'add_discovery_line') {
     let resolvedProductId = String(args.productId || args.id || '').trim();
-    if (!resolvedProductId && args.productName) {
-      resolvedProductId = resolveUiContextProductIdByName(userId, args.productName);
+    const requestedProductName = String(
+      args.productName || args.name || args.term || args.query || ''
+    ).trim();
+
+    if (!resolvedProductId && (requestedProductName || args.optionIndex)) {
+      resolvedProductId =
+        resolveProductIdFromLastSearch(userId, requestedProductName || args.productId, args.optionIndex) ||
+        resolveUiContextProductIdByName(userId, requestedProductName);
     }
-    if (!resolvedProductId && args.productName) {
-      resolvedProductId = await resolveDiscoveryProductIdByName(args.productName);
+    if (!resolvedProductId && requestedProductName) {
+      resolvedProductId = await resolveDiscoveryProductIdByName(requestedProductName);
     }
-    if (!resolvedProductId && args.productName) {
+    if (!resolvedProductId && requestedProductName) {
       const lookup = await callInternalApi({
         userId,
         path: '/api/supplier/products/search',
         query: {
-          q: String(args.productName).trim(),
+          q: requestedProductName,
           limit: 3,
           page: 1
         }
@@ -1018,18 +1204,25 @@ router.post('/session', authenticateToken, isServiceProvider, async (req, res) =
     const { token, expiresAt } = issueVoiceSessionToken(req.userId);
     rememberVoiceSession(req.userId, token, expiresAt);
     rememberVoicePageContext(req.userId, parsedRequest?.pageContext);
+    const retellSession = await createRetellWebCall({
+      userId: req.userId,
+      voiceSessionToken: token
+    });
     console.info('[voice] session created', {
       userId: req.userId,
-      assistantConfigured: Boolean(VAPI_ASSISTANT_ID),
-      publicKeyConfigured: Boolean(VAPI_PUBLIC_KEY),
+      retellAgentConfigured: Boolean(RETELL_AGENT_ID),
+      retellApiKeyConfigured: Boolean(RETELL_API_KEY),
+      accessTokenIssued: Boolean(retellSession.accessToken),
       expiresAt
     });
     return res.json({
       status: 'success',
       voiceSessionToken: token,
       expiresAt,
-      assistantId: VAPI_ASSISTANT_ID || null,
-      publicKey: VAPI_PUBLIC_KEY || null
+      provider: 'retell',
+      agentId: RETELL_AGENT_ID || null,
+      retellAccessToken: retellSession.accessToken,
+      retellCallId: retellSession.callId
     });
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {
@@ -1042,22 +1235,23 @@ router.post('/session', authenticateToken, isServiceProvider, async (req, res) =
 router.post('/tool', async (req, res) => {
   try {
     console.info('[voice] webhook received', {
-      hasSecretHeader: Boolean(req.headers['x-vapi-secret']),
+      hasSecretHeader: Boolean(req.headers['x-retell-secret'] || req.headers['x-retell-signature']),
       bodyType: req.body?.message?.type || req.body?.type || 'unknown'
     });
-    if (VAPI_WEBHOOK_SECRET) {
-      const incoming = req.headers['x-vapi-secret'];
-      if (String(incoming || '') !== String(VAPI_WEBHOOK_SECRET)) {
-        if (ALLOW_INSECURE_VAPI_WEBHOOK) {
-          console.warn('[voice] x-vapi-secret mismatch. Allowing because insecure webhook mode is enabled.');
+    if (RETELL_WEBHOOK_SECRET) {
+      const incoming = req.headers['x-retell-secret'] || req.headers['x-retell-signature'];
+      if (String(incoming || '') !== String(RETELL_WEBHOOK_SECRET)) {
+        if (ALLOW_INSECURE_VOICE_WEBHOOK) {
+          console.warn('[voice] webhook secret mismatch. Allowing because insecure webhook mode is enabled.');
         } else {
-        return res.status(401).json({ status: 'error', message: 'Invalid Vapi webhook secret' });
+          return res.status(401).json({ status: 'error', message: 'Invalid voice webhook secret' });
         }
       }
     }
 
-    const payload = parseWithSchema(vapiServerMessageSchema, req.body || {});
-    const message = normalizeVapiWebhookMessage(payload, req.body || {});
+    const payload = parseWithSchema(retellServerMessageSchema, req.body || {});
+    const providerPayload = parseWithSchema(voiceServerMessageSchema, req.body || {});
+    const message = normalizeVoiceWebhookMessage(payload || providerPayload, req.body || {});
     try {
       rememberCallUserFromMetadata(req.body || {}, message);
     } catch (metadataError) {
@@ -1065,7 +1259,7 @@ router.post('/tool', async (req, res) => {
         reason: metadataError?.message || 'unknown'
       });
     }
-    const toolCalls = collectToolCalls(message);
+    const toolCalls = [...collectToolCalls(message), ...collectRetellToolCalls(req.body || {})];
     if (toolCalls.length === 0) {
       console.info('[voice] no tool calls in message', {
         messageType: String(message.type || 'unknown')
@@ -1139,6 +1333,21 @@ router.post('/tool', async (req, res) => {
           result: JSON.stringify({ ok: false, error: toolError.message || 'Tool execution failed' })
         });
       }
+    }
+
+    if (String(req.body?.event || '').trim()) {
+      const first = results[0];
+      let parsedResult = null;
+      try {
+        parsedResult = first?.result ? JSON.parse(first.result) : null;
+      } catch {
+        parsedResult = first?.result || null;
+      }
+      return res.json({
+        tool_call_id: first?.toolCallId || first?.tool_call_id || first?.toolCallID || null,
+        content: parsedResult,
+        successful: Boolean(parsedResult?.ok !== false)
+      });
     }
 
     return res.json({ results });

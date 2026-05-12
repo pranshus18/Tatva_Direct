@@ -37,7 +37,7 @@ apiRouter.use('/pos', posRouter);
 apiRouter.use('/core-phase2', corePhase2Router);
 apiRouter.use('/payments', paymentsRouter);
 apiRouter.use('/cart-share', cartShareRouter);
-apiRouter.use('/voice/vapi', voiceRouter);
+apiRouter.use('/voice', voiceRouter);
 
 apiRouter.get('/health', getHealth);
 apiRouter.get('/debug/runtime', getRuntimeDebug);

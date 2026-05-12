@@ -60,6 +60,10 @@ const ServiceProviderReturns = safeLazy(
   'Service Provider Returns page'
 );
 const ProductDiscovery = safeLazy(() => import('./pages/ProductDiscovery'), 'Product Discovery page');
+const ServiceProviderThemeSettings = safeLazy(
+  () => import('./pages/ServiceProviderThemeSettings'),
+  'Service Provider Theme Settings page'
+);
 const AdminDashboardOverview = safeLazy(
   () => import('./pages/AdminDashboardOverview'),
   'Admin Dashboard Overview page'
@@ -597,6 +601,14 @@ function App() {
                 />
               </ServiceProviderRoute>
             } 
+          />
+          <Route
+            path="portal-theme"
+            element={
+              <ServiceProviderRoute user={user}>
+                <ServiceProviderThemeSettings />
+              </ServiceProviderRoute>
+            }
           />
           <Route
             path="product-discovery"
