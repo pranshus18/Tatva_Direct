@@ -6,6 +6,20 @@ const formatCurrency = (value) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   })}`;
+const normalizeSpecifications = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const seen = new Set();
+  return Object.entries(value).reduce((acc, [key, rawValue]) => {
+    const cleanKey = String(key || '').trim();
+    const cleanValue = rawValue === null || rawValue === undefined ? '' : String(rawValue).trim();
+    if (!cleanKey || !cleanValue) return acc;
+    const dedupeKey = cleanKey.toLowerCase();
+    if (seen.has(dedupeKey)) return acc;
+    seen.add(dedupeKey);
+    acc.push([cleanKey, cleanValue]);
+    return acc;
+  }, []);
+};
 
 const TransportSuggestion = () => {
   const navigate = useNavigate();
@@ -17,6 +31,20 @@ const TransportSuggestion = () => {
   const hasGstin = Boolean(location.state?.hasGstin);
   const deliveryDestination = location.state?.deliveryDestination || 'shipping';
   const createdOrders = Array.isArray(location.state?.createdOrders) ? location.state.createdOrders : [];
+  const transportOrderCards =
+    createdOrders.length > 0
+      ? createdOrders.map((order) => ({
+          key: order.id || order.orderNumber,
+          vendorName: order.supplier || 'Supplier',
+          total: order.totalAmount || 0,
+          items: Array.isArray(order.items) ? order.items : []
+        }))
+      : poGroups.map((group) => ({
+          key: group.vendorId,
+          vendorName: group.vendorName,
+          total: group.total,
+          items: Array.isArray(group.items) ? group.items : []
+        }));
 
   const [shippingProvider, setShippingProvider] = React.useState('');
   const [trackingNumber, setTrackingNumber] = React.useState('');
@@ -90,9 +118,9 @@ const TransportSuggestion = () => {
           </div>
 
           <div style={{ display: 'grid', gap: '0.75rem' }}>
-            {poGroups.map((group) => (
+            {transportOrderCards.map((group) => (
               <div
-                key={`transport-${group.vendorId}`}
+                key={`transport-${group.key}`}
                 style={{
                   border: '1px solid #e2e8f0',
                   borderRadius: '10px',
@@ -105,8 +133,38 @@ const TransportSuggestion = () => {
                   <span style={{ color: '#4f46e5', fontWeight: 700 }}>{formatCurrency(group.total)}</span>
                 </div>
                 <div style={{ marginTop: '0.25rem', fontSize: '0.84rem', color: '#475569' }}>
-                  Line items: {Array.isArray(group.items) ? group.items.length : 0}
+                  Line items: {group.items.length}
                 </div>
+                {group.items.length > 0 && (
+                  <div style={{ marginTop: '0.55rem', display: 'grid', gap: '0.45rem' }}>
+                    {group.items.map((item, idx) => (
+                      <div key={`${group.key}-${item.supplierProductId || item.productId || idx}`} style={{ fontSize: '0.82rem', color: '#334155' }}>
+                        <div>
+                          <strong>{item.name}</strong> · {item.quantity} {item.unit || 'nos'} · {formatCurrency(item.price)}
+                        </div>
+                        {normalizeSpecifications(item.specifications).length > 0 && (
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '0.2rem' }}>
+                            {normalizeSpecifications(item.specifications).slice(0, 6).map(([key, value]) => (
+                              <span
+                                key={`${group.key}-${idx}-${key}`}
+                                style={{
+                                  fontSize: '0.72rem',
+                                  color: '#334155',
+                                  background: '#f1f5f9',
+                                  border: '1px solid #e2e8f0',
+                                  borderRadius: '9999px',
+                                  padding: '0.12rem 0.45rem'
+                                }}
+                              >
+                                <strong>{key}:</strong> {value}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
           </div>

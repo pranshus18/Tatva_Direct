@@ -218,6 +218,7 @@ export async function reconcileWithSupplierOffers({
               stock: Number.isFinite(parseInt(row.stock, 10)) ? parseInt(row.stock, 10) : 0,
               location: (row.location || meta.location || '').toString(),
               status: row.status,
+              sharedProductStatus: meta.status || null,
               is_active: row.is_active
             };
           })

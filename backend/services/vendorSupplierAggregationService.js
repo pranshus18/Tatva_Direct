@@ -183,7 +183,7 @@ export async function buildSupplierProductsForRanking({
         bestPrice: latestPrice,
         bestRating: parseFloat(product.average_rating) || 0,
         totalStock: 0,
-        hasApprovedProduct: product.status === 'approved'
+        hasApprovedProduct: product.status === 'approved' || product.sharedProductStatus === 'approved'
       };
     } else if (locationCandidates.length > 0) {
       const mergedCandidates = uniqueLocationList([
@@ -225,7 +225,7 @@ export async function buildSupplierProductsForRanking({
       parseFloat(product.average_rating) || 0
     );
     supplierProducts[supplierId].totalStock += latestStock;
-    if (product.status === 'approved') {
+    if (product.status === 'approved' || product.sharedProductStatus === 'approved') {
       supplierProducts[supplierId].hasApprovedProduct = true;
     }
   }

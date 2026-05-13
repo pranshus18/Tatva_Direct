@@ -59,6 +59,8 @@ export function mapSupplierProductsToRankedVendors({
       !Array.isArray(bestProduct.specifications)
         ? bestProduct.specifications
         : {};
+      const isOfferApproved =
+        bestProduct?.status === 'approved' || bestProduct?.sharedProductStatus === 'approved';
       const selectionId = bestProduct?.supplierProductId || `${supplier.supplierId}:${bestProduct?.id || 'offer'}`;
       rankedVendors.push({
       id: supplier.supplierId,
@@ -92,7 +94,7 @@ export function mapSupplierProductsToRankedVendors({
       description: productDescription,
       specifications: productSpecifications,
       isAvailable: (parseInt(bestProduct?.stock, 10) || 0) > 0,
-      status: supplier.hasApprovedProduct ? 'approved' : 'pending'
+      status: isOfferApproved || supplier.hasApprovedProduct ? 'approved' : 'pending'
       });
     });
   });

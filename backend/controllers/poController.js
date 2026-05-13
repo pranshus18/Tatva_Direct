@@ -948,6 +948,23 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       // Calculate total amount (tax-inclusive) and keep detailed GST split.
       const gstSummary = sumGstLines(lineTaxBreakdown);
       const totalAmount = gstSummary.totalAmount;
+      const groupItemDetails = (Array.isArray(group.items) ? group.items : []).map((line) => ({
+        name: line.name || 'Item',
+        quantity: Number(line.quantity) || 0,
+        unit: line.unit || 'nos',
+        price: Number(line.price) || 0,
+        basePrice: Number(line.basePrice) || Number(line.price) || 0,
+        productId: line.productId || null,
+        supplierProductId: line.supplierProductId || null,
+        productIdentification: line.productIdentification || null,
+        specifications:
+          line.specifications && typeof line.specifications === 'object' && !Array.isArray(line.specifications)
+            ? line.specifications
+            : {},
+        images: Array.isArray(line.images) ? line.images.filter(Boolean) : [],
+        productImage: line.productImage || null,
+        lineTotal: (Number(line.quantity) || 0) * (Number(line.price) || 0)
+      }));
 
       // Duplicate guard: if an equivalent order was just created very recently,
       // return the existing order instead of creating a second one.
@@ -971,8 +988,17 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           createdOrders.push({
             id: recentDuplicate.id,
             orderNumber: recentDuplicate.order_number,
+            supplierId: supplier.id,
             supplier: group.vendorName,
             totalAmount: existingAmount,
+            requiredDate: expectedDeliveryDate,
+            paymentMethod: poPaymentMethod,
+            paymentStatus: poPaymentStatus,
+            deliveryDestination,
+            shippingAddress: mapToDeliveryAddress(shippingAddress),
+            billingAddress: mapToDeliveryAddress(billingAddress),
+            gstin: hasGstin ? profileGstin : null,
+            items: groupItemDetails,
             deduplicated: true
           });
           continue;
@@ -1161,8 +1187,17 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       createdOrders.push({
         id: order.id,
         orderNumber: order.order_number,
+        supplierId: supplier.id,
         supplier: group.vendorName,
-        totalAmount: totalAmount
+        totalAmount: totalAmount,
+        requiredDate: expectedDeliveryDate,
+        paymentMethod: poPaymentMethod,
+        paymentStatus: poPaymentStatus,
+        deliveryDestination,
+        shippingAddress: mapToDeliveryAddress(shippingAddress),
+        billingAddress: mapToDeliveryAddress(billingAddress),
+        gstin: hasGstin ? profileGstin : null,
+        items: groupItemDetails
       });
     }
 
