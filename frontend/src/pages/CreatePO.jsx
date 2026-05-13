@@ -36,6 +36,20 @@ const addressPreview = (address = {}) =>
   [address.line1, address.city, address.state, address.pincode, address.country]
     .filter(Boolean)
     .join(', ');
+const normalizeSpecifications = (value) => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+  const seen = new Set();
+  return Object.entries(value)
+    .map(([key, rawValue]) => [String(key || '').trim(), rawValue])
+    .filter(([key, rawValue]) => key && rawValue !== null && rawValue !== undefined && String(rawValue).trim() !== '')
+    .reduce((acc, [key, rawValue]) => {
+      const dedupeKey = key.toLowerCase();
+      if (seen.has(dedupeKey)) return acc;
+      seen.add(dedupeKey);
+      acc.push([key, String(rawValue).trim()]);
+      return acc;
+    }, []);
+};
 
 const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const navigate = useNavigate();
@@ -59,6 +73,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [deliveryDestination, setDeliveryDestination] = useState('shipping');
   const [createdTransportOrders, setCreatedTransportOrders] = useState([]);
   const [selectedTransport, setSelectedTransport] = useState(null);
+  const [expandedItemSpecs, setExpandedItemSpecs] = useState({});
 
   const grandTotalAllPos = useMemo(
     () => poGroups.reduce((sum, g) => sum + (Number(g.total) || 0), 0),
@@ -130,6 +145,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   }, []);
 
   const hasGstin = Boolean(serviceProviderGstin);
+  const toggleItemSpecs = (groupVendorId, item, idx) => {
+    const key = `${groupVendorId || 'vendor'}::${item?.supplierProductId || item?.productId || item?.name || idx}`;
+    setExpandedItemSpecs((prev) => ({
+      ...prev,
+      [key]: !prev[key]
+    }));
+  };
 
   useEffect(() => {
     if (!hasGstin) {
@@ -806,6 +828,54 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                           {item.productIdentification && (
                             <div style={{ fontSize: '0.78rem', color: '#475569', marginTop: '0.2rem' }}>
                               ID: {item.productIdentification}
+                            </div>
+                          )}
+                          {normalizeSpecifications(item.specifications).length > 0 && (
+                            <div
+                              style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: '0.35rem',
+                                marginTop: '0.4rem'
+                              }}
+                            >
+                              {(expandedItemSpecs[`${group.vendorId || 'vendor'}::${item?.supplierProductId || item?.productId || item?.name || idx}`]
+                                ? normalizeSpecifications(item.specifications)
+                                : normalizeSpecifications(item.specifications).slice(0, 8)).map(([key, value]) => (
+                                <span
+                                  key={`${item.supplierProductId || item.productId || item.name}-${key}`}
+                                  style={{
+                                    fontSize: '0.74rem',
+                                    color: '#334155',
+                                    background: '#f1f5f9',
+                                    border: '1px solid #e2e8f0',
+                                    borderRadius: '9999px',
+                                    padding: '0.15rem 0.5rem',
+                                    lineHeight: 1.35
+                                  }}
+                                >
+                                  <strong>{key}:</strong> {value}
+                                </span>
+                              ))}
+                              {normalizeSpecifications(item.specifications).length > 8 && (
+                                <button
+                                  type="button"
+                                  onClick={() => toggleItemSpecs(group.vendorId, item, idx)}
+                                  style={{
+                                    border: 'none',
+                                    background: 'transparent',
+                                    color: '#2563eb',
+                                    fontSize: '0.75rem',
+                                    fontWeight: 600,
+                                    cursor: 'pointer',
+                                    padding: '0.1rem 0.15rem'
+                                  }}
+                                >
+                                  {expandedItemSpecs[`${group.vendorId || 'vendor'}::${item?.supplierProductId || item?.productId || item?.name || idx}`]
+                                    ? 'Show less'
+                                    : `View all specs (+${normalizeSpecifications(item.specifications).length - 8})`}
+                                </button>
+                              )}
                             </div>
                           )}
                         </td>

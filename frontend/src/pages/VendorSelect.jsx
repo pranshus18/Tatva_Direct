@@ -32,12 +32,16 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   };
   const normalizeSpecifications = (value) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    const seen = new Set();
     return Object.entries(value).reduce((acc, [key, rawValue]) => {
       const cleanKey = String(key || '').trim();
       if (!cleanKey) return acc;
       if (rawValue === null || rawValue === undefined) return acc;
       const cleanValue = String(rawValue).trim();
       if (!cleanValue) return acc;
+      const dedupeKey = cleanKey.toLowerCase();
+      if (seen.has(dedupeKey)) return acc;
+      seen.add(dedupeKey);
       acc[cleanKey] = cleanValue;
       return acc;
     }, {});

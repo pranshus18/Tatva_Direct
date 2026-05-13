@@ -511,6 +511,15 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         skuNo: firstNonEmpty(specs.skuNo, specs.sku, specs.SKU, specs.gsku, specs.GSKU),
         modelBrand: firstNonEmpty(attrs.brandModel, specs.modelBrand, specs.brandModel, specs.brand)
       });
+      const supplierSpecs =
+        attrs?.specifications && typeof attrs.specifications === 'object' && !Array.isArray(attrs.specifications)
+          ? attrs.specifications
+          : {};
+      const productSpecs = specs && typeof specs === 'object' && !Array.isArray(specs) ? specs : {};
+      const mergedSpecifications = {
+        ...productSpecs,
+        ...supplierSpecs
+      };
 
       vendorGroups[vendorId].items.push({
         name: itemName,
@@ -525,6 +534,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         bcovLevelId: bcovResolved?.levelId || null,
         basePrice,
         productIdentification: productIdentification || null,
+        specifications: mergedSpecifications,
         images: productImages,
         productImage: productImages[0] || null,
         originalItem: item.normalizedName || item.rawName
