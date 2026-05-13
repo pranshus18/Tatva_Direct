@@ -319,9 +319,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     return data;
   };
 
-  const finalizeTransportDetails = async () => {
+  const finalizeTransportDetails = async (ordersToConfirm = createdTransportOrders) => {
     const token = localStorage.getItem('token');
-    const orderIds = createdTransportOrders
+    const orderIds = (Array.isArray(ordersToConfirm) ? ordersToConfirm : [])
       .map((order) => order?.id)
       .filter(Boolean);
     if (orderIds.length === 0) {
@@ -363,7 +363,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const completeOrderFlow = async () => {
     try {
       setCreatingOrders(true);
-      await finalizeTransportDetails();
+      let activeOrders = Array.isArray(createdTransportOrders) ? createdTransportOrders : [];
+      if (activeOrders.length === 0) {
+        const data = await createPurchaseOrders();
+        activeOrders = Array.isArray(data.orders) ? data.orders : [];
+        setCreatedTransportOrders(activeOrders);
+      }
+      await finalizeTransportDetails(activeOrders);
       setConfirmed(true);
       setTimeout(() => {
         window.location.href = '/your-orders';
@@ -431,41 +437,16 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       alert('No purchase order groups available. Please ensure all items have selected suppliers.');
       return;
     }
-    if (createdTransportOrders.length > 0) {
-      navigate('/transport-suggestion', {
-        state: {
-          poGroups,
-          grandTotalAllPos,
-          requiredDate,
-          hasGstin,
-          deliveryDestination,
-          createdOrders: createdTransportOrders
-        }
-      });
-      return;
-    }
-
-    try {
-      setCreatingOrders(true);
-      const data = await createPurchaseOrders();
-      const createdOrders = Array.isArray(data.orders) ? data.orders : [];
-      setCreatedTransportOrders(createdOrders);
-      navigate('/transport-suggestion', {
-        state: {
-          poGroups,
-          grandTotalAllPos,
-          requiredDate,
-          hasGstin,
-          deliveryDestination,
-          createdOrders
-        }
-      });
-    } catch (err) {
-      console.error('Failed to run transport suggestion flow:', err);
-      alert(err.message || 'Failed to prepare transport suggestion.');
-    } finally {
-      setCreatingOrders(false);
-    }
+    navigate('/transport-suggestion', {
+      state: {
+        poGroups,
+        grandTotalAllPos,
+        requiredDate,
+        hasGstin,
+        deliveryDestination,
+        createdOrders: createdTransportOrders
+      }
+    });
   };
 
   if (confirmed) {
@@ -902,13 +883,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             <button
               className="btn-primary btn-large"
               onClick={handleConfirm}
-              disabled={poGroups.length === 0 || creatingOrders || createdTransportOrders.length === 0 || !selectedTransport?.shippingProvider}
+              disabled={poGroups.length === 0 || creatingOrders || !selectedTransport?.shippingProvider}
             >
               {creatingOrders ? 'Finalizing...' : 'Confirm & Create All POs'}
             </button>
           </div>
           <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#64748b' }}>
-            Step 1: Click Transport suggestion to create order rows and choose transport. Step 2: Confirm & Create All POs will update transport fields on those same orders.
+            Step 1: Click Transport suggestion and choose transport details. Step 2: Confirm & Create All POs will create orders and apply transport details in one flow.
           </p>
           {selectedTransport?.shippingProvider ? (
             <p style={{ marginTop: '0.2rem', fontSize: '0.8rem', color: '#334155' }}>
