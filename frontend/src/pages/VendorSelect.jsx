@@ -404,7 +404,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       return;
     }
     
-    onComplete(selections);
+    onComplete({ ...selections }, [...effectiveItems]);
     navigate('/substitution');
   };
 

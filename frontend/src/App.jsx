@@ -626,7 +626,12 @@ function App() {
                   items={normalizedItems}
                   boqId={boqId}
                   boqProject={boqProject}
-                  onComplete={setSelectedVendors}
+                  onComplete={(vendors, selectedItems) => {
+                    setSelectedVendors(vendors || {});
+                    if (Array.isArray(selectedItems) && selectedItems.length > 0) {
+                      setNormalizedItems(selectedItems);
+                    }
+                  }}
                 />
               </ServiceProviderRoute>
             } 
