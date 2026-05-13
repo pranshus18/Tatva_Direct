@@ -10,6 +10,10 @@ import {
   voiceSessionRequestSchema,
   voiceToolArgsByName
 } from '../contracts/voiceContracts.js';
+import {
+  LISTED_SUPPLIER_PRODUCTS_OR,
+  listedSupplierProductsFilterOptions
+} from '../utils/platformListedSupplierProductsFilter.js';
 
 const router = express.Router();
 const VOICE_SESSION_TTL_SECONDS = Number.parseInt(process.env.VOICE_SESSION_TTL_SECONDS || '900', 10);
@@ -132,8 +136,7 @@ async function searchPlatformDiscoveryProducts({ query, category, limit, page })
       { count: 'exact' }
     )
     .eq('status', 'approved')
-    .eq('supplier_products.status', 'approved')
-    .eq('supplier_products.is_active', true)
+    .or(LISTED_SUPPLIER_PRODUCTS_OR, listedSupplierProductsFilterOptions)
     .order('updated_at', { ascending: false })
     .range(offset, offset + normalizedLimit - 1);
 
@@ -174,8 +177,7 @@ async function resolveDiscoveryProductIdByName(productName) {
       `
     )
     .eq('status', 'approved')
-    .eq('supplier_products.status', 'approved')
-    .eq('supplier_products.is_active', true)
+    .or(LISTED_SUPPLIER_PRODUCTS_OR, listedSupplierProductsFilterOptions)
     .or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`)
     .order('updated_at', { ascending: false })
     .limit(50);
@@ -786,8 +788,7 @@ async function runTool(userId, toolName, args) {
           `
         )
         .eq('status', 'approved')
-        .eq('supplier_products.status', 'approved')
-        .eq('supplier_products.is_active', true)
+        .or(LISTED_SUPPLIER_PRODUCTS_OR, listedSupplierProductsFilterOptions)
         .order('updated_at', { ascending: false });
       if (args.category) {
         fallbackQuery = fallbackQuery.ilike('category', String(args.category || '').trim());

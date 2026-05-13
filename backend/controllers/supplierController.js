@@ -32,6 +32,10 @@ import { recordInventoryMovement } from '../services/inventoryService.js';
 import { applyRestockForClosedReturn } from '../services/returnInventoryService.js';
 import { maybeNotifyInventoryBelowMov } from '../services/lowInventoryMovAlertService.js';
 import { retrySupabaseQuery } from '../services/db.js';
+import {
+  LISTED_SUPPLIER_PRODUCTS_OR,
+  listedSupplierProductsFilterOptions
+} from '../utils/platformListedSupplierProductsFilter.js';
 import { generateAndAttachReceiptPdf } from '../services/receiptPdfService.js';
 import {
   buildIdentityBundle,
@@ -1366,9 +1370,9 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const query = sanitizeDiscoverySearchQuery(q);
     const rankingPoolLimit = query ? 250 : 500;
 
-    // Product Discovery should show products that are actually LISTED by suppliers (supplier_products),
-    // not just the raw catalog table. We fetch approved products that have at least one active,
-    // approved supplier listing. We also return total count for pagination.
+    // Product Discovery: same visibility as supplier portal (GET /api/supplier/products):
+    // approved catalog plus at least one non-rejected supplier_products row that is either
+    // approved+active, or pending/null (treated as listed when catalog is approved).
     let productsQuery = supabase
       .from('products')
       .select(
@@ -1390,8 +1394,7 @@ router.get('/products/search', authenticateToken, async (req, res) => {
         { count: 'exact' }
       )
       .eq('status', 'approved')
-      .eq('supplier_products.status', 'approved')
-      .eq('supplier_products.is_active', true);
+      .or(LISTED_SUPPLIER_PRODUCTS_OR, listedSupplierProductsFilterOptions);
 
     if (normalizedCategory) {
       productsQuery = productsQuery.eq('category', normalizedCategory);
