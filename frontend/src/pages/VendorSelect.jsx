@@ -8,6 +8,7 @@ import './VendorSelect.css';
 const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete }) => {
   const [itemVendors, setItemVendors] = useState({});
   const [selections, setSelections] = useState({});
+  const [expandedSpecifications, setExpandedSpecifications] = useState({});
   const [loading, setLoading] = useState(false);
   const [effectiveItems, setEffectiveItems] = useState([]);
   const [loadingItems, setLoadingItems] = useState(false);
@@ -28,6 +29,18 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     const parts = [skuNo, modelBrand].map(normalizeIdPart);
     if (parts.every((p) => !p)) return '';
     return parts.join('');
+  };
+  const normalizeSpecifications = (value) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.entries(value).reduce((acc, [key, rawValue]) => {
+      const cleanKey = String(key || '').trim();
+      if (!cleanKey) return acc;
+      if (rawValue === null || rawValue === undefined) return acc;
+      const cleanValue = String(rawValue).trim();
+      if (!cleanValue) return acc;
+      acc[cleanKey] = cleanValue;
+      return acc;
+    }, {});
   };
 
   useEffect(() => {
@@ -322,15 +335,14 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   };
 
   const getSelectionKey = (item) => {
-    // Use productId as the stable key.
-    // item.id can change type depending on whether BOQ items come from fresh upload (number)
-    // or saved BOQ (UUID). productId stays consistent, so PO grouping won't break.
-    return item?.productId ? String(item.productId) : String(item?.id ?? '');
+    // Keep selection scoped to each BOQ row so choosing one row doesn't
+    // auto-select other rows that map to the same normalized product.
+    return String(item?.id ?? '');
   };
 
   const handleSelect = (item, vendorId) => {
     const selectionKey = getSelectionKey(item);
-    const normalizedVendorId = String(vendorId);
+    const normalizedVendorId = String(vendorId || '');
 
     if (!selectionKey) return;
 
@@ -354,6 +366,16 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       console.log('Updated selections:', newSelections);
       return newSelections;
     });
+  };
+  const toggleSpecifications = (item, vendorId) => {
+    const itemKey = item?.id?.toString() || String(item?.id || '');
+    const vendorKey = String(vendorId || '');
+    if (!itemKey || !vendorKey) return;
+    const compositeKey = `${itemKey}::${vendorKey}`;
+    setExpandedSpecifications((prev) => ({
+      ...prev,
+      [compositeKey]: !prev[compositeKey]
+    }));
   };
 
   const handleProceed = () => {
@@ -551,18 +573,25 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     return hasStock || hasValidPrice;
                   })
                   .map((vendor) => {
-                    // Normalize vendor ID for comparison
-                    const vendorIdStr = String(vendor.id);
+                    const vendorIdStr = String(vendor.selectionId || vendor.supplierProductId || vendor.id);
+                    const vendorSpecifications = normalizeSpecifications(vendor?.specifications);
+                    const specificationEntries = Object.entries(vendorSpecifications);
+                    const specsKey = `${itemId}::${vendorIdStr}`;
+                    const isSpecsExpanded = !!expandedSpecifications[specsKey];
+                    const visibleSpecificationEntries = isSpecsExpanded
+                      ? specificationEntries
+                      : specificationEntries.slice(0, 6);
+                    const hasMoreSpecifications = specificationEntries.length > 6;
                     const isSelected = currentSelection === vendorIdStr;
                     return (
                   <div 
-                    key={vendor.id}
+                    key={vendorIdStr}
                     className={`vendor-card ${isSelected ? 'selected' : ''}`}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
                       console.log(`[VendorSelect] Clicked on vendor: ${vendor.name} (ID: ${vendor.id}) for item: ${itemId}`);
-                      handleSelect(item, vendor.id);
+                      handleSelect(item, vendorIdStr);
                     }}
                     onMouseDown={(e) => {
                       // Prevent text selection on click
@@ -580,7 +609,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        handleSelect(item, vendor.id);
+                        handleSelect(item, vendorIdStr);
                       }
                     }}
                   >
@@ -662,6 +691,53 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                       {getProductIdentification(item, vendor) && (
                         <div className="product-description">
                           ID: {getProductIdentification(item, vendor)}
+                        </div>
+                      )}
+                      {specificationEntries.length > 0 && (
+                        <div
+                          style={{
+                            marginTop: '0.45rem',
+                            padding: '0.55rem',
+                            borderRadius: '8px',
+                            background: '#f8fafc',
+                            border: '1px solid #e2e8f0'
+                          }}
+                        >
+                          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#334155', marginBottom: '0.3rem' }}>
+                            Specifications
+                          </div>
+                          <div style={{ display: 'grid', gap: '0.2rem' }}>
+                            {visibleSpecificationEntries.map(([key, value]) => (
+                              <div key={`${vendorIdStr}-${key}`} style={{ fontSize: '0.74rem', color: '#475569' }}>
+                                <strong>{key}:</strong> {value}
+                              </div>
+                            ))}
+                            {hasMoreSpecifications && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  toggleSpecifications(item, vendorIdStr);
+                                }}
+                                style={{
+                                  marginTop: '0.2rem',
+                                  textAlign: 'left',
+                                  background: 'transparent',
+                                  border: 'none',
+                                  color: '#2563eb',
+                                  fontSize: '0.72rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  padding: 0
+                                }}
+                              >
+                                {isSpecsExpanded
+                                  ? 'Show less'
+                                  : `View all specs (+${specificationEntries.length - 6} more)`}
+                              </button>
+                            )}
+                          </div>
                         </div>
                       )}
                     </div>

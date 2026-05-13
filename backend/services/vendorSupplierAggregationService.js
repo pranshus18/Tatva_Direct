@@ -7,6 +7,31 @@ import {
 } from './procurementSharedService.js';
 import { supplierLocationCandidates, uniqueLocationList } from './vendorRankingHelpersService.js';
 
+const NON_SPEC_ATTRIBUTE_KEYS = new Set([
+  'description',
+  'name',
+  'category',
+  'brandModel',
+  'brand',
+  'mpn',
+  'gtin',
+  'lsa',
+  'hsnCode',
+  'sku',
+  'packSize',
+  'unit',
+  'variantAttributes',
+  'igstRate',
+  'cgstRate',
+  'sgstRate',
+  'tags',
+  'images',
+  'listingName',
+  'specifications',
+  'specification',
+  'specs'
+]);
+
 export async function buildSupplierProductsForRanking({
   supabase,
   products,
@@ -96,6 +121,34 @@ export async function buildSupplierProductsForRanking({
     const latestLocation = product.location || '';
     const latestAttributes = product.attributes || {};
     const latestSpecifications = product.specifications || {};
+    const supplierSpecificationsNestedCandidate =
+      latestAttributes?.specifications || latestAttributes?.specs || latestAttributes?.specification || {};
+    const supplierSpecificationsNested =
+      supplierSpecificationsNestedCandidate &&
+      typeof supplierSpecificationsNestedCandidate === 'object' &&
+      !Array.isArray(supplierSpecificationsNestedCandidate)
+        ? supplierSpecificationsNestedCandidate
+        : {};
+    const supplierSpecificationsLegacy = Object.entries(
+      latestAttributes && typeof latestAttributes === 'object' && !Array.isArray(latestAttributes)
+        ? latestAttributes
+        : {}
+    ).reduce((acc, [key, value]) => {
+      const normalizedKey = String(key || '').trim();
+      if (!normalizedKey || NON_SPEC_ATTRIBUTE_KEYS.has(normalizedKey)) return acc;
+      if (value === null || value === undefined || typeof value === 'object') return acc;
+      const cleanValue = String(value).trim();
+      if (!cleanValue) return acc;
+      acc[normalizedKey] = cleanValue;
+      return acc;
+    }, {});
+    const mergedSpecifications = {
+      ...(latestSpecifications && typeof latestSpecifications === 'object' && !Array.isArray(latestSpecifications)
+        ? latestSpecifications
+        : {}),
+      ...supplierSpecificationsLegacy,
+      ...supplierSpecificationsNested
+    };
     const skuNo = firstNonEmpty(
       product.skuNo,
       latestSpecifications.skuNo,
@@ -149,6 +202,9 @@ export async function buildSupplierProductsForRanking({
 
     supplierProducts[supplierId].products.push({
       ...product,
+      supplierProductId: product.supplierProductId || product.id || null,
+      supplierVariantKey: product.supplierVariantKey || product.variant_key || null,
+      supplierVariantAsin: product.supplierVariantAsin || product.variant_asin || null,
       basePrice,
       bcovApplied: !!bcovResolved,
       bcovLevelId: bcovResolved?.levelId || null,
@@ -160,7 +216,8 @@ export async function buildSupplierProductsForRanking({
       category: latestCategory,
       skuNo: skuNo || null,
       modelBrand: modelBrand || null,
-      productIdentification: productIdentification || null
+      productIdentification: productIdentification || null,
+      specifications: mergedSpecifications
     });
     supplierProducts[supplierId].bestPrice = Math.min(supplierProducts[supplierId].bestPrice, latestPrice);
     supplierProducts[supplierId].bestRating = Math.max(

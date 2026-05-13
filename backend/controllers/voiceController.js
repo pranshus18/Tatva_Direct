@@ -1038,24 +1038,31 @@ async function runTool(userId, toolName, args) {
     }
 
     const nextDraft = applySelectionsToDraft(draft, resolvedSelections);
+    // Do not send shippingAddress/billingAddress as null — poCartSaveSchema rejects null (optional = omit).
+    // Addresses are still mandatory when calling place_purchase_orders (isAddressComplete).
+    const cartSaveBody = {
+      selectedVendors: nextDraft.selectedVendors || {},
+      substitutions: Array.isArray(nextDraft.substitutions) ? nextDraft.substitutions : [],
+      items: Array.isArray(nextDraft.items) ? nextDraft.items : [],
+      boqGroups: Array.isArray(nextDraft.boqGroups) ? nextDraft.boqGroups : [],
+      boqId: nextDraft.boqId || null,
+      boqProject: nextDraft.boqProject || null,
+      requiredDate: nextDraft.requiredDate || null,
+      paymentMethod: nextDraft.paymentMethod || null,
+      deliveryDestination: nextDraft.deliveryDestination || null,
+      gstin: nextDraft.gstin || null
+    };
+    if (nextDraft.shippingAddress && typeof nextDraft.shippingAddress === 'object') {
+      cartSaveBody.shippingAddress = nextDraft.shippingAddress;
+    }
+    if (nextDraft.billingAddress && typeof nextDraft.billingAddress === 'object') {
+      cartSaveBody.billingAddress = nextDraft.billingAddress;
+    }
     await callInternalApi({
       userId,
       method: 'PUT',
       path: '/api/po/cart',
-      body: {
-        selectedVendors: nextDraft.selectedVendors || {},
-        substitutions: Array.isArray(nextDraft.substitutions) ? nextDraft.substitutions : [],
-        items: Array.isArray(nextDraft.items) ? nextDraft.items : [],
-        boqGroups: Array.isArray(nextDraft.boqGroups) ? nextDraft.boqGroups : [],
-        boqId: nextDraft.boqId || null,
-        boqProject: nextDraft.boqProject || null,
-        requiredDate: nextDraft.requiredDate || null,
-        paymentMethod: nextDraft.paymentMethod || null,
-        deliveryDestination: nextDraft.deliveryDestination || null,
-        shippingAddress: nextDraft.shippingAddress || null,
-        billingAddress: nextDraft.billingAddress || null,
-        gstin: nextDraft.gstin || null
-      }
+      body: cartSaveBody
     });
     setFlowState(userId, FLOW_STEPS.supplier_selection);
     return {

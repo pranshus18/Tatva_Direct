@@ -294,11 +294,12 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
     for (const item of items) {
       const itemId = item.id?.toString();
       const productSelectionKey = item.productId ? String(item.productId) : null;
-      const vendorId =
+      const selectedTokenRaw =
         selectedVendors[itemId] ||
         (productSelectionKey ? selectedVendors[productSelectionKey] : null);
+      const selectedToken = String(selectedTokenRaw || '').trim();
       
-      if (!vendorId) {
+      if (!selectedToken) {
         continue; // Skip items without selected vendor
       }
 
@@ -307,6 +308,23 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       
       // Find the supplier-specific offer from supplier_products + products
       let supplierProduct = null;
+      let vendorId = selectedToken;
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(selectedToken)) {
+        const { data: spBySelectionId } = await supabase
+          .from('supplier_products')
+          .select(`
+            *,
+            product:products(*),
+            supplier:users!supplier_products_supplier_id_fkey (id, name, company, profile)
+          `)
+          .eq('id', selectedToken)
+          .in('status', ['approved', 'pending'])
+          .maybeSingle();
+        if (spBySelectionId?.supplier_id) {
+          supplierProduct = spBySelectionId;
+          vendorId = spBySelectionId.supplier_id;
+        }
+      }
       const itemSpecs = item.specifications || {};
       const requestedVariantIdentity = buildIdentityBundle({
         unit: item.unit,
@@ -321,7 +339,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         Boolean(requestedVariantIdentity.variant.packSize);
       
       // First try to find by productId if available (preferred: explicit catalog link)
-      if (item.productId) {
+      if (!supplierProduct && item.productId) {
         // 1) Prefer approved + active offers (current behaviour)
         let spByIdApprovedQuery = supabase
           .from('supplier_products')

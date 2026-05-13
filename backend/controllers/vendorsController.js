@@ -48,6 +48,14 @@ import { vendorRankSchema } from '../contracts/vendorContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
 
 const router = express.Router();
+const shouldIncludeAllVariantsForItem = ({ item = {}, itemName = '', referenceProduct = null }) => {
+  void item;
+  void itemName;
+  void referenceProduct;
+  // Service-provider selection must be variant-wise so buyers can compare
+  // each supplier offer variant explicitly, even when BOQ name has model tokens.
+  return true;
+};
 
 router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
   try {
@@ -130,6 +138,11 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       }
 
       const targetBrand = detectItemBrand(item, referenceProduct);
+      const includeAllVariants = shouldIncludeAllVariantsForItem({
+        item,
+        itemName,
+        referenceProduct
+      });
       if (targetBrand) {
         console.log(`[Vendor Ranking] Target retailer brand for item ${itemId}: ${targetBrand}`);
       }
@@ -155,6 +168,8 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         item,
         itemId,
         itemName,
+        referenceProduct,
+        includeAllVariants,
         targetBrand,
         detectProductBrandKey,
         fuzzyNameCompatible,
@@ -216,7 +231,8 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         serviceProviderState,
         urgencyBonus,
         itemName,
-        itemCategory
+        itemCategory,
+        includeAllVariants
       });
 
       // Sort primarily by proximity when site geo is known, then by overall rank score.
@@ -229,7 +245,7 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       
       // Only return vendors with available products and valid data
       // Include both approved and pending vendors (approved are prioritized by sort)
-      let validVendors = filterTopValidVendors(vendors, 10);
+      let validVendors = filterTopValidVendors(vendors, includeAllVariants ? 100 : 10);
       
       // CRITICAL: If we have a reference product with a supplier but no vendors were found,
       // create a vendor entry from the reference product to ensure it's shown

@@ -94,6 +94,8 @@ export async function reconcileWithSupplierOffers({
   item,
   itemId,
   itemName,
+  referenceProduct,
+  includeAllVariants = false,
   targetBrand,
   detectProductBrandKey,
   fuzzyNameCompatible,
@@ -101,7 +103,7 @@ export async function reconcileWithSupplierOffers({
 }) {
   let updatedProducts = products;
   try {
-    const candidateProductIds = item.productId
+    const baseCandidateProductIds = item.productId
       ? [
           ...new Set(
             (updatedProducts || [])
@@ -118,6 +120,23 @@ export async function reconcileWithSupplierOffers({
           )
         ]
       : [...new Set((updatedProducts || []).map((p) => p?.id).filter(Boolean))];
+    const candidateProductIds = [...baseCandidateProductIds];
+    if (includeAllVariants && referenceProduct?.family_id) {
+      const { data: familyProducts, error: familyProductsError } = await supabase
+        .from('products')
+        .select('id')
+        .eq('family_id', referenceProduct.family_id)
+        .in('status', ['approved', 'pending']);
+      if (familyProductsError) {
+        console.error(`[Vendor Ranking] Family variant lookup failed for item ${itemId}:`, familyProductsError);
+      } else {
+        for (const row of familyProducts || []) {
+          if (row?.id && !candidateProductIds.includes(row.id)) {
+            candidateProductIds.push(row.id);
+          }
+        }
+      }
+    }
 
     if (candidateProductIds.length > 0) {
       const productMetaById = {};
@@ -139,11 +158,14 @@ export async function reconcileWithSupplierOffers({
       const { data: offerRows, error: offerRowsError } = await supabase
         .from('supplier_products')
         .select(`
+          id,
           product_id,
           price,
           stock,
           min_order_quantity,
           location,
+          variant_key,
+          variant_asin,
           attributes,
           status,
           is_active,
@@ -187,6 +209,9 @@ export async function reconcileWithSupplierOffers({
                   ? row.attributes.images.find(Boolean) || null
                   : (Array.isArray(meta.images) ? meta.images.find(Boolean) || null : null),
               attributes: row.attributes || {},
+              supplierProductId: row.id || null,
+              variant_key: row.variant_key || null,
+              variant_asin: row.variant_asin || null,
               supplier,
               supplier_id: supplier.id,
               price: Number.isFinite(parseFloat(row.price)) ? parseFloat(row.price) : 0,
