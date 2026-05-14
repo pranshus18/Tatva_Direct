@@ -14,6 +14,7 @@ import {
   LISTED_SUPPLIER_PRODUCTS_OR,
   listedSupplierProductsFilterOptions
 } from '../utils/platformListedSupplierProductsFilter.js';
+import { searchProductDiscoveryForUser } from '../services/productDiscoverySearchService.js';
 
 const router = express.Router();
 const VOICE_SESSION_TTL_SECONDS = Number.parseInt(process.env.VOICE_SESSION_TTL_SECONDS || '900', 10);
@@ -100,7 +101,7 @@ function getUiContextSearchFallbackItems({ userId, normalizedQuery, category, li
     .sort((a, b) => b.score - a.score);
 
   const positive = normalizedQuery ? scored.filter((entry) => entry.score > 0) : scored;
-  const limited = positive.slice(0, Math.min(Math.max(Number(limit || 6) || 6, 1), 20));
+  const limited = positive.slice(0, Math.min(Math.max(Number(limit || 20) || 20, 1), 50));
   return limited.map(({ product }) => ({
     productId: product?.id ? String(product.id) : '',
     name: String(product?.name || ''),
@@ -115,7 +116,7 @@ function getUiContextSearchFallbackItems({ userId, normalizedQuery, category, li
 async function searchPlatformDiscoveryProducts({ query, category, limit, page }) {
   const normalizedQuery = sanitizeVoiceSearchForOrFilter(query);
   const normalizedCategory = String(category || '').trim();
-  const normalizedLimit = Math.min(Math.max(Number(limit || 6) || 6, 1), 50);
+  const normalizedLimit = Math.min(Math.max(Number(limit || 20) || 20, 1), 50);
   const normalizedPage = Math.max(Number.parseInt(String(page || 1), 10) || 1, 1);
   const offset = (normalizedPage - 1) * normalizedLimit;
 
@@ -734,7 +735,7 @@ async function runTool(userId, toolName, args) {
       userId: String(userId || ''),
       q: normalizedQuery,
       category: String(args.category || ''),
-      limit: Number(args.limit || 6),
+      limit: Number(args.limit || 20),
       page: Number(args.page || 1)
     });
     const cached = searchProductsCache.get(cacheKey);
@@ -746,35 +747,32 @@ async function runTool(userId, toolName, args) {
     let items = [];
     let total = 0;
     let page = Math.max(Number(args.page || 1), 1);
-    let limit = Math.min(Math.max(Number(args.limit || 6), 1), 20);
+    let limit = Math.min(Math.max(Number(args.limit || 20), 1), 50);
     let degraded = false;
     try {
-      // Same route as Product Discovery + successful curl: personalised ranking and pagination match the UI.
-      const categoryParam = String(args.category || '').trim().toLowerCase();
-      const searchQuery = {};
-      if (normalizedQuery) searchQuery.q = normalizedQuery;
-      if (categoryParam) searchQuery.category = categoryParam;
-      searchQuery.limit = limit;
-      searchQuery.page = page;
-
-      const apiResult = await callInternalApi({
+      const result = await searchProductDiscoveryForUser(supabase, {
         userId,
-        path: '/api/supplier/products/search',
-        query: searchQuery
+        q: normalizedQuery,
+        category: String(args.category || '').trim(),
+        limit,
+        page,
+        legacyManualDiscoveryCategoryFilter: false
       });
-      const suggestions = Array.isArray(apiResult?.suggestions) ? apiResult.suggestions : [];
-      items = suggestions.map((p) => ({
-        productId: String(p?.id ?? p?.productId ?? '').trim(),
-        name: String(p?.name || ''),
-        brand: p?.brand ?? null,
-        category: p?.category ?? null,
-        unit: p?.unit || 'nos',
-        supplierCount: Number.isFinite(Number(p?.supplierCount)) ? Number(p.supplierCount) : null
-      })).filter((row) => Boolean(row.productId));
-      total = Number.isFinite(Number(apiResult?.total)) ? Number(apiResult.total) : items.length;
+      const suggestions = Array.isArray(result?.suggestions) ? result.suggestions : [];
+      items = suggestions
+        .map((p) => ({
+          productId: String(p?.id ?? p?.productId ?? '').trim(),
+          name: String(p?.name || ''),
+          brand: p?.brand ?? null,
+          category: p?.category ?? null,
+          unit: p?.unit || 'nos',
+          supplierCount: Number.isFinite(Number(p?.supplierCount)) ? Number(p.supplierCount) : null
+        }))
+        .filter((row) => Boolean(row.productId));
+      total = Number.isFinite(Number(result?.total)) ? Number(result.total) : items.length;
     } catch (searchError) {
       degraded = true;
-      console.warn('[voice] search_products discovery API failed, trying direct query', {
+      console.warn('[voice] search_products discovery service failed, trying direct query', {
         reason: searchError?.message || 'unknown'
       });
       try {
@@ -804,6 +802,24 @@ async function runTool(userId, toolName, args) {
         });
       }
     }
+
+    if (items.length === 0 && !normalizedQuery) {
+      const ctx = getVoicePageContext(userId);
+      const vis = Array.isArray(ctx?.visibleProducts) ? ctx.visibleProducts : [];
+      if (vis.length) {
+        items = vis.slice(0, limit).map((product) => ({
+          productId: String(product?.id || '').trim(),
+          name: String(product?.name || ''),
+          brand: product?.brand || null,
+          category: product?.category || null,
+          unit: String(product?.unit || 'nos'),
+          supplierCount: Number.isFinite(Number(product?.supplierCount)) ? Number(product.supplierCount) : null,
+          source: 'ui_context_visible_products'
+        }));
+        total = vis.length;
+      }
+    }
+
     if (degraded && items.length === 0) {
       let fallbackQuery = supabase
         .from('products')
@@ -855,7 +871,9 @@ async function runTool(userId, toolName, args) {
 
     const payload = {
       ok: true,
-      source: 'platform_product_discovery',
+      source: 'product_discovery_search',
+      discoverySearch: true,
+      queryUsed: normalizedQuery,
       degraded,
       elapsedMs: Date.now() - startedAt,
       items,
@@ -866,10 +884,14 @@ async function runTool(userId, toolName, args) {
       usedUiContextFallback: items.some((item) => item?.source === 'ui_context_visible_products'),
       flowStep: flow.step,
       nextStep: FLOW_STEPS.discovery,
+      agentInstructions:
+        items.length > 0
+          ? 'Read item names from `items`. Do not say "catalog". This is Product Discovery listed stock.'
+          : 'Say no match for that search on Product Discovery (not "catalog"). Suggest shorter keywords or spelling; if `uiContext.visibleProducts` is present, offer those rows.',
       message:
         items.length > 0
-          ? 'Products found. Tell me which product and quantity to add to cart.'
-          : 'No exact match found. Ask user to choose from currently listed products in discovery.'
+          ? 'Products found (same search as Product Discovery page). Read names from items; ask which to add and quantity.'
+          : 'No products matched this search on Product Discovery for this account. Try a shorter or different keyword, or pick from products currently visible on the discovery page (see uiContext.visibleProducts when present). Do not refer to a separate catalog.'
     };
     lastSearchResultsByUserId.set(
       String(userId || ''),

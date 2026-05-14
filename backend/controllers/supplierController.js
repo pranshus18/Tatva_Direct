@@ -36,6 +36,7 @@ import {
   LISTED_SUPPLIER_PRODUCTS_OR,
   listedSupplierProductsFilterOptions
 } from '../utils/platformListedSupplierProductsFilter.js';
+import { searchProductDiscoveryForUser } from '../services/productDiscoverySearchService.js';
 import { generateAndAttachReceiptPdf } from '../services/receiptPdfService.js';
 import {
   buildIdentityBundle,
@@ -86,7 +87,6 @@ import {
   parseCovThresholdNumber,
   resolveBcovPriceForBuyerMetrics
 } from '../services/procurementSharedService.js';
-import { calculateMatchConfidence, extractTokens } from '../services/textMatchingService.js';
 import {
   brandIsAllowedForSupplier,
   entryOverlapsViewerBrands,
@@ -1340,21 +1340,7 @@ router.get('/locations', authenticateToken, async (req, res) => {
   }
 });
 
-/**
- * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` treats commas as delimiters; commas/parens in the
- * pattern can break the filter. Strip LIKE wildcards so user input cannot broaden matches.
- * Matches voiceController `sanitizeVoiceSearchForOrFilter` so UI and voice search behave the same.
- */
-function sanitizeDiscoverySearchQuery(raw) {
-  let s = String(raw || '').trim();
-  if (!s) return '';
-  s = s.replace(/[,()[\]]/g, ' ').replace(/%/g, ' ').replace(/_/g, ' ');
-  s = s.replace(/\s+/g, ' ').trim();
-  if (s.length > 200) s = s.slice(0, 200);
-  return s;
-}
-
-// Search for product name suggestions (autocomplete) with fuzzy matching
+// Search for product name suggestions (Product Discovery — shared implementation with voice)
 router.get('/products/search', authenticateToken, async (req, res) => {
   try {
     const { q, category } = req.query;
@@ -1366,332 +1352,24 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const page = Number.isFinite(parsedPage) ? Math.max(parsedPage, 1) : 1;
     const parsedOffset = Number.parseInt(String(req.query.offset || ''), 10);
     const offset = Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : (page - 1) * limit;
-    const normalizedCategory = String(category || '').trim().toLowerCase();
-    const query = sanitizeDiscoverySearchQuery(q);
-    const rankingPoolLimit = query ? 250 : 500;
 
-    // Product Discovery: same visibility as supplier portal (GET /api/supplier/products):
-    // approved catalog plus at least one non-rejected supplier_products row that is either
-    // approved+active, or pending/null (treated as listed when catalog is approved).
-    let productsQuery = supabase
-      .from('products')
-      .select(
-        `
-          id,
-          name,
-          category,
-          unit,
-          description,
-          brand,
-          gtin,
-          barcode,
-          specifications,
-          status,
-          is_active,
-          updated_at,
-          supplier_products!inner(count)
-        `,
-        { count: 'exact' }
-      )
-      .eq('status', 'approved')
-      .or(LISTED_SUPPLIER_PRODUCTS_OR, listedSupplierProductsFilterOptions);
-
-    if (normalizedCategory) {
-      productsQuery = productsQuery.eq('category', normalizedCategory);
-    }
-    if (query) {
-      const ilikeQuery = `%${query.replace(/\s+/g, '%')}%`;
-      productsQuery = productsQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`);
-    }
-
-    const { data: rawProducts, error, count } = await productsQuery
-      .order('updated_at', { ascending: false })
-      .limit(rankingPoolLimit);
-    
-    if (error) {
-      console.error('Error fetching products for search:', error);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-
-    const { data: recentOrders } = await supabase
-      .from('orders')
-      .select('id')
-      .eq('service_provider_id', req.userId)
-      .neq('status', 'cancelled')
-      .order('created_at', { ascending: false })
-      .limit(200);
-
-    const recentOrderIds = (recentOrders || []).map((order) => order?.id).filter(Boolean);
-    const categoryAffinity = new Map();
-
-    if (recentOrderIds.length > 0) {
-      const { data: orderItems } = await supabase
-        .from('order_items')
-        .select(`
-          product_id,
-          quantity,
-          product:products (
-            category
-          )
-        `)
-        .in('order_id', recentOrderIds)
-        .limit(3000);
-
-      for (const item of orderItems || []) {
-        const quantity = Math.max(1, Number.parseInt(String(item?.quantity || '1'), 10) || 1);
-        const categoryKey = String(item?.product?.category || '').trim().toLowerCase();
-        if (categoryKey) {
-          categoryAffinity.set(categoryKey, (categoryAffinity.get(categoryKey) || 0) + quantity);
-        }
-      }
-    }
-
-    const suggestions = (rawProducts || []).map((p) => {
-      const supplierCount = Array.isArray(p?.supplier_products) && p.supplier_products[0] && Number.isFinite(p.supplier_products[0].count)
-        ? p.supplier_products[0].count
-        : null;
-      const categoryKey = String(p?.category || '').trim().toLowerCase();
-      const affinityScore = categoryAffinity.get(categoryKey) || 0;
-      const recommendationScore = Number(affinityScore.toFixed(3));
-      return {
-        ...p,
-        supplierCount,
-        recommendationScore
-      };
+    const result = await searchProductDiscoveryForUser(supabase, {
+      userId: req.userId,
+      q,
+      category,
+      limit,
+      page,
+      offset,
+      legacyManualDiscoveryCategoryFilter: true
     });
-
-    suggestions.sort((a, b) => {
-      const scoreDiff = (b.recommendationScore || 0) - (a.recommendationScore || 0);
-      if (scoreDiff !== 0) return scoreDiff;
-
-      const supplierDiff = (Number(b.supplierCount) || 0) - (Number(a.supplierCount) || 0);
-      if (supplierDiff !== 0) return supplierDiff;
-
-      const aUpdated = Date.parse(a?.updated_at || 0) || 0;
-      const bUpdated = Date.parse(b?.updated_at || 0) || 0;
-      if (bUpdated !== aUpdated) return bUpdated - aUpdated;
-
-      return String(a?.name || '').localeCompare(String(b?.name || ''));
-    });
-
-    const paginatedSuggestions = suggestions.slice(offset, offset + limit);
 
     return res.json({
       status: 'success',
-      suggestions: paginatedSuggestions,
-      total: Number.isFinite(count) ? count : suggestions.length,
-      limit,
-      offset,
-      recommendationMode: 'personalized-order-affinity'
-    });
-
-    // (Legacy enrichment logic below is kept for compatibility with other flows that may rely
-    // on filled specs; Product Discovery now returns supplier-listed products above.)
-    const isMeaningfullyFilled = (v) => {
-      if (v === null || v === undefined) return false;
-      if (Array.isArray(v)) return v.length > 0;
-      if (typeof v === 'object') return Object.keys(v).length > 0;
-      if (typeof v === 'number') return Number.isFinite(v);
-      if (typeof v === 'boolean') return true;
-      return String(v).trim() !== '';
-    };
-    const nonEmptyValueCount = (specsObj) =>
-      Object.values(specsObj || {}).filter(isMeaningfullyFilled).length;
-
-    const matchedProductIds = [...new Set((matchedProducts || []).map((p) => p.id).filter(Boolean))];
-    const bestSpecsByProductId = new Map();
-    if (matchedProductIds.length > 0) {
-      const toObject = (value) => {
-        if (!value) return null;
-        if (typeof value === 'object' && !Array.isArray(value)) return value;
-        if (Array.isArray(value)) {
-          const out = {};
-          for (const item of value) {
-            if (!item) continue;
-            if (Array.isArray(item) && item.length >= 2) {
-              const k = String(item[0] ?? '').trim();
-              if (!k) continue;
-              out[k] = item[1];
-              continue;
-            }
-            if (typeof item === 'object') {
-              const k = String(item.key ?? item.name ?? '').trim();
-              if (!k) continue;
-              out[k] = item.value;
-            }
-          }
-          return Object.keys(out).length > 0 ? out : null;
-        }
-        if (typeof value === 'string') {
-          try {
-            let parsed = JSON.parse(value);
-            if (typeof parsed === 'string') {
-              try {
-                parsed = JSON.parse(parsed);
-              } catch {
-                // keep as-is
-              }
-            }
-            if (parsed && typeof parsed === 'object') {
-              if (!Array.isArray(parsed)) return parsed;
-              if (Array.isArray(parsed)) {
-                const out = {};
-                for (const item of parsed) {
-                  if (!item) continue;
-                  if (Array.isArray(item) && item.length >= 2) {
-                    const k = String(item[0] ?? '').trim();
-                    if (!k) continue;
-                    out[k] = item[1];
-                    continue;
-                  }
-                  if (typeof item === 'object') {
-                    const k = String(item.key ?? item.name ?? '').trim();
-                    if (!k) continue;
-                    out[k] = item.value;
-                  }
-                }
-                return Object.keys(out).length > 0 ? out : null;
-              }
-            }
-          } catch {
-            return null;
-          }
-        }
-        return null;
-      };
-
-      const { data: approvedOffers } = await supabase
-        .from('supplier_products')
-        .select('product_id, attributes, updated_at, status')
-        .in('product_id', matchedProductIds)
-        .order('updated_at', { ascending: false });
-
-      for (const row of approvedOffers || []) {
-        // In production, DB rows can contain "Approved " / " APPROVED" etc.
-        const status = String(row?.status || '').trim().toLowerCase();
-        if (status !== 'approved') continue;
-        const pid = row?.product_id;
-        const attributesObj = toObject(row?.attributes);
-        let specs = toObject(attributesObj?.specifications);
-        // Backward-compat: some older rows can carry spec keys directly in attributes.
-        if (!specs && attributesObj) {
-          const direct = {};
-          Object.keys(attributesObj || {}).forEach((k) => {
-            if (['description', 'name', 'images', 'brandModel', 'lsa', 'hsnCode'].includes(k)) return;
-            direct[k] = attributesObj[k];
-          });
-          if (Object.keys(direct).length > 0) specs = direct;
-        }
-        if (!pid || !specs) continue;
-        const existing = bestSpecsByProductId.get(pid);
-        if (!existing) {
-          bestSpecsByProductId.set(pid, specs);
-          continue;
-        }
-        // Prefer the specs payload that contains more non-empty values.
-        if (nonEmptyValueCount(specs) > nonEmptyValueCount(existing)) {
-          bestSpecsByProductId.set(pid, specs);
-        }
-      }
-    }
-
-    const resolveSuggestionSpecifications = (product) => {
-      const baseSpecs =
-        product.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
-          ? product.specifications
-          : {};
-      const supplierSpecs = bestSpecsByProductId.get(product.id) || {};
-      const merged = { ...baseSpecs };
-      Object.keys(supplierSpecs || {}).forEach((k) => {
-        const supplierValue = supplierSpecs[k];
-        if (supplierValue !== undefined && supplierValue !== null) {
-          // Prefer supplier-entered values even when they are arrays/objects.
-          if (isMeaningfullyFilled(supplierValue) || !Object.prototype.hasOwnProperty.call(merged, k)) {
-            merged[k] = supplierValue;
-          }
-        } else if (!Object.prototype.hasOwnProperty.call(merged, k)) {
-          merged[k] = supplierValue;
-        }
-      });
-      return merged;
-    };
-
-    if (!query) {
-      const discoverySuggestions = matchedProducts
-        .slice(0, limit)
-        .map((product) => ({
-          ...product,
-          specifications: resolveSuggestionSpecifications(product)
-        }));
-      return res.json({
-        status: 'success',
-        suggestions: discoverySuggestions
-      });
-    }
-
-    // Rank results so typing starting letters surfaces best matches first.
-    const queryLower = query.toLowerCase();
-    const ranked = matchedProducts
-      .map((product) => {
-        const name = String(product.name || '');
-        const nameLower = name.toLowerCase();
-        const brandLower = String(product.brand || '').toLowerCase();
-        let score = 0;
-
-        if (nameLower === queryLower) score += 150;
-        if (nameLower.startsWith(queryLower)) score += 120;
-        else if (nameLower.includes(queryLower)) score += 80;
-
-        if (brandLower.startsWith(queryLower)) score += 40;
-        else if (brandLower.includes(queryLower)) score += 20;
-
-        // Keep fuzzy scoring as a tiebreaker for close matches.
-        score += Math.round(
-          calculateMatchConfidence(query, name, product.description || '') * 10
-        );
-
-        return { ...product, score };
-      })
-      .filter((product) => product.score > 0)
-      .sort((a, b) => {
-        // Primary sort: score (descending)
-        if (b.score !== a.score) {
-          return b.score - a.score;
-        }
-        // Secondary sort: most recently updated
-        const aTime = new Date(a.updated_at || 0).getTime();
-        const bTime = new Date(b.updated_at || 0).getTime();
-        if (bTime !== aTime) {
-          return bTime - aTime;
-        }
-        // Third sort: name
-        return a.name.localeCompare(b.name);
-      })
-      .slice(0, 20)
-      .map(({ score, ...product }) => ({
-        ...product,
-        specifications: resolveSuggestionSpecifications(product)
-      }));
-
-    // Deduplicate by id (or fallback key) and return top 10.
-    const uniqueMap = new Map();
-    for (const product of ranked) {
-      const key = product.id || `${String(product.name || '').toLowerCase()}|${String(product.category || '').toLowerCase()}`;
-      if (!uniqueMap.has(key)) {
-        uniqueMap.set(key, product);
-      }
-    }
-
-    const finalSuggestions = Array.from(uniqueMap.values()).slice(0, 10);
-    
-    console.log(`Product search for "${q}": Found ${finalSuggestions.length} fuzzy-matched suggestions`);
-
-    res.json({
-      status: 'success',
-      suggestions: finalSuggestions
+      suggestions: result.suggestions,
+      total: result.total,
+      limit: result.limit,
+      offset: result.offset,
+      recommendationMode: result.recommendationMode
     });
   } catch (error) {
     console.error('Search products error:', error);
