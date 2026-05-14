@@ -749,31 +749,62 @@ async function runTool(userId, toolName, args) {
     let limit = Math.min(Math.max(Number(args.limit || 6), 1), 20);
     let degraded = false;
     try {
-      const result = await searchPlatformDiscoveryProducts({
-        query: normalizedQuery,
-        category: args.category,
-        limit,
-        page
+      // Same route as Product Discovery + successful curl: personalised ranking and pagination match the UI.
+      const categoryParam = String(args.category || '').trim().toLowerCase();
+      const searchQuery = {};
+      if (normalizedQuery) searchQuery.q = normalizedQuery;
+      if (categoryParam) searchQuery.category = categoryParam;
+      searchQuery.limit = limit;
+      searchQuery.page = page;
+
+      const apiResult = await callInternalApi({
+        userId,
+        path: '/api/supplier/products/search',
+        query: searchQuery
       });
-      total = Number(result?.total || 0) || 0;
-      page = Number(result?.page || page) || page;
-      limit = Number(result?.limit || limit) || limit;
-      items = (result?.products || []).map((p) => ({
-        productId: p.id,
-        name: p.name,
-        brand: p.brand || null,
-        category: p.category || null,
-        unit: p.unit || 'nos',
-        supplierCount:
-          Array.isArray(p?.supplier_products) && p.supplier_products[0] && Number.isFinite(p.supplier_products[0].count)
-            ? p.supplier_products[0].count
-            : null
-      }));
+      const suggestions = Array.isArray(apiResult?.suggestions) ? apiResult.suggestions : [];
+      items = suggestions.map((p) => ({
+        productId: String(p?.id ?? p?.productId ?? '').trim(),
+        name: String(p?.name || ''),
+        brand: p?.brand ?? null,
+        category: p?.category ?? null,
+        unit: p?.unit || 'nos',
+        supplierCount: Number.isFinite(Number(p?.supplierCount)) ? Number(p.supplierCount) : null
+      })).filter((row) => Boolean(row.productId));
+      total = Number.isFinite(Number(apiResult?.total)) ? Number(apiResult.total) : items.length;
     } catch (searchError) {
       degraded = true;
-      console.warn('[voice] search_products degraded fallback', {
+      console.warn('[voice] search_products discovery API failed, trying direct query', {
         reason: searchError?.message || 'unknown'
       });
+      try {
+        const result = await searchPlatformDiscoveryProducts({
+          query: normalizedQuery,
+          category: args.category,
+          limit,
+          page
+        });
+        total = Number(result?.total || 0) || 0;
+        page = Number(result?.page || page) || page;
+        limit = Number(result?.limit || limit) || limit;
+        items = (result?.products || []).map((p) => ({
+          productId: p.id,
+          name: p.name,
+          brand: p.brand || null,
+          category: p.category || null,
+          unit: p.unit || 'nos',
+          supplierCount:
+            Array.isArray(p?.supplier_products) && p.supplier_products[0] && Number.isFinite(p.supplier_products[0].count)
+              ? p.supplier_products[0].count
+              : null
+        }));
+      } catch (directSearchError) {
+        console.warn('[voice] search_products degraded fallback', {
+          reason: directSearchError?.message || 'unknown'
+        });
+      }
+    }
+    if (degraded && items.length === 0) {
       let fallbackQuery = supabase
         .from('products')
         .select(

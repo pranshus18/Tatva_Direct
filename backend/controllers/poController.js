@@ -46,6 +46,8 @@ import {
   poTransportConfirmSchema
 } from '../contracts/poContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
+import { bookCourierCheckout } from '../services/logisticsBookCourierService.js';
+import { computeGroupWeightKg } from './logisticsController.js';
 import { randomUUID } from 'node:crypto';
 
 const LEGACY_PO_CART_GROUP_PREFIX = 'legacy';
@@ -678,6 +680,73 @@ function mapToDeliveryAddress(address = {}) {
     zipCode: address.pincode,
     country: address.country
   };
+}
+
+function orderDeliveryJsonToLogisticsAddress(addr = {}) {
+  const a = addr && typeof addr === 'object' ? addr : {};
+  const pin = String(a.pincode || a.zipCode || '').replace(/\D/g, '').slice(0, 6);
+  return {
+    line1: String(a.line1 || a.street || '').trim(),
+    city: String(a.city || '').trim(),
+    state: String(a.state || '').trim(),
+    country: String(a.country || 'India').trim() || 'India',
+    pincode: pin
+  };
+}
+
+function isLogisticsDeliveryAddressComplete(a) {
+  return (
+    String(a?.line1 || '').trim().length > 0 &&
+    String(a?.city || '').trim().length > 0 &&
+    String(a?.state || '').trim().length > 0 &&
+    String(a?.country || '').trim().length > 0 &&
+    String(a?.pincode || '').replace(/\D/g, '').length === 6
+  );
+}
+
+function buildCourierLinesFromOrderItems(orderItems) {
+  return (Array.isArray(orderItems) ? orderItems : []).map((row) => {
+    let specs = {};
+    try {
+      if (row.specifications && typeof row.specifications === 'string') {
+        specs = JSON.parse(row.specifications);
+      } else if (row.specifications && typeof row.specifications === 'object' && row.specifications) {
+        specs = row.specifications;
+      }
+    } catch {
+      specs = {};
+    }
+    const name =
+      (row.product && row.product.name) ||
+      specs.brandModel ||
+      specs.name ||
+      'Item';
+    return {
+      product_id: row.product_id,
+      name: String(name).slice(0, 300),
+      quantity: Number(row.quantity) || 0,
+      unit_price: Number(row.unit_price) || 0,
+      total_price: Number(row.total_price) || 0,
+      sku: specs.sku || specs.skuNo || specs.gsku || null
+    };
+  });
+}
+
+function computeOrderWeightKgForCourier(orderItems) {
+  const items = (Array.isArray(orderItems) ? orderItems : []).map((row) => {
+    let specs = {};
+    try {
+      if (row.specifications && typeof row.specifications === 'string') {
+        specs = JSON.parse(row.specifications);
+      } else if (row.specifications && typeof row.specifications === 'object' && row.specifications) {
+        specs = row.specifications;
+      }
+    } catch {
+      specs = {};
+    }
+    return { quantity: row.quantity, specifications: specs };
+  });
+  return computeGroupWeightKg({ items });
 }
 
 /** Avoid user-supplied % / _ widening ILIKE matches unintentionally. */
@@ -1390,7 +1459,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       trackingUrl = null,
       transportNotes = null,
       perOrderTransport,
-      quotedTransportAmount: rootQuotedTransportAmount
+      quotedTransportAmount: rootQuotedTransportAmount,
+      courierCompanyId: rootCourierCompanyId = null
     } = payload;
 
     const transportByOrderId = new Map(
@@ -1405,9 +1475,42 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       return Math.round(n * 100) / 100;
     };
 
+    const { data: buyerRow, error: buyerErr } = await supabase
+      .from('users')
+      .select('id, name, company, email, phone')
+      .eq('id', req.userId)
+      .maybeSingle();
+    if (buyerErr) throw buyerErr;
+    const sessionBuyer = {
+      user_id: buyerRow?.id || req.userId,
+      name: String(buyerRow?.name || '').trim(),
+      company: String(buyerRow?.company || '').trim(),
+      email: String(buyerRow?.email || '').trim(),
+      phone: String(buyerRow?.phone || '').trim()
+    };
+
     const { data: orders, error: ordersError } = await supabase
       .from('orders')
-      .select('id, status_history, delivery_address, total_amount')
+      .select(
+        `
+        id,
+        order_number,
+        status_history,
+        delivery_address,
+        total_amount,
+        supplier_id,
+        service_provider_id,
+        order_items (
+          id,
+          product_id,
+          quantity,
+          unit_price,
+          total_price,
+          specifications,
+          product:products ( name )
+        )
+      `
+      )
       .in('id', orderIds)
       .eq('service_provider_id', req.userId);
     if (ordersError) throw ordersError;
@@ -1426,8 +1529,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
     for (const row of orders || []) {
       const pick = transportByOrderId.get(row.id);
       const sp = pick?.shippingProvider || shippingProvider;
-      const tn = pick?.trackingNumber ?? trackingNumber;
-      const tu = pick?.trackingUrl ?? trackingUrl;
+      let tn = pick?.trackingNumber ?? trackingNumber;
+      let tu = pick?.trackingUrl ?? trackingUrl;
       const tnotes = pick?.transportNotes ?? transportNotes;
       if (!sp || !String(sp).trim()) {
         return res.status(400).json({
@@ -1454,11 +1557,53 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       let nextDeliveryAddress = prevAddr;
       let nextTotalAmount = currentTotal;
 
+      const courierCompanyId =
+        pick?.courierCompanyId ??
+        (!hasPerOrderRows && orderIds.length === 1 && row.id === orderIds[0] ? rootCourierCompanyId : null);
+
+      let resolvedSp = String(sp).trim();
+      if (courierCompanyId != null && Number.isFinite(Number(courierCompanyId))) {
+        const logisticsDelivery = orderDeliveryJsonToLogisticsAddress(prevAddr);
+        if (!isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
+          return res.status(400).json({
+            status: 'error',
+            message: `Order ${row.id}: complete delivery address with a 6-digit pincode is required for courier booking.`
+          });
+        }
+        const lines = buildCourierLinesFromOrderItems(row.order_items);
+        const weightKg = computeOrderWeightKgForCourier(row.order_items);
+        try {
+          const booked = await bookCourierCheckout({
+            courierCompanyId: Number(courierCompanyId),
+            deliveryAddress: logisticsDelivery,
+            sessionBuyer,
+            lines,
+            weightKg,
+            orderId: row.id,
+            orderNumber: row.order_number || undefined
+          });
+          if (booked.trackingNumber) tn = booked.trackingNumber;
+          if (booked.trackingUrl) tu = booked.trackingUrl;
+          if (booked.shippingProvider) resolvedSp = booked.shippingProvider;
+        } catch (bookErr) {
+          logger.error('Logistics book-courier-checkout error:', bookErr);
+          const statusCode =
+            Number(bookErr?.statusCode) >= 400 && Number(bookErr?.statusCode) < 600
+              ? Number(bookErr.statusCode)
+              : 502;
+          return res.status(statusCode).json({
+            status: 'error',
+            message: bookErr?.message || 'Courier booking failed',
+            orderId: row.id
+          });
+        }
+      }
+
       if (transportAmt !== null && transportAmt > 0) {
         const transportBill = {
           amount: transportAmt,
           currency: 'INR',
-          provider: String(sp).trim(),
+          provider: resolvedSp,
           confirmedAt: new Date().toISOString(),
           source: 'logistics_quote'
         };
@@ -1473,7 +1618,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
         status: 'confirmed',
         timestamp: new Date().toISOString(),
         updatedBy: req.userId,
-        notes: `Transport selected: ${sp}${tnotes ? ` | ${tnotes}` : ''}${
+        notes: `Transport selected: ${resolvedSp}${tnotes ? ` | ${tnotes}` : ''}${
           transportAmt !== null && transportAmt > 0 ? ` | Quoted transport: INR ${transportAmt}` : ''
         }`
       });
@@ -1481,7 +1626,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       const { data: updated, error: updateError } = await supabase
         .from('orders')
         .update({
-          shipping_provider: sp,
+          shipping_provider: resolvedSp,
           tracking_number: tn || null,
           tracking_url: tu || null,
           notes: tnotes || null,

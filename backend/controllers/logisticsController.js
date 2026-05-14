@@ -192,7 +192,7 @@ function unitWeightKgFromItem(item) {
   return 0.5;
 }
 
-function computeGroupWeightKg(group) {
+export function computeGroupWeightKg(group) {
   const items = Array.isArray(group?.items) ? group.items : [];
   let sum = 0;
   for (const item of items) {

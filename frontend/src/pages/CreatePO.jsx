@@ -374,9 +374,16 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             ? st.byVendorCourierDetail[sid]
             : null;
         const quotedTransportAmount = parseQuoteInr(det?.rate);
+        const courierCompanyId =
+          det?.courier_company_id != null && det?.courier_company_id !== ''
+            ? Number(det.courier_company_id)
+            : null;
         return {
           orderId: o.id,
           shippingProvider: sp,
+          ...(Number.isFinite(courierCompanyId) && courierCompanyId > 0
+            ? { courierCompanyId }
+            : {}),
           trackingNumber: st.trackingNumber || null,
           trackingUrl: st.trackingUrl || null,
           transportNotes: st.transportNotes || null,
@@ -397,9 +404,15 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       };
       if (orderList.length === 1 && st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object') {
         const sid = String(orderList[0].supplierId || '');
-        const q = parseQuoteInr(st.byVendorCourierDetail[sid]?.rate);
+        const det = st.byVendorCourierDetail[sid];
+        const q = parseQuoteInr(det?.rate);
         if (q != null) {
           confirmBody.quotedTransportAmount = q;
+        }
+        const cc = det?.courier_company_id;
+        const n = cc != null && cc !== '' ? Number(cc) : NaN;
+        if (Number.isFinite(n) && n > 0) {
+          confirmBody.courierCompanyId = n;
         }
       }
     }

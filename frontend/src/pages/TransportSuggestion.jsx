@@ -290,6 +290,7 @@ const TransportSuggestion = () => {
       const sh = shipments.find((x) => String(x.vendorId) === String(id));
       byVendorCourierDetail[id] = {
         name,
+        courier_company_id: p?.courier_company_id ?? null,
         rate: p?.rate ?? null,
         etd: p?.etd ?? null,
         source: p?.source ?? null,

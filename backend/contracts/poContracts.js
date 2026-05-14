@@ -81,6 +81,8 @@ export const poCreateRequestSchema = z.object({
 const perOrderTransportRowSchema = z.object({
   orderId: z.string().uuid(),
   shippingProvider: z.string().min(1).max(120),
+  /** Shiprocket / logistics `courier_company_id` from quote — triggers server-side booking. */
+  courierCompanyId: z.coerce.number().int().positive().optional().nullable(),
   trackingNumber: z.string().max(120).optional().nullable(),
   trackingUrl: z.string().url().optional().nullable(),
   transportNotes: z.string().max(1000).optional().nullable(),
@@ -92,6 +94,8 @@ export const poTransportConfirmSchema = z
   .object({
     orderIds: z.array(z.string().uuid()).min(1),
     shippingProvider: z.string().min(1).max(120).optional(),
+    /** When confirming a single order without perOrderTransport — passed to logistics booking. */
+    courierCompanyId: z.coerce.number().int().positive().optional().nullable(),
     trackingNumber: z.string().max(120).optional().nullable(),
     trackingUrl: z.string().url().optional().nullable(),
     transportNotes: z.string().max(1000).optional().nullable(),
