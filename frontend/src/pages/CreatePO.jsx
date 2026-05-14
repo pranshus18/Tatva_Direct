@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { Check, X } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { getApiUrl } from '../config/api';
+import { API_BASE_URL, getApiUrl, resolveApiPath } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import './CreatePO.css';
 
@@ -28,9 +28,31 @@ const normalizeAddress = (address = {}) => ({
   line1: String(address?.line1 || address?.street || '').trim(),
   city: String(address?.city || '').trim(),
   state: String(address?.state || '').trim(),
-  pincode: String(address?.pincode || address?.zipCode || '').trim(),
+  pincode: String(
+    address?.pincode || address?.zipCode || address?.postalCode || address?.postal_code || ''
+  ).trim(),
   country: String(address?.country || '').trim()
 });
+
+/** Legacy: single shippingProvider. New: byVendorId map (supplier UUID → courier name). */
+function isTransportSelectionReady(transport, groups) {
+  if (!transport || typeof transport !== 'object') return false;
+  if (String(transport.shippingProvider || '').trim()) return true;
+  const by = transport.byVendorId;
+  if (!by || typeof by !== 'object') return false;
+  const ids = (Array.isArray(groups) ? groups : []).map((g) => String(g.vendorId || '')).filter(Boolean);
+  if (ids.length === 0) return Object.keys(by).some((k) => String(by[k] || '').trim());
+  return ids.every((id) => String(by[id] || '').trim());
+}
+
+function formatQuoteMoney(rate) {
+  if (rate == null || rate === '') return null;
+  const n = Number(String(rate).replace(/,/g, ''));
+  if (Number.isFinite(n)) {
+    return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  }
+  return String(rate);
+}
 
 const addressPreview = (address = {}) =>
   [address.line1, address.city, address.state, address.pincode, address.country]
@@ -321,14 +343,45 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
 
   const finalizeTransportDetails = async (ordersToConfirm = createdTransportOrders) => {
     const token = localStorage.getItem('token');
-    const orderIds = (Array.isArray(ordersToConfirm) ? ordersToConfirm : [])
-      .map((order) => order?.id)
-      .filter(Boolean);
+    const orderList = Array.isArray(ordersToConfirm) ? ordersToConfirm : [];
+    const orderIds = orderList.map((order) => order?.id).filter(Boolean);
     if (orderIds.length === 0) {
       throw new Error('No transport-stage orders found. Please click Transport suggestion first.');
     }
-    if (!selectedTransport?.shippingProvider) {
-      throw new Error('Please select transport details first.');
+    const st = selectedTransport;
+    const hasPerVendor =
+      st?.byVendorId && typeof st.byVendorId === 'object' && Object.keys(st.byVendorId).length > 0;
+
+    let confirmBody;
+    if (hasPerVendor) {
+      const perOrderTransport = orderList.map((o) => {
+        const sid = String(o.supplierId || '');
+        const sp = String(st.byVendorId[sid] || '').trim();
+        if (!sp) {
+          throw new Error(
+            `Choose a courier for ${o.supplier || 'each supplier'} on Transport suggestion before confirming.`
+          );
+        }
+        return {
+          orderId: o.id,
+          shippingProvider: sp,
+          trackingNumber: st.trackingNumber || null,
+          trackingUrl: st.trackingUrl || null,
+          transportNotes: st.transportNotes || null
+        };
+      });
+      confirmBody = { orderIds, perOrderTransport };
+    } else {
+      if (!String(st?.shippingProvider || '').trim()) {
+        throw new Error('Please select transport details first.');
+      }
+      confirmBody = {
+        orderIds,
+        shippingProvider: st.shippingProvider,
+        trackingNumber: st.trackingNumber || null,
+        trackingUrl: st.trackingUrl || null,
+        transportNotes: st.transportNotes || null
+      };
     }
 
     const res = await fetch(getApiUrl('/api/po/transport/confirm'), {
@@ -337,13 +390,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         'Content-Type': 'application/json',
         ...(token ? { Authorization: `Bearer ${token}` } : {})
       },
-      body: JSON.stringify({
-        orderIds,
-        shippingProvider: selectedTransport.shippingProvider,
-        trackingNumber: selectedTransport.trackingNumber || null,
-        trackingUrl: selectedTransport.trackingUrl || null,
-        transportNotes: selectedTransport.transportNotes || null
-      })
+      body: JSON.stringify(confirmBody)
     });
 
     if (!res.ok) {
@@ -437,6 +484,64 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       alert('No purchase order groups available. Please ensure all items have selected suppliers.');
       return;
     }
+
+    const missingShipping = ['line1', 'city', 'state', 'pincode', 'country'].find(
+      (key) => !String(shippingAddress?.[key] || '').trim()
+    );
+    if (missingShipping) {
+      alert('Please complete the shipping address (including pincode) before transport suggestions.');
+      return;
+    }
+    if (hasGstin) {
+      const missingBilling = ['line1', 'city', 'state', 'pincode', 'country'].find(
+        (key) => !String(billingAddress?.[key] || '').trim()
+      );
+      if (missingBilling) {
+        alert('Please complete the billing address before transport suggestions.');
+        return;
+      }
+    }
+
+    const logisticsUi = String(import.meta.env.VITE_LOGISTICS_UI_BASE_URL || '').trim();
+    if (logisticsUi) {
+      const token = localStorage.getItem('token');
+      try {
+        const res = await fetch(resolveApiPath('/api/logistics/bridge-session'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            poGroups,
+            shippingAddress,
+            billingAddress,
+            deliveryDestination,
+            hasGstin
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          alert(data.message || data.error || 'Could not prepare logistics session.');
+          return;
+        }
+        const sessionId = data.sessionId;
+        if (!sessionId) {
+          alert('Invalid response from logistics bridge.');
+          return;
+        }
+        const base = logisticsUi.replace(/\/$/, '');
+        const commerceApi = encodeURIComponent(API_BASE_URL.replace(/\/$/, ''));
+        window.location.assign(
+          `${base}/service-provider?session=${encodeURIComponent(sessionId)}&commerceApi=${commerceApi}`
+        );
+      } catch (e) {
+        console.error(e);
+        alert(e?.message || 'Network error while opening logistics.');
+      }
+      return;
+    }
+
     navigate('/transport-suggestion', {
       state: {
         poGroups,
@@ -444,6 +549,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         requiredDate,
         hasGstin,
         deliveryDestination,
+        shippingAddress,
+        billingAddress,
         createdOrders: createdTransportOrders
       }
     });
@@ -871,6 +978,120 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             ))}
           </div>
 
+          {isTransportSelectionReady(selectedTransport, poGroups) ? (
+            <div
+              style={{
+                marginBottom: '1rem',
+                border: '1px solid #c7d2fe',
+                borderRadius: 12,
+                padding: '1rem 1.1rem',
+                background: 'linear-gradient(180deg, #eef2ff 0%, #e0e7ff 100%)'
+              }}
+            >
+              <div style={{ fontWeight: 700, color: '#1e1b4b', marginBottom: '0.65rem', fontSize: '1rem' }}>
+                Selected transport (review rates, then confirm below)
+              </div>
+              {selectedTransport?.byVendorId && Object.keys(selectedTransport.byVendorId).length > 0 ? (
+                <>
+                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                    {Object.entries(selectedTransport.byVendorId)
+                      .filter(([, name]) => String(name || '').trim())
+                      .map(([vid, name]) => {
+                        const g = poGroups.find((x) => String(x.vendorId) === String(vid));
+                        const label = g?.vendorName || vid;
+                        const d =
+                          selectedTransport.byVendorCourierDetail &&
+                          typeof selectedTransport.byVendorCourierDetail === 'object'
+                            ? selectedTransport.byVendorCourierDetail[vid]
+                            : null;
+                        const priceLabel = formatQuoteMoney(d?.rate);
+                        return (
+                          <div
+                            key={vid}
+                            style={{
+                              background: '#fff',
+                              border: '1px solid #c7d2fe',
+                              borderRadius: 10,
+                              padding: '0.65rem 0.85rem',
+                              fontSize: '0.88rem',
+                              color: '#334155'
+                            }}
+                          >
+                            <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '0.25rem' }}>{label}</div>
+                            <div>
+                              <strong>Courier:</strong> {name}
+                            </div>
+                            {priceLabel ? (
+                              <div style={{ marginTop: '0.2rem', fontWeight: 700, color: '#4f46e5' }}>
+                                Quote rate: {priceLabel}
+                              </div>
+                            ) : null}
+                            <div style={{ marginTop: '0.25rem', fontSize: '0.82rem', color: '#64748b' }}>
+                              {d?.etd ? (
+                                <span>
+                                  ETD: {d.etd}
+                                  {d?.source ? ' · ' : ''}
+                                </span>
+                              ) : null}
+                              {d?.source ? <span>Source: {d.source}</span> : null}
+                              {d?.rating != null && d?.rating !== '' ? (
+                                <span>
+                                  {' '}
+                                  · Rating: {d.rating}
+                                </span>
+                              ) : null}
+                              {d?.cod != null ? <span> · COD: {String(d.cod)}</span> : null}
+                              {d?.weightKg != null ? <span> · Billable weight: {d.weightKg} kg</span> : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
+                  {(() => {
+                    const det = selectedTransport.byVendorCourierDetail;
+                    if (!det || typeof det !== 'object') return null;
+                    let sum = 0;
+                    let any = false;
+                    for (const vid of Object.keys(selectedTransport.byVendorId || {})) {
+                      const r = det[vid]?.rate;
+                      const n = Number(String(r ?? '').replace(/,/g, ''));
+                      if (Number.isFinite(n)) {
+                        sum += n;
+                        any = true;
+                      }
+                    }
+                    if (!any) return null;
+                    return (
+                      <div
+                        style={{
+                          marginTop: '0.75rem',
+                          paddingTop: '0.65rem',
+                          borderTop: '1px solid #a5b4fc',
+                          fontWeight: 700,
+                          color: '#312e81',
+                          fontSize: '0.95rem'
+                        }}
+                      >
+                        Combined quoted courier charges:{' '}
+                        {formatQuoteMoney(sum)}
+                        <span style={{ fontWeight: 500, color: '#64748b', fontSize: '0.8rem', marginLeft: '0.35rem' }}>
+                          (sum of per-shipment quotes; final billing per carrier)
+                        </span>
+                      </div>
+                    );
+                  })()}
+                </>
+              ) : (
+                <div style={{ fontSize: '0.9rem', color: '#334155' }}>
+                  <strong>Courier:</strong> {selectedTransport.shippingProvider}
+                  {selectedTransport.trackingNumber ? (
+                    <span style={{ marginLeft: '0.5rem' }}>| Tracking: {selectedTransport.trackingNumber}</span>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          ) : null}
+
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
             <button
               type="button"
@@ -883,7 +1104,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             <button
               className="btn-primary btn-large"
               onClick={handleConfirm}
-              disabled={poGroups.length === 0 || creatingOrders || !selectedTransport?.shippingProvider}
+              disabled={poGroups.length === 0 || creatingOrders || !isTransportSelectionReady(selectedTransport, poGroups)}
             >
               {creatingOrders ? 'Finalizing...' : 'Confirm & Create All POs'}
             </button>
@@ -891,12 +1112,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#64748b' }}>
             Step 1: Click Transport suggestion and choose transport details. Step 2: Confirm & Create All POs will create orders and apply transport details in one flow.
           </p>
-          {selectedTransport?.shippingProvider ? (
-            <p style={{ marginTop: '0.2rem', fontSize: '0.8rem', color: '#334155' }}>
-              Selected transport: <strong>{selectedTransport.shippingProvider}</strong>
-              {selectedTransport.trackingNumber ? ` | Tracking: ${selectedTransport.trackingNumber}` : ''}
-            </p>
-          ) : null}
         </>
       )}
 

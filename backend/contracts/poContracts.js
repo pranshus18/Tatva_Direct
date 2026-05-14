@@ -41,7 +41,9 @@ const addressSchema = z.object({
   pincode: z.string().optional(),
   country: z.string().optional(),
   street: z.string().optional(),
-  zipCode: z.string().optional()
+  zipCode: z.string().optional(),
+  postalCode: z.string().optional(),
+  postal_code: z.string().optional()
 });
 
 export const poCreateRequestSchema = z.object({
@@ -50,7 +52,21 @@ export const poCreateRequestSchema = z.object({
       vendorId: z.string().min(1),
       vendorName: z.string().optional(),
       items: z.array(poGroupItemSchema).min(1),
-      total: z.union([z.number(), z.string()]).optional()
+      total: z.union([z.number(), z.string()]).optional(),
+      pickupPincode: z.string().optional(),
+      pickupAddressSummary: z.string().optional(),
+      pickupOutletId: z.string().uuid().optional().nullable(),
+      pickupOutletName: z.string().optional().nullable(),
+      pickupAddress: z
+        .object({
+          line1: z.string().optional(),
+          city: z.string().optional(),
+          state: z.string().optional(),
+          country: z.string().optional(),
+          pincode: z.string().optional()
+        })
+        .optional()
+        .nullable()
     })
   ).min(1),
   boqId: z.string().uuid().optional().nullable(),
@@ -62,13 +78,56 @@ export const poCreateRequestSchema = z.object({
   gstin: z.string().optional().nullable()
 });
 
-export const poTransportConfirmSchema = z.object({
-  orderIds: z.array(z.string().uuid()).min(1),
+const perOrderTransportRowSchema = z.object({
+  orderId: z.string().uuid(),
   shippingProvider: z.string().min(1).max(120),
   trackingNumber: z.string().max(120).optional().nullable(),
   trackingUrl: z.string().url().optional().nullable(),
   transportNotes: z.string().max(1000).optional().nullable()
 });
+
+export const poTransportConfirmSchema = z
+  .object({
+    orderIds: z.array(z.string().uuid()).min(1),
+    shippingProvider: z.string().min(1).max(120).optional(),
+    trackingNumber: z.string().max(120).optional().nullable(),
+    trackingUrl: z.string().url().optional().nullable(),
+    transportNotes: z.string().max(1000).optional().nullable(),
+    perOrderTransport: z.array(perOrderTransportRowSchema).optional()
+  })
+  .superRefine((data, ctx) => {
+    const rows = data.perOrderTransport || [];
+    const hasPer = rows.length > 0;
+    const hasGlobal = String(data.shippingProvider || '').trim().length > 0;
+    if (!hasPer && !hasGlobal) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Provide shippingProvider for all orders, or perOrderTransport with one entry per orderId.',
+        path: ['shippingProvider']
+      });
+      return;
+    }
+    if (!hasPer) return;
+    const idSet = new Set(data.orderIds);
+    for (const row of rows) {
+      if (!idSet.has(row.orderId)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `perOrderTransport orderId ${row.orderId} is not in orderIds`,
+          path: ['perOrderTransport']
+        });
+      }
+    }
+    for (const oid of data.orderIds) {
+      if (!rows.some((r) => r.orderId === oid)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Missing perOrderTransport entry for order ${oid}`,
+          path: ['perOrderTransport']
+        });
+      }
+    }
+  });
 
 const poCartBoqGroupSchema = z.object({
   groupId: z.string().min(1),

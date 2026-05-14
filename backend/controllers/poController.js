@@ -33,6 +33,7 @@ import {
   canSelfServeCancelOrder,
   canSelfServeEditOrder
 } from '../utils/orderSelfServeRules.js';
+import { getSupplierPickupMeta, getOutletPickupMeta } from '../utils/pickupPincode.js';
 import { toLifecycleStateFromStatus } from '../utils/orderLifecycle.js';
 import logger from '../utils/logger.js';
 import {
@@ -485,8 +486,12 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
           vendorId: vendorId,
           vendorName: supplierName,
           items: [],
-          total: 0
+          total: 0,
+          outletIds: new Set()
         };
+      }
+      if (supplierProduct.outlet_id) {
+        vendorGroups[vendorId].outletIds.add(supplierProduct.outlet_id);
       }
 
       const quantity = parseFloat(item.quantity) || 0;
@@ -543,13 +548,66 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       vendorGroups[vendorId].total += itemTotal;
     }
 
+    const supplierIdsForPins = Object.keys(vendorGroups);
+    const pickupMetaBySupplierId = {};
+    if (supplierIdsForPins.length > 0) {
+      const { data: pinRows } = await supabase
+        .from('users')
+        .select('id, address, profile')
+        .in('id', supplierIdsForPins)
+        .eq('user_type', 'supplier');
+      for (const row of pinRows || []) {
+        pickupMetaBySupplierId[row.id] = getSupplierPickupMeta(row);
+      }
+
+      const singleOutletIdByVendor = {};
+      for (const vid of supplierIdsForPins) {
+        const ids = [...(vendorGroups[vid].outletIds || new Set())].filter(Boolean);
+        if (ids.length === 1) singleOutletIdByVendor[vid] = ids[0];
+      }
+      const outletIdsToLoad = [...new Set(Object.values(singleOutletIdByVendor))];
+      const outletById = {};
+      if (outletIdsToLoad.length > 0) {
+        const { data: outletRows } = await supabase
+          .from('outlets')
+          .select('id, supplier_id, name, address')
+          .in('id', outletIdsToLoad)
+          .eq('is_active', true);
+        for (const o of outletRows || []) {
+          outletById[o.id] = o;
+        }
+      }
+      for (const vid of supplierIdsForPins) {
+        const oid = singleOutletIdByVendor[vid];
+        if (!oid) continue;
+        const outlet = outletById[oid];
+        if (!outlet || String(outlet.supplier_id) !== String(vid)) continue;
+        const om = getOutletPickupMeta(outlet);
+        if (om.pincode) pickupMetaBySupplierId[vid] = om;
+      }
+    }
+
     // Convert to array format
-    const groups = Object.values(vendorGroups).map(group => ({
-      vendorId: group.vendorId,
-      vendorName: group.vendorName,
-      total: Math.round(group.total * 100) / 100,
-      items: group.items
-    }));
+    const groups = Object.values(vendorGroups).map((group) => {
+      const pickup = pickupMetaBySupplierId[group.vendorId] || {
+        pincode: '',
+        summary: '',
+        pickupAddress: { line1: '', city: '', state: '', country: '', pincode: '' },
+        outletId: null,
+        outletName: null
+      };
+      return {
+        vendorId: group.vendorId,
+        vendorName: group.vendorName,
+        total: Math.round(group.total * 100) / 100,
+        pickupPincode: pickup.pincode || '',
+        pickupAddressSummary: pickup.summary || '',
+        pickupAddress: pickup.pickupAddress || null,
+        pickupOutletId: pickup.outletId || null,
+        pickupOutletName: pickup.outletName || null,
+        items: group.items
+      };
+    });
 
     // If no groups were created, return empty array
     if (groups.length === 0) {
@@ -597,7 +655,13 @@ function normalizeAddress(address = {}) {
     line1: String(address?.line1 || address?.street || '').trim(),
     city: String(address?.city || '').trim(),
     state: String(address?.state || '').trim(),
-    pincode: String(address?.pincode || address?.zipCode || '').trim(),
+    pincode: String(
+      address?.pincode ||
+        address?.zipCode ||
+        address?.postalCode ||
+        address?.postal_code ||
+        ''
+    ).trim(),
     country: String(address?.country || '').trim()
   };
 }
@@ -1248,8 +1312,13 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       shippingProvider,
       trackingNumber = null,
       trackingUrl = null,
-      transportNotes = null
+      transportNotes = null,
+      perOrderTransport
     } = payload;
+
+    const transportByOrderId = new Map(
+      (Array.isArray(perOrderTransport) ? perOrderTransport : []).map((r) => [r.orderId, r])
+    );
 
     const { data: orders, error: ordersError } = await supabase
       .from('orders')
@@ -1270,21 +1339,33 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
 
     const updatedOrders = [];
     for (const row of orders || []) {
+      const pick = transportByOrderId.get(row.id);
+      const sp = pick?.shippingProvider || shippingProvider;
+      const tn = pick?.trackingNumber ?? trackingNumber;
+      const tu = pick?.trackingUrl ?? trackingUrl;
+      const tnotes = pick?.transportNotes ?? transportNotes;
+      if (!sp || !String(sp).trim()) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Missing shipping provider for order ${row.id}`
+        });
+      }
+
       const history = Array.isArray(row.status_history) ? [...row.status_history] : [];
       history.push({
         status: 'confirmed',
         timestamp: new Date().toISOString(),
         updatedBy: req.userId,
-        notes: `Transport selected: ${shippingProvider}${transportNotes ? ` | ${transportNotes}` : ''}`
+        notes: `Transport selected: ${sp}${tnotes ? ` | ${tnotes}` : ''}`
       });
 
       const { data: updated, error: updateError } = await supabase
         .from('orders')
         .update({
-          shipping_provider: shippingProvider,
-          tracking_number: trackingNumber || null,
-          tracking_url: trackingUrl || null,
-          notes: transportNotes || null,
+          shipping_provider: sp,
+          tracking_number: tn || null,
+          tracking_url: tu || null,
+          notes: tnotes || null,
           transport_confirmed_at: new Date().toISOString(),
           status_history: history
         })

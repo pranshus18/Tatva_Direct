@@ -18,6 +18,7 @@ import { voiceRouter } from './voice.js';
 import { vendorRequestLogger } from '../middleware/vendorRequestLogger.js';
 import { distanceDebug, getEnvDebug, getHealth, getRuntimeDebug } from '../controllers/systemController.js';
 import { cartShareRouter } from '../controllers/cartShareController.js';
+import { logisticsRouter } from '../controllers/logisticsController.js';
 
 const apiRouter = express.Router();
 
@@ -33,6 +34,7 @@ apiRouter.use('/boq', boqRouter);
 apiRouter.use('/vendors', vendorRequestLogger, vendorRouter);
 apiRouter.use('/substitutions', substitutionRouter);
 apiRouter.use('/po', poRouter);
+apiRouter.use('/logistics', logisticsRouter);
 apiRouter.use('/pos', posRouter);
 apiRouter.use('/core-phase2', corePhase2Router);
 apiRouter.use('/payments', paymentsRouter);
