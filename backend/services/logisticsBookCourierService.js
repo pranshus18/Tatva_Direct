@@ -1,16 +1,25 @@
 /**
- * Last-mile booking against Tatva logistics.
- * 1) POST {LOGISTICS_MODULE_URL}/api/logistics/book-courier-checkout (canonical)
- * 2) If that returns 404 and legacy fallback is allowed, POST .../carrier/book (current Render API)
+ * Last-mile booking against Tatva logistics (Shiprocket via logistics module).
+ * Primary POST URL (in order of precedence):
+ *   1) LOGISTICS_BOOK_COURIER_CHECKOUT_URL — full URL, e.g.
+ *      https://tatva-logistic-module.onrender.com/api/logistics/book-courier-checkout
+ *   2) Else LOGISTICS_MODULE_URL + /api/logistics/book-courier-checkout
+ * Called from Tatva Direct when the user confirms transport (Confirm & create all POs).
  *
- * Set LOGISTICS_BOOK_DISABLE_LEGACY_FALLBACK=true when book-courier-checkout is deployed and you
- * want to never call /carrier/book.
+ * If the checkout URL returns 404 and legacy fallback is allowed, POST .../carrier/book.
+ * Set LOGISTICS_BOOK_DISABLE_LEGACY_FALLBACK=true when checkout is deployed and you want no fallback.
  */
 
 const LOGISTICS_BASE = String(process.env.LOGISTICS_MODULE_URL || 'http://localhost:8001').replace(
   /\/$/,
   ''
 );
+
+function bookCourierCheckoutUrl() {
+  const explicit = String(process.env.LOGISTICS_BOOK_COURIER_CHECKOUT_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  return `${LOGISTICS_BASE}/api/logistics/book-courier-checkout`;
+}
 
 const BOOK_TIMEOUT_MS = Math.max(
   0,
@@ -213,7 +222,6 @@ async function postJson(url, body) {
   throw lastErr || new Error('Logistics booking request failed');
 }
 
-const BOOK_CHECKOUT_URL = () => `${LOGISTICS_BASE}/api/logistics/book-courier-checkout`;
 const BOOK_CARRIER_URL = () => `${LOGISTICS_BASE}/carrier/book`;
 
 /**
@@ -252,11 +260,11 @@ export async function bookCourierCheckout({
     order_number: orderNumber || undefined
   };
 
-  let res = await postJson(BOOK_CHECKOUT_URL(), body);
+  let res = await postJson(bookCourierCheckoutUrl(), body);
 
   if (!res.ok && RETRYABLE.has(res.status)) {
     await delay(500);
-    res = await postJson(BOOK_CHECKOUT_URL(), body);
+    res = await postJson(bookCourierCheckoutUrl(), body);
   }
 
   let usedLegacyCarrierBook = false;
