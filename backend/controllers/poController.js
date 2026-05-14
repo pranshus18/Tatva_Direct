@@ -922,7 +922,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         
         // If supplier-specific product still not found, throw error
         if (!supplierProduct || !supplierProduct.product) {
-          throw new Error(`Supplier product "${item.name}" not found for supplier "${group.vendorName}". Please ensure the supplier has added this product in their manage your product section.`);
+          const err = new Error(
+            `Supplier product "${item.name}" not found for supplier "${group.vendorName}". Please ensure the supplier has added this product in their manage your product section.`
+          );
+          err.statusCode = 400;
+          throw err;
         }
         const itemBrandName =
           supplierProduct?.attributes?.brand ||
@@ -1129,7 +1133,9 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
       if (orderError || !order) {
         logger.error('Order creation error:', orderError);
-        throw new Error(orderError?.message || 'Failed to create order');
+        const err = new Error(orderError?.message || 'Failed to create order');
+        err.statusCode = 500;
+        throw err;
       }
 
       // Create order items
@@ -1147,7 +1153,9 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         logger.error('Order items creation error:', itemsError);
         // Delete the order if items creation fails
         await supabase.from('orders').delete().eq('id', order.id);
-        throw new Error('Failed to create order items');
+        const err = new Error(itemsError?.message || 'Failed to create order items');
+        err.statusCode = 500;
+        throw err;
       }
 
       // Record inventory movements for each ordered item (stock out)
@@ -1296,10 +1304,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     }
     logger.error('PO creation error:', error);
     const statusCode = Number(error?.statusCode) || 500;
-    res.status(statusCode).json({ 
+    const detail = error?.message || 'Failed to create purchase orders';
+    res.status(statusCode).json({
       status: 'error',
-      message: statusCode === 400 ? error.message : 'Failed to create purchase orders',
-      error: error.message 
+      message: detail,
+      error: detail
     });
   }
 });
@@ -1313,16 +1322,25 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       trackingNumber = null,
       trackingUrl = null,
       transportNotes = null,
-      perOrderTransport
+      perOrderTransport,
+      quotedTransportAmount: rootQuotedTransportAmount
     } = payload;
 
     const transportByOrderId = new Map(
       (Array.isArray(perOrderTransport) ? perOrderTransport : []).map((r) => [r.orderId, r])
     );
+    const hasPerOrderRows = transportByOrderId.size > 0;
+
+    const parseQuotedInr = (raw) => {
+      if (raw === null || raw === undefined || raw === '') return null;
+      const n = Number(String(raw).replace(/,/g, ''));
+      if (!Number.isFinite(n) || n < 0) return null;
+      return Math.round(n * 100) / 100;
+    };
 
     const { data: orders, error: ordersError } = await supabase
       .from('orders')
-      .select('id, status_history')
+      .select('id, status_history, delivery_address, total_amount')
       .in('id', orderIds)
       .eq('service_provider_id', req.userId);
     if (ordersError) throw ordersError;
@@ -1351,12 +1369,46 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
         });
       }
 
+      const fromRow = hasPerOrderRows ? parseQuotedInr(pick?.quotedTransportAmount) : null;
+      const fromRoot =
+        !hasPerOrderRows && orderIds.length === 1 && row.id === orderIds[0]
+          ? parseQuotedInr(rootQuotedTransportAmount)
+          : null;
+      const transportAmt = fromRow ?? fromRoot ?? null;
+
+      const prevAddr =
+        row.delivery_address && typeof row.delivery_address === 'object' ? { ...row.delivery_address } : {};
+      const existingBill =
+        prevAddr.transportBill && typeof prevAddr.transportBill === 'object' ? prevAddr.transportBill : null;
+      const existingTransport = Math.round((Number(existingBill?.amount || 0) || 0) * 100) / 100;
+      const currentTotal = Math.round((parseFloat(row.total_amount || 0) || 0) * 100) / 100;
+      const productsOnly = Math.max(0, Math.round((currentTotal - existingTransport) * 100) / 100);
+
+      let nextDeliveryAddress = prevAddr;
+      let nextTotalAmount = currentTotal;
+
+      if (transportAmt !== null && transportAmt > 0) {
+        const transportBill = {
+          amount: transportAmt,
+          currency: 'INR',
+          provider: String(sp).trim(),
+          confirmedAt: new Date().toISOString(),
+          source: 'logistics_quote'
+        };
+        nextDeliveryAddress = { ...prevAddr, transportBill };
+        nextTotalAmount = Math.round((productsOnly + transportAmt) * 100) / 100;
+      } else if (existingBill) {
+        nextDeliveryAddress = { ...prevAddr, transportBill: existingBill };
+      }
+
       const history = Array.isArray(row.status_history) ? [...row.status_history] : [];
       history.push({
         status: 'confirmed',
         timestamp: new Date().toISOString(),
         updatedBy: req.userId,
-        notes: `Transport selected: ${sp}${tnotes ? ` | ${tnotes}` : ''}`
+        notes: `Transport selected: ${sp}${tnotes ? ` | ${tnotes}` : ''}${
+          transportAmt !== null && transportAmt > 0 ? ` | Quoted transport: INR ${transportAmt}` : ''
+        }`
       });
 
       const { data: updated, error: updateError } = await supabase
@@ -1367,7 +1419,9 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
           tracking_url: tu || null,
           notes: tnotes || null,
           transport_confirmed_at: new Date().toISOString(),
-          status_history: history
+          status_history: history,
+          delivery_address: nextDeliveryAddress,
+          total_amount: nextTotalAmount
         })
         .eq('id', row.id)
         .eq('service_provider_id', req.userId)

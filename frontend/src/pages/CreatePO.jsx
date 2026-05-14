@@ -237,7 +237,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         let errorMessage = 'Failed to group purchase orders';
         try {
           const errorData = JSON.parse(errorText);
-          errorMessage = errorData.message || errorData.error || errorMessage;
+          // Backend often puts the real failure on `error` while `message` stays generic for 500s.
+          errorMessage = errorData.error || errorData.message || errorMessage;
         } catch (e) {
           errorMessage = errorText || errorMessage;
         }
@@ -322,7 +323,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       let errorMessage = 'Failed to create purchase orders';
       try {
         const errorData = JSON.parse(errorText);
-        errorMessage = errorData.message || errorData.error || errorMessage;
+        errorMessage = errorData.error || errorData.message || errorMessage;
       } catch (e) {
         errorMessage = errorText || errorMessage;
       }
@@ -336,7 +337,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
 
     const data = JSON.parse(text);
     if (!data.success) {
-      throw new Error(data.message || 'Failed to create purchase orders');
+      throw new Error(data.error || data.message || 'Failed to create purchase orders');
     }
     return data;
   };
@@ -352,6 +353,12 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     const hasPerVendor =
       st?.byVendorId && typeof st.byVendorId === 'object' && Object.keys(st.byVendorId).length > 0;
 
+    const parseQuoteInr = (raw) => {
+      if (raw === null || raw === undefined || raw === '') return null;
+      const n = Number(String(raw).replace(/,/g, ''));
+      return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+    };
+
     let confirmBody;
     if (hasPerVendor) {
       const perOrderTransport = orderList.map((o) => {
@@ -362,12 +369,18 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             `Choose a courier for ${o.supplier || 'each supplier'} on Transport suggestion before confirming.`
           );
         }
+        const det =
+          st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object'
+            ? st.byVendorCourierDetail[sid]
+            : null;
+        const quotedTransportAmount = parseQuoteInr(det?.rate);
         return {
           orderId: o.id,
           shippingProvider: sp,
           trackingNumber: st.trackingNumber || null,
           trackingUrl: st.trackingUrl || null,
-          transportNotes: st.transportNotes || null
+          transportNotes: st.transportNotes || null,
+          ...(quotedTransportAmount != null ? { quotedTransportAmount } : {})
         };
       });
       confirmBody = { orderIds, perOrderTransport };
@@ -382,6 +395,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         trackingUrl: st.trackingUrl || null,
         transportNotes: st.transportNotes || null
       };
+      if (orderList.length === 1 && st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object') {
+        const sid = String(orderList[0].supplierId || '');
+        const q = parseQuoteInr(st.byVendorCourierDetail[sid]?.rate);
+        if (q != null) {
+          confirmBody.quotedTransportAmount = q;
+        }
+      }
     }
 
     const res = await fetch(getApiUrl('/api/po/transport/confirm'), {
@@ -418,9 +438,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       }
       await finalizeTransportDetails(activeOrders);
       setConfirmed(true);
-      setTimeout(() => {
-        window.location.href = '/your-orders';
-      }, 2000);
     } catch (err) {
       console.error('Failed to finalize transport flow:', err);
       alert(err.message || 'Failed to finalize purchase orders. Please try again.');
@@ -563,6 +580,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           <Check size={64} className="success-icon" />
           <h2>Purchase Orders Created!</h2>
           <p>All POs have been successfully generated and sent to vendors.</p>
+          <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+            <button type="button" className="btn-primary" onClick={() => navigate('/your-orders')}>
+              View your orders
+            </button>
+            <button type="button" className="btn-secondary" onClick={() => navigate('/dashboard')}>
+              Back to dashboard
+            </button>
+          </div>
         </div>
       </div>
     );

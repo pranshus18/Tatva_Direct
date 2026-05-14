@@ -65,6 +65,17 @@ function formatAddress(address = {}) {
   return parts.join(', ');
 }
 
+function getTransportBillFromOrder(order) {
+  const tb = order?.delivery_address?.transportBill;
+  if (!tb || typeof tb !== 'object') return null;
+  const amt = Number(tb.amount);
+  if (!Number.isFinite(amt) || amt <= 0) return null;
+  return {
+    amount: Math.round(amt * 100) / 100,
+    provider: tb.provider != null ? String(tb.provider) : ''
+  };
+}
+
 function normalizePartyAddress(address = {}, profile = {}) {
   const base = address && typeof address === 'object' ? address : {};
   const branches = Array.isArray(profile?.branches) ? profile.branches : [];
@@ -241,7 +252,9 @@ function createInvoicePdfBuffer({ order, invoice, items, receiptNumber = null })
       doc.y = tableTop + headerHeight + 8;
       doc.x = pageLeft;
 
-      if (!items.length) {
+      const transportBillRow = getTransportBillFromOrder(order);
+
+      if (!items.length && !transportBillRow) {
         doc.fontSize(10).font('Helvetica').text('No line items found.');
       } else {
         items.forEach((item) => {
@@ -287,13 +300,43 @@ function createInvoicePdfBuffer({ order, invoice, items, receiptNumber = null })
             doc.x = pageLeft;
           }
         });
+        if (transportBillRow) {
+          const rowTop = doc.y;
+          const provLine = transportBillRow.provider ? `\nCarrier: ${transportBillRow.provider}` : '';
+          doc.fontSize(9.2).font('Helvetica').text(
+            `Transport / courier (quoted)${provLine}\nQuoted logistics charge (incl. carrier fees as applicable)`,
+            tableStartX + 6,
+            rowTop,
+            { width: colProduct - 12 }
+          );
+          doc.text('—', tableStartX + colProduct + 6, rowTop, { width: colQty - 12 });
+          doc.text('—', tableStartX + colProduct + colQty + 6, rowTop, { width: colUnit - 12 });
+          doc.text(formatINR(transportBillRow.amount), tableStartX + colProduct + colQty + colUnit + 6, rowTop, {
+            width: colTotal - 12
+          });
+          const rowBottom = Math.max(doc.y, rowTop + 40);
+          doc.save();
+          doc
+            .moveTo(tableStartX, rowBottom + 2)
+            .lineTo(tableStartX + contentWidth, rowBottom + 2)
+            .lineWidth(0.4)
+            .strokeColor(GRID)
+            .stroke();
+          doc.restore();
+          doc.y = rowBottom + 6;
+          doc.x = pageLeft;
+          if (doc.y > doc.page.height - 180) {
+            doc.addPage();
+            doc.x = pageLeft;
+          }
+        }
       }
 
       const gstSummary = invoice?.metadata?.gstSummary || order?.delivery_address?.gstSummary || null;
       section('Total Amount');
       if (gstSummary) {
         doc.fontSize(10.3).font('Helvetica');
-        doc.text(`Taxable subtotal: ${formatINR(gstSummary.subtotalAmount)}`);
+        doc.text(`Taxable subtotal (products): ${formatINR(gstSummary.subtotalAmount)}`);
         if (gstSummary.taxType === 'IGST') {
           doc.text(`GST type: IGST`);
           doc.text(`IGST: ${formatINR(gstSummary.igstAmount || gstSummary.taxAmount)}`);
@@ -301,10 +344,23 @@ function createInvoicePdfBuffer({ order, invoice, items, receiptNumber = null })
           doc.text(`GST type: CGST + SGST`);
           doc.text(`CGST: ${formatINR(gstSummary.cgstAmount)} | SGST: ${formatINR(gstSummary.sgstAmount)}`);
         }
-        doc.text(`Total GST: ${formatINR(gstSummary.taxAmount)}`);
+        doc.text(`Total GST (products): ${formatINR(gstSummary.taxAmount)}`);
+        doc.text(`Products total (incl. GST): ${formatINR(gstSummary.totalAmount)}`);
       }
+      if (transportBillRow) {
+        doc.moveDown(0.12);
+        doc.fontSize(10.1).fillColor('#334155').text(
+          'Courier / transport per selected logistics quote (may include carrier fees and taxes).',
+          { width: contentWidth }
+        );
+        doc.fillColor('#000000');
+        doc.fontSize(10.3).font('Helvetica');
+        const prov = transportBillRow.provider ? ` — ${transportBillRow.provider}` : '';
+        doc.text(`Transport / courier${prov}: ${formatINR(transportBillRow.amount)}`);
+      }
+      doc.moveDown(0.08);
       doc.fontSize(11.5).font('Helvetica-Bold');
-      doc.text(`Total GST + bill: ${formatINR(order?.total_amount ?? order?.totalAmount)}`);
+      doc.text(`Grand total (products + transport): ${formatINR(order?.total_amount ?? order?.totalAmount)}`);
 
       const addr = order?.delivery_address || {};
       section('Delivery Address');

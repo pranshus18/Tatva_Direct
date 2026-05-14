@@ -49,13 +49,13 @@ const addressSchema = z.object({
 export const poCreateRequestSchema = z.object({
   poGroups: z.array(
     z.object({
-      vendorId: z.string().min(1),
+      vendorId: z.coerce.string().min(1),
       vendorName: z.string().optional(),
       items: z.array(poGroupItemSchema).min(1),
       total: z.union([z.number(), z.string()]).optional(),
       pickupPincode: z.string().optional(),
       pickupAddressSummary: z.string().optional(),
-      pickupOutletId: z.string().uuid().optional().nullable(),
+      pickupOutletId: z.preprocess((v) => (v === '' ? null : v), z.string().uuid().optional().nullable()),
       pickupOutletName: z.string().optional().nullable(),
       pickupAddress: z
         .object({
@@ -69,7 +69,7 @@ export const poCreateRequestSchema = z.object({
         .nullable()
     })
   ).min(1),
-  boqId: z.string().uuid().optional().nullable(),
+  boqId: z.preprocess((v) => (v === '' ? null : v), z.string().uuid().optional().nullable()),
   requiredDate: z.string().optional().nullable(),
   paymentMethod: z.enum(['cod', 'online', 'bank_transfer', 'credit']).optional(),
   deliveryDestination: z.enum(['shipping', 'billing']).optional(),
@@ -83,7 +83,9 @@ const perOrderTransportRowSchema = z.object({
   shippingProvider: z.string().min(1).max(120),
   trackingNumber: z.string().max(120).optional().nullable(),
   trackingUrl: z.string().url().optional().nullable(),
-  transportNotes: z.string().max(1000).optional().nullable()
+  transportNotes: z.string().max(1000).optional().nullable(),
+  /** Quoted courier charge (INR) from logistics — stored on the order for receipts/invoices. */
+  quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable()
 });
 
 export const poTransportConfirmSchema = z
@@ -93,7 +95,9 @@ export const poTransportConfirmSchema = z
     trackingNumber: z.string().max(120).optional().nullable(),
     trackingUrl: z.string().url().optional().nullable(),
     transportNotes: z.string().max(1000).optional().nullable(),
-    perOrderTransport: z.array(perOrderTransportRowSchema).optional()
+    perOrderTransport: z.array(perOrderTransportRowSchema).optional(),
+    /** When not using perOrderTransport and exactly one order — same as per-row quoted amount. */
+    quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable()
   })
   .superRefine((data, ctx) => {
     const rows = data.perOrderTransport || [];

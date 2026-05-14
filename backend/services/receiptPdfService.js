@@ -65,6 +65,19 @@ function parseSpecObject(specifications) {
   }
 }
 
+function getTransportBill(order) {
+  const tb = order?.delivery_address?.transportBill;
+  if (!tb || typeof tb !== 'object') return null;
+  const amt = Number(tb.amount);
+  if (!Number.isFinite(amt) || amt <= 0) return null;
+  return {
+    amount: Math.round(amt * 100) / 100,
+    provider: tb.provider != null ? String(tb.provider) : '',
+    currency: tb.currency || 'INR',
+    source: tb.source != null ? String(tb.source) : ''
+  };
+}
+
 export async function loadReceiptItemsAndGst({ order, supplier, serviceProvider }) {
   const { data: rows } = await supabase
     .from('order_items')
@@ -183,7 +196,9 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       doc.y = tableTop + headerHeight + 8;
       doc.x = pageLeft;
 
-      if (!items.length) {
+      const transportBillRow = getTransportBill(order);
+
+      if (!items.length && !transportBillRow) {
         doc.fontSize(10).font('Helvetica').text('No line items found.');
       } else {
         items.forEach((item, idx) => {
@@ -223,6 +238,32 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
             doc.x = pageLeft;
           }
         });
+        if (transportBillRow) {
+          const tAmt = transportBillRow.amount;
+          const rowTop = doc.y;
+          const provLine = transportBillRow.provider ? `\nCarrier: ${transportBillRow.provider}` : '';
+          doc.fontSize(9.2).font('Helvetica').text(
+            `Transport / courier (quoted)${provLine}\nQuoted logistics charge (incl. carrier fees as applicable)`,
+            tableStartX + 6,
+            rowTop,
+            { width: colProduct - 12 }
+          );
+          doc.text('—', tableStartX + colProduct + 6, rowTop, { width: colQty - 12 });
+          doc.text('—', tableStartX + colProduct + colQty + 6, rowTop, { width: colUnit - 12 });
+          doc.text(formatINR(tAmt), tableStartX + colProduct + colQty + colUnit + 6, rowTop, {
+            width: colTotal - 12
+          });
+          const rowBottom = Math.max(doc.y, rowTop + 40);
+          doc.save();
+          doc.moveTo(tableStartX, rowBottom + 2).lineTo(tableStartX + contentWidth, rowBottom + 2).lineWidth(0.4).strokeColor(GRID).stroke();
+          doc.restore();
+          doc.y = rowBottom + 6;
+          doc.x = pageLeft;
+          if (doc.y > doc.page.height - 180) {
+            doc.addPage();
+            doc.x = pageLeft;
+          }
+        }
       }
 
       const strictSummary = gstSummary && typeof gstSummary === 'object'
@@ -233,13 +274,17 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       const cgstAmount = Number(strictSummary?.cgstAmount || 0);
       const sgstAmount = Number(strictSummary?.sgstAmount || 0);
       const igstAmount = Number(strictSummary?.igstAmount || 0);
-      const totalAmount = Number(receipt?.amount || order?.total_amount || strictSummary?.totalAmount || 0);
+      const productsInclGst = Number(strictSummary?.totalAmount || 0);
+      const transportAmt = transportBillRow ? transportBillRow.amount : 0;
+      const totalAmount = transportBillRow
+        ? Number(order?.total_amount || (productsInclGst + transportAmt) || receipt?.amount || 0)
+        : Number(receipt?.amount || order?.total_amount || (productsInclGst + transportAmt) || 0);
 
       doc.moveDown(0.2);
       doc.fontSize(11).font('Helvetica-Bold').text('Total Amount');
       doc.moveDown(0.15);
       doc.fontSize(10.3).font('Helvetica');
-      doc.text(`Taxable subtotal: ${formatINR(subtotalAmount)}`);
+      doc.text(`Taxable subtotal (products): ${formatINR(subtotalAmount)}`);
       if (igstAmount > 0) {
         doc.text(`GST type: IGST`);
         doc.text(`IGST: ${formatINR(igstAmount || taxAmount)}`);
@@ -247,8 +292,21 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
         doc.text(`GST type: CGST + SGST`);
         doc.text(`CGST: ${formatINR(cgstAmount)} | SGST: ${formatINR(sgstAmount)}`);
       }
-      doc.text(`Total GST: ${formatINR(taxAmount)}`);
-      doc.fontSize(11.5).font('Helvetica-Bold').text(`Total GST + bill: ${formatINR(totalAmount)}`);
+      doc.text(`Total GST (products): ${formatINR(taxAmount)}`);
+      doc.text(`Products total (incl. GST): ${formatINR(productsInclGst)}`);
+      if (transportBillRow) {
+        doc.moveDown(0.15);
+        doc.fontSize(10.1).fillColor('#334155').text(
+          'Courier / transport charges are per the selected logistics quote (may include carrier fees and taxes).',
+          { width: contentWidth }
+        );
+        doc.fillColor('#000000');
+        doc.fontSize(10.3).font('Helvetica');
+        const prov = transportBillRow.provider ? ` — ${transportBillRow.provider}` : '';
+        doc.text(`Transport / courier${prov}: ${formatINR(transportAmt)}`);
+      }
+      doc.moveDown(0.12);
+      doc.fontSize(11.5).font('Helvetica-Bold').text(`Grand total (products + transport): ${formatINR(totalAmount)}`);
 
       const deliveryAddress = order?.delivery_address || {};
       section('Delivery Address');
