@@ -1451,6 +1451,8 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
 router.post('/transport/confirm', authenticateToken, isServiceProvider, async (req, res) => {
   try {
+    const transportBookDebug =
+      String(process.env.LOGISTICS_BOOK_DEBUG || '').toLowerCase() === 'true';
     const payload = parseWithSchema(poTransportConfirmSchema, req.body || {});
     const {
       orderIds,
@@ -1564,6 +1566,13 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       let resolvedSp = String(sp).trim();
       let orderNotes = tnotes || null;
       let logisticsBookingMeta = null;
+
+      if (transportBookDebug && (courierCompanyId == null || !Number.isFinite(Number(courierCompanyId)))) {
+        logger.info('[transport/confirm] logistics booking skipped (no courierCompanyId)', {
+          orderId: row.id,
+          orderNumber: row.order_number
+        });
+      }
       if (courierCompanyId != null && Number.isFinite(Number(courierCompanyId))) {
         const logisticsDelivery = orderDeliveryJsonToLogisticsAddress(prevAddr);
         if (!isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
@@ -1594,8 +1603,21 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
             pendingReason: booked.pendingReason || null,
             usedLegacyCarrierBook: booked.usedLegacyCarrierBook,
             trackingNumber: booked.trackingNumber || null,
-            trackingUrl: booked.trackingUrl || null
+            trackingUrl: booked.trackingUrl || null,
+            ...(booked.debug ? { debug: booked.debug } : {})
           };
+
+          if (transportBookDebug) {
+            logger.info('[transport/confirm] logistics booking result (before DB update)', {
+              orderId: row.id,
+              orderNumber: row.order_number,
+              courierCompanyId: Number(courierCompanyId),
+              tracking_number: tn,
+              tracking_url: tu,
+              shipping_provider: resolvedSp,
+              usedLegacyCarrierBook: booked.usedLegacyCarrierBook
+            });
+          }
 
           const diagParts = [];
           if (booked.pendingReason) diagParts.push(booked.pendingReason);
@@ -1663,6 +1685,15 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
         .select('id, order_number, shipping_provider, tracking_number, tracking_url, transport_confirmed_at, notes')
         .single();
       if (updateError) throw updateError;
+      if (transportBookDebug) {
+        logger.info('[transport/confirm] order row after DB update', {
+          orderId: updated.id,
+          orderNumber: updated.order_number,
+          tracking_number: updated.tracking_number,
+          tracking_url: updated.tracking_url,
+          shipping_provider: updated.shipping_provider
+        });
+      }
       updatedOrders.push({
         ...updated,
         ...(logisticsBookingMeta ? { logisticsBooking: logisticsBookingMeta } : {})
@@ -1672,6 +1703,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
     return res.json({
       status: 'success',
       message: `Transport details updated for ${updatedOrders.length} order(s)`,
+      ...(transportBookDebug ? { transportDebugEnabled: true } : {}),
       orders: updatedOrders
     });
   } catch (error) {

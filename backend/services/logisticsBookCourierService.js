@@ -8,6 +8,9 @@
  *
  * If the checkout URL returns 404 and legacy fallback is allowed, POST .../carrier/book.
  * Set LOGISTICS_BOOK_DISABLE_LEGACY_FALLBACK=true when checkout is deployed and you want no fallback.
+ *
+ * Set LOGISTICS_BOOK_DEBUG=true to log booking → DB fields and attach a `debug` object inside each
+ * order's `logisticsBooking` in the JSON response (disable in production once done debugging).
  */
 
 const LOGISTICS_BASE = String(process.env.LOGISTICS_MODULE_URL || 'http://localhost:8001').replace(
@@ -35,6 +38,9 @@ const RETRYABLE = new Set([502, 503, 504]);
 
 const disableLegacy404Fallback =
   String(process.env.LOGISTICS_BOOK_DISABLE_LEGACY_FALLBACK || '').toLowerCase() === 'true';
+
+const bookDebugEnabled =
+  String(process.env.LOGISTICS_BOOK_DEBUG || '').toLowerCase() === 'true';
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -193,6 +199,15 @@ function formatUpstreamBookError(detail) {
   return String(detail);
 }
 
+function safeJsonPreview(obj, max = 1500) {
+  try {
+    const s = JSON.stringify(obj);
+    return s.length > max ? `${s.slice(0, max)}…` : s;
+  } catch {
+    return '[non-serializable]';
+  }
+}
+
 async function postJson(url, body) {
   const opts = {
     method: 'POST',
@@ -297,7 +312,7 @@ export async function bookCourierCheckout({
     trackingUrl = shiprocketPublicTrackingUrl(trackingNumber);
   }
 
-  return {
+  const result = {
     trackingNumber: trackingNumber || null,
     trackingUrl: trackingUrl || null,
     shippingProvider: extracted.shippingProvider || null,
@@ -306,4 +321,29 @@ export async function bookCourierCheckout({
     pendingReason: extracted.pendingReason,
     usedLegacyCarrierBook
   };
+
+  if (bookDebugEnabled) {
+    result.debug = {
+      primaryBookingUrl: bookCourierCheckoutUrl(),
+      fallbackBookingUrl: usedLegacyCarrierBook ? BOOK_CARRIER_URL() : null,
+      httpStatus: res.status,
+      usedLegacyCarrierBook,
+      extractedFromUpstream: {
+        trackingNumber: extracted.trackingNumber || null,
+        trackingUrl: extracted.trackingUrl || null,
+        shippingProvider: extracted.shippingProvider || null,
+        shipmentId: extracted.shipmentId,
+        shiprocketOrderId: extracted.shiprocketOrderId,
+        pendingReason: extracted.pendingReason || null
+      },
+      valuesAfterDerive: {
+        trackingNumber: result.trackingNumber,
+        trackingUrl: result.trackingUrl,
+        shippingProvider: result.shippingProvider
+      },
+      responsePreview: safeJsonPreview(res.json)
+    };
+  }
+
+  return result;
 }
