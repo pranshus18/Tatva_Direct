@@ -40,26 +40,82 @@ function pickStr(...vals) {
   return null;
 }
 
+function pickNum(...vals) {
+  for (const v of vals) {
+    if (v === null || v === undefined) continue;
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
+/** Public Shiprocket tracking page when AWB is known. */
+export function shiprocketPublicTrackingUrl(awb) {
+  const a = pickStr(awb);
+  if (!a) return null;
+  return `https://shiprocket.co/tracking/${encodeURIComponent(a)}`;
+}
+
 /**
- * Read tracking fields from the book-courier-checkout JSON body (top level only).
+ * Read tracking fields from book-courier-checkout (top level or single `data` object).
  */
 export function extractBookingTracking(json) {
   if (!json || typeof json !== 'object') {
-    return { trackingNumber: null, trackingUrl: null, shippingProvider: null };
+    return {
+      trackingNumber: null,
+      trackingUrl: null,
+      shippingProvider: null,
+      shipmentId: null,
+      shiprocketOrderId: null,
+      pendingReason: null
+    };
   }
+  const layer =
+    json.data && typeof json.data === 'object' && !Array.isArray(json.data) ? json.data : json;
+  const sr = layer.shiprocket_response && typeof layer.shiprocket_response === 'object'
+    ? layer.shiprocket_response
+    : null;
+  const pendingReason = pickStr(
+    layer.awb_note,
+    layer.message,
+    layer.error,
+    sr?.message,
+    Array.isArray(layer.errors) ? layer.errors.join('; ') : null
+  );
   return {
-    trackingNumber: pickStr(json.tracking_number, json.trackingNumber),
-    trackingUrl: pickStr(json.tracking_url, json.trackingUrl),
-    shippingProvider: pickStr(json.shipping_provider, json.shippingProvider)
+    trackingNumber: pickStr(
+      layer.tracking_number,
+      layer.trackingNumber,
+      layer.awb_tracking_number,
+      layer.awb_code,
+      layer.awb
+    ),
+    trackingUrl: pickStr(layer.tracking_url, layer.trackingUrl, layer.awb_url, layer.track_url),
+    shippingProvider: pickStr(
+      layer.shipping_provider,
+      layer.shippingProvider,
+      layer.courier_name,
+      layer.carrier_name
+    ),
+    shipmentId: pickNum(layer.shipment_id, layer.shipmentId),
+    shiprocketOrderId: pickNum(layer.shiprocket_order_id, layer.shiprocketOrderId),
+    pendingReason: pendingReason || null
   };
 }
 
 /**
- * /carrier/book returns Shiprocket progress inside data[0].text (JSON string). Parse that layer only.
+ * /carrier/book returns Shiprocket progress inside data[0].text (JSON string).
  */
 function extractLegacyCarrierBookTracking(json) {
   if (!json || typeof json !== 'object') {
-    return { trackingNumber: null, trackingUrl: null, shippingProvider: null };
+    return {
+      trackingNumber: null,
+      trackingUrl: null,
+      shippingProvider: null,
+      shipmentId: null,
+      shiprocketOrderId: null,
+      pendingReason: null
+    };
   }
   let inner = json;
   const t = json?.data?.[0]?.text;
@@ -71,20 +127,47 @@ function extractLegacyCarrierBookTracking(json) {
       inner = {};
     }
   }
-  const fromInner = extractBookingTracking(inner);
-  if (fromInner.trackingNumber || fromInner.trackingUrl || fromInner.shippingProvider) {
-    return fromInner;
+  const base = extractBookingTracking(inner);
+  if (base.trackingNumber || base.trackingUrl || base.shippingProvider) {
+    return base;
   }
+  const sr = inner.shiprocket_response && typeof inner.shiprocket_response === 'object'
+    ? inner.shiprocket_response
+    : null;
+  const tn = pickStr(
+    base.trackingNumber,
+    inner.awb_tracking_number,
+    inner.awb_code,
+    inner.awb,
+    inner.tracking_number,
+    inner.tracking_no
+  );
+  const tu = pickStr(
+    base.trackingUrl,
+    inner.tracking_url,
+    inner.awb_url,
+    inner.track_url,
+    inner.trackingUrl
+  );
+  const sp = pickStr(
+    base.shippingProvider,
+    inner.shipping_provider,
+    inner.courier_name,
+    inner.carrier_name
+  );
+  const pendingReason = pickStr(
+    base.pendingReason,
+    inner.awb_note,
+    inner.message,
+    sr?.message
+  );
   return {
-    trackingNumber: pickStr(
-      inner.awb_tracking_number,
-      inner.awb_code,
-      inner.awb,
-      inner.tracking_number,
-      inner.tracking_no
-    ),
-    trackingUrl: pickStr(inner.tracking_url, inner.awb_url, inner.track_url),
-    shippingProvider: pickStr(inner.shipping_provider, inner.courier_name, inner.carrier_name)
+    trackingNumber: tn,
+    trackingUrl: tu,
+    shippingProvider: sp,
+    shipmentId: base.shipmentId ?? pickNum(inner.shipment_id, inner.shipmentId),
+    shiprocketOrderId: base.shiprocketOrderId ?? pickNum(inner.shiprocket_order_id, inner.shiprocketOrderId),
+    pendingReason: pendingReason || null
   };
 }
 
@@ -134,14 +217,15 @@ const BOOK_CHECKOUT_URL = () => `${LOGISTICS_BASE}/api/logistics/book-courier-ch
 const BOOK_CARRIER_URL = () => `${LOGISTICS_BASE}/carrier/book`;
 
 /**
- * @param {object} params
- * @param {number} params.courierCompanyId
- * @param {object} params.deliveryAddress — { line1, city, state, country, pincode }
- * @param {object} params.sessionBuyer
- * @param {Array<object>} params.lines
- * @param {number} params.weightKg
- * @param {string} [params.orderId]
- * @param {string} [params.orderNumber]
+ * @returns {Promise<{
+ *   trackingNumber: string|null,
+ *   trackingUrl: string|null,
+ *   shippingProvider: string|null,
+ *   shipmentId: number|null,
+ *   shiprocketOrderId: number|null,
+ *   pendingReason: string|null,
+ *   usedLegacyCarrierBook: boolean
+ * }>}
  */
 export async function bookCourierCheckout({
   courierCompanyId,
@@ -198,9 +282,20 @@ export async function bookCourierCheckout({
   const extracted = usedLegacyCarrierBook
     ? extractLegacyCarrierBookTracking(res.json)
     : extractBookingTracking(res.json);
+
+  let trackingUrl = extracted.trackingUrl;
+  const trackingNumber = extracted.trackingNumber;
+  if (!trackingUrl && trackingNumber) {
+    trackingUrl = shiprocketPublicTrackingUrl(trackingNumber);
+  }
+
   return {
-    trackingNumber: extracted.trackingNumber,
-    trackingUrl: extracted.trackingUrl,
-    shippingProvider: extracted.shippingProvider
+    trackingNumber: trackingNumber || null,
+    trackingUrl: trackingUrl || null,
+    shippingProvider: extracted.shippingProvider || null,
+    shipmentId: extracted.shipmentId,
+    shiprocketOrderId: extracted.shiprocketOrderId,
+    pendingReason: extracted.pendingReason,
+    usedLegacyCarrierBook
   };
 }

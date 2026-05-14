@@ -1562,6 +1562,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
         (!hasPerOrderRows && orderIds.length === 1 && row.id === orderIds[0] ? rootCourierCompanyId : null);
 
       let resolvedSp = String(sp).trim();
+      let orderNotes = tnotes || null;
+      let logisticsBookingMeta = null;
       if (courierCompanyId != null && Number.isFinite(Number(courierCompanyId))) {
         const logisticsDelivery = orderDeliveryJsonToLogisticsAddress(prevAddr);
         if (!isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
@@ -1585,6 +1587,27 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
           if (booked.trackingNumber) tn = booked.trackingNumber;
           if (booked.trackingUrl) tu = booked.trackingUrl;
           if (booked.shippingProvider) resolvedSp = booked.shippingProvider;
+
+          logisticsBookingMeta = {
+            shipmentId: booked.shipmentId,
+            shiprocketOrderId: booked.shiprocketOrderId,
+            pendingReason: booked.pendingReason || null,
+            usedLegacyCarrierBook: booked.usedLegacyCarrierBook,
+            trackingNumber: booked.trackingNumber || null,
+            trackingUrl: booked.trackingUrl || null
+          };
+
+          const diagParts = [];
+          if (booked.pendingReason) diagParts.push(booked.pendingReason);
+          if (booked.shipmentId) diagParts.push(`shipment_id ${booked.shipmentId}`);
+          if (booked.shiprocketOrderId) diagParts.push(`shiprocket_order_id ${booked.shiprocketOrderId}`);
+          if (
+            diagParts.length > 0 &&
+            (!booked.trackingNumber || !booked.trackingUrl)
+          ) {
+            const bit = diagParts.join(' · ');
+            orderNotes = orderNotes ? `${orderNotes} | [Logistics] ${bit}` : `[Logistics] ${bit}`;
+          }
         } catch (bookErr) {
           logger.error('Logistics book-courier-checkout error:', bookErr);
           const statusCode =
@@ -1629,7 +1652,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
           shipping_provider: resolvedSp,
           tracking_number: tn || null,
           tracking_url: tu || null,
-          notes: tnotes || null,
+          notes: orderNotes || null,
           transport_confirmed_at: new Date().toISOString(),
           status_history: history,
           delivery_address: nextDeliveryAddress,
@@ -1640,7 +1663,10 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
         .select('id, order_number, shipping_provider, tracking_number, tracking_url, transport_confirmed_at, notes')
         .single();
       if (updateError) throw updateError;
-      updatedOrders.push(updated);
+      updatedOrders.push({
+        ...updated,
+        ...(logisticsBookingMeta ? { logisticsBooking: logisticsBookingMeta } : {})
+      });
     }
 
     return res.json({
