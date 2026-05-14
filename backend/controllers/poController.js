@@ -1586,12 +1586,14 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
         try {
           const booked = await bookCourierCheckout({
             courierCompanyId: Number(courierCompanyId),
+            courierDisplayName: String(sp).trim(),
             deliveryAddress: logisticsDelivery,
             sessionBuyer,
             lines,
             weightKg,
             orderId: row.id,
-            orderNumber: row.order_number || undefined
+            orderNumber: row.order_number || undefined,
+            vendorId: row.supplier_id || null
           });
           if (booked.trackingNumber) tn = booked.trackingNumber;
           if (booked.trackingUrl) tu = booked.trackingUrl;
