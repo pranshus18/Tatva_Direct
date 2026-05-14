@@ -1,6 +1,10 @@
 /**
- * Last-mile booking: POST {LOGISTICS_MODULE_URL}/api/logistics/book-courier-checkout
- * Uses the live response body only (no alternate routes, no nested wrapper parsing).
+ * Last-mile booking against Tatva logistics.
+ * 1) POST {LOGISTICS_MODULE_URL}/api/logistics/book-courier-checkout (canonical)
+ * 2) If that returns 404 and legacy fallback is allowed, POST .../carrier/book (current Render API)
+ *
+ * Set LOGISTICS_BOOK_DISABLE_LEGACY_FALLBACK=true when book-courier-checkout is deployed and you
+ * want to never call /carrier/book.
  */
 
 const LOGISTICS_BASE = String(process.env.LOGISTICS_MODULE_URL || 'http://localhost:8001').replace(
@@ -19,6 +23,9 @@ const BOOK_MAX_RETRIES = Math.min(
 );
 
 const RETRYABLE = new Set([502, 503, 504]);
+
+const disableLegacy404Fallback =
+  String(process.env.LOGISTICS_BOOK_DISABLE_LEGACY_FALLBACK || '').toLowerCase() === 'true';
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -44,6 +51,40 @@ export function extractBookingTracking(json) {
     trackingNumber: pickStr(json.tracking_number, json.trackingNumber),
     trackingUrl: pickStr(json.tracking_url, json.trackingUrl),
     shippingProvider: pickStr(json.shipping_provider, json.shippingProvider)
+  };
+}
+
+/**
+ * /carrier/book returns Shiprocket progress inside data[0].text (JSON string). Parse that layer only.
+ */
+function extractLegacyCarrierBookTracking(json) {
+  if (!json || typeof json !== 'object') {
+    return { trackingNumber: null, trackingUrl: null, shippingProvider: null };
+  }
+  let inner = json;
+  const t = json?.data?.[0]?.text;
+  if (typeof t === 'string') {
+    try {
+      const parsed = JSON.parse(t);
+      if (parsed && typeof parsed === 'object') inner = parsed;
+    } catch {
+      inner = {};
+    }
+  }
+  const fromInner = extractBookingTracking(inner);
+  if (fromInner.trackingNumber || fromInner.trackingUrl || fromInner.shippingProvider) {
+    return fromInner;
+  }
+  return {
+    trackingNumber: pickStr(
+      inner.awb_tracking_number,
+      inner.awb_code,
+      inner.awb,
+      inner.tracking_number,
+      inner.tracking_no
+    ),
+    trackingUrl: pickStr(inner.tracking_url, inner.awb_url, inner.track_url),
+    shippingProvider: pickStr(inner.shipping_provider, inner.courier_name, inner.carrier_name)
   };
 }
 
@@ -89,7 +130,8 @@ async function postJson(url, body) {
   throw lastErr || new Error('Logistics booking request failed');
 }
 
-const BOOK_URL = () => `${LOGISTICS_BASE}/api/logistics/book-courier-checkout`;
+const BOOK_CHECKOUT_URL = () => `${LOGISTICS_BASE}/api/logistics/book-courier-checkout`;
+const BOOK_CARRIER_URL = () => `${LOGISTICS_BASE}/carrier/book`;
 
 /**
  * @param {object} params
@@ -126,11 +168,20 @@ export async function bookCourierCheckout({
     order_number: orderNumber || undefined
   };
 
-  let res = await postJson(BOOK_URL(), body);
+  let res = await postJson(BOOK_CHECKOUT_URL(), body);
 
   if (!res.ok && RETRYABLE.has(res.status)) {
     await delay(500);
-    res = await postJson(BOOK_URL(), body);
+    res = await postJson(BOOK_CHECKOUT_URL(), body);
+  }
+
+  let usedLegacyCarrierBook = false;
+  if (!res.ok && res.status === 404 && !disableLegacy404Fallback) {
+    res = await postJson(BOOK_CARRIER_URL(), {
+      carrier_id: id,
+      order_details: body
+    });
+    usedLegacyCarrierBook = true;
   }
 
   if (!res.ok) {
@@ -144,7 +195,9 @@ export async function bookCourierCheckout({
     throw err;
   }
 
-  const extracted = extractBookingTracking(res.json);
+  const extracted = usedLegacyCarrierBook
+    ? extractLegacyCarrierBookTracking(res.json)
+    : extractBookingTracking(res.json);
   return {
     trackingNumber: extracted.trackingNumber,
     trackingUrl: extracted.trackingUrl,
