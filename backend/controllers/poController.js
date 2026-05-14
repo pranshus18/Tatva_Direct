@@ -680,6 +680,129 @@ function mapToDeliveryAddress(address = {}) {
   };
 }
 
+/** Avoid user-supplied % / _ widening ILIKE matches unintentionally. */
+function sanitizeIlikeFragment(value) {
+  const s = String(value || '').trim();
+  if (!s) return '';
+  return s.replace(/%/g, '').replace(/_/g, ' ').trim();
+}
+
+/**
+ * Resolve supplier_products for PO insert — mirrors /api/po/group so a line that grouped
+ * successfully will not fail at create (e.g. pending offers, same variant/product lookups).
+ */
+async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
+  const select = `
+    *,
+    product:products(*)
+  `;
+
+  if (item?.supplierProductId) {
+    const { data: byOfferId } = await supabase
+      .from('supplier_products')
+      .select(select)
+      .eq('id', item.supplierProductId)
+      .eq('supplier_id', supplierId)
+      .in('status', ['approved', 'pending'])
+      .maybeSingle();
+    if (byOfferId?.product) return byOfferId;
+  }
+
+  const itemSpecs = item?.specifications || {};
+  const specsObj =
+    itemSpecs && typeof itemSpecs === 'object' && !Array.isArray(itemSpecs) ? itemSpecs : {};
+  const requestedVariantIdentity = buildIdentityBundle({
+    unit: item?.unit,
+    brandModel: item?.brandModel || item?.modelBrand,
+    sku: item?.sku || item?.skuNo || item?.gsku || specsObj.sku || specsObj.skuNo || specsObj.gsku,
+    packSize: item?.packSize || item?.pack_size || specsObj.packSize || specsObj.pack_size,
+    specifications: specsObj
+  });
+  const hasVariantSignals =
+    requestedVariantIdentity.matchSignals.hasSku ||
+    Boolean(requestedVariantIdentity.variant.brandModel) ||
+    Boolean(requestedVariantIdentity.variant.packSize);
+
+  if (item?.productId) {
+    let qApproved = supabase
+      .from('supplier_products')
+      .select(select)
+      .eq('product_id', item.productId)
+      .eq('supplier_id', supplierId)
+      .eq('is_active', true)
+      .eq('status', 'approved')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (hasVariantSignals) {
+      qApproved = qApproved.eq('variant_key', requestedVariantIdentity.variantKey);
+    }
+    const { data: spApproved } = await qApproved.maybeSingle();
+    if (spApproved?.product) return spApproved;
+
+    let qAny = supabase
+      .from('supplier_products')
+      .select(select)
+      .eq('product_id', item.productId)
+      .eq('supplier_id', supplierId)
+      .in('status', ['approved', 'pending'])
+      .order('is_active', { ascending: false })
+      .order('approved_at', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (hasVariantSignals) {
+      qAny = qAny.eq('variant_key', requestedVariantIdentity.variantKey);
+    }
+    const { data: spAny } = await qAny.maybeSingle();
+    if (spAny?.product) return spAny;
+  }
+
+  const nameCandidates = [];
+  const pushName = (v) => {
+    const s = sanitizeIlikeFragment(v);
+    if (s && !nameCandidates.includes(s)) nameCandidates.push(s);
+  };
+  pushName(item?.name);
+  pushName(item?.originalItem);
+  pushName(specsObj.brandModel);
+  pushName(item?.brandModel);
+  pushName(item?.modelBrand);
+
+  for (const token of nameCandidates) {
+    let qNameApproved = supabase
+      .from('supplier_products')
+      .select(select)
+      .ilike('product.name', `%${token}%`)
+      .eq('supplier_id', supplierId)
+      .eq('is_active', true)
+      .eq('status', 'approved')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (hasVariantSignals) {
+      qNameApproved = qNameApproved.eq('variant_key', requestedVariantIdentity.variantKey);
+    }
+    const { data: rowsApproved } = await qNameApproved;
+    if (rowsApproved?.[0]?.product) return rowsApproved[0];
+
+    let qNameAny = supabase
+      .from('supplier_products')
+      .select(select)
+      .ilike('product.name', `%${token}%`)
+      .eq('supplier_id', supplierId)
+      .in('status', ['approved', 'pending'])
+      .order('is_active', { ascending: false })
+      .order('approved_at', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (hasVariantSignals) {
+      qNameAny = qNameAny.eq('variant_key', requestedVariantIdentity.variantKey);
+    }
+    const { data: rowsAny } = await qNameAny;
+    if (rowsAny?.[0]?.product) return rowsAny[0];
+  }
+
+  return null;
+}
+
 router.post('/create', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const payload = parseWithSchema(poCreateRequestSchema, req.body || {});
@@ -860,70 +983,14 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       const intraStateTax = isSameIndianState(supplierState, billingState);
       
       for (const item of group.items) {
-        // First try to find supplier-specific product by productId if available
-        let supplierProduct = null;
-        if (item.supplierProductId) {
-          const { data: spById } = await supabase
-            .from('supplier_products')
-            .select(`
-              *,
-              product:products(*)
-            `)
-            .eq('id', item.supplierProductId)
-            .eq('supplier_id', supplier.id)
-            .eq('is_active', true)
-            .eq('status', 'approved')
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
+        const supplierProduct = await loadSupplierProductForPoCreate(supabase, supplier.id, item);
 
-          if (spById) {
-            supplierProduct = spById;
-          }
-        } else if (item.productId) {
-          const { data: spById } = await supabase
-            .from('supplier_products')
-            .select(`
-              *,
-              product:products(*)
-            `)
-            .eq('product_id', item.productId)
-            .eq('supplier_id', supplier.id)
-            .eq('is_active', true)
-            .eq('status', 'approved')
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .maybeSingle();
-          
-          if (spById) {
-            supplierProduct = spById;
-          }
-        }
-        
-        // If not found by ID, try to find supplier-specific product by name
-        if (!supplierProduct) {
-          const { data: spByName } = await supabase
-            .from('supplier_products')
-            .select(`
-              *,
-              product:products(*)
-            `)
-            .ilike('product.name', `%${item.name}%`)
-            .eq('supplier_id', supplier.id)
-            .eq('status', 'approved')
-            .eq('is_active', true)
-            .order('created_at', { ascending: false })
-            .limit(1);
-          
-          if (spByName && spByName.length > 0) {
-            supplierProduct = spByName[0];
-          }
-        }
-        
         // If supplier-specific product still not found, throw error
         if (!supplierProduct || !supplierProduct.product) {
           const err = new Error(
-            `Supplier product "${item.name}" not found for supplier "${group.vendorName}". Please ensure the supplier has added this product in their manage your product section.`
+            `Supplier product "${item.name}" not found for supplier "${group.vendorName}". ` +
+              'If the listing exists, it may be pending approval, inactive, or the catalog name may not match. ' +
+              'Use Manage your product to ensure an active offer (approved or pending per your workflow) is linked for this item.'
           );
           err.statusCode = 400;
           throw err;
