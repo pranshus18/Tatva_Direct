@@ -29,7 +29,7 @@ function escapeIlikeLiteral(text) {
  *
  * @param {boolean} [legacyManualDiscoveryCategoryFilter] - When true, uses the original browser
  *   API behaviour: `category` query param is lowercased and matched with `.eq` (manual Product Discovery).
- *   When false (default for voice), category is matched case-insensitively for spoken/STT input.
+ *   When false, category is matched case-insensitively (ILike).
  */
 export async function searchProductDiscoveryForUser(
   supabase,

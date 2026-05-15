@@ -1340,7 +1340,7 @@ router.get('/locations', authenticateToken, async (req, res) => {
   }
 });
 
-// Search for product name suggestions (Product Discovery — shared implementation with voice)
+// Search for product name suggestions (Product Discovery)
 router.get('/products/search', authenticateToken, async (req, res) => {
   try {
     const { q, category } = req.query;

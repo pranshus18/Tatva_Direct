@@ -13,7 +13,6 @@ import {
   Trash2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import VoiceOrderPanel from '../components/VoiceOrderPanel';
 import { getApiUrl } from '../config/api';
 import './Cart.css';
 
@@ -249,8 +248,6 @@ const Cart = ({ onLoadCart }) => {
         <h1>Cart</h1>
         <p>Review added items, adjust quantity, then continue with supplier selection.</p>
       </div>
-
-      <VoiceOrderPanel />
 
       <div className="cart-shell">
         {error ? (

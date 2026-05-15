@@ -14,7 +14,6 @@ import { posRouter } from './pos.js';
 import { corePhase2Router } from './corePhase2.js';
 import { paymentsRouter } from './payments.js';
 import { adminSupplyChainRouter } from './adminSupplyChain.js';
-import { voiceRouter } from './voice.js';
 import { vendorRequestLogger } from '../middleware/vendorRequestLogger.js';
 import { distanceDebug, getEnvDebug, getHealth, getRuntimeDebug } from '../controllers/systemController.js';
 import { cartShareRouter } from '../controllers/cartShareController.js';
@@ -39,7 +38,6 @@ apiRouter.use('/pos', posRouter);
 apiRouter.use('/core-phase2', corePhase2Router);
 apiRouter.use('/payments', paymentsRouter);
 apiRouter.use('/cart-share', cartShareRouter);
-apiRouter.use('/voice', voiceRouter);
 
 apiRouter.get('/health', getHealth);
 apiRouter.get('/debug/runtime', getRuntimeDebug);

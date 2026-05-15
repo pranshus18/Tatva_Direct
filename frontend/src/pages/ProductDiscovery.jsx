@@ -1,10 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Package, Search, ShoppingCart } from 'lucide-react';
 import { getApiUrl } from '../config/api';
-import VoiceOrderPanel from '../components/VoiceOrderPanel';
 import './ProductDiscovery.css';
-
-const VOICE_LAST_ADDED_KEY = 'voiceDiscoveryLastAdded';
 
 const ProductDiscovery = () => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -17,21 +14,7 @@ const ProductDiscovery = () => {
   const [recommendationMode, setRecommendationMode] = useState('');
   const [cartBusyByProductId, setCartBusyByProductId] = useState({});
   const [cartAddedByProductId, setCartAddedByProductId] = useState({});
-  const [lastDiscoveryCartAdd, setLastDiscoveryCartAdd] = useState(null);
   const pageSize = 24;
-
-  useEffect(() => {
-    try {
-      const raw = sessionStorage.getItem(VOICE_LAST_ADDED_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && parsed.productId) {
-        setLastDiscoveryCartAdd(parsed);
-      }
-    } catch {
-      // Ignore invalid storage.
-    }
-  }, []);
 
   const categories = useMemo(() => {
     const unique = new Set();
@@ -94,47 +77,6 @@ const ProductDiscovery = () => {
   }, [total]);
 
   const safePage = Math.min(Math.max(page, 1), pageCount);
-  const voicePageContext = useMemo(
-    () => ({
-      page: 'product_discovery',
-      searchQuery: searchQuery.trim(),
-      selectedCategory: selectedCategory.trim(),
-      currentPage: safePage,
-      pageSize,
-      total: Number.isFinite(total) ? total : 0,
-      pageCount,
-      recommendationMode,
-      visibleProducts: products.map((product) => ({
-        id: product?.id ? String(product.id) : '',
-        name: String(product?.name || ''),
-        brand: String(product?.brand || ''),
-        category: String(product?.category || ''),
-        unit: String(product?.unit || ''),
-        supplierCount: Number(product?.supplierCount || 0) || 0,
-        barcode: String(product?.barcode || ''),
-        description: String(product?.description || '')
-      })),
-      lastCartAddFromDiscovery: lastDiscoveryCartAdd
-        ? {
-            productId: String(lastDiscoveryCartAdd.productId || ''),
-            name: String(lastDiscoveryCartAdd.name || ''),
-            brand: String(lastDiscoveryCartAdd.brand || ''),
-            at: lastDiscoveryCartAdd.at
-          }
-        : null
-    }),
-    [
-      searchQuery,
-      selectedCategory,
-      safePage,
-      pageSize,
-      total,
-      pageCount,
-      recommendationMode,
-      products,
-      lastDiscoveryCartAdd
-    ]
-  );
 
   const addToCart = async (product) => {
     const token = localStorage.getItem('token');
@@ -166,18 +108,6 @@ const ProductDiscovery = () => {
       if (!saveRes.ok || saveData.status !== 'success') {
         throw new Error(saveData.message || 'Failed to save cart');
       }
-      const cartHint = {
-        productId: String(productId),
-        name: String(product?.name || ''),
-        brand: String(product?.brand || ''),
-        at: Date.now()
-      };
-      try {
-        sessionStorage.setItem(VOICE_LAST_ADDED_KEY, JSON.stringify(cartHint));
-      } catch {
-        // Ignore storage failures.
-      }
-      setLastDiscoveryCartAdd(cartHint);
       setCartAddedByProductId((prev) => ({ ...prev, [String(productId)]: true }));
       setTimeout(() => {
         setCartAddedByProductId((prev) => {
@@ -203,7 +133,6 @@ const ProductDiscovery = () => {
         <h1>Product Discovery</h1>
         <p>Browse products listed by suppliers. You can add items directly to cart without a BOQ.</p>
       </div>
-      <VoiceOrderPanel pageContext={voicePageContext} />
 
       <div className="product-discovery-controls">
         <div className="search-input-wrapper">
