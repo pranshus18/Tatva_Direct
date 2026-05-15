@@ -936,7 +936,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
     const { data: serviceProvider, error: serviceProviderError } = await supabase
       .from('users')
-      .select('id, address, profile')
+      .select('id, address, profile, name, company')
       .eq('id', req.userId)
       .eq('user_type', 'service_provider')
       .maybeSingle();
@@ -1039,9 +1039,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         });
       }
 
-      // Map items to order items format - ONLY use real products from suppliers
-      const orderItems = [];
-      const lineTaxBreakdown = [];
+      // Map items to order items format — line work runs in parallel per item for faster PO create.
       const supplierState = extractUserState(supplier);
       const billingState = billingAddress?.state || shippingAddress?.state || '';
       assertGstStateInputs({
@@ -1050,106 +1048,108 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         context: 'Order GST calculation'
       });
       const intraStateTax = isSameIndianState(supplierState, billingState);
-      
-      for (const item of group.items) {
-        const supplierProduct = await loadSupplierProductForPoCreate(supabase, supplier.id, item);
 
-        // If supplier-specific product still not found, throw error
-        if (!supplierProduct || !supplierProduct.product) {
-          const err = new Error(
-            `Supplier product "${item.name}" not found for supplier "${group.vendorName}". ` +
-              'If the listing exists, it may be pending approval, inactive, or the catalog name may not match. ' +
-              'Use Manage your product to ensure an active offer (approved or pending per your workflow) is linked for this item.'
-          );
-          err.statusCode = 400;
-          throw err;
-        }
-        const itemBrandName =
-          supplierProduct?.attributes?.brand ||
-          supplierProduct?.attributes?.brandModel ||
-          supplierProduct?.product?.brand ||
-          supplierProduct?.product?.specifications?.brand ||
-          supplierProduct?.product?.specifications?.brandModel ||
-          item?.brandModel ||
-          item?.brandName ||
-          item?.brand ||
-          null;
-        const requiredRoleForItem = getAllowedSellerRoleForBrand(itemBrandName, terminalRoleByBrandMap);
-        if (requiredRoleForItem && !supplierMatchesBrandTerminalRole(supplier.profile, itemBrandName, terminalRoleByBrandMap)) {
-          const requiredRole = requiredRoleForItem;
-          const requiredRoleText = requiredRole || 'not configured (admin must define brand chain)';
-          return res.status(403).json({
-            status: 'error',
-            message: `Vendor "${group.vendorName}" cannot be selected for "${item.name}". Required seller role for this brand: ${requiredRoleText}.`
+      const itemsArray = Array.isArray(group.items) ? group.items : [];
+      const lineBuilt = await Promise.all(
+        itemsArray.map(async (item) => {
+          const supplierProduct = await loadSupplierProductForPoCreate(supabase, supplier.id, item);
+
+          if (!supplierProduct || !supplierProduct.product) {
+            const err = new Error(
+              `Supplier product "${item.name}" not found for supplier "${group.vendorName}". ` +
+                'If the listing exists, it may be pending approval, inactive, or the catalog name may not match. ' +
+                'Use Manage your product to ensure an active offer (approved or pending per your workflow) is linked for this item.'
+            );
+            err.statusCode = 400;
+            throw err;
+          }
+          const itemBrandName =
+            supplierProduct?.attributes?.brand ||
+            supplierProduct?.attributes?.brandModel ||
+            supplierProduct?.product?.brand ||
+            supplierProduct?.product?.specifications?.brand ||
+            supplierProduct?.product?.specifications?.brandModel ||
+            item?.brandModel ||
+            item?.brandName ||
+            item?.brand ||
+            null;
+          const requiredRoleForItem = getAllowedSellerRoleForBrand(itemBrandName, terminalRoleByBrandMap);
+          if (requiredRoleForItem && !supplierMatchesBrandTerminalRole(supplier.profile, itemBrandName, terminalRoleByBrandMap)) {
+            const requiredRole = requiredRoleForItem;
+            const requiredRoleText = requiredRole || 'not configured (admin must define brand chain)';
+            const err = new Error(
+              `Vendor "${group.vendorName}" cannot be selected for "${item.name}". Required seller role for this brand: ${requiredRoleText}.`
+            );
+            err.statusCode = 403;
+            throw err;
+          }
+
+          const baseUnitPrice = parseFloat(supplierProduct.price) || 0;
+          const quantity = parseFloat(item.quantity) || 0;
+          const bcovBrandKey = extractBrandForBcov({ supplierProduct, item });
+          const bcovScopeKeys = extractBcovScopeKeys({ supplierProduct, item });
+          const bcovResolved = await resolveBcov({
+            buyerId: req.userId,
+            supplierId: supplier.id,
+            brandKey: bcovBrandKey,
+            scopeKeys: bcovScopeKeys
           });
-        }
+          const unitPrice = bcovResolved?.price ?? baseUnitPrice;
+          const taxableAmount = unitPrice * quantity;
+          assertSupplierProductTaxRates({
+            supplierProduct,
+            context: 'Order GST calculation',
+            productRef: `supplier_product_id ${supplierProduct.id}`
+          });
+          const lineGst = computeLineGst({
+            taxableAmount,
+            igstRate: supplierProduct.igst_rate,
+            cgstRate: supplierProduct.cgst_rate,
+            sgstRate: supplierProduct.sgst_rate,
+            intraState: intraStateTax
+          });
 
-        // Use the actual supplier-specific price from database
-        const baseUnitPrice = parseFloat(supplierProduct.price) || 0;
-        const quantity = parseFloat(item.quantity) || 0;
-        const bcovBrandKey = extractBrandForBcov({ supplierProduct, item });
-        const bcovScopeKeys = extractBcovScopeKeys({ supplierProduct, item });
-        const bcovResolved = await resolveBcov({
-          buyerId: req.userId,
-          supplierId: supplier.id,
-          brandKey: bcovBrandKey,
-          scopeKeys: bcovScopeKeys
-        });
-        const unitPrice = bcovResolved?.price ?? baseUnitPrice;
-        const taxableAmount = unitPrice * quantity;
-        assertSupplierProductTaxRates({
-          supplierProduct,
-          context: 'Order GST calculation',
-          productRef: `supplier_product_id ${supplierProduct.id}`
-        });
-        const lineGst = computeLineGst({
-          taxableAmount,
-          igstRate: supplierProduct.igst_rate,
-          cgstRate: supplierProduct.cgst_rate,
-          sgstRate: supplierProduct.sgst_rate,
-          intraState: intraStateTax
-        });
-        lineTaxBreakdown.push(lineGst);
+          const orderItemRow = {
+            product_id: supplierProduct.product.id,
+            supplier_product_id: supplierProduct.id,
+            quantity: quantity,
+            unit_price: unitPrice,
+            total_price: taxableAmount,
+            specifications: JSON.stringify({
+              productIdentification: item.productIdentification || null,
+              parentAsin: supplierProduct?.product?.asin || null,
+              variantAsin: supplierProduct?.variant_asin || null,
+              variantKey: supplierProduct?.variant_key || null,
+              brandModel: supplierProduct?.attributes?.brandModel || null,
+              variantAttributes: supplierProduct?.attributes?.variantAttributes || {},
+              bcov: bcovResolved
+                ? {
+                    applied: true,
+                    levelId: bcovResolved.levelId,
+                    baseUnitPrice
+                  }
+                : { applied: false },
+              gst: {
+                supplierState,
+                billingState,
+                intraStateTax,
+                taxType: lineGst.taxType,
+                taxableAmount: lineGst.taxableAmount,
+                taxAmount: lineGst.taxAmount,
+                totalAmount: lineGst.totalAmount,
+                igstRate: lineGst.igstRate,
+                cgstRate: lineGst.cgstRate,
+                sgstRate: lineGst.sgstRate
+              },
+              snapshotAt: new Date().toISOString()
+            })
+          };
+          return { lineGst, orderItemRow };
+        })
+      );
 
-        orderItems.push({
-          product_id: supplierProduct.product.id,
-          supplier_product_id: supplierProduct.id,
-          quantity: quantity,
-          unit_price: unitPrice,
-          total_price: taxableAmount,
-          // Immutable per-order identity snapshot for return/replacement tracking.
-          specifications: JSON.stringify({
-            productIdentification: item.productIdentification || null,
-            parentAsin: supplierProduct?.product?.asin || null,
-            variantAsin: supplierProduct?.variant_asin || null,
-            variantKey: supplierProduct?.variant_key || null,
-            brandModel: supplierProduct?.attributes?.brandModel || null,
-            variantAttributes: supplierProduct?.attributes?.variantAttributes || {},
-            bcov: bcovResolved
-              ? {
-                  applied: true,
-                  levelId: bcovResolved.levelId,
-                  baseUnitPrice
-                }
-              : { applied: false },
-            gst: {
-              supplierState,
-              billingState,
-              intraStateTax,
-              taxType: lineGst.taxType,
-              taxableAmount: lineGst.taxableAmount,
-              taxAmount: lineGst.taxAmount,
-              totalAmount: lineGst.totalAmount,
-              igstRate: lineGst.igstRate,
-              cgstRate: lineGst.cgstRate,
-              sgstRate: lineGst.sgstRate
-            },
-            snapshotAt: new Date().toISOString()
-          })
-        });
-      }
-
-      // Calculate total amount (tax-inclusive) and keep detailed GST split.
+      const orderItems = lineBuilt.map((b) => b.orderItemRow);
+      const lineTaxBreakdown = lineBuilt.map((b) => b.lineGst);
       const gstSummary = sumGstLines(lineTaxBreakdown);
       const totalAmount = gstSummary.totalAmount;
       const groupItemDetails = (Array.isArray(group.items) ? group.items : []).map((line) => ({
@@ -1294,73 +1294,73 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         throw err;
       }
 
-      // Record inventory movements for each ordered item (stock out)
+      // Record inventory movements for each ordered item (stock out) — parallel for latency.
       try {
         const itemsWithIds = insertedItems || [];
-        for (let i = 0; i < itemsWithIds.length; i++) {
-          const orderItem = itemsWithIds[i];
-          const qty = parseFloat(orderItem.quantity) || 0;
-          if (!qty || qty <= 0) continue;
+        await Promise.all(
+          itemsWithIds.map(async (orderItem) => {
+            const qty = parseFloat(orderItem.quantity) || 0;
+            if (!qty || qty <= 0) return;
 
-          // Stock must decrease on the exact supplier_products row (seller offer) tied to this line item.
-          let supplierProduct = null;
-          if (orderItem.supplier_product_id) {
-            const { data: spById, error: spErrorById } = await supabase
-              .from('supplier_products')
-              .select('id, supplier_id, product_id')
-              .eq('id', orderItem.supplier_product_id)
-              .maybeSingle();
-            if (spErrorById) {
-              logger.warn('[PO] Inventory movement supplier_product_id lookup error:', spErrorById);
+            let supplierProduct = null;
+            if (orderItem.supplier_product_id) {
+              const { data: spById, error: spErrorById } = await supabase
+                .from('supplier_products')
+                .select('id, supplier_id, product_id')
+                .eq('id', orderItem.supplier_product_id)
+                .maybeSingle();
+              if (spErrorById) {
+                logger.warn('[PO] Inventory movement supplier_product_id lookup error:', spErrorById);
+              }
+              if (spById && spById.supplier_id === supplier.id) {
+                supplierProduct = spById;
+              } else if (spById && spById.supplier_id !== supplier.id) {
+                logger.error('[PO] order_items.supplier_product_id does not belong to this order supplier — skipping wrong inventory row', {
+                  orderSupplierId: supplier.id,
+                  offerOwnerId: spById.supplier_id,
+                  supplierProductId: spById.id
+                });
+              }
             }
-            if (spById && spById.supplier_id === supplier.id) {
-              supplierProduct = spById;
-            } else if (spById && spById.supplier_id !== supplier.id) {
-              logger.error('[PO] order_items.supplier_product_id does not belong to this order supplier — skipping wrong inventory row', {
-                orderSupplierId: supplier.id,
-                offerOwnerId: spById.supplier_id,
-                supplierProductId: spById.id
+
+            if (!supplierProduct) {
+              const { data: spByFallback, error: spError } = await supabase
+                .from('supplier_products')
+                .select('id, supplier_id, product_id')
+                .eq('product_id', orderItem.product_id)
+                .eq('supplier_id', supplier.id)
+                .eq('is_active', true)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              if (spError) {
+                logger.warn('[PO] Inventory movement supplier fallback lookup error:', spError);
+              }
+              supplierProduct = spByFallback;
+            }
+
+            if (!supplierProduct) {
+              logger.warn('[PO] No supplier_products entry found for inventory movement', {
+                product_id: orderItem.product_id,
+                supplier_id: supplier.id
               });
+              return;
             }
-          }
 
-          if (!supplierProduct) {
-            const { data: spByFallback, error: spError } = await supabase
-              .from('supplier_products')
-              .select('id, supplier_id, product_id')
-              .eq('product_id', orderItem.product_id)
-              .eq('supplier_id', supplier.id)
-              .eq('is_active', true)
-              .order('created_at', { ascending: false })
-              .limit(1)
-              .maybeSingle();
-
-            if (spError) {
-              logger.warn('[PO] Inventory movement supplier fallback lookup error:', spError);
-            }
-            supplierProduct = spByFallback;
-          }
-
-          if (!supplierProduct) {
-            logger.warn('[PO] No supplier_products entry found for inventory movement', {
-              product_id: orderItem.product_id,
-              supplier_id: supplier.id
+            await recordInventoryMovement({
+              supplierProductId: supplierProduct.id,
+              supplierId: supplier.id,
+              productId: supplierProduct.product_id || orderItem.product_id,
+              quantityChange: -qty,
+              movementType: 'sale_online',
+              referenceOrderId: order.id,
+              referenceOrderItemId: orderItem.id,
+              notes: 'B2B PO order created from BOQ',
+              userId: req.userId
             });
-            continue;
-          }
-
-          await recordInventoryMovement({
-            supplierProductId: supplierProduct.id,
-            supplierId: supplier.id,
-            productId: supplierProduct.product_id || orderItem.product_id,
-            quantityChange: -qty,
-            movementType: 'sale_online',
-            referenceOrderId: order.id,
-            referenceOrderItemId: orderItem.id,
-            notes: 'B2B PO order created from BOQ',
-            userId: req.userId
-          });
-        }
+          })
+        );
       } catch (invErr) {
         logger.error('[PO] Inventory movement error for B2B PO:', invErr);
         // Do not fail the order if inventory logging fails; monitor via logs.
@@ -1368,23 +1368,22 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
       // Create notification for the supplier about the new order
       try {
-        // Get service provider info for the notification message
-        const { data: serviceProvider } = await supabase
-          .from('users')
-          .select('name, company')
-          .eq('id', req.userId)
-          .single();
-        
-        const serviceProviderName = serviceProvider?.name || serviceProvider?.company || 'Service Provider';
-        
-        await insertNotification({
-          user_id: supplier.id,
-          type: 'order_status',
-          title: 'New Order Received',
-          message: `You have received a new order ${order.order_number} from ${serviceProviderName} for ₹${totalAmount.toLocaleString('en-IN')}`,
-          related_order_id: order.id,
-          is_read: false
-        }, supabase);
+        const serviceProviderName =
+          String(serviceProvider?.name || '').trim() ||
+          String(serviceProvider?.company || '').trim() ||
+          'Service Provider';
+
+        await insertNotification(
+          {
+            user_id: supplier.id,
+            type: 'order_status',
+            title: 'New Order Received',
+            message: `You have received a new order ${order.order_number} from ${serviceProviderName} for ₹${totalAmount.toLocaleString('en-IN')}`,
+            related_order_id: order.id,
+            is_read: false
+          },
+          supabase
+        );
         
         logger.debug(`Notification created for supplier ${supplier.id} about new order ${order.order_number}`);
       } catch (notifError) {
@@ -1527,7 +1526,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       });
     }
 
-    const updatedOrders = [];
+    const rowContexts = [];
     for (const row of orders || []) {
       const pick = transportByOrderId.get(row.id);
       const sp = pick?.shippingProvider || shippingProvider;
@@ -1556,16 +1555,19 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       const currentTotal = Math.round((parseFloat(row.total_amount || 0) || 0) * 100) / 100;
       const productsOnly = Math.max(0, Math.round((currentTotal - existingTransport) * 100) / 100);
 
-      let nextDeliveryAddress = prevAddr;
-      let nextTotalAmount = currentTotal;
-
       const courierCompanyId =
         pick?.courierCompanyId ??
         (!hasPerOrderRows && orderIds.length === 1 && row.id === orderIds[0] ? rootCourierCompanyId : null);
 
-      let resolvedSp = String(sp).trim();
-      let orderNotes = tnotes || null;
-      let logisticsBookingMeta = null;
+      const logisticsDelivery = orderDeliveryJsonToLogisticsAddress(prevAddr);
+      if (courierCompanyId != null && Number.isFinite(Number(courierCompanyId))) {
+        if (!isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
+          return res.status(400).json({
+            status: 'error',
+            message: `Order ${row.id}: complete delivery address with a 6-digit pincode is required for courier booking.`
+          });
+        }
+      }
 
       if (transportBookDebug && (courierCompanyId == null || !Number.isFinite(Number(courierCompanyId)))) {
         logger.info('[transport/confirm] logistics booking skipped (no courierCompanyId)', {
@@ -1573,16 +1575,37 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
           orderNumber: row.order_number
         });
       }
-      if (courierCompanyId != null && Number.isFinite(Number(courierCompanyId))) {
-        const logisticsDelivery = orderDeliveryJsonToLogisticsAddress(prevAddr);
-        if (!isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
-          return res.status(400).json({
-            status: 'error',
-            message: `Order ${row.id}: complete delivery address with a 6-digit pincode is required for courier booking.`
-          });
+
+      rowContexts.push({
+        row,
+        pick,
+        sp,
+        tn,
+        tu,
+        tnotes,
+        transportAmt,
+        prevAddr,
+        existingBill,
+        existingTransport,
+        currentTotal,
+        productsOnly,
+        courierCompanyId,
+        logisticsDelivery,
+        lines: buildCourierLinesFromOrderItems(row.order_items),
+        weightKg: computeOrderWeightKgForCourier(row.order_items),
+        resolvedSp: String(sp).trim(),
+        orderNotes: tnotes || null,
+        logisticsBookingMeta: null
+      });
+    }
+
+    // Book couriers in parallel (major latency win for multi-vendor PO confirm).
+    await Promise.all(
+      rowContexts.map(async (ctx) => {
+        const { row, courierCompanyId, sp, logisticsDelivery, lines, weightKg } = ctx;
+        if (courierCompanyId == null || !Number.isFinite(Number(courierCompanyId))) {
+          return;
         }
-        const lines = buildCourierLinesFromOrderItems(row.order_items);
-        const weightKg = computeOrderWeightKgForCourier(row.order_items);
         try {
           const booked = await bookCourierCheckout({
             courierCompanyId: Number(courierCompanyId),
@@ -1595,11 +1618,11 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
             orderNumber: row.order_number || undefined,
             vendorId: row.supplier_id || null
           });
-          if (booked.trackingNumber) tn = booked.trackingNumber;
-          if (booked.trackingUrl) tu = booked.trackingUrl;
-          if (booked.shippingProvider) resolvedSp = booked.shippingProvider;
+          if (booked.trackingNumber) ctx.tn = booked.trackingNumber;
+          if (booked.trackingUrl) ctx.tu = booked.trackingUrl;
+          if (booked.shippingProvider) ctx.resolvedSp = booked.shippingProvider;
 
-          logisticsBookingMeta = {
+          ctx.logisticsBookingMeta = {
             shipmentId: booked.shipmentId,
             shiprocketOrderId: booked.shiprocketOrderId,
             pendingReason: booked.pendingReason || null,
@@ -1614,9 +1637,9 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
               orderId: row.id,
               orderNumber: row.order_number,
               courierCompanyId: Number(courierCompanyId),
-              tracking_number: tn,
-              tracking_url: tu,
-              shipping_provider: resolvedSp,
+              tracking_number: ctx.tn,
+              tracking_url: ctx.tu,
+              shipping_provider: ctx.resolvedSp,
               usedLegacyCarrierBook: booked.usedLegacyCarrierBook
             });
           }
@@ -1625,12 +1648,9 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
           if (booked.pendingReason) diagParts.push(booked.pendingReason);
           if (booked.shipmentId) diagParts.push(`shipment_id ${booked.shipmentId}`);
           if (booked.shiprocketOrderId) diagParts.push(`shiprocket_order_id ${booked.shiprocketOrderId}`);
-          if (
-            diagParts.length > 0 &&
-            (!booked.trackingNumber || !booked.trackingUrl)
-          ) {
+          if (diagParts.length > 0 && (!booked.trackingNumber || !booked.trackingUrl)) {
             const bit = diagParts.join(' · ');
-            orderNotes = orderNotes ? `${orderNotes} | [Logistics] ${bit}` : `[Logistics] ${bit}`;
+            ctx.orderNotes = ctx.orderNotes ? `${ctx.orderNotes} | [Logistics] ${bit}` : `[Logistics] ${bit}`;
           }
         } catch (bookErr) {
           logger.error('Logistics book-courier-checkout error:', bookErr);
@@ -1638,69 +1658,86 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
             Number(bookErr?.statusCode) >= 400 && Number(bookErr?.statusCode) < 600
               ? Number(bookErr.statusCode)
               : 502;
-          return res.status(statusCode).json({
-            status: 'error',
-            message: bookErr?.message || 'Courier booking failed',
-            orderId: row.id
+          const err = new Error(bookErr?.message || 'Courier booking failed');
+          err.statusCode = statusCode;
+          err.orderId = row.id;
+          throw err;
+        }
+      })
+    );
+
+    const updatedOrders = await Promise.all(
+      rowContexts.map(async (ctx) => {
+        const {
+          row,
+          tn,
+          tu,
+          tnotes,
+          transportAmt,
+          prevAddr,
+          existingBill,
+          productsOnly,
+          resolvedSp
+        } = ctx;
+        let nextDeliveryAddress = prevAddr;
+        let nextTotalAmount = ctx.currentTotal;
+
+        if (transportAmt !== null && transportAmt > 0) {
+          const transportBill = {
+            amount: transportAmt,
+            currency: 'INR',
+            provider: resolvedSp,
+            confirmedAt: new Date().toISOString(),
+            source: 'logistics_quote'
+          };
+          nextDeliveryAddress = { ...prevAddr, transportBill };
+          nextTotalAmount = Math.round((productsOnly + transportAmt) * 100) / 100;
+        } else if (existingBill) {
+          nextDeliveryAddress = { ...prevAddr, transportBill: existingBill };
+        }
+
+        const history = Array.isArray(row.status_history) ? [...row.status_history] : [];
+        history.push({
+          status: 'confirmed',
+          timestamp: new Date().toISOString(),
+          updatedBy: req.userId,
+          notes: `Transport selected: ${resolvedSp}${tnotes ? ` | ${tnotes}` : ''}${
+            transportAmt !== null && transportAmt > 0 ? ` | Quoted transport: INR ${transportAmt}` : ''
+          }`
+        });
+
+        const { data: updated, error: updateError } = await supabase
+          .from('orders')
+          .update({
+            shipping_provider: resolvedSp,
+            tracking_number: tn || null,
+            tracking_url: tu || null,
+            notes: ctx.orderNotes || null,
+            transport_confirmed_at: new Date().toISOString(),
+            status_history: history,
+            delivery_address: nextDeliveryAddress,
+            total_amount: nextTotalAmount
+          })
+          .eq('id', row.id)
+          .eq('service_provider_id', req.userId)
+          .select('id, order_number, shipping_provider, tracking_number, tracking_url, transport_confirmed_at, notes')
+          .single();
+        if (updateError) throw updateError;
+        if (transportBookDebug) {
+          logger.info('[transport/confirm] order row after DB update', {
+            orderId: updated.id,
+            orderNumber: updated.order_number,
+            tracking_number: updated.tracking_number,
+            tracking_url: updated.tracking_url,
+            shipping_provider: updated.shipping_provider
           });
         }
-      }
-
-      if (transportAmt !== null && transportAmt > 0) {
-        const transportBill = {
-          amount: transportAmt,
-          currency: 'INR',
-          provider: resolvedSp,
-          confirmedAt: new Date().toISOString(),
-          source: 'logistics_quote'
+        return {
+          ...updated,
+          ...(ctx.logisticsBookingMeta ? { logisticsBooking: ctx.logisticsBookingMeta } : {})
         };
-        nextDeliveryAddress = { ...prevAddr, transportBill };
-        nextTotalAmount = Math.round((productsOnly + transportAmt) * 100) / 100;
-      } else if (existingBill) {
-        nextDeliveryAddress = { ...prevAddr, transportBill: existingBill };
-      }
-
-      const history = Array.isArray(row.status_history) ? [...row.status_history] : [];
-      history.push({
-        status: 'confirmed',
-        timestamp: new Date().toISOString(),
-        updatedBy: req.userId,
-        notes: `Transport selected: ${resolvedSp}${tnotes ? ` | ${tnotes}` : ''}${
-          transportAmt !== null && transportAmt > 0 ? ` | Quoted transport: INR ${transportAmt}` : ''
-        }`
-      });
-
-      const { data: updated, error: updateError } = await supabase
-        .from('orders')
-        .update({
-          shipping_provider: resolvedSp,
-          tracking_number: tn || null,
-          tracking_url: tu || null,
-          notes: orderNotes || null,
-          transport_confirmed_at: new Date().toISOString(),
-          status_history: history,
-          delivery_address: nextDeliveryAddress,
-          total_amount: nextTotalAmount
-        })
-        .eq('id', row.id)
-        .eq('service_provider_id', req.userId)
-        .select('id, order_number, shipping_provider, tracking_number, tracking_url, transport_confirmed_at, notes')
-        .single();
-      if (updateError) throw updateError;
-      if (transportBookDebug) {
-        logger.info('[transport/confirm] order row after DB update', {
-          orderId: updated.id,
-          orderNumber: updated.order_number,
-          tracking_number: updated.tracking_number,
-          tracking_url: updated.tracking_url,
-          shipping_provider: updated.shipping_provider
-        });
-      }
-      updatedOrders.push({
-        ...updated,
-        ...(logisticsBookingMeta ? { logisticsBooking: logisticsBookingMeta } : {})
-      });
-    }
+      })
+    );
 
     return res.json({
       status: 'success',
@@ -1711,6 +1748,14 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+    }
+    const httpStatus = Number(error?.statusCode);
+    if (Number.isFinite(httpStatus) && httpStatus >= 400 && httpStatus < 600) {
+      return res.status(httpStatus).json({
+        status: 'error',
+        message: error.message || 'Courier booking failed',
+        orderId: error.orderId || undefined
+      });
     }
     logger.error('Transport confirm error:', error);
     return res.status(500).json({

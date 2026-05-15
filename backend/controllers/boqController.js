@@ -1305,6 +1305,42 @@ router.delete('/:id', authenticateToken, isServiceProvider, async (req, res) => 
         message: 'BOQ not found or you do not have permission to delete it' 
       });
     }
+
+    // Orders reference boq_id without ON DELETE CASCADE — unlink first when safe.
+    const deletableOrderStatuses = new Set(['confirmed', 'cancelled']);
+    const { data: linkedOrders, error: linkedOrdersError } = await supabase
+      .from('orders')
+      .select('id, status')
+      .eq('boq_id', id)
+      .eq('service_provider_id', req.userId);
+
+    if (linkedOrdersError) {
+      throw linkedOrdersError;
+    }
+
+    const blockingOrders = (linkedOrders || []).filter((row) => {
+      const s = String(row?.status || '').trim().toLowerCase();
+      return s && !deletableOrderStatuses.has(s);
+    });
+
+    if (blockingOrders.length > 0) {
+      return res.status(400).json({
+        status: 'error',
+        message:
+          'This BOQ is still linked to purchase orders that are not confirmed or cancelled. Cancel or finish those orders first, then you can delete the BOQ.'
+      });
+    }
+
+    if (linkedOrders?.length) {
+      const { error: unlinkError } = await supabase
+        .from('orders')
+        .update({ boq_id: null })
+        .eq('boq_id', id)
+        .eq('service_provider_id', req.userId);
+      if (unlinkError) {
+        throw unlinkError;
+      }
+    }
     
     // Delete uploaded file if it exists (local filesystem - will migrate to Supabase Storage later)
     if (boq.uploaded_file && boq.uploaded_file.path) {
