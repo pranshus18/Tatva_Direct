@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search, Paintbrush } from 'lucide-react';
+import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search, Paintbrush, Mic } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { normalizeUserType } from '../utils/userType';
 import {
@@ -14,6 +14,7 @@ const routePrefetchers = {
   '/dashboard': () => import('../pages/ServiceProviderDashboard'),
   '/boq-normalize': () => import('../pages/BOQNormalize'),
   '/product-discovery': () => import('../pages/ProductDiscovery'),
+  '/voice': () => import('../pages/VoiceCommerce'),
   '/supplier-select': () => import('../pages/VendorSelect'),
   '/substitution': () => import('../pages/Substitution'),
   '/cart': () => import('../pages/Cart'),
@@ -203,6 +204,7 @@ const Layout = ({ user, onLogout, children }) => {
     ...(userType === 'service_provider' ? [
       { path: '/boq-normalize', label: 'BOQ Normalize', icon: FileText },
       { path: '/product-discovery', label: 'Product Discovery', icon: Search },
+      { path: '/voice', label: 'Voice Shop', icon: Mic },
       { path: '/supplier-select', label: 'Supplier Select', icon: Users },
       { path: '/substitution', label: 'Substitution', icon: RefreshCw },
       { path: '/cart', label: 'Cart', icon: ShoppingCart },

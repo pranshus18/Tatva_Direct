@@ -10,6 +10,7 @@ export default defineConfig({
         target: 'http://localhost:8081',
         changeOrigin: true,
         secure: false,
+        ws: true,
         // Logistics quotes call upstream Shiprocket via the backend and can exceed 30s (cold start).
         timeout: 150000,
         proxyTimeout: 150000

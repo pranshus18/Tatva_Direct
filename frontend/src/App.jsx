@@ -60,6 +60,7 @@ const ServiceProviderReturns = safeLazy(
   'Service Provider Returns page'
 );
 const ProductDiscovery = safeLazy(() => import('./pages/ProductDiscovery'), 'Product Discovery page');
+const VoiceCommerce = safeLazy(() => import('./pages/VoiceCommerce'), 'Voice Commerce page');
 const ServiceProviderThemeSettings = safeLazy(
   () => import('./pages/ServiceProviderThemeSettings'),
   'Service Provider Theme Settings page'
@@ -615,6 +616,14 @@ function App() {
             element={
               <ServiceProviderRoute user={user}>
                 <ProductDiscovery />
+              </ServiceProviderRoute>
+            }
+          />
+          <Route
+            path="voice"
+            element={
+              <ServiceProviderRoute user={user}>
+                <VoiceCommerce user={user} />
               </ServiceProviderRoute>
             }
           />

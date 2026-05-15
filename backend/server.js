@@ -11,6 +11,7 @@ import { globalErrorHandler } from './middleware/errorHandler.js';
 import { getApiInfo } from './controllers/systemController.js';
 import logger from './utils/logger.js';
 import { isFeatureEnabled } from './utils/featureFlags.js';
+import { attachVoiceWebSocket } from './voice/voiceWebSocket.js';
 
 // Load environment variables
 // Try to load from backend directory first, then root directory
@@ -166,9 +167,12 @@ logger.info(`  Supabase: ${process.env.SUPABASE_URL ? 'Configured' : 'Not config
 const server = app.listen(port, HOST, () => {
   logger.info(` Server successfully running on http://${HOST}:${port}`);
   logger.info(` Health check: http://${HOST}:${port}/api/health`);
+  logger.info(` Voice WebSocket: ws://${HOST}:${port}/api/voice/ws`);
   logger.info(` API docs: http://${HOST}:${port}/`);
   logger.info(' Server is ready to accept connections');
 });
+
+attachVoiceWebSocket(server);
 
 server.on('error', (err) => {
   logger.error(' Server failed to start:', err);

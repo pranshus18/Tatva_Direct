@@ -18,6 +18,7 @@ import { vendorRequestLogger } from '../middleware/vendorRequestLogger.js';
 import { distanceDebug, getEnvDebug, getHealth, getRuntimeDebug } from '../controllers/systemController.js';
 import { cartShareRouter } from '../controllers/cartShareController.js';
 import { logisticsRouter } from '../controllers/logisticsController.js';
+import { voiceRouter } from './voice.js';
 
 const apiRouter = express.Router();
 
@@ -38,6 +39,7 @@ apiRouter.use('/pos', posRouter);
 apiRouter.use('/core-phase2', corePhase2Router);
 apiRouter.use('/payments', paymentsRouter);
 apiRouter.use('/cart-share', cartShareRouter);
+apiRouter.use('/voice', voiceRouter);
 
 apiRouter.get('/health', getHealth);
 apiRouter.get('/debug/runtime', getRuntimeDebug);
