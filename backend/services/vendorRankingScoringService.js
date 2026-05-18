@@ -61,13 +61,27 @@ export function assignSequentialRank(vendors) {
 }
 
 export function filterTopValidVendors(vendors, limit = 10) {
-  return vendors
-    .filter(
-      (vendor) =>
-        vendor.id &&
-        vendor.name &&
-        (Number.isFinite(parseInt(vendor.stock, 10)) ? parseInt(vendor.stock, 10) > 0 : vendor.stock > 0) &&
-        (vendor.status === 'approved' || vendor.status === 'pending')
-    )
-    .slice(0, limit);
+  const eligible = (vendors || []).filter(
+    (vendor) =>
+      vendor &&
+      vendor.id &&
+      vendor.name &&
+      (vendor.status === 'approved' || vendor.status === 'pending')
+  );
+
+  const stockPriority = (v) => {
+    const s = parseInt(v.stock, 10);
+    if (Number.isFinite(s) && s > 0) return 2;
+    const p = parseFloat(v.price);
+    if (Number.isFinite(p) && p > 0) return 1;
+    return 0;
+  };
+
+  eligible.sort((a, b) => {
+    const sp = stockPriority(b) - stockPriority(a);
+    if (sp !== 0) return sp;
+    return (Number(b.rankScore) || 0) - (Number(a.rankScore) || 0);
+  });
+
+  return eligible.slice(0, limit);
 }

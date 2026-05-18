@@ -243,9 +243,9 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       // Sort approved products first, then by rank score
       prioritizeApprovedThenRankScore(vendors);
       
-      // Only return vendors with available products and valid data
-      // Include both approved and pending vendors (approved are prioritized by sort)
-      let validVendors = filterTopValidVendors(vendors, includeAllVariants ? 100 : 10);
+      // Return all eligible listings (in-stock / priced first); do not hide zero-stock suppliers.
+      const rankCap = includeAllVariants ? 500 : 50;
+      let validVendors = filterTopValidVendors(vendors, rankCap);
       
       // CRITICAL: If we have a reference product with a supplier but no vendors were found,
       // create a vendor entry from the reference product to ensure it's shown

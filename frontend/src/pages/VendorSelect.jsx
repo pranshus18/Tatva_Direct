@@ -203,26 +203,9 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           console.log(`[VendorSelect] Processing vendors for item ${itemId}:`, vendors);
           console.log(`[VendorSelect] Item ${itemId} vendors type:`, typeof vendors, 'isArray:', Array.isArray(vendors));
           if (Array.isArray(vendors)) {
-            // Filter out invalid vendors (must have id, name, and valid price)
-            const validVendors = vendors.filter(v => {
-              const priceNum = typeof v?.price === 'number'
-                ? v.price
-                : parseFloat(v?.price);
-              const stockNum = typeof v?.stock === 'number'
-                ? v.stock
-                : parseInt(v?.stock || 0);
-
-              // We must show supplier if they have stock (price can be 0 temporarily in legacy rows).
-              const hasStock = Number.isFinite(stockNum) ? stockNum > 0 : false;
-              const hasValidPrice = Number.isFinite(priceNum) ? priceNum > 0 : false;
-
-              const isValid = v && v.id && v.name && (hasStock || hasValidPrice);
-              if (!isValid) {
-                console.log(`[VendorSelect] Invalid vendor filtered out:`, v);
-              }
-              return isValid;
-            });
-            console.log(`[VendorSelect] Item ${itemId}: ${validVendors.length} valid vendors after filtering (from ${vendors.length} total)`);
+            // Show every ranked supplier listing (id + name); stock/price may be zero — card shows status.
+            const validVendors = vendors.filter((v) => v && v.id && v.name);
+            console.log(`[VendorSelect] Item ${itemId}: ${validVendors.length} vendors (from ${vendors.length} raw)`);
             // Normalize types so downstream UI doesn't depend on backend returning `price` as a JS number
             cleanedVendors[itemId] = validVendors.map((v) => ({
               ...v,
@@ -567,15 +550,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             <div className="vendor-options">
               {hasVendors ? (
                 vendors
-                  .filter((vendor) => {
-                    if (!vendor || !vendor.id || !vendor.name) return false;
-                    const priceNum = typeof vendor.price === 'number' ? vendor.price : parseFloat(vendor.price);
-                    const stockNum = typeof vendor.stock === 'number' ? vendor.stock : parseInt(vendor.stock || 0, 10);
-                    const hasStock = Number.isFinite(stockNum) ? stockNum > 0 : false;
-                    const hasValidPrice = Number.isFinite(priceNum) ? priceNum > 0 : false;
-                    // Keep vendors that can actually supply stock, even when legacy price is zero.
-                    return hasStock || hasValidPrice;
-                  })
+                  .filter((vendor) => vendor && vendor.id && vendor.name)
                   .map((vendor) => {
                     const vendorIdStr = String(vendor.selectionId || vendor.supplierProductId || vendor.id);
                     const vendorSpecifications = normalizeSpecifications(vendor?.specifications);
