@@ -8,6 +8,11 @@ import {
   hasFreshCartSupplierSelectSession,
   readSupplierSelectScopeSessionIfFresh
 } from '../constants/supplierSelectSession';
+import {
+  buildVendorRankCacheKey,
+  getVendorRankCache,
+  setVendorRankCache
+} from '../utils/vendorRankCache';
 import './VendorSelect.css';
 
 const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete }) => {
@@ -21,8 +26,18 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const navigate = useNavigate();
   const location = useLocation();
   const itemsPropRef = useRef(items);
+  const rankFetchAbortRef = useRef(null);
   /** When set, parent `items` is ignored until it matches these line ids (avoids stale full cart overwriting one-line selection). */
   const lockedLineIdsRef = useRef(null);
+
+  const rankCacheKey = useMemo(() => {
+    if (!effectiveItems?.length) return '';
+    const effectiveBoqId =
+      boqId ||
+      effectiveItems[0]?.boqId ||
+      (typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null);
+    return buildVendorRankCacheKey(effectiveItems, effectiveBoqId);
+  }, [effectiveItems, boqId]);
 
   useEffect(() => {
     itemsPropRef.current = items;
@@ -173,61 +188,72 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boqId, effectiveItems.length, cartSupplierHandoff]);
 
-  const fetchVendors = async () => {
-    // Validate items before fetching
+  const normalizeRankResponse = (data) => {
+    if (!data?.itemVendors || typeof data.itemVendors !== 'object') {
+      const emptyVendors = {};
+      effectiveItems.forEach((item) => {
+        const itemId = item.id?.toString() || String(item.id);
+        emptyVendors[itemId] = [];
+      });
+      return emptyVendors;
+    }
+    const cleanedVendors = {};
+    Object.keys(data.itemVendors).forEach((itemId) => {
+      const vendors = data.itemVendors[itemId];
+      if (Array.isArray(vendors)) {
+        const validVendors = vendors.filter((v) => v && v.id && v.name);
+        cleanedVendors[itemId] = validVendors.map((v) => ({
+          ...v,
+          price: typeof v.price === 'number' ? v.price : parseFloat(v.price),
+          stock: typeof v.stock === 'number' ? v.stock : parseInt(v.stock || 0, 10)
+        }));
+      } else {
+        cleanedVendors[itemId] = [];
+      }
+    });
+    return cleanedVendors;
+  };
+
+  const fetchVendors = async ({ force = false, silent = false, cacheKey: keyOverride } = {}) => {
     if (!effectiveItems || !Array.isArray(effectiveItems) || effectiveItems.length === 0) {
-      console.error('Cannot fetch vendors: items is empty or invalid');
       setLoading(false);
       return;
     }
-    
+
+    const cacheKey = keyOverride || rankCacheKey;
+    if (!force && cacheKey) {
+      const cached = getVendorRankCache(cacheKey);
+      if (cached) {
+        setItemVendors(cached);
+        setLoading(false);
+        return;
+      }
+    }
+
     const token = localStorage.getItem('token');
     if (!token) {
-      console.error('No authentication token found');
       alert('You are not logged in. Please log in again.');
       setLoading(false);
       return;
     }
-    
-    setLoading(true);
 
-    const rankTimeoutMs = 90000;
+    const showBlockingLoader = !silent && Object.keys(itemVendors).length === 0;
+    if (showBlockingLoader) {
+      setLoading(true);
+    }
+
+    rankFetchAbortRef.current?.abort();
     const abortController = new AbortController();
+    rankFetchAbortRef.current = abortController;
+    const rankTimeoutMs = 90000;
     const timeoutId = window.setTimeout(() => abortController.abort(), rankTimeoutMs);
 
     try {
-      // Generate a unique timestamp and random number to prevent any caching
       const timestamp = Date.now();
       const random = Math.random().toString(36).substring(7);
-      
-      // Try using proxy first (relative URL), fallback to full URL
       const isDevelopment = import.meta.env.DEV || window.location.hostname === 'localhost';
-      let apiUrl;
-      if (isDevelopment) {
-        // Use proxy in development (relative URL)
-        apiUrl = `/api/vendors/rank`;
-      } else {
-        // Use full URL in production
-        apiUrl = getApiUrl('/api/vendors/rank');
-      }
-      
+      const apiUrl = isDevelopment ? `/api/vendors/rank` : getApiUrl('/api/vendors/rank');
       const fullUrl = `${apiUrl}?_t=${timestamp}&_r=${random}`;
-      console.log(`[VendorSelect] Fetching vendors at ${new Date().toISOString()}`);
-      console.log(`[VendorSelect] Is Development: ${isDevelopment}`);
-      console.log(`[VendorSelect] API URL: ${apiUrl}`);
-      console.log(`[VendorSelect] Full URL: ${fullUrl}`);
-      console.log(`[VendorSelect] Items being sent:`, effectiveItems);
-      console.log(`[VendorSelect] Items count: ${effectiveItems.length}`);
-      console.log(`[VendorSelect] Sample item structure:`, effectiveItems[0] ? {
-        id: effectiveItems[0].id,
-        normalizedName: effectiveItems[0].normalizedName,
-        rawName: effectiveItems[0].rawName,
-        productId: effectiveItems[0].productId,
-        availableSuppliers: effectiveItems[0].availableSuppliers
-      } : 'No items');
-      console.log(`[VendorSelect] Token present: ${!!token}`);
-      
-      // Add timestamp and random to prevent caching and ensure fresh data
       const effectiveBoqId =
         boqId ||
         effectiveItems[0]?.boqId ||
@@ -236,12 +262,12 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       const res = await fetch(fullUrl, {
         method: 'POST',
         signal: abortController.signal,
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
-          'Pragma': 'no-cache',
+          Pragma: 'no-cache',
           'X-Request-ID': `${timestamp}-${random}`,
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
           items: effectiveItems,
@@ -250,149 +276,78 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           _random: random
         })
       });
-      
-      console.log(`[VendorSelect] Response status: ${res.status} ${res.statusText}`);
-      
+
       if (!res.ok) {
         const errorText = await res.text();
-        console.error(`[VendorSelect] API Error Response:`, errorText);
         let errorMessage = `HTTP error! status: ${res.status}`;
         try {
           const errorData = JSON.parse(errorText);
           errorMessage = errorData.message || errorData.error || errorMessage;
-        } catch (e) {
-          // If not JSON, use the text
+        } catch {
           errorMessage = errorText || errorMessage;
         }
         throw new Error(errorMessage);
       }
-      
+
       const data = await res.json();
-      console.log('[VendorSelect] API Response:', data);
-      console.log('[VendorSelect] ItemVendors:', data.itemVendors);
-      console.log('[VendorSelect] ItemVendors type:', typeof data.itemVendors);
-      console.log('[VendorSelect] ItemVendors keys:', data.itemVendors ? Object.keys(data.itemVendors) : 'null');
-      
-      if (data.itemVendors && typeof data.itemVendors === 'object') {
-        // Ensure all item vendors are arrays and filter out invalid entries
-        const cleanedVendors = {};
-        Object.keys(data.itemVendors).forEach(itemId => {
-          const vendors = data.itemVendors[itemId];
-          console.log(`[VendorSelect] Processing vendors for item ${itemId}:`, vendors);
-          console.log(`[VendorSelect] Item ${itemId} vendors type:`, typeof vendors, 'isArray:', Array.isArray(vendors));
-          if (Array.isArray(vendors)) {
-            // Show every ranked supplier listing (id + name); stock/price may be zero — card shows status.
-            const validVendors = vendors.filter((v) => v && v.id && v.name);
-            console.log(`[VendorSelect] Item ${itemId}: ${validVendors.length} vendors (from ${vendors.length} raw)`);
-            // Normalize types so downstream UI doesn't depend on backend returning `price` as a JS number
-            cleanedVendors[itemId] = validVendors.map((v) => ({
-              ...v,
-              price: typeof v.price === 'number' ? v.price : parseFloat(v.price),
-              stock: typeof v.stock === 'number' ? v.stock : parseInt(v.stock || 0)
-            }));
-          } else {
-            console.log(`[VendorSelect] Item ${itemId}: vendors is not an array:`, typeof vendors, vendors);
-            cleanedVendors[itemId] = [];
-          }
-        });
-        console.log('[VendorSelect] Final cleaned vendors:', cleanedVendors);
-        console.log('[VendorSelect] Setting itemVendors state with:', Object.keys(cleanedVendors).length, 'items');
-        setItemVendors(cleanedVendors);
-      } else {
-        console.log('[VendorSelect] No itemVendors in response or invalid format');
-        // If no itemVendors in response, initialize with empty arrays
+      const cleanedVendors = normalizeRankResponse(data);
+      setItemVendors(cleanedVendors);
+      if (cacheKey) {
+        setVendorRankCache(cacheKey, cleanedVendors);
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError') {
+        if (!silent && showBlockingLoader) {
+          alert(
+            'Supplier ranking is taking too long. Please try Refresh, or try again in a few minutes.'
+          );
+        }
+        return;
+      }
+      console.error('[VendorSelect] Failed to fetch vendors:', error);
+      if (error.message?.includes('Failed to fetch') || error.name === 'TypeError') {
+        alert(
+          'Unable to connect to the server. Check your connection and try Refresh.'
+        );
+      } else if (!silent) {
+        alert(`Error fetching suppliers: ${error.message}`);
+      }
+      if (Object.keys(itemVendors).length === 0) {
         const emptyVendors = {};
-        effectiveItems.forEach(item => {
+        effectiveItems.forEach((item) => {
           const itemId = item.id?.toString() || String(item.id);
           emptyVendors[itemId] = [];
         });
         setItemVendors(emptyVendors);
       }
-    } catch (error) {
-      if (error?.name === 'AbortError') {
-        console.error('[VendorSelect] Rank request timed out');
-        alert(
-          'Supplier ranking is taking too long (server timeout). Please try Refresh, or try again in a few minutes.'
-        );
-      } else {
-        console.error('[VendorSelect] Failed to fetch vendors:', error);
-        console.error('[VendorSelect] Error details:', {
-          message: error.message,
-          name: error.name,
-          stack: error.stack
-        });
-
-        if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
-          const apiUrl = getApiUrl('/api/vendors/rank');
-          const errorMsg = `Unable to connect to the server.\n\nPlease check:\n1. Backend server is running on ${apiUrl.replace('/api/vendors/rank', '')}\n2. Your internet connection\n3. CORS is properly configured\n\nCheck browser console (F12) for more details.`;
-          console.error('[VendorSelect] Connection Error Details:', {
-            apiUrl,
-            error: error.message,
-            name: error.name,
-            stack: error.stack
-          });
-          alert(errorMsg);
-        } else {
-          alert(`Error fetching suppliers: ${error.message}\n\nCheck browser console for details.`);
-        }
-      }
-
-      const emptyVendors = {};
-      effectiveItems.forEach((item) => {
-        const itemId = item.id?.toString() || String(item.id);
-        emptyVendors[itemId] = [];
-      });
-      setItemVendors(emptyVendors);
     } finally {
       window.clearTimeout(timeoutId);
+      if (rankFetchAbortRef.current === abortController) {
+        rankFetchAbortRef.current = null;
+      }
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    // Check if items is valid and has length
-    if (effectiveItems && Array.isArray(effectiveItems) && effectiveItems.length > 0) {
-      // Use a ref to prevent duplicate calls in React StrictMode
-      let isMounted = true;
-      let timeoutId;
-      
-      // Debounce to prevent duplicate calls
-      timeoutId = setTimeout(() => {
-        if (isMounted) {
-          console.log('[VendorSelect] useEffect: Fetching vendors for items:', effectiveItems.length);
-          fetchVendors();
-        }
-      }, 0);
-      
-      return () => {
-        isMounted = false;
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-      };
-    } else {
-      // Cart / discovery often has no boqId — never auto-send users to BOQ normalize (they lose context).
-      // Empty state UI below offers manual links when nothing can be loaded.
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveItems, loadingItems]);
-  
-  // Also fetch vendors when component becomes visible (user switches tabs/windows)
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && effectiveItems && Array.isArray(effectiveItems) && effectiveItems.length > 0) {
-        console.log('Page became visible, refreshing vendor data...');
-        fetchVendors();
-      }
-    };
-    
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [effectiveItems]);
+    if (loadingItems || !effectiveItems?.length || !rankCacheKey) return;
 
-  // Add refresh functionality to get latest supplier data
+    const cached = getVendorRankCache(rankCacheKey);
+    if (cached) {
+      setItemVendors(cached);
+      return;
+    }
+
+    fetchVendors({ cacheKey: rankCacheKey });
+
+    return () => {
+      rankFetchAbortRef.current?.abort();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rankCacheKey, loadingItems]);
+
   const handleRefresh = () => {
-    fetchVendors();
+    fetchVendors({ force: true, silent: Object.keys(itemVendors).length > 0 });
   };
 
   const getSelectionKey = (item) => {
@@ -595,7 +550,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         </button>
       </div>
 
-      {loading && effectiveItems.length > 0 && (
+      {loading && effectiveItems.length > 0 && Object.keys(itemVendors).length === 0 && (
         <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
           Loading suppliers...
         </div>
@@ -609,12 +564,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           
           const selectionKey = getSelectionKey(item);
           const currentSelection = String(selections[selectionKey] || '');
-          
-          console.log(`[VendorSelect] Item ${itemId}:`, {
-            vendorsCount: vendors.length,
-            currentSelection,
-            selections
-          });
           
           return (
           <div key={item.id} className="vendor-section">
