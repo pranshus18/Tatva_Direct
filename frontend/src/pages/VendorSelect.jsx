@@ -4,8 +4,8 @@ import { TrendingUp, Clock, RefreshCw, MapPin } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import {
-  SUPPLIER_SELECT_SESSION,
-  clearSupplierSelectSessionScope
+  clearSupplierSelectScopeSession,
+  readSupplierSelectScopeSessionIfFresh
 } from '../constants/supplierSelectSession';
 import './VendorSelect.css';
 
@@ -16,8 +16,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const [loading, setLoading] = useState(false);
   const [effectiveItems, setEffectiveItems] = useState([]);
   const [loadingItems, setLoadingItems] = useState(false);
-  /** Set when /api/boq/:id/items fails (e.g. wrong lastBoqId); avoids infinite "Loading saved BOQ…" copy. */
-  const [savedBoqItemsError, setSavedBoqItemsError] = useState(null);
   const [boqMeta, setBoqMeta] = useState(boqProject || null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -29,42 +27,14 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     itemsPropRef.current = items;
   }, [items]);
 
-  // Cart passes router state + session backup. Production often drops `location.state`
-  // (redirects, open-in-new-tab); restore from session when scope was written from the cart.
+  // Cart passes router state + session backup. In production, `location.state` is often dropped
+  // (hosting / hard reload); we must read session *without* clearing it first. BOQ clears session
+  // before opening this page so a stale cart backup cannot override a new BOQ flow.
   useLayoutEffect(() => {
-    const fromCart = location?.state?.fromCartSupplierSelect === true;
-    const { SCOPE_KEY, SCOPE_TS_KEY, SCOPE_SOURCE_KEY, SOURCE_CART, TTL_MS } = SUPPLIER_SELECT_SESSION;
-
     let scoped = location?.state?.supplierSelectItems;
-
     if (!Array.isArray(scoped) || scoped.length === 0) {
-      try {
-        const ts = Number(sessionStorage.getItem(SCOPE_TS_KEY) || 0);
-        const source = sessionStorage.getItem(SCOPE_SOURCE_KEY);
-        const ttlOk = Boolean(ts) && Date.now() - ts < TTL_MS;
-        if (ttlOk && (fromCart || source === SOURCE_CART)) {
-          const raw = sessionStorage.getItem(SCOPE_KEY);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) scoped = parsed;
-          }
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-
-    // Not a cart handoff: drop stale cart-only session so BOQ / revisit paths do not pick old lines.
-    if ((!Array.isArray(scoped) || scoped.length === 0) && !fromCart) {
-      try {
-        if (sessionStorage.getItem(SCOPE_SOURCE_KEY) === SOURCE_CART) {
-          sessionStorage.removeItem(SCOPE_KEY);
-          sessionStorage.removeItem(SCOPE_TS_KEY);
-          sessionStorage.removeItem(SCOPE_SOURCE_KEY);
-        }
-      } catch {
-        /* ignore */
-      }
+      const recovered = readSupplierSelectScopeSessionIfFresh();
+      if (recovered) scoped = recovered;
     }
 
     if (!Array.isArray(scoped) || scoped.length === 0) return;
@@ -73,7 +43,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     lockedLineIdsRef.current = ids.size > 0 ? ids : null;
 
     setEffectiveItems(scoped);
-    setSavedBoqItemsError(null);
     const proj = location.state?.supplierSelectBoqProject;
     if (proj && typeof proj === 'object') {
       setBoqMeta(proj);
@@ -131,7 +100,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       lockedLineIdsRef.current = null;
     }
     setEffectiveItems(items);
-    setSavedBoqItemsError(null);
   }, [items]);
 
   // If items are missing (e.g., user returns later), load them from the saved BOQ
@@ -147,42 +115,30 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       if (!id) return;
 
       setLoadingItems(true);
-      setSavedBoqItemsError(null);
       try {
         const res = await fetch(getApiUrl(`/api/boq/${encodeURIComponent(id)}/items`), {
           headers: {
             'Authorization': `Bearer ${token}`
           }
         });
-        const data = await res.json().catch(() => ({}));
+        const data = await res.json();
         if (cancelled) return;
         // Parent may have supplied a focused list while this request was in flight; do not overwrite.
         if (itemsPropRef.current && itemsPropRef.current.length > 0) {
           return;
         }
         if (res.ok && data.status === 'success' && Array.isArray(data.items)) {
-          if (data.items.length === 0) {
-            setSavedBoqItemsError('This saved BOQ has no line items yet.');
-          } else {
-            const withBoq = data.items.map((it) => ({
-              ...it,
-              boqId: data.boqId || id
-            }));
-            setEffectiveItems(withBoq);
-            setSavedBoqItemsError(null);
-            if (data.project && (data.project.location || data.project.requiredDate)) {
-              setBoqMeta(data.project);
-            }
+          const withBoq = data.items.map((it) => ({
+            ...it,
+            boqId: data.boqId || id
+          }));
+          setEffectiveItems(withBoq);
+          if (data.project && (data.project.location || data.project.requiredDate)) {
+            setBoqMeta(data.project);
           }
-        } else {
-          setSavedBoqItemsError(
-            typeof data.message === 'string' && data.message.trim()
-              ? data.message.trim()
-              : `Could not load saved BOQ items (${res.status}).`
-          );
         }
       } catch (e) {
-        setSavedBoqItemsError('Could not load saved BOQ items. Check your connection and try again.');
+        // ignore - UI will prompt to upload again
       } finally {
         if (!cancelled) {
           setLoadingItems(false);
@@ -214,7 +170,11 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     }
     
     setLoading(true);
-    
+
+    const rankTimeoutMs = 90000;
+    const abortController = new AbortController();
+    const timeoutId = window.setTimeout(() => abortController.abort(), rankTimeoutMs);
+
     try {
       // Generate a unique timestamp and random number to prevent any caching
       const timestamp = Date.now();
@@ -255,6 +215,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
       const res = await fetch(fullUrl, {
         method: 'POST',
+        signal: abortController.signal,
         headers: { 
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -328,36 +289,42 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         setItemVendors(emptyVendors);
       }
     } catch (error) {
-      console.error('[VendorSelect] Failed to fetch vendors:', error);
-      console.error('[VendorSelect] Error details:', {
-        message: error.message,
-        name: error.name,
-        stack: error.stack
-      });
-      
-      // Show user-friendly error message
-      if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
-        const apiUrl = getApiUrl('/api/vendors/rank');
-        const errorMsg = `Unable to connect to the server.\n\nPlease check:\n1. Backend server is running on ${apiUrl.replace('/api/vendors/rank', '')}\n2. Your internet connection\n3. CORS is properly configured\n\nCheck browser console (F12) for more details.`;
-        console.error('[VendorSelect] Connection Error Details:', {
-          apiUrl,
-          error: error.message,
+      if (error?.name === 'AbortError') {
+        console.error('[VendorSelect] Rank request timed out');
+        alert(
+          'Supplier ranking is taking too long (server timeout). Please try Refresh, or try again in a few minutes.'
+        );
+      } else {
+        console.error('[VendorSelect] Failed to fetch vendors:', error);
+        console.error('[VendorSelect] Error details:', {
+          message: error.message,
           name: error.name,
           stack: error.stack
         });
-        alert(errorMsg);
-      } else {
-        alert(`Error fetching suppliers: ${error.message}\n\nCheck browser console for details.`);
+
+        if (error.message.includes('Failed to fetch') || error.name === 'TypeError') {
+          const apiUrl = getApiUrl('/api/vendors/rank');
+          const errorMsg = `Unable to connect to the server.\n\nPlease check:\n1. Backend server is running on ${apiUrl.replace('/api/vendors/rank', '')}\n2. Your internet connection\n3. CORS is properly configured\n\nCheck browser console (F12) for more details.`;
+          console.error('[VendorSelect] Connection Error Details:', {
+            apiUrl,
+            error: error.message,
+            name: error.name,
+            stack: error.stack
+          });
+          alert(errorMsg);
+        } else {
+          alert(`Error fetching suppliers: ${error.message}\n\nCheck browser console for details.`);
+        }
       }
-      
-      // Initialize with empty arrays on error
+
       const emptyVendors = {};
-      effectiveItems.forEach(item => {
+      effectiveItems.forEach((item) => {
         const itemId = item.id?.toString() || String(item.id);
         emptyVendors[itemId] = [];
       });
       setItemVendors(emptyVendors);
     } finally {
+      window.clearTimeout(timeoutId);
       setLoading(false);
     }
   };
@@ -479,7 +446,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     }
     
     onComplete({ ...selections }, [...effectiveItems]);
-    clearSupplierSelectSessionScope();
+    clearSupplierSelectScopeSession();
     navigate('/substitution');
   };
 
@@ -509,14 +476,13 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         <div className="page-header">
           <h1>Supplier Selection</h1>
           <p>
-            {savedBoqItemsError
-              ? savedBoqItemsError
-              : canLoadFromSavedBoq
-                ? 'Saved BOQ items did not load into this screen. From the cart, use “Select supplier” on the lines you want, or continue from a BOQ upload.'
-                : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
+            {canLoadFromSavedBoq
+              ? 'Loading saved BOQ items...'
+              : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
           </p>
         </div>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        {!canLoadFromSavedBoq && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
           <button 
             className="btn-primary" 
             onClick={() => navigate('/cart')}
@@ -530,6 +496,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             Upload a BOQ
           </button>
           </div>
+        )}
       </div>
     );
   }

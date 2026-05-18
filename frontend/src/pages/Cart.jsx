@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl } from '../config/api';
-import { SUPPLIER_SELECT_SESSION } from '../constants/supplierSelectSession';
+import { persistSupplierSelectScopeFromCart } from '../constants/supplierSelectSession';
 import './Cart.css';
 
 const Cart = ({ onLoadCart }) => {
@@ -251,21 +251,10 @@ const Cart = ({ onLoadCart }) => {
     };
   };
 
-  const persistSupplierSelectScope = (draft) => {
-    if (!draft?.items?.length) return;
-    try {
-      sessionStorage.setItem(SUPPLIER_SELECT_SESSION.SCOPE_KEY, JSON.stringify(draft.items));
-      sessionStorage.setItem(SUPPLIER_SELECT_SESSION.SCOPE_TS_KEY, String(Date.now()));
-      sessionStorage.setItem(SUPPLIER_SELECT_SESSION.SCOPE_SOURCE_KEY, SUPPLIER_SELECT_SESSION.SOURCE_CART);
-    } catch {
-      /* ignore */
-    }
-  };
-
   const handleContinueToSupplierSelectionForGroup = (group) => {
     const groupDraft = buildDraftFromGroup(group);
     if (groupDraft && typeof onLoadCart === 'function') onLoadCart(groupDraft);
-    persistSupplierSelectScope(groupDraft);
+    persistSupplierSelectScopeFromCart(groupDraft.items);
     const navState = supplierSelectNavigationState(groupDraft);
     navigate('/supplier-select', navState ? { state: navState } : {});
   };
@@ -274,7 +263,7 @@ const Cart = ({ onLoadCart }) => {
   const handleContinueToSupplierSelectionForItem = (item, group) => {
     const draft = buildDraftFromSingleItem(item, group);
     if (draft && typeof onLoadCart === 'function') onLoadCart(draft);
-    persistSupplierSelectScope(draft);
+    persistSupplierSelectScopeFromCart(draft.items);
     const navState = supplierSelectNavigationState(draft);
     navigate('/supplier-select', navState ? { state: navState } : {});
   };
