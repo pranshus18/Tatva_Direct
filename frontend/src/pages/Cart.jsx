@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
@@ -28,6 +28,10 @@ const Cart = ({ onLoadCart }) => {
   const [copyingShareLink, setCopyingShareLink] = useState(false);
 
   const token = localStorage.getItem('token');
+  const cartRef = useRef(null);
+  useEffect(() => {
+    cartRef.current = cart;
+  }, [cart]);
 
   const getGroups = (draft) => {
     if (!draft || typeof draft !== 'object') return [];
@@ -55,9 +59,8 @@ const Cart = ({ onLoadCart }) => {
           ? g.items.map((it) => (String(it?.id) === id ? { ...it, quantity: qty } : it))
           : []
       }));
-      const nextFlat = Array.isArray(draft.items)
-        ? draft.items.map((it) => (String(it?.id) === id ? { ...it, quantity: qty } : it))
-        : draft.items;
+      // Keep flat `items` in lockstep with groups (same as server normalizePoCartDraft).
+      const nextFlat = nextBoqGroups.flatMap((g) => (Array.isArray(g.items) ? g.items : []));
       return { ...draft, boqGroups: nextBoqGroups, items: nextFlat };
     }
     const nextFlat = Array.isArray(draft.items)
@@ -67,10 +70,12 @@ const Cart = ({ onLoadCart }) => {
   };
 
   /**
-   * @param {{ silent?: boolean }} [options] — silent: no full-page loading state; do not overwrite parent workflow (onLoadCart).
+   * @param {{ silent?: boolean, syncWorkflow?: boolean }} [options]
+   * silent: no full-page loading spinner. When syncWorkflow is true (or silent is false), push draft to parent via onLoadCart.
    */
   const loadCart = async (options = {}) => {
     const silent = options.silent === true;
+    const syncWorkflow = options.syncWorkflow === true || !silent;
     if (!token) {
       setError('Please log in again to view cart.');
       setLoading(false);
@@ -89,7 +94,7 @@ const Cart = ({ onLoadCart }) => {
         throw new Error(data.message || 'Failed to load cart');
       }
       setCart(data.cart || null);
-      if (!silent && data.cart?.draft && typeof onLoadCart === 'function') {
+      if (syncWorkflow && data.cart?.draft && typeof onLoadCart === 'function') {
         onLoadCart(data.cart.draft);
       }
     } catch (e) {
@@ -144,15 +149,18 @@ const Cart = ({ onLoadCart }) => {
       if (data.item) {
         const id = String(data.item.id ?? normalizedItemId);
         const qty = Math.floor(Number(data.item.quantity)) || parsed;
-        setCart((prev) => {
-          if (!prev?.draft) return prev;
-          return {
-            ...prev,
-            draft: mergeItemQuantityIntoDraft(prev.draft, id, qty)
-          };
-        });
+        const prev = cartRef.current;
+        if (prev?.draft) {
+          const nextDraft = mergeItemQuantityIntoDraft(prev.draft, id, qty);
+          setCart({ ...prev, draft: nextDraft });
+          if (typeof onLoadCart === 'function') {
+            onLoadCart(nextDraft);
+          }
+        } else {
+          await loadCart({ silent: true, syncWorkflow: true });
+        }
       } else {
-        await loadCart({ silent: true });
+        await loadCart({ silent: true, syncWorkflow: true });
       }
     } catch (e) {
       setError(e.message || 'Failed to update quantity');
