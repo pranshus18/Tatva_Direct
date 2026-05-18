@@ -1,8 +1,9 @@
 import React from 'react';
-import { Mic, PhoneOff, Volume2 } from 'lucide-react';
+import { Mic, PhoneOff } from 'lucide-react';
 import { Navigate } from 'react-router-dom';
 import { normalizeUserType } from '../utils/userType';
 import { useVoiceSession } from '../voice/useVoiceSession';
+import agentGif from '../images/agent.gif';
 import './VoiceCommerce.css';
 
 const VoiceCommerce = ({ user }) => {
@@ -69,7 +70,7 @@ const VoiceCommerce = ({ user }) => {
       ) : null}
 
       <div className={`voice-orb voice-orb--${inCall ? 'in-call' : displayState}`} aria-live="polite">
-        <Volume2 size={28} />
+        <img src={agentGif} alt="" className="voice-orb__img" aria-hidden="true" />
         <span className="voice-orb__label">{stateLabel}</span>
       </div>
 

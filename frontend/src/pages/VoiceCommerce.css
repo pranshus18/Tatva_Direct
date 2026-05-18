@@ -18,48 +18,53 @@
 }
 
 .voice-orb {
-  margin: 2.5rem auto;
-  width: 160px;
-  height: 160px;
-  border-radius: 50%;
+  margin: 2rem auto;
+  width: min(240px, 72vw);
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
-  background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
-  color: #4f46e5;
-  box-shadow: 0 8px 32px rgba(79, 70, 229, 0.15);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  gap: 0.75rem;
+  transition: transform 0.2s ease, filter 0.2s ease;
 }
 
-.voice-orb--listening {
+.voice-orb__img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 50%;
+  object-fit: cover;
+  aspect-ratio: 1;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.35);
+}
+
+.voice-orb--listening .voice-orb__img,
+.voice-orb--in-call .voice-orb__img {
   animation: voice-pulse 1.5s ease-in-out infinite;
-  box-shadow: 0 0 0 0 rgba(79, 70, 229, 0.4);
 }
 
-.voice-orb--thinking,
-.voice-orb--speaking {
-  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-  color: #b45309;
+.voice-orb--thinking .voice-orb__img,
+.voice-orb--speaking .voice-orb__img {
+  animation: voice-pulse 1s ease-in-out infinite;
+  filter: brightness(1.08);
 }
 
 .voice-orb__label {
-  font-size: 0.75rem;
+  font-size: 0.8rem;
   font-weight: 600;
-  max-width: 120px;
-  line-height: 1.3;
+  max-width: 280px;
+  line-height: 1.35;
+  color: #334155;
 }
 
 @keyframes voice-pulse {
   0%,
   100% {
     transform: scale(1);
-    box-shadow: 0 8px 32px rgba(79, 70, 229, 0.15);
+    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.35);
   }
   50% {
-    transform: scale(1.03);
-    box-shadow: 0 0 0 12px rgba(79, 70, 229, 0.08);
+    transform: scale(1.04);
+    box-shadow: 0 16px 48px rgba(79, 70, 229, 0.35);
   }
 }
 
@@ -123,18 +128,6 @@
 
 .voice-tip--ok {
   color: #15803d;
-}
-
-.voice-orb--thinking {
-  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
-  color: #b45309;
-  animation: voice-pulse 1s ease-in-out infinite;
-}
-
-.voice-orb--in-call {
-  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
-  color: #1d4ed8;
-  animation: voice-pulse 2s ease-in-out infinite;
 }
 
 .voice-call-badge {
