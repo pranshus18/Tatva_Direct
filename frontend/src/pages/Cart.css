@@ -383,6 +383,15 @@
   font-weight: 600;
 }
 
+.cart-row-supplier-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.35rem 0.55rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .cart-qty-input {
   width: 70px;
   padding: 0.2rem 0.35rem;

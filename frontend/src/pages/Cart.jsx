@@ -44,13 +44,41 @@ const Cart = ({ onLoadCart }) => {
     return [];
   };
 
-  const loadCart = async () => {
+  const mergeItemQuantityIntoDraft = (draft, itemId, nextQuantity) => {
+    if (!draft || typeof draft !== 'object') return draft;
+    const id = String(itemId || '');
+    const qty = Math.floor(Number(nextQuantity)) || 1;
+    if (Array.isArray(draft.boqGroups) && draft.boqGroups.length > 0) {
+      const nextBoqGroups = draft.boqGroups.map((g) => ({
+        ...g,
+        items: Array.isArray(g.items)
+          ? g.items.map((it) => (String(it?.id) === id ? { ...it, quantity: qty } : it))
+          : []
+      }));
+      const nextFlat = Array.isArray(draft.items)
+        ? draft.items.map((it) => (String(it?.id) === id ? { ...it, quantity: qty } : it))
+        : draft.items;
+      return { ...draft, boqGroups: nextBoqGroups, items: nextFlat };
+    }
+    const nextFlat = Array.isArray(draft.items)
+      ? draft.items.map((it) => (String(it?.id) === id ? { ...it, quantity: qty } : it))
+      : draft.items;
+    return { ...draft, items: nextFlat };
+  };
+
+  /**
+   * @param {{ silent?: boolean }} [options] — silent: no full-page loading state; do not overwrite parent workflow (onLoadCart).
+   */
+  const loadCart = async (options = {}) => {
+    const silent = options.silent === true;
     if (!token) {
       setError('Please log in again to view cart.');
       setLoading(false);
       return;
     }
-    setLoading(true);
+    if (!silent) {
+      setLoading(true);
+    }
     setError('');
     try {
       const response = await fetch(getApiUrl('/api/po/cart'), {
@@ -61,13 +89,15 @@ const Cart = ({ onLoadCart }) => {
         throw new Error(data.message || 'Failed to load cart');
       }
       setCart(data.cart || null);
-      if (data.cart?.draft && typeof onLoadCart === 'function') {
+      if (!silent && data.cart?.draft && typeof onLoadCart === 'function') {
         onLoadCart(data.cart.draft);
       }
     } catch (e) {
       setError(e.message || 'Failed to load cart');
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   };
 
@@ -110,7 +140,20 @@ const Cart = ({ onLoadCart }) => {
       if (!response.ok || data.status !== 'success') {
         throw new Error(data.message || 'Failed to update quantity');
       }
-      await loadCart();
+      // Avoid full reload + loading flash: merge server item (PATCH returns updated row).
+      if (data.item) {
+        const id = String(data.item.id ?? normalizedItemId);
+        const qty = Math.floor(Number(data.item.quantity)) || parsed;
+        setCart((prev) => {
+          if (!prev?.draft) return prev;
+          return {
+            ...prev,
+            draft: mergeItemQuantityIntoDraft(prev.draft, id, qty)
+          };
+        });
+      } else {
+        await loadCart({ silent: true });
+      }
     } catch (e) {
       setError(e.message || 'Failed to update quantity');
     } finally {
@@ -170,9 +213,35 @@ const Cart = ({ onLoadCart }) => {
     };
   };
 
+  const buildDraftFromSingleItem = (item, group) => {
+    const groupDraft = buildDraftFromGroup(group);
+    if (!groupDraft || !item) return null;
+    const one = groupDraft.items.find((it) => String(it?.id) === String(item?.id)) || item;
+    const g0 = groupDraft.boqGroups?.[0];
+    const narrowedGroup = g0
+      ? {
+          ...g0,
+          items: [one],
+          selectedVendors: g0.selectedVendors && typeof g0.selectedVendors === 'object' ? { ...g0.selectedVendors } : {}
+        }
+      : null;
+    return {
+      ...groupDraft,
+      items: [one],
+      boqGroups: narrowedGroup ? [narrowedGroup] : groupDraft.boqGroups
+    };
+  };
+
   const handleContinueToSupplierSelectionForGroup = (group) => {
     const groupDraft = buildDraftFromGroup(group);
     if (groupDraft && typeof onLoadCart === 'function') onLoadCart(groupDraft);
+    navigate('/supplier-select');
+  };
+
+  /** One cart line → supplier rank API only receives that product (correct supplier list). */
+  const handleContinueToSupplierSelectionForItem = (item, group) => {
+    const draft = buildDraftFromSingleItem(item, group);
+    if (draft && typeof onLoadCart === 'function') onLoadCart(draft);
     navigate('/supplier-select');
   };
 
@@ -246,7 +315,7 @@ const Cart = ({ onLoadCart }) => {
     <div className="page">
       <div className="page-header">
         <h1>Cart</h1>
-        <p>Review added items, adjust quantity, then continue with supplier selection.</p>
+        <p>Review items, change quantity, then use <strong>Select supplier</strong> on a row for that product only, or choose suppliers for the whole group.</p>
       </div>
 
       <div className="cart-shell">
@@ -303,11 +372,12 @@ const Cart = ({ onLoadCart }) => {
                     <div className="cart-boq-group__actions">
                       <button
                         type="button"
-                        className="btn-primary cart-boq-group__btn"
+                        className="btn-secondary cart-boq-group__btn"
                         disabled={items.length === 0}
                         onClick={() => handleContinueToSupplierSelectionForGroup(group)}
+                        title="Choose suppliers for every line in this group at once"
                       >
-                        Select Suppliers <ArrowRight size={16} />
+                        All items in group <ArrowRight size={16} />
                       </button>
                     </div>
                   </div>
@@ -320,6 +390,7 @@ const Cart = ({ onLoadCart }) => {
                             <th>Item</th>
                             <th>Unit</th>
                             <th>Quantity</th>
+                            <th>Supplier</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -351,6 +422,17 @@ const Cart = ({ onLoadCart }) => {
                                       +
                                     </button>
                                   </div>
+                                </td>
+                                <td>
+                                  <button
+                                    type="button"
+                                    className="btn-primary cart-row-supplier-btn"
+                                    disabled={!itemId}
+                                    onClick={() => handleContinueToSupplierSelectionForItem(item, group)}
+                                    title="Rank and choose suppliers for this line only"
+                                  >
+                                    Select supplier <ArrowRight size={14} />
+                                  </button>
                                 </td>
                               </tr>
                             );
