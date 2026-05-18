@@ -10,6 +10,18 @@ function getCtx() {
   return audioCtx;
 }
 
+/** Resume Web Audio after a user gesture (required on mobile / strict autoplay). */
+export async function resumeAudioPlayback() {
+  const ctx = getCtx();
+  if (ctx.state === 'suspended') {
+    try {
+      await ctx.resume();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function decodePcm16Base64(b64) {
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
@@ -35,8 +47,11 @@ export function resetAudioPlayback() {
 }
 
 export function playPcmChunk(base64Chunk, sampleRate = 22050) {
-  if (!base64Chunk) return;
+  if (!base64Chunk) return false;
   const ctx = getCtx();
+  if (ctx.state === 'suspended') {
+    void ctx.resume();
+  }
   const samples = decodePcm16Base64(base64Chunk);
   const buffer = ctx.createBuffer(1, samples.length, sampleRate);
   buffer.copyToChannel(samples, 0);
@@ -46,4 +61,5 @@ export function playPcmChunk(base64Chunk, sampleRate = 22050) {
   const startAt = Math.max(ctx.currentTime, nextStart);
   source.start(startAt);
   nextStart = startAt + buffer.duration;
+  return true;
 }

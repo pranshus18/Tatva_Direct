@@ -3,10 +3,11 @@ import {
   createCallSpeechRecognizer,
   speakVoiceReply,
   speakStatus,
-  stopSpeaking
+  stopSpeaking,
+  unlockSpeech
 } from './browserSpeech.js';
 import { isEndCallPhrase, isSendTurnPhrase, stripSendPhrase } from './callPhrases.js';
-import { playPcmChunk, resetAudioPlayback } from './audioPlayback.js';
+import { playPcmChunk, resetAudioPlayback, resumeAudioPlayback } from './audioPlayback.js';
 import { createVoiceSocket } from './voiceSocket.js';
 
 /** Long checkout steps (transport quotes) can take 1–2 minutes. */
@@ -17,6 +18,8 @@ const MAX_SPEAK_MS = 120000;
 /** Auto-send after user stops speaking (real-call feel). */
 const AUTO_SEND_PAUSE_MS = 1400;
 const MIN_AUTO_SEND_CHARS = 2;
+/** Only skip browser TTS when server Piper is explicitly enabled on the client. */
+const USE_SERVER_TTS_ONLY = import.meta.env.VITE_VOICE_SERVER_TTS === 'true';
 
 export function useVoiceSession(token) {
   const debug = typeof localStorage !== 'undefined' && localStorage.getItem('VOICE_DEBUG') === '1';
@@ -35,7 +38,8 @@ export function useVoiceSession(token) {
   const resumeTimerRef = useRef(null);
   const sentRef = useRef(false);
   const streamBufRef = useRef('');
-  const useServerTtsRef = useRef(false);
+  const serverPiperEnabledRef = useRef(false);
+  const serverTtsChunksRef = useRef(0);
   const inCallRef = useRef(false);
   const connectedRef = useRef(false);
   const processingRef = useRef(false);
@@ -162,9 +166,19 @@ export function useVoiceSession(token) {
     setUiState(connectedRef.current ? 'ready' : 'disconnected');
   }, [log]);
 
-  const speak = (text, { onEnd } = {}) => {
+  const shouldSkipBrowserTts = () =>
+    USE_SERVER_TTS_ONLY &&
+    serverPiperEnabledRef.current &&
+    serverTtsChunksRef.current > 0;
+
+  const speak = (text, { onEnd, force = false } = {}) => {
     clearSpeakSafetyTimer();
-    if (useServerTtsRef.current || !text) {
+    const toSpeak = String(text || '').trim();
+    if (!toSpeak) {
+      onEnd?.();
+      return;
+    }
+    if (!force && shouldSkipBrowserTts()) {
       onEnd?.();
       return;
     }
@@ -175,12 +189,13 @@ export function useVoiceSession(token) {
     };
     speakSafetyTimerRef.current = setTimeout(finish, MAX_SPEAK_MS);
     requestAnimationFrame(() => {
-      speakVoiceReply(text, {
+      const started = speakVoiceReply(toSpeak, {
         onStart: () => {
           if (inCallRef.current) setUiState('speaking');
         },
         onEnd: finish
       });
+      if (!started) finish();
     });
   };
 
@@ -317,6 +332,9 @@ export function useVoiceSession(token) {
     unmountedRef.current = false;
 
     const makeHandlers = () => ({
+      onReady: (data) => {
+        serverPiperEnabledRef.current = Boolean(data?.pipeline?.piper);
+      },
       onAuthOk: () => {
         connectedRef.current = true;
         setConnected(true);
@@ -339,7 +357,7 @@ export function useVoiceSession(token) {
           setStreamingReply(statusText);
           setUiState('thinking');
           bumpReplyTimer();
-          if (!useServerTtsRef.current) {
+          if (!shouldSkipBrowserTts()) {
             speakStatus(statusText);
           }
         }
@@ -381,11 +399,11 @@ export function useVoiceSession(token) {
         }, REPLY_DONE_RESUME_MS);
       },
       onTtsChunk: (chunk) => {
-        useServerTtsRef.current = true;
+        if (!USE_SERVER_TTS_ONLY || !serverPiperEnabledRef.current) return;
+        if (playPcmChunk(chunk)) serverTtsChunksRef.current += 1;
         micPausedRef.current = true;
         pauseMicCapture();
         setUiState('speaking');
-        playPcmChunk(chunk);
       },
       onAgentReply: (text) => {
         clearReplyTimer();
@@ -393,8 +411,10 @@ export function useVoiceSession(token) {
         bumpReplyTimer();
         sentRef.current = false;
         processingRef.current = false;
-        setLastReply(text);
+        const replyText = String(text || streamBufRef.current || '').trim();
+        setLastReply(replyText);
         setStreamingReply('');
+        streamBufRef.current = '';
         setError('');
         setInCall(true);
         inCallRef.current = true;
@@ -403,6 +423,7 @@ export function useVoiceSession(token) {
 
         const resume = () => {
           clearReplyTimer();
+          serverTtsChunksRef.current = 0;
           if (inCallRef.current) {
             setInCall(true);
             inCallRef.current = true;
@@ -410,9 +431,16 @@ export function useVoiceSession(token) {
           }
         };
 
-        if (!useServerTtsRef.current && text) speak(text, { onEnd: resume });
-        else resume();
-        useServerTtsRef.current = false;
+        const usedServerOnly = shouldSkipBrowserTts();
+        if (replyText && !usedServerOnly) {
+          speak(replyText, { onEnd: resume });
+        } else if (replyText && usedServerOnly) {
+          setUiState('speaking');
+          const estMs = Math.min(MAX_SPEAK_MS, Math.max(4000, replyText.length * 55));
+          speakSafetyTimerRef.current = setTimeout(resume, estMs);
+        } else {
+          resume();
+        }
       },
       onError: (err) => {
         clearReplyTimer();
@@ -472,6 +500,9 @@ export function useVoiceSession(token) {
   }, [token]);
 
   const startSpeaking = useCallback(() => {
+    unlockSpeech();
+    void resumeAudioPlayback();
+    serverTtsChunksRef.current = 0;
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
       setError('Connecting… try again in a moment.');
       connectSocketRef.current?.();

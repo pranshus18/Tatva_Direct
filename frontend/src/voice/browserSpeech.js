@@ -1,6 +1,50 @@
+let speechUnlocked = false;
+
 export function getSpeechRecognitionCtor() {
   if (typeof window === 'undefined') return null;
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
+}
+
+/** Call from a user click so later async replies can use speechSynthesis (Chrome/Safari). */
+export function unlockSpeech() {
+  if (typeof window === 'undefined' || !window.speechSynthesis || speechUnlocked) return;
+  try {
+    const u = new SpeechSynthesisUtterance(' ');
+    u.volume = 0.01;
+    u.lang = 'en-IN';
+    window.speechSynthesis.speak(u);
+    window.speechSynthesis.cancel();
+    speechUnlocked = true;
+  } catch {
+    /* ignore */
+  }
+}
+
+function pickVoice(lang = 'en-IN') {
+  const voices = window.speechSynthesis?.getVoices?.() || [];
+  const prefer = voices.find((v) => v.lang?.startsWith('en') && /india|en-in/i.test(v.lang));
+  if (prefer) return prefer;
+  return voices.find((v) => v.lang?.startsWith('en')) || voices[0] || null;
+}
+
+function applyUtterance(utter) {
+  const voice = pickVoice(utter.lang);
+  if (voice) utter.voice = voice;
+  utter.rate = 1.05;
+  utter.pitch = 1;
+  utter.volume = 1;
+}
+
+/** Chrome sometimes drops the first speak() after async WS — nudge the queue. */
+function nudgeSpeechSynthesis() {
+  try {
+    if (window.speechSynthesis.speaking) {
+      window.speechSynthesis.pause();
+      window.speechSynthesis.resume();
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 export function speechSnippet(text, maxLen = 220) {
@@ -17,32 +61,60 @@ const VOICE_REPLY_MAX = 520;
 export function speakText(text, { onStart, onEnd, maxLen = 220 } = {}) {
   if (!text || typeof window === 'undefined' || !window.speechSynthesis) {
     onEnd?.();
-    return;
+    return false;
   }
+  const snippet = speechSnippet(text, maxLen);
+  if (!snippet) {
+    onEnd?.();
+    return false;
+  }
+
   window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(speechSnippet(text, maxLen));
-  utter.rate = 1.2;
-  utter.pitch = 1;
+  const utter = new SpeechSynthesisUtterance(snippet);
   utter.lang = 'en-IN';
-  if (onStart) utter.onstart = onStart;
-  if (onEnd) utter.onend = onEnd;
-  window.speechSynthesis.speak(utter);
+  applyUtterance(utter);
+  let ended = false;
+  const finish = () => {
+    if (ended) return;
+    ended = true;
+    onEnd?.();
+  };
+  utter.onstart = () => {
+    onStart?.();
+    setTimeout(nudgeSpeechSynthesis, 50);
+  };
+  utter.onend = finish;
+  utter.onerror = finish;
+
+  const start = () => {
+    window.speechSynthesis.speak(utter);
+    setTimeout(nudgeSpeechSynthesis, 120);
+  };
+
+  const voices = window.speechSynthesis.getVoices();
+  if (voices.length) {
+    start();
+  } else {
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.onvoiceschanged = null;
+      applyUtterance(utter);
+      start();
+    };
+    start();
+  }
+  return true;
 }
 
 /** Speak a full voice reply (may use multiple sentences up to VOICE_REPLY_MAX). */
 export function speakVoiceReply(text, { onStart, onEnd } = {}) {
-  speakText(text, { onStart, onEnd, maxLen: VOICE_REPLY_MAX });
+  return speakText(text, { onStart, onEnd, maxLen: VOICE_REPLY_MAX });
 }
 
 /** Short status while the agent is working (catalog, transport, placing order). */
 export function speakStatus(text) {
   const s = String(text || '').trim();
-  if (!s || typeof window === 'undefined' || !window.speechSynthesis) return;
-  const utter = new SpeechSynthesisUtterance(s.slice(0, 140));
-  utter.rate = 1.15;
-  utter.pitch = 1;
-  utter.lang = 'en-IN';
-  window.speechSynthesis.speak(utter);
+  if (!s) return;
+  speakText(s, { maxLen: 140 });
 }
 
 export function stopSpeaking() {
