@@ -1,9 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { TrendingUp, Clock, RefreshCw, MapPin } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import './VendorSelect.css';
+
+const SESSION_SCOPE_KEY = 'tatvaSupplierSelectScope';
+const SESSION_SCOPE_TS_KEY = 'tatvaSupplierSelectScopeTs';
+const SCOPE_TTL_MS = 120000;
 
 const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete }) => {
   const [itemVendors, setItemVendors] = useState({});
@@ -14,6 +18,54 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const [loadingItems, setLoadingItems] = useState(false);
   const [boqMeta, setBoqMeta] = useState(boqProject || null);
   const navigate = useNavigate();
+  const location = useLocation();
+  const itemsPropRef = useRef(items);
+  /** When set, parent `items` is ignored until it matches these line ids (avoids stale full cart overwriting one-line selection). */
+  const lockedLineIdsRef = useRef(null);
+
+  useEffect(() => {
+    itemsPropRef.current = items;
+  }, [items]);
+
+  // Cart passes router state + session backup; BOQ flow must not read stale session.
+  useLayoutEffect(() => {
+    const fromCart = location?.state?.fromCartSupplierSelect === true;
+    if (!fromCart) {
+      try {
+        sessionStorage.removeItem(SESSION_SCOPE_KEY);
+        sessionStorage.removeItem(SESSION_SCOPE_TS_KEY);
+      } catch {
+        /* ignore */
+      }
+    }
+
+    let scoped = location?.state?.supplierSelectItems;
+    if (fromCart && (!Array.isArray(scoped) || scoped.length === 0)) {
+      try {
+        const ts = Number(sessionStorage.getItem(SESSION_SCOPE_TS_KEY) || 0);
+        if (ts && Date.now() - ts < SCOPE_TTL_MS) {
+          const raw = sessionStorage.getItem(SESSION_SCOPE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) scoped = parsed;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if (!Array.isArray(scoped) || scoped.length === 0) return;
+
+    const ids = new Set(scoped.map((it) => String(it?.id ?? '').trim()).filter(Boolean));
+    lockedLineIdsRef.current = ids.size > 0 ? ids : null;
+
+    setEffectiveItems(scoped);
+    const proj = location.state?.supplierSelectBoqProject;
+    if (proj && typeof proj === 'object') {
+      setBoqMeta(proj);
+    }
+  }, [location.pathname, location.search, location.state]);
   const normalizeIdPart = (value) => (value === null || value === undefined ? '' : String(value).trim());
   const firstNonEmpty = (...values) => {
     for (const value of values) {
@@ -55,13 +107,22 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
   // Keep local working copy of items so we can restore after refresh/navigation
   useEffect(() => {
-    if (items && Array.isArray(items) && items.length > 0) {
-      setEffectiveItems(items);
+    if (!items || !Array.isArray(items) || items.length === 0) return;
+    const lock = lockedLineIdsRef.current;
+    if (lock && lock.size > 0) {
+      const parentIds = new Set(items.map((it) => String(it?.id ?? '').trim()).filter(Boolean));
+      const lockOk = [...lock].every((id) => parentIds.has(id)) && parentIds.size === lock.size;
+      if (!lockOk) {
+        return;
+      }
+      lockedLineIdsRef.current = null;
     }
+    setEffectiveItems(items);
   }, [items]);
 
   // If items are missing (e.g., user returns later), load them from the saved BOQ
   useEffect(() => {
+    let cancelled = false;
     const loadItems = async () => {
       if (effectiveItems && effectiveItems.length > 0) return;
 
@@ -79,6 +140,11 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           }
         });
         const data = await res.json();
+        if (cancelled) return;
+        // Parent may have supplied a focused list while this request was in flight; do not overwrite.
+        if (itemsPropRef.current && itemsPropRef.current.length > 0) {
+          return;
+        }
         if (res.ok && data.status === 'success' && Array.isArray(data.items)) {
           const withBoq = data.items.map((it) => ({
             ...it,
@@ -92,11 +158,16 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       } catch (e) {
         // ignore - UI will prompt to upload again
       } finally {
-        setLoadingItems(false);
+        if (!cancelled) {
+          setLoadingItems(false);
+        }
       }
     };
 
     loadItems();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [boqId, effectiveItems.length]);
 
@@ -287,18 +358,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         }
       };
     } else {
-      // If no items, redirect back to BOQ normalize
-      console.warn('[VendorSelect] No items found, redirecting to BOQ normalize');
-      // Don't redirect if we can load items from the saved BOQ id (prevents flicker/race conditions
-      // right after navigating from BOQ normalize -> supplier select).
-      const possibleBoqId =
-        boqId ||
-        (typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null);
-      const canLoadFromSavedBoq = !!possibleBoqId;
-
-      if (!loadingItems && !canLoadFromSavedBoq) {
-        navigate('/boq-normalize', { replace: true });
-      }
+      // Cart / discovery often has no boqId — never auto-send users to BOQ normalize (they lose context).
+      // Empty state UI below offers manual links when nothing can be loaded.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [effectiveItems, loadingItems]);
@@ -392,6 +453,12 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     }
     
     onComplete({ ...selections }, [...effectiveItems]);
+    try {
+      sessionStorage.removeItem(SESSION_SCOPE_KEY);
+      sessionStorage.removeItem(SESSION_SCOPE_TS_KEY);
+    } catch {
+      /* ignore */
+    }
     navigate('/substitution');
   };
 
@@ -423,16 +490,24 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           <p>
             {canLoadFromSavedBoq
               ? 'Loading saved BOQ items...'
-              : 'No items found. Please go back and upload a BOQ file.'}
+              : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
           </p>
         </div>
         {!canLoadFromSavedBoq && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
           <button 
             className="btn-primary" 
+            onClick={() => navigate('/cart')}
+          >
+            Go to cart
+          </button>
+          <button 
+            className="btn-secondary" 
             onClick={() => navigate('/boq-normalize')}
           >
-            Go Back to BOQ Normalize
+            Upload a BOQ
           </button>
+          </div>
         )}
       </div>
     );

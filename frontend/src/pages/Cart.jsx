@@ -240,17 +240,41 @@ const Cart = ({ onLoadCart }) => {
     };
   };
 
+  const supplierSelectNavigationState = (draft) => {
+    if (!draft || !Array.isArray(draft.items) || draft.items.length === 0) return undefined;
+    return {
+      supplierSelectItems: draft.items,
+      supplierSelectBoqProject: draft.boqProject ?? null,
+      supplierSelectBoqId: draft.boqId ?? null,
+      fromCartSupplierSelect: true
+    };
+  };
+
+  const persistSupplierSelectScope = (draft) => {
+    if (!draft?.items?.length) return;
+    try {
+      sessionStorage.setItem('tatvaSupplierSelectScope', JSON.stringify(draft.items));
+      sessionStorage.setItem('tatvaSupplierSelectScopeTs', String(Date.now()));
+    } catch {
+      /* ignore */
+    }
+  };
+
   const handleContinueToSupplierSelectionForGroup = (group) => {
     const groupDraft = buildDraftFromGroup(group);
     if (groupDraft && typeof onLoadCart === 'function') onLoadCart(groupDraft);
-    navigate('/supplier-select');
+    persistSupplierSelectScope(groupDraft);
+    const navState = supplierSelectNavigationState(groupDraft);
+    navigate('/supplier-select', navState ? { state: navState } : {});
   };
 
   /** One cart line → supplier rank API only receives that product (correct supplier list). */
   const handleContinueToSupplierSelectionForItem = (item, group) => {
     const draft = buildDraftFromSingleItem(item, group);
     if (draft && typeof onLoadCart === 'function') onLoadCart(draft);
-    navigate('/supplier-select');
+    persistSupplierSelectScope(draft);
+    const navState = supplierSelectNavigationState(draft);
+    navigate('/supplier-select', navState ? { state: navState } : {});
   };
 
   const handleShareCart = async () => {
