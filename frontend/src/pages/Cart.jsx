@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl } from '../config/api';
+import { SUPPLIER_SELECT_SESSION } from '../constants/supplierSelectSession';
 import './Cart.css';
 
 const Cart = ({ onLoadCart }) => {
@@ -253,8 +254,9 @@ const Cart = ({ onLoadCart }) => {
   const persistSupplierSelectScope = (draft) => {
     if (!draft?.items?.length) return;
     try {
-      sessionStorage.setItem('tatvaSupplierSelectScope', JSON.stringify(draft.items));
-      sessionStorage.setItem('tatvaSupplierSelectScopeTs', String(Date.now()));
+      sessionStorage.setItem(SUPPLIER_SELECT_SESSION.SCOPE_KEY, JSON.stringify(draft.items));
+      sessionStorage.setItem(SUPPLIER_SELECT_SESSION.SCOPE_TS_KEY, String(Date.now()));
+      sessionStorage.setItem(SUPPLIER_SELECT_SESSION.SCOPE_SOURCE_KEY, SUPPLIER_SELECT_SESSION.SOURCE_CART);
     } catch {
       /* ignore */
     }

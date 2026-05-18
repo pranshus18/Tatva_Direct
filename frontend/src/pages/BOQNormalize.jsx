@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, Search, PlusCircle, MapPin, Calendar } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { clearSupplierSelectSessionScope } from '../constants/supplierSelectSession';
 import './BOQNormalize.css';
 
 // Ask the user to confirm ANY match that is not nearly exact.
@@ -290,6 +291,7 @@ const BOQNormalize = ({ onComplete }) => {
         // ignore storage errors
       }
     }
+    clearSupplierSelectSessionScope();
     navigate('/supplier-select', { replace: false });
   };
 

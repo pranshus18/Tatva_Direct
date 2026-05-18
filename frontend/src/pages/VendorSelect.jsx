@@ -3,11 +3,11 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { TrendingUp, Clock, RefreshCw, MapPin } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import {
+  SUPPLIER_SELECT_SESSION,
+  clearSupplierSelectSessionScope
+} from '../constants/supplierSelectSession';
 import './VendorSelect.css';
-
-const SESSION_SCOPE_KEY = 'tatvaSupplierSelectScope';
-const SESSION_SCOPE_TS_KEY = 'tatvaSupplierSelectScopeTs';
-const SCOPE_TTL_MS = 120000;
 
 const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete }) => {
   const [itemVendors, setItemVendors] = useState({});
@@ -16,6 +16,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const [loading, setLoading] = useState(false);
   const [effectiveItems, setEffectiveItems] = useState([]);
   const [loadingItems, setLoadingItems] = useState(false);
+  /** Set when /api/boq/:id/items fails (e.g. wrong lastBoqId); avoids infinite "Loading saved BOQ…" copy. */
+  const [savedBoqItemsError, setSavedBoqItemsError] = useState(null);
   const [boqMeta, setBoqMeta] = useState(boqProject || null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -27,28 +29,38 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     itemsPropRef.current = items;
   }, [items]);
 
-  // Cart passes router state + session backup; BOQ flow must not read stale session.
+  // Cart passes router state + session backup. Production often drops `location.state`
+  // (redirects, open-in-new-tab); restore from session when scope was written from the cart.
   useLayoutEffect(() => {
     const fromCart = location?.state?.fromCartSupplierSelect === true;
-    if (!fromCart) {
+    const { SCOPE_KEY, SCOPE_TS_KEY, SCOPE_SOURCE_KEY, SOURCE_CART, TTL_MS } = SUPPLIER_SELECT_SESSION;
+
+    let scoped = location?.state?.supplierSelectItems;
+
+    if (!Array.isArray(scoped) || scoped.length === 0) {
       try {
-        sessionStorage.removeItem(SESSION_SCOPE_KEY);
-        sessionStorage.removeItem(SESSION_SCOPE_TS_KEY);
+        const ts = Number(sessionStorage.getItem(SCOPE_TS_KEY) || 0);
+        const source = sessionStorage.getItem(SCOPE_SOURCE_KEY);
+        const ttlOk = Boolean(ts) && Date.now() - ts < TTL_MS;
+        if (ttlOk && (fromCart || source === SOURCE_CART)) {
+          const raw = sessionStorage.getItem(SCOPE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed) && parsed.length > 0) scoped = parsed;
+          }
+        }
       } catch {
         /* ignore */
       }
     }
 
-    let scoped = location?.state?.supplierSelectItems;
-    if (fromCart && (!Array.isArray(scoped) || scoped.length === 0)) {
+    // Not a cart handoff: drop stale cart-only session so BOQ / revisit paths do not pick old lines.
+    if ((!Array.isArray(scoped) || scoped.length === 0) && !fromCart) {
       try {
-        const ts = Number(sessionStorage.getItem(SESSION_SCOPE_TS_KEY) || 0);
-        if (ts && Date.now() - ts < SCOPE_TTL_MS) {
-          const raw = sessionStorage.getItem(SESSION_SCOPE_KEY);
-          if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed) && parsed.length > 0) scoped = parsed;
-          }
+        if (sessionStorage.getItem(SCOPE_SOURCE_KEY) === SOURCE_CART) {
+          sessionStorage.removeItem(SCOPE_KEY);
+          sessionStorage.removeItem(SCOPE_TS_KEY);
+          sessionStorage.removeItem(SCOPE_SOURCE_KEY);
         }
       } catch {
         /* ignore */
@@ -61,6 +73,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     lockedLineIdsRef.current = ids.size > 0 ? ids : null;
 
     setEffectiveItems(scoped);
+    setSavedBoqItemsError(null);
     const proj = location.state?.supplierSelectBoqProject;
     if (proj && typeof proj === 'object') {
       setBoqMeta(proj);
@@ -118,6 +131,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       lockedLineIdsRef.current = null;
     }
     setEffectiveItems(items);
+    setSavedBoqItemsError(null);
   }, [items]);
 
   // If items are missing (e.g., user returns later), load them from the saved BOQ
@@ -133,30 +147,42 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       if (!id) return;
 
       setLoadingItems(true);
+      setSavedBoqItemsError(null);
       try {
         const res = await fetch(getApiUrl(`/api/boq/${encodeURIComponent(id)}/items`), {
           headers: {
             'Authorization': `Bearer ${token}`
           }
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         // Parent may have supplied a focused list while this request was in flight; do not overwrite.
         if (itemsPropRef.current && itemsPropRef.current.length > 0) {
           return;
         }
         if (res.ok && data.status === 'success' && Array.isArray(data.items)) {
-          const withBoq = data.items.map((it) => ({
-            ...it,
-            boqId: data.boqId || id
-          }));
-          setEffectiveItems(withBoq);
-          if (data.project && (data.project.location || data.project.requiredDate)) {
-            setBoqMeta(data.project);
+          if (data.items.length === 0) {
+            setSavedBoqItemsError('This saved BOQ has no line items yet.');
+          } else {
+            const withBoq = data.items.map((it) => ({
+              ...it,
+              boqId: data.boqId || id
+            }));
+            setEffectiveItems(withBoq);
+            setSavedBoqItemsError(null);
+            if (data.project && (data.project.location || data.project.requiredDate)) {
+              setBoqMeta(data.project);
+            }
           }
+        } else {
+          setSavedBoqItemsError(
+            typeof data.message === 'string' && data.message.trim()
+              ? data.message.trim()
+              : `Could not load saved BOQ items (${res.status}).`
+          );
         }
       } catch (e) {
-        // ignore - UI will prompt to upload again
+        setSavedBoqItemsError('Could not load saved BOQ items. Check your connection and try again.');
       } finally {
         if (!cancelled) {
           setLoadingItems(false);
@@ -453,12 +479,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     }
     
     onComplete({ ...selections }, [...effectiveItems]);
-    try {
-      sessionStorage.removeItem(SESSION_SCOPE_KEY);
-      sessionStorage.removeItem(SESSION_SCOPE_TS_KEY);
-    } catch {
-      /* ignore */
-    }
+    clearSupplierSelectSessionScope();
     navigate('/substitution');
   };
 
@@ -488,13 +509,14 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         <div className="page-header">
           <h1>Supplier Selection</h1>
           <p>
-            {canLoadFromSavedBoq
-              ? 'Loading saved BOQ items...'
-              : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
+            {savedBoqItemsError
+              ? savedBoqItemsError
+              : canLoadFromSavedBoq
+                ? 'Saved BOQ items did not load into this screen. From the cart, use “Select supplier” on the lines you want, or continue from a BOQ upload.'
+                : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
           </p>
         </div>
-        {!canLoadFromSavedBoq && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
           <button 
             className="btn-primary" 
             onClick={() => navigate('/cart')}
@@ -508,7 +530,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             Upload a BOQ
           </button>
           </div>
-        )}
       </div>
     );
   }
