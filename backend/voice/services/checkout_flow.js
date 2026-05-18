@@ -159,7 +159,7 @@ export async function startSupplierSelection(toolCtx, memory) {
     payload: { itemId: primaryItemId, vendors }
   });
 
-  return truncateForSpeech(promptSuppliers(vendors.length, vendorLines));
+  return truncateForSpeech(promptSuppliers(vendors.length, vendorLines), 520);
 }
 
 async function loadSubstitutions(client, items, selectedVendors) {
@@ -519,7 +519,7 @@ async function handleSupplierSelect(toolCtx, memory, utterance, pending) {
   const subs = await loadSubstitutions(toolCtx.client, getCheckout(memory).items, selectedVendors);
   if (!subs.length) {
     const next = await advanceAfterSubstitution(toolCtx, memory, []);
-    return `${promptNoSubstitutions(supplierName)} ${next}`;
+    return `${promptNoSubstitutions(supplierName, chosen)} ${next}`;
   }
 
   setCheckout(memory, { substitutionSuggestions: subs });
@@ -531,7 +531,7 @@ async function handleSupplierSelect(toolCtx, memory, utterance, pending) {
     summary: 'substitution choice',
     payload: { suggestions: subs }
   });
-  return truncateForSpeech(promptSubstitutions(supplierName, subs.length, subLines));
+  return truncateForSpeech(promptSubstitutions(supplierName, subs.length, subLines, chosen), 520);
 }
 
 async function advanceAfterSubstitution(toolCtx, memory, substitutions) {

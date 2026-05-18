@@ -88,14 +88,42 @@ export function promptAddedToCart(productName) {
 
 // —— Suppliers ——
 
+const LOCATION_UNKNOWN = /^(location not specified|n\/a|na|unknown)$/i;
+
+function cleanLocationForSpeech(loc) {
+  return String(loc || '')
+    .replace(/\s*\(road route\)\s*/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isSpeakableLocation(loc) {
+  const s = cleanLocationForSpeech(loc);
+  if (!s || LOCATION_UNKNOWN.test(s)) return false;
+  if (/^outlet geo location/i.test(s)) return false;
+  return true;
+}
+
+/** Human-readable supplier location for TTS (e.g. "located in Pune, Maharashtra"). */
+export function formatVendorLocation(v) {
+  const candidates = [v?.location, v?.supplierLocation, v?.distanceSourceLocation];
+  for (const raw of candidates) {
+    if (!isSpeakableLocation(raw)) continue;
+    const loc = cleanLocationForSpeech(raw);
+    return `located in ${loc}`;
+  }
+  return '';
+}
+
 export function formatVendorDetail(v, i) {
   const name = v.name || v.supplierName || v.company || 'Supplier';
+  const location = formatVendorLocation(v);
   const price = v.price != null ? `price ${v.price} rupees` : '';
   const stock = v.stock != null ? `${v.stock} in stock` : '';
   const dist = v.distanceKm != null ? `${Math.round(v.distanceKm)} kilometres away` : '';
   const rating = v.rating != null ? `rating ${v.rating} out of 5` : '';
   const lead = v.leadTime != null ? `delivery about ${v.leadTime} days` : '';
-  const parts = [price, stock, dist, rating, lead].filter(Boolean);
+  const parts = [location, price, stock, dist, rating, lead].filter(Boolean);
   return `Supplier ${i + 1}, ${name}. ${parts.join('. ')}.`;
 }
 
@@ -109,19 +137,20 @@ export function promptSupplierRetry(max) {
   return `I did not catch that. Say supplier number 1 to ${max}, or say the supplier name.`;
 }
 
-export function promptSupplierChosen(name) {
-  return `You chose ${name}.`;
+export function promptSupplierChosen(name, vendor = null) {
+  const loc = vendor ? formatVendorLocation(vendor) : '';
+  return `You chose ${name}${loc ? `, ${loc}` : ''}.`;
 }
 
 // —— Substitution ——
 
-export function promptNoSubstitutions(supplierName) {
-  return `${promptSupplierChosen(supplierName)} No substitution suggestions. Moving to order details.`;
+export function promptNoSubstitutions(supplierName, vendor = null) {
+  return `${promptSupplierChosen(supplierName, vendor)} No substitution suggestions. Moving to order details.`;
 }
 
-export function promptSubstitutions(supplierName, count, subLines) {
+export function promptSubstitutions(supplierName, count, subLines, vendor = null) {
   return truncate(
-    `${promptSupplierChosen(supplierName)} ${stepPrefix('substitution')}I have ${count} substitution suggestion${count === 1 ? '' : 's'}: ${subLines.join('. ')}. Say no substitution to skip, or yes to accept all.`
+    `${promptSupplierChosen(supplierName, vendor)} ${stepPrefix('substitution')}I have ${count} substitution suggestion${count === 1 ? '' : 's'}: ${subLines.join('. ')}. Say no substitution to skip, or yes to accept all.`
   );
 }
 
@@ -229,7 +258,7 @@ export function promptCheckoutCancelled() {
   return 'Checkout cancelled. You can search for another product.';
 }
 
-function truncate(text, max = 480) {
+function truncate(text, max = 520) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   if (s.length <= max) return s;
   return `${s.slice(0, max - 1)}…`;
