@@ -57,6 +57,10 @@ const shouldIncludeAllVariantsForItem = ({ item = {}, itemName = '', referencePr
   return true;
 };
 
+const vendorRankLogVerbose =
+  process.env.NODE_ENV !== 'production' || String(process.env.VENDOR_RANK_VERBOSE || '').trim() === '1';
+const rankLog = vendorRankLogVerbose ? (...args) => console.log(...args) : () => {};
+
 router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const payload = parseWithSchema(vendorRankSchema, req.body || {});
@@ -79,18 +83,21 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         userId: req.userId
       });
     
-    console.log(`\n[Vendor Ranking] ==========================================`);
-    console.log(`[Vendor Ranking] Vendor ranking request received at ${new Date().toISOString()}`);
-    console.log(`[Vendor Ranking] Timestamp: ${_timestamp}, Random: ${_random}`);
-    console.log(`[Vendor Ranking] Items received: ${items?.length || 0}`);
-    console.log(`[Vendor Ranking] Items structure:`, items?.map(item => ({
-      id: item.id,
-      normalizedName: item.normalizedName,
-      rawName: item.rawName,
-      productId: item.productId,
-      availableSuppliers: item.availableSuppliers
-    })));
-    console.log(`[Vendor Ranking] ==========================================\n`);
+    rankLog(`\n[Vendor Ranking] ==========================================`);
+    rankLog(`[Vendor Ranking] Vendor ranking request received at ${new Date().toISOString()}`);
+    rankLog(`[Vendor Ranking] Timestamp: ${_timestamp}, Random: ${_random}`);
+    rankLog(`[Vendor Ranking] Items received: ${items?.length || 0}`);
+    rankLog(
+      `[Vendor Ranking] Items structure:`,
+      items?.map((item) => ({
+        id: item.id,
+        normalizedName: item.normalizedName,
+        rawName: item.rawName,
+        productId: item.productId,
+        availableSuppliers: item.availableSuppliers
+      }))
+    );
+    rankLog(`[Vendor Ranking] ==========================================\n`);
     
     // Detect service provider location from profile/address for proximity-based ranking
     const { serviceProviderCity, serviceProviderState } = await loadServiceProviderLocationContext({
@@ -111,10 +118,15 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       // Try multiple possible field names for item name
       const itemName = item.normalizedName || item.rawName || item.name || item.description || item.itemName || '';
       
-      console.log(`[Vendor Ranking] Processing item ID: ${itemId}, Name: "${itemName}", Full item:`, JSON.stringify(item, null, 2));
-      
+      rankLog(
+        `[Vendor Ranking] Processing item ID: ${itemId}, Name: "${itemName}"`,
+        vendorRankLogVerbose
+          ? JSON.stringify(item)
+          : { id: item.id, productId: item.productId, normalizedName: item.normalizedName }
+      );
+
       if (!itemName || itemName.trim() === '') {
-        console.log(`[Vendor Ranking] Skipping item ${itemId}: No name found`);
+        rankLog(`[Vendor Ranking] Skipping item ${itemId}: No name found`);
         itemVendors[itemId] = [];
         continue;
       }
@@ -144,12 +156,12 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         referenceProduct
       });
       if (targetBrand) {
-        console.log(`[Vendor Ranking] Target retailer brand for item ${itemId}: ${targetBrand}`);
+        rankLog(`[Vendor Ranking] Target retailer brand for item ${itemId}: ${targetBrand}`);
       }
 
       // Search products purely by name (and approximate category) to collect ALL supplier offers,
       // regardless of the specific normalized product_id.
-      console.log(`[Vendor Ranking] Searching products by name only: "${itemNameLower}" (category: ${itemCategory})`);
+      rankLog(`[Vendor Ranking] Searching products by name only: "${itemNameLower}" (category: ${itemCategory})`);
       let products = await searchRankableProductsForItem({
         supabase,
         item,
@@ -182,14 +194,14 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         return supplierMatchesBrandTerminalRole(supplierProfile, targetBrand, terminalRoleByBrandMap);
       });
       if (preRetailCount !== (products || []).length) {
-        console.log(
+        rankLog(
           `[Vendor Ranking] Terminal-role + brand filter for item ${itemId}: ${products.length}/${preRetailCount} offers kept`
         );
       }
 
-      console.log(`[Vendor Ranking] Item "${itemName}": Found ${products?.length || 0} products`);
+      rankLog(`[Vendor Ranking] Item "${itemName}": Found ${products?.length || 0} products`);
       if (products && products.length > 0) {
-        console.log(`[Vendor Ranking] Sample product structure:`, {
+        rankLog(`[Vendor Ranking] Sample product structure:`, {
           id: products[0].id,
           name: products[0].name,
           hasSupplier: !!products[0].supplier,
@@ -259,17 +271,17 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         if (!refBrandAllowed) {
           const requiredRole = getAllowedSellerRoleForBrand(targetBrand, terminalRoleByBrandMap);
           const requiredRoleText = requiredRole || 'admin chain terminal role is not configured';
-          console.log(
+          rankLog(
             `[Vendor Ranking] Reference product supplier is not eligible for terminal role "${requiredRoleText}" and brand "${targetBrand || 'n/a'}"; skipping synthetic vendor for item ${itemId}`
           );
         } else {
-        console.log(`[Vendor Ranking] No vendors found but reference product has supplier, creating vendor entry...`);
+        rankLog(`[Vendor Ranking] No vendors found but reference product has supplier, creating vendor entry...`);
         const fallbackVendor = buildFallbackVendorFromReferenceProduct({ referenceProduct, itemCategory });
         if (fallbackVendor) {
           validVendors = [fallbackVendor];
-          console.log(`[Vendor Ranking] Created vendor entry from reference product: ${validVendors[0].name}`);
+          rankLog(`[Vendor Ranking] Created vendor entry from reference product: ${validVendors[0].name}`);
         } else {
-          console.log(`[Vendor Ranking] Reference product has invalid stock/price, cannot create vendor entry`);
+          rankLog(`[Vendor Ranking] Reference product has invalid stock/price, cannot create vendor entry`);
         }
         }
       }

@@ -66,30 +66,43 @@ export async function buildSupplierProductsForRanking({
     }
   }
 
+  const productsList = products || [];
+  const missingSupplierIds = [
+    ...new Set(
+      productsList
+        .filter((p) => p && (!p.supplier || !p.supplier.id) && p.supplier_id)
+        .map((p) => p.supplier_id)
+        .filter(Boolean)
+    )
+  ];
+
+  const supplierById = new Map();
+  if (missingSupplierIds.length > 0) {
+    const { data: supplierRows, error: supplierBatchError } = await supabase
+      .from('users')
+      .select('id, name, company, email, phone, address, profile')
+      .in('id', missingSupplierIds)
+      .eq('user_type', 'supplier');
+    if (supplierBatchError) {
+      console.error('[Vendor Ranking] Batch supplier preload error:', supplierBatchError);
+    } else {
+      for (const row of supplierRows || []) {
+        if (row?.id) supplierById.set(row.id, row);
+      }
+    }
+  }
+
   const supplierProducts = {};
-  for (const product of products || []) {
+  for (const product of productsList) {
     if (!product.supplier || !product.supplier.id) {
-      console.log(`[Vendor Ranking] Product ${product.id} missing supplier, fetching supplier...`);
       if (product.supplier_id) {
-        const { data: supplierData } = await supabase
-          .from('users')
-          .select('id, name, company, email, phone, address, profile')
-          .eq('id', product.supplier_id)
-          .eq('user_type', 'supplier')
-          .single();
+        const supplierData = supplierById.get(product.supplier_id);
         if (supplierData) {
           product.supplier = supplierData;
-          console.log(
-            `[Vendor Ranking] Fetched supplier for product ${product.id}: ${supplierData.name || supplierData.company}`
-          );
         } else {
-          console.log(
-            `[Vendor Ranking] Skipping product ${product.id}: No supplier found (supplier_id: ${product.supplier_id})`
-          );
           continue;
         }
       } else {
-        console.log(`[Vendor Ranking] Skipping product ${product.id}: No supplier_id found`);
         continue;
       }
     }

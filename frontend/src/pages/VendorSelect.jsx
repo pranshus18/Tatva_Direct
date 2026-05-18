@@ -349,7 +349,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           console.log('[VendorSelect] useEffect: Fetching vendors for items:', effectiveItems.length);
           fetchVendors();
         }
-      }, 100);
+      }, 0);
       
       return () => {
         isMounted = false;
