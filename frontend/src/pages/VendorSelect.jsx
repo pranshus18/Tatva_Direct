@@ -1,10 +1,11 @@
-import React, { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { TrendingUp, Clock, RefreshCw, MapPin } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import {
   clearSupplierSelectScopeSession,
+  hasFreshCartSupplierSelectSession,
   readSupplierSelectScopeSessionIfFresh
 } from '../constants/supplierSelectSession';
 import './VendorSelect.css';
@@ -26,6 +27,17 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   useEffect(() => {
     itemsPropRef.current = items;
   }, [items]);
+
+  /** Cart → supplier select: never auto-fetch an unrelated saved BOQ (lastBoqId) or show BOQ loading copy. */
+  const cartSupplierHandoff = useMemo(() => {
+    try {
+      if (new URLSearchParams(location.search || '').get('from') === 'cart') return true;
+    } catch {
+      /* ignore */
+    }
+    if (location?.state?.fromCartSupplierSelect === true) return true;
+    return hasFreshCartSupplierSelectSession();
+  }, [location.search, location.state]);
 
   // Cart passes router state + session backup. In production, `location.state` is often dropped
   // (hosting / hard reload); we must read session *without* clearing it first. BOQ clears session
@@ -102,7 +114,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     setEffectiveItems(items);
   }, [items]);
 
-  // If items are missing (e.g., user returns later), load them from the saved BOQ
+  // If items are missing (e.g., user returns later), load them from the saved BOQ — not when continuing from cart.
   useEffect(() => {
     let cancelled = false;
     const loadItems = async () => {
@@ -111,17 +123,24 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       const token = localStorage.getItem('token');
       if (!token) return;
 
+      if (cartSupplierHandoff) return;
+
       const id = boqId || localStorage.getItem('lastBoqId');
       if (!id) return;
+
+      const boqListTimeoutMs = 30000;
+      const abortController = new AbortController();
+      const timeoutId = window.setTimeout(() => abortController.abort(), boqListTimeoutMs);
 
       setLoadingItems(true);
       try {
         const res = await fetch(getApiUrl(`/api/boq/${encodeURIComponent(id)}/items`), {
+          signal: abortController.signal,
           headers: {
             'Authorization': `Bearer ${token}`
           }
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (cancelled) return;
         // Parent may have supplied a focused list while this request was in flight; do not overwrite.
         if (itemsPropRef.current && itemsPropRef.current.length > 0) {
@@ -140,6 +159,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       } catch (e) {
         // ignore - UI will prompt to upload again
       } finally {
+        window.clearTimeout(timeoutId);
         if (!cancelled) {
           setLoadingItems(false);
         }
@@ -151,7 +171,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boqId, effectiveItems.length]);
+  }, [boqId, effectiveItems.length, cartSupplierHandoff]);
 
   const fetchVendors = async () => {
     // Validate items before fetching
@@ -456,10 +476,10 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       <div className="page">
         <div className="page-header">
           <h1>Supplier Selection</h1>
-          <p>Loading saved BOQ items...</p>
+          <p>Loading saved BOQ items…</p>
         </div>
         <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
-          Loading...
+          Loading…
         </div>
       </div>
     );
@@ -469,34 +489,28 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     const possibleBoqId =
       boqId ||
       (typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null);
-    const canLoadFromSavedBoq = !!possibleBoqId;
+    const canTrySavedBoq = !!possibleBoqId && !cartSupplierHandoff;
 
     return (
       <div className="page">
         <div className="page-header">
           <h1>Supplier Selection</h1>
           <p>
-            {canLoadFromSavedBoq
-              ? 'Loading saved BOQ items...'
-              : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
+            {cartSupplierHandoff
+              ? 'Your cart lines did not load on this page (common in production when a new tab opens or browser storage is restricted). Go back to the cart and use Select supplier again.'
+              : canTrySavedBoq
+                ? 'No line items are on this screen yet. If you expected your last uploaded BOQ, open BOQ Normalize and continue again, or use the cart to pick supplier lines.'
+                : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
           </p>
         </div>
-        {!canLoadFromSavedBoq && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <button 
-            className="btn-primary" 
-            onClick={() => navigate('/cart')}
-          >
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
+          <button type="button" className="btn-primary" onClick={() => navigate('/cart')}>
             Go to cart
           </button>
-          <button 
-            className="btn-secondary" 
-            onClick={() => navigate('/boq-normalize')}
-          >
+          <button type="button" className="btn-secondary" onClick={() => navigate('/boq-normalize')}>
             Upload a BOQ
           </button>
-          </div>
-        )}
+        </div>
       </div>
     );
   }

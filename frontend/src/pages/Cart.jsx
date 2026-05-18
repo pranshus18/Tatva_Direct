@@ -256,7 +256,10 @@ const Cart = ({ onLoadCart }) => {
     if (groupDraft && typeof onLoadCart === 'function') onLoadCart(groupDraft);
     persistSupplierSelectScopeFromCart(groupDraft.items);
     const navState = supplierSelectNavigationState(groupDraft);
-    navigate('/supplier-select', navState ? { state: navState } : {});
+    navigate(
+      { pathname: '/supplier-select', search: '?from=cart' },
+      navState ? { state: navState } : {}
+    );
   };
 
   /** One cart line → supplier rank API only receives that product (correct supplier list). */
@@ -265,7 +268,10 @@ const Cart = ({ onLoadCart }) => {
     if (draft && typeof onLoadCart === 'function') onLoadCart(draft);
     persistSupplierSelectScopeFromCart(draft.items);
     const navState = supplierSelectNavigationState(draft);
-    navigate('/supplier-select', navState ? { state: navState } : {});
+    navigate(
+      { pathname: '/supplier-select', search: '?from=cart' },
+      navState ? { state: navState } : {}
+    );
   };
 
   const handleShareCart = async () => {

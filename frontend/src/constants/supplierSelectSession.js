@@ -42,3 +42,14 @@ export function readSupplierSelectScopeSessionIfFresh() {
     return null;
   }
 }
+
+/** True if cart→supplier backup was written recently (even if JSON parse fails later). */
+export function hasFreshCartSupplierSelectSession() {
+  try {
+    if (sessionStorage.getItem(SESSION_SCOPE_SOURCE_KEY) !== SESSION_SCOPE_FROM_CART) return false;
+    const ts = Number(sessionStorage.getItem(SESSION_SCOPE_TS_KEY) || 0);
+    return Boolean(ts && Date.now() - ts < SCOPE_TTL_MS);
+  } catch {
+    return false;
+  }
+}
