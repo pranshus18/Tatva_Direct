@@ -1,4 +1,5 @@
 import { InternalApiClient } from './internalApiClient.js';
+import { answerSupportQuestion } from './supportRetriever.js';
 
 function flattenCartItems(draft) {
   const items = [];
@@ -85,8 +86,17 @@ export function createVoiceToolContext(token, memory) {
         id: p.id,
         name: p.name,
         category: p.category,
-        brand: p.brand
+        brand: p.brand,
+        unit: p.unit
       }));
+      if (memory && items.length) {
+        memory.setContext('last_search', {
+          query: String(query).trim(),
+          category: String(category).trim(),
+          at: Date.now(),
+          products: items
+        });
+      }
       return JSON.stringify({ total: result.data?.total, products: items });
     },
 
@@ -266,15 +276,13 @@ export function createVoiceToolContext(token, memory) {
     },
 
     async answer_support_question({ question }) {
-      const { retrieveSupportContext } = await import('./supportRetriever.js');
-      const chunks = retrieveSupportContext(question, 4);
-      if (!chunks.length) return 'No policy information loaded yet. Please contact support.';
-      return JSON.stringify({ sources: chunks.length, context: chunks });
+      return answerSupportQuestion(question);
     }
   };
 
   return {
     client,
+    memory,
     tools,
     executePlaceOrder,
     executeCancelOrder,

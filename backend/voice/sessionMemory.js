@@ -34,10 +34,20 @@ export class SessionMemory {
     this._bucket()[key] = value;
   }
 
-  appendMessage(role, content, limit = 20) {
+  appendMessage(role, content, limit = 8) {
     const messages = this.getJson('messages', []);
     messages.push({ role, content });
     this.setJson('messages', messages.slice(-limit));
+  }
+
+  appendCompact(role, content, limit = 4) {
+    const messages = this.getJson('compact_messages', []);
+    messages.push({ role, content });
+    this.setJson('compact_messages', messages.slice(-limit));
+  }
+
+  getCompactHistory(limit = 2) {
+    return this.getJson('compact_messages', []).slice(-limit);
   }
 
   getMessages() {

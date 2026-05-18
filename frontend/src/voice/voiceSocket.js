@@ -1,10 +1,12 @@
 import { resolveVoiceWsUrl } from './resolveVoiceWsUrl.js';
 
 /**
- * Thin WebSocket client for /api/voice/ws protocol.
+ * Streaming WebSocket client — Alexa-style protocol.
+ * Events: stt_partial, stt_final, reply_chunk, reply_done, tts_chunk, agent_reply
  */
 export function createVoiceSocket({ token, handlers }) {
   const ws = new WebSocket(resolveVoiceWsUrl());
+  const audioChunks = [];
 
   ws.onopen = () => {
     ws.send(JSON.stringify({ type: 'auth', token }));
@@ -19,6 +21,20 @@ export function createVoiceSocket({ token, handlers }) {
       handlers.onError?.({ code: 'invalid_json', message: 'Invalid server message' });
       return;
     }
+
+    if (data.type === 'stt_partial') handlers.onSttPartial?.(data.text);
+    if (data.type === 'stt_final' || data.type === 'final_transcript') {
+      handlers.onSttFinal?.(data.text);
+    }
+    if (data.type === 'reply_chunk') handlers.onReplyChunk?.(data.text);
+    if (data.type === 'reply_done') handlers.onReplyDone?.(data.text);
+    if (data.type === 'tts_chunk') handlers.onTtsChunk?.(data.chunk);
+    if (data.type === 'agent_reply') handlers.onAgentReply?.(data.text);
+    if (data.type === 'agent_state') handlers.onAgentState?.(data.state);
+    if (data.type === 'auth_ok') handlers.onAuthOk?.(data);
+    if (data.type === 'ready') handlers.onReady?.(data);
+    if (data.type === 'error') handlers.onError?.(data);
+
     handlers.onMessage?.(data);
   };
 
@@ -29,8 +45,10 @@ export function createVoiceSocket({ token, handlers }) {
     });
   };
 
-  ws.onclose = () => {
-    handlers.onClose?.();
+  let closedIntentionally = false;
+
+  ws.onclose = (event) => {
+    handlers.onClose?.({ intentional: closedIntentionally, code: event.code });
   };
 
   return {
@@ -39,9 +57,33 @@ export function createVoiceSocket({ token, handlers }) {
       ws.send(JSON.stringify({ type: 'text', text: String(text).trim() }));
       return true;
     },
-    close() {
-      ws.close();
+
+    sendAudioChunk(chunkBase64, { partial = true } = {}) {
+      if (ws.readyState !== WebSocket.OPEN) return false;
+      audioChunks.push(chunkBase64);
+      ws.send(JSON.stringify({ type: 'audio', chunk: chunkBase64, partial }));
+      return true;
     },
+
+    endUtterance(text = '') {
+      if (ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(
+        JSON.stringify({
+          type: 'end_utterance',
+          text: String(text || '').trim()
+        })
+      );
+      audioChunks.length = 0;
+      return true;
+    },
+
+    close() {
+      closedIntentionally = true;
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close(1000, 'client close');
+      }
+    },
+
     get readyState() {
       return ws.readyState;
     }

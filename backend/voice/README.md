@@ -1,41 +1,69 @@
-# Voice commerce module (inside backend)
+# Voice Commerce — Amazon Alexa-Style
 
-One Node process — **no separate service**. Files are split so you can debug each layer.
-
-## File map (where to look when something breaks)
-
-| Symptom | Check file |
-|---------|------------|
-| WebSocket won't connect | `voiceWebSocket.js` |
-| Auth / token errors | `voiceWebSocket.js` + `authMiddleware` |
-| AI wrong / no tools | `geminiOrchestrator.js` |
-| Cart / order API errors | `voiceTools.js` |
-| HTTP to `/api/po` fails | `internalApiClient.js` |
-| "Yes/no" confirm stuck | `confirmations.js` + `sessionMemory.js` |
-| FAQ / policy answers | `supportRetriever.js` + `rag/documents/*.md` |
-| Stock check | `../controllers/voiceController.js` |
-
-## Flow
+## Architecture
 
 ```
-Browser → WS /api/voice/ws (voiceWebSocket.js)
-       → geminiOrchestrator.js
-       → voiceTools.js → internalApiClient.js → existing Express routes
+Voice → Intent Router → FAST (API only) | SMART (RAG + Gemini Flash)
+                     → Streaming WebSocket → TTS
 ```
 
-## Run
+See [ARCHITECTURE.md](./ARCHITECTURE.md) for module map.
+
+## Run (integrated — recommended)
 
 ```bash
-cd backend && npm run dev
+# Terminal 1
+cd backend && node server.js
+
+# Terminal 2
+cd frontend && npm run dev
 ```
 
-Requires `GEMINI_API_KEY` in `backend/.env`.
+Login as **service_provider** → `/voice`
 
-## REST helpers
+## Env (`backend/.env`)
 
-- `GET /api/voice/health`
-- `GET /api/voice/products/:productId/availability`
+```env
+GEMINI_API_KEY=...
+JWT_SECRET=...
 
-## Logs
+# Speed (voice ignores GEMINI_MODEL=pro unless VOICE_USE_APP_GEMINI_MODEL=true)
+VOICE_GEMINI_MODEL=gemini-1.5-flash
+VOICE_MAX_TOOL_ROUNDS=1
+VOICE_MAX_OUTPUT_TOKENS=96
+VOICE_DEBUG=true
 
-Set `LOG_LEVEL=debug` or watch for `[voice]` in server logs from `geminiOrchestrator.js`.
+# Optional Whisper + Piper (run voice-agent on 8765)
+VOICE_PYTHON_URL=http://127.0.0.1:8765
+```
+
+## Optional Python pipeline
+
+```bash
+cd voice-agent && pip install -r requirements.txt && python main.py
+```
+
+Uses `base.en` Whisper + Piper streaming. Node proxies `/stt` and `/tts/stream`.
+
+## Routing rules
+
+| User says | Path | Gemini? | RAG? |
+|-----------|------|---------|------|
+| Add X to cart | FAST | No | No |
+| Show my cart | FAST | No | No |
+| Checkout | FAST | No | No |
+| Track order | FAST | No | No |
+| Refund policy | SMART | No | Yes |
+| Recommend products | SMART | Yes | Maybe |
+| Vague chat | SMART | Yes | Maybe |
+
+## WebSocket events
+
+- `stt_partial`, `stt_final`
+- `reply_chunk`, `reply_done`, `agent_reply`
+- `tts_chunk` (Piper)
+- `agent_state`: listening | thinking | speaking
+
+## Debug
+
+`localStorage.setItem('VOICE_DEBUG','1')` in browser console.

@@ -10,8 +10,9 @@ export function resolveVoiceWsUrl() {
   if (typeof window !== 'undefined') {
     const host = window.location.hostname;
     if (import.meta.env.DEV && (host === 'localhost' || host === '127.0.0.1')) {
-      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      return `${proto}//${window.location.host}/api/voice/ws`;
+      // Direct to backend avoids Vite ws-proxy ECONNRESET; set VITE_VOICE_WS_URL to force proxy.
+      const port = import.meta.env.VITE_BACKEND_PORT || '8081';
+      return `ws://127.0.0.1:${port}/api/voice/ws`;
     }
     const api = getApiUrl('');
     const base = api.replace(/^http/, 'ws').replace(/\/$/, '');

@@ -12,6 +12,7 @@ import { getApiInfo } from './controllers/systemController.js';
 import logger from './utils/logger.js';
 import { isFeatureEnabled } from './utils/featureFlags.js';
 import { attachVoiceWebSocket } from './voice/voiceWebSocket.js';
+import { warmSupportIndex } from './voice/supportRetriever.js';
 
 // Load environment variables
 // Try to load from backend directory first, then root directory
@@ -173,6 +174,10 @@ const server = app.listen(port, HOST, () => {
 });
 
 attachVoiceWebSocket(server);
+const ragChunks = warmSupportIndex();
+if (ragChunks > 0) {
+  logger.info(`[voice] RAG index warmed (${ragChunks} chunks)`);
+}
 
 server.on('error', (err) => {
   logger.error(' Server failed to start:', err);

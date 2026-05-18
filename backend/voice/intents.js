@@ -6,7 +6,7 @@ export function classifyIntent(text) {
   if (!t) return 'unknown';
   if (CONFIRM.test(t)) return 'confirm';
   if (REJECT.test(t)) return 'reject';
-  if (/\b(refund|return policy|support|help|faq|warranty|shipping policy)\b/i.test(t)) return 'support';
+  if (/\b(refund|return|policy|policies|support|help|faq|warranty|shipping|delivery time|payment method|how do i)\b/i.test(t)) return 'support';
   if (/\b(track|order status|cancel order|reorder|my orders?)\b/i.test(t)) return 'order_mgmt';
   if (/\b(checkout|place order|buy|payment|pay)\b/i.test(t)) return 'checkout';
   if (/\b(address|shipping|delivery address|billing)\b/i.test(t)) return 'address';

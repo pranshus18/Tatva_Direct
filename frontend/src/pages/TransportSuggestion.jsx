@@ -39,26 +39,52 @@ const formatAddressLines = (addr) => {
   return lines;
 };
 
-function CourierPickCard({ provider, selected, onPick }) {
+function providerSelectionKey(provider) {
+  if (provider?.courier_company_id != null && provider.courier_company_id !== '') {
+    return `c:${provider.courier_company_id}`;
+  }
+  if (provider?.vehicle_type_id != null && provider.vehicle_type_id !== '') {
+    return `t:${provider.vehicle_type_id}`;
+  }
+  return `n:${String(provider?.name || '').trim()}`;
+}
+
+function providerFareInr(provider) {
+  const raw = provider?.fare_value ?? provider?.estimated_fare ?? provider?.rate ?? null;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(String(raw).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : null;
+}
+
+function TransportPickCard({ provider, selected, onPick, disabled = false, disabledReason = '' }) {
   const [hover, setHover] = React.useState(false);
   const name = String(provider.name || '').trim() || 'Provider';
+  const isTrucking =
+    provider.transportKind === 'trucking' ||
+    String(provider.source || '').toLowerCase() === 'borzo' ||
+    provider.vehicle_type_id != null;
+  const badge = isTrucking ? 'Trucking' : 'Courier';
+  const fare = providerFareInr(provider);
+  const overCapacity = Boolean(provider.capacity_exceeded);
 
   return (
     <button
       type="button"
       aria-pressed={selected}
-      title={`Select ${name}`}
-      onMouseEnter={() => setHover(true)}
+      disabled={disabled}
+      title={disabled ? disabledReason || 'Unavailable' : `Select ${name}`}
+      onMouseEnter={() => !disabled && setHover(true)}
       onMouseLeave={() => setHover(false)}
-      onClick={onPick}
+      onClick={disabled ? undefined : onPick}
       style={{
         textAlign: 'left',
         width: '100%',
         border: selected ? '2px solid #4f46e5' : `1px solid ${hover ? '#94a3b8' : '#e2e8f0'}`,
         borderRadius: 10,
         padding: '0.7rem 0.85rem',
-        background: selected ? '#eef2ff' : hover ? '#f8fafc' : '#fff',
-        cursor: 'pointer',
+        background: disabled ? '#f1f5f9' : selected ? '#eef2ff' : hover ? '#f8fafc' : '#fff',
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.65 : 1,
         display: 'grid',
         gap: '0.25rem',
         boxShadow: selected
@@ -72,29 +98,52 @@ function CourierPickCard({ provider, selected, onPick }) {
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.5rem' }}>
         <span style={{ fontWeight: 700, color: '#0f172a' }}>{name}</span>
-        {selected ? (
+        <span style={{ display: 'flex', gap: '0.35rem', flexShrink: 0 }}>
           <span
             style={{
-              fontSize: '0.72rem',
+              fontSize: '0.68rem',
               fontWeight: 700,
-              color: '#4338ca',
-              background: '#e0e7ff',
+              color: isTrucking ? '#9a3412' : '#1e40af',
+              background: isTrucking ? '#ffedd5' : '#dbeafe',
               borderRadius: 9999,
-              padding: '0.15rem 0.5rem',
-              flexShrink: 0
+              padding: '0.12rem 0.45rem'
             }}
           >
-            Selected
+            {badge}
           </span>
-        ) : null}
+          {selected ? (
+            <span
+              style={{
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                color: '#4338ca',
+                background: '#e0e7ff',
+                borderRadius: 9999,
+                padding: '0.15rem 0.5rem'
+              }}
+            >
+              Selected
+            </span>
+          ) : null}
+        </span>
       </div>
       <div style={{ fontSize: '0.8rem', color: '#475569' }}>
+        {provider.carrier ? <span>{provider.carrier} · </span> : null}
         {provider.source ? <span>Source: {provider.source} · </span> : null}
-        {provider.rate != null && provider.rate !== '' ? <span>Rate: {provider.rate} · </span> : null}
+        {fare != null ? (
+          <span>
+            {isTrucking ? 'Fare' : 'Rate'}: {formatCurrency(fare)} ·{' '}
+          </span>
+        ) : null}
+        {overCapacity ? <span style={{ color: '#b45309' }}>Over capacity — split shipment · </span> : null}
+        {provider.capacity_kg != null ? <span>Capacity: {provider.capacity_kg} kg · </span> : null}
         {provider.etd ? <span>ETD: {provider.etd} · </span> : null}
         {provider.rating != null && provider.rating !== '' ? <span>Rating: {provider.rating} · </span> : null}
         {provider.cod != null ? <span>COD: {String(provider.cod)}</span> : null}
       </div>
+      {provider.message ? (
+        <div style={{ fontSize: '0.75rem', color: '#b45309', marginTop: '0.15rem' }}>{provider.message}</div>
+      ) : null}
     </button>
   );
 }
@@ -225,8 +274,8 @@ const TransportSuggestion = () => {
     };
   }, [poGroups, shippingAddress, billingAddress, deliveryDestination, hasGstin]);
 
-  /** Vendors that returned at least one courier option (must pick per vendor). */
-  const vendorIdsRequiringCourier = React.useMemo(() => {
+  /** Vendors that returned at least one transport option (must pick per vendor). */
+  const vendorIdsRequiringTransport = React.useMemo(() => {
     const fromQuotes = [];
     for (const s of shipments || []) {
       if (!s.vendorId) continue;
@@ -239,9 +288,25 @@ const TransportSuggestion = () => {
     return [...new Set((poGroups || []).map((g) => String(g.vendorId || '')).filter(Boolean))];
   }, [shipments, poGroups]);
 
-  const allCouriersChosen =
-    vendorIdsRequiringCourier.length === 0 ||
-    vendorIdsRequiringCourier.every((id) => String(selectedByVendorId[id] || '').trim());
+  const pickProviderByKey = (vendorId, selectionKey) => {
+    const s = shipments.find((x) => String(x.vendorId) === String(vendorId));
+    if (!s?.logistics?.success || !Array.isArray(s.logistics.providers)) return null;
+    return s.logistics.providers.find((p) => providerSelectionKey(p) === selectionKey) || null;
+  };
+
+  const allTransportChosen =
+    vendorIdsRequiringTransport.length === 0 ||
+    vendorIdsRequiringTransport.every((id) => String(selectedByVendorId[id] || '').trim());
+
+  const selectedProviderOverCapacity = React.useMemo(() => {
+    for (const vid of vendorIdsRequiringTransport) {
+      const selKey = String(selectedByVendorId[vid] || '').trim();
+      if (!selKey) continue;
+      const p = pickProviderByKey(vid, selKey);
+      if (p?.capacity_exceeded) return { vendorId: vid, provider: p };
+    }
+    return null;
+  }, [vendorIdsRequiringTransport, selectedByVendorId, shipments]);
 
   const vendorDisplayName = (vendorId) => {
     const s = shipments.find((x) => String(x.vendorId) === String(vendorId));
@@ -251,59 +316,74 @@ const TransportSuggestion = () => {
   };
 
   const handleUseTransport = () => {
-    if (vendorIdsRequiringCourier.length === 0) {
-      window.alert('No courier quotes are available yet. Fix quote errors or try again later.');
+    if (vendorIdsRequiringTransport.length === 0) {
+      window.alert('No transport quotes are available yet. Fix quote errors or try again later.');
       return;
     }
-    const missing = vendorIdsRequiringCourier.filter((id) => !String(selectedByVendorId[id] || '').trim());
+    const missing = vendorIdsRequiringTransport.filter((id) => !String(selectedByVendorId[id] || '').trim());
     if (missing.length > 0) {
       window.alert(
-        `Choose a courier for each supplier with quotes:\n${missing.map((id) => `• ${vendorDisplayName(id)}`).join('\n')}`
+        `Choose transport for each supplier with quotes:\n${missing.map((id) => `• ${vendorDisplayName(id)}`).join('\n')}`
+      );
+      return;
+    }
+    if (selectedProviderOverCapacity) {
+      window.alert(
+        `${vendorDisplayName(selectedProviderOverCapacity.vendorId)}: selected vehicle exceeds capacity. Choose another option or split the shipment.`
       );
       return;
     }
     const firstChosen =
-      vendorIdsRequiringCourier.map((id) => selectedByVendorId[id]).find((v) => String(v || '').trim()) || '';
-    const byVendorFull = { ...selectedByVendorId };
+      vendorIdsRequiringTransport.map((id) => selectedByVendorId[id]).find((v) => String(v || '').trim()) || '';
+    const byVendorSelectionKey = { ...selectedByVendorId };
     for (const g of poGroups) {
       const id = String(g.vendorId || '');
       if (!id) continue;
-      if (!String(byVendorFull[id] || '').trim() && firstChosen) {
-        byVendorFull[id] = firstChosen;
+      if (!String(byVendorSelectionKey[id] || '').trim() && firstChosen) {
+        byVendorSelectionKey[id] = firstChosen;
       }
     }
 
-    const pickProviderQuote = (vendorId, courierName) => {
-      const s = shipments.find((x) => String(x.vendorId) === String(vendorId));
-      if (!s?.logistics?.success || !Array.isArray(s.logistics.providers)) return null;
-      const want = String(courierName || '').trim().toLowerCase();
-      return (
-        s.logistics.providers.find((p) => String(p.name || '').trim().toLowerCase() === want) || null
-      );
-    };
-
+    const byVendorId = {};
     const byVendorCourierDetail = {};
-    for (const id of Object.keys(byVendorFull)) {
-      const name = byVendorFull[id];
-      if (!String(name || '').trim()) continue;
-      const p = pickProviderQuote(id, name);
+    for (const id of Object.keys(byVendorSelectionKey)) {
+      const selKey = byVendorSelectionKey[id];
+      if (!String(selKey || '').trim()) continue;
+      const p = pickProviderByKey(id, selKey);
       const sh = shipments.find((x) => String(x.vendorId) === String(id));
+      const displayName = String(p?.name || '').trim() || selKey;
+      byVendorId[id] = displayName;
+      const isTrucking =
+        p?.transportKind === 'trucking' ||
+        String(p?.source || '').toLowerCase() === 'borzo' ||
+        p?.vehicle_type_id != null;
+      const fareValue = providerFareInr(p);
       byVendorCourierDetail[id] = {
-        name,
-        courier_company_id: p?.courier_company_id ?? null,
-        rate: p?.rate ?? null,
+        name: displayName,
+        transport_mode: isTrucking ? 'trucking' : 'courier',
+        transportMode: isTrucking ? 'trucking' : 'courier',
+        courier_company_id: isTrucking ? null : (p?.courier_company_id ?? null),
+        vehicle_type_id: isTrucking ? (p?.vehicle_type_id ?? null) : null,
+        vehicleTypeId: isTrucking ? (p?.vehicle_type_id ?? null) : null,
+        carrier: isTrucking ? p?.carrier || 'Borzo' : p?.carrier ?? null,
+        fareValue,
+        rate: fareValue ?? p?.rate ?? p?.estimated_fare ?? p?.fare_value ?? null,
         etd: p?.etd ?? null,
         source: p?.source ?? null,
         rating: p?.rating ?? null,
         cod: p?.cod ?? null,
-        weightKg: sh?.weightKg ?? null
+        weightKg: sh?.weightKg ?? null,
+        pickup_lat: sh?.pickupLat ?? null,
+        pickup_lng: sh?.pickupLng ?? null,
+        delivery_lat: sh?.deliveryLat ?? null,
+        delivery_lng: sh?.deliveryLng ?? null
       };
     }
 
     navigate('/create-po', {
       state: {
         transportSelection: {
-          byVendorId: byVendorFull,
+          byVendorId,
           byVendorCourierDetail,
           shippingProvider: '',
           trackingNumber: '',
@@ -319,7 +399,9 @@ const TransportSuggestion = () => {
     <div className="page">
       <div className="page-header">
         <h1>Transport suggestion</h1>
-        <p>Review courier quotes and pick one provider per supplier (you can use the same or different couriers).</p>
+        <p>
+          Review courier (Shiprocket) and trucking (Borzo) quotes — pick one provider per supplier shipment.
+        </p>
       </div>
 
       {poGroups.length === 0 ? (
@@ -370,7 +452,7 @@ const TransportSuggestion = () => {
           </div>
 
           <div style={{ marginBottom: '1rem' }}>
-            <h3 style={{ margin: '0 0 0.5rem', color: '#0f172a' }}>Courier options</h3>
+            <h3 style={{ margin: '0 0 0.5rem', color: '#0f172a' }}>Transport options</h3>
             {!logisticsLoading && !logisticsError && formatAddressLines(deliveryAddressUsed).length > 0 ? (
               <div
                 style={{
@@ -428,6 +510,12 @@ const TransportSuggestion = () => {
                   <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '0.5rem' }}>
                     Pickup pincode: <strong>{shipment.pickupPincode || '—'}</strong> · Chargeable weight:{' '}
                     <strong>{shipment.weightKg} kg</strong>
+                    {shipment.logistics?.mode ? (
+                      <>
+                        {' '}
+                        · Mode: <strong>{shipment.logistics.mode}</strong>
+                      </>
+                    ) : null}
                   </div>
                   {shipment.pickupOutletName ? (
                     <div style={{ fontSize: '0.78rem', color: '#475569', marginBottom: '0.25rem' }}>
@@ -446,6 +534,21 @@ const TransportSuggestion = () => {
                       Ship-from: {shipment.pickupAddressSummary}
                     </div>
                   ) : null}
+                  {shipment.logistics?.quoteNote ? (
+                    <div
+                      style={{
+                        fontSize: '0.8rem',
+                        color: '#1e40af',
+                        background: '#eff6ff',
+                        border: '1px solid #bfdbfe',
+                        borderRadius: 8,
+                        padding: '0.45rem 0.55rem',
+                        marginBottom: '0.45rem'
+                      }}
+                    >
+                      {shipment.logistics.quoteNote}
+                    </div>
+                  ) : null}
                   {!shipment.logistics?.success ? (
                     <div style={{ fontSize: '0.85rem', color: '#b45309' }}>
                       {shipment.logistics?.message || 'No quotes for this lane.'}
@@ -454,17 +557,22 @@ const TransportSuggestion = () => {
                     <div style={{ display: 'grid', gap: '0.45rem', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
                       {(shipment.logistics.providers || []).map((p, idx) => {
                         const vid = String(shipment.vendorId || '');
-                        const name = String(p.name || '').trim();
-                        const selected = Boolean(name && String(selectedByVendorId[vid] || '').trim() === name);
+                        const selKey = providerSelectionKey(p);
+                        const selected = Boolean(
+                          selKey && String(selectedByVendorId[vid] || '').trim() === selKey
+                        );
+                        const overCap = Boolean(p.capacity_exceeded);
                         return (
-                          <CourierPickCard
-                            key={`${shipment.vendorId}-${p.courier_company_id || p.name || idx}`}
+                          <TransportPickCard
+                            key={`${shipment.vendorId}-${selKey || idx}`}
                             provider={p}
                             selected={selected}
+                            disabled={overCap}
+                            disabledReason="Exceeds vehicle capacity — split shipment or pick another option"
                             onPick={() =>
                               setSelectedByVendorId((prev) => ({
                                 ...prev,
-                                [vid]: name
+                                [vid]: selKey
                               }))
                             }
                           />
@@ -475,7 +583,7 @@ const TransportSuggestion = () => {
                 </div>
               ))}
             </div>
-            {!logisticsLoading && !logisticsError && vendorIdsRequiringCourier.length > 0 ? (
+            {!logisticsLoading && !logisticsError && vendorIdsRequiringTransport.length > 0 ? (
               <div
                 style={{
                   marginTop: '0.85rem',
@@ -487,16 +595,19 @@ const TransportSuggestion = () => {
                   color: '#312e81'
                 }}
               >
-                <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Selected couriers (per supplier)</div>
+                <div style={{ fontWeight: 600, marginBottom: '0.35rem' }}>Selected transport (per supplier)</div>
                 <ul style={{ margin: 0, paddingLeft: '1.1rem' }}>
-                  {vendorIdsRequiringCourier.map((vid) => (
-                    <li key={vid} style={{ marginBottom: '0.2rem' }}>
-                      <strong>{vendorDisplayName(vid)}:</strong>{' '}
-                      {String(selectedByVendorId[vid] || '').trim() || (
-                        <span style={{ color: '#64748b' }}>not selected yet</span>
-                      )}
-                    </li>
-                  ))}
+                  {vendorIdsRequiringTransport.map((vid) => {
+                    const selKey = String(selectedByVendorId[vid] || '').trim();
+                    const p = selKey ? pickProviderByKey(vid, selKey) : null;
+                    const label = p?.name || selKey;
+                    return (
+                      <li key={vid} style={{ marginBottom: '0.2rem' }}>
+                        <strong>{vendorDisplayName(vid)}:</strong>{' '}
+                        {label || <span style={{ color: '#64748b' }}>not selected yet</span>}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ) : null}
@@ -570,7 +681,7 @@ const TransportSuggestion = () => {
           type="button"
           className="btn-primary"
           onClick={handleUseTransport}
-          disabled={poGroups.length === 0 || !allCouriersChosen}
+          disabled={poGroups.length === 0 || !allTransportChosen || Boolean(selectedProviderOverCapacity)}
         >
           Use selected transport
         </button>

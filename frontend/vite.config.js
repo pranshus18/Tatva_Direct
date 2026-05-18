@@ -6,12 +6,17 @@ export default defineConfig({
   server: {
     port: 3000,
     proxy: {
+      // Voice WebSocket only — do not set ws:true on all /api (breaks Vite HMR → ECONNRESET).
+      '/api/voice': {
+        target: 'http://localhost:8081',
+        changeOrigin: true,
+        secure: false,
+        ws: true
+      },
       '/api': {
         target: 'http://localhost:8081',
         changeOrigin: true,
         secure: false,
-        ws: true,
-        // Logistics quotes call upstream Shiprocket via the backend and can exceed 30s (cold start).
         timeout: 150000,
         proxyTimeout: 150000
       }

@@ -2,6 +2,15 @@ import {
   LISTED_SUPPLIER_PRODUCTS_OR,
   listedSupplierProductsFilterOptions
 } from '../utils/platformListedSupplierProductsFilter.js';
+import {
+  rankProductsByQuery,
+  filterByFuzzyScore,
+  shouldRunFuzzyFallback,
+  mergeRankedProducts,
+  FUZZY_MATCH_MIN_SCORE,
+  buildTokenIlikePatterns
+} from './productDiscoveryFuzzyRank.js';
+import { normalizeSearchQueryAliases } from './voiceSearchAliases.js';
 
 /**
  * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` treats commas as delimiters; commas/parens in the
@@ -22,6 +31,69 @@ function escapeIlikeLiteral(text) {
     .replace(/\\/g, '\\\\')
     .replace(/%/g, '\\%')
     .replace(/_/g, '\\_');
+}
+
+function applyCategoryFilter(
+  productsQuery,
+  { legacyCategory, normalizedCategoryLegacy, trimmedCategoryVoice }
+) {
+  if (legacyCategory) {
+    if (normalizedCategoryLegacy) {
+      return productsQuery.eq('category', normalizedCategoryLegacy);
+    }
+    return productsQuery;
+  }
+  if (trimmedCategoryVoice) {
+    return productsQuery.ilike('category', escapeIlikeLiteral(trimmedCategoryVoice));
+  }
+  return productsQuery;
+}
+
+function buildListedProductsQuery(supabase, categoryOpts) {
+  let productsQuery = supabase
+    .from('products')
+    .select(
+      `
+          id,
+          name,
+          category,
+          unit,
+          description,
+          brand,
+          gtin,
+          barcode,
+          specifications,
+          status,
+          is_active,
+          updated_at,
+          supplier_products!inner(count)
+        `,
+      { count: 'exact' }
+    )
+    .eq('status', 'approved')
+    .or(LISTED_SUPPLIER_PRODUCTS_OR, listedSupplierProductsFilterOptions);
+
+  return applyCategoryFilter(productsQuery, categoryOpts);
+}
+
+function applyTextSearchFilter(productsQuery, query) {
+  if (!query) return productsQuery;
+  const ilikeQuery = `%${query.replace(/\s+/g, '%')}%`;
+  return productsQuery.or(
+    `name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`
+  );
+}
+
+function applyTokenSearchFilter(productsQuery, query) {
+  const patterns = buildTokenIlikePatterns(query);
+  if (!patterns.length) return productsQuery;
+
+  const parts = [];
+  for (const pattern of patterns) {
+    const escaped = pattern.replace(/,/g, ' ');
+    parts.push(`name.ilike.${escaped}`, `brand.ilike.${escaped}`);
+  }
+  return productsQuery.or(parts.slice(0, 14).join(','));
 }
 
 /**
@@ -52,53 +124,84 @@ export async function searchProductDiscoveryForUser(
     ? Math.max(parsedOffset, 0)
     : (safePage - 1) * safeLimit;
 
-  const query = sanitizeDiscoverySearchQuery(q);
+  const query = sanitizeDiscoverySearchQuery(normalizeSearchQueryAliases(sanitizeDiscoverySearchQuery(q)));
   const rankingPoolLimit = query ? 250 : 500;
   const legacyCategory = Boolean(legacyManualDiscoveryCategoryFilter);
   const normalizedCategoryLegacy = String(category || '').trim().toLowerCase();
   const trimmedCategoryVoice = String(category || '').trim();
 
-  let productsQuery = supabase
-    .from('products')
-    .select(
-      `
-          id,
-          name,
-          category,
-          unit,
-          description,
-          brand,
-          gtin,
-          barcode,
-          specifications,
-          status,
-          is_active,
-          updated_at,
-          supplier_products!inner(count)
-        `,
-      { count: 'exact' }
-    )
-    .eq('status', 'approved')
-    .or(LISTED_SUPPLIER_PRODUCTS_OR, listedSupplierProductsFilterOptions);
+  const categoryOpts = {
+    legacyCategory,
+    normalizedCategoryLegacy,
+    trimmedCategoryVoice
+  };
 
-  if (legacyCategory) {
-    if (normalizedCategoryLegacy) {
-      productsQuery = productsQuery.eq('category', normalizedCategoryLegacy);
-    }
-  } else if (trimmedCategoryVoice) {
-    productsQuery = productsQuery.ilike('category', escapeIlikeLiteral(trimmedCategoryVoice));
-  }
-  if (query) {
-    const ilikeQuery = `%${query.replace(/\s+/g, '%')}%`;
-    productsQuery = productsQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`);
-  }
+  let productsQuery = applyTextSearchFilter(
+    buildListedProductsQuery(supabase, categoryOpts),
+    query
+  );
 
-  const { data: rawProducts, error, count } = await productsQuery
+  let { data: rawProducts, error, count } = await productsQuery
     .order('updated_at', { ascending: false })
     .limit(rankingPoolLimit);
 
   if (error) {
     throw error;
+  }
+
+  let rankedPool = rankProductsByQuery(query, rawProducts || []);
+
+  if (query && !rankedPool.length) {
+    const tokenQuery = applyTokenSearchFilter(
+      buildListedProductsQuery(supabase, categoryOpts),
+      query
+    );
+    const tokenRes = await tokenQuery.order('updated_at', { ascending: false }).limit(rankingPoolLimit);
+    if (!tokenRes.error && tokenRes.data?.length) {
+      rankedPool = mergeRankedProducts(rankedPool, rankProductsByQuery(query, tokenRes.data));
+      rawProducts = mergeRankedProducts(rawProducts || [], tokenRes.data);
+      count = Math.max(Number(count) || 0, tokenRes.data.length);
+    }
+  }
+
+  if (query && shouldRunFuzzyFallback(query, rankedPool, safeLimit)) {
+    const fallbackQuery = buildListedProductsQuery(supabase, categoryOpts);
+    const fallbackRes = await fallbackQuery
+      .order('updated_at', { ascending: false })
+      .limit(rankingPoolLimit);
+
+    if (!fallbackRes.error && fallbackRes.data?.length) {
+      const fuzzyHits = filterByFuzzyScore(rankProductsByQuery(query, fallbackRes.data), {
+        limit: rankingPoolLimit
+      });
+      rankedPool = mergeRankedProducts(rankedPool, fuzzyHits);
+      const byId = new Map((rawProducts || []).map((p) => [p.id, p]));
+      for (const p of fuzzyHits) {
+        byId.set(p.id, { ...byId.get(p.id), ...p });
+      }
+      rawProducts = [...byId.values()];
+      count = Math.max(Number(count) || 0, rawProducts.length);
+    }
+  }
+
+  const rankedById = new Map(rankedPool.map((p) => [p.id, p.matchScore || 0]));
+  rawProducts = (rawProducts || []).map((p) => ({
+    ...p,
+    matchScore: rankedById.get(p.id) ?? p.matchScore ?? 0
+  }));
+
+  if (query && rankedPool.length) {
+    const orderIds = new Set(rankedPool.map((p) => p.id));
+    rawProducts.sort((a, b) => {
+      const scoreDiff = (b.matchScore || 0) - (a.matchScore || 0);
+      if (scoreDiff !== 0 && (b.matchScore >= FUZZY_MATCH_MIN_SCORE || a.matchScore >= FUZZY_MATCH_MIN_SCORE)) {
+        return scoreDiff;
+      }
+      if (orderIds.has(a.id) !== orderIds.has(b.id)) {
+        return orderIds.has(b.id) ? 1 : -1;
+      }
+      return 0;
+    });
   }
 
   const { data: recentOrders } = await supabase
@@ -150,6 +253,16 @@ export async function searchProductDiscoveryForUser(
   });
 
   suggestions.sort((a, b) => {
+    if (query) {
+      const matchDiff = (b.matchScore || 0) - (a.matchScore || 0);
+      if (
+        matchDiff !== 0 &&
+        (b.matchScore >= FUZZY_MATCH_MIN_SCORE || a.matchScore >= FUZZY_MATCH_MIN_SCORE)
+      ) {
+        return matchDiff;
+      }
+    }
+
     const scoreDiff = (b.recommendationScore || 0) - (a.recommendationScore || 0);
     if (scoreDiff !== 0) return scoreDiff;
 

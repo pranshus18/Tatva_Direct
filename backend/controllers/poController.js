@@ -47,6 +47,7 @@ import {
 } from '../contracts/poContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
 import { bookCourierCheckout } from '../services/logisticsBookCourierService.js';
+import { bookTrucking } from '../services/logisticsBookTruckingService.js';
 import { computeGroupWeightKg } from './logisticsController.js';
 import { randomUUID } from 'node:crypto';
 
@@ -1461,7 +1462,14 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       transportNotes = null,
       perOrderTransport,
       quotedTransportAmount: rootQuotedTransportAmount,
-      courierCompanyId: rootCourierCompanyId = null
+      courierCompanyId: rootCourierCompanyId = null,
+      vehicleTypeId: rootVehicleTypeId = null,
+      pickupLat: rootPickupLat = null,
+      pickupLng: rootPickupLng = null,
+      deliveryLat: rootDeliveryLat = null,
+      deliveryLng: rootDeliveryLng = null,
+      carrier: rootCarrier = null,
+      matter: rootMatter = null
     } = payload;
 
     const transportByOrderId = new Map(
@@ -1555,22 +1563,62 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       const currentTotal = Math.round((parseFloat(row.total_amount || 0) || 0) * 100) / 100;
       const productsOnly = Math.max(0, Math.round((currentTotal - existingTransport) * 100) / 100);
 
+      const isSingleRoot =
+        !hasPerOrderRows && orderIds.length === 1 && row.id === orderIds[0];
+
       const courierCompanyId =
-        pick?.courierCompanyId ??
-        (!hasPerOrderRows && orderIds.length === 1 && row.id === orderIds[0] ? rootCourierCompanyId : null);
+        pick?.courierCompanyId ?? (isSingleRoot ? rootCourierCompanyId : null);
+
+      const vehicleTypeId =
+        pick?.vehicleTypeId ?? (isSingleRoot ? rootVehicleTypeId : null);
+      const transportMode = String(
+        pick?.transportMode ?? (isSingleRoot ? payload.transportMode : null) ?? ''
+      )
+        .trim()
+        .toLowerCase();
+      const transportSource = String(pick?.source ?? (isSingleRoot ? payload.source : null) ?? '')
+        .trim()
+        .toLowerCase();
+      const truckingWeightKg =
+        pick?.weightKg ?? (isSingleRoot ? payload.weightKg : null) ?? null;
+      const pickupLat = pick?.pickupLat ?? (isSingleRoot ? rootPickupLat : null);
+      const pickupLng = pick?.pickupLng ?? (isSingleRoot ? rootPickupLng : null);
+      const deliveryLat = pick?.deliveryLat ?? (isSingleRoot ? rootDeliveryLat : null);
+      const deliveryLng = pick?.deliveryLng ?? (isSingleRoot ? rootDeliveryLng : null);
+      const truckingCarrier = pick?.carrier ?? (isSingleRoot ? rootCarrier : null);
+      const truckingMatter = pick?.matter ?? (isSingleRoot ? rootMatter : null);
 
       const logisticsDelivery = orderDeliveryJsonToLogisticsAddress(prevAddr);
-      if (courierCompanyId != null && Number.isFinite(Number(courierCompanyId))) {
-        if (!isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
+      const willBookCourier =
+        courierCompanyId != null && Number.isFinite(Number(courierCompanyId));
+      const willBookTrucking =
+        !willBookCourier &&
+        (transportMode === 'trucking' ||
+          transportSource === 'borzo' ||
+          (vehicleTypeId != null && Number.isFinite(Number(vehicleTypeId))));
+
+      if (willBookCourier && !isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Order ${row.id}: complete delivery address with a 6-digit pincode is required for courier booking.`
+        });
+      }
+
+      if (willBookTrucking) {
+        const plat = Number(pickupLat);
+        const plng = Number(pickupLng);
+        const dlat = Number(deliveryLat);
+        const dlng = Number(deliveryLng);
+        if (![plat, plng, dlat, dlng].every((n) => Number.isFinite(n))) {
           return res.status(400).json({
             status: 'error',
-            message: `Order ${row.id}: complete delivery address with a 6-digit pincode is required for courier booking.`
+            message: `Order ${row.id}: pickup and delivery coordinates are required for trucking (Borzo) booking. Re-open Transport suggestion and pick a trucking quote.`
           });
         }
       }
 
-      if (transportBookDebug && (courierCompanyId == null || !Number.isFinite(Number(courierCompanyId)))) {
-        logger.info('[transport/confirm] logistics booking skipped (no courierCompanyId)', {
+      if (transportBookDebug && !willBookCourier && !willBookTrucking) {
+        logger.info('[transport/confirm] logistics booking skipped (no courier / trucking selection)', {
           orderId: row.id,
           orderNumber: row.order_number
         });
@@ -1590,6 +1638,18 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
         currentTotal,
         productsOnly,
         courierCompanyId,
+        vehicleTypeId,
+        transportMode,
+        transportSource,
+        truckingWeightKg,
+        pickupLat,
+        pickupLng,
+        deliveryLat,
+        deliveryLng,
+        truckingCarrier,
+        truckingMatter,
+        willBookCourier,
+        willBookTrucking,
         logisticsDelivery,
         lines: buildCourierLinesFromOrderItems(row.order_items),
         weightKg: computeOrderWeightKgForCourier(row.order_items),
@@ -1599,66 +1659,139 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
       });
     }
 
-    // Book couriers in parallel (major latency win for multi-vendor PO confirm).
+    // Book courier or trucking in parallel (multi-vendor PO confirm).
     await Promise.all(
       rowContexts.map(async (ctx) => {
-        const { row, courierCompanyId, sp, logisticsDelivery, lines, weightKg } = ctx;
-        if (courierCompanyId == null || !Number.isFinite(Number(courierCompanyId))) {
-          return;
-        }
+        const {
+          row,
+          courierCompanyId,
+          vehicleTypeId,
+          transportMode,
+          transportSource,
+          truckingWeightKg,
+          sp,
+          logisticsDelivery,
+          lines,
+          weightKg,
+          pickupLat,
+          pickupLng,
+          deliveryLat,
+          deliveryLng,
+          truckingCarrier,
+          truckingMatter,
+          willBookCourier,
+          willBookTrucking
+        } = ctx;
+        if (!willBookCourier && !willBookTrucking) return;
+
         try {
-          const booked = await bookCourierCheckout({
-            courierCompanyId: Number(courierCompanyId),
-            courierDisplayName: String(sp).trim(),
-            deliveryAddress: logisticsDelivery,
-            sessionBuyer,
-            lines,
-            weightKg,
-            orderId: row.id,
-            orderNumber: row.order_number || undefined,
-            vendorId: row.supplier_id || null
+          if (willBookCourier) {
+            const booked = await bookCourierCheckout({
+              courierCompanyId: Number(courierCompanyId),
+              courierDisplayName: String(sp).trim(),
+              deliveryAddress: logisticsDelivery,
+              sessionBuyer,
+              lines,
+              weightKg,
+              orderId: row.id,
+              orderNumber: row.order_number || undefined,
+              vendorId: row.supplier_id || null
+            });
+            if (booked.trackingNumber) ctx.tn = booked.trackingNumber;
+            if (booked.trackingUrl) ctx.tu = booked.trackingUrl;
+            if (booked.shippingProvider) ctx.resolvedSp = booked.shippingProvider;
+
+            ctx.logisticsBookingMeta = {
+              mode: 'courier',
+              shipmentId: booked.shipmentId,
+              shiprocketOrderId: booked.shiprocketOrderId,
+              pendingReason: booked.pendingReason || null,
+              usedLegacyCarrierBook: booked.usedLegacyCarrierBook,
+              trackingNumber: booked.trackingNumber || null,
+              trackingUrl: booked.trackingUrl || null,
+              ...(booked.debug ? { debug: booked.debug } : {})
+            };
+
+            if (transportBookDebug) {
+              logger.info('[transport/confirm] courier booking result (before DB update)', {
+                orderId: row.id,
+                orderNumber: row.order_number,
+                courierCompanyId: Number(courierCompanyId),
+                tracking_number: ctx.tn,
+                tracking_url: ctx.tu,
+                shipping_provider: ctx.resolvedSp
+              });
+            }
+
+            const diagParts = [];
+            if (booked.pendingReason) diagParts.push(booked.pendingReason);
+            if (booked.shipmentId) diagParts.push(`shipment_id ${booked.shipmentId}`);
+            if (booked.shiprocketOrderId) diagParts.push(`shiprocket_order_id ${booked.shiprocketOrderId}`);
+            if (diagParts.length > 0 && (!booked.trackingNumber || !booked.trackingUrl)) {
+              const bit = diagParts.join(' · ');
+              ctx.orderNotes = ctx.orderNotes ? `${ctx.orderNotes} | [Logistics] ${bit}` : `[Logistics] ${bit}`;
+            }
+            return;
+          }
+
+          const bookWeight =
+            Number(truckingWeightKg) > 0 ? Number(truckingWeightKg) : weightKg;
+          const vid =
+            vehicleTypeId != null && Number.isFinite(Number(vehicleTypeId))
+              ? Number(vehicleTypeId)
+              : null;
+          const booked = await bookTrucking({
+            vehicleTypeId: vid,
+            carrier: truckingCarrier || (transportSource === 'borzo' ? 'Borzo' : 'Borzo'),
+            pickupLat,
+            pickupLng,
+            deliveryLat,
+            deliveryLng,
+            contactPhone: sessionBuyer.phone,
+            weightKg: bookWeight,
+            matter: truckingMatter || lines.map((l) => l.name).filter(Boolean).join(', '),
+            displayName: String(sp).trim()
           });
           if (booked.trackingNumber) ctx.tn = booked.trackingNumber;
           if (booked.trackingUrl) ctx.tu = booked.trackingUrl;
           if (booked.shippingProvider) ctx.resolvedSp = booked.shippingProvider;
 
           ctx.logisticsBookingMeta = {
-            shipmentId: booked.shipmentId,
-            shiprocketOrderId: booked.shiprocketOrderId,
+            mode: 'trucking',
+            borzoOrderId: booked.borzoOrderId,
+            vehicleTypeId: vid,
+            transportMode: transportMode || 'trucking',
+            source: transportSource || 'borzo',
             pendingReason: booked.pendingReason || null,
-            usedLegacyCarrierBook: booked.usedLegacyCarrierBook,
             trackingNumber: booked.trackingNumber || null,
             trackingUrl: booked.trackingUrl || null,
             ...(booked.debug ? { debug: booked.debug } : {})
           };
 
           if (transportBookDebug) {
-            logger.info('[transport/confirm] logistics booking result (before DB update)', {
+            logger.info('[transport/confirm] trucking booking result (before DB update)', {
               orderId: row.id,
               orderNumber: row.order_number,
-              courierCompanyId: Number(courierCompanyId),
+              vehicleTypeId: vid,
+              transportMode,
+              source: transportSource,
               tracking_number: ctx.tn,
               tracking_url: ctx.tu,
-              shipping_provider: ctx.resolvedSp,
-              usedLegacyCarrierBook: booked.usedLegacyCarrierBook
+              shipping_provider: ctx.resolvedSp
             });
           }
 
-          const diagParts = [];
-          if (booked.pendingReason) diagParts.push(booked.pendingReason);
-          if (booked.shipmentId) diagParts.push(`shipment_id ${booked.shipmentId}`);
-          if (booked.shiprocketOrderId) diagParts.push(`shiprocket_order_id ${booked.shiprocketOrderId}`);
-          if (diagParts.length > 0 && (!booked.trackingNumber || !booked.trackingUrl)) {
-            const bit = diagParts.join(' · ');
+          if (booked.pendingReason && (!booked.trackingNumber || !booked.trackingUrl)) {
+            const bit = booked.pendingReason;
             ctx.orderNotes = ctx.orderNotes ? `${ctx.orderNotes} | [Logistics] ${bit}` : `[Logistics] ${bit}`;
           }
         } catch (bookErr) {
-          logger.error('Logistics book-courier-checkout error:', bookErr);
+          logger.error('Logistics booking error:', bookErr);
           const statusCode =
             Number(bookErr?.statusCode) >= 400 && Number(bookErr?.statusCode) < 600
               ? Number(bookErr.statusCode)
               : 502;
-          const err = new Error(bookErr?.message || 'Courier booking failed');
+          const err = new Error(bookErr?.message || 'Transport booking failed');
           err.statusCode = statusCode;
           err.orderId = row.id;
           throw err;
@@ -1753,7 +1886,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProvider, async (r
     if (Number.isFinite(httpStatus) && httpStatus >= 400 && httpStatus < 600) {
       return res.status(httpStatus).json({
         status: 'error',
-        message: error.message || 'Courier booking failed',
+        message: error.message || 'Transport booking failed',
         orderId: error.orderId || undefined
       });
     }

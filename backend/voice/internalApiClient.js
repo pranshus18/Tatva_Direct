@@ -9,8 +9,16 @@ const ALLOWED_PREFIXES = [
   '/api/profile',
   '/api/payments/',
   '/api/vendors/rank',
+  '/api/substitutions/',
+  '/api/logistics/',
   '/api/voice/'
 ];
+
+const LOGISTICS_TIMEOUT_MS =
+  Number.parseInt(String(process.env.VOICE_LOGISTICS_TIMEOUT_MS || '150000'), 10) || 150000;
+
+const API_TIMEOUT_MS =
+  Number.parseInt(String(process.env.VOICE_API_TIMEOUT_MS || '6000'), 10) || 6000;
 
 function getApiBase() {
   const port = process.env.PORT || 8081;
@@ -32,7 +40,7 @@ export class InternalApiClient {
     }
   }
 
-  async request(method, path, { params = null, body = null } = {}) {
+  async request(method, path, { params = null, body = null, timeoutMs = null } = {}) {
     this.validatePath(path);
     let url = `${this.base}${path}`;
     if (params) {
@@ -44,15 +52,32 @@ export class InternalApiClient {
       if (q) url += `?${q}`;
     }
 
-    const response = await fetch(url, {
-      method: method.toUpperCase(),
-      headers: {
-        Authorization: `Bearer ${this.token}`,
-        'Content-Type': 'application/json',
-        Accept: 'application/json'
-      },
-      body: body ? JSON.stringify(body) : undefined
-    });
+    const controller = new AbortController();
+    const limit =
+      timeoutMs ||
+      (path.startsWith('/api/logistics/') ? LOGISTICS_TIMEOUT_MS : API_TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), limit);
+
+    let response;
+    try {
+      response = await fetch(url, {
+        method: method.toUpperCase(),
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json'
+        },
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
+      });
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        return { ok: false, statusCode: 408, error: 'Request timed out', data: null };
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
+    }
 
     let data;
     try {
@@ -76,8 +101,11 @@ export class InternalApiClient {
     return this.request('GET', path, { params });
   }
 
-  post(path, body) {
-    return this.request('POST', path, { body: body || {} });
+  post(path, body, options = {}) {
+    return this.request('POST', path, {
+      body: body || {},
+      timeoutMs: options.timeoutMs
+    });
   }
 
   put(path, body) {

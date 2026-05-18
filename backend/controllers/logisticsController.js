@@ -10,6 +10,14 @@ import {
   applyPrimaryStreetLine,
   isPlaceholderStreetLine
 } from '../utils/pickupPincode.js';
+import { geocodeAddressNominatim } from '../utils/geoUtils.js';
+import {
+  inferLogisticsCategory,
+  resolveShipmentQuoteStrategy,
+  LOGISTICS_TRUCKING_MIN_WEIGHT_KG
+} from '../utils/logisticsQuotePolicy.js';
+
+export { inferLogisticsCategory } from '../utils/logisticsQuotePolicy.js';
 
 const router = express.Router();
 
@@ -44,18 +52,87 @@ const LOGISTICS_UPSTREAM_MAX_RETRIES = Math.min(
 const RETRYABLE_UPSTREAM_HTTP = new Set([502, 503, 504]);
 
 const logisticsQuoteCache = new Map();
+let loggedServiceProvidersApiVersion = false;
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function providerFare(p = {}) {
+  const raw = p.fare_value ?? p.estimated_fare ?? p.rate ?? null;
+  if (raw === null || raw === undefined || raw === '') return null;
+  const n = Number(String(raw).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : raw;
+}
+
+function normalizeProviderForUi(p = {}) {
+  const row = { ...p };
+  const src = String(row.source || '').toLowerCase();
+  const isTrucking =
+    src === 'borzo' || (row.vehicle_type_id != null && row.vehicle_type_id !== '');
+  if (isTrucking) {
+    row.transportKind = 'trucking';
+    row.rate = providerFare(row);
+  } else if (row.courier_company_id != null && row.courier_company_id !== '') {
+    row.transportKind = 'courier';
+    row.rate = row.rate ?? providerFare(row);
+  }
+  return row;
 }
 
 function cloneLogistics(value) {
   return {
     success: Boolean(value?.success),
     mode: value?.mode || 'courier',
+    requestedMode: value?.requestedMode ?? value?.requested_mode ?? null,
+    modeRecommendation: value?.modeRecommendation ?? value?.mode_recommendation ?? null,
     message: value?.message ?? null,
-    providers: Array.isArray(value?.providers) ? value.providers.map((p) => ({ ...p })) : []
+    quoteNote: value?.quoteNote ?? null,
+    intercity: value?.intercity ?? null,
+    filteredCount: value?.filteredCount ?? value?.filtered_count ?? null,
+    providers: Array.isArray(value?.providers)
+      ? value.providers.map((p) => normalizeProviderForUi(p))
+      : []
   };
+}
+
+function inferMatterFromGroup(group) {
+  const items = Array.isArray(group?.items) ? group.items : [];
+  const names = items.map((i) => String(i?.name || '').trim()).filter(Boolean);
+  if (names.length === 0) return null;
+  return names.slice(0, 3).join(', ').slice(0, 500);
+}
+
+function parseVolumeCbmFromGroup(group) {
+  const items = Array.isArray(group?.items) ? group.items : [];
+  let sum = 0;
+  for (const item of items) {
+    const specs =
+      item?.specifications && typeof item.specifications === 'object' ? item.specifications : {};
+    const q = Math.max(0, Number(item.quantity) || 0);
+    for (const [k, v] of Object.entries(specs)) {
+      if (!String(k).toLowerCase().includes('volume') && !String(k).toLowerCase().includes('cbm')) continue;
+      const m = String(v).match(/(\d+(?:\.\d+)?)/);
+      if (m) sum += parseFloat(m[1]) * (q || 1);
+    }
+  }
+  return sum > 0 ? Math.round(sum * 1000) / 1000 : 0;
+}
+
+function addressGeocodeText(addr) {
+  if (!addr || typeof addr !== 'object') return '';
+  return [addr.line1, addr.city, addr.state, addr.pincode, addr.country].filter(Boolean).join(', ');
+}
+
+const geoCache = new Map();
+
+async function resolveCoordsForAddress(addr, cacheKey) {
+  const key = cacheKey || addressGeocodeText(addr);
+  if (!key) return null;
+  if (geoCache.has(key)) return geoCache.get(key);
+  const geo = await geocodeAddressNominatim(key);
+  geoCache.set(key, geo);
+  return geo;
 }
 
 function logisticsQuoteCacheGet(cacheKey) {
@@ -294,21 +371,37 @@ function resolveDeliveryPincode(body) {
   return { deliveryAddr: addr, deliveryPincode: digitsPin6(addr.pincode), useBilling };
 }
 
-async function fetchLogisticsQuoteForShipment({
+function buildServiceProvidersBody({
+  mode,
+  category,
   supplierId,
   pickupPincode,
   deliveryPincode,
   weightKg,
+  matter,
+  totalVolumeCbm,
+  pickupGeo,
+  deliveryGeo,
   pickupAddress,
   deliveryAddress
 }) {
-  let logistics = { success: false, mode: 'courier', message: null, providers: [] };
   const body = {
-    mode: 'courier',
+    mode,
+    category,
     pickup_pincode: pickupPincode,
     delivery_pincode: deliveryPincode,
-    weight_kg: weightKg
+    weight_kg: weightKg,
+    total_volume_cbm: totalVolumeCbm
   };
+  if (matter) body.matter = matter;
+  if (pickupGeo && Number.isFinite(pickupGeo.lat) && Number.isFinite(pickupGeo.lng)) {
+    body.pickup_lat = pickupGeo.lat;
+    body.pickup_lng = pickupGeo.lng;
+  }
+  if (deliveryGeo && Number.isFinite(deliveryGeo.lat) && Number.isFinite(deliveryGeo.lng)) {
+    body.delivery_lat = deliveryGeo.lat;
+    body.delivery_lng = deliveryGeo.lng;
+  }
   if (supplierId) body.supplier_id = String(supplierId);
   if (pickupAddress?.line1 && pickupPincode) {
     body.pickup_address = {
@@ -328,6 +421,170 @@ async function fetchLogisticsQuoteForShipment({
       pincode: deliveryPincode
     };
   }
+  return body;
+}
+
+async function postServiceProvidersUpstream(body) {
+  let r = null;
+  let raw = '';
+  let json = {};
+
+  for (let attempt = 1; attempt <= LOGISTICS_UPSTREAM_MAX_RETRIES; attempt++) {
+    const fetchOpts = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    };
+    if (LOGISTICS_UPSTREAM_TIMEOUT_MS > 0) {
+      fetchOpts.signal = AbortSignal.timeout(LOGISTICS_UPSTREAM_TIMEOUT_MS);
+    }
+
+    r = await fetch(`${LOGISTICS_BASE}/api/logistics/service-providers`, fetchOpts);
+    raw = await r.text();
+    json = parseFirstJsonObject(raw) || {};
+
+    const retryable = !r.ok && RETRYABLE_UPSTREAM_HTTP.has(r.status);
+    if (!retryable || attempt >= LOGISTICS_UPSTREAM_MAX_RETRIES) break;
+
+    await delay(450 * attempt);
+  }
+
+  return { r, raw, json };
+}
+
+function intracityUserMessage(rawMsg) {
+  const m = String(rawMsg || '').toLowerCase();
+  return (
+    m.includes('intracity') ||
+    m.includes('intra-city') ||
+    m.includes('intra city') ||
+    m.includes('same-city') ||
+    m.includes('same city')
+  );
+}
+
+function mapUpstreamQuoteResponse({ r, raw, json }, meta = {}) {
+  const apiVersion = json.api_version ?? json.apiVersion ?? null;
+  if (apiVersion && !loggedServiceProvidersApiVersion) {
+    loggedServiceProvidersApiVersion = true;
+    console.info('[logistics] service-providers api_version:', apiVersion);
+  }
+
+  const logistics = {
+    success: Boolean(json.success),
+    mode: json.mode || 'courier',
+    requestedMode: json.requested_mode || meta.requestedMode || 'auto',
+    modeRecommendation: json.mode_recommendation || null,
+    message: json.message ?? null,
+    filteredCount: json.filtered_count ?? null,
+    quoteNote: meta.quoteNote ?? null,
+    intercity: meta.intercity ?? null,
+    sameCity: meta.sameCity ?? null,
+    apiVersion,
+    providers: Array.isArray(json.providers)
+      ? json.providers.map((p) => normalizeProviderForUi(p))
+      : []
+  };
+
+  const upstreamText = (v) => (typeof v === 'string' && v.trim() ? v.trim() : '');
+  const upstreamMsg =
+    upstreamText(json.message) ||
+    upstreamText(json.error) ||
+    (Array.isArray(json.errors)
+      ? json.errors.map((e) => upstreamText(e?.message || e)).filter(Boolean).join('; ')
+      : '') ||
+    upstreamText(json.detail);
+
+  if (!r.ok) {
+    logistics.success = false;
+    logistics.providers = [];
+    const transient = RETRYABLE_UPSTREAM_HTTP.has(r.status);
+    logistics.message =
+      upstreamMsg ||
+      (raw.length > 0 && raw.length < 500 && !raw.trimStart().startsWith('<')
+        ? `Logistics API HTTP ${r.status}: ${raw.trim().slice(0, 400)}`
+        : transient
+          ? `Logistics service returned HTTP ${r.status} after ${LOGISTICS_UPSTREAM_MAX_RETRIES} attempt(s). This is usually a temporary gateway issue (cold start, restart, or overload on the logistics host). Wait 15–30 seconds and refresh, or verify LOGISTICS_MODULE_URL points at a healthy deployment.`
+          : `Logistics API returned HTTP ${r.status}. Check LOGISTICS_MODULE_URL and upstream logs.`);
+  } else if (!logistics.message && upstreamMsg) {
+    logistics.message = upstreamMsg;
+  }
+
+  if (
+    !logistics.success &&
+    (!logistics.providers || logistics.providers.length === 0) &&
+    intracityUserMessage(upstreamMsg || logistics.message)
+  ) {
+    logistics.message =
+      'Trucking available for same-city delivery only; use courier or contact ops for intercity.';
+  } else if (
+    !logistics.success &&
+    (!logistics.providers || logistics.providers.length === 0) &&
+    !logistics.message
+  ) {
+    logistics.message =
+      'No transport quotes were returned (success=false or empty providers). Typical causes: logistics account not linked, invalid tokens, weight above vehicle capacity, or no service on this pickup→delivery lane.';
+  }
+
+  const fc = Number(json.filtered_count);
+  if (
+    !logistics.success &&
+    Number.isFinite(fc) &&
+    fc > 0 &&
+    (!logistics.providers || logistics.providers.length === 0)
+  ) {
+    const w = Number(json.weight_kg) || meta.weightKg;
+    logistics.message =
+      logistics.message ||
+      `No vehicles met capacity for ${w} kg (${fc} option(s) filtered out). Try splitting the order or use courier if under ${LOGISTICS_TRUCKING_MIN_WEIGHT_KG} kg per lane.`;
+  }
+
+  return logistics;
+}
+
+async function fetchLogisticsQuoteForShipment({
+  supplierId,
+  pickupPincode,
+  deliveryPincode,
+  weightKg,
+  pickupAddress,
+  deliveryAddress,
+  category = 'general',
+  matter = null,
+  totalVolumeCbm = 0,
+  pickupGeo = null,
+  deliveryGeo = null,
+  quoteStrategy = null
+}) {
+  let logistics = { success: false, mode: 'courier', message: null, providers: [] };
+
+  const strategy =
+    quoteStrategy ||
+    resolveShipmentQuoteStrategy({
+      weightKg,
+      category,
+      pickupPincode,
+      deliveryPincode,
+      pickupCity: pickupAddress?.city || null,
+      deliveryCity: deliveryAddress?.city || null,
+      pickupGeo,
+      deliveryGeo
+    });
+
+  const body = buildServiceProvidersBody({
+    mode: strategy.mode,
+    category: strategy.category || category,
+    supplierId,
+    pickupPincode,
+    deliveryPincode,
+    weightKg,
+    matter,
+    totalVolumeCbm,
+    pickupGeo,
+    deliveryGeo,
+    pickupAddress,
+    deliveryAddress
+  });
 
   const quoteCacheKey =
     LOGISTICS_QUOTE_CACHE_TTL_MS > 0 ? `${LOGISTICS_BASE}\n${JSON.stringify(body)}` : '';
@@ -338,67 +595,52 @@ async function fetchLogisticsQuoteForShipment({
   }
 
   try {
-    let r = null;
-    let raw = '';
-    let json = {};
+    const first = await postServiceProvidersUpstream(body);
+    logistics = mapUpstreamQuoteResponse(first, {
+      requestedMode: strategy.mode,
+      quoteNote: strategy.quoteNote,
+      intercity: strategy.intercity,
+      sameCity: strategy.sameCity,
+      weightKg
+    });
 
-    for (let attempt = 1; attempt <= LOGISTICS_UPSTREAM_MAX_RETRIES; attempt++) {
-      const fetchOpts = {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      };
-      if (LOGISTICS_UPSTREAM_TIMEOUT_MS > 0) {
-        fetchOpts.signal = AbortSignal.timeout(LOGISTICS_UPSTREAM_TIMEOUT_MS);
+    const truckingEmpty =
+      strategy.allowCourierFallback &&
+      !strategy.intercity &&
+      strategy.mode !== 'courier' &&
+      (!logistics.success || logistics.providers.length === 0) &&
+      (logistics.mode === 'trucking' || strategy.mode === 'auto');
+
+    if (truckingEmpty) {
+      const courierBody = buildServiceProvidersBody({
+        mode: 'courier',
+        category: strategy.category || category,
+        supplierId,
+        pickupPincode,
+        deliveryPincode,
+        weightKg,
+        matter,
+        totalVolumeCbm,
+        pickupGeo,
+        deliveryGeo,
+        pickupAddress,
+        deliveryAddress
+      });
+      const second = await postServiceProvidersUpstream(courierBody);
+      const courierLogistics = mapUpstreamQuoteResponse(second, {
+        requestedMode: 'courier',
+        intercity: strategy.intercity,
+        weightKg,
+        quoteNote:
+          'Trucking had no suitable vehicles for this weight or lane; showing courier (Shiprocket) options instead.'
+      });
+      if (courierLogistics.success && courierLogistics.providers.length > 0) {
+        logistics = courierLogistics;
+      } else if (!logistics.message && courierLogistics.message) {
+        logistics.message = courierLogistics.message;
       }
-
-      r = await fetch(`${LOGISTICS_BASE}/api/logistics/service-providers`, fetchOpts);
-      raw = await r.text();
-      json = parseFirstJsonObject(raw) || {};
-
-      const retryable = !r.ok && RETRYABLE_UPSTREAM_HTTP.has(r.status);
-      if (!retryable || attempt >= LOGISTICS_UPSTREAM_MAX_RETRIES) break;
-
-      await delay(450 * attempt);
     }
 
-    logistics = {
-      success: Boolean(json.success),
-      mode: json.mode || 'courier',
-      message: json.message ?? null,
-      providers: Array.isArray(json.providers) ? json.providers : []
-    };
-
-    const upstreamText = (v) => (typeof v === 'string' && v.trim() ? v.trim() : '');
-    const upstreamMsg =
-      upstreamText(json.message) ||
-      upstreamText(json.error) ||
-      (Array.isArray(json.errors) ? json.errors.map((e) => upstreamText(e?.message || e)).filter(Boolean).join('; ') : '') ||
-      upstreamText(json.detail);
-
-    if (!r.ok) {
-      logistics.success = false;
-      logistics.providers = [];
-      const transient = RETRYABLE_UPSTREAM_HTTP.has(r.status);
-      logistics.message =
-        upstreamMsg ||
-        (raw.length > 0 && raw.length < 500 && !raw.trimStart().startsWith('<')
-          ? `Logistics API HTTP ${r.status}: ${raw.trim().slice(0, 400)}`
-          : transient
-            ? `Logistics service returned HTTP ${r.status} after ${LOGISTICS_UPSTREAM_MAX_RETRIES} attempt(s). This is usually a temporary gateway issue (cold start, restart, or overload on the logistics host). Wait 15–30 seconds and refresh, or verify LOGISTICS_MODULE_URL points at a healthy deployment.`
-            : `Logistics API returned HTTP ${r.status}. Check LOGISTICS_MODULE_URL and upstream logs.`);
-    } else if (!logistics.message && upstreamMsg) {
-      logistics.message = upstreamMsg;
-    }
-
-    if (
-      !logistics.success &&
-      (!logistics.providers || logistics.providers.length === 0) &&
-      !logistics.message
-    ) {
-      logistics.message =
-        'No courier quotes were returned (success=false or empty providers). Typical causes: Shiprocket / courier account not linked on the logistics service, invalid tokens, or no service on this pickup→delivery pin pair.';
-    }
     if (quoteCacheKey) logisticsQuoteCacheSet(quoteCacheKey, logistics);
   } catch (e) {
     const name = String(e?.name || '');
@@ -431,6 +673,11 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
     pincode: deliveryPincode
   });
 
+  const deliveryGeo = await resolveCoordsForAddress(
+    deliveryAddressPayload,
+    `delivery|${deliveryPincode}|${addressGeocodeText(deliveryAddressPayload)}`
+  );
+
   /** Same supplier + lane + weight → one upstream HTTP call */
   const laneQuoteCache = new Map();
 
@@ -460,6 +707,28 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
           ? `${summaryParts.join(', ')} · PIN ${pickupPincode}`
           : resolved.summary;
       const weightKg = computeGroupWeightKg(group);
+      const category = inferLogisticsCategory(group, weightKg);
+      const matter = inferMatterFromGroup(group);
+      const totalVolumeCbm = parseVolumeCbmFromGroup(group);
+
+      let pickupGeo = null;
+      if (pickupAddress) {
+        pickupGeo = await resolveCoordsForAddress(
+          pickupAddress,
+          `pickup|${vendorId || ''}|${pickupPincode}|${addressGeocodeText(pickupAddress)}`
+        );
+      }
+
+      const quoteStrategyWithCoords = resolveShipmentQuoteStrategy({
+        weightKg,
+        category,
+        pickupPincode,
+        deliveryPincode,
+        pickupCity: pickupAddress?.city || null,
+        deliveryCity: deliveryAddressPayload?.city || null,
+        pickupGeo,
+        deliveryGeo
+      });
 
       let logistics = { success: false, mode: 'courier', message: null, providers: [] };
 
@@ -467,7 +736,7 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
         logistics.message =
           'Supplier warehouse pincode is missing. Ask the supplier to complete their profile or outlet address (PIN / postal code).';
       } else {
-        const laneKey = `${vendorId || ''}|${pickupPincode}|${deliveryPincode}|${weightKg}`;
+        const laneKey = `${vendorId || ''}|${pickupPincode}|${deliveryPincode}|${weightKg}|${quoteStrategyWithCoords.mode}|${quoteStrategyWithCoords.category}|${totalVolumeCbm}|${quoteStrategyWithCoords.sameCity}`;
         logistics = await getCachedLaneQuote(laneKey, () =>
           fetchLogisticsQuoteForShipment({
             supplierId: vendorId,
@@ -475,7 +744,13 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
             deliveryPincode,
             weightKg,
             pickupAddress,
-            deliveryAddress: deliveryAddressPayload
+            deliveryAddress: deliveryAddressPayload,
+            category,
+            matter,
+            totalVolumeCbm,
+            pickupGeo,
+            deliveryGeo,
+            quoteStrategy: quoteStrategyWithCoords
           })
         );
       }
@@ -488,8 +763,17 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
         pickupAddress: pickupAddress || null,
         pickupOutletId: group.pickupOutletId || null,
         pickupOutletName: group.pickupOutletName || null,
+        pickupLat: pickupGeo?.lat ?? null,
+        pickupLng: pickupGeo?.lng ?? null,
+        deliveryLat: deliveryGeo?.lat ?? null,
+        deliveryLng: deliveryGeo?.lng ?? null,
         deliveryPincode,
         weightKg,
+        category,
+        intercity: quoteStrategyWithCoords.intercity,
+        sameCity: quoteStrategyWithCoords.sameCity,
+        heavy: quoteStrategyWithCoords.heavy,
+        quoteMode: quoteStrategyWithCoords.mode,
         items: Array.isArray(group.items) ? group.items : [],
         logistics
       };

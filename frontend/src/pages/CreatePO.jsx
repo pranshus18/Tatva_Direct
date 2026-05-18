@@ -359,6 +359,30 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
     };
 
+    const isTruckingDetail = (det) => {
+      if (!det || typeof det !== 'object') return false;
+      const mode = String(det.transportMode || det.transport_mode || '').toLowerCase();
+      if (mode === 'trucking') return true;
+      if (String(det.source || '').toLowerCase() === 'borzo') return true;
+      const vt = det.vehicle_type_id ?? det.vehicleTypeId;
+      return vt != null && vt !== '' && Number(vt) > 0;
+    };
+
+    const applyTruckingFields = (target, det) => {
+      const vtRaw = det?.vehicle_type_id ?? det?.vehicleTypeId;
+      const vtn = vtRaw != null && vtRaw !== '' ? Number(vtRaw) : NaN;
+      if (Number.isFinite(vtn) && vtn > 0) target.vehicleTypeId = vtn;
+      target.transportMode = 'trucking';
+      if (det?.source) target.source = String(det.source);
+      if (det?.weightKg != null && Number(det.weightKg) > 0) target.weightKg = Number(det.weightKg);
+      if (det?.pickup_lat != null) target.pickupLat = Number(det.pickup_lat);
+      if (det?.pickup_lng != null) target.pickupLng = Number(det.pickup_lng);
+      if (det?.delivery_lat != null) target.deliveryLat = Number(det.delivery_lat);
+      if (det?.delivery_lng != null) target.deliveryLng = Number(det.delivery_lng);
+      if (det?.carrier) target.carrier = String(det.carrier);
+      if (det?.name) target.matter = String(det.name);
+    };
+
     let confirmBody;
     if (hasPerVendor) {
       const perOrderTransport = orderList.map((o) => {
@@ -373,22 +397,26 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object'
             ? st.byVendorCourierDetail[sid]
             : null;
-        const quotedTransportAmount = parseQuoteInr(det?.rate);
+        const quotedTransportAmount =
+          parseQuoteInr(det?.fareValue) ?? parseQuoteInr(det?.rate);
         const courierCompanyId =
           det?.courier_company_id != null && det?.courier_company_id !== ''
             ? Number(det.courier_company_id)
             : null;
-        return {
+        const row = {
           orderId: o.id,
           shippingProvider: sp,
-          ...(Number.isFinite(courierCompanyId) && courierCompanyId > 0
-            ? { courierCompanyId }
-            : {}),
           trackingNumber: st.trackingNumber || null,
           trackingUrl: st.trackingUrl || null,
           transportNotes: st.transportNotes || null,
           ...(quotedTransportAmount != null ? { quotedTransportAmount } : {})
         };
+        if (Number.isFinite(courierCompanyId) && courierCompanyId > 0) {
+          row.courierCompanyId = courierCompanyId;
+        } else if (isTruckingDetail(det)) {
+          applyTruckingFields(row, det);
+        }
+        return row;
       });
       confirmBody = { orderIds, perOrderTransport };
     } else {
@@ -405,7 +433,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       if (orderList.length === 1 && st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object') {
         const sid = String(orderList[0].supplierId || '');
         const det = st.byVendorCourierDetail[sid];
-        const q = parseQuoteInr(det?.rate);
+        const q = parseQuoteInr(det?.fareValue) ?? parseQuoteInr(det?.rate);
         if (q != null) {
           confirmBody.quotedTransportAmount = q;
         }
@@ -413,6 +441,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         const n = cc != null && cc !== '' ? Number(cc) : NaN;
         if (Number.isFinite(n) && n > 0) {
           confirmBody.courierCompanyId = n;
+        } else if (isTruckingDetail(det)) {
+          applyTruckingFields(confirmBody, det);
         }
       }
     }
@@ -1057,7 +1087,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                           >
                             <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '0.25rem' }}>{label}</div>
                             <div>
-                              <strong>Courier:</strong> {name}
+                              <strong>
+                                {d?.transport_mode === 'trucking' ? 'Trucking' : 'Courier'}:
+                              </strong>{' '}
+                              {name}
                             </div>
                             {priceLabel ? (
                               <div style={{ marginTop: '0.2rem', fontWeight: 700, color: '#4f46e5' }}>

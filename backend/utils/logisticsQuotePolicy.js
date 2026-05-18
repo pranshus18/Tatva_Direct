@@ -1,0 +1,231 @@
+/**
+ * When to request courier vs auto/trucking quotes from Tatva Logistics.
+ * Borzo trucking is intracity (same-city); heavy bulk uses mode "auto" with lat/lng.
+ */
+
+function digitsPin6(value) {
+  const d = String(value || '').replace(/\D/g, '').slice(0, 6);
+  return d.length === 6 ? d : '';
+}
+
+function normCity(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+export const LOGISTICS_TRUCKING_MIN_WEIGHT_KG = Math.max(
+  0,
+  Number.parseFloat(String(process.env.LOGISTICS_TRUCKING_MIN_WEIGHT_KG || '30')) || 30
+);
+
+/** Max straight-line distance (km) to treat pickup/delivery as same-city for Borzo. */
+export const LOGISTICS_SAME_CITY_MAX_KM = Math.max(
+  5,
+  Number.parseFloat(String(process.env.LOGISTICS_SAME_CITY_MAX_KM || '45')) || 45
+);
+
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/**
+ * Same-city lane (Borzo intracity). Prefer city match or geodesic distance; PIN match is a weak fallback.
+ */
+export function isSameCityLane({
+  pickupPincode,
+  deliveryPincode,
+  pickupCity = null,
+  deliveryCity = null,
+  pickupGeo = null,
+  deliveryGeo = null
+} = {}) {
+  const pc = normCity(pickupCity);
+  const dc = normCity(deliveryCity);
+  if (pc && dc && pc === dc) return true;
+
+  const plat = Number(pickupGeo?.lat);
+  const plng = Number(pickupGeo?.lng);
+  const dlat = Number(deliveryGeo?.lat);
+  const dlng = Number(deliveryGeo?.lng);
+  if ([plat, plng, dlat, dlng].every((n) => Number.isFinite(n))) {
+    const km = haversineKm(plat, plng, dlat, dlng);
+    if (km <= LOGISTICS_SAME_CITY_MAX_KM) return true;
+    if (km > LOGISTICS_SAME_CITY_MAX_KM) return false;
+  }
+
+  const pickup = digitsPin6(pickupPincode);
+  const delivery = digitsPin6(deliveryPincode);
+  if (pickup && delivery && pickup === delivery) return true;
+
+  return false;
+}
+
+export function isIntercityLane({
+  pickupPincode,
+  deliveryPincode,
+  pickupCity = null,
+  deliveryCity = null,
+  pickupGeo = null,
+  deliveryGeo = null
+} = {}) {
+  if (
+    isSameCityLane({
+      pickupPincode,
+      deliveryPincode,
+      pickupCity,
+      deliveryCity,
+      pickupGeo,
+      deliveryGeo
+    })
+  ) {
+    return false;
+  }
+
+  const pc = normCity(pickupCity);
+  const dc = normCity(deliveryCity);
+  if (pc && dc && pc !== dc) return true;
+
+  const plat = Number(pickupGeo?.lat);
+  const plng = Number(pickupGeo?.lng);
+  const dlat = Number(deliveryGeo?.lat);
+  const dlng = Number(deliveryGeo?.lng);
+  if ([plat, plng, dlat, dlng].every((n) => Number.isFinite(n))) {
+    return haversineKm(plat, plng, dlat, dlng) > LOGISTICS_SAME_CITY_MAX_KM;
+  }
+
+  const pickup = digitsPin6(pickupPincode);
+  const delivery = digitsPin6(deliveryPincode);
+  if (pickup && delivery && pickup !== delivery) return true;
+
+  return false;
+}
+
+const BULK_CATEGORY_RE = /\b(paint|primer|putty|cement|sand|aggregate|brick|tile|mortar|grout|plaster|construction|bag)\b/i;
+
+/**
+ * @param {object} group PO vendor group with items
+ * @param {number} [weightKg] precomputed chargeable weight
+ */
+export function inferLogisticsCategory(group, weightKg = null) {
+  const items = Array.isArray(group?.items) ? group.items : [];
+  let sum = 0;
+  if (weightKg == null) {
+    for (const item of items) {
+      const q = Math.max(0, Number(item.quantity) || 0);
+      const specs =
+        item?.specifications && typeof item.specifications === 'object' ? item.specifications : {};
+      let unit = 0.5;
+      for (const [k, v] of Object.entries(specs)) {
+        if (!String(k).toLowerCase().includes('weight')) continue;
+        const m = String(v).match(/(\d+(?:\.\d+)?)\s*kg/i);
+        if (m) {
+          unit = parseFloat(m[1]);
+          break;
+        }
+      }
+      sum += unit * q;
+    }
+    weightKg = Math.max(0.01, sum);
+  }
+
+  const text = items
+    .map((i) => {
+      const specs =
+        i?.specifications && typeof i.specifications === 'object' ? i.specifications : {};
+      return `${i?.name || ''} ${i?.category || ''} ${Object.values(specs).join(' ')}`;
+    })
+    .join(' ')
+    .toLowerCase();
+
+  if (BULK_CATEGORY_RE.test(text)) return 'paint';
+  if (/\b(laptop|notebook|macbook|chromebook)\b/.test(text)) return 'laptop';
+  if (/\b(phone|mobile|tablet|ipad|electronics)\b/.test(text)) return 'electronics';
+  if (weightKg >= LOGISTICS_TRUCKING_MIN_WEIGHT_KG) return 'paint';
+  return 'general';
+}
+
+/**
+ * @returns {{
+ *   mode: 'auto' | 'courier' | 'trucking',
+ *   category: string,
+ *   sameCity: boolean,
+ *   intercity: boolean,
+ *   heavy: boolean,
+ *   quoteNote: string|null,
+ *   allowCourierFallback: boolean
+ * }}
+ */
+export function resolveShipmentQuoteStrategy({
+  weightKg,
+  category,
+  pickupPincode,
+  deliveryPincode,
+  pickupCity = null,
+  deliveryCity = null,
+  pickupGeo = null,
+  deliveryGeo = null
+}) {
+  const w = Number(weightKg) || 0;
+  const heavy = w >= LOGISTICS_TRUCKING_MIN_WEIGHT_KG;
+  const lane = { pickupPincode, deliveryPincode, pickupCity, deliveryCity, pickupGeo, deliveryGeo };
+  const sameCity = isSameCityLane(lane);
+  const intercity = isIntercityLane(lane);
+  const cat = String(category || 'general').trim() || 'general';
+  const bulkCat = cat === 'general' && heavy ? 'paint' : cat;
+
+  if (heavy && intercity) {
+    return {
+      mode: 'auto',
+      category: bulkCat,
+      sameCity: false,
+      intercity: true,
+      heavy: true,
+      quoteNote: null,
+      allowCourierFallback: false
+    };
+  }
+
+  if (heavy && sameCity) {
+    return {
+      mode: 'auto',
+      category: bulkCat,
+      sameCity: true,
+      intercity: false,
+      heavy: true,
+      quoteNote: null,
+      allowCourierFallback: true
+    };
+  }
+
+  if (heavy) {
+    return {
+      mode: 'auto',
+      category: bulkCat,
+      sameCity: false,
+      intercity: false,
+      heavy: true,
+      quoteNote:
+        'Add complete pickup and delivery addresses (or wait for geocoding) so we can confirm same-city trucking.',
+      allowCourierFallback: true
+    };
+  }
+
+  return {
+    mode: 'auto',
+    category: cat,
+    sameCity,
+    intercity,
+    heavy: false,
+    quoteNote: null,
+    allowCourierFallback: false
+  };
+}

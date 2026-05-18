@@ -7,7 +7,7 @@ class Settings(BaseSettings):
 
     tatva_api_base_url: str = "http://localhost:8081"
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"
+    gemini_model: str = "gemini-1.5-flash"
     whisper_model: str = "base.en"
     whisper_device: str = "cpu"
     piper_executable: str = ""

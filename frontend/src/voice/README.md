@@ -28,4 +28,9 @@ Reload `/voice` — logs prefixed with `[voice]`.
 cd frontend && npm run dev
 ```
 
-Backend must be running (`npm run dev` in `backend/`).
+Backend must be running on port **8081** (`node server.js` or `npm run dev` in `backend/`).
+
+## Vite `ECONNRESET` on ws proxy
+
+If you see `ws proxy socket error: ECONNRESET`, the dev client connects **directly** to
+`ws://127.0.0.1:8081/api/voice/ws` (not through Vite). Ensure backend is running before opening `/voice`.
