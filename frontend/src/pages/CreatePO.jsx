@@ -73,6 +73,43 @@ const normalizeSpecifications = (value) => {
     }, []);
 };
 
+/** Align workflow line quantities with the persisted PO cart (source of truth after cart edits). */
+async function mergeWorkflowItemsWithSavedCart(workflowItems) {
+  if (!Array.isArray(workflowItems) || workflowItems.length === 0) return workflowItems;
+  const token = localStorage.getItem('token');
+  if (!token) return workflowItems;
+  try {
+    const res = await fetch(getApiUrl('/api/po/cart'), {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    if (!res.ok || data.status !== 'success' || !data.cart?.draft) {
+      return workflowItems;
+    }
+    const cartItems = Array.isArray(data.cart.draft.items) ? data.cart.draft.items : [];
+    if (cartItems.length === 0) return workflowItems;
+    const qtyByLineId = new Map();
+    for (const row of cartItems) {
+      if (row?.id === undefined || row?.id === null) continue;
+      const key = String(row.id).trim();
+      if (!key) continue;
+      const q = Number(row.quantity);
+      if (Number.isFinite(q) && q >= 1) {
+        qtyByLineId.set(key, Math.floor(q));
+      }
+    }
+    if (qtyByLineId.size === 0) return workflowItems;
+    return workflowItems.map((it) => {
+      const id = it?.id !== undefined && it?.id !== null ? String(it.id).trim() : '';
+      if (!id || !qtyByLineId.has(id)) return it;
+      const q = qtyByLineId.get(id);
+      return { ...it, quantity: q };
+    });
+  } catch {
+    return workflowItems;
+  }
+}
+
 const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -228,7 +265,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
-        body: JSON.stringify({ selectedVendors, substitutions, items })
+        body: JSON.stringify({
+          selectedVendors,
+          substitutions,
+          items: await mergeWorkflowItemsWithSavedCart(items)
+        })
       });
       
       // Check if response is ok
