@@ -19,6 +19,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { buildOrderUpiPayUri, qrServerImageUrl } from '../utils/upiPaymentQr';
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
+import { parseSpecificationsForDisplay } from '../utils/specifications';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import './Dashboard.css';
 
@@ -546,80 +547,6 @@ const ServiceProviderDashboard = ({ user }) => {
     ]
       .filter(Boolean)
       .join(', ');
-
-  const toReadableLabel = (rawKey) =>
-    String(rawKey || '')
-      .replace(/([A-Z])/g, ' $1')
-      .replace(/[_-]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .replace(/^./, (c) => c.toUpperCase());
-
-  const formatSpecValue = (value, depth = 0) => {
-    if (value === undefined || value === null || value === '') return '';
-    if (typeof value !== 'object') return String(value);
-    if (depth > 1) return '';
-
-    return Object.entries(value)
-      .map(([k, v]) => {
-        const nested = formatSpecValue(v, depth + 1);
-        return nested ? `${toReadableLabel(k)}: ${nested}` : '';
-      })
-      .filter(Boolean)
-      .join(', ');
-  };
-
-  const parseSpecifications = (specifications) => {
-    if (!specifications) return [];
-    const directObject = typeof specifications === 'object' ? specifications : null;
-    const parsedObject = (() => {
-      if (directObject) return directObject;
-      if (typeof specifications !== 'string') return null;
-      try {
-        return JSON.parse(specifications);
-      } catch {
-        return null;
-      }
-    })();
-
-    if (!parsedObject) {
-      return [{ label: 'Specs', value: String(specifications) }];
-    }
-
-    const source = parsedObject.snapshot && typeof parsedObject.snapshot === 'object'
-      ? parsedObject.snapshot
-      : parsedObject;
-
-    const preferredKeys = [
-      'brandModel',
-      'identity',
-      'variantAsin',
-      'mpn',
-      'catalogName',
-      'asinLiked'
-    ];
-
-    const entries = [];
-    preferredKeys.forEach((key) => {
-      const value = source[key];
-      if (value === undefined || value === null || value === '') return;
-      if (typeof value === 'object') {
-        const compact = Object.entries(value)
-          .slice(0, 4)
-          .map(([k, v]) => {
-            const formatted = formatSpecValue(v);
-            return formatted ? `${toReadableLabel(k)}: ${formatted}` : '';
-          })
-          .filter(Boolean)
-          .join(', ');
-        if (compact) entries.push({ label: toReadableLabel(key), value: compact });
-        return;
-      }
-      entries.push({ label: toReadableLabel(key), value: String(value) });
-    });
-
-    return entries.slice(0, 6);
-  };
 
   const readGstSummary = (order) =>
     order?.invoice?.metadata?.gstSummary ||
@@ -1190,7 +1117,7 @@ const ServiceProviderDashboard = ({ user }) => {
                                   {item.product.description}
                                 </div>
                               )}
-                              {parseSpecifications(item.specifications).length > 0 && (
+                              {parseSpecificationsForDisplay(item.specifications).length > 0 && (
                                 <div
                                   style={{
                                     display: 'flex',
@@ -1199,7 +1126,7 @@ const ServiceProviderDashboard = ({ user }) => {
                                     marginTop: '0.45rem'
                                   }}
                                 >
-                                  {parseSpecifications(item.specifications).map((entry) => (
+                                  {parseSpecificationsForDisplay(item.specifications).map((entry) => (
                                     <span
                                       key={`${entry.label}-${entry.value}`}
                                       style={{

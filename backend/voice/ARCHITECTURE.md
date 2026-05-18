@@ -3,11 +3,11 @@
 ## Flow
 
 ```
-Streaming Voice Input (browser STT or Whisper via Python)
+Streaming Voice Input (browser STT by default; optional external STT via VOICE_PYTHON_URL)
     → Intent Router (intent_router.js)
     → FAST: fast_action_executor → ecommerce APIs → short reply
     → SMART: rag_service + gemini_service (streaming) → reply
-    → TTS (browser or Piper streaming)
+    → TTS (browser by default; optional external TTS via VOICE_PYTHON_URL)
 ```
 
 ## Modules
@@ -23,8 +23,8 @@ Streaming Voice Input (browser STT or Whisper via Python)
 | Gemini Service | `services/gemini_service.js` | Flash + streaming |
 | WebSocket Manager | `services/websocket_manager.js` | stt_partial, reply_chunk, tts_chunk |
 | AI Orchestrator | `core/ai_orchestrator.js` | Routes FAST vs SMART |
-| Whisper Service | `services/whisper_service.js` | Optional Python STT |
-| Piper TTS | `services/piper_tts_service.js` | Optional Python TTS |
+| Whisper Service | `services/whisper_service.js` | Optional external STT (`VOICE_PYTHON_URL`) |
+| Piper TTS | `services/piper_tts_service.js` | Optional external TTS (`VOICE_PYTHON_URL`) |
 
 ## Performance targets
 
@@ -33,4 +33,4 @@ Streaming Voice Input (browser STT or Whisper via Python)
 
 ## Env
 
-See `README.md` and `voice-agent/.env.example`.
+See `README.md` and `backend/.env`.

@@ -22,10 +22,20 @@ import {
   promptLoadingTransport,
   promptTransportOptions,
   promptTransportRetry,
+  promptTransportQuotesFailed,
+  promptTransportNoQuotes,
+  promptTransportPickRemaining,
+  promptTransportRequiredBeforeOrder,
   promptOrderComplete,
   promptCheckoutCancelled,
   formatPaymentLabel
 } from '../lib/voice_prompts.js';
+import {
+  hasMandatoryTransportSelected,
+  isTransportRetryPhrase,
+  listTransportVendorEntriesFromCheckout,
+  vendorsMissingTransport
+} from '../lib/transportGate.js';
 
 const CHECKOUT_TYPES = new Set([
   'await_select_supplier',
@@ -54,6 +64,18 @@ function setCheckout(memory, patch) {
 function formatAddress(addr) {
   if (!addr) return '';
   return [addr.line1, addr.city, addr.state, addr.pincode].filter(Boolean).join(', ');
+}
+
+function listTransportVendorEntries(checkout) {
+  return listTransportVendorEntriesFromCheckout(checkout);
+}
+
+function setAwaitTransport(memory, payload = {}) {
+  memory.setPendingAction({
+    type: 'await_transport',
+    summary: 'select transport',
+    payload
+  });
 }
 
 function parsePaymentMethod(text) {
@@ -232,20 +254,8 @@ async function loadTransportQuotes(toolCtx, memory) {
   );
 
   if (!logisticsRes.ok) {
-    memory.setPendingAction({
-      type: 'await_place_confirm',
-      summary: 'place the order',
-      payload: { skipTransport: true }
-    });
-    return truncateForSpeech(
-      `Transport quotes could not be loaded: ${logisticsRes.error}. ${promptOrderSummary(
-        checkout.groupText || '',
-        checkout.grandTotal?.toLocaleString?.('en-IN') || String(checkout.grandTotal),
-        checkout.requiredDate,
-        formatPaymentLabel(checkout.paymentMethod),
-        'not selected'
-      )}`
-    );
+    setAwaitTransport(memory, { quotesLoaded: false, loadError: logisticsRes.error || 'unknown error' });
+    return truncateForSpeech(promptTransportQuotesFailed(logisticsRes.error));
   }
 
   const shipments = Array.isArray(logisticsRes.data?.shipments) ? logisticsRes.data.shipments : [];
@@ -265,41 +275,12 @@ async function loadTransportQuotes(toolCtx, memory) {
   setCheckout(memory, { shipments, optionsByVendor });
 
   const hasAnyQuotes = Object.values(optionsByVendor).some((e) => e.providers?.length > 0);
-  if (!hasAnyQuotes) {
+  if (!hasAnyQuotes || !shipments.length) {
     const logisticsMsg =
       shipments[0]?.logistics?.message ||
       'No transport quotes for your delivery address. Update your profile pincode on the website.';
-    memory.setPendingAction({
-      type: 'await_place_confirm',
-      summary: 'place the order',
-      payload: { skipTransport: true }
-    });
-    return truncateForSpeech(
-      `${logisticsMsg} Say place the order to continue, or update your shipping address first. ${promptOrderSummary(
-        checkout.groupText || '',
-        checkout.grandTotal?.toLocaleString?.('en-IN') || String(checkout.grandTotal),
-        checkout.requiredDate,
-        formatPaymentLabel(checkout.paymentMethod),
-        'skipped, no quotes'
-      )}`
-    );
-  }
-
-  if (!shipments.length) {
-    memory.setPendingAction({
-      type: 'await_place_confirm',
-      summary: 'place the order',
-      payload: { skipTransport: true }
-    });
-    return truncateForSpeech(
-      `${promptOrderSummary(
-        checkout.groupText || '',
-        checkout.grandTotal?.toLocaleString?.('en-IN') || String(checkout.grandTotal),
-        checkout.requiredDate,
-        formatPaymentLabel(checkout.paymentMethod),
-        'not selected, no quotes available'
-      )}`
-    );
+    setAwaitTransport(memory, { optionsByVendor, quotesLoaded: true, noQuotes: true });
+    return truncateForSpeech(promptTransportNoQuotes(logisticsMsg));
   }
 
   const vendorLines = [];
@@ -314,11 +295,7 @@ async function loadTransportQuotes(toolCtx, memory) {
     vendorLines.push(`For ${vendorName}: ${opts.join('. ') || 'no quotes'}`);
   }
 
-  memory.setPendingAction({
-    type: 'await_transport',
-    summary: 'select transport',
-    payload: { optionsByVendor }
-  });
+  setAwaitTransport(memory, { optionsByVendor, quotesLoaded: true });
 
   return truncateForSpeech(promptTransportOptions(vendorLines));
 }
@@ -334,6 +311,23 @@ function buildTransportSummary(byVendorId, optionsByVendor) {
 
 async function advanceToOrderConfirm(toolCtx, memory) {
   const checkout = getCheckout(memory);
+  const missing = vendorsMissingTransport(checkout);
+  if (missing.length) {
+    setAwaitTransport(memory, {
+      optionsByVendor: checkout.optionsByVendor,
+      quotesLoaded: true
+    });
+    return truncateForSpeech(promptTransportPickRemaining(missing.length));
+  }
+
+  if (!hasMandatoryTransportSelected(checkout)) {
+    setAwaitTransport(memory, {
+      optionsByVendor: checkout.optionsByVendor,
+      quotesLoaded: Boolean(checkout.optionsByVendor)
+    });
+    return truncateForSpeech(promptTransportRequiredBeforeOrder());
+  }
+
   const transportSummary = buildTransportSummary(
     checkout.transportByVendor,
     checkout.optionsByVendor
@@ -356,33 +350,17 @@ async function advanceToOrderConfirm(toolCtx, memory) {
   );
 }
 
-function providersFromShipment(sh) {
-  if (Array.isArray(sh?.providers) && sh.providers.length) return sh.providers;
-  if (Array.isArray(sh?.logistics?.providers) && sh.logistics.providers.length) {
-    return sh.logistics.providers;
-  }
-  return [];
-}
-
-function listTransportVendorEntries(checkout) {
-  const optionsByVendor = checkout.optionsByVendor || {};
-  const fromOptions = Object.entries(optionsByVendor)
-    .filter(([id]) => id)
-    .map(([vendorId, entry]) => ({
-      vendorId,
-      providers: Array.isArray(entry.providers) ? entry.providers : []
-    }));
-  if (fromOptions.length) return fromOptions;
-
-  return (checkout.shipments || [])
-    .map((sh) => ({
-      vendorId: String(sh.vendorId || sh.supplierId || sh.vendor_id || ''),
-      providers: providersFromShipment(sh)
-    }))
-    .filter((e) => e.vendorId);
-}
-
 async function selectTransport(toolCtx, memory, utterance, pending) {
+  if (isTransportRetryPhrase(utterance)) {
+    const loading = promptLoadingTransport();
+    const step = await loadTransportQuotes(toolCtx, memory);
+    return truncateForSpeech(`${loading} ${step}`);
+  }
+
+  if (/\b(place (the )?order|skip transport|continue without transport)\b/i.test(utterance)) {
+    return truncateForSpeech(promptTransportRequiredBeforeOrder());
+  }
+
   const checkout = getCheckout(memory);
   setCheckout(memory, {
     optionsByVendor: pending.payload?.optionsByVendor || checkout.optionsByVendor
@@ -390,8 +368,12 @@ async function selectTransport(toolCtx, memory, utterance, pending) {
 
   const entries = listTransportVendorEntries(getCheckout(memory));
   const hasProviders = entries.some((e) => e.providers.length > 0);
-  if (!hasProviders && /\b(place (the )?order|skip transport|continue)\b/i.test(utterance)) {
-    return advanceToOrderConfirm(toolCtx, memory);
+  if (!hasProviders) {
+    return truncateForSpeech(
+      pending.payload?.loadError
+        ? promptTransportQuotesFailed(pending.payload.loadError)
+        : promptTransportNoQuotes()
+    );
   }
 
   const idx = parseSelectionIndex(utterance, 20);
@@ -426,12 +408,31 @@ async function selectTransport(toolCtx, memory, utterance, pending) {
   }
 
   setCheckout(memory, { transportByVendor: byVendorId, transportDetailByVendor });
+
+  const updated = getCheckout(memory);
+  const missing = vendorsMissingTransport(updated);
+  if (missing.length) {
+    setAwaitTransport(memory, {
+      optionsByVendor: updated.optionsByVendor,
+      quotesLoaded: true
+    });
+    return truncateForSpeech(promptTransportPickRemaining(missing.length));
+  }
+
   return advanceToOrderConfirm(toolCtx, memory);
 }
 
 async function placeOrderAndConfirmTransport(toolCtx, memory) {
   const { client } = toolCtx;
   const checkout = getCheckout(memory);
+
+  if (!hasMandatoryTransportSelected(checkout)) {
+    setAwaitTransport(memory, {
+      optionsByVendor: checkout.optionsByVendor,
+      quotesLoaded: Boolean(checkout.optionsByVendor)
+    });
+    return truncateForSpeech(promptTransportRequiredBeforeOrder());
+  }
 
   const createRes = await client.post('/api/po/create', {
     poGroups: checkout.poGroups,
@@ -610,6 +611,21 @@ async function handlePlaceConfirm(toolCtx, memory, utterance) {
   if (!isConfirm(utterance) && !/\b(place (the )?order|confirm order|submit)\b/i.test(utterance)) {
     return promptPlaceOrderRetry();
   }
+
+  const checkout = getCheckout(memory);
+  if (!hasMandatoryTransportSelected(checkout)) {
+    const loading = checkout.poGroups?.length ? promptLoadingTransport() : '';
+    if (!checkout.optionsByVendor || !Object.keys(checkout.optionsByVendor).length) {
+      const step = await loadTransportQuotes(toolCtx, memory);
+      return truncateForSpeech(`${loading} ${step}`.trim());
+    }
+    setAwaitTransport(memory, {
+      optionsByVendor: checkout.optionsByVendor,
+      quotesLoaded: true
+    });
+    return truncateForSpeech(promptTransportRequiredBeforeOrder());
+  }
+
   memory.setPendingAction(null);
   const placing = promptPlacingOrder();
   const result = await placeOrderAndConfirmTransport(toolCtx, memory);
@@ -656,10 +672,15 @@ export async function tryCheckoutFlow(text, toolCtx, memory) {
   if (!pending) {
     if (/\b(place (the )?order|checkout|complete order)\b/i.test(utterance)) {
       const checkout = getCheckout(memory);
-      if (checkout.poGroups?.length) {
-        return handlePlaceConfirm(toolCtx, memory, utterance);
+      if (!checkout.poGroups?.length) {
+        return 'Add a product and choose a supplier before placing an order.';
       }
-      return 'Add a product and choose a supplier before placing an order.';
+      if (!hasMandatoryTransportSelected(checkout)) {
+        const loading = promptLoadingTransport();
+        const step = await loadTransportQuotes(toolCtx, memory);
+        return truncateForSpeech(`${loading} ${step}`);
+      }
+      return handlePlaceConfirm(toolCtx, memory, utterance);
     }
     return null;
   }

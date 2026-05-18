@@ -1,5 +1,5 @@
 /**
- * Streaming Piper TTS via Python voice-agent.
+ * Optional external streaming TTS — POST { text } → NDJSON { chunk } lines.
  */
 
 const PYTHON_URL = String(process.env.VOICE_PYTHON_URL || '').replace(/\/$/, '');

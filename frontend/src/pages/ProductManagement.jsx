@@ -21,6 +21,16 @@ import {
 import './Dashboard.css';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import {
+  mergeSpecificationObjects,
+  parseSpecInputToValue,
+  specValueToInput,
+  specificationEntriesForDetails
+} from '../utils/specifications';
+import {
+  applyExtractResultToSpecs,
+  extractSpecificationsFromDescription
+} from '../utils/extractSpecificationsApi';
 
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -205,6 +215,68 @@ const ProductManagement = ({ user }) => {
     }
   };
 
+  const handleSaveSpecifications = async (product, specificationValues) => {
+    const productId = product?.supplier_product_id || product?.id || product?._id;
+    if (!productId) {
+      alert('Unable to save: missing product id.');
+      return { ok: false };
+    }
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(getApiUrl(`/api/supplier/products/${productId}`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ specifications: specificationValues })
+      });
+      const data = await response.json();
+
+      if (!response.ok || data.status !== 'success') {
+        alert(data.message || 'Failed to save specifications');
+        return { ok: false };
+      }
+
+      const updatedProduct = {
+        ...product,
+        ...(data.product || {}),
+        specifications:
+          data.product?.specifications ||
+          mergeSpecificationObjects(product?.specifications || {}, specificationValues)
+      };
+
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.supplier_product_id === productId || p.id === productId || p._id === productId
+            ? { ...p, ...updatedProduct }
+            : p
+        )
+      );
+
+      setViewingItem((prev) => {
+        if (!prev) return prev;
+        const sameRow =
+          prev.supplier_product_id === productId || prev.id === productId || prev._id === productId;
+        return sameRow ? { ...prev, ...updatedProduct } : prev;
+      });
+
+      if (String(updatedProduct.status || '').toLowerCase() === 'pending') {
+        alert(
+          data.message ||
+            'Specifications saved. This product is pending admin review again because specifications changed.'
+        );
+      }
+
+      return { ok: true, product: updatedProduct };
+    } catch (error) {
+      console.error('Failed to save specifications:', error);
+      alert('Failed to save specifications. Please try again.');
+      return { ok: false };
+    }
+  };
+
   const handleUpdateProduct = async (productId, productData) => {
     try {
       const token = localStorage.getItem('token');
@@ -223,9 +295,6 @@ const ProductManagement = ({ user }) => {
           ...data.product,
           specifications: data.product.specifications || {}
         };
-        
-        console.log('✅ Product updated with specifications:', updatedProduct.specifications);
-        console.log('✅ Specification keys:', Object.keys(updatedProduct.specifications || {}));
         
         // Update the products list with the updated product (including specifications)
         setProducts(products.map(p =>
@@ -917,6 +986,7 @@ const ProductManagement = ({ user }) => {
           supplierName={user?.name}
           canEditInventory={isInventoryView}
           onClose={() => setViewingItem(null)}
+          onSaveSpecifications={handleSaveSpecifications}
           onEdit={(item) => {
             setViewingItem(null);
             setEditingItem(item);
@@ -927,11 +997,158 @@ const ProductManagement = ({ user }) => {
   );
 };
 
-const ProductDetailsModal = ({ product, supplierName, canEditInventory = false, onClose, onEdit }) => {
-  const specEntries =
-    product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
-      ? Object.entries(product.specifications).filter(([, value]) => value !== undefined && value !== null && value !== '')
-      : [];
+const ProductDetailsModal = ({
+  product,
+  supplierName,
+  canEditInventory = false,
+  onClose,
+  onEdit,
+  onSaveSpecifications
+}) => {
+  const [displaySpecifications, setDisplaySpecifications] = useState(product?.specifications || {});
+  const [isEditingSpecs, setIsEditingSpecs] = useState(false);
+  const [draftSpecs, setDraftSpecs] = useState({});
+  const [savingSpecs, setSavingSpecs] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState(product?.description || '');
+  const [extractingSpecs, setExtractingSpecs] = useState(false);
+
+  useEffect(() => {
+    setDisplaySpecifications(product?.specifications || {});
+    setIsEditingSpecs(false);
+    setDraftSpecs({});
+    setDescriptionDraft(product?.description || '');
+  }, [product?.specifications, product?.description, product?.id]);
+
+  useEffect(() => {
+    const category = String(product?.category || '').trim().toLowerCase();
+    const model = String(product?.name || '').trim();
+    const brand = String(product?.brand || model || '').trim();
+    if (!category) return;
+
+    let cancelled = false;
+    const loadAdminSpecifications = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const params = new URLSearchParams();
+        if (model) params.set('model', model);
+        if (brand) params.set('brand', brand);
+        const query = params.toString() ? `?${params.toString()}` : '';
+        const response = await fetch(
+          getApiUrl(`/api/supplier/categories/${encodeURIComponent(category)}/specifications${query}`),
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-cache'
+          }
+        );
+        if (!response.ok || cancelled) return;
+        const data = await response.json();
+        if (data?.status !== 'success' || cancelled) return;
+        const adminTemplate =
+          data?.specifications && typeof data.specifications === 'object' ? data.specifications : {};
+        setDisplaySpecifications(
+          mergeSpecificationObjects(adminTemplate, product?.specifications || {})
+        );
+      } catch {
+        // Keep product snapshot when template fetch fails.
+      }
+    };
+
+    loadAdminSpecifications();
+    return () => {
+      cancelled = true;
+    };
+  }, [product?.id, product?.category, product?.name, product?.brand, product?.specifications]);
+
+  const specEntries = specificationEntriesForDetails(displaySpecifications);
+
+  const beginSpecificationEdit = () => {
+    const draft = {};
+    specEntries.forEach((entry) => {
+      draft[entry.key] = specValueToInput(displaySpecifications[entry.key]);
+    });
+    setDraftSpecs(draft);
+    setIsEditingSpecs(true);
+  };
+
+  const cancelSpecificationEdit = () => {
+    setIsEditingSpecs(false);
+    setDraftSpecs({});
+  };
+
+  const saveSpecificationEdits = async () => {
+    if (!onSaveSpecifications) return;
+    const nextSpecs = {};
+    specEntries.forEach((entry) => {
+      const original = displaySpecifications[entry.key];
+      nextSpecs[entry.key] = parseSpecInputToValue(draftSpecs[entry.key], original);
+    });
+
+    setSavingSpecs(true);
+    const result = await onSaveSpecifications(product, nextSpecs);
+    setSavingSpecs(false);
+
+    if (result?.ok) {
+      const merged = mergeSpecificationObjects(
+        displaySpecifications,
+        result.product?.specifications || nextSpecs
+      );
+      setDisplaySpecifications(merged);
+      setIsEditingSpecs(false);
+      setDraftSpecs({});
+    }
+  };
+
+  const handleExtractSpecificationsInDetails = async () => {
+    const category = String(product?.category || '').trim();
+    if (!descriptionDraft.trim()) {
+      alert('Please enter a product description with specification details first.');
+      return;
+    }
+    if (!category) {
+      alert('Product category is required for AI extraction.');
+      return;
+    }
+
+    setExtractingSpecs(true);
+    try {
+      const { response, data } = await extractSpecificationsFromDescription({
+        description: descriptionDraft,
+        category,
+        productName: product?.name || '',
+        existingSpecifications: displaySpecifications
+      });
+
+      if (!response.ok && data?.status !== 'success' && data?.status !== 'warning') {
+        throw new Error(data?.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const result = applyExtractResultToSpecs(displaySpecifications, data);
+      if (!result.ok) {
+        alert(`⚠️ ${result.warning || result.error}`);
+        return;
+      }
+      if (result.categoryMismatchWarning) {
+        alert(`⚠️ ${result.categoryMismatchWarning}`);
+      }
+
+      setDisplaySpecifications(result.merged);
+      const nextDraft = {};
+      Object.keys(result.merged).forEach((key) => {
+        nextDraft[key] = specValueToInput(result.merged[key]);
+      });
+      setDraftSpecs(nextDraft);
+
+      if (result.filledCount > 0) {
+        alert(`Filled ${result.filledCount} specification field${result.filledCount > 1 ? 's' : ''} from description. Review and click Save.`);
+      } else {
+        alert('No values found in description. Use lines like "Finish: Matt" or "Sheen: Low".');
+      }
+    } catch (error) {
+      alert(`Failed to extract specifications: ${error.message}`);
+    } finally {
+      setExtractingSpecs(false);
+    }
+  };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -995,16 +1212,130 @@ const ProductDetailsModal = ({ product, supplierName, canEditInventory = false, 
 
           {specEntries.length > 0 ? (
             <div style={{ marginTop: '1rem' }}>
-              <h4 style={{ marginBottom: '0.5rem' }}>Specifications</h4>
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '0.75rem',
+                  marginBottom: '0.5rem',
+                  flexWrap: 'wrap'
+                }}
+              >
+                <h4 style={{ margin: 0 }}>Specifications</h4>
+                {onSaveSpecifications && !isEditingSpecs ? (
+                  <button type="button" className="btn-secondary" onClick={beginSpecificationEdit}>
+                    <Edit size={16} />
+                    Edit values
+                  </button>
+                ) : null}
+                {isEditingSpecs ? (
+                  <div style={{ display: 'flex', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={cancelSpecificationEdit}
+                      disabled={savingSpecs}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={saveSpecificationEdits}
+                      disabled={savingSpecs}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                    >
+                      <Save size={16} />
+                      {savingSpecs ? 'Saving…' : 'Save'}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+              {isEditingSpecs ? (
+                <div
+                  style={{
+                    marginBottom: '0.75rem',
+                    padding: '0.75rem',
+                    background: '#f0fdf4',
+                    border: '1px solid #bbf7d0',
+                    borderRadius: '8px'
+                  }}
+                >
+                  <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.35rem' }}>
+                    Description (for AI fill)
+                  </label>
+                  <textarea
+                    value={descriptionDraft}
+                    onChange={(e) => setDescriptionDraft(e.target.value)}
+                    rows={3}
+                    placeholder='e.g. Finish: Matt, Volume: 20L, Sheen: Low, Coverage: 140 sq ft/L'
+                    style={{
+                      width: '100%',
+                      padding: '0.5rem 0.65rem',
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '6px',
+                      fontSize: '0.9rem',
+                      resize: 'vertical'
+                    }}
+                  />
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={handleExtractSpecificationsInDetails}
+                      disabled={extractingSpecs || !descriptionDraft.trim()}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '0.35rem',
+                        background: extractingSpecs ? '#9ca3af' : '#10b981',
+                        color: '#fff',
+                        border: 'none'
+                      }}
+                    >
+                      <Sparkles size={14} />
+                      {extractingSpecs ? 'Extracting…' : 'Extract from description (AI)'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.5rem' }}>
-                {specEntries.map(([key, value]) => (
-                  <div key={key} style={{ padding: '0.55rem 0.65rem', border: '1px solid #e2e8f0', borderRadius: '8px', background: '#f8fafc' }}>
-                    <div style={{ fontSize: '0.78rem', color: '#64748b', textTransform: 'capitalize' }}>
-                      {String(key).replace(/[_-]/g, ' ')}
+                {specEntries.map((entry) => (
+                  <div key={entry.key} style={{ padding: '0.55rem 0.65rem', border: '1px solid #e2e8f0', borderRadius: '8px', background: '#f8fafc' }}>
+                    <div style={{ fontSize: '0.78rem', color: '#64748b', textTransform: 'capitalize', marginBottom: '0.35rem' }}>
+                      {entry.label}
                     </div>
-                    <div style={{ fontWeight: 600, color: '#0f172a', fontSize: '0.9rem' }}>
-                      {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                    </div>
+                    {isEditingSpecs ? (
+                      <input
+                        type="text"
+                        value={draftSpecs[entry.key] ?? ''}
+                        onChange={(e) =>
+                          setDraftSpecs((prev) => ({ ...prev, [entry.key]: e.target.value }))
+                        }
+                        placeholder={`Enter ${entry.label.toLowerCase()}`}
+                        style={{
+                          width: '100%',
+                          padding: '0.45rem 0.6rem',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: '6px',
+                          fontSize: '0.9rem',
+                          color: '#0f172a',
+                          background: '#fff'
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          fontWeight: entry.hasValue ? 600 : 400,
+                          color: entry.hasValue ? '#0f172a' : '#9ca3af',
+                          fontSize: '0.9rem',
+                          fontStyle: entry.hasValue ? 'normal' : 'italic'
+                        }}
+                      >
+                        {entry.displayValue}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1119,7 +1450,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         if (productSpecKeys.length > 0) {
           const specsChanged = JSON.stringify(productSpecs) !== JSON.stringify(specifications);
           if (currentSpecKeys.length === 0 || specsChanged) {
-            console.log('🔄 Syncing specifications from product:', productSpecKeys);
             setSpecifications({ ...productSpecs });
           }
         }
@@ -1130,14 +1460,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [product?.specifications]);
-
-  // Debug: Log when specifications change
-  useEffect(() => {
-    console.log('📊 [SPECS STATE] Specifications changed:', specifications);
-    console.log('📊 [SPECS STATE] Number of keys:', Object.keys(specifications).length);
-    console.log('📊 [SPECS STATE] Keys:', Object.keys(specifications));
-    console.log('📊 [SPECS STATE] Will display:', specifications && Object.keys(specifications).length > 0);
-  }, [specifications]);
 
   const addSpecificationKey = () => {
     setSpecifications((prev) => {
@@ -1266,16 +1588,20 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   useEffect(() => {
     const name = (formData.name || '').trim();
     const category = (formData.category || '').trim();
+    const brand = (formData.brand || '').trim();
 
     if (!name || !category) return;
 
     const timeout = setTimeout(async () => {
       try {
         const token = localStorage.getItem('token');
+        const lookupParams = new URLSearchParams({
+          name,
+          category
+        });
+        if (brand) lookupParams.set('brand', brand);
         const res = await fetch(
-          getApiUrl(
-            `/api/supplier/products/lookup?name=${encodeURIComponent(name)}&category=${encodeURIComponent(category)}`
-          ),
+          getApiUrl(`/api/supplier/products/lookup?${lookupParams.toString()}`),
           { headers: { 'Authorization': `Bearer ${token}` } }
         );
         const data = await res.json();
@@ -1284,7 +1610,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         }
         if (
           data.status === 'success' &&
-          data.found &&
           data.specifications &&
           typeof data.specifications === 'object' &&
           !Array.isArray(data.specifications) &&
@@ -1316,7 +1641,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.name, formData.category]);
+  }, [formData.name, formData.category, formData.brand]);
 
   // Keep specification template aligned with admin-defined model profiles while typing product name.
   useEffect(() => {
@@ -1326,12 +1651,15 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (product && (product.status || 'pending') !== 'pending') return;
 
     const timeout = setTimeout(async () => {
-      await loadCategorySpecifications(category, modelHint, { preserveExistingValues: true });
+      await loadCategorySpecifications(category, modelHint, {
+        preserveExistingValues: true,
+        brand: formData.brand
+      });
     }, 350);
 
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.name, formData.category]);
+  }, [formData.name, formData.category, formData.brand]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -1374,10 +1702,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       delete productData.sgst_rate;
       delete productData.lsa;
     }
-    
-    console.log('💾 Saving product with specifications:', allSpecifications);
-    console.log('💾 Specification keys count:', Object.keys(allSpecifications).length);
-    console.log('💾 Specification keys:', Object.keys(allSpecifications));
     
     onSave(productData);
   };
@@ -1476,15 +1800,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         const modelHint = String(formData?.name || '').trim();
         const preserveExistingValues = preserveSpecsOnNextCategoryLoadRef.current;
         preserveSpecsOnNextCategoryLoadRef.current = false;
-        console.log('🔄 Category changed to:', matchedCategory.name, '- loading category/model specs with model hint:', modelHint || '(none)');
         loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues });
-      } else {
-        // Category doesn't match - specs already cleared above
-        console.log('🔄 Category does not match any existing category - Specs cleared');
       }
-    } else if (!currentCategory) {
-      // Category is empty - specs already cleared above
-      console.log('🔄 Category cleared - Specs cleared');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.category, categories, product]);
@@ -1548,12 +1865,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   // If model profile exists in Supabase, it is returned; otherwise category defaults are returned.
   const loadCategorySpecifications = async (categoryName, modelValue = '', options = {}) => {
     const preserveExistingValues = options.preserveExistingValues !== false;
+    const brandValue = String(options.brand ?? formData?.brand ?? '').trim();
     // Auto-load specs for:
     // - new products
     // - existing products that are still pending approval (supplier can still edit)
     // Do NOT auto-load for approved/rejected products to avoid overwriting existing data.
     if (product && (product.status || 'pending') !== 'pending') {
-      console.log('⏭️ Skipping spec load - editing non-pending product');
       return;
     }
 
@@ -1574,102 +1891,67 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     })();
 
     if (!categoryName || !categoryName.trim()) {
-      // If category is cleared, clear specs too
-      console.log('🧹 Category is empty - clearing specs');
       setSpecifications({});
       return;
     }
 
-    // Normalize inputs.
     const normalizedCategoryName = categoryName.trim().toLowerCase();
     const normalizedModel = String(modelValue || '').trim();
-    console.log('🔍 Loading specifications for category/model:', normalizedCategoryName, normalizedModel || '(none)');
 
-    // IMPORTANT: Clear specs immediately when switching categories
-    // This prevents showing old specs from previous category while API call is in progress
     setSpecifications({});
+    setLoadingSpecs(true);
 
     try {
       const token = localStorage.getItem('token');
-      const modelQuery = normalizedModel ? `?model=${encodeURIComponent(normalizedModel)}` : '';
-      const apiUrl = `/api/supplier/categories/${encodeURIComponent(normalizedCategoryName)}/specifications${modelQuery}`;
-      console.log('📡 API URL:', apiUrl);
-      
+      const queryParams = new URLSearchParams();
+      if (normalizedModel) queryParams.set('model', normalizedModel);
+      if (brandValue) queryParams.set('brand', brandValue);
+      const modelQuery = queryParams.toString() ? `?${queryParams.toString()}` : '';
+      const apiUrl = getApiUrl(
+        `/api/supplier/categories/${encodeURIComponent(normalizedCategoryName)}/specifications${modelQuery}`
+      );
+
       const resp = await fetch(apiUrl, {
         headers: {
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`
         },
-        cache: 'no-cache' // Ensure we always get fresh data
+        cache: 'no-cache'
       });
-      
-      console.log('📥 API Response status:', resp.status);
-      
+
       if (resp.ok) {
         const data = await resp.json();
-        console.log('📦 API Response data:', JSON.stringify(data, null, 2));
-        console.log('📦 API Response specifications:', data.specifications);
-        console.log('📦 API Response specifications type:', typeof data.specifications);
-        console.log('📦 API Response specifications is array?', Array.isArray(data.specifications));
-        console.log('📦 API Response specifications keys:', data.specifications ? Object.keys(data.specifications) : 'none');
-        console.log('📦 API Response specifications keys count:', data.specifications ? Object.keys(data.specifications).length : 0);
-        console.log('📦 API Response specifications full object:', JSON.stringify(data.specifications, null, 2));
-        
+
         if (data.status === 'success') {
-          // Check if specifications exist and have keys
-          // IMPORTANT: Even if values are null, we want to show the keys
           const specsObj = data.specifications || {};
           const specKeys = Object.keys(specsObj);
-          const hasSpecs = specKeys.length > 0;
-          
-          console.log('🔍 Checking specs - Keys found:', specKeys.length, '- Keys:', specKeys);
-          console.log('🔍 Has specs?', hasSpecs);
-          
-          if (hasSpecs) {
+
+          if (specKeys.length > 0) {
             const newSpecs = {};
-            Object.keys(specsObj).forEach((k) => {
+            specKeys.forEach((k) => {
               if (preserveExistingValues && Object.prototype.hasOwnProperty.call(existingSpecsSnapshot, k)) {
                 newSpecs[k] = existingSpecsSnapshot[k];
               } else {
                 newSpecs[k] = specsObj[k];
               }
             });
-            console.log('✅ Setting specifications for category/model:', normalizedCategoryName, normalizedModel || '(none)');
-            console.log('✅ Specs object:', newSpecs);
-            console.log('✅ Specs keys:', Object.keys(newSpecs));
-            console.log('✅ Specs keys count:', Object.keys(newSpecs).length);
-            console.log('✅ Full specs object:', JSON.stringify(newSpecs, null, 2));
             setSpecifications(newSpecs);
-            selectedSuggestionSpecsRef.current = null;
-            
-            // Force a small delay to ensure state update is processed
-            setTimeout(() => {
-              console.log('✅ [AFTER SET] Current specifications state should have keys:', Object.keys(newSpecs).length);
-            }, 100);
           } else {
-            console.log('ℹ️ No specifications found for category/model:', normalizedCategoryName, normalizedModel || '(none)');
-            console.log('ℹ️ Specs object was:', specsObj);
             setSpecifications({});
-            selectedSuggestionSpecsRef.current = null;
           }
+          selectedSuggestionSpecsRef.current = null;
         } else {
-          // API returned error status - clear specs
-          console.log('ℹ️ API returned error status - Clearing specs');
           setSpecifications({});
           selectedSuggestionSpecsRef.current = null;
         }
       } else if (resp.status === 404) {
-        // Category not found - clear specs
-        console.log('ℹ️ Category not found (404) for:', normalizedCategoryName, '- Keeping specs empty');
         setSpecifications({});
         selectedSuggestionSpecsRef.current = null;
       } else {
-        console.error('❌ API error:', resp.status, resp.statusText);
-        // On API error, keep specs empty
+        console.error('Failed to load specifications:', resp.status, resp.statusText);
         setSpecifications({});
       }
     } catch (err) {
-      console.error('❌ Failed to load specifications:', normalizedCategoryName, normalizedModel, err);
-      // On error, ensure specs are cleared
+      console.error('Failed to load specifications:', normalizedCategoryName, normalizedModel, err);
       setSpecifications({});
       selectedSuggestionSpecsRef.current = null;
     } finally {
@@ -1706,7 +1988,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         // User typed a valid category name - include product name as model hint so
         // admin-defined model spec profiles are shown while adding products.
         const modelHint = String(formData?.name || '').trim();
-        console.log('📝 Category typed:', matchedCategory.name, '- Loading specs with model hint:', modelHint || '(none)');
         await loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues: false });
       } else {
         // User is typing but hasn't matched a category yet - clear specs
@@ -1732,7 +2013,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     // ALWAYS load admin-defined specs for selected category + current model hint.
     const modelHint = String(formData?.name || '').trim();
-    console.log('📋 Category selected:', updatedCategory, '- Loading admin specs with model hint:', modelHint || '(none)');
     await loadCategorySpecifications(updatedCategory, modelHint, { preserveExistingValues: false });
   };
 
@@ -2021,87 +2301,62 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
   const handleExtractSpecifications = async () => {
     if (!formData.description || !formData.description.trim()) {
-      alert('Please enter a description with specification key-value pairs first');
+      alert('Please enter a description with specification details first');
       return;
     }
 
     if (!formData.category || !formData.category.trim()) {
-      alert('Please select a category first. Category is required to properly extract and validate specifications.');
+      alert('Please select a category first. Category is required to extract specifications.');
       return;
     }
 
     setExtracting(true);
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/supplier/products/extract-specifications'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          description: formData.description,
-          category: formData.category,
-          productName: formData.name,
-          provider: aiProvider,
-          existingSpecifications: specifications || {} // Send existing specs so backend only fills values for these keys
-        })
+      const { response, data } = await extractSpecificationsFromDescription({
+        description: formData.description,
+        category: formData.category,
+        productName: formData.name,
+        provider: aiProvider,
+        existingSpecifications: specifications || {}
       });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
-        console.error('API Error:', errorData);
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      if (!response.ok && data?.status !== 'success' && data?.status !== 'warning') {
+        throw new Error(data?.message || `HTTP error! status: ${response.status}`);
       }
 
-      const data = await response.json();
-      console.log('Extract Specifications Response:', data);
-      
-      // Handle warning status (category mismatch - extraction blocked)
-      if (data.status === 'warning') {
-        alert(`⚠️ ${data.categoryMismatchWarning || data.message || 'Category and description do not match.'}`);
-        return; // Don't extract specifications if there's a mismatch
+      const result = applyExtractResultToSpecs(specifications || {}, data);
+      if (!result.ok) {
+        alert(`⚠️ ${result.warning || result.error}`);
+        return;
       }
-      
-      if (data.status === 'success') {
-        // Show category mismatch warning if present (but still allow extraction)
-        if (data.categoryMismatchWarning) {
-          alert(`⚠️ ${data.categoryMismatchWarning}`);
-        }
-        
-        // Only fill values for existing specification keys (don't add new keys)
-        const extractedSpecs = data.specifications || {};
-        const currentSpecs = specifications || {};
-        
-        // Merge: extracted specs only fill values for existing keys, keep all existing keys
-        const mergedSpecs = { ...currentSpecs };
-        // Only update values for keys that already exist
-        Object.keys(extractedSpecs).forEach(key => {
-          if (currentSpecs.hasOwnProperty(key)) {
-            mergedSpecs[key] = extractedSpecs[key];
-          }
-        });
-          
-          setSpecifications(mergedSpecs);
-        console.log('✅ Specifications extracted from description:', extractedSpecs);
-        console.log('✅ Total specifications after merge:', mergedSpecs);
 
-        const providerName = data.provider === 'openai' ? 'ChatGPT' : data.provider === 'gemini' ? 'Gemini' : data.provider === 'claude' ? 'Claude' : 'AI';
-        const count = data.extractedCount || Object.keys(extractedSpecs).length;
-        if (count > 0) {
-          const warningNote = data.categoryMismatchWarning 
-            ? ' However, please verify that the category matches the description.'
-            : '';
-          alert(`✅ Successfully extracted ${count} specification${count > 1 ? 's' : ''} from description using ${providerName}!${warningNote}`);
+      if (result.categoryMismatchWarning) {
+        alert(`⚠️ ${result.categoryMismatchWarning}`);
+      }
+
+      setSpecifications(result.merged);
+
+      const providerName =
+        result.provider === 'openai'
+          ? 'ChatGPT'
+          : result.provider === 'gemini'
+            ? 'Gemini'
+            : result.provider === 'claude'
+              ? 'Claude'
+              : 'AI';
+
+      if (result.filledCount > 0) {
+        alert(
+          `Successfully extracted ${result.filledCount} specification value${result.filledCount > 1 ? 's' : ''} from description using ${providerName}.`
+        );
       } else {
-          alert(`⚠️ No specifications found in the description. Please ensure your description contains key-value pairs like "Grade: OPC 53" or "Compressive Strength: 53 MPa".`);
-        }
-      } else {
-        alert(data.message || 'Failed to extract specifications from description. Please try again.');
+        alert(
+          'No specification values were found in the description. Try lines like "Finish: Matt" or "Volume: 20L".'
+        );
       }
     } catch (error) {
       console.error('Extract specifications error:', error);
-      alert(`Failed to extract specifications: ${error.message}. Please check your API keys configuration and try again.`);
+      alert(`Failed to extract specifications: ${error.message}. Check AI API keys in server configuration.`);
     } finally {
       setExtracting(false);
     }

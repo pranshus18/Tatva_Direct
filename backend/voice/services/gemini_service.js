@@ -43,8 +43,53 @@ function parseSseChunk(line) {
   }
 }
 
+async function runGenerate(model, body) {
+  const res = await fetchGemini(model, body, false);
+  const data = await res.json();
+  if (!res.ok) {
+    const err = new Error(data?.error?.message || `HTTP ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  const parts = data.candidates?.[0]?.content?.parts || [];
+  const text = parts.filter((p) => p.text).map((p) => p.text).join('').trim();
+  const functionCalls = parts.filter((p) => p.functionCall).map((p) => p.functionCall);
+  return { model, data, text, functionCalls };
+}
+
 export const geminiService = {
   models: MODELS,
+
+  /** Custom system prompt — used for grounded RAG support answers. */
+  async generateWithSystem({
+    systemInstruction,
+    contents,
+    tools = null,
+    maxOutputTokens = MAX_TOKENS,
+    temperature = 0.1,
+    onChunk = null
+  }) {
+    const body = {
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+      contents,
+      generationConfig: { temperature, maxOutputTokens }
+    };
+    if (tools) body.tools = [{ functionDeclarations: tools }];
+
+    let lastErr;
+    for (const model of MODELS) {
+      try {
+        const { text, functionCalls } = await runGenerate(model, body);
+        if (text && onChunk) onChunk(text);
+        return { model, text, functionCalls };
+      } catch (err) {
+        lastErr = err;
+        logger.warn(`[gemini support] ${model}: ${err.message}`);
+        if (err.status !== 404 && err.status !== 400) break;
+      }
+    }
+    throw lastErr || new Error('Gemini support generation failed');
+  },
 
   async generate({ contents, tools = null }) {
     const body = {
@@ -57,14 +102,8 @@ export const geminiService = {
     let lastErr;
     for (const model of MODELS) {
       try {
-        const res = await fetchGemini(model, body, false);
-        const data = await res.json();
-        if (!res.ok) {
-          const err = new Error(data?.error?.message || `HTTP ${res.status}`);
-          err.status = res.status;
-          throw err;
-        }
-        return { model, data };
+        const result = await runGenerate(model, body);
+        return { model: result.model, data: result.data };
       } catch (err) {
         lastErr = err;
         logger.warn(`[gemini] ${model}: ${err.message}`);
@@ -75,11 +114,11 @@ export const geminiService = {
   },
 
   /** Stream text deltas — calls onChunk(text), returns full text + function calls if any. */
-  async streamGenerate({ contents, tools = null, onChunk }) {
+  async streamGenerate({ contents, tools = null, onChunk, systemOverride = null }) {
     const body = {
-      systemInstruction: { parts: [{ text: SYSTEM }] },
+      systemInstruction: { parts: [{ text: systemOverride || SYSTEM }] },
       contents,
-      generationConfig: { temperature: 0.1, maxOutputTokens: MAX_TOKENS }
+      generationConfig: { temperature: 0.2, maxOutputTokens: MAX_TOKENS }
     };
     if (tools) body.tools = [{ functionDeclarations: tools }];
 

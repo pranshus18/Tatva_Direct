@@ -29,7 +29,7 @@ export function speakText(text, { onStart, onEnd, maxLen = 220 } = {}) {
   window.speechSynthesis.speak(utter);
 }
 
-/** Speak a full voice-agent reply (may use multiple sentences up to VOICE_REPLY_MAX). */
+/** Speak a full voice reply (may use multiple sentences up to VOICE_REPLY_MAX). */
 export function speakVoiceReply(text, { onStart, onEnd } = {}) {
   speakText(text, { onStart, onEnd, maxLen: VOICE_REPLY_MAX });
 }

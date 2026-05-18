@@ -1,6 +1,6 @@
 /**
- * Optional Faster-Whisper via Python voice-agent (base.en / small.en).
- * Set VOICE_PYTHON_URL=http://127.0.0.1:8765
+ * Optional external STT — POST { chunk, final } → { text, partial }.
+ * Set VOICE_PYTHON_URL to the service base URL (e.g. http://127.0.0.1:8765).
  */
 
 const PYTHON_URL = String(process.env.VOICE_PYTHON_URL || '').replace(/\/$/, '');

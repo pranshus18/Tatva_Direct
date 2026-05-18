@@ -32,18 +32,9 @@ VOICE_GEMINI_MODEL=gemini-1.5-flash
 VOICE_MAX_TOOL_ROUNDS=1
 VOICE_MAX_OUTPUT_TOKENS=96
 VOICE_DEBUG=true
-
-# Optional Whisper + Piper (run voice-agent on 8765)
-VOICE_PYTHON_URL=http://127.0.0.1:8765
 ```
 
-## Optional Python pipeline
-
-```bash
-cd voice-agent && pip install -r requirements.txt && python main.py
-```
-
-Uses `base.en` Whisper + Piper streaming. Node proxies `/stt` and `/tts/stream`.
+Browser speech handles STT/TTS by default. Set `VOICE_PYTHON_URL` only if you run a separate service that exposes `POST /stt` and `POST /tts/stream`.
 
 ## Routing rules
 
@@ -61,7 +52,7 @@ Uses `base.en` Whisper + Piper streaming. Node proxies `/stt` and `/tts/stream`.
 
 - `stt_partial`, `stt_final`
 - `reply_chunk`, `reply_done`, `agent_reply`
-- `tts_chunk` (Piper)
+- `tts_chunk` (optional external TTS)
 - `agent_state`: listening | thinking | speaking
 
 ## Debug

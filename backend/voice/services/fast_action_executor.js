@@ -3,8 +3,7 @@ import { isLikelyProductSearch } from '../lib/productQueryParser.js';
 import { productCatalogService } from './product_catalog_service.js';
 import { toolCallingEngine } from './tool_calling_engine.js';
 
-const GREETING = 'Hi. I can search products, manage your cart, track orders, or answer policy questions.';
-const THANKS = 'You are welcome. Anything else?';
+import { GREETING_HUMAN, THANKS_HUMAN } from '../lib/humanizeReply.js';
 
 /**
  * Fast path — direct backend APIs, no Gemini.
@@ -14,8 +13,8 @@ export const fastActionExecutor = {
     const { action, slots, route } = routeDecision;
 
     if (route === RouteType.GREETING) {
-      if (/\b(thanks|bye)\b/i.test(text)) return THANKS;
-      return GREETING;
+      if (/\b(thanks|bye)\b/i.test(text)) return THANKS_HUMAN;
+      return GREETING_HUMAN;
     }
 
     if (action === ActionType.SUPPORT_RAG) return null;

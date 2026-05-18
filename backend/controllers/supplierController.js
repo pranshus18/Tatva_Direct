@@ -74,10 +74,18 @@ import {
   normalizeText,
   onboardingAutoApproveThreshold,
   parseBcovNotes,
+  buildSpecificationTemplateFromFields,
+  countMeaningfulSpecValues,
+  mergeSpecificationMaps,
+  parseSpecificationsObject,
   sanitizeSpecifications,
   toFiniteNumber
 } from '../services/supplierCatalogHelpersService.js';
 import { notifyAdminsForPortalAction } from '../services/portalActivityService.js';
+import {
+  extractSpecificationPairsFromDescription,
+  extractSpecificationValuesFromDescription
+} from '../services/supplierAiSpecExtractionService.js';
 import { createAdminWriteNotifyMiddleware } from '../middleware/adminWriteNotifyMiddleware.js';
 import { ensureBrandApprovedOrRequest } from '../services/brandApprovalService.js';
 import { insertNotification, insertNotifications } from '../repositories/notificationsRepository.js';
@@ -377,6 +385,175 @@ async function upsertModelSpecProfile({
   }
 
   return data;
+}
+
+async function fetchApprovedCatalogSpecificationRows(categoryName, brandKey = '') {
+  const { data: rows, error } = await supabase
+    .from('products')
+    .select('id, name, brand, specifications, status, updated_at')
+    .eq('category', categoryName)
+    .order('updated_at', { ascending: false })
+    .limit(200);
+
+  if (error) {
+    console.error('❌ [GET SPECS] Catalog product fetch error:', error);
+    return [];
+  }
+
+  return (rows || []).filter((row) => {
+    const status = String(row?.status ?? '').trim().toLowerCase();
+    if (status && status !== 'approved') return false;
+    if (!brandKey) return true;
+    const rowBrand = normalizeBrandKey(row?.brand || '');
+    return rowBrand && rowBrand === brandKey;
+  });
+}
+
+function pickBestSpecificationMap(rows = [], options = {}) {
+  const excludeProductId = options.excludeProductId || null;
+  let best = null;
+  let bestScore = -1;
+  for (const row of rows) {
+    if (excludeProductId && row?.id === excludeProductId) continue;
+    const specs = parseSpecificationsObject(row?.specifications);
+    if (!specs || Object.keys(specs).length === 0) continue;
+    const score = countMeaningfulSpecValues(specs) * 1000 + Object.keys(specs).length;
+    if (score > bestScore) {
+      bestScore = score;
+      best = specs;
+    }
+  }
+  return best;
+}
+
+/** Resolve admin-defined specification keys/values for a category + model + brand. */
+async function resolveAdminSpecificationTemplate({
+  categoryName: rawCategory,
+  modelRaw = '',
+  brandRaw = '',
+  excludeProductId = null
+} = {}) {
+  const categoryName = String(rawCategory || '').trim().toLowerCase();
+  if (!categoryName) return {};
+
+  const modelIdentifier = normalizeModelIdentifier(modelRaw);
+  const brandKey = brandRaw ? normalizeBrandKey(brandRaw) : '';
+
+  let { data: category } = await supabase
+    .from('categories')
+    .select('name, display_name, default_specifications')
+    .eq('name', categoryName)
+    .maybeSingle();
+
+  if (!category) {
+    const { data: allCategories } = await supabase
+      .from('categories')
+      .select('name, display_name, default_specifications')
+      .eq('is_active', true);
+    category = (allCategories || []).find((cat) => String(cat?.name || '').toLowerCase() === categoryName);
+  }
+
+  let specs = {};
+
+  if (modelIdentifier) {
+    const { data: profile, error: profileError } = await supabase
+      .from('model_spec_profiles')
+      .select('specifications')
+      .eq('category', categoryName)
+      .eq('model_identifier', modelIdentifier)
+      .maybeSingle();
+    if (profileError) {
+      console.error('resolveAdminSpecificationTemplate model profile error:', profileError);
+    } else {
+      const profileSpecs = parseSpecificationsObject(profile?.specifications);
+      if (profileSpecs && Object.keys(profileSpecs).length > 0) {
+        specs = profileSpecs;
+      }
+    }
+  }
+
+  if (Object.keys(specs).length === 0 && modelIdentifier) {
+    const { data: productMatches, error: productMatchError } = await supabase
+      .from('products')
+      .select('id, name, specifications, status, updated_at')
+      .eq('category', categoryName)
+      .order('updated_at', { ascending: false })
+      .limit(200);
+    if (productMatchError) {
+      console.error('resolveAdminSpecificationTemplate product match error:', productMatchError);
+    } else {
+      const modelRows = (productMatches || []).filter((row) => {
+        const status = String(row?.status ?? '').trim().toLowerCase();
+        if (status && status !== 'approved') return false;
+        const normalizedName = normalizeModelIdentifier(row?.name || '');
+        return normalizedName && normalizedName === modelIdentifier;
+      });
+      const matchSpecs = pickBestSpecificationMap(modelRows, { excludeProductId });
+      if (matchSpecs) specs = matchSpecs;
+    }
+  }
+
+  if (Object.keys(specs).length === 0 && category) {
+    const defaultSpecs = parseSpecificationsObject(category.default_specifications);
+    if (defaultSpecs && Object.keys(defaultSpecs).length > 0) {
+      specs = defaultSpecs;
+    }
+  }
+
+  let catalogRows = await fetchApprovedCatalogSpecificationRows(categoryName, brandKey);
+  if (brandKey && catalogRows.length === 0) {
+    catalogRows = await fetchApprovedCatalogSpecificationRows(categoryName, '');
+  }
+  if (excludeProductId) {
+    catalogRows = catalogRows.filter((row) => row.id !== excludeProductId);
+  }
+
+  const modelMatchedRows = modelIdentifier
+    ? catalogRows.filter((row) => normalizeModelIdentifier(row?.name || '') === modelIdentifier)
+    : catalogRows;
+
+  const modelMatchedSpecs = pickBestSpecificationMap(modelMatchedRows, { excludeProductId });
+  if (modelMatchedSpecs) {
+    specs = mergeSpecificationMaps(specs, modelMatchedSpecs);
+  } else if (brandKey) {
+    const brandMatchedSpecs = pickBestSpecificationMap(catalogRows, { excludeProductId });
+    if (brandMatchedSpecs) {
+      specs = mergeSpecificationMaps(specs, brandMatchedSpecs);
+    }
+  }
+
+  if (Object.keys(specs).length === 0) {
+    const { fields } = await loadSpecTemplateForCategory(categoryName);
+    const templateSpecs = buildSpecificationTemplateFromFields(fields);
+    if (Object.keys(templateSpecs).length > 0) {
+      specs = templateSpecs;
+    }
+  }
+
+  if (Object.keys(specs).length === 0) {
+    const categoryFallbackSpecs = pickBestSpecificationMap(catalogRows, { excludeProductId });
+    if (categoryFallbackSpecs) specs = categoryFallbackSpecs;
+  }
+
+  return specs;
+}
+
+async function enrichProductSpecificationsForDisplay({
+  category,
+  name,
+  brand,
+  existingSpecs,
+  productId = null
+}) {
+  const storedSpecs = parseSpecificationsObject(existingSpecs) || {};
+  const brandHint = String(brand || name || '').trim();
+  const adminTemplate = await resolveAdminSpecificationTemplate({
+    categoryName: category,
+    modelRaw: name,
+    brandRaw: brandHint,
+    excludeProductId: productId
+  });
+  return mergeSpecificationMaps(adminTemplate, storedSpecs);
 }
 
 async function loadSpecTemplateForCategory(category, familyId = null) {
@@ -846,8 +1023,9 @@ router.get('/products', authenticateToken, async (req, res) => {
     // Combine product and supplier_products data.
     // If an admin deletes the shared product but a junction row remains (unexpected legacy data),
     // skip the row so the supplier UI doesn't show "ghost" products.
-    const products = (supplierProducts || [])
-      .map(sp => {
+    const products = (
+      await Promise.all(
+        (supplierProducts || []).map(async (sp) => {
         if (!sp.product) return null;
 
         const baseSpecs =
@@ -858,22 +1036,31 @@ router.get('/products', authenticateToken, async (req, res) => {
           sp.attributes?.specifications && typeof sp.attributes.specifications === 'object'
             ? sp.attributes.specifications
             : {};
-        const mergedSpecs = { ...baseSpecs, ...offerSpecs };
+        const storedSpecs = mergeSpecificationMaps(baseSpecs, offerSpecs);
+        const listingName =
+          sp.attributes?.listingName != null && String(sp.attributes.listingName).trim() !== ''
+            ? String(sp.attributes.listingName).trim()
+            : sp.product.name;
+        const displayBrand = sp.attributes?.brand || sp.product.brand || '';
+        const mergedSpecs = await enrichProductSpecificationsForDisplay({
+          category: sp.product.category,
+          name: listingName,
+          brand: displayBrand || listingName,
+          existingSpecs: storedSpecs,
+          productId: sp.product.id
+        });
         const offerImages = sanitizeImageUrls(sp.attributes?.images);
         const baseImages = sanitizeImageUrls(sp.product?.images);
 
         return {
           ...sp.product,
           // Per-variant display: offer overrides shared catalog (same merge as PUT response)
-          name:
-            (sp.attributes?.listingName != null && String(sp.attributes.listingName).trim() !== '')
-              ? String(sp.attributes.listingName).trim()
-              : sp.product.name,
+          name: listingName,
           description:
             sp.attributes && Object.prototype.hasOwnProperty.call(sp.attributes, 'description')
               ? sp.attributes.description
               : (sp.product.description ?? ''),
-          brand: sp.attributes?.brand || sp.product.brand,
+          brand: displayBrand || sp.product.brand,
           gtin: sp.attributes?.gtin || sp.product.gtin,
           mpn: sp.attributes?.mpn || sp.product.mpn,
           specifications: mergedSpecs,
@@ -910,7 +1097,8 @@ router.get('/products', authenticateToken, async (req, res) => {
           supplier_product_id: sp.id // Include junction table ID
         };
       })
-      .filter(Boolean);
+      )
+    ).filter(Boolean);
     
     res.json({ 
       status: 'success',
@@ -1385,6 +1573,8 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
   try {
     const name = String(req.query.name || '').trim();
     const category = String(req.query.category || '').trim().toLowerCase();
+    const brandRaw = String(req.query.brand || req.query.brandName || '').trim();
+    const brandKey = brandRaw ? normalizeBrandKey(brandRaw) : '';
 
     if (!name || !category) {
       return res.json({
@@ -1557,56 +1747,17 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       }
     }
 
-    // Ensure admin-defined spec keys are present even if product/supplier specs are empty.
-    // This makes the UI deterministic on selection (no dependency on a separate template fetch).
-    if (product?.category) {
-      const categoryName = String(product.category || '').trim().toLowerCase();
-      const modelIdentifier = normalizeModelIdentifier(product.name || '');
-
-      let templateSpecs = null;
-
-      // Prefer model-specific profile template if it exists.
-      if (categoryName && modelIdentifier) {
-        const { data: profile, error: profileError } = await supabase
-          .from('model_spec_profiles')
-          .select('specifications')
-          .eq('category', categoryName)
-          .eq('model_identifier', modelIdentifier)
-          .maybeSingle();
-        if (profileError) {
-          console.error('Product lookup model profile fetch error:', profileError);
-        } else {
-          const parsed = toObject(profile?.specifications);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length > 0) {
-            templateSpecs = parsed;
-          }
-        }
-      }
-
-      // Fallback to category defaults.
-      if (!templateSpecs && categoryName) {
-        const { data: catRow, error: catError } = await supabase
-          .from('categories')
-          .select('default_specifications')
-          .eq('name', categoryName)
-          .maybeSingle();
-        if (catError) {
-          console.error('Product lookup category specs fetch error:', catError);
-        } else {
-          const parsed = toObject(catRow?.default_specifications);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.keys(parsed).length > 0) {
-            templateSpecs = parsed;
-          }
-        }
-      }
-
-      if (templateSpecs) {
-        Object.keys(templateSpecs).forEach((k) => {
-          if (!Object.prototype.hasOwnProperty.call(mergedSpecifications, k)) {
-            mergedSpecifications[k] = templateSpecs[k];
-          }
-        });
-      }
+    const lookupCategory = String(product?.category || category || '').trim().toLowerCase();
+    const lookupName = String(product?.name || name || '').trim();
+    const brandHint = brandRaw || lookupName;
+    if (lookupCategory) {
+      mergedSpecifications = await enrichProductSpecificationsForDisplay({
+        category: lookupCategory,
+        name: lookupName,
+        brand: brandHint,
+        existingSpecs: mergedSpecifications,
+        productId: product?.id || null
+      });
     }
 
     // If product exists, calculate recommended price as average of all suppliers' prices
@@ -1727,6 +1878,8 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
       req.query.model || req.query.mpn || req.query.brandModel || ''
     ).trim();
     const modelIdentifier = normalizeModelIdentifier(modelRaw);
+    const brandRaw = String(req.query.brand || req.query.brandName || '').trim();
+    const brandKey = brandRaw ? normalizeBrandKey(brandRaw) : '';
 
     console.log(`🔍 [GET SPECS] Request for category: "${rawName}" -> normalized: "${categoryName}"`);
 
@@ -1764,99 +1917,11 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
 
     console.log(`✅ [GET SPECS] Category "${categoryName}" found`);
 
-    const toPlainObject = (value) => {
-      if (!value) return null;
-      if (typeof value === 'object' && !Array.isArray(value)) return value;
-      if (typeof value === 'string') {
-        try {
-          let parsed = JSON.parse(value);
-          if (typeof parsed === 'string') {
-            try {
-              parsed = JSON.parse(parsed);
-            } catch {
-              // keep as-is
-            }
-          }
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    };
-
-    // Ensure we return an empty object if defaultSpecifications is null/undefined
-    let specs = {};
-    let source = 'category';
-    let modelProfile = null;
-
-    // If model is provided and we've previously saved specs for that model+category,
-    // use those as the primary template for all suppliers.
-    if (modelIdentifier) {
-      const { data: profile, error: profileError } = await supabase
-        .from('model_spec_profiles')
-        .select('model_identifier, display_model, specifications, updated_at')
-        .eq('category', categoryName)
-        .eq('model_identifier', modelIdentifier)
-        .maybeSingle();
-      if (profileError) {
-        console.error('❌ [GET SPECS] Model profile fetch error:', profileError);
-      } else {
-        const profileSpecs = toPlainObject(profile?.specifications);
-        if (!profileSpecs) {
-          // nothing
-        } else {
-          const profileKeys = Object.keys(profileSpecs);
-        if (profileKeys.length > 0) {
-            specs = profileSpecs;
-          source = 'model_profile';
-          modelProfile = {
-            modelIdentifier: profile.model_identifier,
-            displayModel: profile.display_model,
-            updatedAt: profile.updated_at
-          };
-        }
-        }
-      }
-    }
-
-    // Backward-compat fallback: if model profile is missing, try approved catalog products
-    // in this category and match by normalized name/model text.
-    if (Object.keys(specs).length === 0 && modelIdentifier) {
-      const { data: productMatches, error: productMatchError } = await supabase
-        .from('products')
-        .select('name, specifications, status, updated_at')
-        .eq('category', categoryName)
-        .order('updated_at', { ascending: false })
-        .limit(200);
-      if (productMatchError) {
-        console.error('❌ [GET SPECS] Product fallback fetch error:', productMatchError);
-      } else {
-        const productMatch = (productMatches || []).find((row) => {
-          const st = String(row?.status ?? '').trim().toLowerCase();
-          if (st && st !== 'approved') return false;
-          const normalizedName = normalizeModelIdentifier(row?.name || '');
-          return normalizedName && normalizedName === modelIdentifier;
-        });
-        const matchSpecs = toPlainObject(productMatch?.specifications);
-        if (matchSpecs && Object.keys(matchSpecs).length > 0) {
-          specs = matchSpecs;
-          source = 'approved_product';
-        }
-      }
-    }
-
-    // Fallback to admin category defaults when no model-specific profile exists.
-    if (Object.keys(specs).length === 0) {
-      const defaultSpecs = toPlainObject(category?.default_specifications);
-      if (defaultSpecs) {
-        const specKeys = Object.keys(defaultSpecs);
-      if (specKeys.length > 0) {
-          specs = defaultSpecs;
-          source = 'category';
-      }
-      }
-    }
+    const specs = await resolveAdminSpecificationTemplate({
+      categoryName,
+      modelRaw,
+      brandRaw: brandRaw || modelRaw
+    });
 
     return res.json({
       status: 'success',
@@ -1864,8 +1929,10 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
         name: category.name,
         displayName: category.display_name || category.name
       },
-      source,
-      model: modelProfile,
+      source: 'resolved',
+      model: modelIdentifier
+        ? { modelIdentifier, displayModel: modelRaw || modelIdentifier }
+        : null,
       specifications: specs
     });
   } catch (error) {
@@ -6178,23 +6245,17 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
     // Use immutable order snapshot fields so placed orders never drift with later edits.
     const orderItems = Array.isArray(order.order_items) ? order.order_items : [];
     order.order_items = orderItems.map((it) => {
-      let snapshot = {};
-      if (it?.specifications && typeof it.specifications === 'object') {
-        snapshot = it.specifications;
-      } else if (typeof it?.specifications === 'string') {
-        try {
-          snapshot = JSON.parse(it.specifications);
-        } catch {
-          snapshot = {};
-        }
-      }
+      const snapshot = parseSpecificationsObject(it?.specifications) || {};
       const variantAttributes =
         snapshot?.variantAttributes && typeof snapshot.variantAttributes === 'object'
           ? snapshot.variantAttributes
           : {};
+      const productSpecs = parseSpecificationsObject(it?.product?.specifications);
+      const displaySpecifications = mergeSpecificationMaps(productSpecs, snapshot);
 
       return {
         ...it,
+        specifications: displaySpecifications,
         unitPrice: parseFloat(it?.unit_price ?? it?.unitPrice ?? 0) || 0,
         totalPrice: parseFloat(it?.total_price ?? it?.totalPrice ?? 0) || 0,
         variantKey: snapshot?.variantKey || null,
@@ -6827,10 +6888,16 @@ router.post('/products/ai-enhance', authenticateToken, async (req, res) => {
   }
 });
 
-// Extract specification keys from admin template; supplier fills only values.
+// Load admin spec template keys OR extract specification values from description via AI.
 router.post('/products/extract-specifications', authenticateToken, async (req, res) => {
   try {
-    const { category, familyId } = parseWithSchema(supplierProductExtractSpecificationsSchema, req.body || {});
+    const payload = parseWithSchema(supplierProductExtractSpecificationsSchema, req.body || {});
+    const category = String(payload.category || '').trim().toLowerCase();
+    const description = String(payload.description || '').trim();
+    const productName = String(payload.productName || '').trim();
+    const provider = payload.provider || 'auto';
+    const existingSpecifications = parseSpecificationsObject(payload.existingSpecifications) || {};
+
     if (!category) {
       return res.status(400).json({
         status: 'error',
@@ -6838,34 +6905,67 @@ router.post('/products/extract-specifications', authenticateToken, async (req, r
       });
     }
 
-    const { template, fields } = await loadSpecTemplateForCategory(category, familyId || null);
+    if (description) {
+      const templateKeys = Object.keys(existingSpecifications);
+      if (templateKeys.length > 0) {
+        const aiResult = await extractSpecificationValuesFromDescription({
+          description,
+          category,
+          productName,
+          existingSpecifications,
+          provider,
+          blockOnCategoryMismatch: false
+        });
+        return res.status(aiResult.status === 'error' ? 400 : 200).json(aiResult);
+      }
+
+      const aiResult = await extractSpecificationPairsFromDescription({
+        description,
+        category,
+        productName,
+        provider
+      });
+      return res.status(aiResult.status === 'error' ? 400 : 200).json(aiResult);
+    }
+
+    const adminTemplate = await resolveAdminSpecificationTemplate({
+      categoryName: category,
+      modelRaw: productName,
+      brandRaw: productName
+    });
+
+    if (Object.keys(adminTemplate).length > 0) {
+      return res.json({
+        status: 'success',
+        source: 'admin_template',
+        specifications: adminTemplate
+      });
+    }
+
+    const { template, fields } = await loadSpecTemplateForCategory(category, payload.familyId || null);
     if (!template || fields.length === 0) {
       return res.status(404).json({
         status: 'error',
-        message: 'No active specification template found for this category/model'
+        message:
+          'No specification template found. Add a description and use Extract Specifications, or ask admin to configure category specs.'
       });
     }
 
-    const specifications = {};
-    const schema = [];
-    for (const field of fields) {
-      const key = (field.field_key || '').toString().trim();
-      if (!key) continue;
-      specifications[key] = null;
-      schema.push({
-        key,
-        displayName: field.display_name,
-        dataType: field.data_type,
-        isRequired: !!field.is_required,
-        enumValues: field.enum_values || [],
-        allowedUnits: field.allowed_units || [],
-        minValue: field.min_value,
-        maxValue: field.max_value
-      });
-    }
+    const specifications = buildSpecificationTemplateFromFields(fields);
+    const schema = (fields || []).map((field) => ({
+      key: field.field_key,
+      displayName: field.display_name,
+      dataType: field.data_type,
+      isRequired: !!field.is_required,
+      enumValues: field.enum_values || [],
+      allowedUnits: field.allowed_units || [],
+      minValue: field.min_value,
+      maxValue: field.max_value
+    }));
 
-    res.json({
+    return res.json({
       status: 'success',
+      source: 'spec_template',
       template: {
         id: template.id,
         name: template.name,
@@ -6881,7 +6981,7 @@ router.post('/products/extract-specifications', authenticateToken, async (req, r
     console.error('Extract specifications error:', error);
     res.status(500).json({
       status: 'error',
-      message: error.message || 'Failed to load specification template'
+      message: error.message || 'Failed to extract specifications'
     });
   }
 });

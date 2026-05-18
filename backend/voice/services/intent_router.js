@@ -1,8 +1,13 @@
 import { ActionType, RouteType } from '../core/routeTypes.js';
 import { extractProductQuery, isLikelyProductSearch } from '../lib/productQueryParser.js';
+import {
+  resolveCancelOrderAction,
+  resolveTrackOrderAction,
+  shouldUseSupportRag
+} from '../lib/supportIntent.js';
 
 const SUPPORT_RE =
-  /\b(refund|return|policy|policies|warranty|faq|help|how do i|can i return|shipping policy|delivery time|payment method)\b/i;
+  /\b(refund|return|policy|policies|warranty|faq|help|how do i|can i return|shipping policy|delivery time|payment method|damaged|razorpay|cod|credit line|non-returnable)\b/i;
 
 const SMART_RE =
   /\b(recommend|suggestion|compare|versus|vs\b|which (one|product)|best for|explain|tell me about|buying guide|what should i buy|difference between)\b/i;
@@ -64,16 +69,18 @@ function detectAction(text) {
   if (/\bremove\s+.+\s+from\s+cart\b/i.test(t)) return ActionType.REMOVE_FROM_CART;
 
   if (/\b(checkout|place\s+(?:my\s+)?order|buy\s+now)\b/i.test(t)) return ActionType.CHECKOUT;
-  if (/\b(cancel\s+order)\b/i.test(t)) return ActionType.CANCEL_ORDER;
-  if (/\b(track|order status|where is my order|my orders?|recent orders?)\b/i.test(t)) {
-    return ActionType.TRACK_ORDER;
-  }
+
+  const cancelAction = resolveCancelOrderAction(t);
+  if (cancelAction) return cancelAction;
+
+  const trackAction = resolveTrackOrderAction(t);
+  if (trackAction) return trackAction;
   if (/\b(reorder|order again)\b/i.test(t)) return ActionType.REORDER;
 
   if (/\b(stock|inventory|in stock|availability)\b/i.test(t)) return ActionType.INVENTORY_CHECK;
   if (/\b(shipping address|my address|delivery address)\b/i.test(t)) return ActionType.ADDRESS_GET;
 
-  if (SUPPORT_RE.test(t)) return ActionType.SUPPORT_RAG;
+  if (SUPPORT_RE.test(t) || shouldUseSupportRag(t)) return ActionType.SUPPORT_RAG;
 
   if (SEARCH_RE.test(t) || isLikelyProductSearch(t)) return ActionType.SEARCH_PRODUCTS;
 

@@ -189,15 +189,10 @@ router.post('/login', async (req, res) => {
     const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
     const initialAdminPassword = process.env.ADMIN_PASSWORD;
     
-    // Debug logging
-    console.log('Login attempt for email:', email.toLowerCase());
-    console.log('Admin email from env:', adminEmail.toLowerCase());
-    console.log('Admin password set:', !!initialAdminPassword);
-    console.log('Email match:', email.toLowerCase() === adminEmail.toLowerCase());
-    if (initialAdminPassword) {
-      console.log('Admin password length:', initialAdminPassword.length);
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Login attempt for email:', email.toLowerCase());
     }
-    
+
     // If this is the admin email, handle admin login
     if (email.toLowerCase() === adminEmail.toLowerCase()) {
       let { data: adminUser, error: adminError } = await supabase
@@ -206,11 +201,8 @@ router.post('/login', async (req, res) => {
         .eq('email', adminEmail.toLowerCase())
         .single();
       
-      console.log('Admin user found:', !!adminUser);
-      
       // If admin user doesn't exist and we have initial password from env, create it
       if (!adminUser && initialAdminPassword) {
-        console.log('Creating new admin user...');
         try {
           const hashedPassword = await hashPassword(initialAdminPassword);
           const { data: newAdmin, error: createError } = await supabase
@@ -236,7 +228,6 @@ router.post('/login', async (req, res) => {
           }
           
           adminUser = newAdmin;
-          console.log('Admin user created successfully');
         } catch (createError) {
           console.error('Error creating admin user:', createError);
           return res.status(500).json({
@@ -248,32 +239,21 @@ router.post('/login', async (req, res) => {
       
       // If admin user exists, verify password
       if (adminUser) {
-        console.log('Admin user found in database');
-        console.log('Admin user type:', adminUser.user_type);
-        console.log('Admin is_active:', adminUser.is_active);
-        
         // Ensure user type is admin
         if (adminUser.user_type !== 'admin') {
-          console.log('User type is not admin, updating...');
           await supabase
             .from('users')
             .update({ user_type: 'admin' })
             .eq('id', adminUser.id);
           adminUser.user_type = 'admin';
-          console.log('User type updated to admin');
         }
         
         // Verify password
         const isPasswordCorrect = await comparePassword(password, adminUser.password);
-        console.log('Password verification result:', isPasswordCorrect);
-        console.log('Provided password length:', password.length);
-        console.log('Env password length:', initialAdminPassword ? initialAdminPassword.length : 'N/A');
-        console.log('Password matches env:', initialAdminPassword && password === initialAdminPassword);
         
         // If password doesn't match and we have initial password from env, 
         // allow reset if the provided password matches the env password
         if (!isPasswordCorrect && initialAdminPassword && password === initialAdminPassword) {
-          console.log('Password matches env, updating admin password in database...');
           const hashedPassword = await hashPassword(initialAdminPassword);
           const { data: updatedAdmin, error: updateError } = await supabase
             .from('users')
@@ -291,10 +271,7 @@ router.post('/login', async (req, res) => {
           }
           
           adminUser = updatedAdmin;
-          console.log('Admin password updated successfully');
         } else if (!isPasswordCorrect) {
-          console.log('Incorrect password provided');
-          console.log('Tip: If this is the first login, make sure ADMIN_PASSWORD in .env matches the password you entered');
           return res.status(401).json({
             status: 'error',
             message: 'Incorrect email or password. Please check your credentials.'
@@ -304,7 +281,6 @@ router.post('/login', async (req, res) => {
         // Final password verification
         const finalPasswordCheck = await comparePassword(password, adminUser.password);
         if (!finalPasswordCheck) {
-          console.log('Final password check failed');
           return res.status(401).json({
             status: 'error',
             message: 'Incorrect email or password. Please check your credentials.'

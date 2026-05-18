@@ -104,7 +104,11 @@ export const supplierProductAiEnhanceSchema = z.object({
 
 export const supplierProductExtractSpecificationsSchema = z.object({
   category: z.string().min(1),
-  familyId: z.string().uuid().optional().nullable()
+  familyId: z.string().uuid().optional().nullable(),
+  description: z.string().optional(),
+  productName: z.string().optional(),
+  provider: z.string().optional(),
+  existingSpecifications: z.record(z.string(), z.any()).optional()
 });
 
 export const supplierProductAnalyzeImageSchema = z.object({

@@ -1,5 +1,5 @@
 import { InternalApiClient } from './internalApiClient.js';
-import { answerSupportQuestion } from './supportRetriever.js';
+import { ragService } from './services/rag_service.js';
 
 function flattenCartItems(draft) {
   const items = [];
@@ -276,7 +276,7 @@ export function createVoiceToolContext(token, memory) {
     },
 
     async answer_support_question({ question }) {
-      return answerSupportQuestion(question);
+      return ragService.answerGrounded(question);
     }
   };
 

@@ -32,27 +32,59 @@ export function getApiInfo(req, res) {
   });
 }
 
+async function probeDatabase() {
+  const { error } = await supabase.from('users').select('count').limit(1);
+  const dbConnected = !error || error.code !== '42P01';
+  return {
+    type: 'Supabase (PostgreSQL)',
+    status: dbConnected ? 'connected' : 'disconnected',
+    connected: dbConnected,
+    error: error ? error.message : null
+  };
+}
+
 export async function getHealth(req, res) {
   try {
-    const { error } = await supabase.from('users').select('count').limit(1);
-    const dbConnected = !error || error.code !== '42P01';
-
+    const database = await probeDatabase();
     return res.status(200).json({
       status: 'success',
       message: 'Server is running',
       timestamp: new Date().toISOString(),
-      database: {
-        type: 'Supabase (PostgreSQL)',
-        status: dbConnected ? 'connected' : 'disconnected',
-        connected: dbConnected,
-        error: error ? error.message : null
-      },
+      database,
       uptime: process.uptime()
     });
   } catch (error) {
     return res.status(200).json({
       status: 'success',
       message: 'Server is running',
+      timestamp: new Date().toISOString(),
+      database: {
+        type: 'Supabase (PostgreSQL)',
+        status: 'error',
+        connected: false,
+        error: error.message
+      },
+      uptime: process.uptime()
+    });
+  }
+}
+
+/** Readiness probe — returns 503 when the database is unreachable. */
+export async function getHealthReady(req, res) {
+  try {
+    const database = await probeDatabase();
+    const ready = database.connected;
+    return res.status(ready ? 200 : 503).json({
+      status: ready ? 'success' : 'error',
+      message: ready ? 'Ready' : 'Database unavailable',
+      timestamp: new Date().toISOString(),
+      database,
+      uptime: process.uptime()
+    });
+  } catch (error) {
+    return res.status(503).json({
+      status: 'error',
+      message: 'Database unavailable',
       timestamp: new Date().toISOString(),
       database: {
         type: 'Supabase (PostgreSQL)',

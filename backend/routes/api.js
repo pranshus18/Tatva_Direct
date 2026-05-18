@@ -15,7 +15,7 @@ import { corePhase2Router } from './corePhase2.js';
 import { paymentsRouter } from './payments.js';
 import { adminSupplyChainRouter } from './adminSupplyChain.js';
 import { vendorRequestLogger } from '../middleware/vendorRequestLogger.js';
-import { distanceDebug, getEnvDebug, getHealth, getRuntimeDebug } from '../controllers/systemController.js';
+import { distanceDebug, getEnvDebug, getHealth, getHealthReady, getRuntimeDebug } from '../controllers/systemController.js';
 import { cartShareRouter } from '../controllers/cartShareController.js';
 import { logisticsRouter } from '../controllers/logisticsController.js';
 import { voiceRouter } from './voice.js';
@@ -42,8 +42,9 @@ apiRouter.use('/cart-share', cartShareRouter);
 apiRouter.use('/voice', voiceRouter);
 
 apiRouter.get('/health', getHealth);
-apiRouter.get('/debug/runtime', getRuntimeDebug);
+apiRouter.get('/health/ready', getHealthReady);
 if (process.env.NODE_ENV !== 'production') {
+  apiRouter.get('/debug/runtime', getRuntimeDebug);
   apiRouter.get('/debug/env', getEnvDebug);
   apiRouter.get('/debug/distance-test', distanceDebug);
 }

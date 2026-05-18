@@ -8,8 +8,13 @@ import { requestContext } from './middleware/requestContext.js';
 import { requestLogger } from './middleware/requestLogger.js';
 import { noApiCache } from './middleware/cacheControl.js';
 import { globalErrorHandler } from './middleware/errorHandler.js';
+import { registerProcessSafety, markProcessShuttingDown } from './middleware/processSafety.js';
+import { validateProductionEnv } from './config/validateEnv.js';
 import { getApiInfo } from './controllers/systemController.js';
 import logger from './utils/logger.js';
+
+registerProcessSafety();
+validateProductionEnv();
 import { isFeatureEnabled } from './utils/featureFlags.js';
 import { attachVoiceWebSocket } from './voice/voiceWebSocket.js';
 import { warmSupportIndex } from './voice/supportRetriever.js';
@@ -197,6 +202,7 @@ function shutdown(signal) {
     return;
   }
   isShuttingDown = true;
+  markProcessShuttingDown();
   logger.info(` ${signal} received, shutting down gracefully`);
 
   // Do not hang forever on open keep-alive sockets.

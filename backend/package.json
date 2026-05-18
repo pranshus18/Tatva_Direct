@@ -10,7 +10,8 @@
     "backfill-product-identity": "node scripts/backfillProductCatalogIdentity.js",
     "backfill-tsin": "node scripts/backfillTsinCodes.js",
     "phase2-load-test": "node scripts/phase2LoadTest.js",
-    "phase3-reliability-jobs": "node scripts/phase3ReliabilityJobs.js"
+    "phase3-reliability-jobs": "node scripts/phase3ReliabilityJobs.js",
+    "rag-audit": "node voice/scripts/rag-audit.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",

@@ -1,6 +1,7 @@
 import { ActionType } from '../core/routeTypes.js';
 import { GEMINI_TOOL_DECLARATIONS } from '../voiceTools.js';
 import { truncateForSpeech } from '../summarizeForVoice.js';
+import { shouldUseSupportRag } from '../lib/supportIntent.js';
 import { geminiService } from './gemini_service.js';
 import { ragService } from './rag_service.js';
 import { toolCallingEngine } from './tool_calling_engine.js';
@@ -8,22 +9,38 @@ import { toolCallingEngine } from './tool_calling_engine.js';
 const TOOL_RESULT_MAX = Number.parseInt(String(process.env.VOICE_TOOL_RESULT_MAX || '600'), 10) || 600;
 const MAX_ROUNDS = Number.parseInt(String(process.env.VOICE_MAX_TOOL_ROUNDS || '1'), 10) || 1;
 
+const CONVERSATIONAL_SYSTEM = [
+  'You are Tatva Direct voice shopping assistant — friendly, concise, human.',
+  'Help with products, cart, and orders using tools when needed.',
+  'For policy or FAQ topics you do not know, say you can help with returns, shipping, or payments — do not invent policies.',
+  'Keep replies to 1-2 short spoken sentences.'
+].join(' ');
+
 /**
- * Smart AI Path — Gemini + RAG only for recommendations, comparisons, FAQs, guidance.
+ * Smart AI Path — Gemini + RAG for recommendations, comparisons, FAQs, guidance.
  */
 export const smartAiExecutor = {
   async execute(text, toolCtx, memory, { onChunk, action } = {}) {
     const utterance = String(text || '').trim();
 
-    if (action === ActionType.SUPPORT_RAG || /\b(refund|policy|faq|return|warranty|shipping)\b/i.test(utterance)) {
-      const answer = ragService.answer(utterance);
-      if (onChunk) onChunk(answer);
+    if (shouldUseSupportRag(utterance, action)) {
+      const answer = await ragService.answerGrounded(utterance, { onChunk, memory });
       memory.appendCompact('user', utterance);
       memory.appendCompact('assistant', answer);
       return answer;
     }
 
-    const ragHits = ragService.retrieve(utterance, 2);
+    if (
+      (action === ActionType.CONVERSATIONAL || action === ActionType.UNKNOWN) &&
+      ragService.isHighConfidencePolicyQuery(utterance)
+    ) {
+      const answer = await ragService.answerGrounded(utterance, { onChunk, memory });
+      memory.appendCompact('user', utterance);
+      memory.appendCompact('assistant', answer);
+      return answer;
+    }
+
+    const ragHits = ragService.retrieve(utterance, 3);
     const ragContext = ragHits.map((h) => h.snippet).join('\n');
 
     const history = memory.getCompactHistory(2);
@@ -40,11 +57,30 @@ export const smartAiExecutor = {
     let rounds = 0;
     while (rounds < MAX_ROUNDS) {
       rounds += 1;
-      const { text: replyText, functionCalls } = await geminiService.streamGenerate({
-        contents,
-        tools: GEMINI_TOOL_DECLARATIONS,
-        onChunk
-      });
+      let replyText = '';
+      let functionCalls = [];
+      try {
+        const generated = await geminiService.streamGenerate({
+          contents,
+          tools: GEMINI_TOOL_DECLARATIONS,
+          systemOverride: CONVERSATIONAL_SYSTEM,
+          onChunk
+        });
+        replyText = generated.text || '';
+        functionCalls = generated.functionCalls || [];
+      } catch {
+        if (ragHits.length && ragService.isHighConfidencePolicyQuery(utterance)) {
+          const answer = await ragService.answerGrounded(utterance, { onChunk, memory });
+          memory.appendCompact('user', utterance);
+          memory.appendCompact('assistant', answer);
+          return answer;
+        }
+        const fallback =
+          'I can help you search products, manage your cart, or answer questions about returns, shipping, and payments. Try saying show my cart or how do refunds work.';
+        memory.appendCompact('user', utterance);
+        memory.appendCompact('assistant', fallback);
+        return truncateForSpeech(fallback);
+      }
 
       if (functionCalls?.length) {
         contents.push({
@@ -74,6 +110,6 @@ export const smartAiExecutor = {
       return output;
     }
 
-    return 'Try asking about a product or say show my cart.';
+    return 'Try asking about a product, or say show my cart.';
   }
 };

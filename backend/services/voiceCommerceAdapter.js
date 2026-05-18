@@ -1,6 +1,5 @@
 /**
- * Central paths for voice-agent HTTP integration (documentation / smoke tests).
- * The Python voice-agent calls these public REST routes with the user's JWT.
+ * REST paths used by the integrated voice commerce stack (Node + browser).
  */
 
 export const VOICE_API_PATHS = {

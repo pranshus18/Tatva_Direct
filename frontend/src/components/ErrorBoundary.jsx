@@ -48,20 +48,22 @@ class ErrorBoundary extends React.Component {
           >
             Reload Page
           </button>
-          <details style={{ marginTop: '20px', maxWidth: '600px' }}>
-            <summary style={{ cursor: 'pointer', color: '#6c757d' }}>Error Details</summary>
-            <pre style={{
-              marginTop: '10px',
-              padding: '10px',
-              background: '#f8f9fa',
-              border: '1px solid #dee2e6',
-              borderRadius: '4px',
-              overflow: 'auto',
-              fontSize: '12px'
-            }}>
-              {this.state.error?.stack || JSON.stringify(this.state.error, null, 2)}
-            </pre>
-          </details>
+          {import.meta.env.DEV && (
+            <details style={{ marginTop: '20px', maxWidth: '600px' }}>
+              <summary style={{ cursor: 'pointer', color: '#6c757d' }}>Error Details</summary>
+              <pre style={{
+                marginTop: '10px',
+                padding: '10px',
+                background: '#f8f9fa',
+                border: '1px solid #dee2e6',
+                borderRadius: '4px',
+                overflow: 'auto',
+                fontSize: '12px'
+              }}>
+                {this.state.error?.stack || JSON.stringify(this.state.error, null, 2)}
+              </pre>
+            </details>
+          )}
         </div>
       );
     }

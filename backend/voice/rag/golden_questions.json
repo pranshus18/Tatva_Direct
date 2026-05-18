@@ -1,0 +1,42 @@
+[
+  {
+    "question": "how do refunds work",
+    "must_match_source": "returns_policy.md",
+    "must_include_terms": ["refund", "return"]
+  },
+  {
+    "question": "what is your return policy",
+    "must_match_source": "returns_policy.md",
+    "must_include_terms": ["return", "policy"]
+  },
+  {
+    "question": "how long does shipping take",
+    "must_match_source": "shipping.md",
+    "must_include_terms": ["timeline", "delivery"]
+  },
+  {
+    "question": "how can I track my order",
+    "must_match_source": "shipping.md",
+    "must_include_terms": ["track", "order"]
+  },
+  {
+    "question": "can I pay with razorpay online",
+    "must_match_source": "payments.md",
+    "must_include_terms": ["razorpay", "online"]
+  },
+  {
+    "question": "how do I update my shipping address",
+    "must_match_source": "shipping.md",
+    "must_include_terms": ["address", "pincode"]
+  },
+  {
+    "question": "what payment methods do you accept",
+    "must_match_source": "faq.md",
+    "must_include_terms": ["cod", "payment"]
+  },
+  {
+    "question": "damaged items return",
+    "must_match_source": "returns_policy.md",
+    "must_include_terms": ["damaged", "order"]
+  }
+]

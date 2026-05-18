@@ -33,7 +33,7 @@ export function helpForPending(pendingType, checkout = {}) {
     await_substitution: `${stepPrefix('substitution')}Say no substitution to skip, or yes to accept suggestions.`,
     await_po_details: poHelp(checkout),
     await_place_confirm: `${stepPrefix('confirm_order')}Say place the order to buy, or say no to cancel.`,
-    await_transport: `${stepPrefix('transport')}Say transport number 1, or say the courier name you want.`
+    await_transport: `${stepPrefix('transport')}Say transport number 1, or say the courier name. If quotes failed, say retry.`
   };
   return map[pendingType] || 'Say a product name to search, or continue with your last question.';
 }
@@ -192,7 +192,33 @@ export function promptTransportOptions(vendorLines) {
 }
 
 export function promptTransportRetry() {
-  return `${stepPrefix('transport')}Say transport number 1, or say the courier name.`;
+  return `${stepPrefix('transport')}Transport is required before placing the order. Say transport number 1, or say the courier name.`;
+}
+
+export function promptTransportQuotesFailed(error) {
+  const detail = error ? ` ${error}.` : '';
+  return truncate(
+    `${stepPrefix('transport')}I could not load courier quotes.${detail} Say retry to load quotes again, or update your shipping pincode on the website. You cannot place the order without transport.`
+  );
+}
+
+export function promptTransportNoQuotes(message) {
+  const detail = message ? ` ${message}.` : '';
+  return truncate(
+    `${stepPrefix('transport')}No courier quotes are available for your address.${detail} Say retry, or update your profile address and pincode on the website. Transport is required before checkout.`
+  );
+}
+
+export function promptTransportPickRemaining(count) {
+  const extra =
+    count > 1
+      ? ` ${count} suppliers still need a courier.`
+      : ' One more supplier needs a courier.';
+  return `${stepPrefix('transport')}Pick transport for each supplier.${extra} Say transport number 1, or say the courier name.`;
+}
+
+export function promptTransportRequiredBeforeOrder() {
+  return `${stepPrefix('transport')}You must choose transport before placing the order. Say retry to load couriers, or say transport number 1.`;
 }
 
 export function promptOrderComplete(orderNumbers) {

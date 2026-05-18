@@ -1,7 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { getApiUrl } from '../config/api';
 import { useNavigate } from 'react-router-dom';
-import { Package, MapPin, Box, Save, ArrowRight } from 'lucide-react';
+import { Package, MapPin, Box, Save, ArrowRight, Sparkles } from 'lucide-react';
+import {
+  applyExtractResultToSpecs,
+  extractSpecificationsFromDescription
+} from '../utils/extractSpecificationsApi';
 import tatvaLogo from '../images/tatva_d.png';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import './Auth.css';
@@ -37,7 +41,50 @@ const SupplierProductSetup = ({ user }) => {
   const [priceTouched, setPriceTouched] = useState(false);
   const [specifications, setSpecifications] = useState({});
   const [loadingSpecs, setLoadingSpecs] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [extractingSpecs, setExtractingSpecs] = useState(false);
   const navigate = useNavigate();
+
+  const handleExtractSpecifications = async () => {
+    if (!formData.description?.trim()) {
+      setError('Enter a description with specification details first (e.g. Finish: Matt, Volume: 20L).');
+      return;
+    }
+    if (!formData.category?.trim()) {
+      setError('Select a category before extracting specifications.');
+      return;
+    }
+
+    setExtractingSpecs(true);
+    setError('');
+    try {
+      const { response, data } = await extractSpecificationsFromDescription({
+        description: formData.description,
+        category: formData.category,
+        productName: formData.name,
+        existingSpecifications: specifications || {}
+      });
+
+      if (!response.ok && data?.status !== 'success' && data?.status !== 'warning') {
+        throw new Error(data?.message || 'Extraction failed');
+      }
+
+      const result = applyExtractResultToSpecs(specifications || {}, data);
+      if (!result.ok) {
+        setError(result.warning || result.error || 'Could not extract specifications.');
+        return;
+      }
+
+      setSpecifications(result.merged);
+      if (result.filledCount === 0) {
+        setError('No values found in description. Use key: value lines.');
+      }
+    } catch (err) {
+      setError(err.message || 'Failed to extract specifications from description.');
+    } finally {
+      setExtractingSpecs(false);
+    }
+  };
 
   const handleChange = (e) => {
     if (e.target?.name === 'price') {
@@ -91,6 +138,24 @@ const SupplierProductSetup = ({ user }) => {
     });
   };
 
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(getApiUrl('/api/supplier/categories'), {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (data.status === 'success') {
+          setCategories(data.categories || []);
+        }
+      } catch (error) {
+        console.error('Failed to fetch categories:', error);
+      }
+    };
+    fetchCategories();
+  }, []);
+
   // Fetch locations from profile on mount
   useEffect(() => {
     const fetchLocations = async () => {
@@ -116,13 +181,16 @@ const SupplierProductSetup = ({ user }) => {
   useEffect(() => {
     const name = (formData.name || '').trim();
     const category = (formData.category || '').trim();
+    const brand = (formData.brand || '').trim();
     if (!name || !category) return;
 
     const timeout = setTimeout(async () => {
       try {
         const token = localStorage.getItem('token');
+        const lookupParams = new URLSearchParams({ name, category });
+        if (brand) lookupParams.set('brand', brand);
         const res = await fetch(
-          getApiUrl(`/api/supplier/products/lookup?name=${encodeURIComponent(name)}&category=${encodeURIComponent(category)}`),
+          getApiUrl(`/api/supplier/products/lookup?${lookupParams.toString()}`),
           { headers: { 'Authorization': `Bearer ${token}` } }
         );
         const data = await res.json();
@@ -131,10 +199,10 @@ const SupplierProductSetup = ({ user }) => {
         }
         if (
           data.status === 'success' &&
-          data.found &&
           data.specifications &&
           typeof data.specifications === 'object' &&
-          !Array.isArray(data.specifications)
+          !Array.isArray(data.specifications) &&
+          Object.keys(data.specifications).length > 0
         ) {
           setSpecifications(data.specifications);
         }
@@ -159,12 +227,13 @@ const SupplierProductSetup = ({ user }) => {
     }, 350);
 
     return () => clearTimeout(timeout);
-  }, [formData.name, formData.category]);
+  }, [formData.name, formData.category, formData.brand]);
 
   // Load admin-defined specs for selected category + product/model hint.
   useEffect(() => {
     const category = String(formData.category || '').trim().toLowerCase();
     const modelHint = String(formData.name || '').trim();
+    const brand = String(formData.brand || '').trim();
     if (!category) {
       setSpecifications({});
       return;
@@ -173,7 +242,10 @@ const SupplierProductSetup = ({ user }) => {
       try {
         setLoadingSpecs(true);
         const token = localStorage.getItem('token');
-        const query = modelHint ? `?model=${encodeURIComponent(modelHint)}` : '';
+        const queryParams = new URLSearchParams();
+        if (modelHint) queryParams.set('model', modelHint);
+        if (brand) queryParams.set('brand', brand);
+        const query = queryParams.toString() ? `?${queryParams.toString()}` : '';
         const resp = await fetch(
           getApiUrl(`/api/supplier/categories/${encodeURIComponent(category)}/specifications${query}`),
           {
@@ -182,7 +254,6 @@ const SupplierProductSetup = ({ user }) => {
           }
         );
         if (!resp.ok) {
-          setSpecifications({});
           return;
         }
         const data = await resp.json();
@@ -210,7 +281,7 @@ const SupplierProductSetup = ({ user }) => {
       }
     }, 300);
     return () => clearTimeout(timeout);
-  }, [formData.category, formData.name]);
+  }, [formData.category, formData.name, formData.brand]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -444,14 +515,25 @@ const SupplierProductSetup = ({ user }) => {
                 required
                 className="select-input"
               >
-                <option value="steel">Steel & Metal</option>
-                <option value="cement">Cement & Concrete</option>
-                <option value="aggregates">Aggregates</option>
-                <option value="masonry">Masonry</option>
-                <option value="electrical">Electrical</option>
-                <option value="plumbing">Plumbing</option>
-                <option value="hardware">Hardware</option>
-                <option value="other">Other</option>
+                {categories.length > 0 ? (
+                  categories.map((cat) => (
+                    <option key={cat.name} value={cat.name}>
+                      {cat.displayName || cat.name}
+                    </option>
+                  ))
+                ) : (
+                  <>
+                    <option value="steel">Steel & Metal</option>
+                    <option value="cement">Cement & Concrete</option>
+                    <option value="aggregates">Aggregates</option>
+                    <option value="masonry">Masonry</option>
+                    <option value="electrical">Electrical</option>
+                    <option value="plumbing">Plumbing</option>
+                    <option value="paint">Paint</option>
+                    <option value="hardware">Hardware</option>
+                    <option value="other">Other</option>
+                  </>
+                )}
               </select>
             </div>
           </div>
@@ -640,11 +722,35 @@ const SupplierProductSetup = ({ user }) => {
                 name="description"
                 value={formData.description}
                 onChange={handleChange}
-                placeholder="Add any additional details about your product..."
+                placeholder="Add product details. Use key: value lines (e.g. Finish: Matt, Volume: 20L) then click Extract Specifications."
                 rows="3"
                 className="textarea-input"
               />
             </div>
+            {formData.description?.trim() && formData.category?.trim() ? (
+              <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleExtractSpecifications}
+                  disabled={extractingSpecs}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    background: extractingSpecs ? '#9ca3af' : '#10b981',
+                    color: '#fff',
+                    border: 'none',
+                    padding: '0.4rem 0.75rem',
+                    borderRadius: '6px',
+                    fontSize: '0.85rem'
+                  }}
+                >
+                  <Sparkles size={14} />
+                  {extractingSpecs ? 'Extracting…' : 'Extract Specifications (AI)'}
+                </button>
+              </div>
+            ) : null}
           </div>
 
           <div className="form-group">

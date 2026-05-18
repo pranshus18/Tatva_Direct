@@ -13,11 +13,11 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   });
 }
 
-// Log API configuration for debugging
-const apiUrl = import.meta.env.VITE_API_BASE_URL || 'https://tatvadirect.onrender.com (default)';
-console.log('API Base URL:', apiUrl);
-console.log('Environment:', import.meta.env.MODE);
-console.log('All env vars:', import.meta.env);
+if (import.meta.env.DEV) {
+  const apiUrl = import.meta.env.VITE_API_BASE_URL || 'https://tatvadirect.onrender.com (default)';
+  console.log('API Base URL:', apiUrl);
+  console.log('Environment:', import.meta.env.MODE);
+}
 
 const rootElement = document.getElementById('root');
 
