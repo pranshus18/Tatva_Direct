@@ -1,0 +1,190 @@
+import { buildVariantAsinLikeId } from '../../../services/productIdentityService.js';
+
+const IGST_ALLOWED_RATES = new Set([0, 5, 12, 18, 28]);
+const CGST_SGST_ALLOWED_RATES = new Set([0, 2.5, 6, 9, 14]);
+const CANONICAL_VARIANT_TSIN_REGEX = /^TS[A-Z0-9]{4}$/;
+
+export const ORDER_INSERT_MAX_RETRIES = 3;
+
+export function sanitizeImageUrls(input) {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of input) {
+    const url = String(raw || '').trim();
+    if (!url) continue;
+    if (!/^https?:\/\//i.test(url)) continue;
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out.slice(0, 12);
+}
+
+export function resolveVariantTsin(parentAsin, variantKey, currentVariantAsin) {
+  const normalizedCurrent = String(currentVariantAsin || '').trim().toUpperCase();
+  if (CANONICAL_VARIANT_TSIN_REGEX.test(normalizedCurrent)) {
+    return normalizedCurrent;
+  }
+  return buildVariantAsinLikeId(parentAsin || '', variantKey || '');
+}
+
+export function normalizeUserAddress(address = {}) {
+  if (!address || typeof address !== 'object') return null;
+  const line1 = String(address.line1 || address.street || '').trim();
+  const line2 = String(address.line2 || address.area || '').trim();
+  const city = String(address.city || '').trim();
+  const state = String(address.state || '').trim();
+  const zipCode = String(address.zipCode || address.pincode || address.postalCode || '').trim();
+  const country = String(address.country || '').trim();
+
+  return {
+    ...address,
+    street: line1,
+    line1,
+    line2,
+    city,
+    state,
+    zipCode,
+    pincode: zipCode,
+    country
+  };
+}
+
+function parseTaxRate(rawValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') return null;
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return NaN;
+  return Number(parsed.toFixed(2));
+}
+
+export function validateAndNormalizeTaxRates(input = {}) {
+  const igstRate = parseTaxRate(input.igst_rate ?? input.igstRate);
+  const cgstRate = parseTaxRate(input.cgst_rate ?? input.cgstRate);
+  const sgstRate = parseTaxRate(input.sgst_rate ?? input.sgstRate);
+
+  const anyProvided = [igstRate, cgstRate, sgstRate].some((v) => v !== null);
+  if (!anyProvided) {
+    return { ok: true, data: { igstRate: null, cgstRate: null, sgstRate: null } };
+  }
+
+  if ([igstRate, cgstRate, sgstRate].some((v) => Number.isNaN(v))) {
+    return {
+      ok: false,
+      message: 'Invalid tax rate value. Select values from the provided dropdown options only.'
+    };
+  }
+
+  if (igstRate === null || cgstRate === null || sgstRate === null) {
+    return { ok: false, message: 'IGST, CGST, and SGST are all required together.' };
+  }
+
+  if (!IGST_ALLOWED_RATES.has(igstRate)) {
+    return { ok: false, message: 'Invalid IGST rate. Allowed values are 0, 5, 12, 18, and 28.' };
+  }
+  if (!CGST_SGST_ALLOWED_RATES.has(cgstRate) || !CGST_SGST_ALLOWED_RATES.has(sgstRate)) {
+    return {
+      ok: false,
+      message: 'Invalid CGST/SGST rate. Allowed values are 0, 2.5, 6, 9, and 14.'
+    };
+  }
+  if (cgstRate !== sgstRate) {
+    return { ok: false, message: 'CGST and SGST must be the same percentage.' };
+  }
+  if (Number((cgstRate + sgstRate).toFixed(2)) !== igstRate) {
+    return { ok: false, message: 'IGST must equal CGST + SGST.' };
+  }
+
+  return { ok: true, data: { igstRate, cgstRate, sgstRate } };
+}
+
+export function createTaxRateHelpers(supabase) {
+  async function fetchLatestTaxRatesForProduct(productId) {
+    if (!productId) return null;
+    const { data } = await supabase
+      .from('supplier_products')
+      .select('igst_rate, cgst_rate, sgst_rate, updated_at')
+      .eq('product_id', productId)
+      .not('igst_rate', 'is', null)
+      .not('cgst_rate', 'is', null)
+      .not('sgst_rate', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return null;
+    return {
+      igstRate: Number(data.igst_rate),
+      cgstRate: Number(data.cgst_rate),
+      sgstRate: Number(data.sgst_rate)
+    };
+  }
+
+  async function fetchLatestTaxRatesForCategory(categoryName) {
+    const normalizedCategory = String(categoryName || '').trim().toLowerCase();
+    if (!normalizedCategory) return null;
+
+    const { data: products } = await supabase
+      .from('products')
+      .select('id')
+      .eq('category', normalizedCategory)
+      .limit(100);
+    const productIds = (products || []).map((p) => p.id).filter(Boolean);
+    if (!productIds.length) return null;
+
+    const { data } = await supabase
+      .from('supplier_products')
+      .select('igst_rate, cgst_rate, sgst_rate, updated_at')
+      .in('product_id', productIds)
+      .not('igst_rate', 'is', null)
+      .not('cgst_rate', 'is', null)
+      .not('sgst_rate', 'is', null)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!data) return null;
+    return {
+      igstRate: Number(data.igst_rate),
+      cgstRate: Number(data.cgst_rate),
+      sgstRate: Number(data.sgst_rate)
+    };
+  }
+
+  async function resolveTaxRatesForProductCreate({
+    input = {},
+    preferredProductId = null,
+    categoryName = ''
+  } = {}) {
+    const explicitValidation = validateAndNormalizeTaxRates(input);
+    if (!explicitValidation.ok) return explicitValidation;
+
+    if (explicitValidation.data.igstRate !== null) {
+      return explicitValidation;
+    }
+
+    const byProduct = await fetchLatestTaxRatesForProduct(preferredProductId);
+    if (byProduct) return { ok: true, data: byProduct };
+
+    const byCategory = await fetchLatestTaxRatesForCategory(categoryName);
+    if (byCategory) return { ok: true, data: byCategory };
+
+    return explicitValidation;
+  }
+
+  return { resolveTaxRatesForProductCreate };
+}
+
+export function isOrderNumberConflictError(error) {
+  if (!error) return false;
+  if (error.code === '23505') {
+    const details = String(error.details || '').toLowerCase();
+    const message = String(error.message || '').toLowerCase();
+    return details.includes('order_number') || message.includes('order_number');
+  }
+  return false;
+}
+
+export function isRevenueRecognizedOrder(order) {
+  const paymentStatus = String(order?.payment_status || order?.paymentStatus || '').toLowerCase();
+  const status = String(order?.status || '').toLowerCase();
+  return paymentStatus === 'paid' && status !== 'cancelled' && status !== 'returned';
+}

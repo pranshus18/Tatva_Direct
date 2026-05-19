@@ -1,0 +1,7 @@
+[
+  { "name": "serviceProviderDashboardRoutes", "start": 167, "end": 388 },
+  { "name": "supplierDashboardRoutes", "start": 389, "end": 561 },
+  { "name": "orderDetailRoutes", "start": 562, "end": 806 },
+  { "name": "returnRoutes", "start": 807, "end": 1047 },
+  { "name": "paymentRoutes", "start": 1048, "end": 1278 }
+]

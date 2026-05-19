@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Check, X } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
+import { fetchVoiceCartDraft, isVoiceGuidedActive } from '../voice/voiceCartBridge';
 import './Substitution.css';
 
 const Substitution = ({ selectedVendors, onComplete, items }) => {
@@ -11,13 +13,33 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
   const [hasFetchedSuggestions, setHasFetchedSuggestions] = useState(false);
   const [substitutionsFetchFailed, setSubstitutionsFetchFailed] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const didAutoSkipRef = useRef(false);
+  const [voiceCart, setVoiceCart] = useState(null);
+  const voiceGuided = isVoiceGuidedActive();
+
+  const workflowItems = voiceCart?.items?.length ? voiceCart.items : items;
+  const workflowVendors =
+    voiceCart?.selectedVendors && Object.keys(voiceCart.selectedVendors).length
+      ? voiceCart.selectedVendors
+      : selectedVendors;
 
   useEffect(() => {
-    if (items && items.length > 0) {
+    if (!voiceGuided) return;
+    let cancelled = false;
+    fetchVoiceCartDraft().then((draft) => {
+      if (!cancelled) setVoiceCart(draft);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [voiceGuided, location.state?.voiceNavSeq]);
+
+  useEffect(() => {
+    if (workflowItems && workflowItems.length > 0) {
       fetchSubstitutions();
     }
-  }, [selectedVendors, items]);
+  }, [workflowVendors, workflowItems]);
 
   const fetchSubstitutions = async () => {
     const token = localStorage.getItem('token');
@@ -32,7 +54,7 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
           'Content-Type': 'application/json',
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
-        body: JSON.stringify({ selectedVendors, items })
+        body: JSON.stringify({ selectedVendors: workflowVendors, items: workflowItems })
       });
       const data = await res.json();
       setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : []);
@@ -50,14 +72,14 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
   useEffect(() => {
     if (didAutoSkipRef.current) return;
     if (!hasFetchedSuggestions || loadingSuggestions) return;
-    if (!items || items.length === 0) return;
+    if (!workflowItems || workflowItems.length === 0) return;
     if (substitutionsFetchFailed) return;
     if (suggestions.length === 0) {
       didAutoSkipRef.current = true;
       onComplete([]);
       navigate('/create-po');
     }
-  }, [hasFetchedSuggestions, loadingSuggestions, suggestions, items, substitutionsFetchFailed, onComplete, navigate]);
+  }, [hasFetchedSuggestions, loadingSuggestions, suggestions, workflowItems, substitutionsFetchFailed, onComplete, navigate]);
 
   const handleDecision = (id, approved) => {
     setDecisions({ ...decisions, [id]: approved });
@@ -71,6 +93,7 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
 
   return (
     <div className="page">
+      <VoiceGuidedBanner />
       <div className="page-header">
         <h1>Substitution Suggestions</h1>
         <p>Review AI-recommended alternatives to optimize cost and availability</p>

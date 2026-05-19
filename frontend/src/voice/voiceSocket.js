@@ -34,6 +34,7 @@ export function createVoiceSocket({ token, handlers }) {
     if (data.type === 'auth_ok') handlers.onAuthOk?.(data);
     if (data.type === 'ready') handlers.onReady?.(data);
     if (data.type === 'error') handlers.onError?.(data);
+    if (data.type === 'ui_navigate') handlers.onUiNavigate?.(data);
 
     handlers.onMessage?.(data);
   };
@@ -55,6 +56,14 @@ export function createVoiceSocket({ token, handlers }) {
     sendText(text) {
       if (ws.readyState !== WebSocket.OPEN) return false;
       ws.send(JSON.stringify({ type: 'text', text: String(text).trim() }));
+      return true;
+    },
+
+    sendCallStart(flow) {
+      if (ws.readyState !== WebSocket.OPEN) return false;
+      const f = String(flow || '').trim();
+      if (!f) return false;
+      ws.send(JSON.stringify({ type: 'call_start', flow: f }));
       return true;
     },
 

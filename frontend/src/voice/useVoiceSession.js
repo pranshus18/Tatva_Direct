@@ -4,11 +4,15 @@ import {
   speakVoiceReply,
   speakStatus,
   stopSpeaking,
-  unlockSpeech
+  unlockSpeech,
+  preloadVoices
 } from './browserSpeech.js';
 import { isEndCallPhrase, isSendTurnPhrase, stripSendPhrase } from './callPhrases.js';
 import { playPcmChunk, resetAudioPlayback, resumeAudioPlayback } from './audioPlayback.js';
 import { createVoiceSocket } from './voiceSocket.js';
+import { VOICE_AGENT_GREETING } from './voiceGreeting.js';
+import { setVoiceGuidedActive } from './voiceCartBridge.js';
+import { voiceStartRouteForPathname } from './voiceStartRoutes.js';
 
 /** Long checkout steps (transport quotes) can take 1–2 minutes. */
 const REPLY_TIMEOUT_MS = 180000;
@@ -21,11 +25,13 @@ const MIN_AUTO_SEND_CHARS = 2;
 /** Only skip browser TTS when server Piper is explicitly enabled on the client. */
 const USE_SERVER_TTS_ONLY = import.meta.env.VITE_VOICE_SERVER_TTS === 'true';
 
-export function useVoiceSession(token) {
+export function useVoiceSession(token, { onNavigate } = {}) {
   const debug = typeof localStorage !== 'undefined' && localStorage.getItem('VOICE_DEBUG') === '1';
 
   const [state, setState] = useState('connecting');
   const [error, setError] = useState('');
+  const [voiceScreen, setVoiceScreen] = useState('');
+  const [voicePath, setVoicePath] = useState('');
   const [inCall, setInCall] = useState(false);
   const [lastReply, setLastReply] = useState('');
   const [streamingReply, setStreamingReply] = useState('');
@@ -114,12 +120,17 @@ export function useVoiceSession(token) {
     }, REPLY_TIMEOUT_MS);
   }, []);
 
+  const endCallFromVoiceRef = useRef(() => {});
+
   const scheduleAutoSend = useCallback((text) => {
     clearAutoSendTimer();
     const clean = String(text || '').trim();
     if (!inCallRef.current || processingRef.current || sentRef.current) return;
+    if (isEndCallPhrase(clean)) {
+      endCallFromVoiceRef.current();
+      return;
+    }
     if (clean.length < MIN_AUTO_SEND_CHARS) return;
-    if (isEndCallPhrase(clean)) return;
 
     autoSendTimerRef.current = setTimeout(() => {
       autoSendTimerRef.current = null;
@@ -150,6 +161,7 @@ export function useVoiceSession(token) {
 
   const endCall = useCallback(() => {
     log('call ended by user');
+    setVoiceGuidedActive(false);
     inCallRef.current = false;
     processingRef.current = false;
     micPausedRef.current = false;
@@ -161,6 +173,7 @@ export function useVoiceSession(token) {
     pauseMicCapture();
     setInterimText('');
     pendingTextRef.current = '';
+    setVoiceScreen('');
     stopSpeaking();
     sentRef.current = false;
     setUiState(connectedRef.current ? 'ready' : 'disconnected');
@@ -199,6 +212,15 @@ export function useVoiceSession(token) {
     });
   };
 
+  const endCallFromVoice = useCallback(() => {
+    if (!inCallRef.current) return;
+    clearAutoSendTimer();
+    pauseMicCapture();
+    speak('Goodbye. Ending the call.', { onEnd: endCall });
+  }, [endCall]);
+
+  endCallFromVoiceRef.current = endCallFromVoice;
+
   const beginCallListening = useCallback(() => {
     if (!inCallRef.current || !connectedRef.current || unmountedRef.current) return;
     if (processingRef.current || sentRef.current || micPausedRef.current) return;
@@ -220,6 +242,10 @@ export function useVoiceSession(token) {
         if (!inCallRef.current || micPausedRef.current) return;
         pendingTextRef.current = text;
         setInterimText(text);
+        if (isEndCallPhrase(String(text || '').trim())) {
+          endCallFromVoiceRef.current();
+          return;
+        }
         scheduleAutoSend(text);
       },
       onError: (e) => {
@@ -273,8 +299,7 @@ export function useVoiceSession(token) {
       let clean = String(rawText || '').trim();
 
       if (isEndCallPhrase(clean)) {
-        pauseMicCapture();
-        speak('Goodbye. Ending the call.', { onEnd: endCall });
+        endCallFromVoice();
         return;
       }
 
@@ -309,23 +334,25 @@ export function useVoiceSession(token) {
         processingRef.current = false;
         sentRef.current = false;
         micPausedRef.current = false;
-        setError('Could not send. Say done speaking or tap the button.');
+        setError('Could not send. Say end call or tap End call.');
         resumeMicAfterReply();
         return;
       }
 
       bumpReplyTimer();
     },
-    [log, endCall, speak, resumeMicAfterReply, beginCallListening, bumpReplyTimer]
+    [log, endCall, endCallFromVoice, speak, resumeMicAfterReply, beginCallListening, bumpReplyTimer]
   );
 
   const resumeMicRef = useRef(resumeMicAfterReply);
   const sendTurnRef = useRef(sendTurn);
   const connectSocketRef = useRef(null);
   const beginCallListeningRef = useRef(beginCallListening);
+  const onNavigateRef = useRef(onNavigate);
   resumeMicRef.current = resumeMicAfterReply;
   sendTurnRef.current = sendTurn;
   beginCallListeningRef.current = beginCallListening;
+  onNavigateRef.current = onNavigate;
 
   useEffect(() => {
     if (!token) return undefined;
@@ -350,8 +377,24 @@ export function useVoiceSession(token) {
           setUiState('ready');
         }
       },
+      onUiNavigate: (data) => {
+        if (!inCallRef.current) return;
+        const label = data?.label || '';
+        const path = data?.path || '';
+        if (label) setVoiceScreen(label);
+        if (path) setVoicePath(path);
+        onNavigateRef.current?.(data);
+      },
       onMessage: (data) => {
         if (!inCallRef.current) return;
+        if (data.type === 'ui_navigate') {
+          const label = data.label || '';
+          const path = data.path || '';
+          if (label) setVoiceScreen(label);
+          if (path) setVoicePath(path);
+          onNavigateRef.current?.(data);
+          return;
+        }
         if (data.type === 'status_message') {
           const statusText = data.text || 'Working on your request…';
           setStreamingReply(statusText);
@@ -501,6 +544,7 @@ export function useVoiceSession(token) {
 
   const startSpeaking = useCallback(() => {
     unlockSpeech();
+    void preloadVoices();
     void resumeAudioPlayback();
     serverTtsChunksRef.current = 0;
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
@@ -514,27 +558,48 @@ export function useVoiceSession(token) {
     micPausedRef.current = false;
     setInCall(true);
     setError('');
-    setLastReply('');
-    beginCallListening();
-  }, [beginCallListening]);
+    setLastReply(VOICE_AGENT_GREETING);
+    micPausedRef.current = true;
+    setUiState('speaking');
+    const startRoute =
+      typeof window !== 'undefined' ? voiceStartRouteForPathname(window.location.pathname) : null;
+    if (startRoute) {
+      setVoiceGuidedActive(true, startRoute.label);
+      setVoicePath(startRoute.path);
+      onNavigateRef.current?.(startRoute);
+    } else {
+      setVoiceGuidedActive(true, 'Voice shop');
+    }
 
-  /** Send current speech — call stays open. */
-  const doneSpeaking = useCallback(() => {
-    if (!inCallRef.current) return;
-    const text = recognizerRef.current?.stop() || pendingTextRef.current || interimText || '';
-    recognizerRef.current = null;
-    sendTurnRef.current(text);
-  }, [interimText]);
+    const callFlow =
+      startRoute?.screen === 'cart'
+        ? 'cart'
+        : startRoute?.screen === 'product_discovery'
+          ? 'discovery'
+          : null;
+
+    speak(VOICE_AGENT_GREETING, {
+      onEnd: () => {
+        if (!inCallRef.current) return;
+        if (callFlow) {
+          socketRef.current?.sendCallStart?.(callFlow);
+        }
+        micPausedRef.current = false;
+        beginCallListening();
+      }
+    });
+  }, [beginCallListening]);
 
   return {
     state,
     error,
+    voiceScreen,
+    voicePath,
     inCall,
     connected,
     lastReply: streamingReply || lastReply,
     interimText,
     startSpeaking,
-    endCall,
-    doneSpeaking
+    endCall
   };
 }

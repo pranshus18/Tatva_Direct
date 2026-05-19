@@ -6,6 +6,7 @@ import { AiOrchestrator } from '../core/ai_orchestrator.js';
 import { whisperService } from './whisper_service.js';
 import { piperTtsService } from './piper_tts_service.js';
 import { ragService } from './rag_service.js';
+import { sendVoiceUiNavigate } from './voice_ui_broadcast.js';
 
 const VOICE_WS_PATH = '/api/voice/ws';
 const audioBuffers = new WeakMap();
@@ -30,20 +31,37 @@ function sendStatusForUtterance(ws, userText, memory) {
   const pending = memory?.getPendingAction?.();
   const t = String(userText || '').toLowerCase();
 
+  if (
+    pending?.type === 'await_pick_product' ||
+    pending?.type === 'await_add_quantity' ||
+    pending?.type === 'await_discovery_cart_handoff'
+  ) {
+    send(ws, { type: 'status_message', text: 'Updating your product selection…' });
+    return;
+  }
+  if (pending?.type === 'await_cart_continue') {
+    send(ws, { type: 'status_message', text: 'Opening your cart…' });
+    sendVoiceUiNavigate(ws, memory);
+    return;
+  }
   if (pending?.type === 'await_select_supplier') {
     send(ws, { type: 'status_message', text: 'Loading supplier details…' });
+    sendVoiceUiNavigate(ws, memory);
     return;
   }
   if (pending?.type === 'await_substitution') {
     send(ws, { type: 'status_message', text: 'Checking substitutions…' });
+    sendVoiceUiNavigate(ws, memory);
     return;
   }
-  if (pending?.type === 'await_po_details') {
-    send(ws, { type: 'status_message', text: 'Saving order details…' });
+  if (pending?.type === 'await_po_details' || pending?.type === 'await_place_confirm') {
+    send(ws, { type: 'status_message', text: 'Opening purchase order…' });
+    sendVoiceUiNavigate(ws, memory);
     return;
   }
   if (pending?.type === 'await_transport' || /\b(transport|courier|shipping)\b/i.test(t)) {
     send(ws, { type: 'status_message', text: 'Loading transport options… this may take a minute.' });
+    sendVoiceUiNavigate(ws, memory);
     return;
   }
   if (
@@ -67,6 +85,18 @@ async function streamReply(ws, orchestrator, userText) {
 
   const reply = await orchestrator.handleTranscript(userText, { onChunk });
   const finalText = reply || fullReply;
+
+  if (/order is placed/i.test(finalText)) {
+    send(ws, {
+      type: 'ui_navigate',
+      path: '/your-orders',
+      label: 'Your orders',
+      screen: 'orders'
+    });
+  } else {
+    sendVoiceUiNavigate(ws, orchestrator.memory, { replyText: finalText });
+  }
+
   send(ws, { type: 'reply_done', text: finalText });
 
   if (piperTtsService.isEnabled() && finalText) {
@@ -142,6 +172,19 @@ export function attachVoiceWebSocket(server) {
           orchestrator = new AiOrchestrator(data.token, memory);
           send(ws, { type: 'auth_ok', sessionId });
           send(ws, { type: 'agent_state', state: 'listening' });
+          return;
+        }
+
+        if (type === 'call_start' && orchestrator) {
+          const flow = String(data.flow || '').toLowerCase();
+          if (flow === 'cart') {
+            const { beginCartCheckoutSession } = await import('./checkout_flow.js');
+            await beginCartCheckoutSession(orchestrator.toolCtx, memory);
+            sendVoiceUiNavigate(ws, memory);
+          } else if (flow === 'discovery') {
+            const { enterDiscoveryFlow } = await import('../lib/voice_flow_mode.js');
+            enterDiscoveryFlow(memory);
+          }
           return;
         }
 

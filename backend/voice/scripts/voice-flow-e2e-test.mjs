@@ -56,7 +56,9 @@ async function main() {
 
   const results = [];
   results.push(await step('search', orch, memory, 'mac air m2'));
+  results.push(await step('select product', orch, memory, 'add to cart'));
   results.push(await step('quantity', orch, memory, '2'));
+  results.push(await step('cart continue', orch, memory, 'continue'));
   results.push(await step('supplier', orch, memory, '1'));
 
   let pendingType = memory.getPendingAction()?.type;

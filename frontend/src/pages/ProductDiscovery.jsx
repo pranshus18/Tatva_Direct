@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Check, Package, Search, ShoppingCart } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import './ProductDiscovery.css';
 
 const ProductDiscovery = () => {
@@ -129,6 +130,7 @@ const ProductDiscovery = () => {
 
   return (
     <div className="product-discovery-container">
+      <VoiceGuidedBanner />
       <div className="product-discovery-header">
         <h1>Product Discovery</h1>
         <p>Browse products listed by suppliers. You can add items directly to cart without a BOQ.</p>

@@ -4,6 +4,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { API_BASE_URL, getApiUrl, resolveApiPath } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
+import { fetchVoiceCartDraft, isVoiceGuidedActive } from '../voice/voiceCartBridge';
 import './CreatePO.css';
 
 /** UPI intent for platform collection QR. Set `VITE_PLATFORM_UPI_VPA` in `.env` for testing; swap to live platform ID when ready. */
@@ -113,6 +115,8 @@ async function mergeWorkflowItemsWithSavedCart(workflowItems) {
 const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const navigate = useNavigate();
   const location = useLocation();
+  const voiceGuided = isVoiceGuidedActive();
+  const [voiceCart, setVoiceCart] = useState(null);
   const [poGroups, setPoGroups] = useState([]);
   const [confirmed, setConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -139,15 +143,33 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     [poGroups]
   );
 
+  const workflowItems = voiceCart?.items?.length ? voiceCart.items : items;
+  const workflowVendors =
+    voiceCart?.selectedVendors && Object.keys(voiceCart.selectedVendors).length
+      ? voiceCart.selectedVendors
+      : selectedVendors;
+  const workflowSubs = voiceCart?.substitutions ?? substitutions;
+
+  useEffect(() => {
+    if (!voiceGuided) return;
+    let cancelled = false;
+    fetchVoiceCartDraft().then((draft) => {
+      if (!cancelled) setVoiceCart(draft);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [voiceGuided, location.state?.voiceNavSeq]);
+
   useEffect(() => {
     // Validate that we have the required data
-    if (!items || items.length === 0) {
+    if (!workflowItems || workflowItems.length === 0) {
       setError('No items found. Please go back and upload a BOQ file.');
       setLoading(false);
       return;
     }
 
-    if (!selectedVendors || Object.keys(selectedVendors).length === 0) {
+    if (!workflowVendors || Object.keys(workflowVendors).length === 0) {
       setError('No suppliers selected. Please go back and select suppliers for your items.');
       setLoading(false);
       return;
@@ -155,7 +177,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
 
     // Group by vendor
     groupByVendor();
-  }, [selectedVendors, substitutions, items]);
+  }, [workflowVendors, workflowSubs, workflowItems]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -253,11 +275,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     const token = localStorage.getItem('token');
     
     try {
-      console.log('Grouping POs with data:', {
-        selectedVendors,
-        itemsCount: items?.length,
-        substitutionsCount: substitutions?.length
-      });
+      const vendors = workflowVendors;
+      const subs = workflowSubs;
+      const lineItems = workflowItems;
 
       const res = await fetch(getApiUrl('/api/po/group'), {
         method: 'POST',
@@ -266,9 +286,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
         body: JSON.stringify({
-          selectedVendors,
-          substitutions,
-          items: await mergeWorkflowItemsWithSavedCart(items)
+          selectedVendors: vendors,
+          substitutions: subs,
+          items: await mergeWorkflowItemsWithSavedCart(lineItems)
         })
       });
       
@@ -723,12 +743,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
 
   return (
     <div className="page">
+      <VoiceGuidedBanner />
       <div className="page-header">
         <h1>Create Purchase Orders</h1>
         <p>Review and confirm POs grouped by vendor</p>
       </div>
 
-      <div style={{ 
+      <div style={{
         marginBottom: '1.5rem', 
         padding: '1rem', 
         borderRadius: '8px', 

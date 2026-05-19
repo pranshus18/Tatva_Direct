@@ -1,0 +1,98 @@
+.voice-call-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 1rem;
+  transform: translateX(-50%);
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  max-width: min(720px, calc(100vw - 2rem));
+  padding: 0.65rem 1rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.94);
+  color: #f8fafc;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.45);
+  border: 1px solid rgba(99, 102, 241, 0.45);
+}
+
+.voice-call-bar--inline {
+  position: static;
+  transform: none;
+  max-width: none;
+  margin: 0 auto 1rem;
+  justify-content: center;
+  background: #eef2ff;
+  color: #312e81;
+  border-color: #c7d2fe;
+  box-shadow: none;
+}
+
+.voice-call-bar__orb {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.voice-call-bar__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+  font-size: 0.8rem;
+}
+
+.voice-call-bar__meta strong {
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+
+.voice-call-bar__error {
+  color: #fecaca;
+  font-size: 0.75rem;
+}
+
+.voice-call-bar__actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+
+.voice-call-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: none;
+  border-radius: 999px;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.voice-call-bar__btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.voice-call-bar__btn--primary {
+  background: #4f46e5;
+  color: #fff;
+}
+
+.voice-call-bar__btn--stop {
+  background: #dc2626;
+  color: #fff;
+}
+
+.layout--voice-active .content {
+  padding-bottom: 5.5rem;
+}

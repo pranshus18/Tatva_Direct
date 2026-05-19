@@ -5,7 +5,11 @@ import {
   parseFiniteNumber,
   resolveBcovPriceForBuyerMetrics
 } from './procurementSharedService.js';
-import { supplierLocationCandidates, uniqueLocationList } from './vendorRankingHelpersService.js';
+import {
+  resolveSupplierPincode,
+  supplierLocationCandidates,
+  uniqueLocationList
+} from './vendorRankingHelpersService.js';
 
 const NON_SPEC_ATTRIBUTE_KEYS = new Set([
   'description',
@@ -184,6 +188,11 @@ export async function buildSupplierProductsForRanking({
       supplierProfile: product?.supplier?.profile || {}
     });
     const supplierLocation = locationCandidates[0] || 'Location not specified';
+    const supplierPincode = resolveSupplierPincode({
+      productLocation: latestLocation,
+      supplierAddress,
+      supplierProfile: product?.supplier?.profile || {}
+    });
 
     if (!supplierProducts[supplierId]) {
       supplierProducts[supplierId] = {
@@ -191,6 +200,7 @@ export async function buildSupplierProductsForRanking({
         supplierName: product.supplier.name || product.supplier.company || 'Unknown Supplier',
         supplierCompany: product.supplier.company || '',
         supplierLocation,
+        supplierPincode,
         locationCandidates,
         products: [],
         bestPrice: latestPrice,
@@ -211,6 +221,9 @@ export async function buildSupplierProductsForRanking({
       ) {
         supplierProducts[supplierId].supplierLocation = mergedCandidates[0];
       }
+    }
+    if (!supplierProducts[supplierId].supplierPincode && supplierPincode) {
+      supplierProducts[supplierId].supplierPincode = supplierPincode;
     }
 
     supplierProducts[supplierId].products.push({

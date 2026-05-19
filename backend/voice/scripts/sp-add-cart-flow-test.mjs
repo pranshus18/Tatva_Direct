@@ -85,7 +85,8 @@ async function main() {
   const steps = [
     { say: 'search mac air m2', expect: /found|mac/i },
     { say: 'add to cart', expect: /how many/i },
-    { say: '2', expect: /added/i }
+    { say: '2', expect: /added|cart/i },
+    { say: 'continue', expect: /supplier/i }
   ];
 
   const results = [];

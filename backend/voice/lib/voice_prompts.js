@@ -6,15 +6,16 @@
 export const FLOW_STEPS = {
   search: { n: 1, label: 'Product search' },
   quantity: { n: 2, label: 'Quantity' },
-  suppliers: { n: 3, label: 'Supplier selection' },
-  substitution: { n: 4, label: 'Substitution' },
-  po_details: { n: 5, label: 'Purchase order details' },
-  transport: { n: 6, label: 'Transport selection' },
-  confirm_order: { n: 7, label: 'Order confirmation' },
-  done: { n: 8, label: 'Complete' }
+  cart: { n: 3, label: 'Cart' },
+  suppliers: { n: 4, label: 'Supplier selection' },
+  substitution: { n: 5, label: 'Substitution' },
+  po_details: { n: 6, label: 'Purchase order details' },
+  transport: { n: 7, label: 'Transport selection' },
+  confirm_order: { n: 8, label: 'Order confirmation' },
+  done: { n: 9, label: 'Complete' }
 };
 
-function stepPrefix(stepKey) {
+export function stepPrefix(stepKey) {
   const s = FLOW_STEPS[stepKey];
   return s ? `Step ${s.n}, ${s.label}. ` : '';
 }
@@ -25,10 +26,18 @@ export function isHelpPhrase(text) {
   );
 }
 
-export function helpForPending(pendingType, checkout = {}) {
+export function helpForPending(pendingType, checkout = {}, flowMode = 'discovery') {
+  if (!pendingType && flowMode === 'cart') {
+    return 'Cart checkout: review cart, then say continue for supplier, substitution, PO details, transport, and place the order.';
+  }
+  if (!pendingType) {
+    return 'Product discovery: search, select, quantity, cart, then supplier and the rest. Or say go to my cart to checkout items already in your cart.';
+  }
   const map = {
     await_add_quantity: `${stepPrefix('quantity')}Say how many you want — for example 2, two, or two nos.`,
-    await_pick_product: `${stepPrefix('quantity')}Say the product number from the list, then say how many.`,
+    await_pick_product: `${stepPrefix('search')}Say the product number from the list, or say add to cart for the one I found.`,
+    await_discovery_cart_handoff: `${stepPrefix('cart')}Added to your cart. Review on screen, then say continue or select supplier.`,
+    await_cart_continue: `${stepPrefix('cart')}Review your cart on screen. Say continue or select supplier when you are ready.`,
     await_select_supplier: `${stepPrefix('suppliers')}Say supplier number 1, or say the supplier name.`,
     await_substitution: `${stepPrefix('substitution')}Say no substitution to skip, or yes to accept suggestions.`,
     await_po_details: poHelp(checkout),
@@ -55,11 +64,11 @@ function poHelp(checkout) {
 // —— Search ——
 
 export function promptSearchSingle(productName) {
-  return `${stepPrefix('search')}I found ${productName}. ${stepPrefix('quantity')}How many do you want in your cart? Say a number, for example 2.`;
+  return `${stepPrefix('search')}I found ${productName}. Say add to cart, or say number 1 to select it.`;
 }
 
 export function promptSearchMultiple(lines, total) {
-  return `${stepPrefix('search')}I found ${total} products. ${lines}. ${stepPrefix('quantity')}Say the product number, then how many you need. Or say add to cart.`;
+  return `${stepPrefix('search')}I found ${total} products. ${lines}. Say the product number or name to select one.`;
 }
 
 export function promptSearchNotFound(query) {
@@ -69,7 +78,7 @@ export function promptSearchNotFound(query) {
 }
 
 export function promptSearchFuzzy(query, lines, total) {
-  return `${stepPrefix('search')}I heard "${query}". Here are the closest matches I found: ${lines}. ${stepPrefix('quantity')}Say the product number, or say the name again more clearly.`;
+  return `${stepPrefix('search')}I heard "${query}". Here are the closest matches I found: ${lines}. Say the product number or name to select one.`;
 }
 
 // —— Cart / quantity ——
@@ -79,11 +88,74 @@ export function promptAskQuantity(productName) {
 }
 
 export function promptPickProduct(choices) {
-  return `${stepPrefix('quantity')}Which product? ${choices}. Say the number first, then how many.`;
+  return `${stepPrefix('search')}Which product do you want? ${choices}. Say the number or the product name.`;
 }
 
 export function promptAddedToCart(productName) {
   return `Added ${productName} to your cart.`;
+}
+
+export function promptCartContinue() {
+  return `${stepPrefix('cart')}Your cart is on screen. Say continue or select supplier when you are ready to pick a supplier.`;
+}
+
+/** Discovery flow only — after adding a new product, before supplier step. */
+export function promptDiscoveryCartHandoff() {
+  return `${stepPrefix('cart')}Your cart is on screen. Say continue or select supplier for the next step.`;
+}
+
+export function promptCartWithItems(count, flowMode = 'discovery') {
+  const n = Math.max(0, Number(count) || 0);
+  const items = n === 1 ? '1 item' : `${n} items`;
+  if (flowMode === 'cart') {
+    return `${stepPrefix('cart')}Your cart has ${items} on screen. Say continue or select supplier for the next step.`;
+  }
+  return `${stepPrefix('cart')}Your cart has ${items} on screen. Say continue or select supplier, or search for another product.`;
+}
+
+export function promptCartCheckoutOnly() {
+  return `${stepPrefix('cart')}You are ordering from your cart. Say continue or select supplier. To add a new product, say go to product discovery.`;
+}
+
+export function promptCartEmpty() {
+  return `${stepPrefix('cart')}Your cart is empty. Say a product name to search, or say go to product discovery.`;
+}
+
+const GO_TO_LABELS = {
+  product_discovery: 'Product discovery',
+  cart: 'Cart',
+  supplier_select: 'Supplier selection',
+  substitution: 'Substitution',
+  create_po: 'Create purchase order',
+  transport: 'Transport',
+  orders: 'Your orders'
+};
+
+const GO_TO_STEP_KEY = {
+  product_discovery: 'search',
+  cart: 'cart',
+  supplier_select: 'suppliers',
+  substitution: 'substitution',
+  create_po: 'po_details',
+  transport: 'transport',
+  orders: 'done'
+};
+
+export function promptGoToScreen(screenKey) {
+  const label = GO_TO_LABELS[screenKey] || 'that page';
+  const stepKey = GO_TO_STEP_KEY[screenKey];
+  const prefix = stepKey ? stepPrefix(stepKey) : '';
+  if (screenKey === 'product_discovery') {
+    return `${prefix}You are on ${label}. Say a product name to search.`;
+  }
+  if (screenKey === 'orders') {
+    return `${prefix}Opening ${label}. You can review past orders on screen.`;
+  }
+  return `${prefix}Opening ${label}. Say what you want to do next.`;
+}
+
+export function promptResumeCheckout() {
+  return `${stepPrefix('cart')}Continuing from your cart.`;
 }
 
 // —— Suppliers ——
@@ -104,15 +176,50 @@ function isSpeakableLocation(loc) {
   return true;
 }
 
-/** Human-readable supplier location for TTS (e.g. "located in Pune, Maharashtra"). */
+function extractPincodeFromVendor(v) {
+  const direct = String(v?.pincode || v?.supplierPincode || v?.postalCode || '').replace(/\D/g, '');
+  if (/^\d{6}$/.test(direct)) return direct;
+  if (/^\d{5,6}$/.test(direct)) return direct.slice(0, 6);
+
+  const sources = [v?.location, v?.supplierLocation, v?.distanceSourceLocation];
+  for (const raw of sources) {
+    const match = String(raw || '').match(/\b(\d{6})\b/);
+    if (match) return match[1];
+  }
+  return '';
+}
+
+/** Speak pincode digit-by-digit for clearer TTS (e.g. "4 1 1 0 0 7"). */
+export function formatPincodeForSpeech(pincode) {
+  const digits = String(pincode || '').replace(/\D/g, '');
+  if (digits.length < 5) return '';
+  return digits.split('').join(' ');
+}
+
+/** Human-readable supplier location for TTS (city/state + pincode). */
 export function formatVendorLocation(v) {
+  const pincode = extractPincodeFromVendor(v);
+  const pinPhrase = pincode ? `pincode is ${formatPincodeForSpeech(pincode)}` : '';
+
   const candidates = [v?.location, v?.supplierLocation, v?.distanceSourceLocation];
   for (const raw of candidates) {
     if (!isSpeakableLocation(raw)) continue;
-    const loc = cleanLocationForSpeech(raw);
-    return `located in ${loc}`;
+    let loc = cleanLocationForSpeech(raw);
+    if (pincode) {
+      loc = loc
+        .replace(new RegExp(`\\b${pincode}\\b`, 'g'), '')
+        .replace(/,\s*,/g, ',')
+        .replace(/^,\s*|\s*,\s*$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+    const locOk = loc && !/^,|,\s*$/.test(loc) && loc.toLowerCase() !== 'india';
+    if (locOk && pinPhrase) return `located in ${loc}, ${pinPhrase}`;
+    if (locOk) return `located in ${loc}`;
+    if (pinPhrase) return pinPhrase;
   }
-  return '';
+
+  return pinPhrase;
 }
 
 export function formatVendorDetail(v, i) {
@@ -258,7 +365,7 @@ export function promptCheckoutCancelled() {
   return 'Checkout cancelled. You can search for another product.';
 }
 
-function truncate(text, max = 520) {
+function truncate(text, max = 4500) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   if (s.length <= max) return s;
   return `${s.slice(0, max - 1)}…`;

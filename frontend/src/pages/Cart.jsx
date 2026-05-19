@@ -15,6 +15,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl } from '../config/api';
 import { persistSupplierSelectScopeFromCart } from '../constants/supplierSelectSession';
+import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import './Cart.css';
 
 const Cart = ({ onLoadCart }) => {
@@ -342,6 +343,7 @@ const Cart = ({ onLoadCart }) => {
 
   return (
     <div className="page">
+      <VoiceGuidedBanner />
       <div className="page-header">
         <h1>Cart</h1>
         <p>Review items, change quantity, then use <strong>Select supplier</strong> on a row for that product only, or choose suppliers for the whole group.</p>

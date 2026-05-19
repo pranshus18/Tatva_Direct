@@ -1,4 +1,5 @@
-const CONFIRM = /\b(yes|yeah|yep|confirm|confirmed|go ahead|proceed|ok|okay|do it|place it|place order)\b/i;
+const CONFIRM =
+  /\b(yes|yeah|yep|confirm|confirmed|go ahead|proceed|ok|okay|do it|place it|place order|place the order)\b/i;
 const REJECT = /\b(no|nope|cancel that|don't|do not|stop|never mind|nevermind)\b/i;
 
 export function classifyIntent(text) {

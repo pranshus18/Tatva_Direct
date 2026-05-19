@@ -5,10 +5,21 @@ const baseDir = '/Users/abcom/Downloads/Tatva_pranshu-main/backend';
 const baseUrl = process.env.API_BASE_URL || 'http://localhost:8081';
 const skipPayments = process.env.SKIP_PAYMENTS === 'true';
 
+function routeModules(dir, apiPrefix) {
+  return fs
+    .readdirSync(path.join(baseDir, dir))
+    .filter((name) => name.endsWith('Routes.js'))
+    .map((name) => [`${dir}/${name}`, apiPrefix]);
+}
+
 const mappings = [
   ['controllers/authController.js', '/auth'],
   ['controllers/profileController.js', '/profile'],
-  ['controllers/supplierController.js', '/supplier'],
+  ...routeModules('controllers/supplier', '/supplier'),
+  ...routeModules('controllers/po', '/po'),
+  ...routeModules('controllers/dashboard', '/dashboard'),
+  ...routeModules('controllers/boq', '/boq'),
+  ['controllers/admin/productCatalogRoutes.js', '/admin'],
   ['controllers/dashboardController.js', '/dashboard'],
   ['controllers/adminController.js', '/admin'],
   ['controllers/admin/productModerationRoutes.js', '/admin'],

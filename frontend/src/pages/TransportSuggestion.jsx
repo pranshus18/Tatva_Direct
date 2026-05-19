@@ -1,6 +1,7 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { resolveApiPath } from '../config/api';
+import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 
 const formatCurrency = (value) =>
   `₹${(Number(value) || 0).toLocaleString('en-IN', {
@@ -397,6 +398,7 @@ const TransportSuggestion = () => {
 
   return (
     <div className="page">
+      <VoiceGuidedBanner />
       <div className="page-header">
         <h1>Transport suggestion</h1>
         <p>

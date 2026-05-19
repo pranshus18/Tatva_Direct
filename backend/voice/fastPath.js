@@ -1,9 +1,7 @@
 import { classifyIntent } from './intents.js';
 import { answerSupportQuestion } from './supportRetriever.js';
 import { summarizeToolResult, truncateForSpeech } from './summarizeForVoice.js';
-
-const GREETING =
-  'Hi. I can search products, manage your cart, track orders, or answer policy questions. What do you need?';
+import { VOICE_AGENT_GREETING } from './lib/humanizeReply.js';
 
 const SUPPORT_RE =
   /\b(refund|return|policy|policies|shipping|delivery time|warranty|faq|help me with|how do i|can i cancel|payment method)\b/i;
@@ -17,7 +15,7 @@ export async function tryFastPath(text, toolCtx) {
   const tools = toolCtx.tools;
 
   if (/^(hi|hello|hey|namaste|good\s+(morning|evening))\b/.test(lower)) {
-    return GREETING;
+    return VOICE_AGENT_GREETING;
   }
 
   if (SUPPORT_RE.test(t) || classifyIntent(t) === 'support') {

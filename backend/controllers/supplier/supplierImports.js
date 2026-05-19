@@ -1,0 +1,127 @@
+/** Shared static imports for supplier route modules. */
+export { default as crypto } from 'crypto';
+export { isValidPrimaryOrderStatus, toLifecycleStateFromStatus } from '../../utils/orderLifecycle.js';
+export { default as logger } from '../../utils/logger.js';
+export {
+  supplierBcovLevelsUpsertSchema,
+  supplierBcovResolvePriceSchema,
+  supplierCategoryCreateSchema,
+  supplierInventoryAdjustSchema,
+  supplierOutletCreateSchema,
+  supplierOutletDeleteSchema,
+  supplierOutletRepairGeoSchema,
+  supplierOutletUpdateSchema,
+  supplierOrderStatusPatchSchema,
+  supplierProductAiEnhanceSchema,
+  supplierProductAnalyzeImageSchema,
+  supplierProductCreateSchema,
+  supplierProductDeleteSchema,
+  supplierProductExtractSpecificationsSchema,
+  supplierProductUpdateSchema,
+  supplierUpstreamCartSaveSchema,
+  supplierReturnStatusPatchSchema,
+  supplierUnitCreateSchema,
+  supplierUpstreamOrdersSchema
+} from '../../contracts/supplierContracts.js';
+export { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
+export { recordInventoryMovement } from '../../services/inventoryService.js';
+export { applyRestockForClosedReturn } from '../../services/returnInventoryService.js';
+export { maybeNotifyInventoryBelowMov } from '../../services/lowInventoryMovAlertService.js';
+export { retrySupabaseQuery } from '../../services/db.js';
+export {
+  LISTED_SUPPLIER_PRODUCTS_OR,
+  listedSupplierProductsFilterOptions
+} from '../../utils/platformListedSupplierProductsFilter.js';
+export { searchProductDiscoveryForUser } from '../../services/productDiscoverySearchService.js';
+export { generateAndAttachReceiptPdf } from '../../services/receiptPdfService.js';
+export {
+  buildIdentityBundle,
+  buildVariantAsinLikeId,
+  normalizeVariantAttributes
+} from '../../services/productIdentityService.js';
+export {
+  validateSpecValues,
+  scoreOnboardingConfidence,
+  decideOnboardingAction
+} from '../../services/catalogOnboardingService.js';
+export {
+  haversineKm,
+  resolveGeoFromOutletAddress,
+  isValidGeoLocation,
+  geocodeAddressNominatim,
+  buildOutletAddressString,
+  getMinDrivingDistanceFromOriginsKm
+} from '../../utils/geoUtils.js';
+export { getMinimumOrderValueInrForSellerRole } from '../../utils/supplierProfile.js';
+export { fetchPendingChainRequest } from '../../services/supplierChainProfileService.js';
+export {
+  fetchClosedReturnQuantityByOrderItem,
+  getNetItemMetrics,
+  buildOrderNetRevenueMap
+} from '../../utils/netRevenue.js';
+export { normalizeBrandKey } from '../../services/supplyChainSharedService.js';
+export {
+  composeBcovNotes,
+  isCatalogGuardrailsEnabled,
+  isValidGtin,
+  normalizeBcovBrand,
+  normalizeGtin,
+  normalizeModelIdentifier,
+  normalizeText,
+  onboardingAutoApproveThreshold,
+  parseBcovNotes,
+  buildSpecificationTemplateFromFields,
+  countMeaningfulSpecValues,
+  mergeSpecificationMaps,
+  parseSpecificationsObject,
+  sanitizeSpecifications,
+  toFiniteNumber
+} from '../../services/supplierCatalogHelpersService.js';
+export { notifyAdminsForPortalAction } from '../../services/portalActivityService.js';
+export {
+  extractSpecificationPairsFromDescription,
+  extractSpecificationValuesFromDescription
+} from '../../services/supplierAiSpecExtractionService.js';
+export { ensureBrandApprovedOrRequest } from '../../services/brandApprovalService.js';
+export { insertNotification, insertNotifications } from '../../repositories/notificationsRepository.js';
+export { findAdmins, findUserBasicById } from '../../repositories/usersRepository.js';
+export { validateAndNormalizeBcovLevels } from '../../services/supplierBcovService.js';
+export {
+  parseCovThresholdNumber,
+  resolveBcovPriceForBuyerMetrics
+} from '../../services/procurementSharedService.js';
+export {
+  brandIsAllowedForSupplier,
+  entryOverlapsViewerBrands,
+  getViewerBrandTokensForRole,
+  normalizeChainNameKey,
+  normalizeBrandKeyFromAttributes,
+  parseBrandTokens
+} from '../../services/supplierBrandGuardService.js';
+export {
+  dedupeUpstreamCandidatesBySupplierPreferClosest,
+  getFirstSupplierBranchAddressText,
+  minHaversineKmBuyerOutletsToSeller,
+  rankUpstreamOffersForProduct,
+  SUPPLY_CHAIN_ROLE_LABELS,
+  UPSTREAM_RANK_PRIORITY
+} from '../../services/supplierUpstreamRankingService.js';
+export { mapSupplyChainPartner } from '../../services/supplierPartnerMapperService.js';
+export {
+  getImmediateParentRolesUnion,
+  getMySupplierRoles,
+  getViewerBrandTokensUnionForAllRoles,
+  loadAdminBrandChainsByName,
+  normalizeChainRolesFromStages,
+  PARENT_ROLE_BY_MY_ROLE,
+  pickDisplayRoleFromAllowedSet,
+  pickMatchingUpstreamRoleForSeller,
+  resolveRequiredUpstreamRoleFromAdminChain,
+  ROLE_DEPTH,
+  sellerMatchesUpstreamRoles,
+  sortRolesByChainDepthDesc,
+  SUPPLIER_ROLE_SET,
+  userHasSupplierRole
+} from '../../services/supplierChainRoutingService.js';
+export { shouldMoveToPendingForSpecChange } from '../../utils/supplierProductApproval.js';
+export { PRODUCT_IMAGES_BUCKET, uploadFile } from '../../services/storage.js';

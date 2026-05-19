@@ -4,6 +4,7 @@ import { productCatalogService } from './product_catalog_service.js';
 import { toolCallingEngine } from './tool_calling_engine.js';
 
 import { GREETING_HUMAN, THANKS_HUMAN } from '../lib/humanizeReply.js';
+import { isCartFlowMode } from '../lib/voice_flow_mode.js';
 
 /**
  * Fast path — direct backend APIs, no Gemini.
@@ -45,6 +46,10 @@ export const fastActionExecutor = {
     }
 
     if (resolvedAction === ActionType.ADD_TO_CART) {
+      return null;
+    }
+
+    if (isCartFlowMode(toolCtx.memory) && resolvedAction === ActionType.OPEN_CART) {
       return null;
     }
 

@@ -68,6 +68,8 @@ export function mapSupplierProductsToRankedVendors({
       name: supplier.supplierName,
       company: supplier.supplierCompany,
       location: displayLocation,
+      pincode: supplier.supplierPincode || null,
+      supplierPincode: supplier.supplierPincode || null,
       distanceSourceLocation,
       price: productPrice,
       basePrice: parseFloat(bestProduct?.basePrice) || productPrice,

@@ -1,0 +1,7 @@
+[
+  { "name": "groupRoutes", "start": 255, "end": 875 },
+  { "name": "createRoutes", "start": 876, "end": 1451 },
+  { "name": "transportRoutes", "start": 1452, "end": 1901 },
+  { "name": "cartRoutes", "start": 1902, "end": 2151 },
+  { "name": "orderActionRoutes", "start": 2152, "end": 2501 }
+]

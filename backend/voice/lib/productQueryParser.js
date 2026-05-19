@@ -7,6 +7,13 @@ const CATEGORY_WORDS =
 const NOT_PRODUCT =
   /\b(cart|checkout|order|track|cancel|refund|policy|address|payment|hello|thanks|bye)\b/i;
 
+/** Bare numbers / quantity words — not a product search. */
+const QUANTITY_OR_STEP_WORD =
+  /^(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|a couple|couple|pair|dozen|\d{1,4})$/i;
+
+const STEP_RESPONSE =
+  /^(yes|yeah|yep|nope|no|ok|okay|sure|cancel|stop|skip|none|first|second|third|1st|2nd|3rd)$/i;
+
 /** Pull product search terms from natural speech. */
 export function extractProductQuery(text) {
   const original = String(text || '').trim();
@@ -31,6 +38,7 @@ export function extractProductQuery(text) {
 export function isLikelyProductSearch(text) {
   const t = String(text || '').trim();
   if (!t || t.length < 1 || t.length > 100) return false;
+  if (QUANTITY_OR_STEP_WORD.test(t) || STEP_RESPONSE.test(t)) return false;
   if (/^[a-z0-9][a-z0-9.\-\s]{0,14}$/i.test(t)) return true;
   if (NOT_PRODUCT.test(t)) return false;
   if (SEARCH_VERBS.test(t) || CATEGORY_WORDS.test(t)) return true;

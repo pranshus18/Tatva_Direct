@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { syncVoiceUiScreenForPending } from './lib/voice_ui_screens.js';
+import { normalizePendingForFlow } from './lib/voice_flow_mode.js';
 
 const store = new Map();
 const TTL_MS = (Number.parseInt(String(process.env.VOICE_SESSION_TTL_SEC || '3600'), 10) || 3600) * 1000;
@@ -55,7 +57,9 @@ export class SessionMemory {
   }
 
   setPendingAction(action) {
-    this.setJson('pending_action', action || null);
+    const normalized = normalizePendingForFlow(this, action);
+    this.setJson('pending_action', normalized || null);
+    if (normalized?.type) syncVoiceUiScreenForPending(this, normalized.type);
   }
 
   getPendingAction() {

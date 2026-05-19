@@ -10,7 +10,14 @@ import { productCatalogService } from '../services/product_catalog_service.js';
 import { isLikelyProductSearch } from '../lib/productQueryParser.js';
 import { tryAddToCartFlow } from '../services/add_to_cart_flow.js';
 import { tryCheckoutFlow } from '../services/checkout_flow.js';
+import { tryVoiceNavigationFlow } from '../services/voice_navigation_flow.js';
 import { isHelpPhrase, helpForPending } from '../lib/voice_prompts.js';
+import {
+  enterDiscoveryFlow,
+  getVoiceFlowMode,
+  isCartFlowMode,
+  shouldBlockAmbientProductSearch
+} from '../lib/voice_flow_mode.js';
 import { ActionType } from './routeTypes.js';
 
 const VOICE_DEBUG = String(process.env.VOICE_DEBUG || '').toLowerCase() === 'true';
@@ -51,10 +58,12 @@ export class AiOrchestrator {
     const pending = this.memory.getPendingAction();
 
     if (isHelpPhrase(text)) {
+      const flowMode = getVoiceFlowMode(this.memory);
       const help =
         (await tryCheckoutFlow(text, this.toolCtx, this.memory)) ||
-        (await tryAddToCartFlow(text, this.toolCtx, this.memory)) ||
-        helpForPending(pending?.type, this.memory.getContext('checkout', {}));
+        (!isCartFlowMode(this.memory) &&
+          (await tryAddToCartFlow(text, this.toolCtx, this.memory))) ||
+        helpForPending(pending?.type, this.memory.getContext('checkout', {}), flowMode);
       if (help) {
         this.memory.appendCompact('user', text);
         this.memory.appendCompact('assistant', help);
@@ -62,6 +71,15 @@ export class AiOrchestrator {
         this._log('help', t0);
         return help;
       }
+    }
+
+    const navFlow = await tryVoiceNavigationFlow(text, this.toolCtx, this.memory);
+    if (navFlow) {
+      this.memory.appendCompact('user', text);
+      this.memory.appendCompact('assistant', navFlow);
+      if (onChunk) onChunk(navFlow);
+      this._log('nav', t0);
+      return navFlow;
     }
 
     const checkoutFlow = await tryCheckoutFlow(text, this.toolCtx, this.memory);
@@ -111,13 +129,18 @@ export class AiOrchestrator {
       }
     }
 
-    if (isLikelyProductSearch(text) && decision.action === ActionType.CONVERSATIONAL) {
+    if (
+      isLikelyProductSearch(text) &&
+      !shouldBlockAmbientProductSearch(this.memory, pending) &&
+      decision.action === ActionType.CONVERSATIONAL
+    ) {
       const catalog = await productCatalogService.searchFromUtterance(
         this.toolCtx.client,
         text,
         this.memory
       );
       if (catalog.ok) {
+        enterDiscoveryFlow(this.memory);
         const speech = productCatalogService.formatSearchSpeech(catalog, this.memory);
         if (onChunk) onChunk(speech);
         this.memory.appendCompact('user', text);

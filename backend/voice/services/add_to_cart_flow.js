@@ -1,12 +1,20 @@
 import { productCatalogService } from './product_catalog_service.js';
 import { toolCallingEngine } from './tool_calling_engine.js';
-import { startSupplierSelection } from './checkout_flow.js';
 import { ActionType } from '../core/routeTypes.js';
 import { truncateForSpeech } from '../summarizeForVoice.js';
+import { isLikelyProductSearch } from '../lib/productQueryParser.js';
+import {
+  enterDiscoveryFlow,
+  canRunDiscoveryAddFlow,
+  getVoiceFlowMode,
+  isCartFlowMode
+} from '../lib/voice_flow_mode.js';
+import { parseGoToScreenIntent } from './voice_navigation_phrases.js';
 import {
   parseQuantity,
   parseSelectionIndex,
-  isExplicitCancel
+  isExplicitCancel,
+  isQuantityOnlyUtterance
 } from '../lib/spokenNumbers.js';
 import {
   isHelpPhrase,
@@ -14,11 +22,36 @@ import {
   promptAskQuantity,
   promptPickProduct,
   promptAddedToCart,
+  promptDiscoveryCartHandoff,
   promptCheckoutCancelled
 } from '../lib/voice_prompts.js';
 
 const ADD_INTENT_RE =
   /\b(add|put)\s+(?:it|that|this|them)?\s*(?:to|in|into)\s+(?:the\s+)?cart\b|\badd\s+to\s+(?:the\s+)?cart\b|\bput\s+(?:it\s+)?in\s+(?:the\s+)?cart\b/i;
+
+const SEARCH_RESTART_RE = /\b(search|find|look(?:ing)?\s+for|show\s+me)\b/i;
+
+async function runSearchFromUtterance(toolCtx, memory, utterance) {
+  const catalog = await productCatalogService.searchFromUtterance(
+    toolCtx.client,
+    utterance,
+    memory
+  );
+  if (!catalog.ok) {
+    return catalog.error === 'Request timed out'
+      ? 'Search timed out. Try a shorter product name.'
+      : 'I could not search right now. Please try again.';
+  }
+  return productCatalogService.formatSearchSpeech(catalog, memory);
+}
+
+function shouldRestartProductSearch(utterance) {
+  const t = String(utterance || '').trim();
+  if (!t || isAddToCartIntent(t) || isHelpPhrase(t)) return false;
+  if (isQuantityOnlyUtterance(t)) return false;
+  if (/^(yes|no|ok|okay|cancel|stop|skip|none)$/i.test(t)) return false;
+  return SEARCH_RESTART_RE.test(t) || isLikelyProductSearch(t);
+}
 
 export function isAddToCartIntent(text) {
   const t = String(text || '');
@@ -56,9 +89,14 @@ async function executeAdd(toolCtx, product, quantity) {
   );
   if (!result?.ok) return result?.speech || `Could not add ${p.name} to cart.`;
 
+  enterDiscoveryFlow(toolCtx.memory);
   const addedMsg = promptAddedToCart(p.name);
-  const supplierStep = await startSupplierSelection(toolCtx, toolCtx.memory);
-  return `${addedMsg} ${supplierStep}`;
+  toolCtx.memory.setPendingAction({
+    type: 'await_discovery_cart_handoff',
+    summary: 'discovery cart handoff before supplier',
+    payload: { productName: p.name }
+  });
+  return `${addedMsg} ${promptDiscoveryCartHandoff()}`;
 }
 
 /**
@@ -68,8 +106,20 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
   const utterance = String(text || '').trim();
   const pending = memory.getPendingAction();
 
+  if (!canRunDiscoveryAddFlow(memory)) {
+    if (parseGoToScreenIntent(utterance) === 'product_discovery') {
+      enterDiscoveryFlow(memory);
+      return null;
+    }
+    return null;
+  }
+
+  if (isCartFlowMode(memory)) {
+    return null;
+  }
+
   if (isHelpPhrase(utterance) && pending) {
-    return helpForPending(pending.type, memory.getContext('checkout', {}));
+    return helpForPending(pending.type, memory.getContext('checkout', {}), getVoiceFlowMode(memory));
   }
 
   if (
@@ -85,6 +135,11 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
     const lower = utterance.toLowerCase();
     if (/^(yes|yeah|yep|sure|ok|okay|add it|please add)\b/i.test(lower)) {
       return promptAskQuantity(pending.payload.name);
+    }
+
+    if (shouldRestartProductSearch(utterance)) {
+      memory.setPendingAction(null);
+      return runSearchFromUtterance(toolCtx, memory, utterance);
     }
 
     const qty = parseQuantity(utterance);
@@ -111,20 +166,33 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
       }
     }
 
+    if (idx == null && isAddToCartIntent(utterance) && products.length === 1) {
+      idx = 0;
+    }
+
+    if (idx == null && products.length === 1) {
+      const lower = utterance.toLowerCase();
+      if (/^(yes|yeah|yep|sure|ok|okay|that one|this one|select|confirm)\b/i.test(lower)) {
+        idx = 0;
+      }
+    }
+
+    if (idx == null && products.length === 1 && isQuantityOnlyUtterance(utterance)) {
+      const qty = parseQuantity(utterance);
+      memory.setPendingAction(null);
+      return executeAdd(toolCtx, products[0], qty);
+    }
+
+    if (idx == null && shouldRestartProductSearch(utterance)) {
+      memory.setPendingAction(null);
+      return runSearchFromUtterance(toolCtx, memory, utterance);
+    }
+
     if (idx == null) {
       return promptPickProduct(formatProductChoices(products));
     }
 
     const product = products[idx];
-    const explicitQty = /\b(\d+)\s*(?:units?|pieces?|items?|of them)\b/i.test(utterance);
-    if (explicitQty) {
-      const qty = parseQuantity(utterance);
-      if (qty != null) {
-        memory.setPendingAction(null);
-        return executeAdd(toolCtx, product, qty);
-      }
-    }
-
     memory.setPendingAction({
       type: 'await_add_quantity',
       summary: `add ${product.name}`,
@@ -136,7 +204,7 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
   if (!isAddToCartIntent(utterance)) return null;
 
   if (isHelpPhrase(utterance)) {
-    return 'Step 1, search. Step 2, quantity. Then supplier, substitution, PO details, transport, and confirm order — all in this call.';
+    return 'Step 1, search. Step 2, quantity. Step 3, cart. Then supplier, substitution, PO details, transport, and confirm order — all in this call.';
   }
 
   const last = memory.getContext('last_search');
@@ -168,15 +236,12 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
       memory.setPendingAction(null);
       return executeAdd(toolCtx, p, qtyInPhrase);
     }
-    if (pending?.type === 'await_add_quantity') {
-      return promptAskQuantity(pending.payload.name);
-    }
     memory.setPendingAction({
-      type: 'await_add_quantity',
-      summary: `add ${p.name}`,
-      payload: { id: p.id, name: p.name }
+      type: 'await_pick_product',
+      summary: 'pick a product to add',
+      payload: { products: [p] }
     });
-    return promptAskQuantity(p.name);
+    return promptPickProduct(`1. ${p.name}`);
   }
 
   memory.setPendingAction({

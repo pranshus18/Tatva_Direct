@@ -21,7 +21,8 @@ export function humanizeSupportReply(text) {
 export const SUPPORT_FALLBACK_HUMAN =
   "I'm not sure about that — I don't have it in our policies. Check your orders page or contact support and they'll help you out.";
 
-export const GREETING_HUMAN =
-  "Hey! I can help you find products, manage your cart, track orders, or answer questions about returns, shipping, and payments. What do you need?";
+export const VOICE_AGENT_GREETING = 'Hey, this is Pranshu, your AI assistant.';
+
+export const GREETING_HUMAN = VOICE_AGENT_GREETING;
 
 export const THANKS_HUMAN = "You're welcome! Anything else I can help with?";

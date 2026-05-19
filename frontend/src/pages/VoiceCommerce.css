@@ -3,69 +3,31 @@
   margin: 0 auto;
   padding: 2rem 1.25rem 3rem;
   text-align: center;
+  background: #000;
+  min-height: calc(100vh - 4rem);
+  border-radius: 12px;
 }
 
 .voice-page__header h1 {
   font-size: 1.75rem;
   margin: 0 0 0.5rem;
-  color: #0f172a;
+  color: #f8fafc;
 }
 
-.voice-page__header p {
-  margin: 0;
-  color: #64748b;
-  font-size: 0.95rem;
+.voice-page__orb {
+  margin: 1.5rem auto 0.5rem;
 }
 
-.voice-orb {
-  margin: 2rem auto;
-  width: min(240px, 72vw);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.75rem;
-  transition: transform 0.2s ease, filter 0.2s ease;
-}
-
-.voice-orb__img {
-  width: 100%;
-  height: auto;
-  display: block;
-  border-radius: 50%;
-  object-fit: cover;
-  aspect-ratio: 1;
-  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.35);
-}
-
-.voice-orb--listening .voice-orb__img,
-.voice-orb--in-call .voice-orb__img {
-  animation: voice-pulse 1.5s ease-in-out infinite;
-}
-
-.voice-orb--thinking .voice-orb__img,
-.voice-orb--speaking .voice-orb__img {
-  animation: voice-pulse 1s ease-in-out infinite;
-  filter: brightness(1.08);
-}
-
-.voice-orb__label {
-  font-size: 0.8rem;
-  font-weight: 600;
-  max-width: 280px;
-  line-height: 1.35;
-  color: #334155;
-}
-
-@keyframes voice-pulse {
-  0%,
-  100% {
-    transform: scale(1);
-    box-shadow: 0 12px 40px rgba(15, 23, 42, 0.35);
-  }
-  50% {
-    transform: scale(1.04);
-    box-shadow: 0 16px 48px rgba(79, 70, 229, 0.35);
-  }
+.voice-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .voice-controls {
@@ -104,7 +66,7 @@
 }
 
 .voice-error {
-  color: #b91c1c;
+  color: #fca5a5;
   margin-top: 1rem;
   font-size: 0.9rem;
 }

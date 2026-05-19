@@ -1,6 +1,9 @@
-/** Keep spoken replies short for low latency. */
+/** Max chars sent to the client for TTS (full checkout prompts, suppliers, etc.). */
+export const VOICE_SPEECH_MAX_LEN =
+  Number.parseInt(String(process.env.VOICE_SPEECH_MAX_LEN || '4500'), 10) || 4500;
 
-export function truncateForSpeech(text, maxLen = 320) {
+/** Trim only when extremely long; default allows full spoken checkout flows. */
+export function truncateForSpeech(text, maxLen = VOICE_SPEECH_MAX_LEN) {
   const s = String(text || '').replace(/\s+/g, ' ').trim();
   if (s.length <= maxLen) return s;
   const cut = s.slice(0, maxLen);

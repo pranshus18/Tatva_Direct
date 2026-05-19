@@ -30,6 +30,20 @@ cd frontend && npm run dev
 
 Backend must be running on port **8081** (`node server.js` or `npm run dev` in `backend/`).
 
+## Natural voice (browser TTS)
+
+On **Start speaking**, the app picks the best local voice (e.g. Google / Samantha / Rishi on en-IN), speaks slightly slower, and pauses between sentences.
+
+Optional `frontend/.env`:
+
+```env
+VITE_VOICE_SPEECH_RATE=0.94
+VITE_VOICE_SPEECH_PITCH=1
+VITE_VOICE_CHUNK_PAUSE_MS=320
+```
+
+Use **Chrome or Edge** on desktop for the widest voice list.
+
 ## Vite `ECONNRESET` on ws proxy
 
 If you see `ws proxy socket error: ECONNRESET`, the dev client connects **directly** to

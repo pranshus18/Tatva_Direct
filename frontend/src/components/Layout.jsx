@@ -9,6 +9,8 @@ import {
   resolveServiceProviderThemeBackground
 } from '../utils/serviceProviderTheme';
 import './Layout.css';
+import { VoiceSessionProvider } from '../voice/VoiceSessionContext.jsx';
+import { getVoiceGuidedPath, isVoiceGuidedActive } from '../voice/voiceCartBridge';
 
 const routePrefetchers = {
   '/dashboard': () => import('../pages/ServiceProviderDashboard'),
@@ -53,6 +55,7 @@ const prefetchedRoutes = new Set();
 const idleHandleFallback = { id: null };
 const Layout = ({ user, onLogout, children }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const [voiceNavTick, setVoiceNavTick] = useState(0);
   const [serviceProviderThemePrefs, setServiceProviderThemePrefs] = useState(() => ({
     themeId: 'default',
     customImageDataUrl: ''
@@ -271,6 +274,12 @@ const Layout = ({ user, onLogout, children }) => {
     };
   }, []);
 
+  useEffect(() => {
+    const onVoiceNav = () => setVoiceNavTick((n) => n + 1);
+    window.addEventListener('voice-guided-updated', onVoiceNav);
+    return () => window.removeEventListener('voice-guided-updated', onVoiceNav);
+  }, []);
+
   const layoutThemeClass =
     userType === 'service_provider'
       ? 'layout--service-provider-theme'
@@ -280,15 +289,25 @@ const Layout = ({ user, onLogout, children }) => {
       ? { backgroundImage: resolveServiceProviderThemeBackground(serviceProviderThemePrefs) }
       : undefined;
 
-  return (
-    <div className={`layout ${layoutThemeClass}`.trim()} style={layoutStyle}>
+  const layoutToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const layoutBody = (
+    <div
+      className={`layout ${layoutThemeClass}${isVoiceGuidedActive() ? ' layout--voice-guided' : ''}`.trim()}
+      style={layoutStyle}
+    >
       <nav className="sidebar">
         <div className="logo">
           <img src={tatvaLogo} alt="Tatva Direct" className="logo-image" />
         </div>
         <div className="nav-steps">
           {steps.map(({ path, label, icon: Icon }) => {
-            const isActive = location.pathname === path;
+            void voiceNavTick;
+            const guidedPath = isVoiceGuidedActive() ? getVoiceGuidedPath() : '';
+            const guidedBase = guidedPath ? guidedPath.split('?')[0] : '';
+            const isActive =
+              guidedBase && location.pathname === guidedBase
+                ? path === guidedBase
+                : location.pathname === path;
             
             return (
               <div
@@ -362,6 +381,12 @@ const Layout = ({ user, onLogout, children }) => {
       </main>
     </div>
   );
+
+  if (userType === 'service_provider' && layoutToken) {
+    return <VoiceSessionProvider token={layoutToken}>{layoutBody}</VoiceSessionProvider>;
+  }
+
+  return layoutBody;
 };
 
 export default Layout;

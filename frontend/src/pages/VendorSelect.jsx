@@ -13,6 +13,8 @@ import {
   getVendorRankCache,
   setVendorRankCache
 } from '../utils/vendorRankCache';
+import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
+import { isVoiceGuidedActive, prepareSupplierSelectFromVoiceCart } from '../voice/voiceCartBridge';
 import './VendorSelect.css';
 
 const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete }) => {
@@ -75,6 +77,34 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       setBoqMeta(proj);
     }
   }, [location.pathname, location.search, location.state]);
+
+  useEffect(() => {
+    const voiceQuery = (() => {
+      try {
+        return new URLSearchParams(location.search || '').get('voice') === '1';
+      } catch {
+        return false;
+      }
+    })();
+    if (!voiceQuery && !isVoiceGuidedActive()) return;
+    if (effectiveItems.length > 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const items = await prepareSupplierSelectFromVoiceCart();
+      if (!cancelled && items.length) {
+        lockedLineIdsRef.current = new Set(
+          items.map((it) => String(it?.id ?? '').trim()).filter(Boolean)
+        );
+        setEffectiveItems(items);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.search, effectiveItems.length]);
+
   const normalizeIdPart = (value) => (value === null || value === undefined ? '' : String(value).trim());
   const firstNonEmpty = (...values) => {
     for (const value of values) {
@@ -472,6 +502,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
   return (
     <div className="page">
+      <VoiceGuidedBanner />
       <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
           <h1>Supplier Selection</h1>

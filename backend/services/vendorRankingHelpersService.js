@@ -117,3 +117,25 @@ export const supplierLocationCandidates = ({ productLocation, supplierAddress, s
 
   return uniqueLocationList(candidates);
 };
+
+export const extractPostalCode = (obj = {}) =>
+  firstNonEmpty(obj?.pincode, obj?.zipCode, obj?.postal_code, obj?.zip, obj?.zip_code);
+
+/** Best-effort supplier pincode for voice / display (address, branch, or location text). */
+export const resolveSupplierPincode = ({ productLocation, supplierAddress, supplierProfile } = {}) => {
+  const fromAddress = extractPostalCode(supplierAddress);
+  if (fromAddress) return String(fromAddress).replace(/\D/g, '').slice(0, 6);
+
+  const locMatch = String(productLocation || '').match(/\b(\d{6})\b/);
+  if (locMatch) return locMatch[1];
+
+  const branches = Array.isArray(supplierProfile?.branches) ? supplierProfile.branches : [];
+  for (const branch of branches) {
+    const fromBranch = extractPostalCode(branch);
+    if (fromBranch) return String(fromBranch).replace(/\D/g, '').slice(0, 6);
+    const branchMatch = String(branch?.location || branch?.address || '').match(/\b(\d{6})\b/);
+    if (branchMatch) return branchMatch[1];
+  }
+
+  return '';
+};

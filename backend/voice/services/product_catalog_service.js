@@ -7,6 +7,7 @@ import {
   promptSearchNotFound,
   promptSearchFuzzy
 } from '../lib/voice_prompts.js';
+import { enterDiscoveryFlow } from '../lib/voice_flow_mode.js';
 
 const SEARCH_PATH = '/api/supplier/products/search';
 const LOOKUP_PATH = '/api/supplier/products/lookup';
@@ -147,19 +148,10 @@ export const productCatalogService = {
   prepareAddToCartFollowUp(memory, parsed) {
     if (!memory || !parsed?.products?.length) return;
 
-    if (parsed.products.length === 1) {
-      const p = parsed.products[0];
-      memory.setPendingAction({
-        type: 'await_add_quantity',
-        summary: `add ${p.name}`,
-        payload: { id: p.id, name: p.name }
-      });
-      return;
-    }
-
+    enterDiscoveryFlow(memory);
     memory.setPendingAction({
       type: 'await_pick_product',
-      summary: 'add from search',
+      summary: 'pick a product from search',
       payload: { products: parsed.products }
     });
   },
