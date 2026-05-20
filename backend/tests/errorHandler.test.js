@@ -49,3 +49,28 @@ test('globalErrorHandler returns Zod validation message', () => {
   assert.equal(res.statusCode, 400);
   assert.equal(res.body.message, 'Invalid email');
 });
+
+test('globalErrorHandler maps ETIMEDOUT to 504 with requestId', () => {
+  const res = mockRes();
+  const err = new Error('upstream slow');
+  err.code = 'ETIMEDOUT';
+
+  globalErrorHandler(err, { requestId: 'req-504' }, res, () => {});
+
+  assert.equal(res.statusCode, 504);
+  assert.equal(res.body.requestId, 'req-504');
+});
+
+test('globalErrorHandler attaches requestId on generic 500 in production', () => {
+  const prev = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  const res = mockRes();
+  const err = new Error('secret detail');
+
+  globalErrorHandler(err, { requestId: 'req-500' }, res, () => {});
+  process.env.NODE_ENV = prev;
+
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.body.message, 'Internal server error');
+  assert.equal(res.body.requestId, 'req-500');
+});

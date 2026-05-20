@@ -13,8 +13,7 @@ import {
   fetchRazorpayPayment,
   getRazorpayPublicConfig,
   isRazorpayConfigured,
-  verifyRazorpayPaymentSignature,
-  verifyRazorpayWebhookSignature
+  verifyRazorpayPaymentSignature
 } from '../services/razorpayService.js';
 import {
   bankTransferMarkSchema,
@@ -27,28 +26,10 @@ import {
   riskSignalReviewSchema
 } from '../contracts/paymentContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
+import { upsertPaymentTransaction } from '../services/paymentTransactionService.js';
+import { normalizePaymentMethodForOrder, httpStatusForUpstreamError } from '../utils/paymentNormalize.js';
 
 const router = express.Router();
-const webhookRouter = express.Router();
-
-async function upsertPaymentTransaction(txn) {
-  const { data, error } = await supabase
-    .from('payment_transactions')
-    .upsert(txn, { onConflict: 'provider,provider_payment_id' })
-    .select('*')
-    .single();
-  if (error) throw error;
-  return data;
-}
-
-function normalizePaymentMethodForOrder(method) {
-  const normalized = String(method || '').toLowerCase();
-  if (!normalized) return 'online';
-  if (['upi', 'card', 'netbanking', 'bank_transfer', 'cash', 'credit', 'online', 'cheque'].includes(normalized)) {
-    return normalized === 'netbanking' ? 'online' : normalized;
-  }
-  return 'online';
-}
 
 router.post('/orders/:id/razorpay/create', authenticateToken, async (req, res) => {
   try {
@@ -149,7 +130,16 @@ router.post('/orders/:id/razorpay/create', authenticateToken, async (req, res) =
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
-    return res.status(500).json({ status: 'error', message: e.message || 'Failed to create payment intent' });
+    const status = httpStatusForUpstreamError(e);
+    const message =
+      status === 504
+        ? 'Payment provider timed out. Please try again.'
+        : e.message || 'Failed to create payment intent';
+    return res.status(status).json({
+      status: 'error',
+      message,
+      ...(req.requestId ? { requestId: req.requestId } : {})
+    });
   }
 });
 
@@ -318,7 +308,16 @@ router.post('/orders/:id/razorpay/confirm', authenticateToken, async (req, res) 
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
-    return res.status(500).json({ status: 'error', message: e.message || 'Failed to confirm payment' });
+    const status = httpStatusForUpstreamError(e);
+    const message =
+      status === 504
+        ? 'Payment provider timed out. Please try again.'
+        : e.message || 'Failed to confirm payment';
+    return res.status(status).json({
+      status: 'error',
+      message,
+      ...(req.requestId ? { requestId: req.requestId } : {})
+    });
   }
 });
 
@@ -738,107 +737,4 @@ router.get('/metrics', authenticateToken, requireFinanceRole, async (_req, res) 
   }
 });
 
-webhookRouter.post('/razorpay', async (req, res) => {
-  try {
-    const signature = req.headers['x-razorpay-signature'];
-    const rawBody = req.body instanceof Buffer ? req.body.toString('utf8') : JSON.stringify(req.body || {});
-    const isValid = verifyRazorpayWebhookSignature({ rawBody, signature });
-    const payload = req.body instanceof Buffer ? JSON.parse(rawBody || '{}') : req.body || {};
-    const eventType = payload?.event || 'unknown';
-    const providerEventId = payload?.payload?.payment?.entity?.id || payload?.payload?.order?.entity?.id || null;
-
-    const { data: loggedEvent, error: logError } = await supabase
-      .from('payment_webhook_events')
-      .insert({
-        provider: 'razorpay',
-        event_type: eventType,
-        provider_event_id: providerEventId,
-        signature: signature || null,
-        payload,
-        processing_status: isValid ? 'received' : 'failed',
-        processing_error: isValid ? null : 'Invalid webhook signature'
-      })
-      .select('*')
-      .maybeSingle();
-
-    if (logError && logError.code === '23505') {
-      return res.json({ status: 'ok', deduplicated: true });
-    }
-    if (logError) throw logError;
-
-    if (!isValid) {
-      return res.status(400).json({ status: 'error', message: 'Invalid webhook signature' });
-    }
-
-    const paymentEntity = payload?.payload?.payment?.entity || null;
-    if (paymentEntity?.order_id && paymentEntity?.id) {
-      const { data: order } = await supabase
-        .from('orders')
-        .select('*')
-        .eq('payment_provider_order_id', paymentEntity.order_id)
-        .maybeSingle();
-      if (order) {
-        await upsertPaymentTransaction({
-          order_id: order.id,
-          service_provider_id: order.service_provider_id,
-          supplier_id: order.supplier_id,
-          provider: 'razorpay',
-          method: paymentEntity.method || 'upi',
-          transaction_type: 'payment',
-          amount: (Number(paymentEntity.amount || 0) / 100).toFixed(2),
-          provider_order_id: paymentEntity.order_id,
-          provider_payment_id: paymentEntity.id,
-          status: paymentEntity.status === 'captured' ? 'captured' : 'authorized',
-          metadata: { webhook: true, payload: paymentEntity }
-        });
-
-        if (paymentEntity.status === 'captured') {
-          const wasAlreadyPaid = String(order.payment_status || '').toLowerCase() === 'paid';
-          const { data: updatedOrder } = await supabase
-            .from('orders')
-            .update({
-              payment_status: 'paid',
-              payment_method: normalizePaymentMethodForOrder(paymentEntity.method || 'online'),
-              payment_provider: 'razorpay',
-              payment_provider_payment_id: paymentEntity.id,
-              payment_verified_at: new Date().toISOString()
-            })
-            .eq('id', order.id)
-            .select('*')
-            .single();
-          if (!wasAlreadyPaid && updatedOrder) {
-            await createReceiptAndDeliver({
-              order: updatedOrder,
-              paymentMethod: normalizePaymentMethodForOrder(paymentEntity.method || 'online'),
-              paymentReference: paymentEntity.id,
-              actorUserId: null
-            });
-            try {
-              const { invoice } = await createInvoiceForOrder(updatedOrder);
-              const { pdfUrl, pdfPath } = await generateAndUploadInvoicePdf({ order: updatedOrder, invoice });
-              if (pdfUrl) {
-                await saveInvoicePdfUrlToInvoice({ orderId: updatedOrder.id, pdfUrl, pdfPath });
-              }
-            } catch (invoicePdfErr) {
-              console.error('[Payments] Invoice PDF after Razorpay webhook:', invoicePdfErr);
-            }
-          }
-        }
-      }
-    }
-
-    if (loggedEvent?.id) {
-      await supabase
-        .from('payment_webhook_events')
-        .update({ processing_status: 'processed', processed_at: new Date().toISOString() })
-        .eq('id', loggedEvent.id);
-    }
-
-    return res.json({ status: 'ok' });
-  } catch (e) {
-    console.error('[Payments] Razorpay webhook processing failed:', e);
-    return res.status(500).json({ status: 'error', message: 'Webhook processing failed' });
-  }
-});
-
-export { router as paymentsRouter, webhookRouter as paymentsWebhookRouter };
+export { router as paymentsRouter };

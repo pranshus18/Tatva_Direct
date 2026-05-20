@@ -1,5 +1,13 @@
 import jwt from 'jsonwebtoken';
 import { supabase } from '../config/supabase.js';
+import { shouldUpdateLastLogin } from '../utils/lastLoginThrottle.js';
+
+const LAST_LOGIN_UPDATE_INTERVAL_MS =
+  Number.parseInt(String(process.env.LAST_LOGIN_UPDATE_INTERVAL_MS || '600000'), 10) || 600000;
+
+function normalizeUserType(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
 
 export const requireAuthentication = async (req, res, next) => {
   try {
@@ -41,10 +49,13 @@ export const requireAuthentication = async (req, res, next) => {
       }
     }
 
-    await supabase
-      .from('users')
-      .update({ last_login: new Date().toISOString() })
-      .eq('id', currentUser.id);
+    if (shouldUpdateLastLogin(currentUser.last_login, LAST_LOGIN_UPDATE_INTERVAL_MS)) {
+      await supabase
+        .from('users')
+        .update({ last_login: new Date().toISOString() })
+        .eq('id', currentUser.id);
+      currentUser.last_login = new Date().toISOString();
+    }
 
     req.user = currentUser;
     req.userId = currentUser.id;
@@ -72,6 +83,16 @@ export const requireAuthentication = async (req, res, next) => {
 
 export const requireServiceProvider = async (req, res, next) => {
   try {
+    if (req.user?.user_type !== undefined) {
+      if (normalizeUserType(req.user.user_type) === 'service_provider') {
+        return next();
+      }
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. This feature is only available for service providers.'
+      });
+    }
+
     const { data: user, error } = await supabase
       .from('users')
       .select('user_type')
@@ -85,7 +106,7 @@ export const requireServiceProvider = async (req, res, next) => {
       });
     }
 
-    const normalizedUserType = String(user.user_type || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const normalizedUserType = normalizeUserType(user.user_type);
     if (normalizedUserType === 'service_provider') {
       next();
     } else {
@@ -104,6 +125,16 @@ export const requireServiceProvider = async (req, res, next) => {
 
 export const requireAdminRole = async (req, res, next) => {
   try {
+    if (req.user?.user_type !== undefined) {
+      if (req.user.user_type === 'admin') {
+        return next();
+      }
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. Admin access required.'
+      });
+    }
+
     const { data: user, error } = await supabase
       .from('users')
       .select('user_type')

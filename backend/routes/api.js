@@ -19,10 +19,11 @@ import { distanceDebug, getEnvDebug, getHealth, getHealthReady, getRuntimeDebug 
 import { cartShareRouter } from '../controllers/cartShareController.js';
 import { logisticsRouter } from '../controllers/logisticsController.js';
 import { voiceRouter } from './voice.js';
+import { authRateLimiter } from '../middleware/rateLimits.js';
 
 const apiRouter = express.Router();
 
-apiRouter.use('/auth', authRouter);
+apiRouter.use('/auth', authRateLimiter, authRouter);
 apiRouter.use('/profile', profileRouter);
 apiRouter.use('/supplier', supplierRouter);
 apiRouter.use('/dashboard', dashboardRouter);

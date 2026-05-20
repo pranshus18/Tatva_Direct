@@ -116,7 +116,19 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const voiceGuided = isVoiceGuidedActive();
-  const [voiceCart, setVoiceCart] = useState(null);
+  /** Voice navigation passes a draft snapshot; use it on first paint so we do not flash "upload BOQ" before /api/po/cart returns. */
+  const navVoiceCart =
+    location.state?.voiceCart && typeof location.state.voiceCart === 'object'
+      ? location.state.voiceCart
+      : null;
+  const [voiceCart, setVoiceCart] = useState(navVoiceCart);
+  /** False until we know persisted cart + navigation snapshot have been applied (avoids BOQ-only errors for cart / voice checkout). */
+  const [cartContextReady, setCartContextReady] = useState(() => {
+    const hasPropItems = Array.isArray(items) && items.length > 0;
+    const navHasItems =
+      navVoiceCart && Array.isArray(navVoiceCart.items) && navVoiceCart.items.length > 0;
+    return hasPropItems || navHasItems;
+  });
   const [poGroups, setPoGroups] = useState([]);
   const [confirmed, setConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -150,21 +162,45 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       : selectedVendors;
   const workflowSubs = voiceCart?.substitutions ?? substitutions;
 
+  // Load server PO cart for voice flow, discovery/cart checkout (no BOQ rows in App state), and to refresh after voice navigation.
   useEffect(() => {
-    if (!voiceGuided) return;
     let cancelled = false;
-    fetchVoiceCartDraft().then((draft) => {
-      if (!cancelled) setVoiceCart(draft);
-    });
+    const hasPropItems = Array.isArray(items) && items.length > 0;
+    if (hasPropItems && !voiceGuided) {
+      setCartContextReady(true);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    (async () => {
+      const draft = await fetchVoiceCartDraft();
+      if (cancelled) return;
+      setVoiceCart((prev) => {
+        if (Array.isArray(draft?.items) && draft.items.length > 0) return draft;
+        if (prev && Array.isArray(prev.items) && prev.items.length > 0) return prev;
+        return draft;
+      });
+      setCartContextReady(true);
+    })();
+
     return () => {
       cancelled = true;
     };
-  }, [voiceGuided, location.state?.voiceNavSeq]);
+  }, [items, voiceGuided, location.state?.voiceNavSeq]);
 
   useEffect(() => {
+    if (!cartContextReady) {
+      setLoading(true);
+      setError(null);
+      return;
+    }
+
     // Validate that we have the required data
     if (!workflowItems || workflowItems.length === 0) {
-      setError('No items found. Please go back and upload a BOQ file.');
+      setError(
+        'No line items in this checkout. Add products from Product Discovery or your cart, or upload a BOQ file to continue.'
+      );
       setLoading(false);
       return;
     }
@@ -177,7 +213,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
 
     // Group by vendor
     groupByVendor();
-  }, [workflowVendors, workflowSubs, workflowItems]);
+  }, [cartContextReady, workflowVendors, workflowSubs, workflowItems]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -702,11 +738,19 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       <div className="page">
         <div className="page-header">
           <h1>Create Purchase Orders</h1>
-          <p>Grouping items by vendor...</p>
+          <p>
+            {cartContextReady
+              ? 'Grouping items by vendor…'
+              : 'Loading your cart and checkout…'}
+          </p>
         </div>
         <div style={{ textAlign: 'center', padding: '3rem' }}>
           <div className="spinner" style={{ margin: '0 auto' }} />
-          <p>Please wait while we group your purchase orders...</p>
+          <p>
+            {cartContextReady
+              ? 'Please wait while we group your purchase orders…'
+              : 'Syncing your saved cart (voice or discovery) before creating purchase orders…'}
+          </p>
         </div>
       </div>
     );

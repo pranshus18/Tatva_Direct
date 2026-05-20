@@ -43,4 +43,7 @@ The product management system includes an AI Fetch feature that generates produc
   - `GEMINI_API_KEY` - For Google Gemini
   - `ANTHROPIC_API_KEY` - For Claude
 
-See `DEPLOYMENT.md` for detailed configuration instructions.
+## Configuration and production
+
+- **AI API keys** — Configure at least one of `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `ANTHROPIC_API_KEY` in `.env` (see list above).
+- **[Production readiness checklist](docs/PRODUCTION_READINESS.md)** — rate limits, auth load, Razorpay timeouts, request IDs in errors, and how to scale safely.

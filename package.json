@@ -2,7 +2,10 @@
   "name": "ai-procurement-optimizer",
   "version": "1.0.0",
   "private": true,
-  "workspaces": ["frontend", "backend"],
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
   "scripts": {
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:frontend": "cd frontend && npm run dev",
@@ -18,5 +21,10 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.2"
+  },
+  "overrides": {
+    "axios": "^1.16.1",
+    "follow-redirects": "^1.16.0",
+    "path-to-regexp": "0.1.13"
   }
 }

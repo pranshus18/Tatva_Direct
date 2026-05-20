@@ -38,10 +38,23 @@ function routesFromRouterStack(stack) {
   return out;
 }
 
+function collectJsFiles(dir) {
+  const out = [];
+  for (const name of fs.readdirSync(dir)) {
+    const full = path.join(dir, name);
+    const stat = fs.statSync(full);
+    if (stat.isDirectory()) {
+      out.push(...collectJsFiles(full));
+    } else if (name.endsWith('.js')) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
 const expectedFromModules = [];
-for (const name of fs.readdirSync(supplierDir)) {
-  if (!name.endsWith('Routes.js')) continue;
-  expectedFromModules.push(...routesFromFile(path.join(supplierDir, name)));
+for (const file of collectJsFiles(supplierDir)) {
+  expectedFromModules.push(...routesFromFile(file));
 }
 expectedFromModules.sort();
 

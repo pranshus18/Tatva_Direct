@@ -8,6 +8,7 @@ export function globalErrorHandler(err, req, res, next) {
   }
 
   logger.error('Request error:', {
+    requestId: req?.requestId,
     message: err?.message,
     code: err?.code,
     name: err?.name,
@@ -64,6 +65,14 @@ export function globalErrorHandler(err, req, res, next) {
     });
   }
 
+  if (err.code === 'ETIMEDOUT' || err.statusCode === 504) {
+    return res.status(504).json({
+      status: 'error',
+      message: 'Upstream service timed out. Please try again.',
+      requestId: req?.requestId
+    });
+  }
+
   const statusCode = err.statusCode || 500;
   const clientMessage = statusCode < 500 && err.message
     ? err.message
@@ -71,6 +80,7 @@ export function globalErrorHandler(err, req, res, next) {
 
   return res.status(statusCode).json({
     status: 'error',
-    message: clientMessage
+    message: clientMessage,
+    ...(req?.requestId ? { requestId: req.requestId } : {})
   });
 }
