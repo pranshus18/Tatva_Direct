@@ -1,8 +1,69 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Package, Search, ShoppingCart } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, ImageOff, MapPin, Package, Search, ShoppingCart, Star, Tag, Users } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import ProductImageCarousel from '../components/ProductImageCarousel';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import './ProductDiscovery.css';
+
+function formatPrice(price) {
+  const num = Number(price);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function RatingStars({ rating, reviews }) {
+  const num = Number(rating);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  const full = Math.floor(num);
+  const hasHalf = num - full >= 0.25;
+  return (
+    <div className="pd-rating">
+      <div className="pd-rating__stars">
+        {Array.from({ length: 5 }, (_, i) => (
+          <Star
+            key={i}
+            size={14}
+            className={i < full ? 'pd-star--filled' : (i === full && hasHalf) ? 'pd-star--half' : 'pd-star--empty'}
+          />
+        ))}
+      </div>
+      <span className="pd-rating__value">{num.toFixed(1)}</span>
+      {Number(reviews) > 0 && <span className="pd-rating__count">({reviews})</span>}
+    </div>
+  );
+}
+
+function SpecBadges({ specifications }) {
+  if (!specifications || typeof specifications !== 'object') return null;
+  const entries = Object.entries(specifications).filter(
+    ([, v]) => v !== null && v !== undefined && String(v).trim()
+  );
+  if (!entries.length) return null;
+  return (
+    <div className="pd-specs">
+      {entries.slice(0, 4).map(([key, val]) => (
+        <span key={key} className="pd-spec-badge">
+          <strong>{key}:</strong> {String(val)}
+        </span>
+      ))}
+      {entries.length > 4 && <span className="pd-spec-badge pd-spec-more">+{entries.length - 4} more</span>}
+    </div>
+  );
+}
+
+function TagList({ tags }) {
+  const list = Array.isArray(tags) ? tags.filter(Boolean) : [];
+  if (!list.length) return null;
+  return (
+    <div className="pd-tags">
+      <Tag size={12} />
+      {list.slice(0, 5).map((t) => (
+        <span key={t} className="pd-tag">{t}</span>
+      ))}
+      {list.length > 5 && <span className="pd-tag pd-tag--more">+{list.length - 5}</span>}
+    </div>
+  );
+}
 
 const ProductDiscovery = () => {
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,25 +189,36 @@ const ProductDiscovery = () => {
     }
   };
 
+  const imageArray = (product) => {
+    if (Array.isArray(product?.images) && product.images.length > 0) return product.images;
+    return [];
+  };
+
   return (
     <div className="product-discovery-container">
       <VoiceGuidedBanner />
-      <div className="product-discovery-header">
-        <h1>Product Discovery</h1>
-        <p>Browse products listed by suppliers. You can add items directly to cart without a BOQ.</p>
+
+      <div className="pd-hero">
+        <h1 className="pd-hero__title">Discover Products</h1>
+        <p className="pd-hero__subtitle">
+          Browse the full catalog of construction materials from verified suppliers.
+          Search, compare, and add items directly to your cart.
+        </p>
       </div>
 
-      <div className="product-discovery-controls">
-        <div className="search-input-wrapper">
-          <Search size={18} />
+      <div className="pd-controls">
+        <div className="pd-search">
+          <Search size={18} className="pd-search__icon" />
           <input
             type="text"
-            placeholder="Search products..."
+            className="pd-search__input"
+            placeholder="Search by name, brand, or description..."
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
           />
         </div>
         <select
+          className="pd-category-select"
           value={selectedCategory}
           onChange={(event) => setSelectedCategory(event.target.value)}
         >
@@ -159,86 +231,139 @@ const ProductDiscovery = () => {
         </select>
       </div>
 
-      {error ? <div className="product-discovery-error">{error}</div> : null}
+      {error ? <div className="pd-error">{error}</div> : null}
 
-      <div className="product-discovery-summary">
-        <div>
-          <strong>{Number.isFinite(total) ? total : 0}</strong> product{total === 1 ? '' : 's'} listed by suppliers
+      <div className="pd-toolbar">
+        <div className="pd-toolbar__info">
+          <strong>{Number.isFinite(total) ? total : 0}</strong> product{total === 1 ? '' : 's'} available
           {recommendationMode ? (
-            <span className="recommendation-pill">Recommended by your past orders</span>
+            <span className="pd-rec-pill">Personalized for you</span>
           ) : null}
         </div>
-        <div className="product-discovery-pager">
+        <div className="pd-pager">
           <button
             type="button"
-            className="btn-secondary"
+            className="pd-pager__btn"
             disabled={loading || safePage <= 1}
             onClick={() => setPage((p) => Math.max(1, p - 1))}
           >
-            Prev
+            <ChevronLeft size={16} /> Prev
           </button>
-          <span>
-            Page <strong>{safePage}</strong> / {pageCount}
+          <span className="pd-pager__text">
+            {safePage} / {pageCount}
           </span>
           <button
             type="button"
-            className="btn-secondary"
+            className="pd-pager__btn"
             disabled={loading || safePage >= pageCount}
             onClick={() => setPage((p) => p + 1)}
           >
-            Next
+            Next <ChevronRight size={16} />
           </button>
         </div>
       </div>
 
       {loading ? (
-        <div className="product-discovery-state">Loading products...</div>
+        <div className="pd-state pd-state--loading">
+          <div className="pd-spinner" />
+          <span>Loading products...</span>
+        </div>
       ) : products.length === 0 ? (
-        <div className="product-discovery-state">
-          <Package size={22} />
-          <span>No products found. Try a different search.</span>
+        <div className="pd-state pd-state--empty">
+          <Package size={32} />
+          <span>No products found. Try a different search or category.</span>
         </div>
       ) : (
-        <div className="product-discovery-grid">
-          {products.map((product) => (
-            <article className="product-card" key={product.id || `${product.name}-${product.category}`}>
-              <h3>{product.name || 'Unnamed Product'}</h3>
-              <p className="product-card-meta">
-                {product.brand ? `${product.brand} | ` : ''}
-                {product.category || 'uncategorized'}
-              </p>
-              <p className="product-card-description">{product.description || 'No description available.'}</p>
-              <div className="product-card-footer">
-                <span>Unit: {product.unit || 'N/A'}</span>
-                {product.barcode ? <span>Barcode: {product.barcode}</span> : null}
-              </div>
-              <div className="product-card-actions">
-                <div className="product-card-actions__meta">
-                  {Number.isFinite(Number(product?.supplierCount)) ? (
-                    <span>{Number(product.supplierCount)} supplier{Number(product.supplierCount) === 1 ? '' : 's'}</span>
+        <div className="pd-grid">
+          {products.map((product) => {
+            const imgs = imageArray(product);
+            const price = formatPrice(product?.price);
+            const pid = String(product?.id || '');
+            const inStock = Number(product?.stock) > 0;
+            const moq = Number(product?.min_order_quantity);
+
+            return (
+              <article className="pd-card" key={product.id || `${product.name}-${product.category}`}>
+                <div className="pd-card__image">
+                  {imgs.length > 0 ? (
+                    <ProductImageCarousel images={imgs} alt={product.name} height={180} rounded={10} stopPropagation />
                   ) : (
-                    <span />
+                    <div className="pd-card__no-image">
+                      <ImageOff size={36} />
+                      <span>No image</span>
+                    </div>
+                  )}
+                  {product.category && (
+                    <span className="pd-card__category-badge">{product.category}</span>
                   )}
                 </div>
-                <button
-                  type="button"
-                  className="btn-primary product-card-actions__cart"
-                  onClick={() => addToCart(product)}
-                  disabled={Boolean(cartBusyByProductId[String(product?.id || '')])}
-                >
-                  {cartAddedByProductId[String(product?.id || '')] ? (
-                    <>
-                      <Check size={16} /> Added as new BOQ
-                    </>
-                  ) : (
-                    <>
-                      <ShoppingCart size={16} /> Add to cart
-                    </>
-                  )}
-                </button>
-              </div>
-            </article>
-          ))}
+
+                <div className="pd-card__body">
+                  <div className="pd-card__header">
+                    <h3 className="pd-card__name">{product.name || 'Unnamed Product'}</h3>
+                    {product.brand && <span className="pd-card__brand">{product.brand}</span>}
+                  </div>
+
+                  <RatingStars rating={product.average_rating} reviews={product.total_reviews} />
+
+                  <p className="pd-card__desc">
+                    {product.description || 'No description available.'}
+                  </p>
+
+                  <SpecBadges specifications={product.specifications} />
+                  <TagList tags={product.tags} />
+
+                  <div className="pd-card__details">
+                    {price && <span className="pd-card__price">{price}<small>/{product.unit || 'unit'}</small></span>}
+                    {!price && <span className="pd-card__price pd-card__price--na">Price on request</span>}
+
+                    <div className="pd-card__meta-row">
+                      {product.unit && <span className="pd-card__meta-item">Unit: {product.unit}</span>}
+                      {moq > 1 && <span className="pd-card__meta-item">MOQ: {moq}</span>}
+                      {product.stock != null && (
+                        <span className={`pd-card__stock ${inStock ? 'pd-card__stock--in' : 'pd-card__stock--out'}`}>
+                          {inStock ? `${product.stock} in stock` : 'Out of stock'}
+                        </span>
+                      )}
+                    </div>
+
+                    {product.location && (
+                      <div className="pd-card__location">
+                        <MapPin size={13} /> {product.location}
+                      </div>
+                    )}
+
+                    {product.barcode && (
+                      <span className="pd-card__barcode">Barcode: {product.barcode}</span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="pd-card__footer">
+                  <div className="pd-card__suppliers">
+                    {Number.isFinite(Number(product?.supplierCount)) && (
+                      <>
+                        <Users size={14} />
+                        <span>{Number(product.supplierCount)} supplier{Number(product.supplierCount) === 1 ? '' : 's'}</span>
+                      </>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="pd-card__cart-btn"
+                    onClick={() => addToCart(product)}
+                    disabled={Boolean(cartBusyByProductId[pid])}
+                  >
+                    {cartAddedByProductId[pid] ? (
+                      <><Check size={16} /> Added</>
+                    ) : (
+                      <><ShoppingCart size={16} /> Add to Cart</>
+                    )}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
         </div>
       )}
     </div>

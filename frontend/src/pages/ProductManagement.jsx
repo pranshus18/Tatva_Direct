@@ -16,7 +16,8 @@ import {
   Upload,
   Image as ImageIcon,
   Loader,
-  ChevronDown
+  ChevronDown,
+  DollarSign
 } from 'lucide-react';
 import './Dashboard.css';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
@@ -788,6 +789,31 @@ const ProductManagement = ({ user }) => {
                       className="product-actions"
                       style={{ display: 'flex', alignItems: 'center', gap: '0.15rem', flexShrink: 0 }}
                     >
+                      {product.variantKey && (
+                        <button
+                          className="btn-icon"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const params = new URLSearchParams();
+                            params.set('variantKey', product.variantKey);
+                            if (product.variantAsin || product.variant_asin) {
+                              params.set('variantAsin', product.variantAsin || product.variant_asin);
+                            }
+                            if (product.name) params.set('variantName', product.name);
+                            if (product.brand) params.set('brand', product.brand);
+                            navigate(`/supplier-bcov?${params.toString()}`);
+                          }}
+                          style={{
+                            padding: '0.3rem',
+                            borderRadius: '6px',
+                            transition: 'all 0.2s ease',
+                            color: '#8b5cf6'
+                          }}
+                          title="Set ProductCOV pricing levels for this variant"
+                        >
+                          <DollarSign size={14} />
+                        </button>
+                      )}
                       {isInventoryView && (
                         <button
                           className="btn-icon"
@@ -1006,6 +1032,7 @@ const ProductDetailsModal = ({
   onEdit,
   onSaveSpecifications
 }) => {
+  const detailsNavigate = useNavigate();
   const [displaySpecifications, setDisplaySpecifications] = useState(product?.specifications || {});
   const [isEditingSpecs, setIsEditingSpecs] = useState(false);
   const [draftSpecs, setDraftSpecs] = useState({});
@@ -1161,6 +1188,26 @@ const ProductDetailsModal = ({
         <div className="modal-header">
           <h2>Product Details</h2>
           <div className="modal-actions">
+            {product?.variantKey && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  const params = new URLSearchParams();
+                  params.set('variantKey', product.variantKey);
+                  if (product.variantAsin || product.variant_asin) {
+                    params.set('variantAsin', product.variantAsin || product.variant_asin);
+                  }
+                  if (product.name) params.set('variantName', product.name);
+                  if (product.brand) params.set('brand', product.brand);
+                  detailsNavigate(`/supplier-bcov?${params.toString()}`);
+                }}
+                style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}
+              >
+                <DollarSign size={16} />
+                ProductCOV
+              </button>
+            )}
             {canEditInventory ? (
               <button
                 type="button"

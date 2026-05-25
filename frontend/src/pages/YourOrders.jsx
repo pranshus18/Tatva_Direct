@@ -32,10 +32,12 @@ const paymentMethodLabel = (order) => {
   const pm = String(order?.paymentMethod || order?.payment_method || '').toLowerCase();
   if (pm === 'cash') return 'Cash on delivery';
   if (pm === 'online') return 'Pay online';
-  if (pm === 'bank_transfer') return 'Bank transfer';
+  if (pm === 'upi') return 'UPI (direct transfer)';
+  if (pm === 'bank_transfer') return 'Bank transfer (NEFT/RTGS/IMPS)';
+  if (pm === 'card') return 'Credit / Debit Card';
+  if (pm === 'cheque') return 'Cheque';
   if (pm === 'credit') return 'Credit / pay later';
-  if (pm === 'upi') return 'UPI';
-  if (pm === 'card') return 'Card';
+  if (pm === 'credit_note') return 'Credit note';
   if (!pm) return 'Not set (pay online)';
   return pm.replace(/_/g, ' ');
 };

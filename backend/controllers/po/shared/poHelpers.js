@@ -12,6 +12,7 @@ export const PAYMENT_METHODS_ALLOWED = new Set([
   'cheque',
   'online',
   'credit',
+  'credit_note',
   'upi',
   'card'
 ]);
@@ -21,7 +22,7 @@ export function resolveB2bPaymentFromBody(body) {
   const raw = String(body?.paymentMethod || body?.payment_method || 'online')
     .toLowerCase()
     .trim();
-  const allowed = new Set(['cod', 'online', 'bank_transfer', 'credit']);
+  const allowed = new Set(['cod', 'online', 'bank_transfer', 'credit', 'credit_note', 'card', 'upi', 'cheque']);
   const choice = allowed.has(raw) ? raw : 'online';
   if (choice === 'cod') {
     return { payment_method: 'cash', payment_status: 'pending' };
@@ -31,6 +32,18 @@ export function resolveB2bPaymentFromBody(body) {
   }
   if (choice === 'credit') {
     return { payment_method: 'credit', payment_status: 'pending' };
+  }
+  if (choice === 'credit_note') {
+    return { payment_method: 'credit_note', payment_status: 'pending' };
+  }
+  if (choice === 'card') {
+    return { payment_method: 'card', payment_status: 'pending' };
+  }
+  if (choice === 'upi') {
+    return { payment_method: 'upi', payment_status: 'pending' };
+  }
+  if (choice === 'cheque') {
+    return { payment_method: 'cheque', payment_status: 'pending' };
   }
   return { payment_method: 'online', payment_status: 'pending' };
 }

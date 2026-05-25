@@ -52,6 +52,9 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, itemBrandCandidates);
     const { payment_method: poPaymentMethod, payment_status: poPaymentStatus } =
       resolveB2bPaymentFromBody(payload);
+    const paymentDetails = payload.paymentDetails && typeof payload.paymentDetails === 'object'
+      ? payload.paymentDetails
+      : null;
     const requestedShippingAddress = normalizeAddress(payload.shippingAddress || {});
     const requestedBillingAddress = normalizeAddress(payload.billingAddress || {});
     const rawDeliveryDestination = String(payload.deliveryDestination || 'shipping').toLowerCase().trim();
@@ -415,7 +418,8 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
                 cgstAmount: gstSummary.cgstAmount,
                 sgstAmount: gstSummary.sgstAmount,
                 totalAmount: gstSummary.totalAmount
-              }
+              },
+              ...(paymentDetails ? { paymentDetails } : {})
             },
             channel: 'b2b_po',
             outlet_id: null,

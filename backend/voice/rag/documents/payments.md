@@ -12,6 +12,9 @@ Bank transfer may be offered for certain suppliers or order types. Transfer deta
 ## Credit line
 Credit line lets eligible service providers place orders on account up to an approved limit. Settlement follows your platform ledger and due dates.
 
+## Credit note
+Credit note is used when the buyer has a credit balance issued by the supplier (e.g. from returns, overpayments, or adjustments). The credit note amount is applied against the order total.
+
 ## Payment receipts
 Payment receipts and invoices may be downloaded from your orders or payments section after payment is recorded.
 

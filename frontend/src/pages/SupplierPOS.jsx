@@ -889,8 +889,10 @@ const SupplierPOS = () => {
                         <option value="cash">Cash</option>
                         <option value="card">Card (Debit/Credit)</option>
                         <option value="upi">UPI</option>
-                        <option value="bank_transfer">Bank Transfer</option>
+                        <option value="bank_transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
+                        <option value="cheque">Cheque</option>
                         <option value="credit">Credit (Pay Later)</option>
+                        <option value="credit_note">Credit Note</option>
                       </select>
                     </div>
                   </div>

@@ -138,6 +138,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [creatingOrders, setCreatingOrders] = useState(false);
   /** How the buyer will pay for these POs (stored on each order; drives post-checkout flow). */
   const [poPaymentMethod, setPoPaymentMethod] = useState('online');
+  /** Payment details collected based on selected method (card number, UTR, etc.) */
+  const [paymentDetails, setPaymentDetails] = useState({});
   /** Online flow: show platform test QR before calling create API. */
   const [showOnlineQrModal, setShowOnlineQrModal] = useState(false);
   const [platformQrDataUrl, setPlatformQrDataUrl] = useState('');
@@ -409,6 +411,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         boqId,
         requiredDate,
         paymentMethod: poPaymentMethod,
+        paymentDetails: Object.keys(paymentDetails).length > 0 ? paymentDetails : undefined,
         deliveryDestination,
         shippingAddress,
         billingAddress: hasGstin ? billingAddress : shippingAddress,
@@ -852,7 +855,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           </label>
           <select
             value={poPaymentMethod}
-            onChange={(e) => setPoPaymentMethod(e.target.value)}
+            onChange={(e) => {
+              setPoPaymentMethod(e.target.value);
+              setPaymentDetails({});
+            }}
             style={{
               maxWidth: '320px',
               width: '100%',
@@ -865,12 +871,275 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           >
             <option value="online">Pay online (UPI / card via Razorpay)</option>
             <option value="cod">Cash on delivery</option>
-            <option value="bank_transfer">Bank transfer</option>
+            <option value="upi">UPI (direct transfer)</option>
+            <option value="bank_transfer">Bank transfer (NEFT / RTGS / IMPS)</option>
+            <option value="card">Credit / Debit Card</option>
+            <option value="cheque">Cheque</option>
             <option value="credit">Credit / pay later (on account)</option>
+            <option value="credit_note">Credit note</option>
           </select>
           <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#6b7280', maxWidth: '520px' }}>
             This applies to every purchase order created in this step. Pay online: you will see a platform test QR before orders are placed. COD and credit stay pending until the supplier confirms payment or delivery.
           </p>
+
+          {poPaymentMethod === 'card' && (
+            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>Card Payment Details</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  placeholder="Card holder name *"
+                  value={paymentDetails.cardHolderName || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, cardHolderName: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <select
+                  value={paymentDetails.cardNetwork || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, cardNetwork: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem', background: '#fff' }}
+                >
+                  <option value="">Select card type *</option>
+                  <option value="visa">Visa</option>
+                  <option value="mastercard">Mastercard</option>
+                  <option value="rupay">RuPay</option>
+                  <option value="amex">American Express</option>
+                  <option value="other">Other</option>
+                </select>
+                <input
+                  type="text"
+                  placeholder="Last 4 digits of card *"
+                  maxLength={4}
+                  value={paymentDetails.last4Digits || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, last4Digits: e.target.value.replace(/\D/g, '').slice(0, 4) }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Transaction / Approval code *"
+                  value={paymentDetails.transactionId || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, transactionId: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="date"
+                  value={paymentDetails.paymentDate || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, paymentDate: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                  title="Date of transaction"
+                />
+              </div>
+              <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* Required fields for reconciliation</p>
+            </div>
+          )}
+
+          {poPaymentMethod === 'upi' && (
+            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>UPI Payment Details</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  placeholder="UPI Transaction ID / UTR *"
+                  value={paymentDetails.upiTransactionId || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, upiTransactionId: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Sender UPI ID (e.g. name@upi)"
+                  value={paymentDetails.senderUpiId || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, senderUpiId: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Receiver UPI ID / name"
+                  value={paymentDetails.receiverUpiId || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, receiverUpiId: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="date"
+                  value={paymentDetails.paymentDate || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, paymentDate: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                  title="Date of transaction"
+                />
+              </div>
+              <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* UPI Transaction ID is required for payment verification</p>
+            </div>
+          )}
+
+          {poPaymentMethod === 'bank_transfer' && (
+            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>Bank Transfer Details</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  placeholder="UTR / Reference number *"
+                  value={paymentDetails.utrNumber || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, utrNumber: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Account holder name *"
+                  value={paymentDetails.accountHolderName || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, accountHolderName: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Bank name *"
+                  value={paymentDetails.bankName || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, bankName: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="IFSC code"
+                  value={paymentDetails.ifscCode || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, ifscCode: e.target.value.toUpperCase() }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="date"
+                  value={paymentDetails.transferDate || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, transferDate: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                  title="Date of transfer"
+                />
+              </div>
+              <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* Required fields. IFSC and date help with faster reconciliation.</p>
+            </div>
+          )}
+
+          {poPaymentMethod === 'cheque' && (
+            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>Cheque Details</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  placeholder="Cheque number *"
+                  value={paymentDetails.chequeNumber || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, chequeNumber: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Bank name *"
+                  value={paymentDetails.bankName || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, bankName: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Payee name (as on cheque)"
+                  value={paymentDetails.payeeName || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, payeeName: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="date"
+                  value={paymentDetails.chequeDate || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, chequeDate: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                  title="Date on cheque *"
+                />
+                <input
+                  type="number"
+                  placeholder="Cheque amount (INR) *"
+                  min="0"
+                  step="0.01"
+                  value={paymentDetails.chequeAmount || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, chequeAmount: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+              </div>
+              <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* Required. Payment is confirmed once cheque is cleared by the bank.</p>
+            </div>
+          )}
+
+          {poPaymentMethod === 'credit' && (
+            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>Credit Terms</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <select
+                  value={paymentDetails.creditPeriod || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, creditPeriod: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem', background: '#fff' }}
+                >
+                  <option value="">Select credit period *</option>
+                  <option value="7">7 days</option>
+                  <option value="15">15 days</option>
+                  <option value="30">30 days</option>
+                  <option value="45">45 days</option>
+                  <option value="60">60 days</option>
+                  <option value="90">90 days</option>
+                </select>
+                <input
+                  type="text"
+                  placeholder="PO / Reference number"
+                  value={paymentDetails.poReference || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, poReference: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Remarks / special terms"
+                  value={paymentDetails.remarks || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, remarks: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+              </div>
+              <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* Payment due within the selected credit period from delivery date.</p>
+            </div>
+          )}
+
+          {poPaymentMethod === 'credit_note' && (
+            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>Credit Note Details</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <input
+                  type="text"
+                  placeholder="Credit note number *"
+                  value={paymentDetails.creditNoteNumber || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, creditNoteNumber: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="date"
+                  value={paymentDetails.creditNoteDate || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, creditNoteDate: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                  title="Credit note issue date *"
+                />
+                <input
+                  type="number"
+                  placeholder="Credit note amount (INR) *"
+                  min="0"
+                  step="0.01"
+                  value={paymentDetails.creditNoteAmount || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, creditNoteAmount: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Issued by (supplier name or reference) *"
+                  value={paymentDetails.issuedBy || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, issuedBy: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+                <input
+                  type="text"
+                  placeholder="Reason (return / adjustment / overpayment)"
+                  value={paymentDetails.reason || ''}
+                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, reason: e.target.value }))}
+                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
+                />
+              </div>
+              <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* Required. The credit note amount will be adjusted against this order total.</p>
+            </div>
+          )}
         </div>
         <div className="checkout-address-card">
           <div className="checkout-address-card__head">

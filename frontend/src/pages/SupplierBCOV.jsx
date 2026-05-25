@@ -215,10 +215,16 @@ const SupplierBCOV = () => {
         <div>
           <h1>Product_COV</h1>
           <p className="bcov-subtitle">
-            Set pricing levels for variant: <strong>{variantName || variantKey}</strong>
+            Set pricing levels for variant:{' '}
+            <strong>{variantName || variantKey}</strong>
+            {variantAsin ? (
+              <span style={{ marginLeft: '0.5rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.85em', color: '#6366f1', fontWeight: 600 }}>
+                [{variantAsin}]
+              </span>
+            ) : null}
           </p>
           <p className="bcov-subtitle" style={{ fontSize: '0.8rem', opacity: 0.7 }}>
-            Variant Key: {variantKey}{variantAsin ? ` | ASIN: ${variantAsin}` : ''}
+            Variant Key: {variantKey}{variantAsin ? ` | TSIN: ${variantAsin}` : ''}
           </p>
           <SupplierProductAdditionSteps
             variant={saveMessage || isStepCompleted ? 'bcov-done' : 'bcov'}
@@ -235,7 +241,14 @@ const SupplierBCOV = () => {
 
       <div className="dashboard-section bcov-card">
         <div className="section-header">
-          <h2>{variantName || variantKey}</h2>
+          <h2>
+            {variantName || variantKey}
+            {variantAsin ? (
+              <span style={{ marginLeft: '0.5rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '0.7em', color: '#6366f1', fontWeight: 500 }}>
+                [{variantAsin}]
+              </span>
+            ) : null}
+          </h2>
           <button className="btn-secondary" onClick={addRow}>
             <Plus size={16} />
             Add Level
