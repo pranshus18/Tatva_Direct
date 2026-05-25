@@ -244,6 +244,29 @@ export function parseQuantity(text) {
 }
 
 /**
+ * Last-resort: pull the first bare digit/number from any text, ignoring surrounding noise.
+ */
+export function extractAnyNumber(text) {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return null;
+
+  const digit = t.match(/(\d{1,4})/);
+  if (digit) return clampQty(Number.parseInt(digit[1], 10));
+
+  for (const [word, num] of Object.entries(WORD_NUMBERS)) {
+    if (new RegExp(`\\b${word}\\b`, 'i').test(t)) return clampQty(num);
+  }
+  for (const [word, num] of Object.entries(HOMOPHONE_QTY)) {
+    if (new RegExp(`\\b${word}\\b`, 'i').test(t)) return clampQty(num);
+  }
+  for (const [word, num] of Object.entries(NATIVE_WORD_NUMBERS)) {
+    if (t.includes(word)) return clampQty(num);
+  }
+
+  return null;
+}
+
+/**
  * Pick option 1..max from speech (supplier, product, transport).
  * @returns {number|null} zero-based index
  */

@@ -15,7 +15,8 @@ import {
   parseVoicePickQuantity,
   parseSelectionIndex,
   isExplicitCancel,
-  isQuantityOnlyUtterance
+  isQuantityOnlyUtterance,
+  extractAnyNumber
 } from '../lib/spokenNumbers.js';
 import { parseAddToCartUtterance } from '../lib/addToCartParse.js';
 import {
@@ -118,44 +119,35 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
   const utterance = String(text || '').trim();
   const pending = memory.getPendingAction();
 
-  if (!canRunDiscoveryAddFlow(memory)) {
-    if (parseGoToScreenIntent(utterance) === 'product_discovery') {
-      enterDiscoveryFlow(memory);
-      return null;
+  const hasDiscoveryPending =
+    pending?.type === 'await_add_quantity' || pending?.type === 'await_pick_product';
+
+  if (hasDiscoveryPending) {
+    if (isHelpPhrase(utterance)) {
+      return helpForPending(pending.type, memory.getContext('checkout', {}), getVoiceFlowMode(memory), memory);
     }
-    return null;
-  }
 
-  if (isCartFlowMode(memory)) {
-    return null;
-  }
-
-  if (isHelpPhrase(utterance) && pending) {
-    return helpForPending(pending.type, memory.getContext('checkout', {}), getVoiceFlowMode(memory), memory);
-  }
-
-  if (
-    pending &&
-    (pending.type === 'await_add_quantity' || pending.type === 'await_pick_product') &&
-    isExplicitCancel(utterance, { pendingType: pending.type })
-  ) {
-    memory.setPendingAction(null);
-    return promptCheckoutCancelled(memory);
+    if (isExplicitCancel(utterance, { pendingType: pending.type })) {
+      memory.setPendingAction(null);
+      return promptCheckoutCancelled(memory);
+    }
   }
 
   if (pending?.type === 'await_add_quantity') {
-    const lower = utterance.toLowerCase();
-    if (isAffirmShortPhrase(lower)) {
-      return promptAskQuantity(pending.payload.name, memory);
-    }
-
-    if (shouldRestartProductSearch(utterance)) {
+    if (isSearchRestartPhrase(utterance)) {
       memory.setPendingAction(null);
       return runSearchFromUtterance(toolCtx, memory, utterance);
     }
 
+    const lower = utterance.toLowerCase();
+    if (isAffirmShortPhrase(lower)) {
+      memory.setPendingAction(null);
+      return executeAdd(toolCtx, pending.payload, 1);
+    }
+
     let qty = parseVoicePickQuantity(utterance);
     if (qty == null) qty = parseQuantity(utterance);
+    if (qty == null) qty = extractAnyNumber(utterance);
     if (qty == null) {
       return promptAskQuantity(pending.payload.name, memory);
     }
@@ -193,10 +185,6 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
             if (idx < 0) idx = null;
           }
         }
-        if (idx == null && addParsed.quantity != null && products.length === 1) {
-          memory.setPendingAction(null);
-          return executeAdd(toolCtx, products[0], addParsed.quantity);
-        }
       }
     }
 
@@ -207,10 +195,11 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
       }
     }
 
-    if (idx == null && products.length === 1 && isQuantityOnlyUtterance(utterance)) {
-      const qty = parseQuantity(utterance);
-      memory.setPendingAction(null);
-      return executeAdd(toolCtx, products[0], qty);
+    if (idx == null) {
+      const fallbackNum = extractAnyNumber(utterance);
+      if (fallbackNum != null && fallbackNum >= 1 && fallbackNum <= products.length) {
+        idx = fallbackNum - 1;
+      }
     }
 
     if (idx == null && isSearchRestartPhrase(utterance)) {
@@ -223,13 +212,6 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
     }
 
     const product = products[idx];
-    if (isQuantityOnlyUtterance(utterance) && products.length === 1) {
-      const qty = parseQuantity(utterance);
-      if (qty != null) {
-        memory.setPendingAction(null);
-        return executeAdd(toolCtx, product, qty);
-      }
-    }
 
     memory.setPendingAction({
       type: 'await_add_quantity',
@@ -237,6 +219,22 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
       payload: { id: product.id, name: product.name }
     });
     return promptAskQuantity(product.name, memory);
+  }
+
+  if (!canRunDiscoveryAddFlow(memory)) {
+    if (parseGoToScreenIntent(utterance) === 'product_discovery') {
+      enterDiscoveryFlow(memory);
+      return null;
+    }
+    return null;
+  }
+
+  if (isCartFlowMode(memory)) {
+    return null;
+  }
+
+  if (isHelpPhrase(utterance) && pending) {
+    return helpForPending(pending.type, memory.getContext('checkout', {}), getVoiceFlowMode(memory), memory);
   }
 
   if (!isAddToCartIntent(utterance)) return null;
