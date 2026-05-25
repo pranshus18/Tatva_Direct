@@ -282,13 +282,14 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       }
 
       const quantity = parseFloat(item.quantity) || 0;
-      // Use supplier-specific price from supplier_products as the authoritative price
       const basePrice = parseFloat(supplierProduct.price) || 0;
+      const bcovVariantKey = supplierProduct?.variant_key || item?.variantKey || '';
       const bcovBrandKey = extractBrandForBcov({ supplierProduct, item });
       const bcovScopeKeys = extractBcovScopeKeys({ supplierProduct, item });
       const bcovResolved = await resolveBcov({
         buyerId: req.userId,
         supplierId: vendorId,
+        variantKey: bcovVariantKey,
         brandKey: bcovBrandKey,
         scopeKeys: bcovScopeKeys
       });

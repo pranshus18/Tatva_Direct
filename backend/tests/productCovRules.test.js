@@ -216,22 +216,26 @@ test('extractBrandForBcov and extractBcovScopeKeys resolve product scope', () =>
   };
   assert.equal(extractBrandForBcov({ supplierProduct, item: {} }), 'acme widget');
   const keys = extractBcovScopeKeys({ supplierProduct, item: { variantAsin: 'ASIN-9' } });
-  assert.ok(keys.includes('asin-9'));
   assert.ok(keys.includes('vk-1'));
-  assert.ok(keys.includes('sp-1'));
-  assert.ok(keys.includes('acme widget'));
+  assert.ok(keys.includes('ASIN-9'));
 });
 
-test('validateAndNormalizeBcovLevels requires all three threshold fields per row', () => {
+test('validateAndNormalizeBcovLevels requires variantKey and threshold fields per row', () => {
   const bad = validateAndNormalizeBcovLevels([
-    { brand: 'Acme', levelName: 'L1', buyerCov: 100, buyerPcov: 500, price: 90, buyerBcov: '' }
+    { variantKey: 'vk-1', levelName: 'L1', buyerCov: 100, buyerPcov: 500, price: 90, buyerBcov: '' }
   ]);
   assert.equal(bad.ok, false);
 
+  const noVariant = validateAndNormalizeBcovLevels([
+    { levelName: 'L1', buyerCov: 100, buyerPcov: 500, price: 90, buyerBcov: '1000' }
+  ]);
+  assert.equal(noVariant.ok, false);
+
   const good = validateAndNormalizeBcovLevels([
-    { brand: 'Acme', levelName: 'L1', buyerCov: 100, buyerPcov: 500, price: 90, buyerBcov: '1000' }
+    { variantKey: 'vk-1', levelName: 'L1', buyerCov: 100, buyerPcov: 500, price: 90, buyerBcov: '1000' }
   ]);
   assert.equal(good.ok, true);
+  assert.equal(good.levels[0].variantKey, 'vk-1');
   assert.equal(good.levels[0].minPurchaseQty, 100);
   assert.equal(good.levels[0].maxPurchaseQty, 500);
   assert.equal(good.levels[0].buyerBcov, '1000');

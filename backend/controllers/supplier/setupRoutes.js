@@ -8,7 +8,6 @@ import {
   getViewerBrandTokensForRole,
   loadAdminBrandChainsByName,
   mapSupplyChainPartner,
-  normalizeBcovBrand,
   normalizeChainNameKey,
   normalizeChainRolesFromStages,
   parseBcovNotes,
@@ -221,21 +220,20 @@ router.get('/supply-chain-partners', authenticateToken, async (req, res) => {
   }
 });
 
-// BCOV levels (brand-wise quantity slabs -> unit price)
+// BCOV levels (variant-based quantity slabs -> unit price)
 router.get('/bcov-levels', authenticateToken, async (req, res) => {
   try {
-    const scopeKey = String(req.query.scopeKey || '').trim();
-    const normalizedScopeKey = normalizeBcovBrand(scopeKey);
+    const variantKey = String(req.query.variantKey || '').trim();
 
     let query = supabase
       .from('supplier_bcov_levels')
-      .select('id, brand_name, min_purchase_qty, max_purchase_qty, unit_price, notes')
+      .select('id, variant_key, variant_asin, variant_name, brand_name, min_purchase_qty, max_purchase_qty, unit_price, notes')
       .eq('supplier_id', req.userId)
-      .order('normalized_brand', { ascending: true })
+      .order('variant_key', { ascending: true })
       .order('min_purchase_qty', { ascending: true });
 
-    if (normalizedScopeKey) {
-      query = query.eq('normalized_brand', normalizedScopeKey);
+    if (variantKey) {
+      query = query.eq('variant_key', variantKey);
     }
 
     const { data, error } = await query;
@@ -248,7 +246,9 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
         const parsedNotes = parseBcovNotes(r.notes);
         return {
           id: r.id,
-          brand: r.brand_name,
+          variantKey: r.variant_key,
+          variantAsin: r.variant_asin || null,
+          variantName: r.variant_name || r.brand_name || '',
           levelName: parsedNotes.levelName,
           buyerBcov: parsedNotes.buyerBcov,
           buyerCov: Number(r.min_purchase_qty),
@@ -269,41 +269,45 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
 router.put('/bcov-levels', authenticateToken, async (req, res) => {
   try {
     const payloadInput = parseWithSchema(supplierBcovLevelsUpsertSchema, req.body || {});
-    const scopeKey = String(payloadInput.scopeKey || '').trim();
-    const normalizedScopeKey = normalizeBcovBrand(scopeKey);
+    const variantKey = String(payloadInput.variantKey || '').trim();
+    const variantAsin = String(payloadInput.variantAsin || '').trim() || null;
+    const variantName = String(payloadInput.variantName || '').trim() || null;
+
+    if (!variantKey) {
+      return res.status(400).json({ status: 'error', message: 'variantKey is required' });
+    }
+
     const parsed = validateAndNormalizeBcovLevels(payloadInput.levels || []);
     if (!parsed.ok) {
       return res.status(400).json({ status: 'error', message: parsed.message });
     }
 
-    if (normalizedScopeKey) {
-      const hasOutOfScopeBrand = parsed.levels.some((row) => row.normalizedBrand !== normalizedScopeKey);
-      if (hasOutOfScopeBrand) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'All Product_COV rows must belong to the selected product/brand scope.'
-        });
-      }
+    const hasOutOfScopeVariant = parsed.levels.some((row) => row.variantKey !== variantKey);
+    if (hasOutOfScopeVariant) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'All Product_COV rows must belong to the selected variant.'
+      });
     }
 
     const payload = parsed.levels.map((row) => ({
       supplier_id: req.userId,
-      brand_name: row.brand,
-      normalized_brand: row.normalizedBrand,
+      variant_key: variantKey,
+      variant_asin: variantAsin,
+      variant_name: variantName,
+      brand_name: variantName || variantKey,
+      normalized_brand: variantKey,
       min_purchase_qty: row.minPurchaseQty,
       max_purchase_qty: row.maxPurchaseQty,
       unit_price: row.price,
       notes: row.notes
     }));
 
-    let deleteQuery = supabase
+    const { error: deleteError } = await supabase
       .from('supplier_bcov_levels')
       .delete()
-      .eq('supplier_id', req.userId);
-    if (normalizedScopeKey) {
-      deleteQuery = deleteQuery.eq('normalized_brand', normalizedScopeKey);
-    }
-    const { error: deleteError } = await deleteQuery;
+      .eq('supplier_id', req.userId)
+      .eq('variant_key', variantKey);
     if (deleteError) throw deleteError;
 
     if (payload.length > 0) {
@@ -315,7 +319,7 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
 
     return res.json({
       status: 'success',
-      message: 'BCOV levels saved successfully',
+      message: 'Product_COV levels saved successfully',
       count: payload.length
     });
   } catch (error) {
@@ -330,34 +334,29 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
 router.post('/bcov-levels/resolve-price', authenticateToken, async (req, res) => {
   try {
     const payloadInput = parseWithSchema(supplierBcovResolvePriceSchema, req.body || {});
-    const brand = String(payloadInput.brand || '').trim();
-    const normalizedBrand = normalizeBcovBrand(brand);
-    const legacyPurchaseQty = toFiniteNumber(payloadInput.purchaseQty);
+    const variantKey = String(payloadInput.variantKey || '').trim();
     const supplierCov = toFiniteNumber(payloadInput.supplierCov);
     const platformCov = toFiniteNumber(payloadInput.platformCov);
     const brandCov = toFiniteNumber(payloadInput.brandCov);
-    const effectiveSupplierCov = supplierCov ?? legacyPurchaseQty;
-    const effectivePlatformCov = platformCov ?? legacyPurchaseQty;
-    const effectiveBrandCov = brandCov ?? legacyPurchaseQty;
 
-    if (!normalizedBrand) {
-      return res.status(400).json({ status: 'error', message: 'brand is required' });
+    if (!variantKey) {
+      return res.status(400).json({ status: 'error', message: 'variantKey is required' });
     }
-    if (effectiveSupplierCov === null || effectiveSupplierCov < 0) {
+    if (supplierCov === null || supplierCov < 0) {
       return res.status(400).json({ status: 'error', message: 'supplierCov must be 0 or more' });
     }
-    if (effectivePlatformCov === null || effectivePlatformCov < 0) {
+    if (platformCov === null || platformCov < 0) {
       return res.status(400).json({ status: 'error', message: 'platformCov must be 0 or more' });
     }
-    if (effectiveBrandCov === null || effectiveBrandCov < 0) {
+    if (brandCov === null || brandCov < 0) {
       return res.status(400).json({ status: 'error', message: 'brandCov must be 0 or more' });
     }
 
     const { data, error } = await supabase
       .from('supplier_bcov_levels')
-      .select('id, brand_name, min_purchase_qty, max_purchase_qty, unit_price, notes')
+      .select('id, variant_key, variant_name, min_purchase_qty, max_purchase_qty, unit_price, notes')
       .eq('supplier_id', req.userId)
-      .eq('normalized_brand', normalizedBrand)
+      .eq('variant_key', variantKey)
       .order('min_purchase_qty', { ascending: false });
 
     if (error) throw error;
@@ -365,9 +364,9 @@ router.post('/bcov-levels/resolve-price', authenticateToken, async (req, res) =>
     const levels = data || [];
     const matched = resolveBcovPriceForBuyerMetrics({
       levels,
-      supplierCov: effectiveSupplierCov,
-      platformCov: effectivePlatformCov,
-      brandCov: effectiveBrandCov
+      supplierCov,
+      platformCov,
+      brandCov
     });
 
     if (!matched) {
@@ -375,10 +374,10 @@ router.post('/bcov-levels/resolve-price', authenticateToken, async (req, res) =>
         status: 'success',
         result: {
           matched: false,
-          brand,
-          supplierCov: effectiveSupplierCov,
-          platformCov: effectivePlatformCov,
-          brandCov: effectiveBrandCov
+          variantKey,
+          supplierCov,
+          platformCov,
+          brandCov
         }
       });
     }
@@ -393,27 +392,25 @@ router.post('/bcov-levels/resolve-price', authenticateToken, async (req, res) =>
       result: {
         matched: true,
         levelId: matched.levelId,
-        brand: matchedLevel?.brand_name || brand,
-        supplierCov: effectiveSupplierCov,
-        platformCov: effectivePlatformCov,
-        brandCov: effectiveBrandCov,
+        variantKey,
+        variantName: matchedLevel?.variant_name || null,
+        supplierCov,
+        platformCov,
+        brandCov,
         levelName: parsedNotes.levelName,
         buyerBcov: parsedNotes.buyerBcov,
         buyerCov: brandCovThreshold,
         buyerPcov: platformCovThreshold,
-        minPurchaseQty: brandCovThreshold,
-        maxPurchaseQty: platformCovThreshold,
         supplierCovThreshold,
         platformCovThreshold,
         brandCovThreshold,
         appliedBy:
-          supplierCovThreshold !== null && effectiveSupplierCov >= supplierCovThreshold
+          supplierCovThreshold !== null && supplierCov >= supplierCovThreshold
             ? 'supplier'
-            : brandCovThreshold !== null && effectiveBrandCov >= brandCovThreshold
+            : brandCovThreshold !== null && brandCov >= brandCovThreshold
             ? 'brand'
             : 'platform',
-        price: matched.price,
-        notes: parsedNotes.rawNotes || null
+        price: matched.price
       }
     });
   } catch (error) {

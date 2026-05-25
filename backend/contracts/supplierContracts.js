@@ -1,13 +1,15 @@
 import { z } from 'zod';
 
 export const supplierBcovLevelsUpsertSchema = z.object({
-  scopeKey: z.string().optional(),
+  variantKey: z.string().min(1),
+  variantAsin: z.string().optional(),
+  variantName: z.string().optional(),
   levels: z.array(z.record(z.string(), z.any()))
 });
 
 export const supplierBcovResolvePriceSchema = z.object({
-  brand: z.string().min(1),
-  purchaseQty: z.union([z.number(), z.string()]).optional(),
+  variantKey: z.string().min(1),
+  variantAsin: z.string().optional(),
   supplierCov: z.union([z.number(), z.string()]).optional(),
   platformCov: z.union([z.number(), z.string()]).optional(),
   brandCov: z.union([z.number(), z.string()]).optional()

@@ -78,6 +78,18 @@ export const resolveBcovPriceForBuyerMetrics = ({ levels = [], supplierCov = 0, 
   };
 };
 
+export const extractVariantKeyForBcov = ({ supplierProduct, item }) => {
+  return String(
+    supplierProduct?.variant_key ||
+    item?.variantKey ||
+    supplierProduct?.variant_asin ||
+    item?.variantAsin ||
+    supplierProduct?.id ||
+    item?.supplierProductId ||
+    ''
+  ).trim();
+};
+
 export const extractBrandForBcov = ({ supplierProduct, item }) => {
   const spAttrs = supplierProduct?.attributes || {};
   const product = supplierProduct?.product || {};
@@ -102,11 +114,9 @@ export const extractBrandForBcov = ({ supplierProduct, item }) => {
 };
 
 export const extractBcovScopeKeys = ({ supplierProduct, item }) => {
-  const variantAsin = normalizeBrandKey(supplierProduct?.variant_asin || item?.variantAsin || '');
-  const variantKey = normalizeBrandKey(supplierProduct?.variant_key || item?.variantKey || '');
-  const supplierProductId = normalizeBrandKey(supplierProduct?.id || item?.supplierProductId || '');
-  const brandKey = extractBrandForBcov({ supplierProduct, item });
-  return [...new Set([variantAsin, variantKey, supplierProductId, brandKey].filter(Boolean))];
+  const variantKey = String(supplierProduct?.variant_key || item?.variantKey || '').trim();
+  const variantAsin = String(supplierProduct?.variant_asin || item?.variantAsin || '').trim();
+  return [...new Set([variantKey, variantAsin].filter(Boolean))];
 };
 
 export const buildBcovResolver = (supabaseClient) => {
@@ -184,17 +194,15 @@ export const buildBcovResolver = (supabaseClient) => {
     return totals;
   };
 
-  return async ({ buyerId, supplierId, brandKey, scopeKeys = [] }) => {
+  return async ({ buyerId, supplierId, variantKey, brandKey, scopeKeys = [] }) => {
     if (!buyerId || !supplierId) return null;
-    const normalizedScopeKeys = [
-      ...new Set(
-        [
-          ...((Array.isArray(scopeKeys) ? scopeKeys : []).map((k) => normalizeBrandKey(k || ''))),
-          normalizeBrandKey(brandKey || '')
-        ].filter(Boolean)
-      )
+
+    const lookupKeys = [
+      ...(variantKey ? [variantKey] : []),
+      ...((Array.isArray(scopeKeys) ? scopeKeys : []).filter(Boolean))
     ];
-    if (normalizedScopeKeys.length === 0) return null;
+    const uniqueKeys = [...new Set(lookupKeys.filter(Boolean))];
+    if (uniqueKeys.length === 0) return null;
 
     const paidOrders = await loadPaidOrders(buyerId);
     const platformCov = paidOrders.reduce((sum, row) => sum + (parseFiniteNumber(row.total_amount) || 0), 0);
@@ -205,15 +213,15 @@ export const buildBcovResolver = (supabaseClient) => {
     const fallbackBrandKey = normalizeBrandKey(brandKey || '');
     const brandCov = parseFiniteNumber(brandCovByBrand.get(fallbackBrandKey)) || 0;
 
-    for (const scopeKey of normalizedScopeKeys) {
-      const cacheKey = `${supplierId}::${scopeKey}`;
+    for (const key of uniqueKeys) {
+      const cacheKey = `${supplierId}::${key}`;
       let levels = cache.get(cacheKey);
       if (!levels) {
         const { data, error } = await supabaseClient
           .from('supplier_bcov_levels')
           .select('id, min_purchase_qty, max_purchase_qty, unit_price, notes')
           .eq('supplier_id', supplierId)
-          .eq('normalized_brand', scopeKey)
+          .eq('variant_key', key)
           .order('min_purchase_qty', { ascending: false });
         if (error) {
           console.error('[BCOV] load levels error:', error);

@@ -47,25 +47,25 @@ export async function buildSupplierProductsForRanking({
   brandCovByBrand
 }) {
   const productSupplierIds = [...new Set((products || []).map((p) => p?.supplier?.id).filter(Boolean))];
-  const bcovBySupplierBrand = new Map();
+  const bcovBySupplierVariant = new Map();
   if (productSupplierIds.length > 0) {
     const { data: bcovRows, error: bcovError } = await supabase
       .from('supplier_bcov_levels')
-      .select('id, supplier_id, normalized_brand, min_purchase_qty, max_purchase_qty, unit_price, notes')
+      .select('id, supplier_id, variant_key, normalized_brand, min_purchase_qty, max_purchase_qty, unit_price, notes')
       .in('supplier_id', productSupplierIds);
     if (bcovError) {
       console.error('[Vendor Ranking] BCOV preload error:', bcovError);
     } else {
       for (const row of bcovRows || []) {
-        const key = `${row.supplier_id}::${row.normalized_brand}`;
-        if (!bcovBySupplierBrand.has(key)) bcovBySupplierBrand.set(key, []);
-        bcovBySupplierBrand.get(key).push(row);
+        const key = `${row.supplier_id}::${row.variant_key || row.normalized_brand}`;
+        if (!bcovBySupplierVariant.has(key)) bcovBySupplierVariant.set(key, []);
+        bcovBySupplierVariant.get(key).push(row);
       }
-      for (const [key, levels] of bcovBySupplierBrand.entries()) {
+      for (const [key, levels] of bcovBySupplierVariant.entries()) {
         levels.sort(
           (a, b) => (parseFiniteNumber(b.min_purchase_qty) || 0) - (parseFiniteNumber(a.min_purchase_qty) || 0)
         );
-        bcovBySupplierBrand.set(key, levels);
+        bcovBySupplierVariant.set(key, levels);
       }
     }
   }
@@ -114,6 +114,7 @@ export async function buildSupplierProductsForRanking({
     const supplierId = product.supplier.id;
     const supplierAddress = product.supplier.address || {};
     const basePrice = parseFloat(product.price) || 0;
+    const productVariantKey = String(product?.variant_key || '').trim();
     const productBrandKey = normalizeBrandKey(
       product?.attributes?.brandModel ||
         product?.attributes?.brand ||
@@ -122,7 +123,10 @@ export async function buildSupplierProductsForRanking({
         product?.brand ||
         targetBrand
     );
-    const bcovLevels = bcovBySupplierBrand.get(`${supplierId}::${productBrandKey}`) || [];
+    const bcovLevels =
+      (productVariantKey && bcovBySupplierVariant.get(`${supplierId}::${productVariantKey}`)) ||
+      bcovBySupplierVariant.get(`${supplierId}::${productBrandKey}`) ||
+      [];
     const bcovResolved = resolveBcovPriceForBuyerMetrics({
       levels: bcovLevels,
       supplierCov: parseFiniteNumber(supplierCovById.get(supplierId)) || 0,

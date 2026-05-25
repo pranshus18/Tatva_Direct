@@ -326,6 +326,7 @@ const ProductManagement = ({ user }) => {
           if (data?.nextStep?.variantAsin) params.set('variantAsin', data.nextStep.variantAsin);
           if (data?.nextStep?.variantKey) params.set('variantKey', data.nextStep.variantKey);
           if (data?.nextStep?.supplierProductId) params.set('supplierProductId', data.nextStep.supplierProductId);
+          if (nextProductName) params.set('variantName', nextProductName);
           if (nextBrand) params.set('brand', nextBrand);
           if (nextProductName) params.set('productName', nextProductName);
           params.set('from', 'manage-inventory');

@@ -1,4 +1,4 @@
-import { composeBcovNotes, normalizeBcovBrand, toFiniteNumber } from './supplierCatalogHelpersService.js';
+import { composeBcovNotes, toFiniteNumber } from './supplierCatalogHelpersService.js';
 
 export function validateAndNormalizeBcovLevels(levelsRaw = []) {
   if (!Array.isArray(levelsRaw)) {
@@ -11,8 +11,10 @@ export function validateAndNormalizeBcovLevels(levelsRaw = []) {
   const normalized = [];
   for (let i = 0; i < levelsRaw.length; i += 1) {
     const row = levelsRaw[i] || {};
-    const brand = String(row.brand || '').trim();
-    const normalizedBrand = normalizeBcovBrand(brand);
+    const variantKey = String(row.variantKey || '').trim();
+    const variantAsin = String(row.variantAsin || '').trim() || null;
+    const variantName = String(row.variantName || '').trim() || null;
+
     const buyerCov = toFiniteNumber(row.buyerCov !== undefined ? row.buyerCov : row.minPurchaseQty);
     const price = toFiniteNumber(row.price);
     const buyerPcovRaw = row.buyerPcov !== undefined ? row.buyerPcov : row.maxPurchaseQty;
@@ -21,11 +23,11 @@ export function validateAndNormalizeBcovLevels(levelsRaw = []) {
         ? null
         : toFiniteNumber(buyerPcovRaw);
 
-    if (!brand || !normalizedBrand) {
-      return { ok: false, message: `Row ${i + 1}: brand is required` };
+    if (!variantKey) {
+      return { ok: false, message: `Row ${i + 1}: variant is required` };
     }
-    if (brand.length > 120) {
-      return { ok: false, message: `Row ${i + 1}: brand must be <= 120 characters` };
+    if (variantKey.length > 128) {
+      return { ok: false, message: `Row ${i + 1}: variantKey must be <= 128 characters` };
     }
     if (buyerCov === null || buyerCov < 0) {
       return { ok: false, message: `Row ${i + 1}: Brand_cov must be 0 or more` };
@@ -51,8 +53,9 @@ export function validateAndNormalizeBcovLevels(levelsRaw = []) {
 
     normalized.push({
       id: row.id || null,
-      brand,
-      normalizedBrand,
+      variantKey,
+      variantAsin,
+      variantName,
       minPurchaseQty: buyerCov,
       maxPurchaseQty: buyerPcov,
       price,

@@ -249,11 +249,13 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
           const baseUnitPrice = parseFloat(supplierProduct.price) || 0;
           const quantity = parseFloat(item.quantity) || 0;
+          const bcovVariantKey = supplierProduct?.variant_key || item?.variantKey || '';
           const bcovBrandKey = extractBrandForBcov({ supplierProduct, item });
           const bcovScopeKeys = extractBcovScopeKeys({ supplierProduct, item });
           const bcovResolved = await resolveBcov({
             buyerId: req.userId,
             supplierId: supplier.id,
+            variantKey: bcovVariantKey,
             brandKey: bcovBrandKey,
             scopeKeys: bcovScopeKeys
           });
