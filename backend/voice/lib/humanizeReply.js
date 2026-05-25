@@ -1,5 +1,10 @@
 /** Normalize support replies for natural spoken delivery. */
 
+import { getVoiceText } from '../i18n/index.js';
+import { resolveVoiceLanguage } from './voiceLanguage.js';
+import { wrapEngaging, engagementSeed } from './conversationalVoice.js';
+import { prepareSpeechText } from './prepareSpeechText.js';
+
 const ROBOTIC_PATTERNS = [
   [/\bAccording to (?:our |the )?policy,?\s*/gi, ''],
   [/\bAs per (?:the )?policy,?\s*/gi, ''],
@@ -9,20 +14,31 @@ const ROBOTIC_PATTERNS = [
   [/\bI'm an AI\b/gi, '']
 ];
 
-export function humanizeSupportReply(text) {
-  let s = String(text || '').replace(/\s+/g, ' ').trim();
+export function humanizeSupportReply(text, locale = 'en-IN') {
+  let s = prepareSpeechText(text, locale);
   for (const [pattern, replacement] of ROBOTIC_PATTERNS) {
     s = s.replace(pattern, replacement);
   }
-  if (s && !/[.!?]$/.test(s)) s += '.';
   return s;
 }
 
-export const SUPPORT_FALLBACK_HUMAN =
-  "I'm not sure about that — I don't have it in our policies. Check your orders page or contact support and they'll help you out.";
+export function getSupportFallbackHuman(language = 'english') {
+  const lang = resolveVoiceLanguage(null, language);
+  return getVoiceText('support.fallback', lang, {}, getVoiceText('support.fallback', 'english', {}, ''));
+}
 
-export const VOICE_AGENT_GREETING = 'Hey, this is Pranshu, your AI assistant.';
+export function getGreetingHuman(language = 'english') {
+  const lang = resolveVoiceLanguage(null, language);
+  const key = lang === 'hinglish' ? 'greeting.hinglish' : 'greeting.default';
+  const body = getVoiceText(key, lang, {}, getVoiceText('greeting.default', 'english', {}, ''));
+  return wrapEngaging(lang, body, {
+    leadPool: 'welcomeLead',
+    seed: engagementSeed(null)
+  });
+}
 
-export const GREETING_HUMAN = VOICE_AGENT_GREETING;
-
-export const THANKS_HUMAN = "You're welcome! Anything else I can help with?";
+export function getThanksHuman(language = 'english') {
+  const lang = resolveVoiceLanguage(null, language);
+  const body = getVoiceText('thanks.default', lang, {}, getVoiceText('thanks.default', 'english', {}, ''));
+  return wrapEngaging(lang, body, { ack: true, seed: engagementSeed(null) });
+}

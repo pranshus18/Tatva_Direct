@@ -101,6 +101,47 @@ export const parseSpecificationsObject = (value) => {
   return null;
 };
 
+/** Immutable order / PO snapshot fields — not merged from live catalog rows. */
+export const ORDER_SNAPSHOT_META_KEYS = new Set([
+  'parentAsin',
+  'variantAsin',
+  'variantKey',
+  'brandModel',
+  'variantAttributes',
+  'snapshotAt',
+  'productIdentification',
+  'bcov',
+  'gst'
+]);
+
+const stripOrderSnapshotMetaKeys = (specs = {}) =>
+  Object.fromEntries(
+    Object.entries(specs).filter(([key]) => !ORDER_SNAPSHOT_META_KEYS.has(String(key || '').trim()))
+  );
+
+/**
+ * Merge catalog + order snapshot specs for display without overwriting
+ * frozen identity fields captured at order placement.
+ */
+export const mergeOrderItemSpecificationsForDisplay = (productSpecs, snapshot) => {
+  const productParsed = parseSpecificationsObject(productSpecs) || {};
+  const snapshotParsed = parseSpecificationsObject(snapshot) || {};
+  const merged = mergeSpecificationMaps(
+    stripOrderSnapshotMetaKeys(productParsed),
+    stripOrderSnapshotMetaKeys(snapshotParsed)
+  );
+  for (const key of ORDER_SNAPSHOT_META_KEYS) {
+    if (
+      snapshotParsed[key] !== undefined &&
+      snapshotParsed[key] !== null &&
+      snapshotParsed[key] !== ''
+    ) {
+      merged[key] = snapshotParsed[key];
+    }
+  }
+  return merged;
+};
+
 /** Merge spec maps; prefer meaningful values over empty placeholders. */
 export const mergeSpecificationMaps = (...sources) => {
   const merged = {};

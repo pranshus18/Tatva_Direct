@@ -1,26 +1,29 @@
 import { truncateForSpeech } from '../../summarizeForVoice.js';
 import { isReject, isConfirm } from '../../intents.js';
+import { isPlaceOrderPhrase } from '../../lib/voiceIntentPhrases.js';
 import {
   promptPlaceOrderRetry,
   promptPlacingOrder,
   promptOrderComplete,
-  promptLoadingTransport,
   promptTransportRequiredBeforeOrder
 } from '../../lib/voice_prompts.js';
 import { hasMandatoryTransportSelected } from '../../lib/transportGate.js';
-import { getCheckout, setCheckout, setAwaitTransport } from './checkout_flow_state.js';
+import { getCheckout, setAwaitTransport } from './checkout_flow_state.js';
 import { loadTransportQuotes } from './checkout_flow_transport.js';
+import { getVoiceText } from '../../i18n/index.js';
+import { resolveVoiceLanguage } from '../../lib/voiceLanguage.js';
 
 export async function placeOrderAndConfirmTransport(toolCtx, memory) {
   const { client } = toolCtx;
   const checkout = getCheckout(memory);
+  const lang = resolveVoiceLanguage(memory);
 
   if (!hasMandatoryTransportSelected(checkout)) {
     setAwaitTransport(memory, {
       optionsByVendor: checkout.optionsByVendor,
       quotesLoaded: Boolean(checkout.optionsByVendor)
     });
-    return truncateForSpeech(promptTransportRequiredBeforeOrder());
+    return truncateForSpeech(promptTransportRequiredBeforeOrder(memory));
   }
 
   const createRes = await client.post('/api/po/create', {
@@ -33,12 +36,12 @@ export async function placeOrderAndConfirmTransport(toolCtx, memory) {
     gstin: checkout.gstin || null
   });
   if (!createRes.ok) {
-    return `Order creation failed: ${createRes.error}`;
+    return getVoiceText('checkout.orderCreationFailed', lang, { error: createRes.error }, '');
   }
 
   const orders = createRes.data?.orders || [];
   if (!orders.length) {
-    return 'Orders were not created. Please finish on the website.';
+    return getVoiceText('checkout.ordersNotCreated', lang, {}, '');
   }
 
   const byVendorId = checkout.transportByVendor || {};
@@ -70,40 +73,47 @@ export async function placeOrderAndConfirmTransport(toolCtx, memory) {
     });
     if (!confirmRes.ok) {
       const nums = orders.map((o) => o.order_number || o.id).join(', ');
-      return `Order created${nums ? ` (${nums})` : ''}, but transport booking failed: ${confirmRes.error}. Finish transport on the website.`;
+      const orderRef = nums ? ` (${nums})` : '';
+      return getVoiceText(
+        'checkout.orderCreatedTransportFailed',
+        lang,
+        { orderRef, error: confirmRes.error },
+        ''
+      );
     }
   }
 
   memory.setPendingAction(null);
   const nums = orders.map((o) => o.order_number || o.id).join(', ');
-  return truncateForSpeech(promptOrderComplete(nums));
+  return truncateForSpeech(promptOrderComplete(nums, memory));
 }
 
 export async function handlePlaceConfirm(toolCtx, memory, utterance) {
+  const lang = resolveVoiceLanguage(memory);
+
   if (isReject(utterance)) {
     memory.setPendingAction(null);
-    return 'Order not placed. Say a product name to start again.';
+    return getVoiceText('confirm.rejectStartAgain', lang, {}, '');
   }
-  if (!isConfirm(utterance) && !/\b(place (the )?order|confirm order|submit)\b/i.test(utterance)) {
-    return promptPlaceOrderRetry();
+  if (!isPlaceOrderPhrase(utterance)) {
+    return promptPlaceOrderRetry(memory);
   }
 
   const checkout = getCheckout(memory);
   if (!hasMandatoryTransportSelected(checkout)) {
-    const loading = checkout.poGroups?.length ? promptLoadingTransport() : '';
     if (!checkout.optionsByVendor || !Object.keys(checkout.optionsByVendor).length) {
       const step = await loadTransportQuotes(toolCtx, memory);
-      return truncateForSpeech(`${loading} ${step}`.trim());
+      return truncateForSpeech(step);
     }
     setAwaitTransport(memory, {
       optionsByVendor: checkout.optionsByVendor,
       quotesLoaded: true
     });
-    return truncateForSpeech(promptTransportRequiredBeforeOrder());
+    return truncateForSpeech(promptTransportRequiredBeforeOrder(memory));
   }
 
   memory.setPendingAction(null);
-  const placing = promptPlacingOrder();
+  const placing = promptPlacingOrder(memory);
   const result = await placeOrderAndConfirmTransport(toolCtx, memory);
   return `${placing} ${result}`;
 }

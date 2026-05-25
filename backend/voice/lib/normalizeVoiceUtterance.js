@@ -1,0 +1,85 @@
+import { normalizeSearchQueryAliases } from '../../services/voiceSearchAliases.js';
+import { isQuantityLikeUtterance } from './spokenNumbers.js';
+
+const SOLE_WORD_QTY = {
+  to: '2',
+  too: '2',
+  tu: '2',
+  true: '2',
+  do: '2',
+  won: '1',
+  one: '1',
+  tree: '3',
+  free: '3',
+  for: '4',
+  ate: '8',
+  sex: '6',
+  tin: '10'
+};
+
+/** STT often hears assistant TTS or background audio — ignore as user intent. */
+const NOISE_UTTERANCE_RE =
+  /\b(song|music|lyrics|youtube|spotify|netflix|radio|bangla|bollywood|play\s+this|subscribe|thank\s+you\s+for\s+watching)\b/i;
+
+/**
+ * Fix common browser / cloud STT mistakes before routing (search, cart, checkout).
+ */
+export function normalizeVoiceUtterance(text) {
+  let t = String(text || '').trim();
+  if (!t) return t;
+
+  t = t
+    .replace(/\s+/g, ' ')
+    .replace(/[""]/g, '"')
+    .replace(/['']/g, "'");
+
+  const low = t.toLowerCase().replace(/[.,!?]+$/g, '').trim();
+  if (SOLE_WORD_QTY[low]) return SOLE_WORD_QTY[low];
+
+  const qtyPhrase = low.match(
+    /^(?:(?:i\s+)?(?:want|need|order|get|give\s+me|just|only|please)\s+)?(to|too|tu|two|one|three|four|five|six|seven|eight|nine|ten)\s+(?:units?|pieces?|items?|pcs?|nos?)$/i
+  );
+  if (qtyPhrase) {
+    const map = {
+      to: '2',
+      too: '2',
+      tu: '2',
+      two: '2',
+      one: '1',
+      three: '3',
+      four: '4',
+      five: '5',
+      six: '6',
+      seven: '7',
+      eight: '8',
+      nine: '9',
+      ten: '10'
+    };
+    return map[qtyPhrase[1].toLowerCase()] || t;
+  }
+
+  // Common mis-hears for cart / search commands
+  t = t
+    .replace(/\badd\s+to\s+car\b/gi, 'add to cart')
+    .replace(/\bart\s+to\s+cart\b/gi, 'add to cart')
+    .replace(/\bhad\s+to\s+cart\b/gi, 'add to cart')
+    .replace(/\bcart\s+mean\b/gi, 'cart mein')
+    .replace(/\bcontinue\s+shopping\b/gi, 'continue')
+    .replace(/\bconfirm\s+order\b/gi, 'place order')
+    .replace(/\bplease\s+order\b/gi, 'place order');
+
+  const normalized = normalizeSearchQueryAliases(t);
+  return normalized || t;
+}
+
+export function isLikelySpeechNoise(text) {
+  const t = String(text || '').trim();
+  if (!t) return true;
+  if (isQuantityLikeUtterance(t)) return false;
+  if (t.length < 2) return true;
+  if (NOISE_UTTERANCE_RE.test(t)) return true;
+  if (t.length > 100 && !/\b(cart|search|add|order|product|supplier|continue|confirm|cement|steel|help)\b/i.test(t)) {
+    return true;
+  }
+  return false;
+}

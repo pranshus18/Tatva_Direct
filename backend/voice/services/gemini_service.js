@@ -1,12 +1,22 @@
 import logger from '../../utils/logger.js';
-import { resolveVoiceModels } from '../voiceModel.js';
+import { resolveVoiceGeminiTimeoutMs, resolveVoiceModels } from '../voiceModel.js';
+import { resolveVoiceLanguage } from '../lib/voiceLanguage.js';
+import {
+  VOICE_PERSONALITY_CORE,
+  VOICE_CHAT_TEMPERATURE,
+  VOICE_SUPPORT_TEMPERATURE,
+  buildVoiceSystemPrompt
+} from '../lib/voicePersonality.js';
 
-const SYSTEM =
-  'Ecommerce voice assistant. Short answers only (1-2 sentences). Use tools when needed.';
+const SYSTEM_BASE = VOICE_PERSONALITY_CORE;
+
+function buildLanguageSystem(systemText, language) {
+  return buildVoiceSystemPrompt(systemText, language);
+}
 
 const MODELS = resolveVoiceModels();
 const MAX_TOKENS = Number.parseInt(String(process.env.VOICE_MAX_OUTPUT_TOKENS || '96'), 10) || 96;
-const TIMEOUT_MS = Number.parseInt(String(process.env.VOICE_GEMINI_TIMEOUT_MS || '8000'), 10) || 8000;
+const TIMEOUT_MS = resolveVoiceGeminiTimeoutMs();
 
 async function fetchGemini(model, body, stream = false) {
   const key = process.env.GEMINI_API_KEY;
@@ -26,6 +36,13 @@ async function fetchGemini(model, body, stream = false) {
       body: JSON.stringify(body),
       signal: controller.signal
     });
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      const timeoutErr = new Error('Gemini request timed out');
+      timeoutErr.name = 'TimeoutError';
+      throw timeoutErr;
+    }
+    throw err;
   } finally {
     clearTimeout(timeout);
   }
@@ -66,11 +83,12 @@ export const geminiService = {
     contents,
     tools = null,
     maxOutputTokens = MAX_TOKENS,
-    temperature = 0.1,
-    onChunk = null
+    temperature = VOICE_SUPPORT_TEMPERATURE,
+    onChunk = null,
+    language = null
   }) {
     const body = {
-      systemInstruction: { parts: [{ text: systemInstruction }] },
+      systemInstruction: { parts: [{ text: buildLanguageSystem(systemInstruction, language) }] },
       contents,
       generationConfig: { temperature, maxOutputTokens }
     };
@@ -91,11 +109,11 @@ export const geminiService = {
     throw lastErr || new Error('Gemini support generation failed');
   },
 
-  async generate({ contents, tools = null }) {
+  async generate({ contents, tools = null, language = null }) {
     const body = {
-      systemInstruction: { parts: [{ text: SYSTEM }] },
+      systemInstruction: { parts: [{ text: buildLanguageSystem(SYSTEM_BASE, language) }] },
       contents,
-      generationConfig: { temperature: 0.1, maxOutputTokens: MAX_TOKENS }
+      generationConfig: { temperature: VOICE_CHAT_TEMPERATURE, maxOutputTokens: MAX_TOKENS }
     };
     if (tools) body.tools = [{ functionDeclarations: tools }];
 
@@ -114,11 +132,13 @@ export const geminiService = {
   },
 
   /** Stream text deltas — calls onChunk(text), returns full text + function calls if any. */
-  async streamGenerate({ contents, tools = null, onChunk, systemOverride = null }) {
+  async streamGenerate({ contents, tools = null, onChunk, systemOverride = null, language = null }) {
     const body = {
-      systemInstruction: { parts: [{ text: systemOverride || SYSTEM }] },
+      systemInstruction: {
+        parts: [{ text: buildLanguageSystem(systemOverride || SYSTEM_BASE, language) }]
+      },
       contents,
-      generationConfig: { temperature: 0.2, maxOutputTokens: MAX_TOKENS }
+      generationConfig: { temperature: VOICE_CHAT_TEMPERATURE, maxOutputTokens: MAX_TOKENS }
     };
     if (tools) body.tools = [{ functionDeclarations: tools }];
 
@@ -132,7 +152,7 @@ export const geminiService = {
 
         const reader = res.body?.getReader();
         if (!reader) {
-          const fallback = await this.generate({ contents, tools });
+          const fallback = await this.generate({ contents, tools, language });
           const parts = fallback.data.candidates?.[0]?.content?.parts || [];
           const text = parts.filter((p) => p.text).map((p) => p.text).join('');
           if (text && onChunk) onChunk(text);
@@ -171,7 +191,7 @@ export const geminiService = {
       }
     }
 
-    const fallback = await this.generate({ contents, tools });
+    const fallback = await this.generate({ contents, tools, language });
     const parts = fallback.data.candidates?.[0]?.content?.parts || [];
     const text = parts.filter((p) => p.text).map((p) => p.text).join('').trim();
     if (text && onChunk) onChunk(text);

@@ -6,16 +6,21 @@ import { parseSelectionIndex, isExplicitCancel } from '../lib/spokenNumbers.js';
 import {
   isHelpPhrase,
   helpForPending,
-  promptCheckoutCancelled,
-  promptLoadingTransport
+  promptCheckoutCancelled
 } from '../lib/voice_prompts.js';
 import {
   isResumeCheckoutPhrase,
   parseGoToScreenIntent
 } from './voice_navigation_phrases.js';
+import {
+  isCheckoutCommandPhrase,
+  isPlaceOrderPhrase
+} from '../lib/voiceIntentPhrases.js';
 import { getVoiceFlowMode, isCartFlowMode } from '../lib/voice_flow_mode.js';
 import { hasMandatoryTransportSelected } from '../lib/transportGate.js';
-import { CHECKOUT_TYPES, getCheckout } from './checkout/checkout_flow_state.js';
+import { getCheckout, CHECKOUT_TYPES } from './checkout/checkout_flow_state.js';
+import { getVoiceText } from '../i18n/index.js';
+import { resolveVoiceLanguage } from '../lib/voiceLanguage.js';
 import {
   beginCartCheckoutSession,
   handleDiscoveryCartHandoff as handleDiscoveryCartHandoffStep,
@@ -51,9 +56,9 @@ export async function tryCheckoutFlow(text, toolCtx, memory) {
     const checkout = getCheckout(memory);
     const flowMode = getVoiceFlowMode(memory);
     if (pending?.type) {
-      return helpForPending(pending.type, checkout, flowMode);
+      return helpForPending(pending.type, checkout, flowMode, memory);
     }
-    return helpForPending(null, checkout, flowMode);
+    return helpForPending(null, checkout, flowMode, memory);
   }
 
   if (pending && CHECKOUT_TYPES.has(pending.type)) {
@@ -73,7 +78,7 @@ export async function tryCheckoutFlow(text, toolCtx, memory) {
       isExplicitCancel(utterance, { pendingType })
     ) {
       memory.setPendingAction(null);
-      return promptCheckoutCancelled();
+      return promptCheckoutCancelled(memory);
     }
   }
 
@@ -82,20 +87,24 @@ export async function tryCheckoutFlow(text, toolCtx, memory) {
       return null;
     }
 
-    if (/\b(place (the )?order|complete order)\b/i.test(utterance)) {
+    if (isPlaceOrderPhrase(utterance)) {
       const checkout = getCheckout(memory);
       if (!checkout.poGroups?.length) {
-        return 'Add a product and choose a supplier before placing an order.';
+        return getVoiceText(
+          'checkout.placeOrderNeedItems',
+          resolveVoiceLanguage(memory),
+          {},
+          ''
+        );
       }
       if (!hasMandatoryTransportSelected(checkout)) {
-        const loading = promptLoadingTransport();
         const step = await loadTransportQuotes(toolCtx, memory);
-        return truncateForSpeech(`${loading} ${step}`);
+        return truncateForSpeech(step);
       }
       return handlePlaceConfirm(toolCtx, memory, utterance);
     }
 
-    if (/\b(checkout|check out)\b/i.test(utterance) && isCartFlowMode(memory)) {
+    if (isCheckoutCommandPhrase(utterance) && isCartFlowMode(memory)) {
       return resumeCheckoutFromCart(toolCtx, memory, { forceStep: 'auto' });
     }
 

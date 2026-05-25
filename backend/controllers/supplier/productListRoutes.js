@@ -6,7 +6,7 @@ import {
 } from './supplierImports.js';
 import {
   sanitizeImageUrls,
-  resolveVariantTsin
+  supplierOfferTsinFields
 } from './shared/productHelpers.js';
 
 export function registerSupplierProductListRoutes(ctx) {
@@ -123,8 +123,7 @@ router.get('/products', authenticateToken, async (req, res) => {
           approved_by: sp.approved_by,
           approved_at: sp.approved_at,
           supplier_id: sp.supplier_id,
-          variantKey: sp.variant_key,
-          variantAsin: resolveVariantTsin(sp.product?.asin, sp.variant_key, sp.variant_asin),
+          ...supplierOfferTsinFields(sp.product, sp),
           brandModel: sp.attributes?.brandModel,
           lsa: sp.attributes?.lsa,
           hsnCode: sp.attributes?.hsnCode,

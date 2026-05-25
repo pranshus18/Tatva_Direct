@@ -113,6 +113,15 @@ const Cart = ({ onLoadCart }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const onVoiceCart = () => {
+      loadCart({ silent: true, syncWorkflow: true });
+    };
+    window.addEventListener('voice-cart-updated', onVoiceCart);
+    return () => window.removeEventListener('voice-cart-updated', onVoiceCart);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const groups = useMemo(() => getGroups(cart?.draft || {}), [cart]);
   const allItems = useMemo(
     () => groups.flatMap((group) => (Array.isArray(group?.items) ? group.items : [])),

@@ -12,26 +12,34 @@ import {
 import { parseGoToScreenIntent } from './voice_navigation_phrases.js';
 import {
   parseQuantity,
+  parseVoicePickQuantity,
   parseSelectionIndex,
   isExplicitCancel,
   isQuantityOnlyUtterance
 } from '../lib/spokenNumbers.js';
+import { parseAddToCartUtterance } from '../lib/addToCartParse.js';
+import {
+  isAddToCartIntent as isAddToCartIntentPhrase,
+  isAffirmShortPhrase,
+  isPickConfirmPhrase,
+  isSearchRestartPhrase,
+  isShortControlUtterance
+} from '../lib/voiceIntentPhrases.js';
 import {
   isHelpPhrase,
   helpForPending,
   promptAskQuantity,
   promptPickProduct,
-  promptAddedToCart,
-  promptDiscoveryCartHandoff,
-  promptCheckoutCancelled
+  promptAddedWithHandoff,
+  promptCheckoutCancelled,
+  formatProductChoiceLines
 } from '../lib/voice_prompts.js';
+import { getVoiceText } from '../i18n/index.js';
+import { resolveVoiceLanguage } from '../lib/voiceLanguage.js';
 
-const ADD_INTENT_RE =
-  /\b(add|put)\s+(?:it|that|this|them)?\s*(?:to|in|into)\s+(?:the\s+)?cart\b|\badd\s+to\s+(?:the\s+)?cart\b|\bput\s+(?:it\s+)?in\s+(?:the\s+)?cart\b/i;
-
-const SEARCH_RESTART_RE = /\b(search|find|look(?:ing)?\s+for|show\s+me)\b/i;
 
 async function runSearchFromUtterance(toolCtx, memory, utterance) {
+  const lang = resolveVoiceLanguage(memory);
   const catalog = await productCatalogService.searchFromUtterance(
     toolCtx.client,
     utterance,
@@ -39,8 +47,8 @@ async function runSearchFromUtterance(toolCtx, memory, utterance) {
   );
   if (!catalog.ok) {
     return catalog.error === 'Request timed out'
-      ? 'Search timed out. Try a shorter product name.'
-      : 'I could not search right now. Please try again.';
+      ? getVoiceText('search.requestTimeout', lang, {}, '')
+      : getVoiceText('search.serviceUnavailable', lang, {}, '');
   }
   return productCatalogService.formatSearchSpeech(catalog, memory);
 }
@@ -49,23 +57,12 @@ function shouldRestartProductSearch(utterance) {
   const t = String(utterance || '').trim();
   if (!t || isAddToCartIntent(t) || isHelpPhrase(t)) return false;
   if (isQuantityOnlyUtterance(t)) return false;
-  if (/^(yes|no|ok|okay|cancel|stop|skip|none)$/i.test(t)) return false;
-  return SEARCH_RESTART_RE.test(t) || isLikelyProductSearch(t);
+  if (isShortControlUtterance(t)) return false;
+  return isSearchRestartPhrase(t) || isLikelyProductSearch(t);
 }
 
 export function isAddToCartIntent(text) {
-  const t = String(text || '');
-  if (ADD_INTENT_RE.test(t)) return true;
-  if (/\badd\s+.+\s+to\s+(?:the\s+)?cart\b/i.test(t)) return true;
-  if (/\badd\s+(?:the\s+)?(first|1st|number\s*\d+)\b/i.test(t)) return true;
-  return false;
-}
-
-function formatProductChoices(products) {
-  return products
-    .slice(0, 5)
-    .map((p, i) => `${i + 1}. ${p.name}`)
-    .join('. ');
+  return isAddToCartIntentPhrase(text);
 }
 
 function normalizeProduct(p) {
@@ -87,16 +84,31 @@ async function executeAdd(toolCtx, product, quantity) {
     },
     ''
   );
-  if (!result?.ok) return result?.speech || `Could not add ${p.name} to cart.`;
+  if (!result?.ok) {
+    const lang = resolveVoiceLanguage(toolCtx.memory);
+    return result?.speech || getVoiceText('cart.addFailed', lang, { productName: p.name }, '');
+  }
+
+  try {
+    await toolCtx.tools?.get_cart?.();
+  } catch {
+    /* cart refresh is best-effort */
+  }
+  if (typeof toolCtx.onCartUpdated === 'function') {
+    try {
+      toolCtx.onCartUpdated();
+    } catch {
+      /* ignore */
+    }
+  }
 
   enterDiscoveryFlow(toolCtx.memory);
-  const addedMsg = promptAddedToCart(p.name);
   toolCtx.memory.setPendingAction({
     type: 'await_discovery_cart_handoff',
     summary: 'discovery cart handoff before supplier',
     payload: { productName: p.name }
   });
-  return `${addedMsg} ${promptDiscoveryCartHandoff()}`;
+  return promptAddedWithHandoff(p.name, toolCtx.memory);
 }
 
 /**
@@ -119,7 +131,7 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
   }
 
   if (isHelpPhrase(utterance) && pending) {
-    return helpForPending(pending.type, memory.getContext('checkout', {}), getVoiceFlowMode(memory));
+    return helpForPending(pending.type, memory.getContext('checkout', {}), getVoiceFlowMode(memory), memory);
   }
 
   if (
@@ -128,13 +140,13 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
     isExplicitCancel(utterance, { pendingType: pending.type })
   ) {
     memory.setPendingAction(null);
-    return promptCheckoutCancelled();
+    return promptCheckoutCancelled(memory);
   }
 
   if (pending?.type === 'await_add_quantity') {
     const lower = utterance.toLowerCase();
-    if (/^(yes|yeah|yep|sure|ok|okay|add it|please add)\b/i.test(lower)) {
-      return promptAskQuantity(pending.payload.name);
+    if (isAffirmShortPhrase(lower)) {
+      return promptAskQuantity(pending.payload.name, memory);
     }
 
     if (shouldRestartProductSearch(utterance)) {
@@ -142,9 +154,10 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
       return runSearchFromUtterance(toolCtx, memory, utterance);
     }
 
-    const qty = parseQuantity(utterance);
+    let qty = parseVoicePickQuantity(utterance);
+    if (qty == null) qty = parseQuantity(utterance);
     if (qty == null) {
-      return promptAskQuantity(pending.payload.name);
+      return promptAskQuantity(pending.payload.name, memory);
     }
     memory.setPendingAction(null);
     const speech = await executeAdd(toolCtx, pending.payload, qty);
@@ -155,24 +168,41 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
     const products = pending.payload.products || [];
     if (!products.length) {
       memory.setPendingAction(null);
-      return 'Search for a product first, then say add to cart.';
+      return getVoiceText('cart.needSearchBeforeAdd', resolveVoiceLanguage(memory), {}, '');
     }
 
     let idx = parseSelectionIndex(utterance, products.length);
+
     if (idx == null) {
       const byName = productCatalogService.resolveProductFromSession(memory, utterance);
       if (byName) {
         idx = products.findIndex((p) => p.id === byName.id);
+        if (idx < 0) idx = null;
       }
     }
 
-    if (idx == null && isAddToCartIntent(utterance) && products.length === 1) {
-      idx = 0;
+    if (idx == null && isAddToCartIntent(utterance)) {
+      if (products.length === 1) {
+        idx = 0;
+      } else {
+        const addParsed = parseAddToCartUtterance(utterance);
+        if (addParsed.productHint) {
+          const byHint = productCatalogService.resolveProductFromSession(memory, addParsed.productHint);
+          if (byHint) {
+            idx = products.findIndex((p) => p.id === byHint.id);
+            if (idx < 0) idx = null;
+          }
+        }
+        if (idx == null && addParsed.quantity != null && products.length === 1) {
+          memory.setPendingAction(null);
+          return executeAdd(toolCtx, products[0], addParsed.quantity);
+        }
+      }
     }
 
     if (idx == null && products.length === 1) {
       const lower = utterance.toLowerCase();
-      if (/^(yes|yeah|yep|sure|ok|okay|that one|this one|select|confirm)\b/i.test(lower)) {
+      if (isPickConfirmPhrase(lower) || isAffirmShortPhrase(lower)) {
         idx = 0;
       }
     }
@@ -183,34 +213,45 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
       return executeAdd(toolCtx, products[0], qty);
     }
 
-    if (idx == null && shouldRestartProductSearch(utterance)) {
+    if (idx == null && isSearchRestartPhrase(utterance)) {
       memory.setPendingAction(null);
       return runSearchFromUtterance(toolCtx, memory, utterance);
     }
 
     if (idx == null) {
-      return promptPickProduct(formatProductChoices(products));
+      return promptPickProduct(formatProductChoiceLines(products, memory), memory);
     }
 
     const product = products[idx];
+    if (isQuantityOnlyUtterance(utterance) && products.length === 1) {
+      const qty = parseQuantity(utterance);
+      if (qty != null) {
+        memory.setPendingAction(null);
+        return executeAdd(toolCtx, product, qty);
+      }
+    }
+
     memory.setPendingAction({
       type: 'await_add_quantity',
       summary: `add ${product.name}`,
       payload: { id: product.id, name: product.name }
     });
-    return promptAskQuantity(product.name);
+    return promptAskQuantity(product.name, memory);
   }
 
   if (!isAddToCartIntent(utterance)) return null;
 
   if (isHelpPhrase(utterance)) {
-    return 'Step 1, search. Step 2, quantity. Step 3, cart. Then supplier, substitution, PO details, transport, and confirm order — all in this call.';
+    return getVoiceText('help.discoveryAddSteps', resolveVoiceLanguage(memory), {}, '');
   }
 
   const last = memory.getContext('last_search');
   const products = last?.products || [];
-  let product = productCatalogService.resolveProductFromSession(memory, utterance);
-  const qtyInPhrase = parseQuantity(utterance);
+  const addParsed = parseAddToCartUtterance(utterance);
+  let product =
+    productCatalogService.resolveProductFromSession(memory, addParsed.productHint || utterance) ||
+    productCatalogService.resolveProductFromSession(memory, utterance);
+  const qtyInPhrase = addParsed.quantity ?? parseQuantity(utterance);
 
   if (product && qtyInPhrase != null) {
     memory.setPendingAction(null);
@@ -223,11 +264,11 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
       summary: `add ${product.name}`,
       payload: { id: product.id, name: product.name }
     });
-    return promptAskQuantity(product.name);
+    return promptAskQuantity(product.name, memory);
   }
 
   if (!products.length) {
-    return 'Step 1, search. Say a product name first, for example Mac Air M2.';
+    return getVoiceText('cart.searchProductNameFirst', resolveVoiceLanguage(memory), {}, '');
   }
 
   if (products.length === 1) {
@@ -241,7 +282,7 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
       summary: 'pick a product to add',
       payload: { products: [p] }
     });
-    return promptPickProduct(`1. ${p.name}`);
+    return promptPickProduct(`1. ${p.name}`, memory);
   }
 
   memory.setPendingAction({
@@ -249,5 +290,5 @@ export async function tryAddToCartFlow(text, toolCtx, memory) {
     summary: 'pick a product to add',
     payload: { products }
   });
-  return truncateForSpeech(promptPickProduct(formatProductChoices(products)));
+  return truncateForSpeech(promptPickProduct(formatProductChoiceLines(products, memory), memory));
 }

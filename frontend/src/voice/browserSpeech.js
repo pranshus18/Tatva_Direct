@@ -1,89 +1,114 @@
-let speechUnlocked = false;
-let cachedVoice = null;
-let voicesWarmPromise = null;
+import {
+  getProsodyForLocale,
+  pickSpeechVoice,
+  rankVoicesForLocale,
+  resolveSpeechLocale,
+  scoreSpeechVoice
+} from './speechAccent.js';
 
-const SPEECH_RATE =
-  Number.parseFloat(String(import.meta.env.VITE_VOICE_SPEECH_RATE || '0.94')) || 0.94;
-const SPEECH_PITCH =
-  Number.parseFloat(String(import.meta.env.VITE_VOICE_SPEECH_PITCH || '1')) || 1;
+let speechUnlocked = false;
+const voiceCacheByLocale = new Map();
+const warmPromisesByLocale = new Map();
+let activeSpeechLocale = 'en-IN';
+let activeLanguageId = 'english';
+
+const DEFAULT_RATE =
+  Number.parseFloat(String(import.meta.env.VITE_VOICE_SPEECH_RATE || '0.9')) || 0.9;
+const DEFAULT_PITCH =
+  Number.parseFloat(String(import.meta.env.VITE_VOICE_SPEECH_PITCH || '1.03')) || 1.03;
 const STATUS_RATE =
-  Number.parseFloat(String(import.meta.env.VITE_VOICE_STATUS_RATE || '0.98')) || 0.98;
+  Number.parseFloat(String(import.meta.env.VITE_VOICE_STATUS_RATE || '0.95')) || 0.95;
 const CHUNK_PAUSE_MS =
-  Number.parseInt(String(import.meta.env.VITE_VOICE_CHUNK_PAUSE_MS || '320'), 10) || 320;
-const SPEECH_CHUNK_MAX = 280;
+  Number.parseInt(String(import.meta.env.VITE_VOICE_CHUNK_PAUSE_MS || '120'), 10) || 120;
+const SPEECH_CHUNK_MAX = 190;
+
+const VOICE_DEBUG =
+  typeof localStorage !== 'undefined' && localStorage.getItem('VOICE_DEBUG') === '1';
 
 export function getSpeechRecognitionCtor() {
   if (typeof window === 'undefined') return null;
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
 }
 
-function scoreVoice(voice) {
-  const name = String(voice?.name || '').toLowerCase();
-  const lang = String(voice?.lang || '').toLowerCase();
-  let score = 0;
-
-  if (lang.startsWith('en-in')) score += 40;
-  else if (lang.startsWith('en-gb')) score += 28;
-  else if (lang.startsWith('en-us')) score += 24;
-  else if (lang.startsWith('en')) score += 18;
-
-  if (voice.localService) score += 12;
-  if (/google/i.test(name)) score += 22;
-  if (/microsoft|apple|amazon|natural|neural|premium|enhanced|online/i.test(name)) score += 30;
-  if (/samantha|karen|daniel|rishi|veena|priya|moira|tessa|serena|zira|david|susan/i.test(name)) {
-    score += 34;
-  }
-  if (/female|woman/i.test(name)) score += 4;
-  if (/compact|espeak|android|bad news|bells|boing|whisper/i.test(name)) score -= 80;
-
-  return score;
+function getVoicesList() {
+  return window.speechSynthesis?.getVoices?.() || [];
 }
 
-function pickBestVoice() {
-  const voices = window.speechSynthesis?.getVoices?.() || [];
-  if (!voices.length) return null;
-  const ranked = [...voices].sort((a, b) => scoreVoice(b) - scoreVoice(a));
-  return ranked[0] || null;
+function cachedVoiceForLocale(locale) {
+  return voiceCacheByLocale.get(String(locale || 'en-IN').toLowerCase()) || null;
 }
 
-/** Load system voices early so the first reply does not use a robotic default. */
-export function preloadVoices() {
+function setCachedVoice(locale, voice) {
+  voiceCacheByLocale.set(String(locale || 'en-IN').toLowerCase(), voice || null);
+}
+
+function resolveLocale(locale, text, languageId) {
+  if (locale) return String(locale);
+  if (languageId) return resolveSpeechLocale(languageId, text);
+  return resolveSpeechLocale(activeLanguageId, text);
+}
+
+function logVoicePick(locale, voice, textSample) {
+  if (!VOICE_DEBUG || !voice) return;
+  console.log('[voice TTS]', {
+    locale,
+    voice: `${voice.name} (${voice.lang})`,
+    score: scoreSpeechVoice(voice, locale),
+    sample: String(textSample || '').slice(0, 60),
+    alternates: rankVoicesForLocale(getVoicesList(), locale, 3)
+  });
+}
+
+export function preloadVoices(locale = activeSpeechLocale) {
   if (typeof window === 'undefined' || !window.speechSynthesis) {
     return Promise.resolve(null);
   }
-  if (voicesWarmPromise) return voicesWarmPromise;
 
-  voicesWarmPromise = new Promise((resolve) => {
+  const key = String(locale || 'en-IN').toLowerCase();
+  if (warmPromisesByLocale.has(key)) return warmPromisesByLocale.get(key);
+
+  const promise = new Promise((resolve) => {
     const finish = () => {
-      cachedVoice = pickBestVoice();
-      resolve(cachedVoice);
+      const voices = getVoicesList();
+      const picked = pickSpeechVoice(voices, key);
+      setCachedVoice(key, picked);
+      logVoicePick(key, picked, '');
+      resolve(picked);
     };
 
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length) {
+    const voices = getVoicesList();
+    if (voices.length >= 3) {
       finish();
       return;
     }
 
+    let attempts = 0;
     const onChange = () => {
-      window.speechSynthesis.removeEventListener('voiceschanged', onChange);
-      finish();
+      attempts += 1;
+      const v = getVoicesList();
+      if (v.length >= 3 || attempts > 5) {
+        window.speechSynthesis.removeEventListener('voiceschanged', onChange);
+        finish();
+      }
     };
     window.speechSynthesis.addEventListener('voiceschanged', onChange);
-    setTimeout(finish, 600);
+    window.speechSynthesis.getVoices();
+    setTimeout(finish, 900);
   });
 
-  return voicesWarmPromise;
+  warmPromisesByLocale.set(key, promise);
+  return promise;
 }
 
-/** Call from a user click so later async replies can use speechSynthesis (Chrome/Safari). */
-export function unlockSpeech() {
+export function unlockSpeech(locale = activeSpeechLocale) {
   if (typeof window === 'undefined' || !window.speechSynthesis || speechUnlocked) return;
   try {
-    void preloadVoices();
+    void preloadVoices(locale);
     const u = new SpeechSynthesisUtterance(' ');
     u.volume = 0.01;
-    u.lang = 'en-IN';
+    u.lang = locale || 'en-IN';
+    const v = cachedVoiceForLocale(locale) || pickSpeechVoice(getVoicesList(), locale);
+    if (v) u.voice = v;
     window.speechSynthesis.speak(u);
     window.speechSynthesis.cancel();
     speechUnlocked = true;
@@ -92,37 +117,56 @@ export function unlockSpeech() {
   }
 }
 
-function applyUtterance(utter, { rate = SPEECH_RATE, pitch = SPEECH_PITCH } = {}) {
-  const voice = cachedVoice || pickBestVoice();
+function applyUtterance(utter, { rate, pitch, locale = activeSpeechLocale } = {}) {
+  const loc = String(locale || 'en-IN');
+  const prosody = getProsodyForLocale(loc);
+  let voice = cachedVoiceForLocale(loc);
+  if (!voice) {
+    voice = pickSpeechVoice(getVoicesList(), loc);
+    setCachedVoice(loc, voice);
+  }
+
+  utter.lang = loc;
   if (voice) {
     utter.voice = voice;
-    utter.lang = voice.lang || 'en-IN';
-  } else {
-    utter.lang = 'en-IN';
+    if (voice.lang) utter.lang = voice.lang;
   }
-  utter.rate = rate;
-  utter.pitch = pitch;
+
+  utter.rate = rate ?? prosody.rate ?? DEFAULT_RATE;
+  utter.pitch = pitch ?? prosody.pitch ?? DEFAULT_PITCH;
   utter.volume = 1;
 }
 
-/** Normalize text so TTS sounds less robotic (numbers, abbreviations). */
-export function humanizeForSpeech(text) {
-  return (
-    String(text || '')
+export function humanizeForSpeech(text, locale = activeSpeechLocale) {
+  let s = String(text || '').trim();
+  if (!s) return '';
+
+  s = s
+    .replace(/\s*—\s*/g, ', ')
+    .replace(/\s*–\s*/g, ', ')
+    .replace(/\s*;\s*/g, '. ')
+    .replace(/\*\*/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const loc = String(locale || 'en-IN').toLowerCase();
+  const isLatinHeavy = !/[\u0900-\u097F\u0C80-\u0CFF\u0C00-\u0C7F]/.test(s);
+
+  if (isLatinHeavy || loc.startsWith('en')) {
+    s = s
       .replace(/\b(\d+)\s*km\b/gi, '$1 kilometers')
-      .replace(/\b(\d+)\s*nos\b/gi, '$1 items')
-      .replace(/\bnos\b/gi, 'items')
+      .replace(/\b(\d+)\s*nos\b/gi, '$1 pieces')
+      .replace(/\bnos\b/gi, 'pieces')
       .replace(/\bRs\.?\s*/gi, 'rupees ')
       .replace(/\bINR\s*/gi, 'rupees ')
       .replace(/\bCOD\b/g, 'cash on delivery')
       .replace(/\bPO\b/g, 'purchase order')
-      .replace(/\bUPi\b/gi, 'U P I')
-      .replace(/\s+/g, ' ')
-      .trim()
-  );
+      .replace(/\bUPI\b/gi, 'U P I');
+  }
+
+  return s.replace(/\s+/g, ' ').trim();
 }
 
-/** Chrome sometimes drops the first speak() after async WS — nudge the queue. */
 function nudgeSpeechSynthesis() {
   try {
     if (window.speechSynthesis.speaking) {
@@ -134,22 +178,28 @@ function nudgeSpeechSynthesis() {
   }
 }
 
-export function speechSnippet(text, maxLen = 220) {
-  const s = humanizeForSpeech(text);
+export function speechSnippet(text, maxLen = 220, locale = activeSpeechLocale, languageId = null) {
+  const loc = resolveLocale(locale, text, languageId);
+  const s = humanizeForSpeech(text, loc);
   if (s.length <= maxLen) return s;
   const cut = s.slice(0, maxLen);
   const dot = cut.lastIndexOf('.');
-  return dot > 60 ? cut.slice(0, dot + 1) : `${cut.trim()}…`;
+  const qm = cut.lastIndexOf('?');
+  const stop = Math.max(dot, qm);
+  return stop > 50 ? cut.slice(0, stop + 1) : `${cut.trim()}…`;
 }
 
-function splitForSpeech(text) {
-  const s = humanizeForSpeech(text);
+function splitForSpeech(text, locale, languageId) {
+  const loc = resolveLocale(locale, text, languageId);
+  const s = humanizeForSpeech(text, loc);
   if (!s) return [];
-  const sentences = s.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [s];
+
+  const rawParts = s.split(/(?<=[.!?।])\s+/).filter(Boolean);
   const chunks = [];
   let buf = '';
-  for (const sentence of sentences) {
-    const piece = sentence.trim();
+
+  for (const part of rawParts) {
+    const piece = part.trim();
     if (!piece) continue;
     const next = buf ? `${buf} ${piece}` : piece;
     if (next.length > SPEECH_CHUNK_MAX && buf) {
@@ -163,20 +213,23 @@ function splitForSpeech(text) {
   return chunks.length ? chunks : [s];
 }
 
-function speakUtterance(snippet, { onStart, onEnd, rate, pitch } = {}) {
+function speakUtterance(snippet, { onStart, onEnd, rate, pitch, locale, languageId } = {}) {
   if (!snippet || typeof window === 'undefined' || !window.speechSynthesis) {
     onEnd?.();
     return false;
   }
 
+  const loc = resolveLocale(locale, snippet, languageId);
   const utter = new SpeechSynthesisUtterance(snippet);
-  applyUtterance(utter, { rate, pitch });
+  applyUtterance(utter, { rate, pitch, locale: loc });
+
   let ended = false;
   const finish = () => {
     if (ended) return;
     ended = true;
     onEnd?.();
   };
+
   utter.onstart = () => {
     onStart?.();
     setTimeout(nudgeSpeechSynthesis, 50);
@@ -184,47 +237,60 @@ function speakUtterance(snippet, { onStart, onEnd, rate, pitch } = {}) {
   utter.onend = finish;
   utter.onerror = finish;
 
-  const start = () => {
+  const run = () => {
+    applyUtterance(utter, { rate, pitch, locale: loc });
+    logVoicePick(loc, utter.voice || cachedVoiceForLocale(loc), snippet);
     window.speechSynthesis.speak(utter);
     setTimeout(nudgeSpeechSynthesis, 120);
   };
 
-  const run = () => {
-    applyUtterance(utter, { rate, pitch });
-    start();
-  };
-
-  if (cachedVoice || window.speechSynthesis.getVoices().length) {
+  if (cachedVoiceForLocale(loc) || getVoicesList().length) {
     run();
   } else {
-    void preloadVoices().then(run);
+    void preloadVoices(loc).then(run);
   }
   return true;
 }
 
-export function speakText(text, { onStart, onEnd, maxLen = 220, rate = STATUS_RATE } = {}) {
+export function speakText(text, { onStart, onEnd, maxLen = 220, rate, locale, languageId } = {}) {
   if (!text || typeof window === 'undefined' || !window.speechSynthesis) {
     onEnd?.();
     return false;
   }
-  const snippet = speechSnippet(text, maxLen);
+  const loc = resolveLocale(locale, text, languageId);
+  const snippet = speechSnippet(text, maxLen, loc, languageId);
   if (!snippet) {
     onEnd?.();
     return false;
   }
   window.speechSynthesis.cancel();
-  return speakUtterance(snippet, { onStart, onEnd, rate });
+  const prosody = getProsodyForLocale(loc);
+  return speakUtterance(snippet, {
+    onStart,
+    onEnd,
+    rate: rate ?? prosody.rate,
+    pitch: prosody.pitch,
+    locale: loc,
+    languageId
+  });
 }
 
-/** Speak the full agent reply with natural pacing between phrases. */
-export function speakVoiceReply(text, { onStart, onEnd } = {}) {
-  const parts = splitForSpeech(text);
+/**
+ * @param {object} opts
+ * @param {string} [opts.locale] - BCP-47 (hi-IN, kn-IN, …)
+ * @param {string} [opts.languageId] - english | hindi | kannada | telugu
+ */
+export function speakVoiceReply(text, { onStart, onEnd, locale, languageId } = {}) {
+  const loc = resolveLocale(locale, text, languageId || activeLanguageId);
+  const parts = splitForSpeech(text, loc, languageId || activeLanguageId);
   if (!parts.length) {
     onEnd?.();
     return false;
   }
   window.speechSynthesis.cancel();
+  const prosody = getProsodyForLocale(loc);
   let index = 0;
+
   const speakNext = () => {
     if (index >= parts.length) {
       onEnd?.();
@@ -233,8 +299,10 @@ export function speakVoiceReply(text, { onStart, onEnd } = {}) {
     const isFirst = index === 0;
     const isLast = index === parts.length - 1;
     speakUtterance(parts[index], {
-      rate: SPEECH_RATE,
-      pitch: SPEECH_PITCH,
+      rate: prosody.rate,
+      pitch: prosody.pitch,
+      locale: loc,
+      languageId: languageId || activeLanguageId,
       onStart: isFirst ? onStart : undefined,
       onEnd: () => {
         index += 1;
@@ -244,30 +312,52 @@ export function speakVoiceReply(text, { onStart, onEnd } = {}) {
     });
   };
 
-  void preloadVoices().then(speakNext);
+  void preloadVoices(loc).then(speakNext);
   return true;
 }
 
-/** Short status while the agent is working (catalog, transport, placing order). */
-export function speakStatus(text) {
+export function speakStatus(text, locale, languageId) {
   const s = String(text || '').trim();
   if (!s) return;
-  speakText(s, { maxLen: 140, rate: STATUS_RATE });
+  speakText(s, {
+    maxLen: 120,
+    rate: STATUS_RATE,
+    locale,
+    languageId: languageId || activeLanguageId
+  });
+}
+
+/** Set active call language for accent (prefer languageId over raw BCP-47). */
+export function setSpeechLocale(locale, languageId = null) {
+  activeSpeechLocale = String(locale || 'en-IN');
+  if (languageId) activeLanguageId = languageId;
+  const loc = resolveSpeechLocale(activeLanguageId, '');
+  activeSpeechLocale = loc;
+  warmPromisesByLocale.delete(loc.toLowerCase());
+  voiceCacheByLocale.delete(loc.toLowerCase());
+  void preloadVoices(loc);
+}
+
+export function setSpeechLanguage(languageId) {
+  const id = languageId || 'english';
+  activeLanguageId = id;
+  const loc = resolveSpeechLocale(id, '');
+  activeSpeechLocale = loc;
+  warmPromisesByLocale.delete(loc.toLowerCase());
+  voiceCacheByLocale.delete(loc.toLowerCase());
+  void preloadVoices(loc);
 }
 
 export function stopSpeaking() {
   window.speechSynthesis?.cancel();
 }
 
-/**
- * Continuous recognition for an active call.
- * Does NOT auto-submit on pause — only accumulates text until stop() is called.
- */
 export function createCallSpeechRecognizer({
   onInterim,
   onFinal,
   onError,
-  shouldKeepListening
+  shouldKeepListening,
+  locale = 'en-IN'
 } = {}) {
   const Ctor = getSpeechRecognitionCtor();
   if (!Ctor) {
@@ -278,6 +368,23 @@ export function createCallSpeechRecognizer({
   let transcript = '';
   let active = false;
   let stopping = false;
+  let activeLocale = String(locale || 'en-IN');
+
+  const pickBestPiece = (result) => {
+    const candidates = [];
+    for (let i = 0; i < result.length; i += 1) {
+      const text = String(result[i]?.transcript || '').trim();
+      if (!text) continue;
+      const conf = Number(result[i]?.confidence);
+      candidates.push({
+        text,
+        conf: Number.isFinite(conf) ? conf : (i === 0 ? 0.92 : 0.55 - i * 0.08)
+      });
+    }
+    if (!candidates.length) return '';
+    candidates.sort((a, b) => b.conf - a.conf || b.text.length - a.text.length);
+    return candidates[0].text;
+  };
 
   const flushTranscript = () => {
     const text = transcript.trim();
@@ -290,12 +397,13 @@ export function createCallSpeechRecognizer({
       let interim = '';
       let gotFinal = false;
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
-        const piece = event.results[i][0]?.transcript || '';
+        const piece = pickBestPiece(event.results[i]);
+        if (!piece) continue;
         if (event.results[i].isFinal) {
-          transcript = `${transcript} ${piece}`.trim();
+          transcript = transcript ? `${transcript} ${piece}`.trim() : piece;
           gotFinal = true;
         } else {
-          interim += piece;
+          interim += (interim ? ' ' : '') + piece;
         }
       }
       const display = `${transcript} ${interim}`.trim() || transcript;
@@ -316,10 +424,10 @@ export function createCallSpeechRecognizer({
       if (shouldKeepListening?.()) {
         try {
           recognition = new Ctor();
-          recognition.lang = 'en-IN';
+          recognition.lang = activeLocale;
           recognition.interimResults = true;
           recognition.continuous = true;
-          recognition.maxAlternatives = 1;
+          recognition.maxAlternatives = 5;
           bindHandlers(recognition);
           recognition.start();
           active = true;
@@ -330,14 +438,27 @@ export function createCallSpeechRecognizer({
     };
   };
 
+  const applyLocale = (nextLocale) => {
+    const loc = String(nextLocale || 'en-IN');
+    if (loc === activeLocale) return;
+    activeLocale = loc;
+    if (!active || stopping) return;
+    try {
+      recognition?.stop();
+    } catch {
+      /* ignore */
+    }
+  };
+
   const start = () => {
     stopping = false;
     transcript = '';
+    activeLocale = String(locale || 'en-IN');
     recognition = new Ctor();
-    recognition.lang = 'en-IN';
+    recognition.lang = activeLocale;
     recognition.interimResults = true;
     recognition.continuous = true;
-    recognition.maxAlternatives = 1;
+    recognition.maxAlternatives = 5;
     bindHandlers(recognition);
     try {
       recognition.start();
@@ -375,5 +496,13 @@ export function createCallSpeechRecognizer({
 
   const getTranscript = () => transcript.trim();
 
-  return { isSupported: true, start, stop, abort, getTranscript, isActive: () => active };
+  return {
+    isSupported: true,
+    start,
+    stop,
+    abort,
+    getTranscript,
+    setLocale: applyLocale,
+    isActive: () => active
+  };
 }

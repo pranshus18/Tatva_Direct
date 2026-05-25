@@ -27,9 +27,35 @@ export function createVoiceSocket({ token, handlers }) {
       handlers.onSttFinal?.(data.text);
     }
     if (data.type === 'reply_chunk') handlers.onReplyChunk?.(data.text);
-    if (data.type === 'reply_done') handlers.onReplyDone?.(data.text);
-    if (data.type === 'tts_chunk') handlers.onTtsChunk?.(data.chunk);
-    if (data.type === 'agent_reply') handlers.onAgentReply?.(data.text);
+    if (data.type === 'reply_done') {
+      handlers.onReplyDone?.(data.text, {
+        instant: Boolean(data.instant)
+      });
+    }
+    if (data.type === 'tts_start') {
+      handlers.onTtsStart?.({
+        seq: data.seq,
+        statusLine: Boolean(data.statusLine)
+      });
+    }
+    if (data.type === 'tts_chunk') {
+      handlers.onTtsChunk?.({
+        seq: data.seq,
+        chunk: data.chunk,
+        encoding: data.encoding || 'pcm16',
+        sampleRate: data.sampleRate || 24000
+      });
+    }
+    if (data.type === 'tts_done') {
+      handlers.onTtsDone?.({
+        seq: data.seq,
+        provider: data.provider
+      });
+    }
+    if (data.type === 'tts_skipped') handlers.onTtsSkipped?.(data);
+    if (data.type === 'agent_reply') {
+      handlers.onAgentReply?.(data.text, { instant: Boolean(data.instant) });
+    }
     if (data.type === 'agent_state') handlers.onAgentState?.(data.state);
     if (data.type === 'auth_ok') handlers.onAuthOk?.(data);
     if (data.type === 'ready') handlers.onReady?.(data);
@@ -59,11 +85,38 @@ export function createVoiceSocket({ token, handlers }) {
       return true;
     },
 
-    sendCallStart(flow) {
+    sendTtsSpeak(text) {
+      if (ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(JSON.stringify({ type: 'tts_speak', text: String(text || '').trim() }));
+      return true;
+    },
+
+    sendCallStart(flow, language = '') {
       if (ws.readyState !== WebSocket.OPEN) return false;
       const f = String(flow || '').trim();
       if (!f) return false;
-      ws.send(JSON.stringify({ type: 'call_start', flow: f }));
+      ws.send(
+        JSON.stringify({
+          type: 'call_start',
+          flow: f,
+          language: String(language || '').trim()
+        })
+      );
+      return true;
+    },
+
+    sendTransportSelected(selection) {
+      if (ws.readyState !== WebSocket.OPEN) return false;
+      if (!selection || typeof selection !== 'object') return false;
+      ws.send(
+        JSON.stringify({
+          type: 'transport_selected',
+          selection: {
+            byVendorId: selection.byVendorId || {},
+            byVendorCourierDetail: selection.byVendorCourierDetail || {}
+          }
+        })
+      );
       return true;
     },
 

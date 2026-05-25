@@ -1,0 +1,176 @@
+{
+  "startedAt": "2026-05-21T05:57:35.110Z",
+  "endedAt": "2026-05-21T05:57:44.612Z",
+  "base": "http://127.0.0.1:8081",
+  "results": {
+    "AUTH-01": {
+      "status": "PASS",
+      "notes": "Login OK: service_provider, supplier, admin",
+      "evidence": ""
+    },
+    "AUTH-02": {
+      "status": "PASS",
+      "notes": "SP blocked from admin route (403)",
+      "evidence": ""
+    },
+    "DISC-01": {
+      "status": "PASS",
+      "notes": "Search returned 4 item(s)",
+      "evidence": ""
+    },
+    "DISC-02": {
+      "status": "PASS",
+      "notes": "category=laptop, count=2",
+      "evidence": ""
+    },
+    "DISC-03": {
+      "status": "PASS",
+      "notes": "empty query list count=4",
+      "evidence": ""
+    },
+    "CHK-01": {
+      "status": "BLOCKED",
+      "notes": "No listable product with supplier_product_id for automated PO create",
+      "evidence": ""
+    },
+    "CHK-02": {
+      "status": "PASS",
+      "notes": "poGroups: Too small: expected array to have >=1 items",
+      "evidence": ""
+    },
+    "PAY-01": {
+      "status": "FAIL",
+      "notes": "Could not resolve order UUID",
+      "evidence": ""
+    },
+    "PAY-02": {
+      "status": "FAIL",
+      "notes": "Could not resolve order UUID",
+      "evidence": ""
+    },
+    "ORD-EDIT-01": {
+      "status": "PASS",
+      "notes": "Order updated successfully",
+      "evidence": ""
+    },
+    "ORD-EDIT-02": {
+      "status": "PASS",
+      "notes": "This order can only be edited while it is pending/confirmed and unpaid",
+      "evidence": ""
+    },
+    "ORD-CAN-01": {
+      "status": "PASS",
+      "notes": "Order cancelled successfully",
+      "evidence": ""
+    },
+    "ORD-CAN-02": {
+      "status": "PASS",
+      "notes": "This order cannot be cancelled after processing/shipping/delivery or once paid",
+      "evidence": ""
+    },
+    "ORD-CAN-03": {
+      "status": "PASS",
+      "notes": "repeat cancel status 400; movements after repeat=1",
+      "evidence": ""
+    },
+    "INV-01": {
+      "status": "PASS",
+      "notes": "cancel_restock movements=1 (expected 1)",
+      "evidence": ""
+    },
+    "INV-02": {
+      "status": "PASS",
+      "notes": "Stock restored or increased for 1 SKU(s)",
+      "evidence": ""
+    },
+    "REV-01": {
+      "status": "PASS",
+      "notes": "You can only rate a supplier after the order is delivered and payment is marked as paid",
+      "evidence": ""
+    },
+    "REV-02": {
+      "status": "BLOCKED",
+      "notes": "No delivered+paid order",
+      "evidence": ""
+    },
+    "RET-01": {
+      "status": "BLOCKED",
+      "notes": "Delivered order has no item id in dashboard payload",
+      "evidence": ""
+    },
+    "RET-02": {
+      "status": "BLOCKED",
+      "notes": "No order item id",
+      "evidence": ""
+    },
+    "NOTIF-01": {
+      "status": "PASS",
+      "notes": "fetched 33, mark read 200",
+      "evidence": ""
+    },
+    "REG-01": {
+      "status": "PASS",
+      "notes": "status 200",
+      "evidence": ""
+    },
+    "REG-02": {
+      "status": "PASS",
+      "notes": "inventory summary 200",
+      "evidence": ""
+    },
+    "REG-03": {
+      "status": "PASS",
+      "notes": "admin notifications 200",
+      "evidence": ""
+    }
+  },
+  "counts": {
+    "PASS": 18,
+    "FAIL": 2,
+    "BLOCKED": 4,
+    "NOT RUN": 0
+  },
+  "dbLog": {
+    "orderNumber": "ORD-15MAY2026-22028A44",
+    "orderUuid": "89ab1278-bba5-466c-9edf-1132807b072b",
+    "stockBefore": [
+      {
+        "supplier_product_id": "4b835a1d-2c7a-4641-a050-bcffca277a50",
+        "stock": 125,
+        "ordered_qty": 5
+      }
+    ],
+    "cancellationStatusVerified": true,
+    "restockMovementCount": 1,
+    "stockAfter": [
+      {
+        "supplier_product_id": "4b835a1d-2c7a-4641-a050-bcffca277a50",
+        "stock": 130,
+        "ordered_qty": 5
+      }
+    ],
+    "movements": [
+      {
+        "id": "f2c2f2ca-bf46-4716-a445-bc20dda94c7e",
+        "supplier_product_id": "4b835a1d-2c7a-4641-a050-bcffca277a50",
+        "quantity_change": 5,
+        "notes": "cancel_restock: inventory added back due to order cancellation"
+      }
+    ],
+    "duplicateRestockPrevented": "Yes"
+  },
+  "defects": [],
+  "automated": {
+    "backend": {
+      "status": "PASS",
+      "notes": "backend npm test",
+      "evidence": ""
+    },
+    "frontend": {
+      "status": "PASS",
+      "notes": "frontend npm test",
+      "evidence": ""
+    }
+  },
+  "passRatePct": 75
+}

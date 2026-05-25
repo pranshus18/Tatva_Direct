@@ -6,7 +6,7 @@ import {
   insertNotification,
   isValidPrimaryOrderStatus,
   logger,
-  mergeSpecificationMaps,
+  mergeOrderItemSpecificationsForDisplay,
   parseSpecificationsObject,
   parseWithSchema,
   recordInventoryMovement,
@@ -221,18 +221,18 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
           ? snapshot.variantAttributes
           : {};
       const productSpecs = parseSpecificationsObject(it?.product?.specifications);
-      const displaySpecifications = mergeSpecificationMaps(productSpecs, snapshot);
+      const displaySpecifications = mergeOrderItemSpecificationsForDisplay(productSpecs, snapshot);
 
       return {
         ...it,
         specifications: displaySpecifications,
         unitPrice: parseFloat(it?.unit_price ?? it?.unitPrice ?? 0) || 0,
         totalPrice: parseFloat(it?.total_price ?? it?.totalPrice ?? 0) || 0,
+        asin: snapshot?.parentAsin || it?.product?.asin || null,
+        parentAsin: snapshot?.parentAsin || it?.product?.asin || null,
         variantKey: snapshot?.variantKey || null,
         variantAsin: snapshot?.variantAsin || null,
-        productTrackingId:
-          snapshot?.variantAsin ||
-          null,
+        productTrackingId: snapshot?.variantAsin || null,
         brandModel: snapshot?.brandModel ?? variantAttributes?.brandModel ?? null
       };
     });

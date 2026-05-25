@@ -1,1 +1,6 @@
-export const VOICE_AGENT_GREETING = 'Hey, this is Pranshu, your AI assistant.';
+import { voiceText } from './voiceText.js';
+
+export function getVoiceGreeting(language = 'english') {
+  const key = language === 'hinglish' ? 'greeting.hinglish' : 'greeting.default';
+  return voiceText(language, key, {}, voiceText('english', 'greeting.default'));
+}

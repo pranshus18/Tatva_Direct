@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { API_BASE_URL, getApiUrl, resolveApiPath } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import SupplierTsinLine from '../components/SupplierTsinLine';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import { fetchVoiceCartDraft, isVoiceGuidedActive } from '../voice/voiceCartBridge';
 import './CreatePO.css';
@@ -1092,6 +1093,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                               ID: {item.productIdentification}
                             </div>
                           )}
+                          <SupplierTsinLine asin={item.asin} variantAsin={item.variantAsin} />
                           {normalizeSpecifications(item.specifications).length > 0 && (
                             <div
                               style={{

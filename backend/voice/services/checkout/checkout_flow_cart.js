@@ -34,7 +34,7 @@ export async function beginCartCheckoutSession(toolCtx, memory) {
   const synced = await syncCheckoutFromCartDraft(toolCtx, memory);
   if (!synced.ok || !synced.items.length) {
     memory.setPendingAction(null);
-    return { ok: false, speech: promptCartEmpty() };
+    return { ok: false, speech: promptCartEmpty(memory) };
   }
   memory.setPendingAction({
     type: 'await_cart_continue',
@@ -43,14 +43,14 @@ export async function beginCartCheckoutSession(toolCtx, memory) {
   });
   return {
     ok: true,
-    speech: promptCartWithItems(synced.items.length, 'cart')
+    speech: promptCartWithItems(synced.items.length, 'cart', memory)
   };
 }
 
 export async function handleDiscoveryCartHandoff(toolCtx, memory, utterance, startSupplierSelection) {
   enterDiscoveryFlow(memory);
   if (!isCartContinuePhrase(utterance)) {
-    return promptDiscoveryCartHandoff();
+    return promptDiscoveryCartHandoff(memory);
   }
   return startSupplierSelection(toolCtx, memory);
 }
@@ -58,7 +58,7 @@ export async function handleDiscoveryCartHandoff(toolCtx, memory, utterance, sta
 export async function handleCartContinue(toolCtx, memory, utterance, startSupplierSelection) {
   enterCartCheckoutFlow(memory);
   if (!isCartContinuePhrase(utterance)) {
-    return promptCartContinue();
+    return promptCartContinue(memory);
   }
   return startSupplierSelection(toolCtx, memory);
 }

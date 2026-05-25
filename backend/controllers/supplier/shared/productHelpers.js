@@ -2,9 +2,13 @@ import { buildVariantAsinLikeId } from '../../../services/productIdentityService
 
 const IGST_ALLOWED_RATES = new Set([0, 5, 12, 18, 28]);
 const CGST_SGST_ALLOWED_RATES = new Set([0, 2.5, 6, 9, 14]);
-const CANONICAL_VARIANT_TSIN_REGEX = /^TS[A-Z0-9]{4}$/;
-
 export const ORDER_INSERT_MAX_RETRIES = 3;
+
+/** Parent TSIN exactly as stored on products.asin (supplier catalog row). */
+export function resolveParentTsin(parentAsin) {
+  const stored = String(parentAsin || '').trim().toUpperCase();
+  return stored || null;
+}
 
 export function sanitizeImageUrls(input) {
   if (!Array.isArray(input)) return [];
@@ -21,12 +25,24 @@ export function sanitizeImageUrls(input) {
   return out.slice(0, 12);
 }
 
+/**
+ * Variant TSIN for a supplier offer: always prefer supplier_products.variant_asin when set.
+ * Only derive from parent + variant_key when the column is blank (legacy rows).
+ */
 export function resolveVariantTsin(parentAsin, variantKey, currentVariantAsin) {
-  const normalizedCurrent = String(currentVariantAsin || '').trim().toUpperCase();
-  if (CANONICAL_VARIANT_TSIN_REGEX.test(normalizedCurrent)) {
-    return normalizedCurrent;
-  }
+  const stored = String(currentVariantAsin || '').trim().toUpperCase();
+  if (stored) return stored;
   return buildVariantAsinLikeId(parentAsin || '', variantKey || '');
+}
+
+/** TSIN fields for API responses — matches supplier inventory listing. */
+export function supplierOfferTsinFields(parentProduct, supplierProduct) {
+  const asin = resolveParentTsin(parentProduct?.asin);
+  return {
+    asin,
+    variantAsin: resolveVariantTsin(asin, supplierProduct?.variant_key, supplierProduct?.variant_asin),
+    variantKey: supplierProduct?.variant_key || null
+  };
 }
 
 export function normalizeUserAddress(address = {}) {

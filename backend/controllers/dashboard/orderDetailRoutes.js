@@ -149,12 +149,12 @@ router.get('/service-provider/orders/:id', authenticateToken, async (req, res) =
         // Frontend expects camelCase keys
         unitPrice: parseFloat(it?.unit_price ?? it?.unitPrice ?? 0) || 0,
         totalPrice: parseFloat(it?.total_price ?? it?.totalPrice ?? 0) || 0,
-        // Keep tracking/identity immutable from order-time snapshot.
+        // Keep tracking/identity immutable from order-time snapshot (supplier offer at placement).
+        asin: snapshot?.parentAsin || it?.product?.asin || null,
+        parentAsin: snapshot?.parentAsin || it?.product?.asin || null,
         variantKey: snapshot?.variantKey || null,
         variantAsin: snapshot?.variantAsin || null,
-        productTrackingId:
-          snapshot?.variantAsin ||
-          null,
+        productTrackingId: snapshot?.variantAsin || null,
         brandModel: snapshot?.brandModel ?? variantAttributes?.brandModel ?? null
       };
     });

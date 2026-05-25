@@ -44,6 +44,10 @@ export function normalizeSearchQueryAliases(raw) {
   if (!q) return '';
 
   q = q.replace(/\bmak\s+air\b/g, 'mac air');
+  q = q.replace(/\bmack\s+air\b/g, 'mac air');
+  q = q.replace(/\bmac\s+book\s+air\b/g, 'macbook air');
+  q = q.replace(/\bmacbook\s+air\s+m2\b/g, 'macbook air m2');
+  q = q.replace(/\bmac\s+air\s+m\s*2\b/g, 'mac air m2');
   q = q.replace(/\bmak\s+book\b/g, 'macbook');
   q = q.replace(/\btmt\s+bars?\b/g, 'steel rod');
 

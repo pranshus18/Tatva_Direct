@@ -43,8 +43,4 @@ export function hasMandatoryTransportSelected(checkout = {}) {
   return vendorsMissingTransport(checkout).length === 0;
 }
 
-export function isTransportRetryPhrase(utterance) {
-  return /\b(retry|reload|try again|refresh|load (?:quotes|transport) again)\b/i.test(
-    String(utterance || '')
-  );
-}
+export { isTransportRetryPhrase } from './voiceIntentPhrases.js';

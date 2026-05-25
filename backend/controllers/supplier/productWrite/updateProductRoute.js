@@ -1,6 +1,6 @@
 import {
   brandIsAllowedForSupplier,
-  buildIdentityBundle,
+  buildSupplierVariantIdentity,
   buildVariantAsinLikeId,
   findAdmins,
   findUserBasicById,
@@ -85,21 +85,33 @@ export function registerSupplierProductUpdateRoute(ctx) {
         const candidateLocation = req.body.location !== undefined
           ? ((req.body.location || '').trim() || supplierProduct.location)
           : supplierProduct.location;
-        const variantIdentity = buildIdentityBundle({
-          unit: req.body.unit !== undefined ? req.body.unit : updatedAttributes.unit,
-          brandModel: updatedAttributes.brandModel,
-          sku: updatedAttributes.sku,
-          packSize: updatedAttributes.packSize,
-          specifications: nextSpecifications
-        });
-        updateSupplierProductData.variant_key = variantIdentity.variantKey;
-        const { data: productIdentity } = await supabase
+        const { data: parentProduct } = await supabase
           .from('products')
-          .select('asin')
+          .select('asin, specifications')
           .eq('id', supplierProduct.product_id)
           .maybeSingle();
+        const variantIdentity = buildSupplierVariantIdentity(
+          {
+            unit: req.body.unit !== undefined ? req.body.unit : updatedAttributes.unit,
+            brandModel: updatedAttributes.brandModel,
+            gtin: updatedAttributes.gtin,
+            mpn: updatedAttributes.mpn,
+            sku: updatedAttributes.sku,
+            packSize: updatedAttributes.packSize,
+            specifications: nextSpecifications
+          },
+          parentProduct
+        );
+        updateSupplierProductData.variant_key = variantIdentity.variantKey;
+        updatedAttributes.variantAttributes = variantIdentity.variant.variantAttributes;
+        if (updateSupplierProductData.attributes) {
+          updateSupplierProductData.attributes = {
+            ...updateSupplierProductData.attributes,
+            variantAttributes: variantIdentity.variant.variantAttributes
+          };
+        }
         updateSupplierProductData.variant_asin = buildVariantAsinLikeId(
-          productIdentity?.asin || '',
+          parentProduct?.asin || '',
           variantIdentity.variantKey
         );
 

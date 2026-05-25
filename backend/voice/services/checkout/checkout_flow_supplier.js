@@ -10,10 +10,17 @@ import {
   promptCartEmpty,
   promptCartWithItems
 } from '../../lib/voice_prompts.js';
+import { getVoiceText } from '../../i18n/index.js';
+import { resolveVoiceLanguage } from '../../lib/voiceLanguage.js';
 import { enterCartCheckoutFlow } from '../../lib/voice_flow_mode.js';
 import { getCheckout, setCheckout } from './checkout_flow_state.js';
 import { loadCartItems, syncCheckoutFromCartDraft } from './checkout_flow_cart.js';
+import { syncVoiceCheckoutToCart } from './checkout_flow_sync.js';
 import { advanceAfterSubstitution, advancePoDetails } from './checkout_flow_po.js';
+import {
+  isNoSubstitutionPhrase,
+  isSubstitutionAcceptPhrase
+} from '../../lib/voiceIntentPhrases.js';
 
 export async function loadSubstitutions(client, items, selectedVendors) {
   const res = await client.post('/api/substitutions/suggest', { items, selectedVendors });
@@ -22,10 +29,12 @@ export async function loadSubstitutions(client, items, selectedVendors) {
 }
 
 export async function startSupplierSelection(toolCtx, memory) {
+  enterCartCheckoutFlow(memory);
   const { client } = toolCtx;
+  const lang = resolveVoiceLanguage(memory);
   const cart = await loadCartItems(client);
   if (!cart.ok || !cart.items.length) {
-    return 'Your cart is empty. Say a product name to search first, for example Mac Air M2.';
+    return getVoiceText('checkout.emptyCartVoice', lang, {}, '');
   }
 
   const rank = await client.post('/api/vendors/rank', {
@@ -34,7 +43,7 @@ export async function startSupplierSelection(toolCtx, memory) {
     _timestamp: Date.now()
   });
   if (!rank.ok) {
-    return `I could not load suppliers: ${rank.error}. Try again in a moment.`;
+    return getVoiceText('checkout.supplierRankFailed', lang, { error: rank.error }, '');
   }
 
   const itemVendors = rank.data?.itemVendors || {};
@@ -42,7 +51,7 @@ export async function startSupplierSelection(toolCtx, memory) {
   const vendors = Array.isArray(itemVendors[primaryItemId]) ? itemVendors[primaryItemId] : [];
 
   if (!vendors.length) {
-    return 'No suppliers are available for this product right now. Try another product.';
+    return getVoiceText('checkout.noSuppliersAvailable', lang, {}, '');
   }
 
   setCheckout(memory, {
@@ -53,14 +62,14 @@ export async function startSupplierSelection(toolCtx, memory) {
     substitutions: []
   });
 
-  const vendorLines = vendors.slice(0, 6).map((v, i) => formatVendorDetail(v, i));
+  const vendorLines = vendors.slice(0, 6).map((v, i) => formatVendorDetail(v, i, memory));
   memory.setPendingAction({
     type: 'await_select_supplier',
     summary: 'select a supplier',
     payload: { itemId: primaryItemId, vendors }
   });
 
-  return truncateForSpeech(promptSuppliers(vendors.length, vendorLines), VOICE_SPEECH_MAX_LEN);
+  return truncateForSpeech(promptSuppliers(vendors.length, vendorLines, memory), VOICE_SPEECH_MAX_LEN);
 }
 
 export async function resumeCheckoutFromCart(toolCtx, memory, { forceStep = 'auto' } = {}) {
@@ -68,7 +77,7 @@ export async function resumeCheckoutFromCart(toolCtx, memory, { forceStep = 'aut
   const synced = await syncCheckoutFromCartDraft(toolCtx, memory);
   if (!synced.ok || !synced.items.length) {
     memory.setPendingAction(null);
-    return promptCartEmpty();
+    return promptCartEmpty(memory);
   }
 
   const selectedVendors = synced.draft?.selectedVendors || {};
@@ -82,7 +91,7 @@ export async function resumeCheckoutFromCart(toolCtx, memory, { forceStep = 'aut
       summary: 'review cart',
       payload: { itemCount: synced.items.length }
     });
-    return promptCartWithItems(synced.items.length, flow);
+    return promptCartWithItems(synced.items.length, flow, memory);
   }
 
   if (forceStep === 'supplier_select') {
@@ -102,16 +111,30 @@ export async function resumeCheckoutFromCart(toolCtx, memory, { forceStep = 'aut
       return advanceAfterSubstitution(toolCtx, memory, []);
     }
     setCheckout(memory, { substitutionSuggestions: subs });
-    const subLines = subs
-      .slice(0, 3)
-      .map((s, i) => `Suggestion ${i + 1}, ${s.title || s.suggestedItem || 'alternative product'}`);
+    const subLines = subs.slice(0, 3).map((s, i) =>
+      getVoiceText(
+        'sub.suggestionLine',
+        resolveVoiceLanguage(memory),
+        {
+          index: String(i + 1),
+          title: s.title || s.suggestedItem || getVoiceText('sub.defaultTitle', resolveVoiceLanguage(memory), {}, '')
+        },
+        ''
+      )
+    );
     memory.setPendingAction({
       type: 'await_substitution',
       summary: 'substitution choice',
       payload: { suggestions: subs }
     });
     return truncateForSpeech(
-      promptSubstitutions('your supplier', subs.length, subLines, null),
+      promptSubstitutions(
+        getVoiceText('sub.placeholderSupplier', resolveVoiceLanguage(memory), {}, ''),
+        subs.length,
+        subLines,
+        null,
+        memory
+      ),
       VOICE_SPEECH_MAX_LEN
     );
   }
@@ -121,7 +144,7 @@ export async function resumeCheckoutFromCart(toolCtx, memory, { forceStep = 'aut
     summary: 'review cart',
     payload: { itemCount: synced.items.length }
   });
-  return promptCartWithItems(synced.items.length, flow);
+  return promptCartWithItems(synced.items.length, flow, memory);
 }
 
 export async function handleSupplierSelect(toolCtx, memory, utterance, pending) {
@@ -138,48 +161,59 @@ export async function handleSupplierSelect(toolCtx, memory, utterance, pending) 
     });
   }
   if (idx == null) {
-    return promptSupplierRetry(vendors.length);
+    return promptSupplierRetry(vendors.length, memory);
   }
 
   const chosen = vendors[idx];
-  const supplierName = chosen.name || chosen.supplierName || chosen.company || 'this supplier';
+  const supplierName =
+    chosen.name ||
+    chosen.supplierName ||
+    chosen.company ||
+    getVoiceText('supplier.thisSupplier', resolveVoiceLanguage(memory), {}, 'this supplier');
   const token = chosen.supplierProductId || chosen.id || chosen.vendorId;
   const selectedVendors = { ...(getCheckout(memory).selectedVendors || {}) };
   selectedVendors[itemId] = String(token);
   if (chosen.productId) selectedVendors[String(chosen.productId)] = String(token);
 
   setCheckout(memory, { selectedVendors });
+  await syncVoiceCheckoutToCart(toolCtx, memory);
 
   const subs = await loadSubstitutions(toolCtx.client, getCheckout(memory).items, selectedVendors);
   if (!subs.length) {
     const next = await advanceAfterSubstitution(toolCtx, memory, []);
-    return `${promptNoSubstitutions(supplierName, chosen)} ${next}`;
+    return `${promptNoSubstitutions(supplierName, chosen, memory)} ${next}`;
   }
 
   setCheckout(memory, { substitutionSuggestions: subs });
   const subLines = subs
     .slice(0, 3)
-    .map((s, i) => `Suggestion ${i + 1}, ${s.title || s.suggestedItem || 'alternative product'}`);
+    .map((s, i) =>
+      getVoiceText(
+        'sub.suggestionLine',
+        resolveVoiceLanguage(memory),
+        {
+          index: String(i + 1),
+          title: s.title || s.suggestedItem || getVoiceText('sub.defaultTitle', resolveVoiceLanguage(memory), {}, '')
+        },
+        ''
+      )
+    );
   memory.setPendingAction({
     type: 'await_substitution',
     summary: 'substitution choice',
     payload: { suggestions: subs }
   });
   return truncateForSpeech(
-    promptSubstitutions(supplierName, subs.length, subLines, chosen),
+    promptSubstitutions(supplierName, subs.length, subLines, chosen, memory),
     VOICE_SPEECH_MAX_LEN
   );
 }
 
 export async function handleSubstitution(toolCtx, memory, utterance) {
-  const t = utterance.toLowerCase().trim();
-  if (
-    /^(no|nope|skip|none)$/i.test(t) ||
-    /\b(no substitution|skip substitution|skip|none|no substitute|without substitution)\b/.test(t)
-  ) {
+  if (isNoSubstitutionPhrase(utterance)) {
     return advanceAfterSubstitution(toolCtx, memory, []);
   }
-  if (/\b(yes|accept|approve)\b/.test(t)) {
+  if (isSubstitutionAcceptPhrase(utterance)) {
     const subs = getCheckout(memory).substitutionSuggestions || [];
     const approved = subs.map((s) => ({
       originalItem: s.originalItem,
@@ -187,5 +221,5 @@ export async function handleSubstitution(toolCtx, memory, utterance) {
     }));
     return advanceAfterSubstitution(toolCtx, memory, approved);
   }
-  return promptSubstitutionRetry();
+  return promptSubstitutionRetry(memory);
 }

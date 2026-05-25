@@ -8,7 +8,11 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createClient } from '@supabase/supabase-js';
-import { buildIdentityBundle, buildVariantAsinLikeId } from '../services/productIdentityService.js';
+import {
+  buildIdentityBundle,
+  buildSupplierVariantIdentity,
+  buildVariantAsinLikeId
+} from '../services/productIdentityService.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '..', '.env') });
@@ -79,8 +83,7 @@ function buildVariantIdentityInput(row, parentProduct = null) {
     sku: attrs.sku || attrs.skuNo || attrs.gsku || '',
     unit: attrs.unit || row.unit || row.pack_unit || parentProduct?.unit || '',
     packSize: attrs.packSize || attrs.pack_size || row.pack_size || '',
-    specifications: specs,
-    variantAttributes: specs
+    specifications: specs
   };
 }
 
@@ -138,8 +141,11 @@ async function main() {
     const parent = productById.get(sp.product_id) || null;
     if (!parent) continue;
 
-    const variantIdentity = buildIdentityBundle(buildVariantIdentityInput(sp, parent));
-    const variantKey = sp.variant_key || variantIdentity.variantKey;
+    const variantIdentity = buildSupplierVariantIdentity(
+      buildVariantIdentityInput(sp, parent),
+      parent
+    );
+    const variantKey = variantIdentity.variantKey;
     const variantTsin = buildVariantAsinLikeId(parent.asin || '', variantKey);
 
     const patch = {
@@ -188,8 +194,8 @@ async function main() {
       parent
     );
 
-    const variantIdentity = buildIdentityBundle(variantInput);
-    const variantKey = pv.variant_key || variantIdentity.variantKey;
+    const variantIdentity = buildSupplierVariantIdentity(variantInput, parent);
+    const variantKey = variantIdentity.variantKey;
     const variantTsin = buildVariantAsinLikeId(parent.asin || '', variantKey);
 
     const patch = {

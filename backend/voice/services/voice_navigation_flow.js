@@ -26,7 +26,7 @@ async function goToCartCheckout(toolCtx, memory, utterance) {
   const synced = await syncCheckoutFromCartDraft(toolCtx, memory);
   if (!synced.ok || !synced.items.length) {
     memory.setPendingAction(null);
-    return promptCartEmpty();
+    return promptCartEmpty(memory);
   }
 
   if (isCartContinuePhrase(utterance)) {
@@ -51,12 +51,12 @@ export async function tryVoiceNavigationFlow(text, toolCtx, memory) {
   if (screen === 'product_discovery') {
     enterDiscoveryFlow(memory);
     memory.setPendingAction(null);
-    return promptGoToScreen('product_discovery');
+    return promptGoToScreen('product_discovery', memory);
   }
 
   if (screen === 'orders') {
     memory.setPendingAction(null);
-    return promptGoToScreen('orders');
+    return promptGoToScreen('orders', memory);
   }
 
   if (screen === 'cart') {
@@ -67,13 +67,13 @@ export async function tryVoiceNavigationFlow(text, toolCtx, memory) {
     if (isDiscoveryFlowMode(memory)) {
       return null;
     }
-    return `${promptResumeCheckout()} ${await resumeCheckoutFromCart(toolCtx, memory, { forceStep: 'auto' })}`;
+    return `${promptResumeCheckout(memory)} ${await resumeCheckoutFromCart(toolCtx, memory, { forceStep: 'auto' })}`;
   }
 
   if (screen === 'supplier_select' || screen === 'substitution' || screen === 'create_po' || screen === 'transport') {
     const synced = await syncCheckoutFromCartDraft(toolCtx, memory);
     if (!synced.items.length) {
-      return promptCartEmpty();
+      return promptCartEmpty(memory);
     }
     if (!isCartFlowMode(memory)) {
       enterCartCheckoutFlow(memory);

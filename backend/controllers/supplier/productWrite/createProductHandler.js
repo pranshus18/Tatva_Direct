@@ -1,6 +1,7 @@
 import {
   brandIsAllowedForSupplier,
   buildIdentityBundle,
+  buildSupplierVariantIdentity,
   buildVariantAsinLikeId,
   crypto,
   decideOnboardingAction,
@@ -199,6 +200,31 @@ export function buildSupplierProductCreateHandler(ctx) {
       }
       const { productId, catalogAsin, isNewProduct } = baseProductResult;
 
+      let parentProductForVariant = existingProduct;
+      if (
+        !parentProductForVariant?.specifications ||
+        typeof parentProductForVariant.specifications !== 'object'
+      ) {
+        const { data: parentRow } = await supabase
+          .from('products')
+          .select('specifications, asin')
+          .eq('id', productId)
+          .maybeSingle();
+        parentProductForVariant = parentRow || { specifications: normalizedSpecs };
+      }
+      const variantIdentityBundle = buildSupplierVariantIdentity(
+        {
+          unit,
+          brandModel,
+          gtin: gtinInput,
+          mpn: mpnInput,
+          sku: requestSpecs?.skuNo || requestSpecs?.sku || requestSpecs?.gsku || '',
+          packSize: requestSpecs?.packSize || requestSpecs?.pack_size || '',
+          specifications: normalizedSpecs
+        },
+        parentProductForVariant
+      );
+
       const currentLocation = (otherData.location || '').trim();
       const { data: existingSupplierProduct } = await supabase
         .from('supplier_products')
@@ -206,7 +232,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         .eq('product_id', productId)
         .eq('supplier_id', req.userId)
         .eq('location', currentLocation)
-        .eq('variant_key', identityBundle.variantKey)
+        .eq('variant_key', variantIdentityBundle.variantKey)
         .maybeSingle();
       if (existingSupplierProduct) {
         return res.status(400).json({
@@ -222,7 +248,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         .from('supplier_products')
         .select('id')
         .eq('product_id', productId)
-        .eq('variant_key', identityBundle.variantKey)
+        .eq('variant_key', variantIdentityBundle.variantKey)
         .eq('status', 'approved')
         .eq('is_active', true)
         .limit(1)
@@ -243,7 +269,10 @@ export function buildSupplierProductCreateHandler(ctx) {
         approvedVariantOffer ||
         (selectedCatalogProductId && selectedCatalogIsApproved && !selectedProductSpecsChanged)
       );
-      const variantAsin = buildVariantAsinLikeId(catalogAsin || identityBundle.asinLikeId, identityBundle.variantKey);
+      const variantAsin = buildVariantAsinLikeId(
+        catalogAsin || identityBundle.asinLikeId,
+        variantIdentityBundle.variantKey
+      );
 
       const supplierProductData = {
         product_id: productId,
@@ -258,7 +287,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         igst_rate: igstRate,
         cgst_rate: cgstRate,
         sgst_rate: sgstRate,
-        variant_key: identityBundle.variantKey,
+        variant_key: variantIdentityBundle.variantKey,
         variant_asin: variantAsin,
         attributes: {
           description: otherData.description || '',
@@ -274,7 +303,7 @@ export function buildSupplierProductCreateHandler(ctx) {
           sku: (requestSpecs?.skuNo || requestSpecs?.sku || requestSpecs?.gsku || '').toString().trim(),
           packSize: (requestSpecs?.packSize || requestSpecs?.pack_size || '').toString().trim(),
           unit: (unit || '').toString().trim(),
-          variantAttributes: identityBundle.variant.variantAttributes,
+          variantAttributes: variantIdentityBundle.variant.variantAttributes,
           igstRate,
           cgstRate,
           sgstRate,
@@ -349,7 +378,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         .eq('id', productId)
         .eq('supplier_products.supplier_id', req.userId)
         .eq('supplier_products.location', currentLocation)
-        .eq('supplier_products.variant_key', identityBundle.variantKey)
+        .eq('supplier_products.variant_key', variantIdentityBundle.variantKey)
         .single();
 
       const responseProduct = {
@@ -361,7 +390,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         status: completeProduct?.supplier_products?.[0]?.status,
         is_active: completeProduct?.supplier_products?.[0]?.is_active,
         supplier_id: req.userId,
-        variantKey: completeProduct?.supplier_products?.[0]?.variant_key || identityBundle.variantKey,
+        variantKey: completeProduct?.supplier_products?.[0]?.variant_key || variantIdentityBundle.variantKey,
         variantAsin: completeProduct?.supplier_products?.[0]?.variant_asin || variantAsin
       };
 
@@ -380,7 +409,7 @@ export function buildSupplierProductCreateHandler(ctx) {
             : `${supplier?.name} (${supplier?.company || supplier?.email}) added "${responseProduct.name}" with variant specifications that require your approval.`,
           related_product_id: productId,
           related_supplier_id: supplier?.id || req.userId,
-          metadata: { productId, supplierId: req.userId, variantKey: identityBundle.variantKey },
+          metadata: { productId, supplierId: req.userId, variantKey: variantIdentityBundle.variantKey },
           is_read: false
         }));
         await insertNotifications(notifications, supabase);

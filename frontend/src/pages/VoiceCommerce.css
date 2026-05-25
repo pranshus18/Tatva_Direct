@@ -18,6 +18,19 @@
   margin: 1.5rem auto 0.5rem;
 }
 
+.voice-heard {
+  margin: 0.75rem auto 0;
+  max-width: 28rem;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  color: #cbd5e1;
+}
+
+.voice-heard__label {
+  color: #94a3b8;
+  font-weight: 600;
+}
+
 .voice-sr-only {
   position: absolute;
   width: 1px;

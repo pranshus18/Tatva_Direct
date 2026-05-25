@@ -59,16 +59,39 @@ function flattenCartItems(draft) {
 }
 
 /** Load persisted PO cart — same source the voice agent uses on the server. */
+/** Notify App workflow state after voice syncs cart (suppliers, substitutions, PO fields). */
+export function emitVoiceCartUpdated(draft) {
+  if (typeof window === 'undefined' || !draft) return;
+  try {
+    window.dispatchEvent(new CustomEvent('voice-cart-updated', { detail: draft }));
+  } catch {
+    /* ignore */
+  }
+}
+
 export async function fetchVoiceCartDraft() {
   const token = localStorage.getItem('token');
-  if (!token) return { items: [], selectedVendors: {}, substitutions: [], draft: null };
+  const empty = {
+    items: [],
+    selectedVendors: {},
+    substitutions: [],
+    poGroups: [],
+    grandTotalAllPos: 0,
+    requiredDate: '',
+    hasGstin: false,
+    deliveryDestination: 'shipping',
+    shippingAddress: {},
+    billingAddress: {},
+    draft: null
+  };
+  if (!token) return empty;
 
   const res = await fetch(getApiUrl('/api/po/cart'), {
     headers: { Authorization: `Bearer ${token}` }
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data?.cart?.draft) {
-    return { items: [], selectedVendors: {}, substitutions: [], draft: null };
+    return empty;
   }
 
   const draft = data.cart.draft;
@@ -76,8 +99,44 @@ export async function fetchVoiceCartDraft() {
     items: flattenCartItems(draft),
     selectedVendors: draft.selectedVendors || {},
     substitutions: draft.substitutions || [],
+    poGroups: Array.isArray(draft.poGroups) ? draft.poGroups : [],
+    grandTotalAllPos: Number(draft.grandTotalAllPos) || 0,
+    requiredDate: draft.requiredDate || '',
+    hasGstin: Boolean(String(draft.gstin || '').trim()),
+    deliveryDestination: draft.deliveryDestination || 'shipping',
+    shippingAddress: draft.shippingAddress || {},
+    billingAddress: draft.billingAddress || {},
     draft
   };
+}
+
+/** Build PO groups for Transport suggestion when draft has not stored them yet. */
+export async function fetchPoGroupsForVoiceCart(voiceCart) {
+  const existing = Array.isArray(voiceCart?.poGroups) ? voiceCart.poGroups : [];
+  if (existing.length) return existing;
+
+  const items = voiceCart?.items || [];
+  const selectedVendors = voiceCart?.selectedVendors || {};
+  if (!items.length || !Object.keys(selectedVendors).length) return [];
+
+  const token = localStorage.getItem('token');
+  if (!token) return [];
+
+  const res = await fetch(getApiUrl('/api/po/group'), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({
+      items,
+      selectedVendors,
+      substitutions: voiceCart?.substitutions || []
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return [];
+  return data?.groups || data?.poGroups || [];
 }
 
 export async function prepareSupplierSelectFromVoiceCart() {

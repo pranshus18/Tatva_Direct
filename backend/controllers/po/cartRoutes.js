@@ -3,7 +3,7 @@ import {
   MAX_CART_ITEM_QUANTITY,
   buildPoCartDraftFromSavePayload,
   getContractErrorMessage,
-  newPoCartGroupId,
+  appendDiscoveryItemAsNewProject,
   normalizePoCartDraft,
   parseWithSchema,
   poCartSaveSchema
@@ -136,20 +136,11 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
       specifications: product.specifications || undefined
     };
 
-    const groupId = `pd-group-${newPoCartGroupId()}`;
-    const existingGroups = Array.isArray(currentDraft.boqGroups) ? currentDraft.boqGroups : [];
-    const nextGroups = [
-      ...existingGroups,
-      {
-        groupId,
-        boqId: null,
-        boqName: `Discovery - ${product.name || 'Product'}`,
-        boqProject: { source: 'product_discovery' },
-        selectedVendors: {},
-        substitutions: [],
-        items: [discoveryItem]
-      }
-    ];
+    const { boqGroups: nextGroups, groupId: resultGroupId } = appendDiscoveryItemAsNewProject(
+      currentDraft.boqGroups,
+      discoveryItem,
+      product.name
+    );
 
     const nextDraftPayload = normalizePoCartDraft({
       ...currentDraft,
@@ -170,7 +161,7 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
     return res.json({
       status: 'success',
       message: 'Product added to cart',
-      groupId
+      groupId: resultGroupId
     });
   } catch (error) {
     console.error('Add discovery product to cart error:', error);

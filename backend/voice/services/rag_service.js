@@ -4,7 +4,8 @@ import {
   getSupportRetrievalConfidence,
   warmSupportIndex
 } from '../supportRetriever.js';
-import { SUPPORT_FALLBACK_HUMAN } from '../lib/humanizeReply.js';
+import { getSupportFallbackHuman } from '../lib/humanizeReply.js';
+import { resolveVoiceLanguage } from '../lib/voiceLanguage.js';
 import { synthesizeSupportAnswer } from './support_answer_synthesizer.js';
 
 const DEFAULT_K = Number.parseInt(String(process.env.VOICE_RAG_TOP_K || '5'), 10) || 5;
@@ -42,7 +43,7 @@ export const ragService = {
     const confidence = getSupportRetrievalConfidence(hits);
 
     if (!hits.length || confidence < MIN_CONFIDENCE) {
-      return SUPPORT_FALLBACK_HUMAN;
+      return getSupportFallbackHuman(resolveVoiceLanguage(memory));
     }
 
     if (USE_SYNTHESIS && process.env.GEMINI_API_KEY) {

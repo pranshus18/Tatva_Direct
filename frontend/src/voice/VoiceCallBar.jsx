@@ -4,6 +4,7 @@ import { useLocation } from 'react-router-dom';
 import { useVoiceSessionContext } from './VoiceSessionContext.jsx';
 import agentGif from '../images/agent.gif';
 import { isVoiceGuidedActive, getVoiceGuidedLabel } from './voiceCartBridge.js';
+import { voiceText } from './voiceText.js';
 import './VoiceCallBar.css';
 
 const VoiceCallBar = () => {
@@ -22,21 +23,24 @@ const VoiceCallBar = () => {
   if (!ctx?.inCall) return null;
 
   const onVoicePage = location.pathname === '/voice';
-  const { state, error, voiceScreen, endCall } = ctx;
+  const { state, error, voiceScreen, endCall, voiceLanguage } = ctx;
+  const lang = voiceLanguage || 'english';
 
   const displayState = state === 'ready' ? 'listening' : state;
   const busy = state === 'thinking' || state === 'speaking';
   const stepLabel =
-    voiceScreen || (isVoiceGuidedActive() ? getVoiceGuidedLabel() : '') || 'Voice assistant active';
+    voiceScreen ||
+    (isVoiceGuidedActive() ? getVoiceGuidedLabel() : '') ||
+    voiceText(lang, 'ui.voiceAssistantActive');
 
   const stateLabel = {
-    connecting: 'Connecting…',
-    ready: 'Listening…',
-    listening: 'Listening…',
-    thinking: 'Thinking…',
-    speaking: 'Speaking…',
-    error: 'Error',
-    disconnected: 'Disconnected'
+    connecting: voiceText(lang, 'ui.connecting'),
+    ready: voiceText(lang, 'ui.listening'),
+    listening: voiceText(lang, 'ui.listening'),
+    thinking: voiceText(lang, 'ui.thinking'),
+    speaking: voiceText(lang, 'ui.speaking'),
+    error: voiceText(lang, 'ui.error'),
+    disconnected: voiceText(lang, 'ui.disconnected')
   }[displayState] || displayState;
 
   if (onVoicePage) {

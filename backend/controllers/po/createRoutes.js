@@ -11,13 +11,17 @@ import {
   getAllowedSellerRoleForBrand,
   getContractErrorMessage,
   insertNotification,
+  isAddressComplete,
   isOrderNumberConflictError,
   isSameIndianState,
   loadAdminBrandTerminalRoleMap,
   logger,
+  mapToDeliveryAddress,
+  normalizeAddress,
   parseWithSchema,
   poCreateRequestSchema,
   recordInventoryMovement,
+  resolveB2bPaymentFromBody,
   sumGstLines,
   supplierMatchesBrandTerminalRole,
   toLifecycleStateFromStatus
@@ -280,7 +284,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
               variantAsin: supplierProduct?.variant_asin || null,
               variantKey: supplierProduct?.variant_key || null,
               brandModel: supplierProduct?.attributes?.brandModel || null,
-              variantAttributes: supplierProduct?.attributes?.variantAttributes || {},
+              variantAttributes:
+                supplierProduct?.attributes?.variantAttributes &&
+                typeof supplierProduct.attributes.variantAttributes === 'object'
+                  ? supplierProduct.attributes.variantAttributes
+                  : {},
               bcov: bcovResolved
                 ? {
                     applied: true,
@@ -319,6 +327,9 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         basePrice: Number(line.basePrice) || Number(line.price) || 0,
         productId: line.productId || null,
         supplierProductId: line.supplierProductId || null,
+        asin: line.asin || null,
+        variantAsin: line.variantAsin || null,
+        variantKey: line.variantKey || null,
         productIdentification: line.productIdentification || null,
         specifications:
           line.specifications && typeof line.specifications === 'object' && !Array.isArray(line.specifications)

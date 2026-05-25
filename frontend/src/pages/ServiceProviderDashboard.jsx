@@ -21,6 +21,7 @@ import { buildOrderUpiPayUri, qrServerImageUrl } from '../utils/upiPaymentQr';
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import SupplierTsinLine from '../components/SupplierTsinLine';
 import './Dashboard.css';
 
 const DASHBOARD_CACHE_KEY = 'sp_dashboard_cache_v1';
@@ -1117,6 +1118,10 @@ const ServiceProviderDashboard = ({ user }) => {
                                   {item.product.description}
                                 </div>
                               )}
+                              <SupplierTsinLine
+                                asin={item.asin || item.parentAsin}
+                                variantAsin={item.variantAsin}
+                              />
                               {parseSpecificationsForDisplay(item.specifications).length > 0 && (
                                 <div
                                   style={{

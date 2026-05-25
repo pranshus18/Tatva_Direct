@@ -187,7 +187,10 @@ export const poCartSaveSchema = z
     deliveryDestination: z.enum(['shipping', 'billing']).optional().nullable(),
     shippingAddress: addressSchema.optional(),
     billingAddress: addressSchema.optional(),
-    gstin: z.string().optional().nullable()
+    gstin: z.string().optional().nullable(),
+    /** Voice / Create PO — persisted so Transport suggestion page can load quotes. */
+    poGroups: z.array(z.record(z.string(), z.any())).optional().default([]),
+    grandTotalAllPos: z.union([z.number(), z.string()]).optional().nullable()
   })
   .superRefine((val, ctx) => {
     const n = Array.isArray(val.items) ? val.items.length : 0;

@@ -1,7 +1,13 @@
 /** Shared static imports for PO route modules. */
 export { supabase } from '../../config/supabase.js';
 export { recordInventoryMovement } from '../../services/inventoryService.js';
-export { buildIdentityBundle } from '../../services/productIdentityService.js';
+export {
+  buildIdentityBundle,
+  buildSupplierVariantIdentity,
+  buildSupplierVariantIdentityFromPoItem,
+  resolveSupplierVariantKeyForItem,
+  hasSupplierVariantSignals
+} from '../../services/productIdentityService.js';
 export {
   getAllowedSellerRoleForBrand,
   loadAdminBrandTerminalRoleMap,

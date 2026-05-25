@@ -246,6 +246,23 @@ function App() {
     if (draft.boqProject && typeof draft.boqProject === 'object') setBoqProject(draft.boqProject);
   };
 
+  useEffect(() => {
+    if (!isAuthenticated) return undefined;
+    const onVoiceCart = (event) => {
+      const detail = event?.detail;
+      if (!detail || typeof detail !== 'object') return;
+      loadCartDraftIntoWorkflow({
+        items: detail.items,
+        selectedVendors: detail.selectedVendors,
+        substitutions: detail.substitutions,
+        boqId: detail.draft?.boqId,
+        boqProject: detail.draft?.boqProject
+      });
+    };
+    window.addEventListener('voice-cart-updated', onVoiceCart);
+    return () => window.removeEventListener('voice-cart-updated', onVoiceCart);
+  }, [isAuthenticated]);
+
   if (loading) {
     return (
       <div style={{

@@ -3,6 +3,7 @@ import { runTool } from '../voiceTools.js';
 import { truncateForSpeech } from '../summarizeForVoice.js';
 import { productCatalogService } from './product_catalog_service.js';
 import { extractProductQuery } from '../lib/productQueryParser.js';
+import { voiceText } from '../lib/voiceText.js';
 
 function safeParseSearch(raw) {
   if (typeof raw !== 'string') return raw;
@@ -20,6 +21,21 @@ function safeParseSearch(raw) {
   }
 }
 
+function toolResultSucceeded(raw) {
+  if (raw == null) return false;
+  if (typeof raw === 'object') {
+    return String(raw.status || '').toLowerCase() === 'success';
+  }
+  const s = String(raw);
+  if (s.includes('add to cart failed') || s.includes('failed')) return false;
+  try {
+    const data = JSON.parse(s);
+    return String(data?.status || '').toLowerCase() === 'success';
+  } catch {
+    return /\bsuccess\b/i.test(s);
+  }
+}
+
 /**
  * Structured tool execution — { action, slots } → backend APIs.
  */
@@ -31,7 +47,7 @@ export const toolCallingEngine = {
     switch (action) {
       case ActionType.ADD_TO_CART: {
         let product = productCatalogService.resolveProductFromSession(memory, utterance);
-        let name = product?.name || slots.product_name || 'item';
+        let name = product?.name || slots.product_name || voiceText(memory, 'product.unnamed');
         let productId = product?.id || slots.product_id;
 
         if (!productId && slots.query) {
@@ -51,8 +67,8 @@ export const toolCallingEngine = {
           return {
             ok: false,
             speech: q
-              ? `I am not able to find the product "${q}". Search for it first, then say add to cart.`
-              : 'I am not able to find the product. Search first, then say add to cart.'
+              ? voiceText(memory, 'tool.productNotFoundQuery', { query: q })
+              : voiceText(memory, 'tool.productNotFound')
           };
         }
 
@@ -60,33 +76,40 @@ export const toolCallingEngine = {
           product_id: productId,
           quantity: slots.quantity || 1
         });
-        const ok =
-          typeof raw === 'object' ||
-          String(raw).includes('success') ||
-          String(raw).includes('status');
-        return { ok, speech: ok ? `Added ${name} to your cart.` : truncateForSpeech(String(raw)) };
+        const ok = toolResultSucceeded(raw);
+        return {
+          ok,
+          speech: ok ? voiceText(memory, 'tool.addedToCart', { name }) : truncateForSpeech(String(raw))
+        };
       }
 
       case ActionType.REMOVE_FROM_CART:
         if (slots.clear_all) {
           await tools.remove_from_cart({ clear_all: true });
-          return { ok: true, speech: 'Cart cleared.' };
+          return { ok: true, speech: voiceText(memory, 'tool.cartCleared') };
         }
-        return { ok: false, speech: 'Say clear cart, or remove by item name.' };
+        return { ok: false, speech: voiceText(memory, 'tool.clearCartHint') };
 
       case ActionType.OPEN_CART: {
         const raw = await tools.get_cart({});
         const data = safeParseSearch(raw);
         const items = data?.items || [];
-        if (!items.length) return { ok: true, speech: 'Your cart is empty.' };
+        if (!items.length) return { ok: true, speech: voiceText(memory, 'tool.cartEmpty') };
         const names = items.slice(0, 3).map((i) => `${i.name} × ${i.quantity || 1}`);
         const more = items.length > 3 ? ` and ${items.length - 3} more.` : '';
-        return { ok: true, speech: `Cart has ${items.length} items: ${names.join(', ')}${more}` };
+        return {
+          ok: true,
+          speech: voiceText(memory, 'tool.cartItems', {
+            count: String(items.length),
+            names: names.join(', '),
+            more
+          })
+        };
       }
 
       case ActionType.CLEAR_CART: {
         await tools.remove_from_cart({ clear_all: true });
-        return { ok: true, speech: 'Cart cleared.' };
+        return { ok: true, speech: voiceText(memory, 'tool.cartCleared') };
       }
 
       case ActionType.SEARCH_PRODUCTS: {
@@ -128,11 +151,11 @@ export const toolCallingEngine = {
           return { ok: true, speech: truncateForSpeech(String(raw)) };
         }
         const dash = await client.get('/api/dashboard/service-provider');
-        if (!dash.ok) return { ok: false, speech: 'Could not load orders.' };
+        if (!dash.ok) return { ok: false, speech: voiceText(memory, 'tool.ordersLoadFailed') };
         const orders = (dash.data?.yourOrders || dash.data?.orders || []).slice(0, 3);
-        if (!orders.length) return { ok: true, speech: 'You have no recent orders.' };
+        if (!orders.length) return { ok: true, speech: voiceText(memory, 'tool.noOrders') };
         const lines = orders.map((o, i) => `${i + 1}. ${o.order_number || o.id}, ${o.status || 'unknown'}`);
-        return { ok: true, speech: `Recent orders: ${lines.join('. ')}` };
+        return { ok: true, speech: voiceText(memory, 'tool.recentOrders', { lines: lines.join('. ') }) };
       }
 
       case ActionType.CANCEL_ORDER: {
@@ -145,12 +168,12 @@ export const toolCallingEngine = {
 
       case ActionType.REORDER: {
         await tools.reorder_products({ order_id: slots.order_id });
-        return { ok: true, speech: 'Items added from your previous order.' };
+        return { ok: true, speech: voiceText(memory, 'tool.reorderAdded') };
       }
 
       case ActionType.INVENTORY_CHECK: {
         if (!slots.product_id) {
-          return { ok: false, speech: 'Say check stock for a product from your last search.' };
+          return { ok: false, speech: voiceText(memory, 'tool.stockNeedSearch') };
         }
         const raw = await tools.check_inventory({ product_id: slots.product_id });
         return { ok: true, speech: truncateForSpeech(String(raw)) };

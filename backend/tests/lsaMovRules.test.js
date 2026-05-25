@@ -13,6 +13,27 @@ test('crossedLsaThreshold triggers only on above-to-below/equal crossing', () =>
   assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 10, lsaThreshold: 0 }), false);
 });
 
+test('crossedLsaThreshold edge cases', () => {
+  // Lands exactly on LSA
+  assert.equal(crossedLsaThreshold({ previousStock: 11, newStock: 10, lsaThreshold: 10 }), true);
+  // Drops through LSA to zero
+  assert.equal(crossedLsaThreshold({ previousStock: 5, newStock: 0, lsaThreshold: 3 }), true);
+  // Stock increase never counts as a crossing
+  assert.equal(crossedLsaThreshold({ previousStock: 5, newStock: 15, lsaThreshold: 10 }), false);
+  // Already at/below LSA, further decrease
+  assert.equal(crossedLsaThreshold({ previousStock: 8, newStock: 5, lsaThreshold: 10 }), false);
+  // Stays above LSA after decrease
+  assert.equal(crossedLsaThreshold({ previousStock: 50, newStock: 40, lsaThreshold: 10 }), false);
+  // Invalid or missing LSA
+  assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 5, lsaThreshold: 'abc' }), false);
+  assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 5, lsaThreshold: null }), false);
+  assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 5, lsaThreshold: undefined }), false);
+  // Coerces numeric strings
+  assert.equal(crossedLsaThreshold({ previousStock: '20', newStock: '10', lsaThreshold: '10' }), true);
+  // Negative stock inputs clamp to 0
+  assert.equal(crossedLsaThreshold({ previousStock: 4, newStock: -2, lsaThreshold: 2 }), true);
+});
+
 test('crossedInventoryBelowMov triggers when inventory value drops under MOV', () => {
   assert.equal(
     crossedInventoryBelowMov({

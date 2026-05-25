@@ -20,6 +20,7 @@ import {
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import SupplierTsinLine from '../components/SupplierTsinLine';
 import './Dashboard.css';
 
 const SupplierDashboard = ({ user }) => {
@@ -1136,6 +1137,10 @@ const SupplierDashboard = ({ user }) => {
                                   {item.product.description}
                                 </div>
                               )}
+                              <SupplierTsinLine
+                                asin={item.asin || item.parentAsin}
+                                variantAsin={item.variantAsin}
+                              />
                               {parseSpecificationsForDisplay(item.specifications).length > 0 && (
                                 <div
                                   style={{

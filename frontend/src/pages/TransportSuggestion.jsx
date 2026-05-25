@@ -2,6 +2,8 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { resolveApiPath } from '../config/api';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
+import { useVoiceSessionContext } from '../voice/VoiceSessionContext';
+import { isVoiceGuidedActive } from '../voice/voiceCartBridge';
 
 const formatCurrency = (value) =>
   `₹${(Number(value) || 0).toLocaleString('en-IN', {
@@ -152,14 +154,34 @@ function TransportPickCard({ provider, selected, onPick, disabled = false, disab
 const TransportSuggestion = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const voiceSession = useVoiceSessionContext();
+  const notifyTransportSelected = voiceSession?.notifyTransportSelected;
 
-  const poGroups = Array.isArray(location.state?.poGroups) ? location.state.poGroups : [];
-  const grandTotalAllPos = Number(location.state?.grandTotalAllPos) || 0;
-  const requiredDate = location.state?.requiredDate || '';
-  const hasGstin = Boolean(location.state?.hasGstin);
-  const deliveryDestination = location.state?.deliveryDestination || 'shipping';
-  const shippingAddress = location.state?.shippingAddress || {};
-  const billingAddress = location.state?.billingAddress || {};
+  const statePo = Array.isArray(location.state?.poGroups) ? location.state.poGroups : [];
+  const draftPo = Array.isArray(location.state?.voiceCart?.poGroups)
+    ? location.state.voiceCart.poGroups
+    : Array.isArray(location.state?.voiceCart?.draft?.poGroups)
+      ? location.state.voiceCart.draft.poGroups
+      : [];
+  const poGroups = statePo.length ? statePo : draftPo;
+  const grandTotalAllPos =
+    Number(location.state?.grandTotalAllPos) ||
+    Number(location.state?.voiceCart?.grandTotalAllPos) ||
+    poGroups.reduce((s, g) => s + (Number(g.total) || 0), 0);
+  const requiredDate =
+    location.state?.requiredDate || location.state?.voiceCart?.requiredDate || '';
+  const hasGstin =
+    location.state?.hasGstin != null
+      ? Boolean(location.state.hasGstin)
+      : Boolean(String(location.state?.voiceCart?.draft?.gstin || '').trim());
+  const deliveryDestination =
+    location.state?.deliveryDestination ||
+    location.state?.voiceCart?.deliveryDestination ||
+    'shipping';
+  const shippingAddress =
+    location.state?.shippingAddress || location.state?.voiceCart?.shippingAddress || {};
+  const billingAddress =
+    location.state?.billingAddress || location.state?.voiceCart?.billingAddress || {};
   const createdOrders = Array.isArray(location.state?.createdOrders) ? location.state.createdOrders : [];
 
   const transportOrderCards =
@@ -381,17 +403,31 @@ const TransportSuggestion = () => {
       };
     }
 
+    const transportSelection = {
+      byVendorId,
+      byVendorCourierDetail,
+      shippingProvider: '',
+      trackingNumber: '',
+      trackingUrl: '',
+      transportNotes: ''
+    };
+
+    if (isVoiceGuidedActive() && typeof notifyTransportSelected === 'function') {
+      notifyTransportSelected(transportSelection);
+    }
+
     navigate('/create-po', {
       state: {
-        transportSelection: {
-          byVendorId,
-          byVendorCourierDetail,
-          shippingProvider: '',
-          trackingNumber: '',
-          trackingUrl: '',
-          transportNotes: ''
-        },
-        createdOrders
+        transportSelection,
+        createdOrders,
+        poGroups,
+        grandTotalAllPos,
+        requiredDate,
+        hasGstin,
+        deliveryDestination,
+        shippingAddress,
+        billingAddress,
+        voiceGuided: isVoiceGuidedActive()
       }
     });
   };

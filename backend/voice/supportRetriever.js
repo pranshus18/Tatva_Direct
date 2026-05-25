@@ -2,7 +2,8 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { truncateForSpeech } from './summarizeForVoice.js';
-import { SUPPORT_FALLBACK_HUMAN } from './lib/humanizeReply.js';
+import { getSupportFallbackHuman } from './lib/humanizeReply.js';
+import { resolveVoiceLanguage } from './lib/voiceLanguage.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DOCS_DIR = join(__dirname, 'rag', 'documents');
@@ -322,11 +323,11 @@ export function getSupportRetrievalConfidence(hits) {
 }
 
 /** Snippet-only fallback when synthesis is off or Gemini unavailable. */
-export function answerSupportQuestion(query) {
+export function answerSupportQuestion(query, memoryOrLanguage = null) {
   const hits = retrieveSupportContext(query, 3);
   const confidence = getSupportRetrievalConfidence(hits);
   if (!hits.length || confidence < MIN_CONFIDENCE) {
-    return SUPPORT_FALLBACK_HUMAN;
+    return getSupportFallbackHuman(resolveVoiceLanguage(memoryOrLanguage));
   }
   const top = hits.slice(0, 2).map((h) => h.snippet).filter(Boolean).join(' ');
   return truncateForSpeech(top || hits[0].title, 320);

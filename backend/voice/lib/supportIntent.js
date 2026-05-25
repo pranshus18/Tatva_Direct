@@ -1,13 +1,17 @@
 import { ActionType } from '../core/routeTypes.js';
+import {
+  isCommandingOrderPhrase,
+  isOrderCancelPhrase,
+  isOrderTrackPhrase,
+  isProceduralStartPhrase,
+  isSupportTopicPhrase
+} from './voiceIntentPhrases.js';
 
 /** User is asking how something works, not commanding an action. */
 export function isProceduralPolicyQuestion(text) {
   const t = String(text || '').trim();
   if (!t) return false;
-  return (
-    /^(how|what|when|where|why|can i|could i|do you|does|is there|tell me|explain|i want to know)/i.test(t) ||
-    /\b(how do i|how can i|how does|what is the|what are the|tell me about|explain the|walk me through)\b/i.test(t)
-  );
+  return isProceduralStartPhrase(t);
 }
 
 /** Order id present for track/cancel/pay actions. */
@@ -15,7 +19,8 @@ export function extractOrderId(text) {
   const t = String(text || '');
   const patterns = [
     /\b(?:track|cancel|pay(?:ment)? for|status of)\s+(?:order\s+)?#?([A-Za-z0-9-]{4,})\b/i,
-    /\border\s+#?([A-Za-z0-9-]{4,})\b/i
+    /\border\s+#?([A-Za-z0-9-]{4,})\b/i,
+    /(?:ऑर्डर|ಆರ್ಡರ್|ఆర్డర్)\s+#?([A-Za-z0-9-]{4,})/i
   ];
   for (const pattern of patterns) {
     const m = t.match(pattern);
@@ -24,9 +29,6 @@ export function extractOrderId(text) {
   return null;
 }
 
-const SUPPORT_TOPIC_RE =
-  /\b(refund|return|policy|policies|warranty|faq|shipping|delivery|payment method|damaged|incorrect|razorpay|cod|credit line|cancel(?:lation)?|timeline|eligible|non-returnable)\b/i;
-
 /**
  * Route to grounded support RAG (not cart/order APIs).
  */
@@ -34,12 +36,9 @@ export function shouldUseSupportRag(utterance, action = null) {
   const t = String(utterance || '').trim();
   if (!t) return false;
   if (action === ActionType.SUPPORT_RAG) return true;
-  if (SUPPORT_TOPIC_RE.test(t)) return true;
+  if (isSupportTopicPhrase(t)) return true;
   if (isProceduralPolicyQuestion(t)) {
-    const commanding =
-      /\b(cancel order|track order|pay online|place order|checkout|add .+ to cart)\b/i.test(t) &&
-      extractOrderId(t);
-    return !commanding;
+    return !(isCommandingOrderPhrase(t) && extractOrderId(t));
   }
   return false;
 }
@@ -49,15 +48,14 @@ export function shouldUseSupportRag(utterance, action = null) {
  */
 export function resolveTrackOrderAction(text) {
   const t = String(text || '').trim();
-  const isTrackTopic =
-    /\b(track|order status|where is my order)\b/i.test(t) ||
-    /\b(my orders?|recent orders?|order history)\b/i.test(t);
-  if (!isTrackTopic) return null;
+  if (!isOrderTrackPhrase(t)) return null;
 
   const orderId = extractOrderId(t);
-  if (/\b(my orders?|recent orders?|order history)\b/i.test(t) && !isProceduralPolicyQuestion(t)) {
-    return ActionType.TRACK_ORDER;
-  }
+  const listOrders =
+    /\b(my orders?|recent orders?|order history)\b/i.test(t) ||
+    /ನನ್ನ\s+ಆರ್ಡರ್|నా\s+ఆర్డర್|मेरा\s+ऑर्डर/.test(t);
+
+  if (listOrders && !isProceduralPolicyQuestion(t)) return ActionType.TRACK_ORDER;
   if (orderId && !isProceduralPolicyQuestion(t)) return ActionType.TRACK_ORDER;
   if (isProceduralPolicyQuestion(t) || /\bwhere is my order\b/i.test(t)) {
     return ActionType.SUPPORT_RAG;
@@ -68,7 +66,7 @@ export function resolveTrackOrderAction(text) {
 
 export function resolveCancelOrderAction(text) {
   const t = String(text || '').trim();
-  if (!/\bcancel\b/i.test(t) || !/\border\b/i.test(t)) return null;
+  if (!isOrderCancelPhrase(t)) return null;
 
   const orderId = extractOrderId(t);
   if (orderId && !isProceduralPolicyQuestion(t)) return ActionType.CANCEL_ORDER;

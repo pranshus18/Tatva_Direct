@@ -16,10 +16,42 @@ export function clearSupplierSelectScopeSession() {
   }
 }
 
+/**
+ * One supplier-select row per product — avoids duplicate Mac Air M2 blocks from repeated voice adds.
+ */
+export function dedupeSupplierSelectItems(items) {
+  if (!Array.isArray(items) || items.length === 0) return [];
+  const byLineId = new Set();
+  const byProductId = new Map();
+  const out = [];
+
+  for (const it of items) {
+    const lineId = String(it?.id ?? '').trim();
+    if (lineId && byLineId.has(lineId)) continue;
+    if (lineId) byLineId.add(lineId);
+
+    const pid = String(it?.productId ?? '').trim();
+    if (pid) {
+      if (byProductId.has(pid)) {
+        const prev = byProductId.get(pid);
+        prev.quantity = (Number(prev.quantity) || 0) + (Number(it.quantity) || 0);
+        continue;
+      }
+      const row = { ...it };
+      byProductId.set(pid, row);
+      out.push(row);
+      continue;
+    }
+    out.push({ ...it });
+  }
+  return out;
+}
+
 export function persistSupplierSelectScopeFromCart(items) {
-  if (!Array.isArray(items) || items.length === 0) return;
+  const scoped = dedupeSupplierSelectItems(items);
+  if (!scoped.length) return;
   try {
-    sessionStorage.setItem(SESSION_SCOPE_KEY, JSON.stringify(items));
+    sessionStorage.setItem(SESSION_SCOPE_KEY, JSON.stringify(scoped));
     sessionStorage.setItem(SESSION_SCOPE_TS_KEY, String(Date.now()));
     sessionStorage.setItem(SESSION_SCOPE_SOURCE_KEY, SESSION_SCOPE_FROM_CART);
   } catch {
@@ -37,7 +69,7 @@ export function readSupplierSelectScopeSessionIfFresh() {
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    return parsed;
+    return dedupeSupplierSelectItems(parsed);
   } catch {
     return null;
   }

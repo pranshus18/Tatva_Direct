@@ -2,8 +2,10 @@
 import {
   ADDRESS_REQUIRED_FIELDS,
   buildBcovResolver,
-  buildIdentityBundle,
   buildProductIdentification,
+  buildSupplierVariantIdentityFromPoItem,
+  hasSupplierVariantSignals,
+  resolveSupplierVariantKeyForItem,
   computeGroupWeightKg,
   extractBcovScopeKeys,
   extractBrandForBcov,
@@ -12,9 +14,13 @@ import {
   getContractErrorMessage,
   getOutletPickupMeta,
   getSupplierPickupMeta,
+  isAddressComplete,
   loadAdminBrandTerminalRoleMap,
+  mapToDeliveryAddress,
+  normalizeAddress,
   parseWithSchema,
   poGroupRequestSchema,
+  resolveB2bPaymentFromBody,
   supplierMatchesBrandTerminalRole
 } from './poImports.js';
 
@@ -104,18 +110,22 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         }
       }
       const itemSpecs = item.specifications || {};
-      const requestedVariantIdentity = buildIdentityBundle({
-        unit: item.unit,
-        brandModel: item.brandModel || item.modelBrand,
-        sku: item.sku || item.skuNo || item.gsku || itemSpecs.sku || itemSpecs.skuNo || itemSpecs.gsku,
-        packSize: item.packSize || item.pack_size || itemSpecs.packSize || itemSpecs.pack_size,
-        specifications: itemSpecs
-      });
-      const hasVariantSignals =
-        requestedVariantIdentity.matchSignals.hasSku ||
-        Boolean(requestedVariantIdentity.variant.brandModel) ||
-        Boolean(requestedVariantIdentity.variant.packSize);
-      
+      let parentProductForVariant = null;
+      if (!supplierProduct && item.productId) {
+        const { data: parentRow } = await supabase
+          .from('products')
+          .select('specifications')
+          .eq('id', item.productId)
+          .maybeSingle();
+        parentProductForVariant = parentRow;
+      }
+      const requestedVariantIdentity = buildSupplierVariantIdentityFromPoItem(
+        item,
+        parentProductForVariant
+      );
+      const requestedVariantKey = resolveSupplierVariantKeyForItem(item, parentProductForVariant);
+      const hasVariantSignals = hasSupplierVariantSignals(item, requestedVariantIdentity);
+
       // First try to find by productId if available (preferred: explicit catalog link)
       if (!supplierProduct && item.productId) {
         // 1) Prefer approved + active offers (current behaviour)
@@ -133,7 +143,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
           .order('created_at', { ascending: false })
           .limit(1);
         if (hasVariantSignals) {
-          spByIdApprovedQuery = spByIdApprovedQuery.eq('variant_key', requestedVariantIdentity.variantKey);
+          spByIdApprovedQuery = spByIdApprovedQuery.eq('variant_key', requestedVariantKey);
         }
         const { data: spByIdApproved } = await spByIdApprovedQuery.maybeSingle();
         
@@ -158,7 +168,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
             .order('created_at', { ascending: false })
             .limit(1);
           if (hasVariantSignals) {
-            spByIdAnyQuery = spByIdAnyQuery.eq('variant_key', requestedVariantIdentity.variantKey);
+            spByIdAnyQuery = spByIdAnyQuery.eq('variant_key', requestedVariantKey);
           }
           const { data: spByIdAny } = await spByIdAnyQuery.maybeSingle();
 
@@ -185,7 +195,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
           .order('created_at', { ascending: false })
           .limit(1);
         if (hasVariantSignals) {
-          spByNameApprovedQuery = spByNameApprovedQuery.eq('variant_key', requestedVariantIdentity.variantKey);
+          spByNameApprovedQuery = spByNameApprovedQuery.eq('variant_key', requestedVariantKey);
         }
         const { data: spByNameApproved } = await spByNameApprovedQuery;
         
@@ -208,7 +218,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
             .order('created_at', { ascending: false })
             .limit(1);
           if (hasVariantSignals) {
-            spByNameAnyQuery = spByNameAnyQuery.eq('variant_key', requestedVariantIdentity.variantKey);
+            spByNameAnyQuery = spByNameAnyQuery.eq('variant_key', requestedVariantKey);
           }
           const { data: spByNameAny } = await spByNameAnyQuery;
 
@@ -312,6 +322,9 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         // Used to show supplier-specific tracking info (brandModel)
         // and to set order_items.supplier_product_id for later enrichment in dashboard.js.
         supplierProductId: supplierProduct.id,
+        asin: product.asin || null,
+        variantKey: supplierProduct.variant_key || null,
+        variantAsin: supplierProduct.variant_asin || null,
         bcovApplied: !!bcovResolved,
         bcovLevelId: bcovResolved?.levelId || null,
         basePrice,
@@ -407,55 +420,6 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
     });
   }
 });
-
-/** Map service-provider PO checkout choice to DB columns (aligns with POS / invoices). */
-function resolveB2bPaymentFromBody(body) {
-  const raw = String(body?.paymentMethod || body?.payment_method || 'online')
-    .toLowerCase()
-    .trim();
-  const allowed = new Set(['cod', 'online', 'bank_transfer', 'credit']);
-  const choice = allowed.has(raw) ? raw : 'online';
-  if (choice === 'cod') {
-    return { payment_method: 'cash', payment_status: 'pending' };
-  }
-  if (choice === 'bank_transfer') {
-    return { payment_method: 'bank_transfer', payment_status: 'pending' };
-  }
-  if (choice === 'credit') {
-    return { payment_method: 'credit', payment_status: 'pending' };
-  }
-  return { payment_method: 'online', payment_status: 'pending' };
-}
-
-function normalizeAddress(address = {}) {
-  return {
-    line1: String(address?.line1 || address?.street || '').trim(),
-    city: String(address?.city || '').trim(),
-    state: String(address?.state || '').trim(),
-    pincode: String(
-      address?.pincode ||
-        address?.zipCode ||
-        address?.postalCode ||
-        address?.postal_code ||
-        ''
-    ).trim(),
-    country: String(address?.country || '').trim()
-  };
-}
-
-function isAddressComplete(address = {}) {
-  return ADDRESS_REQUIRED_FIELDS.every((field) => String(address?.[field] || '').trim());
-}
-
-function mapToDeliveryAddress(address = {}) {
-  return {
-    street: address.line1,
-    city: address.city,
-    state: address.state,
-    zipCode: address.pincode,
-    country: address.country
-  };
-}
 
 function orderDeliveryJsonToLogisticsAddress(addr = {}) {
   const a = addr && typeof addr === 'object' ? addr : {};
@@ -555,17 +519,18 @@ async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
   const itemSpecs = item?.specifications || {};
   const specsObj =
     itemSpecs && typeof itemSpecs === 'object' && !Array.isArray(itemSpecs) ? itemSpecs : {};
-  const requestedVariantIdentity = buildIdentityBundle({
-    unit: item?.unit,
-    brandModel: item?.brandModel || item?.modelBrand,
-    sku: item?.sku || item?.skuNo || item?.gsku || specsObj.sku || specsObj.skuNo || specsObj.gsku,
-    packSize: item?.packSize || item?.pack_size || specsObj.packSize || specsObj.pack_size,
-    specifications: specsObj
-  });
-  const hasVariantSignals =
-    requestedVariantIdentity.matchSignals.hasSku ||
-    Boolean(requestedVariantIdentity.variant.brandModel) ||
-    Boolean(requestedVariantIdentity.variant.packSize);
+  let parentProductForVariant = null;
+  if (item?.productId) {
+    const { data: parentRow } = await supabase
+      .from('products')
+      .select('specifications')
+      .eq('id', item.productId)
+      .maybeSingle();
+    parentProductForVariant = parentRow;
+  }
+  const requestedVariantIdentity = buildSupplierVariantIdentityFromPoItem(item, parentProductForVariant);
+  const requestedVariantKey = resolveSupplierVariantKeyForItem(item, parentProductForVariant);
+  const hasVariantSignals = hasSupplierVariantSignals(item, requestedVariantIdentity);
 
   if (item?.productId) {
     let qApproved = supabase
@@ -578,7 +543,7 @@ async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
       .order('created_at', { ascending: false })
       .limit(1);
     if (hasVariantSignals) {
-      qApproved = qApproved.eq('variant_key', requestedVariantIdentity.variantKey);
+      qApproved = qApproved.eq('variant_key', requestedVariantKey);
     }
     const { data: spApproved } = await qApproved.maybeSingle();
     if (spApproved?.product) return spApproved;
@@ -594,7 +559,7 @@ async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
       .order('created_at', { ascending: false })
       .limit(1);
     if (hasVariantSignals) {
-      qAny = qAny.eq('variant_key', requestedVariantIdentity.variantKey);
+      qAny = qAny.eq('variant_key', requestedVariantKey);
     }
     const { data: spAny } = await qAny.maybeSingle();
     if (spAny?.product) return spAny;
@@ -622,7 +587,7 @@ async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
       .order('created_at', { ascending: false })
       .limit(1);
     if (hasVariantSignals) {
-      qNameApproved = qNameApproved.eq('variant_key', requestedVariantIdentity.variantKey);
+      qNameApproved = qNameApproved.eq('variant_key', requestedVariantKey);
     }
     const { data: rowsApproved } = await qNameApproved;
     if (rowsApproved?.[0]?.product) return rowsApproved[0];
@@ -638,7 +603,7 @@ async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
       .order('created_at', { ascending: false })
       .limit(1);
     if (hasVariantSignals) {
-      qNameAny = qNameAny.eq('variant_key', requestedVariantIdentity.variantKey);
+      qNameAny = qNameAny.eq('variant_key', requestedVariantKey);
     }
     const { data: rowsAny } = await qNameAny;
     if (rowsAny?.[0]?.product) return rowsAny[0];

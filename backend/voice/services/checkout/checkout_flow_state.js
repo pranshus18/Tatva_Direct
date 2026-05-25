@@ -1,5 +1,8 @@
 /** Shared checkout session state and small parsers. */
 
+import { parsePaymentMethodPhrase } from '../../lib/voiceIntentPhrases.js';
+import { syncVoiceUiScreenForPending } from '../../lib/voice_ui_screens.js';
+
 export const CHECKOUT_TYPES = new Set([
   'await_discovery_cart_handoff',
   'await_cart_continue',
@@ -37,20 +40,27 @@ export function setAwaitTransport(memory, payload = {}) {
     summary: 'select transport',
     payload
   });
+  syncVoiceUiScreenForPending(memory, 'await_transport');
 }
 
 export function parsePaymentMethod(text) {
-  const t = String(text || '').toLowerCase();
-  if (/\b(cod|cash on delivery|cash)\b/.test(t)) return 'cod';
-  if (/\b(online|upi|card|razorpay)\b/.test(t)) return 'online';
-  if (/\b(bank transfer|neft|rtgs)\b/.test(t)) return 'bank_transfer';
-  return null;
+  return parsePaymentMethodPhrase(text);
 }
+
+const TOMORROW_PATTERNS = [
+  /\btomorrow\b/i,
+  /\b(kal|aaj\s+ke\s+baad)\b/i,
+  /\b(naale|naalege)\b/i,
+  /\b(repu|repuki)\b/i,
+  /कल/,
+  /ನಾಳೆ/,
+  /రేపు/
+];
 
 export function parseRequiredDate(text) {
   const t = String(text || '').trim();
   if (!t) return null;
-  if (/\btomorrow\b/i.test(t)) {
+  if (TOMORROW_PATTERNS.some((re) => re.test(t))) {
     const d = new Date();
     d.setDate(d.getDate() + 1);
     return d.toISOString().slice(0, 10);

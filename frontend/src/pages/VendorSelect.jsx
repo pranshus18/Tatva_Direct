@@ -3,10 +3,12 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { TrendingUp, Clock, RefreshCw, MapPin } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import SupplierTsinLine from '../components/SupplierTsinLine';
 import {
   clearSupplierSelectScopeSession,
   hasFreshCartSupplierSelectSession,
-  readSupplierSelectScopeSessionIfFresh
+  readSupplierSelectScopeSessionIfFresh,
+  dedupeSupplierSelectItems
 } from '../constants/supplierSelectSession';
 import {
   buildVendorRankCacheKey,
@@ -68,10 +70,11 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
     if (!Array.isArray(scoped) || scoped.length === 0) return;
 
-    const ids = new Set(scoped.map((it) => String(it?.id ?? '').trim()).filter(Boolean));
+    const deduped = dedupeSupplierSelectItems(scoped);
+    const ids = new Set(deduped.map((it) => String(it?.id ?? '').trim()).filter(Boolean));
     lockedLineIdsRef.current = ids.size > 0 ? ids : null;
 
-    setEffectiveItems(scoped);
+    setEffectiveItems(deduped);
     const proj = location.state?.supplierSelectBoqProject;
     if (proj && typeof proj === 'object') {
       setBoqMeta(proj);
@@ -93,10 +96,11 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     (async () => {
       const items = await prepareSupplierSelectFromVoiceCart();
       if (!cancelled && items.length) {
+        const deduped = dedupeSupplierSelectItems(items);
         lockedLineIdsRef.current = new Set(
-          items.map((it) => String(it?.id ?? '').trim()).filter(Boolean)
+          deduped.map((it) => String(it?.id ?? '').trim()).filter(Boolean)
         );
-        setEffectiveItems(items);
+        setEffectiveItems(deduped);
       }
     })();
 
@@ -156,7 +160,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       }
       lockedLineIdsRef.current = null;
     }
-    setEffectiveItems(items);
+    setEffectiveItems(dedupeSupplierSelectItems(items));
   }, [items]);
 
   // If items are missing (e.g., user returns later), load them from the saved BOQ — not when continuing from cart.
@@ -729,6 +733,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                           ID: {getProductIdentification(item, vendor)}
                         </div>
                       )}
+                      <SupplierTsinLine asin={vendor.asin || vendor.parentAsin} variantAsin={vendor.variantAsin} />
                       {specificationEntries.length > 0 && (
                         <div
                           style={{

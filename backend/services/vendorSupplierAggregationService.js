@@ -226,11 +226,16 @@ export async function buildSupplierProductsForRanking({
       supplierProducts[supplierId].supplierPincode = supplierPincode;
     }
 
+    const parentTsin = product.asin || product.parentAsin || null;
+    const variantTsin = product.variant_asin || product.supplierVariantAsin || null;
     supplierProducts[supplierId].products.push({
       ...product,
+      asin: parentTsin,
+      parentAsin: parentTsin,
       supplierProductId: product.supplierProductId || product.id || null,
       supplierVariantKey: product.supplierVariantKey || product.variant_key || null,
-      supplierVariantAsin: product.supplierVariantAsin || product.variant_asin || null,
+      supplierVariantAsin: variantTsin,
+      variantAsin: variantTsin,
       basePrice,
       bcovApplied: !!bcovResolved,
       bcovLevelId: bcovResolved?.levelId || null,

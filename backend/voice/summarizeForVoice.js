@@ -1,4 +1,7 @@
 /** Max chars sent to the client for TTS (full checkout prompts, suppliers, etc.). */
+import { getVoiceText } from './i18n/index.js';
+import { resolveVoiceLanguage } from './lib/voiceLanguage.js';
+
 export const VOICE_SPEECH_MAX_LEN =
   Number.parseInt(String(process.env.VOICE_SPEECH_MAX_LEN || '4500'), 10) || 4500;
 
@@ -12,7 +15,11 @@ export function truncateForSpeech(text, maxLen = VOICE_SPEECH_MAX_LEN) {
   return `${cut.trim()}…`;
 }
 
-export function summarizeToolResult(toolName, raw) {
+function vt(memoryOrLanguage, key, params = {}) {
+  return getVoiceText(key, resolveVoiceLanguage(memoryOrLanguage), params, '');
+}
+
+export function summarizeToolResult(toolName, raw, memoryOrLanguage = null) {
   let data;
   try {
     data = typeof raw === 'string' ? JSON.parse(raw) : raw;
@@ -22,10 +29,16 @@ export function summarizeToolResult(toolName, raw) {
 
   if (toolName === 'get_cart') {
     const items = data?.items || [];
-    if (!items.length || data?.empty) return 'Your cart is empty.';
+    if (!items.length || data?.empty) return vt(memoryOrLanguage, 'summarize.cartEmpty');
     const names = items.slice(0, 3).map((i) => `${i.name || 'item'} × ${i.quantity || 1}`);
     const more = items.length > 3 ? ` and ${items.length - 3} more.` : '';
-    return truncateForSpeech(`Cart has ${items.length} items: ${names.join(', ')}${more}`);
+    return truncateForSpeech(
+      vt(memoryOrLanguage, 'summarize.cartItems', {
+        count: String(items.length),
+        names: names.join(', '),
+        more
+      })
+    );
   }
 
   if (toolName === 'search_products' || toolName === 'get_recommendations') {
@@ -33,8 +46,8 @@ export function summarizeToolResult(toolName, raw) {
     if (!products.length) {
       const q = String(data?.searchQuery || '').trim();
       return q
-        ? `I am not able to find the product "${q}".`
-        : 'I am not able to find the product.';
+        ? vt(memoryOrLanguage, 'summarize.productNotFoundQuery', { query: q })
+        : vt(memoryOrLanguage, 'summarize.productNotFound');
     }
     const lines = products.slice(0, 3).map((p, i) => {
       const bits = [p.name || 'Product'];
@@ -44,7 +57,10 @@ export function summarizeToolResult(toolName, raw) {
     });
     const total = data.total ?? products.length;
     return truncateForSpeech(
-      `Found ${total} product${total === 1 ? '' : 's'}. ${lines.join('. ')}. Say add to cart, then tell me how many.`
+      vt(memoryOrLanguage, 'summarize.searchIntro', {
+        total: String(total),
+        lines: lines.join('. ')
+      })
     );
   }
 

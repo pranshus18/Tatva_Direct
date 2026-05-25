@@ -9,6 +9,24 @@ const PREFERRED_SPEC_KEYS = [
 
 const INTERNAL_SPEC_KEYS = new Set(['snapshot']);
 
+/** PO/order snapshot identity — not product template fields. */
+const ORDER_SNAPSHOT_META_KEYS = new Set([
+  'parentAsin',
+  'variantAsin',
+  'variantKey',
+  'brandModel',
+  'variantAttributes',
+  'snapshotAt',
+  'productIdentification',
+  'bcov',
+  'gst'
+]);
+
+const isDisplayableSpecKey = (key) => {
+  const normalized = String(key || '').trim();
+  return normalized && !INTERNAL_SPEC_KEYS.has(normalized) && !ORDER_SNAPSHOT_META_KEYS.has(normalized);
+};
+
 export const toReadableSpecLabel = (rawKey) =>
   String(rawKey || '')
     .replace(/([A-Z])/g, ' $1')
@@ -81,7 +99,7 @@ export const parseSpecificationsForDisplay = (specifications, options = {}) => {
   const pushEntry = (key, value) => {
     const label = toReadableSpecLabel(key);
     const normalizedLabel = label.toLowerCase();
-    if (!label || seen.has(normalizedLabel) || INTERNAL_SPEC_KEYS.has(key)) return;
+    if (!label || seen.has(normalizedLabel) || !isDisplayableSpecKey(key)) return;
     if (!includeEmpty && !isMeaningfullyFilled(value)) return;
 
     const formatted =
@@ -126,7 +144,7 @@ export const specificationEntriesForDetails = (specifications) => {
   if (!parsedObject) return [];
 
   return Object.keys(parsedObject)
-    .filter((key) => key && !INTERNAL_SPEC_KEYS.has(key))
+    .filter((key) => isDisplayableSpecKey(key))
     .sort((a, b) => a.localeCompare(b))
     .map((key) => ({
       key,

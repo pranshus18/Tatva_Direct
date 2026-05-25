@@ -75,4 +75,20 @@ export class SessionMemory {
   getContext(key, fallback = null) {
     return this.getJson('context', {})[key] ?? fallback;
   }
+
+  setVoiceLanguage(language) {
+    this.setJson('voice_language', language || null);
+  }
+
+  getVoiceLanguage(fallback = null) {
+    return this.getJson('voice_language', fallback);
+  }
+
+  setVoiceLanguageSelected(selected) {
+    this.setJson('voice_language_selected', Boolean(selected));
+  }
+
+  isVoiceLanguageSelected() {
+    return Boolean(this.getJson('voice_language_selected', false));
+  }
 }

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import { mergeSpecificationMaps } from './supplierCatalogHelpersService.js';
 
 /**
  * Product Identity Service (Phase 1)
@@ -225,6 +226,83 @@ export function buildIdentityBundle(input = {}) {
   };
 }
 
+/**
+ * Variant identity for a supplier offer: merge shared catalog specs with offer specs
+ * (same rules as supplier product list / detail UI) before hashing variant_key.
+ */
+/** Supplier-page variant key already chosen (cart / listing) — wins over recomputation. */
+export function extractExplicitVariantKey(source = {}) {
+  return String(source.variantKey || source.variant_key || '').trim();
+}
+
+/**
+ * PO / cart line → same variant identity rules as supplier product create/update.
+ */
+export function buildSupplierVariantIdentityFromPoItem(item = {}, parentProduct = null) {
+  const itemSpecs =
+    item.specifications && typeof item.specifications === 'object' && !Array.isArray(item.specifications)
+      ? item.specifications
+      : {};
+  return buildSupplierVariantIdentity(
+    {
+      unit: item.unit,
+      brandModel: item.brandModel || item.modelBrand,
+      gtin: item.gtin,
+      mpn: item.mpn,
+      sku: item.sku || item.skuNo || item.gsku || itemSpecs.sku || itemSpecs.skuNo || itemSpecs.gsku,
+      packSize: item.packSize || item.pack_size || itemSpecs.packSize || itemSpecs.pack_size,
+      specifications: itemSpecs
+    },
+    parentProduct
+  );
+}
+
+/**
+ * Resolve variant_key for DB matching: use supplier-page value when present, else compute.
+ */
+export function resolveSupplierVariantKeyForItem(item = {}, parentProduct = null) {
+  const explicit = extractExplicitVariantKey(item);
+  if (explicit) return explicit;
+  return buildSupplierVariantIdentityFromPoItem(item, parentProduct).variantKey;
+}
+
+/** Whether PO queries should filter supplier_products.variant_key (not pick arbitrary variant). */
+export function hasSupplierVariantSignals(item = {}, variantIdentity = null) {
+  if (extractExplicitVariantKey(item)) return true;
+  if (String(item?.supplierProductId || '').trim()) return true;
+  const attrs = variantIdentity?.variant?.variantAttributes;
+  if (attrs && typeof attrs === 'object' && Object.keys(attrs).length > 0) return true;
+  return Boolean(
+    variantIdentity?.matchSignals?.hasSku ||
+    variantIdentity?.variant?.brandModel ||
+    variantIdentity?.variant?.packSize
+  );
+}
+
+export function buildSupplierVariantIdentity(offerInput = {}, parentProduct = null) {
+  const catalogSpecs =
+    parentProduct?.specifications &&
+    typeof parentProduct.specifications === 'object' &&
+    !Array.isArray(parentProduct.specifications)
+      ? parentProduct.specifications
+      : {};
+  const offerSpecs =
+    offerInput.specifications &&
+    typeof offerInput.specifications === 'object' &&
+    !Array.isArray(offerInput.specifications)
+      ? offerInput.specifications
+      : offerInput.variantAttributes &&
+          typeof offerInput.variantAttributes === 'object' &&
+          !Array.isArray(offerInput.variantAttributes)
+        ? offerInput.variantAttributes
+        : {};
+  const mergedSpecifications = mergeSpecificationMaps(catalogSpecs, offerSpecs);
+  return buildIdentityBundle({
+    ...offerInput,
+    specifications: mergedSpecifications
+  });
+}
+
 export default {
   normalizeTextField,
   normalizeIdentifierField,
@@ -236,5 +314,10 @@ export default {
   buildVariantAsinLikeId,
   buildCatalogKey,
   buildVariantKey,
-  buildIdentityBundle
+  buildIdentityBundle,
+  buildSupplierVariantIdentity,
+  extractExplicitVariantKey,
+  buildSupplierVariantIdentityFromPoItem,
+  resolveSupplierVariantKeyForItem,
+  hasSupplierVariantSignals
 };

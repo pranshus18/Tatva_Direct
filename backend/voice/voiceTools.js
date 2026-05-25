@@ -1,5 +1,6 @@
 import { InternalApiClient } from './internalApiClient.js';
 import { ragService } from './services/rag_service.js';
+import { voiceText } from './lib/voiceText.js';
 
 function flattenCartItems(draft) {
   const items = [];
@@ -48,16 +49,16 @@ export function createVoiceToolContext(token, memory) {
       selectedVendors: selected,
       substitutions: []
     });
-    if (!groupRes.ok) return `Could not group order: ${groupRes.error}`;
+    if (!groupRes.ok) return voiceText(memory, 'tools.groupOrderFailed', { error: groupRes.error });
     const poGroups = groupRes.data?.poGroups || groupRes.data?.groups || [];
-    if (!poGroups.length) return 'No purchase order groups could be created.';
+    if (!poGroups.length) return voiceText(memory, 'tools.noPoGroups');
 
     const createRes = await client.post('/api/po/create', {
       poGroups,
       paymentMethod,
       deliveryDestination: 'shipping'
     });
-    if (!createRes.ok) return `Order creation failed: ${createRes.error}`;
+    if (!createRes.ok) return voiceText(memory, 'tools.orderCreationFailed', { error: createRes.error });
     return JSON.stringify(createRes.data);
   }
 
@@ -65,14 +66,16 @@ export function createVoiceToolContext(token, memory) {
     const oid = payload.order_id || payload.orderId;
     const reason = payload.reason || 'Voice cancellation';
     const res = await client.post(`/api/po/${encodeURIComponent(oid)}/cancel`, { reason });
-    if (!res.ok) return `Cancel failed: ${res.error}`;
+    if (!res.ok) return voiceText(memory, 'tools.cancelFailed', { error: res.error });
     return JSON.stringify(res.data);
   }
 
   async function executeOnlinePayment(orderId) {
     const res = await client.post(`/api/payments/orders/${orderId}/razorpay/create`, {});
-    if (!res.ok) return `Payment setup failed: ${res.error}`;
-    return `Online payment intent created. Complete payment in the app if prompted. ${JSON.stringify(res.data).slice(0, 400)}`;
+    if (!res.ok) return voiceText(memory, 'tools.paymentSetupFailed', { error: res.error });
+    return voiceText(memory, 'tools.paymentIntentCreated', {
+      detail: JSON.stringify(res.data).slice(0, 400)
+    });
   }
 
   const tools = {
@@ -81,7 +84,7 @@ export function createVoiceToolContext(token, memory) {
       if (String(query).trim()) params.q = String(query).trim();
       if (String(category).trim()) params.category = String(category).trim();
       const result = await client.get('/api/supplier/products/search', params);
-      if (!result.ok) return `Search failed: ${result.error}`;
+      if (!result.ok) return voiceText(memory, 'tools.searchFailed', { error: result.error });
       const items = (result.data?.suggestions || []).slice(0, limit).map((p) => ({
         id: p.id,
         name: p.name,
@@ -106,13 +109,13 @@ export function createVoiceToolContext(token, memory) {
 
     async check_inventory({ product_id: productId }) {
       const result = await client.get(`/api/voice/products/${productId}/availability`);
-      if (!result.ok) return `Inventory check failed: ${result.error}`;
+      if (!result.ok) return voiceText(memory, 'tools.inventoryCheckFailed', { error: result.error });
       return JSON.stringify(result.data);
     },
 
     async get_cart() {
       const result = await client.get('/api/po/cart');
-      if (!result.ok) return `Could not load cart: ${result.error}`;
+      if (!result.ok) return voiceText(memory, 'tools.cartLoadFailed', { error: result.error });
       const draft = result.data?.cart?.draft || {};
       const items = flattenCartItems(draft).map((it) => ({
         id: it.id,
@@ -129,26 +132,26 @@ export function createVoiceToolContext(token, memory) {
         productId,
         quantity: Math.max(1, Math.floor(Number(quantity) || 1))
       });
-      if (!result.ok) return `Add to cart failed: ${result.error}`;
-      return JSON.stringify(result.data);
+      if (!result.ok) return voiceText(memory, 'tools.addToCartFailed', { error: result.error });
+      return { status: 'success', ...(result.data || {}) };
     },
 
     async update_cart({ item_id: itemId, quantity }) {
       const result = await client.patch(`/api/po/cart/items/${itemId}/quantity`, {
         quantity: Math.max(1, Math.floor(Number(quantity) || 1))
       });
-      if (!result.ok) return `Update failed: ${result.error}`;
+      if (!result.ok) return voiceText(memory, 'tools.updateFailed', { error: result.error });
       return JSON.stringify(result.data);
     },
 
     async remove_from_cart({ item_id: itemId = '', clear_all: clearAll = false }) {
       if (clearAll) {
         const result = await client.delete('/api/po/cart');
-        if (!result.ok) return `Clear cart failed: ${result.error}`;
+        if (!result.ok) return voiceText(memory, 'tools.clearCartFailed', { error: result.error });
         return JSON.stringify(result.data);
       }
       const cartRes = await client.get('/api/po/cart');
-      if (!cartRes.ok) return `Could not load cart: ${cartRes.error}`;
+      if (!cartRes.ok) return voiceText(memory, 'tools.cartLoadFailed', { error: cartRes.error });
       const draft = cartRes.data?.cart?.draft || {};
       const groups = [...(draft.boqGroups || [])];
       let found = false;
@@ -160,7 +163,7 @@ export function createVoiceToolContext(token, memory) {
           g.items = next;
         }
       }
-      if (!found) return 'Cart item not found.';
+      if (!found) return voiceText(memory, 'tools.cartItemNotFound');
       draft.boqGroups = groups.filter((g) => (g.items || []).length);
       const result = await client.put('/api/po/cart', {
         boqGroups: draft.boqGroups,
@@ -168,7 +171,7 @@ export function createVoiceToolContext(token, memory) {
         substitutions: draft.substitutions || [],
         items: draft.items || []
       });
-      if (!result.ok) return `Remove failed: ${result.error}`;
+      if (!result.ok) return voiceText(memory, 'tools.removeFailed', { error: result.error });
       return JSON.stringify({ status: 'success', message: 'Item removed' });
     },
 
@@ -182,7 +185,7 @@ export function createVoiceToolContext(token, memory) {
           const orders = (dash.data?.yourOrders || dash.data?.orders || []).slice(0, 5);
           return JSON.stringify({ hint: 'Order not found', recentOrders: orders });
         }
-        return `Track failed: ${result.error}`;
+        return voiceText(memory, 'tools.trackFailed', { error: result.error });
       }
       return JSON.stringify(result.data);
     },
@@ -193,14 +196,14 @@ export function createVoiceToolContext(token, memory) {
         summary: `cancel order ${orderId}`,
         payload: { order_id: orderId, reason }
       });
-      return `I can cancel order ${orderId}. Say yes to confirm, or no to cancel.`;
+      return voiceText(memory, 'tools.cancelOrderConfirm', { orderId });
     },
 
     async reorder_products({ order_id: orderId }) {
       const detail = await client.get(
         `/api/dashboard/service-provider/orders/${encodeURIComponent(orderId)}`
       );
-      if (!detail.ok) return `Could not load order: ${detail.error}`;
+      if (!detail.ok) return voiceText(memory, 'tools.orderLoadFailed', { error: detail.error });
       const order = detail.data?.order || detail.data;
       const lines = order.order_items || order.items || [];
       let added = 0;
@@ -218,9 +221,9 @@ export function createVoiceToolContext(token, memory) {
 
     async create_order({ payment_method: paymentMethod = 'cod' }) {
       const cartRes = await client.get('/api/po/cart');
-      if (!cartRes.ok) return `Could not load cart: ${cartRes.error}`;
+      if (!cartRes.ok) return voiceText(memory, 'tools.cartLoadFailed', { error: cartRes.error });
       const items = flattenCartItems(cartRes.data?.cart?.draft || {});
-      if (!items.length) return 'Your cart is empty. Add products before checkout.';
+      if (!items.length) return voiceText(memory, 'tools.cartEmptyCheckout');
 
       let selected = memory.getContext('selected_vendors') || {};
       if (!Object.keys(selected).length) {
@@ -233,7 +236,10 @@ export function createVoiceToolContext(token, memory) {
         summary: 'place your order',
         payload: { items, selected_vendors: selected, payment_method: paymentMethod }
       });
-      return `Ready to place order with ${items.length} items (${paymentMethod}). Say yes to confirm, or no to cancel.`;
+      return voiceText(memory, 'tools.placeOrderConfirm', {
+        count: String(items.length),
+        paymentMethod
+      });
     },
 
     async select_payment_method({ order_id: orderId, method = 'online' }) {
@@ -244,14 +250,14 @@ export function createVoiceToolContext(token, memory) {
           summary: `start online payment for order ${orderId}`,
           payload: { order_id: orderId, method: 'online' }
         });
-        return `I can start online payment for order ${orderId}. Say yes to confirm, or no to cancel.`;
+        return voiceText(memory, 'tools.onlinePaymentConfirm', { orderId });
       }
       if (m === 'bank_transfer') {
         const res = await client.post(
           `/api/payments/orders/${orderId}/bank-transfer/request`,
           {}
         );
-        if (!res.ok) return `Bank transfer request failed: ${res.error}`;
+        if (!res.ok) return voiceText(memory, 'tools.bankTransferFailed', { error: res.error });
         return JSON.stringify(res.data);
       }
       return JSON.stringify({ status: 'success', message: `Payment method noted: ${m}` });
@@ -259,7 +265,7 @@ export function createVoiceToolContext(token, memory) {
 
     async get_profile_addresses() {
       const result = await client.get('/api/profile');
-      if (!result.ok) return `Could not load profile: ${result.error}`;
+      if (!result.ok) return voiceText(memory, 'tools.profileLoadFailed', { error: result.error });
       const user = result.data?.user || result.data;
       return JSON.stringify({
         address: user.address,
@@ -271,7 +277,7 @@ export function createVoiceToolContext(token, memory) {
       const result = await client.put('/api/profile', {
         address: { line1, city, state, pincode, country }
       });
-      if (!result.ok) return `Address update failed: ${result.error}`;
+      if (!result.ok) return voiceText(memory, 'tools.addressUpdateFailed', { error: result.error });
       return JSON.stringify({ status: 'success', message: 'Shipping address updated' });
     },
 
@@ -429,11 +435,12 @@ export const GEMINI_TOOL_DECLARATIONS = [
 ];
 
 export async function runTool(toolCtx, name, args) {
+  const { memory } = toolCtx;
   const fn = toolCtx.tools[name];
-  if (!fn) return `Unknown tool: ${name}`;
+  if (!fn) return voiceText(memory, 'tools.unknownTool', { name });
   try {
     return await fn(args || {});
   } catch (err) {
-    return `Tool error: ${err.message}`;
+    return voiceText(memory, 'tools.toolError');
   }
 }

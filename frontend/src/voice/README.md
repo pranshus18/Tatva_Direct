@@ -30,9 +30,11 @@ cd frontend && npm run dev
 
 Backend must be running on port **8081** (`node server.js` or `npm run dev` in `backend/`).
 
-## Natural voice (browser TTS)
+## Natural voice (server TTS — no downloads)
 
-On **Start speaking**, the app picks the best local voice (e.g. Google / Samantha / Rishi on en-IN), speaks slightly slower, and pauses between sentences.
+By default the **backend** synthesizes speech (Indian neural voices for English, Hindi, Kannada, Telugu). Users do not install Mac/Windows voice packs. The browser plays streamed audio from the server; local `speechSynthesis` is only a fallback.
+
+Optional: set `GEMINI_API_KEY` on the backend for Gemini TTS. Disable server TTS with `VOICE_EDGE_TTS=false` (not recommended).
 
 Optional `frontend/.env`:
 

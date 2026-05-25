@@ -4,6 +4,7 @@
 
 import { FLOW_STEPS } from './voice_prompts.js';
 import { getVoiceFlowMode, VOICE_FLOW_CART } from './voice_flow_mode.js';
+import { hasMandatoryTransportSelected } from './transportGate.js';
 
 export const VOICE_UI_SCREENS = {
   product_discovery: {
@@ -71,37 +72,97 @@ const PENDING_TO_SCREEN = {
   await_transport: 'transport'
 };
 
+function screenFromCheckoutState(memory) {
+  const checkout = memory.getContext?.('checkout', {}) || {};
+  const hasCart = Boolean(checkout.items?.length);
+  const hasVendors = Boolean(Object.keys(checkout.selectedVendors || {}).length);
+  const hasSubs = Boolean(checkout.substitutionSuggestions?.length);
+  const hasPo = Boolean(checkout.poGroups?.length || checkout.poFieldsQueue?.length);
+
+  if (hasPo) return VOICE_UI_SCREENS.create_po;
+  if (hasSubs) return VOICE_UI_SCREENS.substitution;
+  if (hasVendors) return VOICE_UI_SCREENS.supplier_select;
+  if (hasCart) return VOICE_UI_SCREENS.cart;
+  return null;
+}
+
 /**
  * Parse the last "Step N, Label" from the assistant reply — matches what the user hears.
  */
 export function resolveVoiceUiScreenFromReply(replyText) {
   const text = String(replyText || '');
   const matches = [...text.matchAll(/Step\s+(\d+)\s*,\s*([^.;]+?)(?=\s*\.|\s*Say\b|$)/gi)];
-  if (!matches.length) return null;
+  if (matches.length) {
+    const last = matches[matches.length - 1];
+    const label = String(last[2] || '')
+      .trim()
+      .toLowerCase();
 
-  const last = matches[matches.length - 1];
-  const label = String(last[2] || '')
-    .trim()
-    .toLowerCase();
+    for (const [stepKey, meta] of Object.entries(FLOW_STEPS)) {
+      if (label === meta.label.toLowerCase()) {
+        const screenKey = FLOW_STEP_TO_SCREEN[stepKey];
+        if (screenKey && VOICE_UI_SCREENS[screenKey]) return VOICE_UI_SCREENS[screenKey];
+      }
+    }
 
+    if (label.includes('supplier')) return VOICE_UI_SCREENS.supplier_select;
+    if (label.includes('substitution')) return VOICE_UI_SCREENS.substitution;
+    if (label.includes('transport')) return VOICE_UI_SCREENS.transport;
+    if (label.includes('purchase order') || label.includes('order confirmation')) {
+      return VOICE_UI_SCREENS.create_po;
+    }
+    if (label.includes('cart')) return VOICE_UI_SCREENS.cart;
+    if (label.includes('product search') || label.includes('quantity')) {
+      return VOICE_UI_SCREENS.product_discovery;
+    }
+    if (label.includes('complete')) return VOICE_UI_SCREENS.orders;
+  }
+
+  const lower = text.toLowerCase();
   for (const [stepKey, meta] of Object.entries(FLOW_STEPS)) {
-    if (label === meta.label.toLowerCase()) {
+    if (lower.includes(meta.label.toLowerCase())) {
       const screenKey = FLOW_STEP_TO_SCREEN[stepKey];
       if (screenKey && VOICE_UI_SCREENS[screenKey]) return VOICE_UI_SCREENS[screenKey];
     }
   }
 
-  if (label.includes('supplier')) return VOICE_UI_SCREENS.supplier_select;
-  if (label.includes('substitution')) return VOICE_UI_SCREENS.substitution;
-  if (label.includes('transport')) return VOICE_UI_SCREENS.transport;
-  if (label.includes('purchase order') || label.includes('order confirmation')) {
+  return null;
+}
+
+/**
+ * Resolve screen for navigation after a voice turn (pending + checkout; no stale search-only jump).
+ */
+export function resolveVoiceUiScreenForNavigate(memory, replyText = '') {
+  if (!memory) return null;
+
+  const checkout = memory.getContext?.('checkout', {}) || {};
+  const pendingType = memory.getPendingAction?.()?.type;
+
+  if (
+    hasMandatoryTransportSelected(checkout) &&
+    (pendingType === 'await_transport' || pendingType === 'await_place_confirm')
+  ) {
     return VOICE_UI_SCREENS.create_po;
   }
-  if (label.includes('cart')) return VOICE_UI_SCREENS.cart;
-  if (label.includes('product search') || label.includes('quantity')) {
-    return VOICE_UI_SCREENS.product_discovery;
+
+  if (pendingType && PENDING_TO_SCREEN[pendingType]) {
+    return VOICE_UI_SCREENS[PENDING_TO_SCREEN[pendingType]];
   }
-  if (label.includes('complete')) return VOICE_UI_SCREENS.orders;
+
+  const explicitKey = memory.getContext?.('voice_ui_screen');
+  if (explicitKey && VOICE_UI_SCREENS[explicitKey]) {
+    return VOICE_UI_SCREENS[explicitKey];
+  }
+
+  const fromReply = resolveVoiceUiScreenFromReply(replyText);
+  if (fromReply) return fromReply;
+
+  const fromCheckout = screenFromCheckoutState(memory);
+  if (fromCheckout) return fromCheckout;
+
+  if (getVoiceFlowMode(memory) === VOICE_FLOW_CART) {
+    return null;
+  }
 
   return null;
 }
@@ -116,39 +177,10 @@ export function syncVoiceUiScreenForPending(memory, pendingType) {
   if (screenKey) setVoiceUiScreenKey(memory, screenKey);
 }
 
+/** @deprecated Prefer resolveVoiceUiScreenForNavigate for post-turn routing. */
 export function resolveVoiceUiScreen(memory, replyText = '') {
-  if (!memory) return null;
-
-  const fromReply = resolveVoiceUiScreenFromReply(replyText);
-  if (fromReply) return fromReply;
-
-  const explicitKey = memory.getContext?.('voice_ui_screen');
-  if (explicitKey && VOICE_UI_SCREENS[explicitKey]) {
-    return VOICE_UI_SCREENS[explicitKey];
-  }
-
-  const pending = memory.getPendingAction?.();
-  const pendingType = pending?.type;
-  const checkout = memory.getContext?.('checkout', {}) || {};
-
-  if (pendingType && PENDING_TO_SCREEN[pendingType]) {
-    return VOICE_UI_SCREENS[PENDING_TO_SCREEN[pendingType]];
-  }
-
-  const hasCart = Boolean(checkout.items?.length);
-  const hasVendors = Boolean(Object.keys(checkout.selectedVendors || {}).length);
-  const hasSubs = Boolean(checkout.substitutionSuggestions?.length);
-  const hasPo = Boolean(checkout.poGroups?.length || checkout.poFieldsQueue?.length);
-
-  if (hasPo) return VOICE_UI_SCREENS.create_po;
-  if (hasSubs && hasVendors) return VOICE_UI_SCREENS.substitution;
-  if (hasCart && hasVendors) return VOICE_UI_SCREENS.substitution;
-  if (hasCart && !hasVendors) return VOICE_UI_SCREENS.cart;
-  if (hasCart) return VOICE_UI_SCREENS.cart;
-
-  if (getVoiceFlowMode(memory) === VOICE_FLOW_CART) {
-    return null;
-  }
+  const navigated = resolveVoiceUiScreenForNavigate(memory, replyText);
+  if (navigated) return navigated;
 
   const lastSearch = memory.getContext?.('last_search');
   if (lastSearch?.products?.length) return VOICE_UI_SCREENS.product_discovery;
@@ -156,14 +188,45 @@ export function resolveVoiceUiScreen(memory, replyText = '') {
   return null;
 }
 
-export function voiceScreenToPayload(screen) {
+export function voiceScreenToPayload(screen, memory = null) {
+  return buildVoiceNavigatePayload(screen, memory);
+}
+
+/** WebSocket ui_navigate payload — includes PO + transport when checkout is ready. */
+export function buildVoiceNavigatePayload(screen, memory = null) {
   if (!screen?.path) return null;
   const path = `${screen.path}${screen.query || ''}`;
   const screenKey =
     Object.entries(VOICE_UI_SCREENS).find(([, v]) => v.path === screen.path)?.[0] || 'unknown';
-  return {
+  const payload = {
     path,
     label: screen.label || '',
     screen: screenKey
   };
+
+  if (!memory || screenKey !== 'create_po') return payload;
+
+  const checkout = memory.getContext?.('checkout', {}) || {};
+  const byVendorId = checkout.transportByVendor || {};
+  if (!Object.keys(byVendorId).length) return payload;
+
+  payload.transportSelection = {
+    byVendorId,
+    byVendorCourierDetail: checkout.transportDetailByVendor || {},
+    shippingProvider: '',
+    trackingNumber: '',
+    trackingUrl: '',
+    transportNotes: ''
+  };
+  if (Array.isArray(checkout.poGroups) && checkout.poGroups.length) {
+    payload.poGroups = checkout.poGroups;
+    payload.grandTotalAllPos = checkout.grandTotal;
+    payload.requiredDate = checkout.requiredDate || '';
+    payload.hasGstin = Boolean(String(checkout.gstin || '').trim());
+    payload.deliveryDestination = checkout.deliveryDestination || 'shipping';
+    payload.shippingAddress = checkout.shippingAddress || {};
+    payload.billingAddress = checkout.billingAddress || {};
+  }
+
+  return payload;
 }

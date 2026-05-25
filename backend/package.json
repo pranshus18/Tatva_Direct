@@ -6,13 +6,15 @@
     "dev": "node --watch server.js",
     "start": "node server.js",
     "test": "node --test tests/**/*.test.js",
+    "test:i18n": "node voice/scripts/i18n-key-parity.mjs",
     "check:production": "node scripts/productionReadinessCheck.mjs && node scripts/verifyModularControllers.mjs",
     "test-server": "node test-server.js",
     "backfill-product-identity": "node scripts/backfillProductCatalogIdentity.js",
     "backfill-tsin": "node scripts/backfillTsinCodes.js",
     "phase2-load-test": "node scripts/phase2LoadTest.js",
     "phase3-reliability-jobs": "node scripts/phase3ReliabilityJobs.js",
-    "rag-audit": "node voice/scripts/rag-audit.mjs"
+    "rag-audit": "node voice/scripts/rag-audit.mjs",
+    "bench:voice": "node scripts/voiceLatencyBench.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.39.0",
@@ -20,6 +22,7 @@
     "cors": "^2.8.5",
     "csv-parser": "^3.2.0",
     "dotenv": "^16.3.1",
+    "edge-tts-universal": "^1.4.0",
     "express": "^4.22.2",
     "express-rate-limit": "^7.5.1",
     "fs-extra": "^11.3.3",

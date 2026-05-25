@@ -16,12 +16,134 @@ export const PAYMENT_METHODS_ALLOWED = new Set([
   'card'
 ]);
 
+/** Map service-provider PO checkout choice to DB columns (aligns with POS / invoices). */
+export function resolveB2bPaymentFromBody(body) {
+  const raw = String(body?.paymentMethod || body?.payment_method || 'online')
+    .toLowerCase()
+    .trim();
+  const allowed = new Set(['cod', 'online', 'bank_transfer', 'credit']);
+  const choice = allowed.has(raw) ? raw : 'online';
+  if (choice === 'cod') {
+    return { payment_method: 'cash', payment_status: 'pending' };
+  }
+  if (choice === 'bank_transfer') {
+    return { payment_method: 'bank_transfer', payment_status: 'pending' };
+  }
+  if (choice === 'credit') {
+    return { payment_method: 'credit', payment_status: 'pending' };
+  }
+  return { payment_method: 'online', payment_status: 'pending' };
+}
+
+export function normalizeAddress(address = {}) {
+  return {
+    line1: String(address?.line1 || address?.street || '').trim(),
+    city: String(address?.city || '').trim(),
+    state: String(address?.state || '').trim(),
+    pincode: String(
+      address?.pincode ||
+        address?.zipCode ||
+        address?.postalCode ||
+        address?.postal_code ||
+        ''
+    ).trim(),
+    country: String(address?.country || 'India').trim() || 'India'
+  };
+}
+
+export function isAddressComplete(address = {}) {
+  return ADDRESS_REQUIRED_FIELDS.every((field) => String(address?.[field] || '').trim());
+}
+
+export function mapToDeliveryAddress(address = {}) {
+  return {
+    street: address.line1,
+    city: address.city,
+    state: address.state,
+    zipCode: address.pincode,
+    country: address.country
+  };
+}
+
 export function newPoCartGroupId() {
   try {
     return randomUUID();
   } catch {
     return `g-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
   }
+}
+
+/**
+ * Optional merge of rows that share the same productId (legacy cleanup). Not applied on cart load/add by default.
+ */
+export function consolidateDuplicateProductLines(boqGroups) {
+  if (!Array.isArray(boqGroups) || boqGroups.length === 0) return [];
+
+  const firstGroupByProduct = new Map();
+  const mergedRowByProduct = new Map();
+  const out = boqGroups.map((g) => ({
+    ...g,
+    items: []
+  }));
+
+  for (let gi = 0; gi < boqGroups.length; gi += 1) {
+    const sourceItems = Array.isArray(boqGroups[gi]?.items) ? boqGroups[gi].items : [];
+    for (const it of sourceItems) {
+      const pid = String(it?.productId || '').trim();
+      if (!pid) {
+        out[gi].items.push({ ...it });
+        continue;
+      }
+      if (!firstGroupByProduct.has(pid)) {
+        firstGroupByProduct.set(pid, gi);
+        const row = { ...it };
+        mergedRowByProduct.set(pid, row);
+        out[gi].items.push(row);
+        continue;
+      }
+      const row = mergedRowByProduct.get(pid);
+      row.quantity = Math.min(
+        MAX_CART_ITEM_QUANTITY,
+        (Number(row.quantity) || 0) + (Number(it.quantity) || 0)
+      );
+    }
+  }
+
+  return out.filter((g) => (g.items || []).length > 0);
+}
+
+export function isDiscoveryBoqGroup(group) {
+  if (!group || typeof group !== 'object') return false;
+  if (group.boqProject?.source === 'product_discovery') return true;
+  return /^discovery\b/i.test(String(group.boqName || '').trim());
+}
+
+/**
+ * Voice / discovery add: always a new cart project (group), even for the same product.
+ * Quantity is exactly what the user asked on this add — not merged into prior lines.
+ * @returns {{ boqGroups: object[], groupId: string }}
+ */
+export function appendDiscoveryItemAsNewProject(boqGroups, item, productName) {
+  const groups = Array.isArray(boqGroups) ? [...boqGroups] : [];
+  const label = String(productName || item?.name || 'Product').trim() || 'Product';
+  const qty = Math.min(
+    MAX_CART_ITEM_QUANTITY,
+    Math.max(1, Math.floor(Number(item?.quantity) || 1))
+  );
+  const resultGroupId = `pd-group-${newPoCartGroupId()}`;
+  const newGroup = {
+    groupId: resultGroupId,
+    boqId: null,
+    boqName: `Discovery - ${label}`,
+    boqProject: { source: 'product_discovery' },
+    selectedVendors: {},
+    substitutions: [],
+    items: [{ ...item, quantity: qty }]
+  };
+  return {
+    boqGroups: [...groups, newGroup],
+    groupId: resultGroupId
+  };
 }
 
 export function normalizePoCartDraft(raw) {
@@ -38,21 +160,27 @@ export function normalizePoCartDraft(raw) {
       deliveryDestination: null,
       shippingAddress: null,
       billingAddress: null,
-      gstin: null
+      gstin: null,
+      poGroups: [],
+      grandTotalAllPos: null
     };
   }
   const hasGroups = Array.isArray(raw.boqGroups) && raw.boqGroups.length > 0;
   if (hasGroups) {
-    const items = raw.boqGroups.flatMap((g) => (Array.isArray(g?.items) ? g.items : []));
+    const boqGroups = raw.boqGroups.map((g) => ({
+      ...g,
+      items: Array.isArray(g?.items) ? [...g.items] : []
+    }));
+    const items = boqGroups.flatMap((g) => (Array.isArray(g?.items) ? g.items : []));
     const mergedSelected = { ...(raw.selectedVendors || {}) };
-    raw.boqGroups.forEach((g) => {
+    boqGroups.forEach((g) => {
       if (g?.selectedVendors && typeof g.selectedVendors === 'object') {
         Object.assign(mergedSelected, g.selectedVendors);
       }
     });
     return {
       ...raw,
-      boqGroups: raw.boqGroups,
+      boqGroups,
       items,
       selectedVendors: mergedSelected
     };
@@ -114,7 +242,9 @@ export function buildPoCartDraftFromSavePayload(payload) {
     deliveryDestination: payload.deliveryDestination ?? null,
     shippingAddress: payload.shippingAddress ?? null,
     billingAddress: payload.billingAddress ?? null,
-    gstin: payload.gstin ?? null
+    gstin: payload.gstin ?? null,
+    poGroups: Array.isArray(payload.poGroups) ? payload.poGroups : [],
+    grandTotalAllPos: payload.grandTotalAllPos ?? null
   };
 }
 

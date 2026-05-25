@@ -99,7 +99,7 @@ export function canRunCartCheckoutResume(memory, pending) {
 
 export function shouldBlockAmbientProductSearch(memory, pending) {
   if (isCartFlowMode(memory)) return true;
-  if (isDiscoveryOnlyPending(pending)) return false;
+  if (isDiscoveryOnlyPending(pending)) return true;
   if (!pending?.type) return false;
   return SHARED_CHECKOUT_PENDING.has(pending.type) || CART_ONLY_PENDING.has(pending.type);
 }

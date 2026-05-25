@@ -1,3 +1,8 @@
+import { getVoiceText } from '../i18n/index.js';
+import { resolveVoiceLanguage } from './voiceLanguage.js';
+import { isHelpPhrase as isHelpPhraseIntent } from './voiceIntentPhrases.js';
+import { wrapEngaging, joinEngaging, engagementSeed } from './conversationalVoice.js';
+
 /**
  * Spoken prompts for the one-call voice shopping + checkout flow.
  * Keep replies short for TTS; each prompt ends with what to say next.
@@ -15,121 +20,251 @@ export const FLOW_STEPS = {
   done: { n: 9, label: 'Complete' }
 };
 
-export function stepPrefix(stepKey) {
-  const s = FLOW_STEPS[stepKey];
-  return s ? `Step ${s.n}, ${s.label}. ` : '';
+function languageOf(memoryOrLanguage = null) {
+  if (typeof memoryOrLanguage === 'string') return memoryOrLanguage;
+  return resolveVoiceLanguage(memoryOrLanguage);
+}
+
+/** Spoken + parsed by the app to open the matching page (see voice_ui_screens.js). */
+export function stepPrefix(stepKey, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const step = FLOW_STEPS[stepKey];
+  if (!step) return '';
+  const label = getVoiceText(`flow.stepLabel.${stepKey}`, lang, {}, step.label);
+  const prefix = getVoiceText(
+    'flow.stepPrefix',
+    lang,
+    { n: String(step.n), label },
+    `Step ${step.n}, ${label}. `
+  );
+  return prefix.endsWith(' ') ? prefix : `${prefix} `;
+}
+
+export function formatProductChoiceLines(products, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  return (Array.isArray(products) ? products : [])
+    .slice(0, 5)
+    .map((p, i) =>
+      getVoiceText(
+        'search.productLine',
+        lang,
+        { index: String(i + 1), name: p.name || p.product_name || 'item' },
+        `${i + 1}. ${p.name || 'item'}`
+      )
+    )
+    .join('. ');
+}
+
+function engage(lang, body, opts = {}) {
+  return wrapEngaging(lang, body, opts);
 }
 
 export function isHelpPhrase(text) {
-  return /\b(what('?s)? next|what do i say|help|where am i|which step|repeat)\b/i.test(
-    String(text || '')
-  );
+  return isHelpPhraseIntent(text);
 }
 
-export function helpForPending(pendingType, checkout = {}, flowMode = 'discovery') {
-  if (!pendingType && flowMode === 'cart') {
-    return 'Cart checkout: review cart, then say continue for supplier, substitution, PO details, transport, and place the order.';
-  }
-  if (!pendingType) {
-    return 'Product discovery: search, select, quantity, cart, then supplier and the rest. Or say go to my cart to checkout items already in your cart.';
-  }
-  const map = {
-    await_add_quantity: `${stepPrefix('quantity')}Say how many you want — for example 2, two, or two nos.`,
-    await_pick_product: `${stepPrefix('search')}Say the product number from the list, or say add to cart for the one I found.`,
-    await_discovery_cart_handoff: `${stepPrefix('cart')}Added to your cart. Review on screen, then say continue or select supplier.`,
-    await_cart_continue: `${stepPrefix('cart')}Review your cart on screen. Say continue or select supplier when you are ready.`,
-    await_select_supplier: `${stepPrefix('suppliers')}Say supplier number 1, or say the supplier name.`,
-    await_substitution: `${stepPrefix('substitution')}Say no substitution to skip, or yes to accept suggestions.`,
-    await_po_details: poHelp(checkout),
-    await_place_confirm: `${stepPrefix('confirm_order')}Say place the order to buy, or say no to cancel.`,
-    await_transport: `${stepPrefix('transport')}Say transport number 1, or say the courier name. If quotes failed, say retry.`
-  };
-  return map[pendingType] || 'Say a product name to search, or continue with your last question.';
-}
-
-function poHelp(checkout) {
+function poHelp(checkout, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
   const field = checkout.pendingPoField;
   if (field === 'requiredDate') {
-    return `${stepPrefix('po_details')}Say a delivery date like 20 May 2026, or say default.`;
+    return `${stepPrefix('po_details', memoryOrLanguage)}${getVoiceText('help.await_po_requiredDate', lang, {}, '')}`;
   }
   if (field === 'paymentMethod') {
-    return `${stepPrefix('po_details')}Say cash on delivery, online, or bank transfer.`;
+    return `${stepPrefix('po_details', memoryOrLanguage)}${getVoiceText('help.await_po_payment', lang, {}, '')}`;
   }
   if (field === 'confirmAddresses') {
-    return `${stepPrefix('po_details')}Say yes to confirm your shipping address.`;
+    return `${stepPrefix('po_details', memoryOrLanguage)}${getVoiceText('help.await_po_addresses', lang, {}, '')}`;
   }
-  return `${stepPrefix('po_details')}Answer the question I just asked about your order.`;
+  return `${stepPrefix('po_details', memoryOrLanguage)}${getVoiceText('help.await_po_generic', lang, {}, '')}`;
+}
+
+export function helpForPending(pendingType, checkout = {}, flowMode = 'discovery', memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const helpLead = getVoiceText('help.lead', lang, {}, 'No worries — here\'s where we are.');
+  if (!pendingType && flowMode === 'cart') {
+    return joinEngaging([helpLead, getVoiceText('help.cartMode', lang, {}, '')]);
+  }
+  if (!pendingType) {
+    return joinEngaging([helpLead, getVoiceText('help.discoveryMode', lang, {}, '')]);
+  }
+  const map = {
+    await_add_quantity: `${stepPrefix('quantity', memoryOrLanguage)}${getVoiceText('help.await_add_quantity', lang, {}, '')}`,
+    await_pick_product: `${stepPrefix('search', memoryOrLanguage)}${getVoiceText('help.await_pick_product', lang, {}, '')}`,
+    await_discovery_cart_handoff: `${stepPrefix('cart', memoryOrLanguage)}${getVoiceText(
+      'help.await_discovery_cart_handoff',
+      lang,
+      {},
+      ''
+    )}`,
+    await_cart_continue: `${stepPrefix('cart', memoryOrLanguage)}${getVoiceText('help.await_cart_continue', lang, {}, '')}`,
+    await_select_supplier: `${stepPrefix('suppliers', memoryOrLanguage)}${getVoiceText(
+      'help.await_select_supplier',
+      lang,
+      {},
+      ''
+    )}`,
+    await_substitution: `${stepPrefix('substitution', memoryOrLanguage)}${getVoiceText('help.await_substitution', lang, {}, '')}`,
+    await_po_details: poHelp(checkout, memoryOrLanguage),
+    await_place_confirm: `${stepPrefix('confirm_order', memoryOrLanguage)}${getVoiceText(
+      'help.await_place_confirm',
+      lang,
+      {},
+      ''
+    )}`,
+    await_transport: `${stepPrefix('transport', memoryOrLanguage)}${getVoiceText('help.await_transport', lang, {}, '')}`
+  };
+  const body = map[pendingType] || getVoiceText('help.fallback', lang, {}, '');
+  return joinEngaging([helpLead, body]);
 }
 
 // —— Search ——
 
-export function promptSearchSingle(productName) {
-  return `${stepPrefix('search')}I found ${productName}. Say add to cart, or say number 1 to select it.`;
+export function promptSearchSingle(productName, memoryOrLanguage = null) {
+  const language = languageOf(memoryOrLanguage);
+  const fallback = `Nice — I found ${productName}. Say add to cart, or number 1.`;
+  const body = `${stepPrefix('search', memoryOrLanguage)}${getVoiceText('search.single', language, { productName }, fallback)}`;
+  return engage(language, body, {
+    leadPool: 'searchLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null,
+    seed: engagementSeed(typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null)
+  });
 }
 
-export function promptSearchMultiple(lines, total) {
-  return `${stepPrefix('search')}I found ${total} products. ${lines}. Say the product number or name to select one.`;
+export function promptSearchMultiple(lines, total, memoryOrLanguage = null) {
+  const language = languageOf(memoryOrLanguage);
+  const fallback = `I found ${total} options for you. ${lines}. Which one — number or name?`;
+  const body = getVoiceText('search.multiple', language, { total, lines }, fallback);
+  return engage(language, body, {
+    leadPool: 'searchLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null,
+    seed: engagementSeed(typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null)
+  });
 }
 
-export function promptSearchNotFound(query) {
-  return query
-    ? `I could not find a close match for "${query}". Try saying the product name again, or a shorter name like cement, steel rod, or Mac Air.`
-    : 'I could not find that product. Say the product name you need, for example cement or Mac Air M2.';
+export function promptSearchNotFound(query, memoryOrLanguage = null) {
+  const language = languageOf(memoryOrLanguage);
+  const key = query ? 'search.notFound.withQuery' : 'search.notFound.noQuery';
+  const fallback = query
+    ? `I could not find a close match for "${query}". Say the product name again.`
+    : 'I could not find that product. Say the product name you need.';
+  const body = getVoiceText(key, language, { query }, fallback);
+  return engage(language, body, {
+    leadPool: 'notFoundLead',
+    ack: true,
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptSearchFuzzy(query, lines, total) {
-  return `${stepPrefix('search')}I heard "${query}". Here are the closest matches I found: ${lines}. Say the product number or name to select one.`;
+export function promptSearchFuzzy(query, lines, total, memoryOrLanguage = null) {
+  const language = languageOf(memoryOrLanguage);
+  const fallback = `I heard "${query}". Here are ${total} close matches: ${lines}. Say the product number or name.`;
+  const body = getVoiceText('search.fuzzy', language, { query, total, lines }, fallback);
+  return engage(language, body, {
+    leadPool: 'searchLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
 // —— Cart / quantity ——
 
-export function promptAskQuantity(productName) {
-  return `${stepPrefix('quantity')}How many ${productName} should I add to your cart? Say a number.`;
+export function promptAskQuantity(productName, memoryOrLanguage = null) {
+  const language = languageOf(memoryOrLanguage);
+  const fallback = `Great pick. How many ${productName}? Just say the number.`;
+  const body = `${stepPrefix('quantity', memoryOrLanguage)}${getVoiceText('search.askQuantity', language, { productName }, fallback)}`;
+  return engage(language, body, {
+    leadPool: 'qtyLead',
+    ack: true,
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null,
+    seed: engagementSeed(typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null)
+  });
 }
 
-export function promptPickProduct(choices) {
-  return `${stepPrefix('search')}Which product do you want? ${choices}. Say the number or the product name.`;
+export function promptPickProduct(choices, memoryOrLanguage = null) {
+  const language = languageOf(memoryOrLanguage);
+  const fallback = `Which product do you want? ${choices}. Say the number or product name.`;
+  const body = `${stepPrefix('search', memoryOrLanguage)}${getVoiceText('search.pickProduct', language, { choices }, fallback)}`;
+  return engage(language, body, {
+    leadPool: 'searchLead',
+    ack: true,
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptAddedToCart(productName) {
-  return `Added ${productName} to your cart.`;
+export function promptAddedToCart(productName, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = getVoiceText('cart.added', lang, { productName }, `${productName} is in your cart now.`);
+  return engage(lang, body, {
+    leadPool: 'cartLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptCartContinue() {
-  return `${stepPrefix('cart')}Your cart is on screen. Say continue or select supplier when you are ready to pick a supplier.`;
+export function promptCartContinue(memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = `${stepPrefix('cart', memoryOrLanguage)}${getVoiceText('cart.continue', lang, {}, '')}`;
+  return engage(lang, body, { ack: true, memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null });
 }
 
-/** Discovery flow only — after adding a new product, before supplier step. */
-export function promptDiscoveryCartHandoff() {
-  return `${stepPrefix('cart')}Your cart is on screen. Say continue or select supplier for the next step.`;
+export function promptDiscoveryCartHandoff(memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = `${stepPrefix('cart', memoryOrLanguage)}${getVoiceText('cart.discoveryHandoff', lang, {}, '')}`;
+  return engage(lang, body, {
+    leadPool: 'cartLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptCartWithItems(count, flowMode = 'discovery') {
+export function promptQtyIncreasedInCart(productName, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = getVoiceText(
+    'cart.qtyIncreased',
+    lang,
+    { productName },
+    `Added more ${productName} to your cart.`
+  );
+  return engage(lang, body, {
+    leadPool: 'cartLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
+}
+
+/** Added or qty bump + what to do next — one natural breath for TTS. */
+export function promptAddedOrQtyWithHandoff(productName, quantityMerged, memoryOrLanguage = null) {
+  return joinEngaging([
+    quantityMerged
+      ? promptQtyIncreasedInCart(productName, memoryOrLanguage)
+      : promptAddedToCart(productName, memoryOrLanguage),
+    promptDiscoveryCartHandoff(memoryOrLanguage)
+  ]);
+}
+
+/** @deprecated Use promptAddedOrQtyWithHandoff */
+export function promptAddedWithHandoff(productName, memoryOrLanguage = null) {
+  return promptAddedOrQtyWithHandoff(productName, false, memoryOrLanguage);
+}
+
+export function promptCartWithItems(count, flowMode = 'discovery', memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
   const n = Math.max(0, Number(count) || 0);
-  const items = n === 1 ? '1 item' : `${n} items`;
-  if (flowMode === 'cart') {
-    return `${stepPrefix('cart')}Your cart has ${items} on screen. Say continue or select supplier for the next step.`;
-  }
-  return `${stepPrefix('cart')}Your cart has ${items} on screen. Say continue or select supplier, or search for another product.`;
+  const items =
+    n === 1
+      ? getVoiceText('cart.itemsCountOne', lang, {}, '1 item')
+      : getVoiceText('cart.itemsCountMany', lang, { count: String(n) }, `${n} items`);
+  const key = flowMode === 'cart' ? 'cart.withItems.cart' : 'cart.withItems.discovery';
+  const body = getVoiceText(key, lang, { items }, '');
+  return engage(lang, body, {
+    leadPool: 'cartLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptCartCheckoutOnly() {
-  return `${stepPrefix('cart')}You are ordering from your cart. Say continue or select supplier. To add a new product, say go to product discovery.`;
+export function promptCartCheckoutOnly(memoryOrLanguage = null) {
+  return getVoiceText('cart.checkoutOnly', languageOf(memoryOrLanguage), {}, '');
 }
 
-export function promptCartEmpty() {
-  return `${stepPrefix('cart')}Your cart is empty. Say a product name to search, or say go to product discovery.`;
+export function promptCartEmpty(memoryOrLanguage = null) {
+  return getVoiceText('cart.empty', languageOf(memoryOrLanguage), {}, '');
 }
-
-const GO_TO_LABELS = {
-  product_discovery: 'Product discovery',
-  cart: 'Cart',
-  supplier_select: 'Supplier selection',
-  substitution: 'Substitution',
-  create_po: 'Create purchase order',
-  transport: 'Transport',
-  orders: 'Your orders'
-};
 
 const GO_TO_STEP_KEY = {
   product_discovery: 'search',
@@ -141,21 +276,30 @@ const GO_TO_STEP_KEY = {
   orders: 'done'
 };
 
-export function promptGoToScreen(screenKey) {
-  const label = GO_TO_LABELS[screenKey] || 'that page';
+export function promptGoToScreen(screenKey, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
   const stepKey = GO_TO_STEP_KEY[screenKey];
-  const prefix = stepKey ? stepPrefix(stepKey) : '';
+  let body = '';
   if (screenKey === 'product_discovery') {
-    return `${prefix}You are on ${label}. Say a product name to search.`;
+    body = getVoiceText('nav.productDiscovery', lang, {}, '');
+  } else if (screenKey === 'orders') {
+    body = getVoiceText('nav.orders', lang, {}, '');
+  } else {
+    const labelKey = `nav.screen.${screenKey}`;
+    const label = getVoiceText(labelKey, lang, {}, 'Page');
+    body = getVoiceText('nav.generic', lang, { label }, '');
   }
-  if (screenKey === 'orders') {
-    return `${prefix}Opening ${label}. You can review past orders on screen.`;
-  }
-  return `${prefix}Opening ${label}. Say what you want to do next.`;
+  const prefixed = stepKey ? `${stepPrefix(stepKey, memoryOrLanguage)}${body}` : body;
+  return engage(lang, prefixed, {
+    leadPool: 'navLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptResumeCheckout() {
-  return `${stepPrefix('cart')}Continuing from your cart.`;
+export function promptResumeCheckout(memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = getVoiceText('nav.resumeCheckout', lang, {}, '');
+  return engage(lang, body, { leadPool: 'navLead', ack: true, memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null });
 }
 
 // —— Suppliers ——
@@ -197,9 +341,13 @@ export function formatPincodeForSpeech(pincode) {
 }
 
 /** Human-readable supplier location for TTS (city/state + pincode). */
-export function formatVendorLocation(v) {
+export function formatVendorLocation(v, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
   const pincode = extractPincodeFromVendor(v);
-  const pinPhrase = pincode ? `pincode is ${formatPincodeForSpeech(pincode)}` : '';
+  const digits = formatPincodeForSpeech(pincode);
+  const pinPhrase = pincode
+    ? getVoiceText('supplier.pincodeIs', lang, { digits }, `pincode is ${digits}`)
+    : '';
 
   const candidates = [v?.location, v?.supplierLocation, v?.distanceSourceLocation];
   for (const raw of candidates) {
@@ -214,155 +362,301 @@ export function formatVendorLocation(v) {
         .trim();
     }
     const locOk = loc && !/^,|,\s*$/.test(loc) && loc.toLowerCase() !== 'india';
-    if (locOk && pinPhrase) return `located in ${loc}, ${pinPhrase}`;
-    if (locOk) return `located in ${loc}`;
-    if (pinPhrase) return pinPhrase;
+    if (locOk && pinPhrase) {
+      return getVoiceText(
+        'supplier.locatedWithPin',
+        lang,
+        { loc, pinPart: pinPhrase },
+        `located in ${loc}, ${pinPhrase}`
+      );
+    }
+    if (locOk) {
+      return getVoiceText('supplier.locatedOnly', lang, { loc }, `located in ${loc}`);
+    }
+    if (pinPhrase) {
+      return getVoiceText('supplier.pinOnly', lang, { pinPart: pinPhrase }, pinPhrase);
+    }
   }
 
   return pinPhrase;
 }
 
-export function formatVendorDetail(v, i) {
-  const name = v.name || v.supplierName || v.company || 'Supplier';
-  const location = formatVendorLocation(v);
-  const price = v.price != null ? `price ${v.price} rupees` : '';
-  const stock = v.stock != null ? `${v.stock} in stock` : '';
-  const dist = v.distanceKm != null ? `${Math.round(v.distanceKm)} kilometres away` : '';
-  const rating = v.rating != null ? `rating ${v.rating} out of 5` : '';
-  const lead = v.leadTime != null ? `delivery about ${v.leadTime} days` : '';
+export function formatVendorDetail(v, i, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const name = v.name || v.supplierName || v.company || getVoiceText('supplier.fallbackName', lang, {}, 'Supplier');
+  const location = formatVendorLocation(v, memoryOrLanguage);
+  const price =
+    v.price != null
+      ? getVoiceText('supplier.partPrice', lang, { price: v.price }, `price ${v.price} rupees`)
+      : '';
+  const stock =
+    v.stock != null
+      ? getVoiceText('supplier.partStock', lang, { stock: v.stock }, `${v.stock} in stock`)
+      : '';
+  const dist =
+    v.distanceKm != null
+      ? getVoiceText(
+          'supplier.partDist',
+          lang,
+          { distKm: String(Math.round(v.distanceKm)) },
+          `${Math.round(v.distanceKm)} kilometres away`
+        )
+      : '';
+  const rating =
+    v.rating != null
+      ? getVoiceText('supplier.partRating', lang, { rating: String(v.rating) }, `rating ${v.rating} out of 5`)
+      : '';
+  const lead =
+    v.leadTime != null
+      ? getVoiceText('supplier.partLead', lang, { days: String(v.leadTime) }, `delivery about ${v.leadTime} days`)
+      : '';
   const parts = [location, price, stock, dist, rating, lead].filter(Boolean);
-  return `Supplier ${i + 1}, ${name}. ${parts.join('. ')}.`;
-}
-
-export function promptSuppliers(count, vendorLines) {
-  return truncate(
-    `${stepPrefix('suppliers')}There ${count === 1 ? 'is' : 'are'} ${count} supplier${count === 1 ? '' : 's'} for this product. ${vendorLines.join(' ')} ${stepPrefix('suppliers')}Say supplier number 1, or say the supplier name you want.`
+  const index = String(i + 1);
+  return getVoiceText(
+    'supplier.detailLine',
+    lang,
+    { index, name, parts: parts.join('. ') },
+    `Supplier ${i + 1}, ${name}. ${parts.join('. ')}.`
   );
 }
 
-export function promptSupplierRetry(max) {
-  return `I did not catch that. Say supplier number 1 to ${max}, or say the supplier name.`;
+export function promptSuppliers(count, vendorLines, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const intro =
+    count === 1
+      ? getVoiceText('supplier.introOne', lang, {}, '')
+      : getVoiceText('supplier.introMany', lang, { count: String(count) }, '');
+  const pick = getVoiceText('supplier.pickInstruction', lang, {}, '');
+  const body = `${stepPrefix('suppliers', memoryOrLanguage)}${intro} ${vendorLines.join(' ')} ${pick}`;
+  return engage(lang, truncate(body), {
+    leadPool: 'supplierLead',
+    ack: true,
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptSupplierChosen(name, vendor = null) {
-  const loc = vendor ? formatVendorLocation(vendor) : '';
-  return `You chose ${name}${loc ? `, ${loc}` : ''}.`;
+export function promptSupplierRetry(max, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  return getVoiceText('supplier.retry', lang, { max: String(max) }, '');
+}
+
+export function promptSupplierChosen(name, vendor = null, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const loc = vendor ? formatVendorLocation(vendor, memoryOrLanguage) : '';
+  const body = loc
+    ? getVoiceText('supplier.chosenWithLoc', lang, { name, loc }, '')
+    : getVoiceText('supplier.chosenNoLoc', lang, { name }, '');
+  return engage(lang, body, {
+    leadPool: 'supplierLead',
+    alwaysAck: true,
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
 // —— Substitution ——
 
-export function promptNoSubstitutions(supplierName, vendor = null) {
-  return `${promptSupplierChosen(supplierName, vendor)} No substitution suggestions. Moving to order details.`;
+export function promptNoSubstitutions(supplierName, vendor = null, memoryOrLanguage = null) {
+  const chosen = promptSupplierChosen(supplierName, vendor, memoryOrLanguage);
+  const rest = getVoiceText('sub.noAfterChosen', languageOf(memoryOrLanguage), {}, '');
+  return `${chosen} ${rest}`;
 }
 
-export function promptSubstitutions(supplierName, count, subLines, vendor = null) {
-  return truncate(
-    `${promptSupplierChosen(supplierName, vendor)} ${stepPrefix('substitution')}I have ${count} substitution suggestion${count === 1 ? '' : 's'}: ${subLines.join('. ')}. Say no substitution to skip, or yes to accept all.`
+export function promptSubstitutions(supplierName, count, subLines, vendor = null, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const chosen = promptSupplierChosen(supplierName, vendor, memoryOrLanguage);
+  const lines = subLines.join('. ');
+  const introKey = count === 1 ? 'sub.introOne' : 'sub.introMany';
+  const intro = getVoiceText(
+    introKey,
+    lang,
+    count === 1 ? { lines } : { count: String(count), lines },
+    ''
   );
+  return truncate(`${chosen} ${stepPrefix('substitution', memoryOrLanguage)}${intro}`);
 }
 
-export function promptSubstitutionRetry() {
-  return `${stepPrefix('substitution')}Say no substitution to skip this step, or yes to accept the suggestions.`;
+export function promptSubstitutionRetry(memoryOrLanguage = null) {
+  return `${stepPrefix('substitution', memoryOrLanguage)}${getVoiceText('sub.retry', languageOf(memoryOrLanguage), {}, '')}`;
 }
 
 // —— PO details ——
 
-export function promptPoRequiredDate() {
-  return `${stepPrefix('po_details')}What is the required delivery date? Say a date like 20 May 2026, or say default for one week from today.`;
+export function promptPoRequiredDate(memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = getVoiceText('po.requiredDate', lang, {}, '');
+  return engage(lang, body, {
+    leadPool: 'poLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptPoPayment() {
-  return `${stepPrefix('po_details')}How will you pay? Say cash on delivery, online payment, or bank transfer.`;
+export function promptPoPayment(memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = getVoiceText('po.payment', lang, {}, '');
+  return engage(lang, body, {
+    leadPool: 'poLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptPoAddress(shipLine) {
-  return `${stepPrefix('po_details')}Your shipping address is ${shipLine || 'on your profile'}. Say yes to confirm, or update your profile on the website first.`;
+export function promptPoAddress(shipLine, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const line =
+    shipLine ||
+    getVoiceText('po.addressFromProfile', lang, {}, 'from your profile');
+  const body = getVoiceText('po.address', lang, { shipLine: line }, '');
+  return engage(lang, body, {
+    leadPool: 'poLead',
+    ack: true,
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptPoDateRetry() {
-  return 'Say a date like 2026-05-20, or say default.';
+export function promptPoDateRetry(memoryOrLanguage = null) {
+  return getVoiceText('po.dateRetry', languageOf(memoryOrLanguage), {}, '');
 }
 
-export function promptPoPaymentRetry() {
-  return 'Say cash on delivery, online, or bank transfer.';
+export function promptPoPaymentRetry(memoryOrLanguage = null) {
+  return getVoiceText('po.paymentRetry', languageOf(memoryOrLanguage), {}, '');
 }
 
-export function promptPoAddressRetry() {
-  return 'Say yes to confirm the address.';
+export function promptPoAddressRetry(memoryOrLanguage = null) {
+  return getVoiceText('po.addressRetry', languageOf(memoryOrLanguage), {}, '');
 }
 
-export function formatPaymentLabel(method) {
+export function formatPaymentLabel(method, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
   const m = String(method || '').toLowerCase();
-  if (m === 'cod') return 'cash on delivery';
-  if (m === 'online') return 'online payment';
-  if (m === 'bank_transfer') return 'bank transfer';
-  return method || 'not set';
+  if (m === 'cod') return getVoiceText('pay.cod', lang, {}, 'cash on delivery');
+  if (m === 'online') return getVoiceText('pay.online', lang, {}, 'online payment');
+  if (m === 'bank_transfer') return getVoiceText('pay.bank', lang, {}, 'bank transfer');
+  return method ? String(method) : getVoiceText('pay.notSet', lang, {}, 'not set');
 }
 
-export function promptOrderSummary(groups, grandTotal, requiredDate, paymentMethod, transportSummary) {
-  const pay = formatPaymentLabel(paymentMethod);
-  const transportPart = transportSummary ? ` Transport: ${transportSummary}.` : '';
-  return truncate(
-    `${stepPrefix('confirm_order')}Here is your order summary. ${groups}. Grand total about ${grandTotal} rupees. Delivery by ${requiredDate}. Payment: ${pay}.${transportPart} ${stepPrefix('confirm_order')}Say place the order to confirm, or say no to cancel.`
+export function promptOrderSummary(
+  groups,
+  grandTotal,
+  requiredDate,
+  paymentMethod,
+  transportSummary,
+  memoryOrLanguage = null
+) {
+  const lang = languageOf(memoryOrLanguage);
+  const pay = formatPaymentLabel(paymentMethod, memoryOrLanguage);
+  const transportPart = transportSummary
+    ? getVoiceText('confirm.transportPart', lang, { transportSummary }, ` Transport: ${transportSummary}.`)
+    : '';
+  const body = getVoiceText(
+    'confirm.summary',
+    lang,
+    {
+      groups,
+      grandTotal,
+      requiredDate,
+      pay,
+      transportPart
+    },
+    ''
   );
+  return engage(lang, truncate(body), {
+    leadPool: 'confirmLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptPlaceOrderRetry() {
-  return `${stepPrefix('confirm_order')}Say place the order to confirm, or say no to cancel.`;
+export function promptPlaceOrderRetry(memoryOrLanguage = null) {
+  return `${stepPrefix('confirm_order', memoryOrLanguage)}${getVoiceText(
+    'confirm.placeRetry',
+    languageOf(memoryOrLanguage),
+    {},
+    ''
+  )}`;
 }
 
-export function promptPlacingOrder() {
-  return 'Placing your order now. Please wait.';
+export function promptPlacingOrder(memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = getVoiceText('confirm.placing', lang, {}, '');
+  return engage(lang, body, {
+    leadPool: 'waitLead',
+    alwaysAck: true,
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptLoadingTransport() {
-  return `${stepPrefix('transport')}Loading transport quotes. This may take up to a minute. Please wait.`;
+export function promptLoadingTransport(memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const body = getVoiceText('transport.loading', lang, {}, '');
+  return engage(lang, body, {
+    leadPool: 'waitLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
 // —— Transport ——
 
-export function promptTransportOptions(vendorLines) {
-  return truncate(
-    `${stepPrefix('transport')}Choose transport before we place the order. ${vendorLines.join(' ')} Say transport number 1, or say the courier name.`
-  );
+export function promptTransportOptions(vendorLines, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const joined = vendorLines.join(' ');
+  const body = getVoiceText('transport.optionsIntro', lang, { vendorLines: joined }, '');
+  return engage(lang, truncate(body), {
+    leadPool: 'transportLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptTransportRetry() {
-  return `${stepPrefix('transport')}Transport is required before placing the order. Say transport number 1, or say the courier name.`;
+export function promptTransportRetry(memoryOrLanguage = null) {
+  return `${stepPrefix('transport', memoryOrLanguage)}${getVoiceText('transport.retry', languageOf(memoryOrLanguage), {}, '')}`;
 }
 
-export function promptTransportQuotesFailed(error) {
+export function promptTransportQuotesFailed(error, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
   const detail = error ? ` ${error}.` : '';
   return truncate(
-    `${stepPrefix('transport')}I could not load courier quotes.${detail} Say retry to load quotes again, or update your shipping pincode on the website. You cannot place the order without transport.`
+    `${stepPrefix('transport', memoryOrLanguage)}${getVoiceText('transport.quotesFailed', lang, { detail }, '')}`
   );
 }
 
-export function promptTransportNoQuotes(message) {
+export function promptTransportNoQuotes(message, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
   const detail = message ? ` ${message}.` : '';
   return truncate(
-    `${stepPrefix('transport')}No courier quotes are available for your address.${detail} Say retry, or update your profile address and pincode on the website. Transport is required before checkout.`
+    `${stepPrefix('transport', memoryOrLanguage)}${getVoiceText('transport.noQuotes', lang, { detail }, '')}`
   );
 }
 
-export function promptTransportPickRemaining(count) {
+export function promptTransportPickRemaining(count, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
   const extra =
     count > 1
-      ? ` ${count} suppliers still need a courier.`
-      : ' One more supplier needs a courier.';
-  return `${stepPrefix('transport')}Pick transport for each supplier.${extra} Say transport number 1, or say the courier name.`;
+      ? getVoiceText('transport.pickRemainingMany', lang, { count: String(count) }, '')
+      : getVoiceText('transport.pickRemainingOne', lang, {}, '');
+  return `${stepPrefix('transport', memoryOrLanguage)}${getVoiceText('transport.pickIntro', lang, { extra }, '')}`;
 }
 
-export function promptTransportRequiredBeforeOrder() {
-  return `${stepPrefix('transport')}You must choose transport before placing the order. Say retry to load couriers, or say transport number 1.`;
+export function promptTransportRequiredBeforeOrder(memoryOrLanguage = null) {
+  return `${stepPrefix('transport', memoryOrLanguage)}${getVoiceText(
+    'transport.requiredBeforeOrder',
+    languageOf(memoryOrLanguage),
+    {},
+    ''
+  )}`;
 }
 
-export function promptOrderComplete(orderNumbers) {
-  return `${stepPrefix('done')}Your order is placed${orderNumbers ? `, order number ${orderNumbers}` : ''}. Transport is booked. You can search for another product or say end the call.`;
+export function promptOrderComplete(orderNumbers, memoryOrLanguage = null) {
+  const lang = languageOf(memoryOrLanguage);
+  const key = orderNumbers ? 'done.withNumber' : 'done.withoutNumber';
+  const body = getVoiceText(key, lang, { orderNumbers: orderNumbers || '' }, '');
+  if (typeof memoryOrLanguage === 'object' && memoryOrLanguage?.setJson) {
+    memoryOrLanguage.setJson('voice_navigate_orders', true);
+  }
+  return engage(lang, body, {
+    leadPool: 'doneLead',
+    memory: typeof memoryOrLanguage === 'object' ? memoryOrLanguage : null
+  });
 }
 
-export function promptCheckoutCancelled() {
-  return 'Checkout cancelled. You can search for another product.';
+export function promptCheckoutCancelled(memoryOrLanguage = null) {
+  return getVoiceText('cart.checkoutCancelled', languageOf(memoryOrLanguage), {}, '');
 }
 
 function truncate(text, max = 4500) {

@@ -36,6 +36,7 @@ export { searchProductDiscoveryForUser } from '../../services/productDiscoverySe
 export { generateAndAttachReceiptPdf } from '../../services/receiptPdfService.js';
 export {
   buildIdentityBundle,
+  buildSupplierVariantIdentity,
   buildVariantAsinLikeId,
   normalizeVariantAttributes
 } from '../../services/productIdentityService.js';
@@ -73,6 +74,7 @@ export {
   buildSpecificationTemplateFromFields,
   countMeaningfulSpecValues,
   mergeSpecificationMaps,
+  mergeOrderItemSpecificationsForDisplay,
   parseSpecificationsObject,
   sanitizeSpecifications,
   toFiniteNumber

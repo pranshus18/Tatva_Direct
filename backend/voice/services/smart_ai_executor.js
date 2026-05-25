@@ -5,16 +5,14 @@ import { shouldUseSupportRag } from '../lib/supportIntent.js';
 import { geminiService } from './gemini_service.js';
 import { ragService } from './rag_service.js';
 import { toolCallingEngine } from './tool_calling_engine.js';
+import { resolveVoiceLanguage } from '../lib/voiceLanguage.js';
+import { getVoiceText } from '../i18n/index.js';
+import { getConversationalSystemPrompt } from '../lib/voicePersonality.js';
 
 const TOOL_RESULT_MAX = Number.parseInt(String(process.env.VOICE_TOOL_RESULT_MAX || '600'), 10) || 600;
 const MAX_ROUNDS = Number.parseInt(String(process.env.VOICE_MAX_TOOL_ROUNDS || '1'), 10) || 1;
 
-const CONVERSATIONAL_SYSTEM = [
-  'You are Tatva Direct voice shopping assistant — friendly, concise, human.',
-  'Help with products, cart, and orders using tools when needed.',
-  'For policy or FAQ topics you do not know, say you can help with returns, shipping, or payments — do not invent policies.',
-  'Keep replies to 1-2 short spoken sentences.'
-].join(' ');
+const CONVERSATIONAL_SYSTEM = getConversationalSystemPrompt();
 
 /**
  * Smart AI Path — Gemini + RAG for recommendations, comparisons, FAQs, guidance.
@@ -22,6 +20,7 @@ const CONVERSATIONAL_SYSTEM = [
 export const smartAiExecutor = {
   async execute(text, toolCtx, memory, { onChunk, action } = {}) {
     const utterance = String(text || '').trim();
+    const voiceLanguage = resolveVoiceLanguage(memory);
 
     if (shouldUseSupportRag(utterance, action)) {
       const answer = await ragService.answerGrounded(utterance, { onChunk, memory });
@@ -64,7 +63,8 @@ export const smartAiExecutor = {
           contents,
           tools: GEMINI_TOOL_DECLARATIONS,
           systemOverride: CONVERSATIONAL_SYSTEM,
-          onChunk
+          onChunk,
+          language: voiceLanguage
         });
         replyText = generated.text || '';
         functionCalls = generated.functionCalls || [];
@@ -75,8 +75,7 @@ export const smartAiExecutor = {
           memory.appendCompact('assistant', answer);
           return answer;
         }
-        const fallback =
-          'I can help you search products, manage your cart, or answer questions about returns, shipping, and payments. Try saying show my cart or how do refunds work.';
+        const fallback = getVoiceText('smart.fallback', voiceLanguage, {}, '');
         memory.appendCompact('user', utterance);
         memory.appendCompact('assistant', fallback);
         return truncateForSpeech(fallback);
@@ -104,12 +103,14 @@ export const smartAiExecutor = {
         continue;
       }
 
-      const output = truncateForSpeech(replyText || 'Done.');
+      const output = truncateForSpeech(
+        replyText || getVoiceText('smart.done', voiceLanguage, {}, 'Done.')
+      );
       memory.appendCompact('user', utterance);
       memory.appendCompact('assistant', output);
       return output;
     }
 
-    return 'Try asking about a product, or say show my cart.';
+    return getVoiceText('smart.retryHint', voiceLanguage, {}, '');
   }
 };

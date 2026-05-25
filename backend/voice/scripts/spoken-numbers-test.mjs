@@ -10,6 +10,8 @@ const qtyCases = [
   ['not two', 2],
   ['two in nos', 2],
   ['number two', 2],
+  ['number 5', 5],
+  ['qty 3', 3],
   ['two pieces', 2],
   ['I want 3', 3],
   ['no', null]

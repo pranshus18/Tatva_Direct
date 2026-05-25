@@ -3,8 +3,10 @@ import { isLikelyProductSearch } from '../lib/productQueryParser.js';
 import { productCatalogService } from './product_catalog_service.js';
 import { toolCallingEngine } from './tool_calling_engine.js';
 
-import { GREETING_HUMAN, THANKS_HUMAN } from '../lib/humanizeReply.js';
+import { getGreetingHuman, getThanksHuman } from '../lib/humanizeReply.js';
 import { isCartFlowMode } from '../lib/voice_flow_mode.js';
+import { resolveVoiceLanguage } from '../lib/voiceLanguage.js';
+import { isThanksPhrase } from '../lib/voiceIntentPhrases.js';
 
 /**
  * Fast path — direct backend APIs, no Gemini.
@@ -12,10 +14,11 @@ import { isCartFlowMode } from '../lib/voice_flow_mode.js';
 export const fastActionExecutor = {
   async execute(routeDecision, text, toolCtx) {
     const { action, slots, route } = routeDecision;
+    const language = resolveVoiceLanguage(toolCtx.memory);
 
     if (route === RouteType.GREETING) {
-      if (/\b(thanks|bye)\b/i.test(text)) return THANKS_HUMAN;
-      return GREETING_HUMAN;
+      if (isThanksPhrase(text)) return getThanksHuman(language);
+      return getGreetingHuman(language);
     }
 
     if (action === ActionType.SUPPORT_RAG) return null;

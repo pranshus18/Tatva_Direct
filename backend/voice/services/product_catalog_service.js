@@ -8,6 +8,7 @@ import {
   promptSearchFuzzy
 } from '../lib/voice_prompts.js';
 import { enterDiscoveryFlow } from '../lib/voice_flow_mode.js';
+import { voiceText } from '../lib/voiceText.js';
 
 const SEARCH_PATH = '/api/supplier/products/search';
 const LOOKUP_PATH = '/api/supplier/products/lookup';
@@ -161,13 +162,13 @@ export const productCatalogService = {
 
     if (!parsed.ok) {
       return parsed.error === 'Request timed out'
-        ? 'Search timed out. Try a shorter product name.'
-        : `I could not search right now. Please try again.`;
+        ? voiceText(memory, 'search.requestTimeout')
+        : voiceText(memory, 'search.serviceUnavailable');
     }
 
     if (!parsed.products?.length) {
       memory?.setPendingAction?.(null);
-      return promptSearchNotFound(queryLabel);
+      return promptSearchNotFound(queryLabel, memory);
     }
 
     this.prepareAddToCartFollowUp(memory, parsed);
@@ -175,17 +176,20 @@ export const productCatalogService = {
     const lines = parsed.products
       .slice(0, 5)
       .map((p, i) => {
-        const bits = [p.name || 'Product'];
+        const bits = [p.name || voiceText(memory, 'search.unnamedLabel')];
         if (p.brand) bits.push(p.brand);
         if (p.unit) bits.push(p.unit);
-        return `Number ${i + 1}, ${bits.join(', ')}`;
+        return voiceText(memory, 'search.productLine', {
+          index: String(i + 1),
+          parts: bits.join(', ')
+        });
       })
       .join('. ');
     const total = parsed.total ?? parsed.products.length;
 
     if (parsed.products.length === 1) {
-      const name = parsed.products[0].name || 'this product';
-      return promptSearchSingle(name);
+      const name = parsed.products[0].name || voiceText(memory, 'search.unnamedProduct');
+      return promptSearchSingle(name, memory);
     }
 
     const heard = String(parsed.query || '').trim();
@@ -197,29 +201,54 @@ export const productCatalogService = {
       !heard.includes(first.slice(0, 4));
 
     if (fuzzyMatch) {
-      return promptSearchFuzzy(heard, lines, total);
+      return promptSearchFuzzy(heard, lines, total, memory);
     }
 
-    return promptSearchMultiple(lines, total);
+    return promptSearchMultiple(lines, total, memory);
   },
 
   resolveProductFromSession(memory, text) {
     const last = memory?.getContext('last_search');
     if (!last?.products?.length) return null;
 
-    const t = String(text || '').toLowerCase();
-    const idxMatch = t.match(/\b(?:first|1st|number\s*1|#1)\b/);
+    const t = String(text || '').toLowerCase().trim();
+    if (!t) return null;
+
+    const idxMatch = t.match(/\b(?:first|1st|number\s*1|#1|pehla|modala|modalaneya|modata)\b/);
     if (idxMatch) return last.products[0];
 
-    const numMatch = t.match(/\b(?:number|#)\s*(\d+)\b/);
+    const numMatch = t.match(/\b(?:number|#|no)\s*(\d+)\b/);
     if (numMatch) {
       const i = Number.parseInt(numMatch[1], 10) - 1;
       if (i >= 0 && i < last.products.length) return last.products[i];
     }
 
+    let bestMatch = null;
+    let bestScore = 0;
+
     for (const p of last.products) {
-      if (p.name && t.includes(String(p.name).toLowerCase().slice(0, 12))) return p;
+      if (!p.name) continue;
+      const pName = String(p.name).toLowerCase();
+      const pWords = pName.split(/[\s,.\-/]+/).filter((w) => w.length >= 3);
+
+      if (t.includes(pName.slice(0, 12))) {
+        return p;
+      }
+      if (pName.includes(t) && t.length >= 3) {
+        return p;
+      }
+
+      let matched = 0;
+      const tWords = t.split(/[\s,.\-/]+/).filter((w) => w.length >= 2);
+      for (const tw of tWords) {
+        if (pWords.some((pw) => pw.includes(tw) || tw.includes(pw))) matched += 1;
+      }
+      const score = tWords.length > 0 ? matched / tWords.length : 0;
+      if (score > bestScore && score >= 0.5) {
+        bestScore = score;
+        bestMatch = p;
+      }
     }
-    return null;
+    return bestMatch;
   }
 };

@@ -16,9 +16,18 @@ import {
   enterDiscoveryFlow,
   getVoiceFlowMode,
   isCartFlowMode,
+  isDiscoveryOnlyPending,
   shouldBlockAmbientProductSearch
 } from '../lib/voice_flow_mode.js';
 import { ActionType } from './routeTypes.js';
+import {
+  getLanguageConfirmation,
+  getLanguageSelectionPrompt,
+  isVoiceMultilingualEnabled,
+  parseVoiceLanguageFromText,
+  resolveVoiceLanguage
+} from '../lib/voiceLanguage.js';
+import { getVoiceText } from '../i18n/index.js';
 
 const VOICE_DEBUG = String(process.env.VOICE_DEBUG || '').toLowerCase() === 'true';
 
@@ -47,15 +56,64 @@ export class AiOrchestrator {
     if (ptype === 'payment') {
       return truncateForSpeech(await this.toolCtx.executeOnlinePayment(payload.order_id));
     }
-    return 'Unknown pending action.';
+    return getVoiceText('error.unknownPending', resolveVoiceLanguage(this.memory), {}, '');
   }
 
   async handleTranscript(userText, { onChunk } = {}) {
     const t0 = Date.now();
     const text = String(userText || '').trim();
-    if (!text) return "I didn't catch that. Please try again.";
+    const currentLang = resolveVoiceLanguage(this.memory);
+    if (!text) {
+      return getVoiceText('error.noCatch', currentLang, {}, '');
+    }
 
     const pending = this.memory.getPendingAction();
+
+    const isEndCallIntent =
+      /\b(end (the |this )?call|hang ?up|stop (the )?call|disconnect call|call band karo|कॉल बंद करो|కాల్ ముగించు|ಕಾಲ್ ಮುಗಿಸಿ)\b/i.test(
+        text
+      );
+    if (isEndCallIntent) {
+      const bye = getVoiceText('call.ending', currentLang, {}, '');
+      this.memory.appendCompact('user', text);
+      this.memory.appendCompact('assistant', bye);
+      if (onChunk) onChunk(bye);
+      return bye;
+    }
+
+    if (isVoiceMultilingualEnabled() && !this.memory.isVoiceLanguageSelected()) {
+      const chosen = parseVoiceLanguageFromText(text);
+      if (!chosen) {
+        const ask = getLanguageSelectionPrompt();
+        this.memory.appendCompact('user', text);
+        this.memory.appendCompact('assistant', ask);
+        if (onChunk) onChunk(ask);
+        return ask;
+      }
+      this.memory.setVoiceLanguage(chosen);
+      this.memory.setVoiceLanguageSelected(true);
+      const switched = getLanguageConfirmation(chosen);
+      this.memory.appendCompact('user', text);
+      this.memory.appendCompact('assistant', switched);
+      if (onChunk) onChunk(switched);
+      return switched;
+    }
+
+    const switchIntent =
+      /\b(switch|change|language|bhasha|ಭಾಷೆ|భాష|भाषा)\b/i.test(text) ||
+      /^(english|hinglish|hindi|kannada|telugu)$/i.test(text);
+    if (isVoiceMultilingualEnabled() && switchIntent) {
+      const requested = parseVoiceLanguageFromText(text);
+      if (requested && requested !== currentLang) {
+        this.memory.setVoiceLanguage(requested);
+        this.memory.setVoiceLanguageSelected(true);
+        const switched = getLanguageConfirmation(requested);
+        this.memory.appendCompact('user', text);
+        this.memory.appendCompact('assistant', switched);
+        if (onChunk) onChunk(switched);
+        return switched;
+      }
+    }
 
     if (isHelpPhrase(text)) {
       const flowMode = getVoiceFlowMode(this.memory);
@@ -63,7 +121,7 @@ export class AiOrchestrator {
         (await tryCheckoutFlow(text, this.toolCtx, this.memory)) ||
         (!isCartFlowMode(this.memory) &&
           (await tryAddToCartFlow(text, this.toolCtx, this.memory))) ||
-        helpForPending(pending?.type, this.memory.getContext('checkout', {}), flowMode);
+        helpForPending(pending?.type, this.memory.getContext('checkout', {}), flowMode, this.memory);
       if (help) {
         this.memory.appendCompact('user', text);
         this.memory.appendCompact('assistant', help);
@@ -80,6 +138,17 @@ export class AiOrchestrator {
       if (onChunk) onChunk(navFlow);
       this._log('nav', t0);
       return navFlow;
+    }
+
+    if (isDiscoveryOnlyPending(pending)) {
+      const addFirst = await tryAddToCartFlow(text, this.toolCtx, this.memory);
+      if (addFirst) {
+        this.memory.appendCompact('user', text);
+        this.memory.appendCompact('assistant', addFirst);
+        if (onChunk) onChunk(addFirst);
+        this._log('add_cart', t0);
+        return addFirst;
+      }
     }
 
     const checkoutFlow = await tryCheckoutFlow(text, this.toolCtx, this.memory);
@@ -101,10 +170,11 @@ export class AiOrchestrator {
     }
 
     const gate = await handleConfirmationGate(text, pending, {
+      memory: this.memory,
       onConfirm: (p) => this.runPending(p),
       onReject: async () => {
         this.memory.setPendingAction(null);
-        return 'Okay, cancelled.';
+        return getVoiceText('call.cancelled', resolveVoiceLanguage(this.memory), {}, '');
       }
     });
     if (gate.handled && gate.reply) {

@@ -4,6 +4,7 @@ import { Navigate } from 'react-router-dom';
 import { normalizeUserType } from '../utils/userType';
 import { useVoiceSessionContext } from '../voice/VoiceSessionContext';
 import { VoiceAssistantOrb } from '../voice/VoiceAssistantOrb.jsx';
+import { voiceText } from '../voice/voiceText.js';
 import './VoiceCommerce.css';
 
 const VoiceCommerce = ({ user }) => {
@@ -33,6 +34,8 @@ const VoiceCommerce = ({ user }) => {
     inCall,
     connected,
     voiceScreen,
+    voiceLanguage,
+    interimText,
     startSpeaking,
     endCall
   } = session;
@@ -64,6 +67,15 @@ const VoiceCommerce = ({ user }) => {
         caption={voiceScreen || stateLabel}
         className="voice-page__orb"
       />
+
+      {inCall && interimText ? (
+        <p className="voice-heard" aria-live="polite">
+          <span className="voice-heard__label">
+            {voiceText(voiceLanguage, 'ui.heardYouSay', {}, 'I heard:')}
+          </span>{' '}
+          {interimText}
+        </p>
+      ) : null}
 
       <div className="voice-controls">
         {!inCall ? (

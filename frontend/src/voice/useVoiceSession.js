@@ -5,25 +5,61 @@ import {
   speakStatus,
   stopSpeaking,
   unlockSpeech,
-  preloadVoices
+  preloadVoices,
+  setSpeechLanguage
 } from './browserSpeech.js';
+import { resolveSpeechLocale, resolveSttLocaleForText } from './speechAccent.js';
+import { isLikelySpeechNoise, normalizeVoiceUtterance } from './normalizeUtterance.js';
 import { isEndCallPhrase, isSendTurnPhrase, stripSendPhrase } from './callPhrases.js';
-import { playPcmChunk, resetAudioPlayback, resumeAudioPlayback } from './audioPlayback.js';
+import {
+  getPlaybackRemainingSec,
+  beginPlaybackUtterance,
+  playAudioChunk,
+  resetAudioPlayback,
+  resumeAudioPlayback
+} from './audioPlayback.js';
 import { createVoiceSocket } from './voiceSocket.js';
-import { VOICE_AGENT_GREETING } from './voiceGreeting.js';
-import { setVoiceGuidedActive } from './voiceCartBridge.js';
+import { emitVoiceCartUpdated, fetchVoiceCartDraft, setVoiceGuidedActive } from './voiceCartBridge.js';
 import { voiceStartRouteForPathname } from './voiceStartRoutes.js';
+import { getDefaultVoiceLanguage, getVoiceLanguageMeta, normalizeVoiceLanguage } from './voiceLanguage.js';
+import { languageSelectionPrompt, voiceText } from './voiceText.js';
 
 /** Long checkout steps (transport quotes) can take 1–2 minutes. */
 const REPLY_TIMEOUT_MS = 180000;
-const RESUME_MIC_MS = 600;
-const REPLY_DONE_RESUME_MS = 1200;
+const RESUME_MIC_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_RESUME_MIC_MS || '60'), 10) || 60;
+const REPLY_DONE_RESUME_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_REPLY_DONE_RESUME_MS || '0'), 10) || 0;
+const TTS_DONE_TAIL_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_TTS_DONE_TAIL_MS || '90'), 10) || 90;
+const TTS_DONE_MIN_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_TTS_DONE_MIN_MS || '80'), 10) || 80;
 const MAX_SPEAK_MS = 120000;
+/** Browser fallback only if server TTS never starts for this reply. */
+const SERVER_TTS_FALLBACK_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_SERVER_TTS_FALLBACK_MS || '8000'), 10) || 8000;
+const INSTANT_TTS_FALLBACK_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_INSTANT_TTS_FALLBACK_MS || '2500'), 10) || 2500;
 /** Auto-send after user stops speaking (real-call feel). */
-const AUTO_SEND_PAUSE_MS = 1400;
+const AUTO_SEND_PAUSE_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_AUTO_SEND_PAUSE_MS || '850'), 10) || 850;
+/** Faster send when user only said a language name (English / Hindi / …). */
+const LANGUAGE_PICK_SEND_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_LANGUAGE_PICK_SEND_MS || '200'), 10) || 200;
+const LANGUAGE_PICK_UTTERANCE_RE =
+  /^(english|hinglish|hindi|kannada|telugu|हिंदी|हिन्दी|हिंग्लिश|ಕನ್ನಡ|తెలుగు)$/i;
+const LANGUAGE_PICK_TTS_TAIL_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_LANGUAGE_PICK_TTS_TAIL_MS || '25'), 10) || 25;
+const LANGUAGE_PICK_TTS_MIN_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_LANGUAGE_PICK_TTS_MIN_MS || '35'), 10) || 35;
+const LANGUAGE_PICK_RESUME_MIC_MS =
+  Number.parseInt(String(import.meta.env.VITE_VOICE_LANGUAGE_PICK_RESUME_MS || '50'), 10) || 50;
 const MIN_AUTO_SEND_CHARS = 2;
-/** Only skip browser TTS when server Piper is explicitly enabled on the client. */
-const USE_SERVER_TTS_ONLY = import.meta.env.VITE_VOICE_SERVER_TTS === 'true';
+/** Single-digit / number-word turns (quantity pick) must auto-send despite MIN length. */
+const SHORT_QUANTITY_UTTERANCE_RE =
+  /^(?:\d|one|two|three|four|five|six|seven|eight|nine|ten|ek|do|teen|char|paanch|ondu|eradu|rendu|moodu|एक|दो|तीन|ಒಂದು|ಎರಡು|రెండు)$/i;
+/** Default on: one server neural voice only (no browser + server mix). Set VITE_VOICE_SERVER_TTS=false to allow browser fallback. */
+const FORCE_SERVER_TTS_ONLY = import.meta.env.VITE_VOICE_SERVER_TTS !== 'false';
 
 export function useVoiceSession(token, { onNavigate } = {}) {
   const debug = typeof localStorage !== 'undefined' && localStorage.getItem('VOICE_DEBUG') === '1';
@@ -37,6 +73,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
   const [streamingReply, setStreamingReply] = useState('');
   const [interimText, setInterimText] = useState('');
   const [connected, setConnected] = useState(false);
+  const [voiceLanguage, setVoiceLanguage] = useState(getDefaultVoiceLanguage());
 
   const socketRef = useRef(null);
   const recognizerRef = useRef(null);
@@ -44,8 +81,22 @@ export function useVoiceSession(token, { onNavigate } = {}) {
   const resumeTimerRef = useRef(null);
   const sentRef = useRef(false);
   const streamBufRef = useRef('');
-  const serverPiperEnabledRef = useRef(false);
+  const serverTtsEnabledRef = useRef(false);
   const serverTtsChunksRef = useRef(0);
+  const ttsSeqRef = useRef(0);
+  const playbackGenRef = useRef(0);
+  const serverTtsDoneRef = useRef(false);
+  const instantSpeakActiveRef = useRef(false);
+  const browserSpeakFallbackRef = useRef(null);
+  const awaitingServerTtsRef = useRef(false);
+  const pendingReplyForTtsRef = useRef('');
+  const lastReplyForTtsRef = useRef('');
+  const greetingPendingRef = useRef(false);
+  const greetingAfterRef = useRef(null);
+  const languagePickPendingRef = useRef(false);
+  const statusOnlyTtsRef = useRef(false);
+  const mainReplyTtsPendingRef = useRef(false);
+  const usingServerAudioRef = useRef(false);
   const inCallRef = useRef(false);
   const connectedRef = useRef(false);
   const processingRef = useRef(false);
@@ -55,6 +106,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
   const autoSendTimerRef = useRef(null);
   const replyDoneTimerRef = useRef(null);
   const speakSafetyTimerRef = useRef(null);
+  const voiceLanguageRef = useRef(getDefaultVoiceLanguage());
 
   const log = useCallback(
     (...args) => {
@@ -114,7 +166,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
       sentRef.current = false;
       micPausedRef.current = false;
       if (inCallRef.current) {
-        setError('Still working… you can speak again, or wait a moment and repeat.');
+        setError(voiceText(voiceLanguageRef.current, 'ui.stillWorking'));
         resumeMicRef.current();
       }
     }, REPLY_TIMEOUT_MS);
@@ -130,23 +182,31 @@ export function useVoiceSession(token, { onNavigate } = {}) {
       endCallFromVoiceRef.current();
       return;
     }
-    if (clean.length < MIN_AUTO_SEND_CHARS) return;
+    if (clean.length < MIN_AUTO_SEND_CHARS && !SHORT_QUANTITY_UTTERANCE_RE.test(clean)) return;
+
+    const sendDelay = LANGUAGE_PICK_UTTERANCE_RE.test(clean) ? LANGUAGE_PICK_SEND_MS : AUTO_SEND_PAUSE_MS;
 
     autoSendTimerRef.current = setTimeout(() => {
       autoSendTimerRef.current = null;
       if (!inCallRef.current || processingRef.current || sentRef.current) return;
-      const latest =
-        recognizerRef.current?.getTranscript?.() || pendingTextRef.current || clean;
-      if (String(latest).trim().length < MIN_AUTO_SEND_CHARS) return;
-      log('auto-send after pause', latest);
+      const latest = normalizeVoiceUtterance(
+        String(recognizerRef.current?.getTranscript?.() || pendingTextRef.current || clean).trim()
+      );
+      const latestTrim = String(latest).trim();
+      if (latestTrim.length < MIN_AUTO_SEND_CHARS && !SHORT_QUANTITY_UTTERANCE_RE.test(latestTrim)) return;
+      if (isLikelySpeechNoise(latestTrim)) {
+        log('ignored noise on auto-send', latestTrim);
+        return;
+      }
+      log('auto-send after pause', latestTrim);
       try {
         recognizerRef.current?.abort?.();
       } catch {
         /* ignore */
       }
       recognizerRef.current = null;
-      sendTurnRef.current(latest);
-    }, AUTO_SEND_PAUSE_MS);
+      sendTurnRef.current(latestTrim);
+    }, sendDelay);
   }, [log]);
 
   const pauseMicCapture = () => {
@@ -170,6 +230,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
     clearAutoSendTimer();
     clearReplyDoneTimer();
     clearSpeakSafetyTimer();
+    clearServerTtsWait();
     pauseMicCapture();
     setInterimText('');
     pendingTextRef.current = '';
@@ -179,10 +240,45 @@ export function useVoiceSession(token, { onNavigate } = {}) {
     setUiState(connectedRef.current ? 'ready' : 'disconnected');
   }, [log]);
 
-  const shouldSkipBrowserTts = () =>
-    USE_SERVER_TTS_ONLY &&
-    serverPiperEnabledRef.current &&
-    serverTtsChunksRef.current > 0;
+  /** When server TTS is on, use one voice path only (Edge neural on server). */
+  const shouldSkipBrowserTts = () => {
+    if (!serverTtsEnabledRef.current) return false;
+    if (FORCE_SERVER_TTS_ONLY) return true;
+    return (
+      awaitingServerTtsRef.current ||
+      usingServerAudioRef.current ||
+      serverTtsChunksRef.current > 0 ||
+      serverTtsDoneRef.current
+    );
+  };
+
+  const armServerTtsFallback = (replyText, onEnd, { delayMs = SERVER_TTS_FALLBACK_MS } = {}) => {
+    clearBrowserSpeakFallback();
+    if (!serverTtsEnabledRef.current || !replyText) return;
+    pendingReplyForTtsRef.current = replyText;
+    lastReplyForTtsRef.current = replyText;
+    awaitingServerTtsRef.current = true;
+    browserSpeakFallbackRef.current = setTimeout(() => {
+      browserSpeakFallbackRef.current = null;
+      if (!awaitingServerTtsRef.current) return;
+      awaitingServerTtsRef.current = false;
+      pendingReplyForTtsRef.current = '';
+      speak(replyText, { onEnd, force: true });
+    }, delayMs);
+  };
+
+  const clearServerTtsWait = () => {
+    awaitingServerTtsRef.current = false;
+    pendingReplyForTtsRef.current = '';
+    clearBrowserSpeakFallback();
+  };
+
+  const clearBrowserSpeakFallback = () => {
+    if (browserSpeakFallbackRef.current) {
+      clearTimeout(browserSpeakFallbackRef.current);
+      browserSpeakFallbackRef.current = null;
+    }
+  };
 
   const speak = (text, { onEnd, force = false } = {}) => {
     clearSpeakSafetyTimer();
@@ -195,6 +291,12 @@ export function useVoiceSession(token, { onNavigate } = {}) {
       onEnd?.();
       return;
     }
+    if (usingServerAudioRef.current && !force) {
+      onEnd?.();
+      return;
+    }
+    const langId = voiceLanguageRef.current;
+    const ttsLocale = resolveSpeechLocale(langId, toSpeak);
     stopSpeaking();
     const finish = () => {
       clearSpeakSafetyTimer();
@@ -203,6 +305,8 @@ export function useVoiceSession(token, { onNavigate } = {}) {
     speakSafetyTimerRef.current = setTimeout(finish, MAX_SPEAK_MS);
     requestAnimationFrame(() => {
       const started = speakVoiceReply(toSpeak, {
+        locale: ttsLocale,
+        languageId: langId,
         onStart: () => {
           if (inCallRef.current) setUiState('speaking');
         },
@@ -216,7 +320,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
     if (!inCallRef.current) return;
     clearAutoSendTimer();
     pauseMicCapture();
-    speak('Goodbye. Ending the call.', { onEnd: endCall });
+    speak(voiceText(voiceLanguageRef.current, 'call.ending'), { onEnd: endCall });
   }, [endCall]);
 
   endCallFromVoiceRef.current = endCallFromVoice;
@@ -233,6 +337,12 @@ export function useVoiceSession(token, { onNavigate } = {}) {
     const rec = createCallSpeechRecognizer({
       onInterim: (text) => {
         if (!inCallRef.current || micPausedRef.current) return;
+        if (isEndCallPhrase(String(text || '').trim())) {
+          endCallFromVoiceRef.current();
+          return;
+        }
+        const sttLoc = resolveSttLocaleForText(voiceLanguageRef.current, text);
+        recognizerRef.current?.setLocale?.(sttLoc);
         clearAutoSendTimer();
         pendingTextRef.current = text;
         setInterimText(text);
@@ -240,6 +350,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
       },
       onFinal: (text) => {
         if (!inCallRef.current || micPausedRef.current) return;
+        recognizerRef.current?.setLocale?.(resolveSttLocaleForText(voiceLanguageRef.current, text));
         pendingTextRef.current = text;
         setInterimText(text);
         if (isEndCallPhrase(String(text || '').trim())) {
@@ -251,7 +362,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
       onError: (e) => {
         if (!inCallRef.current || micPausedRef.current) return;
         if (e.error === 'not-allowed') {
-          setError('Microphone permission denied');
+          setError(voiceText(voiceLanguageRef.current, 'ui.micDenied'));
           endCall();
           return;
         }
@@ -263,11 +374,12 @@ export function useVoiceSession(token, { onNavigate } = {}) {
         }, RESUME_MIC_MS);
       },
       shouldKeepListening: () =>
-        inCallRef.current && !micPausedRef.current && !processingRef.current && !sentRef.current
+        inCallRef.current && !micPausedRef.current && !processingRef.current && !sentRef.current,
+      locale: resolveSttLocaleForText(voiceLanguageRef.current, '')
     });
 
     if (!rec.isSupported) {
-      setError('Use Chrome or Edge for voice.');
+      setError(voiceText(voiceLanguageRef.current, 'ui.browserUnsupported'));
       endCall();
       return;
     }
@@ -286,17 +398,19 @@ export function useVoiceSession(token, { onNavigate } = {}) {
     micPausedRef.current = false;
     setInCall(true);
     inCallRef.current = true;
+    const resumeMs = languagePickPendingRef.current ? LANGUAGE_PICK_RESUME_MIC_MS : RESUME_MIC_MS;
     resumeTimerRef.current = setTimeout(() => {
       resumeTimerRef.current = null;
+      languagePickPendingRef.current = false;
       if (inCallRef.current) beginCallListening();
-    }, RESUME_MIC_MS);
+    }, resumeMs);
   }, [beginCallListening]);
 
   const sendTurn = useCallback(
     (rawText) => {
       if (!inCallRef.current) return;
 
-      let clean = String(rawText || '').trim();
+      let clean = normalizeVoiceUtterance(String(rawText || '').trim());
 
       if (isEndCallPhrase(clean)) {
         endCallFromVoice();
@@ -312,8 +426,21 @@ export function useVoiceSession(token, { onNavigate } = {}) {
         return;
       }
 
+      if (isLikelySpeechNoise(clean)) {
+        log('ignored noise utterance', clean);
+        processingRef.current = false;
+        sentRef.current = false;
+        micPausedRef.current = false;
+        setInterimText('');
+        pendingTextRef.current = '';
+        const retryMsg = voiceText(voiceLanguageRef.current, 'stt.didNotCatch', {}, '');
+        if (retryMsg) speakStatus(retryMsg, null, voiceLanguageRef.current);
+        beginCallListening();
+        return;
+      }
+
       if (socketRef.current?.readyState !== WebSocket.OPEN) {
-        setError('Connection lost. Say end the call, then tap Start speaking again.');
+        setError(voiceText(voiceLanguageRef.current, 'ui.connectionLost'));
         return;
       }
       if (sentRef.current) return;
@@ -327,6 +454,12 @@ export function useVoiceSession(token, { onNavigate } = {}) {
       pendingTextRef.current = '';
       setStreamingReply('');
       streamBufRef.current = '';
+      clearServerTtsWait();
+      stopSpeaking();
+      serverTtsChunksRef.current = 0;
+      serverTtsDoneRef.current = false;
+      usingServerAudioRef.current = false;
+      instantSpeakActiveRef.current = false;
       setUiState('thinking');
       log('send', clean);
 
@@ -334,7 +467,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
         processingRef.current = false;
         sentRef.current = false;
         micPausedRef.current = false;
-        setError('Could not send. Say end call or tap End call.');
+        setError(voiceText(voiceLanguageRef.current, 'ui.sendFailed'));
         resumeMicAfterReply();
         return;
       }
@@ -360,7 +493,17 @@ export function useVoiceSession(token, { onNavigate } = {}) {
 
     const makeHandlers = () => ({
       onReady: (data) => {
-        serverPiperEnabledRef.current = Boolean(data?.pipeline?.piper);
+        serverTtsEnabledRef.current = Boolean(
+          data?.pipeline?.serverTts ?? data?.pipeline?.piper
+        );
+        if (data?.language) {
+          const normalized = normalizeVoiceLanguage(data.language);
+          if (normalized) {
+            voiceLanguageRef.current = normalized;
+            setVoiceLanguage(normalized);
+            setSpeechLanguage(normalized);
+          }
+        }
       },
       onAuthOk: () => {
         connectedRef.current = true;
@@ -395,18 +538,56 @@ export function useVoiceSession(token, { onNavigate } = {}) {
           onNavigateRef.current?.(data);
           return;
         }
+        if (data.type === 'cart_updated') {
+          void fetchVoiceCartDraft().then((draft) => emitVoiceCartUpdated(draft));
+          return;
+        }
         if (data.type === 'status_message') {
-          const statusText = data.text || 'Working on your request…';
+          const lang = voiceLanguageRef.current;
+          const statusText =
+            data.text ||
+            voiceText(lang, 'status.pleaseWait', {}, '') ||
+            voiceText(lang, 'ui.transportLoading', {}, 'One moment…');
           setStreamingReply(statusText);
           setUiState('thinking');
           bumpReplyTimer();
-          if (!shouldSkipBrowserTts()) {
-            speakStatus(statusText);
+          statusOnlyTtsRef.current = Boolean(data.speak);
+          if (serverTtsEnabledRef.current && data.speak) {
+            awaitingServerTtsRef.current = true;
+          } else if (
+            !serverTtsEnabledRef.current &&
+            !shouldSkipBrowserTts() &&
+            !usingServerAudioRef.current
+          ) {
+            speakStatus(statusText, null, voiceLanguageRef.current);
           }
         }
         if (data.type === 'call_active') {
           setInCall(true);
           inCallRef.current = true;
+        }
+        if (data.type === 'language_set') {
+          const normalized = normalizeVoiceLanguage(data.language);
+          if (normalized) {
+            voiceLanguageRef.current = normalized;
+            setVoiceLanguage(normalized);
+            setSpeechLanguage(normalized);
+            if (!languagePickPendingRef.current) {
+              void preloadVoices(resolveSpeechLocale(normalized));
+            }
+            pauseMicCapture();
+            if (recognizerRef.current) {
+              try {
+                recognizerRef.current.stop();
+              } catch {
+                /* ignore */
+              }
+              recognizerRef.current = null;
+            }
+          }
+        }
+        if (data.type === 'error' && data.message) {
+          setError(String(data.message));
         }
       },
       onAgentState: (s) => {
@@ -423,12 +604,53 @@ export function useVoiceSession(token, { onNavigate } = {}) {
         setStreamingReply(streamBufRef.current);
         bumpReplyTimer();
       },
-      onReplyDone: (text) => {
+      onReplyDone: (text, meta) => {
         bumpReplyTimer();
-        setLastReply(text || streamBufRef.current);
+        const replyText = String(text || streamBufRef.current || '').trim();
+        setLastReply(replyText);
+        lastReplyForTtsRef.current = replyText;
         setStreamingReply('');
         streamBufRef.current = '';
         clearReplyDoneTimer();
+
+        if (serverTtsEnabledRef.current && replyText && !meta?.instant) {
+          mainReplyTtsPendingRef.current = true;
+        }
+
+        if (meta?.instant && replyText) {
+          sentRef.current = false;
+          processingRef.current = false;
+          lastReplyForTtsRef.current = replyText;
+          instantSpeakActiveRef.current = true;
+          languagePickPendingRef.current = true;
+          if (serverTtsEnabledRef.current) {
+            setUiState('speaking');
+            armServerTtsFallback(
+              replyText,
+              () => {
+                instantSpeakActiveRef.current = false;
+                languagePickPendingRef.current = false;
+                void preloadVoices(resolveSpeechLocale(voiceLanguageRef.current));
+                if (inCallRef.current) resumeMicRef.current();
+              },
+              { delayMs: INSTANT_TTS_FALLBACK_MS }
+            );
+          } else {
+            clearServerTtsWait();
+            setUiState('speaking');
+            speak(replyText, {
+              force: true,
+              onEnd: () => {
+                instantSpeakActiveRef.current = false;
+                if (inCallRef.current) resumeMicRef.current();
+              }
+            });
+          }
+          return;
+        }
+
+        if (serverTtsEnabledRef.current) return;
+
         replyDoneTimerRef.current = setTimeout(() => {
           replyDoneTimerRef.current = null;
           if (!inCallRef.current || !sentRef.current) return;
@@ -441,14 +663,118 @@ export function useVoiceSession(token, { onNavigate } = {}) {
           resumeMicRef.current();
         }, REPLY_DONE_RESUME_MS);
       },
-      onTtsChunk: (chunk) => {
-        if (!USE_SERVER_TTS_ONLY || !serverPiperEnabledRef.current) return;
-        if (playPcmChunk(chunk)) serverTtsChunksRef.current += 1;
+      onTtsStart: (payload) => {
+        if (!serverTtsEnabledRef.current) return;
+        const seq = Number(payload?.seq) || 0;
+        ttsSeqRef.current = seq;
+        playbackGenRef.current = beginPlaybackUtterance();
+        clearServerTtsWait();
+        stopSpeaking();
+        serverTtsChunksRef.current = 0;
+        serverTtsDoneRef.current = false;
+        usingServerAudioRef.current = false;
+        statusOnlyTtsRef.current = Boolean(payload?.statusLine);
+        mainReplyTtsPendingRef.current = !payload?.statusLine;
         micPausedRef.current = true;
         pauseMicCapture();
         setUiState('speaking');
       },
-      onAgentReply: (text) => {
+      onTtsChunk: (payload) => {
+        if (!serverTtsEnabledRef.current || !payload?.chunk) return;
+        if (payload?.seq != null && payload.seq !== ttsSeqRef.current) return;
+        clearServerTtsWait();
+        instantSpeakActiveRef.current = false;
+        usingServerAudioRef.current = true;
+        if (
+          playAudioChunk(payload.chunk, {
+            encoding: payload.encoding || 'pcm16',
+            sampleRate: payload.sampleRate || 24000,
+            generation: playbackGenRef.current
+          })
+        ) {
+          serverTtsChunksRef.current += 1;
+        }
+        micPausedRef.current = true;
+        pauseMicCapture();
+        setUiState('speaking');
+      },
+      onTtsDone: (payload) => {
+        if (payload?.seq != null && payload.seq !== ttsSeqRef.current) return;
+        clearServerTtsWait();
+        serverTtsDoneRef.current = true;
+        if (!inCallRef.current || serverTtsChunksRef.current === 0) {
+          usingServerAudioRef.current = false;
+          if (instantSpeakActiveRef.current) {
+            instantSpeakActiveRef.current = false;
+            resumeMicRef.current();
+          }
+          return;
+        }
+        clearSpeakSafetyTimer();
+        const tailMs = languagePickPendingRef.current ? LANGUAGE_PICK_TTS_TAIL_MS : TTS_DONE_TAIL_MS;
+        const minMs = languagePickPendingRef.current ? LANGUAGE_PICK_TTS_MIN_MS : TTS_DONE_MIN_MS;
+        const ms = Math.min(
+          MAX_SPEAK_MS,
+          Math.max(minMs, getPlaybackRemainingSec() * 1000 + tailMs)
+        );
+        speakSafetyTimerRef.current = setTimeout(() => {
+          speakSafetyTimerRef.current = null;
+          serverTtsChunksRef.current = 0;
+          serverTtsDoneRef.current = false;
+          usingServerAudioRef.current = false;
+          mainReplyTtsPendingRef.current = false;
+          statusOnlyTtsRef.current = false;
+          if (languagePickPendingRef.current) {
+            languagePickPendingRef.current = false;
+            void preloadVoices(resolveSpeechLocale(voiceLanguageRef.current));
+          }
+          if (greetingPendingRef.current) {
+            greetingPendingRef.current = false;
+            if (inCallRef.current) {
+              const callFlow =
+                typeof window !== 'undefined'
+                  ? voiceStartRouteForPathname(window.location.pathname)?.screen === 'cart'
+                    ? 'cart'
+                    : voiceStartRouteForPathname(window.location.pathname)?.screen ===
+                        'product_discovery'
+                      ? 'discovery'
+                      : null
+                  : null;
+              if (callFlow) socketRef.current?.sendCallStart?.(callFlow, '');
+              micPausedRef.current = false;
+              beginCallListeningRef.current?.();
+            }
+            return;
+          }
+          if (inCallRef.current) resumeMicRef.current();
+        }, ms);
+      },
+      onTtsSkipped: () => {
+        const replyText = String(
+          pendingReplyForTtsRef.current || lastReplyForTtsRef.current || ''
+        ).trim();
+        clearServerTtsWait();
+        if (!inCallRef.current) return;
+        instantSpeakActiveRef.current = false;
+        languagePickPendingRef.current = false;
+        serverTtsChunksRef.current = 0;
+        serverTtsDoneRef.current = false;
+        usingServerAudioRef.current = false;
+        if (!replyText) {
+          resumeMicRef.current();
+          return;
+        }
+        setUiState('speaking');
+        speak(replyText, {
+          force: true,
+          onEnd: () => {
+            clearSpeakSafetyTimer();
+            void preloadVoices(resolveSpeechLocale(voiceLanguageRef.current));
+            if (inCallRef.current) resumeMicRef.current();
+          }
+        });
+      },
+      onAgentReply: (text, meta) => {
         clearReplyTimer();
         clearReplyDoneTimer();
         bumpReplyTimer();
@@ -466,7 +792,12 @@ export function useVoiceSession(token, { onNavigate } = {}) {
 
         const resume = () => {
           clearReplyTimer();
+          clearSpeakSafetyTimer();
+          clearServerTtsWait();
           serverTtsChunksRef.current = 0;
+          serverTtsDoneRef.current = false;
+          instantSpeakActiveRef.current = false;
+          usingServerAudioRef.current = false;
           if (inCallRef.current) {
             setInCall(true);
             inCallRef.current = true;
@@ -474,16 +805,31 @@ export function useVoiceSession(token, { onNavigate } = {}) {
           }
         };
 
-        const usedServerOnly = shouldSkipBrowserTts();
-        if (replyText && !usedServerOnly) {
-          speak(replyText, { onEnd: resume });
-        } else if (replyText && usedServerOnly) {
-          setUiState('speaking');
-          const estMs = Math.min(MAX_SPEAK_MS, Math.max(4000, replyText.length * 55));
-          speakSafetyTimerRef.current = setTimeout(resume, estMs);
-        } else {
+        if (!replyText) {
           resume();
+          return;
         }
+
+        if (meta?.instant || instantSpeakActiveRef.current) {
+          return;
+        }
+
+        if (serverTtsEnabledRef.current) {
+          setUiState('speaking');
+          if (serverTtsChunksRef.current > 0 || usingServerAudioRef.current) {
+            if (!serverTtsDoneRef.current) return;
+            const ms = Math.min(
+              MAX_SPEAK_MS,
+              Math.max(TTS_DONE_MIN_MS, getPlaybackRemainingSec() * 1000 + TTS_DONE_TAIL_MS)
+            );
+            speakSafetyTimerRef.current = setTimeout(resume, ms);
+            return;
+          }
+          armServerTtsFallback(replyText, resume);
+          return;
+        }
+
+        speak(replyText, { onEnd: resume });
       },
       onError: (err) => {
         clearReplyTimer();
@@ -492,7 +838,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
         micPausedRef.current = false;
 
         if (inCallRef.current) {
-          setError(err.message || 'Error — call still active. Speak again.');
+          setError(voiceText(voiceLanguageRef.current, 'ui.genericError'));
           resumeMicRef.current();
           return;
         }
@@ -506,7 +852,7 @@ export function useVoiceSession(token, { onNavigate } = {}) {
         clearReplyTimer();
         if (intentional || unmountedRef.current) return;
         if (inCallRef.current) {
-          setError('Reconnecting… call still active.');
+          setError(voiceText(voiceLanguageRef.current, 'ui.reconnecting'));
           connectSocketRef.current?.();
           return;
         }
@@ -543,12 +889,19 @@ export function useVoiceSession(token, { onNavigate } = {}) {
   }, [token]);
 
   const startSpeaking = useCallback(() => {
-    unlockSpeech();
-    void preloadVoices();
+    const langId = voiceLanguageRef.current;
+    const ttsLoc = resolveSpeechLocale(langId);
+    setSpeechLanguage(langId);
+    unlockSpeech(ttsLoc);
+    void preloadVoices(ttsLoc);
     void resumeAudioPlayback();
     serverTtsChunksRef.current = 0;
+    serverTtsDoneRef.current = false;
+    usingServerAudioRef.current = false;
+    instantSpeakActiveRef.current = false;
+    clearServerTtsWait();
     if (socketRef.current?.readyState !== WebSocket.OPEN) {
-      setError('Connecting… try again in a moment.');
+      setError(voiceText(voiceLanguageRef.current, 'ui.connectingRetry'));
       connectSocketRef.current?.();
       return;
     }
@@ -558,7 +911,8 @@ export function useVoiceSession(token, { onNavigate } = {}) {
     micPausedRef.current = false;
     setInCall(true);
     setError('');
-    setLastReply(VOICE_AGENT_GREETING);
+    const greeting = languageSelectionPrompt();
+    setLastReply(greeting);
     micPausedRef.current = true;
     setUiState('speaking');
     const startRoute =
@@ -578,17 +932,34 @@ export function useVoiceSession(token, { onNavigate } = {}) {
           ? 'discovery'
           : null;
 
-    speak(VOICE_AGENT_GREETING, {
-      onEnd: () => {
-        if (!inCallRef.current) return;
-        if (callFlow) {
-          socketRef.current?.sendCallStart?.(callFlow);
-        }
-        micPausedRef.current = false;
-        beginCallListening();
+    const afterGreeting = () => {
+      if (!inCallRef.current) return;
+      if (callFlow) {
+        socketRef.current?.sendCallStart?.(callFlow, '');
       }
-    });
+      micPausedRef.current = false;
+      beginCallListening();
+    };
+    greetingAfterRef.current = afterGreeting;
+
+    if (serverTtsEnabledRef.current || FORCE_SERVER_TTS_ONLY) {
+      awaitingServerTtsRef.current = true;
+      greetingPendingRef.current = true;
+      socketRef.current?.sendTtsSpeak?.(greeting);
+      speakSafetyTimerRef.current = setTimeout(() => {
+        speakSafetyTimerRef.current = null;
+        greetingPendingRef.current = false;
+        afterGreeting();
+      }, 12000);
+    } else {
+      speak(greeting, { onEnd: afterGreeting });
+    }
   }, [beginCallListening]);
+
+  const notifyTransportSelected = useCallback((selection) => {
+    if (!selection || typeof selection !== 'object') return false;
+    return Boolean(socketRef.current?.sendTransportSelected?.(selection));
+  }, []);
 
   return {
     state,
@@ -597,9 +968,11 @@ export function useVoiceSession(token, { onNavigate } = {}) {
     voicePath,
     inCall,
     connected,
+    voiceLanguage,
     lastReply: streamingReply || lastReply,
     interimText,
     startSpeaking,
-    endCall
+    endCall,
+    notifyTransportSelected
   };
 }
