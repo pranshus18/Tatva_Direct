@@ -891,7 +891,6 @@ const SupplierPOS = () => {
                         <option value="upi">UPI</option>
                         <option value="bank_transfer">Bank Transfer (NEFT/RTGS/IMPS)</option>
                         <option value="credit">Credit (Pay Later)</option>
-                        <option value="credit_note">Credit Note</option>
                       </select>
                     </div>
                   </div>

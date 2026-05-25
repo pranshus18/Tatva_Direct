@@ -35,9 +35,7 @@ const paymentMethodLabel = (order) => {
   if (pm === 'upi') return 'UPI';
   if (pm === 'bank_transfer') return 'Bank transfer';
   if (pm === 'card') return 'Credit / Debit Card';
-  if (pm === 'cheque') return 'Cheque';
   if (pm === 'credit') return 'Credit / pay later';
-  if (pm === 'credit_note') return 'Credit note';
   if (!pm) return 'Not set (pay online)';
   return pm.replace(/_/g, ' ');
 };

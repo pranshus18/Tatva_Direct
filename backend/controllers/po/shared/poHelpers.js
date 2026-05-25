@@ -9,10 +9,8 @@ export const MAX_CART_ITEM_QUANTITY = 1000000000;
 export const PAYMENT_METHODS_ALLOWED = new Set([
   'cash',
   'bank_transfer',
-  'cheque',
   'online',
   'credit',
-  'credit_note',
   'upi',
   'card'
 ]);
@@ -22,7 +20,7 @@ export function resolveB2bPaymentFromBody(body) {
   const raw = String(body?.paymentMethod || body?.payment_method || 'online')
     .toLowerCase()
     .trim();
-  const allowed = new Set(['cod', 'online', 'bank_transfer', 'credit', 'credit_note', 'card']);
+  const allowed = new Set(['cod', 'online', 'bank_transfer', 'credit', 'card']);
   const choice = allowed.has(raw) ? raw : 'online';
   if (choice === 'cod') {
     return { payment_method: 'cash', payment_status: 'pending' };
@@ -32,9 +30,6 @@ export function resolveB2bPaymentFromBody(body) {
   }
   if (choice === 'credit') {
     return { payment_method: 'credit', payment_status: 'pending' };
-  }
-  if (choice === 'credit_note') {
-    return { payment_method: 'credit_note', payment_status: 'pending' };
   }
   if (choice === 'card') {
     return { payment_method: 'card', payment_status: 'pending' };

@@ -874,7 +874,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             <option value="bank_transfer">Bank transfer (NEFT / RTGS / IMPS)</option>
             <option value="card">Credit / Debit Card</option>
             <option value="credit">Credit / pay later (on account)</option>
-            <option value="credit_note">Credit note</option>
           </select>
           <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#6b7280', maxWidth: '520px' }}>
             This applies to every purchase order created in this step. Pay online: you will see a platform test QR before orders are placed. COD and credit stay pending until the supplier confirms payment or delivery.
@@ -1010,51 +1009,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             </div>
           )}
 
-          {poPaymentMethod === 'credit_note' && (
-            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
-              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>Credit Note Details</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <input
-                  type="text"
-                  placeholder="Credit note number *"
-                  value={paymentDetails.creditNoteNumber || ''}
-                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, creditNoteNumber: e.target.value }))}
-                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
-                />
-                <input
-                  type="date"
-                  value={paymentDetails.creditNoteDate || ''}
-                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, creditNoteDate: e.target.value }))}
-                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
-                  title="Credit note issue date *"
-                />
-                <input
-                  type="number"
-                  placeholder="Credit note amount (INR) *"
-                  min="0"
-                  step="0.01"
-                  value={paymentDetails.creditNoteAmount || ''}
-                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, creditNoteAmount: e.target.value }))}
-                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
-                />
-                <input
-                  type="text"
-                  placeholder="Issued by (supplier name or reference) *"
-                  value={paymentDetails.issuedBy || ''}
-                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, issuedBy: e.target.value }))}
-                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
-                />
-                <input
-                  type="text"
-                  placeholder="Reason (return / adjustment / overpayment)"
-                  value={paymentDetails.reason || ''}
-                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, reason: e.target.value }))}
-                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
-                />
-              </div>
-              <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* Required. The credit note amount will be adjusted against this order total.</p>
-            </div>
-          )}
         </div>
         <div className="checkout-address-card">
           <div className="checkout-address-card__head">
