@@ -199,8 +199,4 @@ export function isOrderNumberConflictError(error) {
   return false;
 }
 
-export function isRevenueRecognizedOrder(order) {
-  const paymentStatus = String(order?.payment_status || order?.paymentStatus || '').toLowerCase();
-  const status = String(order?.status || '').toLowerCase();
-  return paymentStatus === 'paid' && status !== 'cancelled' && status !== 'returned';
-}
+export { isRevenueRecognizedOrder } from '../../../utils/salesMetrics.js';

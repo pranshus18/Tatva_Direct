@@ -196,9 +196,9 @@ export default function SupplierSelectYourself() {
               <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>{discountInsights?.summary?.totalOrders ?? 0}</div>
             </div>
             <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '0.75rem' }}>
-              <div style={{ fontSize: '0.82rem', color: '#64748b' }}>Total order value</div>
+              <div style={{ fontSize: '0.82rem', color: '#64748b' }}>Total purchase value</div>
               <div style={{ fontSize: '1.2rem', fontWeight: 700 }}>
-                ₹{Number(discountInsights?.summary?.totalOrderValue || 0).toLocaleString()}
+                ₹{Number(discountInsights?.summary?.totalPurchaseValue || 0).toLocaleString()}
               </div>
             </div>
           </div>

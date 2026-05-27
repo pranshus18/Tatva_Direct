@@ -1,4 +1,5 @@
 import { supabase } from '../config/supabase.js';
+import { isRevenueRecognizedOrder } from '../utils/salesMetrics.js';
 
 export function normalizeCustomerPhone(phone) {
   return String(phone || '')
@@ -18,14 +19,116 @@ export function normalizeCustomerName(name) {
 }
 
 /**
- * Same person only when BOTH name and phone match (after normalization).
- * Returns null if either is missing — treated as a separate/unidentified customer.
+ * Same person when phone matches (after normalization), regardless of name.
+ * Returns null when phone is missing.
  */
-export function buildCustomerIdentityKey(name, phone) {
-  const normalizedName = normalizeCustomerName(name);
+export function buildCustomerIdentityKey(_name, phone) {
   const normalizedPhone = normalizeCustomerPhone(phone);
-  if (!normalizedName || !normalizedPhone) return null;
-  return `${normalizedName}|${normalizedPhone}`;
+  if (!normalizedPhone) return null;
+  return normalizedPhone;
+}
+
+/** All aggregate keys that may refer to the same buyer/customer for credit lookup. */
+export function buildCreditAggregateKeys({
+  buyerUserId = null,
+  customerId = null,
+  phone = null,
+  name = null
+} = {}) {
+  const keys = [];
+  const normalizedPhone = normalizeCustomerPhone(phone);
+  const identityKey = buildCustomerIdentityKey(name, phone);
+  if (normalizedPhone) keys.push(`phone:${normalizedPhone}`);
+  if (identityKey) keys.push(`identity:${identityKey}`);
+  return keys;
+}
+
+export function lookupCreditAccountValue(
+  map,
+  { buyerId = null, linkedBuyerUserId = null, linkedCustomerId = null, phone = null, name = null } = {}
+) {
+  const keys = buyerId
+    ? [buyerId, ...buildCreditAggregateKeys({ buyerUserId: linkedBuyerUserId, customerId: linkedCustomerId, phone, name })]
+    : buildCreditAggregateKeys({ buyerUserId: linkedBuyerUserId, customerId: linkedCustomerId, phone, name });
+  const seen = new Set();
+  for (const key of keys) {
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    if (map.has(key)) return map.get(key);
+  }
+  return 0;
+}
+
+export function orderMatchesParty(order, party, usersById = new Map(), customersById = new Map()) {
+  const { aggregateKey } = resolveSalesAggregateKey(order, usersById, customersById);
+  const partyKeys = buildCreditAggregateKeys({
+    buyerUserId: party?.buyerUserId || party?.linkedBuyerUserId,
+    customerId: party?.customerId || party?.linkedCustomerId,
+    phone: party?.phone,
+    name: party?.name
+  });
+  if (party?.buyerId && aggregateKey === party.buyerId) return true;
+  return partyKeys.includes(aggregateKey);
+}
+
+export function partyFromBuyerRecord(rec = {}) {
+  return {
+    buyerId: rec.buyerId || null,
+    buyerUserId: rec.linkedBuyerUserId || rec.buyerUserId || null,
+    linkedBuyerUserId: rec.linkedBuyerUserId || rec.buyerUserId || null,
+    customerId: rec.linkedCustomerId || rec.customerId || null,
+    linkedCustomerId: rec.linkedCustomerId || rec.customerId || null,
+    phone: rec.phone || null,
+    name: rec.name || null
+  };
+}
+
+/**
+ * Gross order value (total_amount) for a buyer across matching online + offline orders.
+ * Excludes cancelled/returned. Optional channel: 'online' | 'offline'.
+ */
+export function sumOrderTotalsForParty(
+  orders = [],
+  party,
+  usersById = new Map(),
+  customersById = new Map(),
+  { channel = null } = {}
+) {
+  let total = 0;
+  for (const order of orders) {
+    if (!isCountableSalesOrder(order)) continue;
+    if (!orderMatchesParty(order, party, usersById, customersById)) continue;
+    if (channel === 'offline' && !isOfflineSaleChannel(order.channel)) continue;
+    if (channel === 'online' && isOfflineSaleChannel(order.channel)) continue;
+    total += parseFloat(order.total_amount || 0) || 0;
+  }
+  return roundMoney(total);
+}
+
+/**
+ * Paid net revenue (items minus closed returns) for a buyer across matching orders.
+ */
+export function sumNetRevenueForParty(
+  orders = [],
+  netRevenueByOrderId = new Map(),
+  party,
+  usersById = new Map(),
+  customersById = new Map(),
+  { channel = null } = {}
+) {
+  let total = 0;
+  for (const order of orders) {
+    if (!isRevenueRecognizedOrder(order)) continue;
+    if (!orderMatchesParty(order, party, usersById, customersById)) continue;
+    if (channel === 'offline' && !isOfflineSaleChannel(order.channel)) continue;
+    if (channel === 'online' && isOfflineSaleChannel(order.channel)) continue;
+    total += netRevenueByOrderId.get(order.id) || 0;
+  }
+  return roundMoney(total);
+}
+
+export function hasCreditPartyFromRecord(rec = {}) {
+  return Boolean(normalizeCustomerPhone(rec.phone));
 }
 
 export function isOfflineSaleChannel(channel) {
@@ -61,28 +164,12 @@ export function resolveOrderParty(order, usersById = new Map(), customersById = 
 
 export function resolveSalesAggregateKey(order, usersById = new Map(), customersById = new Map()) {
   const party = resolveOrderParty(order, usersById, customersById);
-  const identityKey = buildCustomerIdentityKey(party.name, party.phone);
+  const identityKey = buildCustomerIdentityKey(null, party.phone);
   if (identityKey) {
     return {
       aggregateKey: `identity:${identityKey}`,
       identityKey,
       buyerType: 'unified',
-      party
-    };
-  }
-  if (party.buyerUserId) {
-    return {
-      aggregateKey: `user:${party.buyerUserId}`,
-      identityKey: null,
-      buyerType: 'b2b_partial',
-      party
-    };
-  }
-  if (party.customerId) {
-    return {
-      aggregateKey: `customer:${party.customerId}`,
-      identityKey: null,
-      buyerType: 'pos_partial',
       party
     };
   }
@@ -95,7 +182,7 @@ export function resolveSalesAggregateKey(order, usersById = new Map(), customers
 }
 
 /**
- * Sum order values for the same supplier where customer name AND phone both match.
+ * Sum order values for the same supplier where customer phone matches.
  */
 export async function getCombinedSalesTotalForCustomer({
   supplierId,
@@ -105,11 +192,7 @@ export async function getCombinedSalesTotalForCustomer({
   customerId = null
 }) {
   if (!supplierId) return 0;
-
-  const targetIdentity = buildCustomerIdentityKey(customerName, customerPhone);
-  if (!targetIdentity) {
-    if (!buyerUserId && !customerId) return 0;
-  }
+  if (!buyerUserId && !customerId && !customerName && !customerPhone) return 0;
 
   const { data: orders, error } = await supabase
     .from('orders')
@@ -123,46 +206,49 @@ export async function getCombinedSalesTotalForCustomer({
 
   const ordersList = orders || [];
   const userIds = [...new Set(ordersList.map((o) => o.service_provider_id).filter(Boolean))];
+  if (buyerUserId) userIds.push(buyerUserId);
   const customerIds = [...new Set(ordersList.map((o) => o.customer_id).filter(Boolean))];
+  if (customerId) customerIds.push(customerId);
 
   let usersById = new Map();
-  if (userIds.length > 0) {
+  const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
+  if (uniqueUserIds.length > 0) {
     const { data: users } = await supabase
       .from('users')
       .select('id, name, company, phone')
-      .in('id', userIds);
+      .in('id', uniqueUserIds);
     usersById = new Map((users || []).map((u) => [u.id, u]));
   }
 
   let customersById = new Map();
-  if (customerIds.length > 0) {
+  const uniqueCustomerIds = [...new Set(customerIds.filter(Boolean))];
+  if (uniqueCustomerIds.length > 0) {
     const { data: customers } = await supabase
       .from('customers')
       .select('id, name, phone')
-      .in('id', customerIds);
+      .in('id', uniqueCustomerIds);
     customersById = new Map((customers || []).map((c) => [c.id, c]));
   }
 
-  let total = 0;
-  for (const order of ordersList) {
-    if (!isCountableSalesOrder(order)) continue;
-
-    if (targetIdentity) {
-      const { identityKey } = resolveSalesAggregateKey(order, usersById, customersById);
-      if (identityKey === targetIdentity) {
-        total += parseFloat(order.total_amount || 0) || 0;
-      }
-      continue;
-    }
-
-    if (buyerUserId && order.service_provider_id === buyerUserId) {
-      total += parseFloat(order.total_amount || 0) || 0;
-    } else if (customerId && order.customer_id === customerId) {
-      total += parseFloat(order.total_amount || 0) || 0;
-    }
+  let name = customerName;
+  let phone = customerPhone;
+  if (buyerUserId) {
+    const user = usersById.get(buyerUserId) || {};
+    name = name || user.name || user.company || null;
+    phone = phone || user.phone || null;
+  }
+  if (customerId) {
+    const customer = customersById.get(customerId) || {};
+    name = name || customer.name || null;
+    phone = phone || customer.phone || null;
   }
 
-  return roundMoney(total);
+  return sumOrderTotalsForParty(
+    ordersList,
+    { buyerUserId, customerId, linkedBuyerUserId: buyerUserId, linkedCustomerId: customerId, name, phone },
+    usersById,
+    customersById
+  );
 }
 
 export async function resolvePartyDetails({

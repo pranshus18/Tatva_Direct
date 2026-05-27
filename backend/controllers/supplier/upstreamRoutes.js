@@ -946,10 +946,10 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
           orderAmount: totalAmount
         });
 
-        if (!creditCheck.allowed) {
+        if (!creditCheck.payLaterOffered || !creditCheck.allowed) {
           return res.status(400).json({
             status: 'error',
-            message: `Credit not available: ${creditCheck.message}`,
+            message: `Pay later not available: ${creditCheck.message} Use online, COD, bank transfer, or card instead.`,
             credit: creditCheck
           });
         }
@@ -1082,6 +1082,96 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
   }
 });
 
+router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can add items to upstream cart' });
+    }
+
+    const mineSupplierProductId = String(req.body?.mineSupplierProductId || '').trim();
+    const requestedQuantity = parseInt(req.body?.quantity, 10);
+    if (!mineSupplierProductId) {
+      return res.status(400).json({ status: 'error', message: 'mineSupplierProductId is required' });
+    }
+
+    const { data: mineRow, error: mineError } = await supabase
+      .from('supplier_products')
+      .select('id, supplier_id, min_order_quantity')
+      .eq('id', mineSupplierProductId)
+      .eq('supplier_id', req.userId)
+      .maybeSingle();
+    if (mineError) throw mineError;
+    if (!mineRow) {
+      return res.status(404).json({ status: 'error', message: 'Selected product was not found in your inventory' });
+    }
+
+    const minQty = Math.max(1, parseInt(mineRow.min_order_quantity || 1, 10) || 1);
+    const quantity = Number.isFinite(requestedQuantity) && requestedQuantity > 0
+      ? Math.max(minQty, requestedQuantity)
+      : minQty;
+
+    const { data: cartRow, error: cartError } = await supabase
+      .from('po_carts')
+      .select('id, draft_payload, updated_at')
+      .eq('service_provider_id', req.userId)
+      .maybeSingle();
+    if (cartError) throw cartError;
+
+    const currentDraft =
+      cartRow?.draft_payload && typeof cartRow.draft_payload === 'object'
+        ? cartRow.draft_payload
+        : {};
+
+    const nextSelectedMine =
+      currentDraft?.selectedMine && typeof currentDraft.selectedMine === 'object'
+        ? { ...currentDraft.selectedMine }
+        : {};
+    nextSelectedMine[mineSupplierProductId] = quantity;
+
+    const nextDraftPayload = {
+      mode: 'supplier_upstream',
+      selectedMine: nextSelectedMine,
+      selectedUpstreamOffer:
+        currentDraft?.selectedUpstreamOffer && typeof currentDraft.selectedUpstreamOffer === 'object'
+          ? currentDraft.selectedUpstreamOffer
+          : {},
+      suggestions: Array.isArray(currentDraft?.suggestions) ? currentDraft.suggestions : [],
+      brandFilter: String(currentDraft?.brandFilter || '').trim(),
+      searchTerm: String(currentDraft?.searchTerm || '').trim(),
+      cartName: String(currentDraft?.cartName || '').trim()
+    };
+
+    const { data: saved, error: saveError } = await supabase
+      .from('po_carts')
+      .upsert(
+        {
+          service_provider_id: req.userId,
+          draft_payload: nextDraftPayload
+        },
+        { onConflict: 'service_provider_id' }
+      )
+      .select('id, updated_at')
+      .single();
+    if (saveError) throw saveError;
+
+    return res.json({
+      status: 'success',
+      message: 'Item added to upstream cart',
+      item: {
+        mineSupplierProductId,
+        quantity
+      },
+      cart: {
+        id: saved.id,
+        updatedAt: saved.updated_at
+      }
+    });
+  } catch (error) {
+    console.error('Add upstream cart item error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to add item to upstream cart' });
+  }
+});
+
 router.get('/upstream/cart', authenticateToken, async (req, res) => {
   try {
     if (req.user?.user_type !== 'supplier') {
@@ -1112,6 +1202,75 @@ router.get('/upstream/cart', authenticateToken, async (req, res) => {
   }
 });
 
+router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can update upstream cart name' });
+    }
+    const cartName = String(req.body?.cartName || '').trim();
+    if (!cartName) {
+      return res.status(400).json({ status: 'error', message: 'Project name is required' });
+    }
+    if (cartName.length > 120) {
+      return res.status(400).json({ status: 'error', message: 'Project name must be 120 characters or fewer' });
+    }
+
+    const { data: cartRow, error: cartError } = await supabase
+      .from('po_carts')
+      .select('id, draft_payload, updated_at')
+      .eq('service_provider_id', req.userId)
+      .maybeSingle();
+    if (cartError) throw cartError;
+
+    const currentDraft =
+      cartRow?.draft_payload && typeof cartRow.draft_payload === 'object'
+        ? cartRow.draft_payload
+        : {};
+
+    const nextDraftPayload = {
+      mode: 'supplier_upstream',
+      selectedMine:
+        currentDraft?.selectedMine && typeof currentDraft.selectedMine === 'object'
+          ? currentDraft.selectedMine
+          : {},
+      selectedUpstreamOffer:
+        currentDraft?.selectedUpstreamOffer && typeof currentDraft.selectedUpstreamOffer === 'object'
+          ? currentDraft.selectedUpstreamOffer
+          : {},
+      suggestions: Array.isArray(currentDraft?.suggestions) ? currentDraft.suggestions : [],
+      brandFilter: String(currentDraft?.brandFilter || '').trim(),
+      searchTerm: String(currentDraft?.searchTerm || '').trim(),
+      cartName
+    };
+
+    const { data: saved, error: saveError } = await supabase
+      .from('po_carts')
+      .upsert(
+        {
+          service_provider_id: req.userId,
+          draft_payload: nextDraftPayload
+        },
+        { onConflict: 'service_provider_id' }
+      )
+      .select('id, updated_at')
+      .single();
+    if (saveError) throw saveError;
+
+    return res.json({
+      status: 'success',
+      message: 'Upstream project name updated',
+      cart: {
+        id: saved.id,
+        updatedAt: saved.updated_at,
+        cartName
+      }
+    });
+  } catch (error) {
+    console.error('Update upstream cart name error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to update upstream project name' });
+  }
+});
+
 router.put('/upstream/cart', authenticateToken, async (req, res) => {
   try {
     if (req.user?.user_type !== 'supplier') {
@@ -1125,7 +1284,8 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       selectedUpstreamOffer: payloadInput.selectedUpstreamOffer || {},
       suggestions: Array.isArray(payloadInput.suggestions) ? payloadInput.suggestions : [],
       brandFilter: String(payloadInput.brandFilter || '').trim(),
-      searchTerm: String(payloadInput.searchTerm || '').trim()
+      searchTerm: String(payloadInput.searchTerm || '').trim(),
+      cartName: String(payloadInput.cartName || '').trim()
     };
 
     const { data: saved, error } = await supabase

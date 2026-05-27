@@ -1039,6 +1039,24 @@ const ProductDetailsModal = ({
   const [savingSpecs, setSavingSpecs] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(product?.description || '');
   const [extractingSpecs, setExtractingSpecs] = useState(false);
+  const specsObject =
+    product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
+      ? product.specifications
+      : {};
+  const gtinValue =
+    String(
+      product?.gtin ||
+        product?.barcode ||
+        specsObject?.gtin ||
+        specsObject?.GTIN ||
+        specsObject?.upc ||
+        specsObject?.UPC ||
+        specsObject?.ean ||
+        specsObject?.EAN ||
+        specsObject?.barcode ||
+        specsObject?.Barcode ||
+        ''
+    ).trim();
 
   useEffect(() => {
     setDisplaySpecifications(product?.specifications || {});
@@ -1204,7 +1222,6 @@ const ProductDetailsModal = ({
                 }}
                 style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}
               >
-                <DollarSign size={16} />
                 ProductCOV
               </button>
             )}
@@ -1243,6 +1260,7 @@ const ProductDetailsModal = ({
             <div><strong>Status:</strong> {(product.status || 'pending').toUpperCase()}</div>
             <div><strong>Price:</strong> {product.price} per {product.unit || 'unit'}</div>
             <div><strong>Stock:</strong> {product.stock} {product.unit || 'unit'}</div>
+            {gtinValue ? <div><strong>GTIN / UPC / EAN:</strong> {gtinValue}</div> : null}
             {product.lsa ? <div><strong>LSA:</strong> {product.lsa}</div> : null}
             {product.location ? <div><strong>Location:</strong> {product.location}</div> : null}
             {product.asin ? <div><strong>TSIN:</strong> {product.asin}</div> : null}

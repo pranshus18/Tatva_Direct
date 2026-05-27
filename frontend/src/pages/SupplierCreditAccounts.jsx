@@ -12,6 +12,33 @@ function utilizationPct(acc) {
   return Math.min(100, Math.round((Number(acc.outstanding || 0) / limit) * 100));
 }
 
+function findAccountForBuyer(buyer, accounts = []) {
+  if (!buyer || !accounts.length) return null;
+  if (buyer.linkedBuyerUserId) {
+    const byUser = accounts.find((a) => a.buyerUserId === buyer.linkedBuyerUserId);
+    if (byUser) return byUser;
+  }
+  if (buyer.linkedCustomerId) {
+    const byCustomer = accounts.find((a) => a.customerId === buyer.linkedCustomerId);
+    if (byCustomer) return byCustomer;
+  }
+  const phone = String(buyer.phone || '').trim();
+  if (phone) {
+    const byPhone = accounts.find((a) => a.customerPhone === phone);
+    if (byPhone) return byPhone;
+  }
+  return null;
+}
+
+function buyerCreditTarget(buyer) {
+  return {
+    buyerUserId: buyer?.linkedBuyerUserId || null,
+    customerId: buyer?.linkedCustomerId || null,
+    customerPhone: buyer?.phone || null,
+    draftKey: buyer?.buyerId
+  };
+}
+
 export default function SupplierCreditAccounts() {
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState([]);
@@ -35,7 +62,8 @@ export default function SupplierCreditAccounts() {
     const buyersPayload = await buyersRes.json();
     const list = creditPayload.status === 'success' ? creditPayload.accounts || [] : [];
     setAccounts(list);
-    setBuyers(buyersPayload.status === 'success' ? buyersPayload.buyers || [] : []);
+    const buyerList = buyersPayload.status === 'success' ? buyersPayload.buyers || [] : [];
+    setBuyers(buyerList);
 
     const nextDrafts = {};
     list.forEach((acc) => {
@@ -49,7 +77,18 @@ export default function SupplierCreditAccounts() {
         notes: acc.notes || ''
       };
     });
-    (buyersPayload.buyers || []).forEach((b) => {
+    buyerList.forEach((b) => {
+      const acc = findAccountForBuyer(b, list);
+      if (acc) {
+        nextDrafts[b.buyerId] = {
+          creditLimit: String(acc.creditLimit ?? ''),
+          paylaterThreshold: String(acc.payLaterThreshold ?? b.paylaterThreshold ?? 0),
+          creditPeriodDays: String(acc.creditPeriodDays ?? 30),
+          isEnabled: acc.isEnabled !== false,
+          notes: acc.notes || ''
+        };
+        return;
+      }
       if (!nextDrafts[b.buyerId]) {
         nextDrafts[b.buyerId] = {
           creditLimit: '',
@@ -76,14 +115,6 @@ export default function SupplierCreditAccounts() {
       }
     })();
   }, [loadData]);
-
-  const accountsByBuyer = useMemo(() => {
-    const m = new Map();
-    accounts.forEach((a) => {
-      if (a.buyerUserId) m.set(a.buyerUserId, a);
-    });
-    return m;
-  }, [accounts]);
 
   const posAccounts = useMemo(
     () => accounts.filter((a) => a.partyType === 'pos_customer' || a.customerPhone),
@@ -126,11 +157,20 @@ export default function SupplierCreditAccounts() {
     }));
   };
 
-  const saveCredit = async ({ buyerUserId, customerPhone, draftKey }) => {
+  const saveCredit = async ({ buyerUserId, customerId, customerPhone, draftKey }) => {
     const draft = drafts[draftKey] || {};
     const limit = Number(draft.creditLimit);
     if (!Number.isFinite(limit) || limit < 0) {
       alert('Enter a valid credit limit (₹).');
+      return;
+    }
+    const paylaterThreshold = Number(draft.paylaterThreshold);
+    if (!Number.isFinite(paylaterThreshold) || paylaterThreshold < 0) {
+      alert('Enter a valid pay-later minimum (₹0 or more).');
+      return;
+    }
+    if (paylaterThreshold > 0 && limit <= 0) {
+      alert('Set a credit limit (₹) before enabling a pay-later minimum.');
       return;
     }
     try {
@@ -144,9 +184,10 @@ export default function SupplierCreditAccounts() {
         },
         body: JSON.stringify({
           buyerUserId: buyerUserId || null,
+          customerId: customerId || null,
           customerPhone: customerPhone || null,
           creditLimit: limit,
-          paylaterThreshold: Number(draft.paylaterThreshold) || 0,
+          paylaterThreshold,
           creditPeriodDays: Number(draft.creditPeriodDays) || 30,
           isEnabled: draft.isEnabled !== false,
           notes: draft.notes || null
@@ -159,6 +200,42 @@ export default function SupplierCreditAccounts() {
       await loadData();
     } catch (e) {
       alert(e.message || 'Failed to save credit account');
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const settleCycle = async ({ buyerUserId, customerPhone, customerId, partyName }) => {
+    const label = partyName || 'this customer';
+    const confirmed = window.confirm(
+      `Mark the full outstanding credit for ${label} as paid?\n\nThis settles the current loan cycle. Revenue and dashboard totals will update after settlement.`
+    );
+    if (!confirmed) return;
+
+    const settleKey = buyerUserId || customerPhone || customerId || 'settle';
+    try {
+      setSavingKey(`settle-${settleKey}`);
+      const token = localStorage.getItem('token');
+      const res = await fetch(getApiUrl('/api/supplier/credit-accounts/settle'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          buyerUserId: buyerUserId || null,
+          customerPhone: customerPhone || null,
+          customerId: customerId || null
+        })
+      });
+      const payload = await res.json();
+      if (!res.ok || payload.status !== 'success') {
+        throw new Error(payload.message || 'Failed to settle');
+      }
+      alert(payload.message || 'Credit cycle settled.');
+      await loadData();
+    } catch (err) {
+      alert(err.message || 'Failed to settle credit cycle');
     } finally {
       setSavingKey(null);
     }
@@ -230,9 +307,10 @@ export default function SupplierCreditAccounts() {
       <div className="profile-content">
         <div className="profile-section">
           <p style={{ color: '#64748b', fontSize: '0.92rem', marginTop: 0 }}>
-            Set credit limits and pay-later minimum order amounts per buyer. Pay later only appears when the
-            order total meets the minimum. You will get a notification when usage reaches{' '}
-            {Math.round(WARN_UTILIZATION * 100)}% of the limit.
+            <strong>Credit limit</strong> is the maximum total outstanding a buyer can have on pay-later
+            orders at once (e.g. ₹1,00,000 — they can use the full amount across orders, but not more).
+            <strong>Pay-later minimum</strong> is a lifetime net revenue gate. <strong>Loan cycle:</strong> when
+            the cycle ends, they must settle the full outstanding before new pay-later orders.
           </p>
           <div className="supplier-summary-grid">
             <div className="supplier-summary-card">
@@ -278,10 +356,15 @@ export default function SupplierCreditAccounts() {
               onChange={(e) => setPosLimit(e.target.value)}
               style={{ ...inputStyle, width: 120 }}
             />
-            <select value={posPeriod} onChange={(e) => setPosPeriod(e.target.value)} style={inputStyle}>
+            <select
+              value={posPeriod}
+              onChange={(e) => setPosPeriod(e.target.value)}
+              style={inputStyle}
+              title="Loan cycle length in days"
+            >
               {[7, 15, 30, 45, 60, 90].map((d) => (
                 <option key={d} value={d}>
-                  {d} days
+                  {d} day cycle
                 </option>
               ))}
             </select>
@@ -308,6 +391,13 @@ export default function SupplierCreditAccounts() {
                 saveCredit({
                   customerPhone: row.customerPhone,
                   draftKey: row.customerPhone || row.customerId
+                })
+              }
+              onSettle={(row) =>
+                settleCycle({
+                  customerPhone: row.customerPhone,
+                  customerId: row.customerId,
+                  partyName: row.partyName
                 })
               }
               idKey={(r) => r.customerPhone || r.id}
@@ -339,7 +429,8 @@ export default function SupplierCreditAccounts() {
                     <th style={th}>Company</th>
                     <th style={th}>Limit ₹</th>
                     <th style={th}>Pay-later min ₹</th>
-                    <th style={th}>Days</th>
+                    <th style={th}>Loan cycle (days)</th>
+                    <th style={th}>Cycle due</th>
                     <th style={th}>Used %</th>
                     <th style={th}>Outstanding</th>
                     <th style={th}>Available</th>
@@ -349,7 +440,7 @@ export default function SupplierCreditAccounts() {
                 </thead>
                 <tbody>
                   {filteredBuyers.map((buyer) => {
-                    const acc = accountsByBuyer.get(buyer.buyerId);
+                    const acc = findAccountForBuyer(buyer, accounts);
                     const draft = drafts[buyer.buyerId] || {
                       creditLimit: '',
                       paylaterThreshold: String(buyer.paylaterThreshold ?? 0),
@@ -388,7 +479,7 @@ export default function SupplierCreditAccounts() {
                             }
                             style={cellInput}
                             placeholder="0"
-                            title="Minimum order amount for pay later (must be greater than 0)"
+                            title="Minimum order amount for pay later on this order (₹0 = no minimum)"
                           />
                         </td>
                         <td style={td}>
@@ -399,6 +490,16 @@ export default function SupplierCreditAccounts() {
                             onChange={(e) => updateDraft(buyer.buyerId, 'creditPeriodDays', e.target.value)}
                             style={{ ...cellInput, width: 64 }}
                           />
+                        </td>
+                        <td style={td}>
+                          {acc?.cycleDueAt ? (
+                            <span style={{ color: acc.cycleIsOverdue ? '#b91c1c' : '#334155' }}>
+                              {new Date(acc.cycleDueAt).toLocaleDateString('en-IN')}
+                              {acc.cycleIsOverdue ? ' (overdue)' : ` (${acc.cycleDaysRemaining ?? 0}d left)`}
+                            </span>
+                          ) : (
+                            '—'
+                          )}
                         </td>
                         <td style={td}>{acc ? `${pct}%` : '—'}</td>
                         <td style={td}>₹{Number(acc?.outstanding || 0).toLocaleString('en-IN')}</td>
@@ -411,17 +512,33 @@ export default function SupplierCreditAccounts() {
                           />
                         </td>
                         <td style={td}>
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
-                            disabled={savingKey === buyer.buyerId}
-                            onClick={() =>
-                              saveCredit({ buyerUserId: buyer.buyerId, draftKey: buyer.buyerId })
-                            }
-                          >
-                            {savingKey === buyer.buyerId ? '…' : 'Save'}
-                          </button>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                            <button
+                              type="button"
+                              className="btn-secondary"
+                              style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
+                              disabled={savingKey === buyer.buyerId}
+                              onClick={() => saveCredit(buyerCreditTarget(buyer))}
+                            >
+                              {savingKey === buyer.buyerId ? '…' : 'Save'}
+                            </button>
+                            {acc && Number(acc.outstanding) > 0 ? (
+                              <button
+                                type="button"
+                                className="btn-primary"
+                                style={{ fontSize: '0.75rem', padding: '0.3rem 0.55rem' }}
+                                disabled={savingKey === `settle-${buyer.buyerId}`}
+                                onClick={() =>
+                                  settleCycle({
+                                    ...buyerCreditTarget(buyer),
+                                    partyName: buyer.name || buyer.company
+                                  })
+                                }
+                              >
+                                {savingKey === `settle-${buyer.buyerId}` ? '…' : 'Settle cycle'}
+                              </button>
+                            ) : null}
+                          </div>
                         </td>
                       </tr>
                     );
@@ -442,13 +559,15 @@ export default function SupplierCreditAccounts() {
   );
 }
 
-function CreditTable({ rows, drafts, savingKey, onDraft, onSave, idKey, draftKey, nameCol }) {
+function CreditTable({ rows, drafts, savingKey, onDraft, onSave, onSettle, idKey, draftKey, nameCol }) {
   return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 720 }}>
+    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
       <thead>
         <tr>
           <th style={th}>Customer</th>
           <th style={th}>Limit</th>
+          <th style={th}>Outstanding</th>
+          <th style={th}>Cycle due</th>
           <th style={th}>Used %</th>
           <th style={th}>Available</th>
           <th style={th} />
@@ -459,15 +578,18 @@ function CreditTable({ rows, drafts, savingKey, onDraft, onSave, idKey, draftKey
           const key = draftKey(row);
           const draft = drafts[key] || {};
           const pct = utilizationPct(row);
+          const settleKey = `settle-${key}`;
           return (
             <tr
               key={idKey(row)}
               style={
-                pct >= 99
+                row.cycleIsOverdue
                   ? { background: '#fef2f2' }
-                  : pct >= WARN_UTILIZATION * 100
-                    ? { background: '#fffbeb' }
-                    : {}
+                  : pct >= 99
+                    ? { background: '#fef2f2' }
+                    : pct >= WARN_UTILIZATION * 100
+                      ? { background: '#fffbeb' }
+                      : {}
               }
             >
               <td style={td}>{nameCol(row)}</td>
@@ -480,18 +602,42 @@ function CreditTable({ rows, drafts, savingKey, onDraft, onSave, idKey, draftKey
                   style={cellInput}
                 />
               </td>
+              <td style={td}>₹{Number(row.outstanding || 0).toLocaleString('en-IN')}</td>
+              <td style={td}>
+                {row.cycleDueAt ? (
+                  <span style={{ fontSize: '0.85rem', color: row.cycleIsOverdue ? '#b91c1c' : '#334155' }}>
+                    {new Date(row.cycleDueAt).toLocaleDateString('en-IN')}
+                    {row.cycleIsOverdue ? ' (overdue)' : ''}
+                  </span>
+                ) : (
+                  '—'
+                )}
+              </td>
               <td style={td}>{pct}%</td>
               <td style={td}>₹{Number(row.available || 0).toLocaleString('en-IN')}</td>
               <td style={td}>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  style={{ fontSize: '0.8rem' }}
-                  disabled={savingKey === key}
-                  onClick={() => onSave(row)}
-                >
-                  {savingKey === key ? '…' : 'Save'}
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ fontSize: '0.8rem' }}
+                    disabled={savingKey === key}
+                    onClick={() => onSave(row)}
+                  >
+                    {savingKey === key ? '…' : 'Save'}
+                  </button>
+                  {onSettle && Number(row.outstanding) > 0 ? (
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      style={{ fontSize: '0.75rem' }}
+                      disabled={savingKey === settleKey}
+                      onClick={() => onSettle(row)}
+                    >
+                      {savingKey === settleKey ? '…' : 'Settle cycle'}
+                    </button>
+                  ) : null}
+                </div>
               </td>
             </tr>
           );

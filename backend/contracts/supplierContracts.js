@@ -43,7 +43,8 @@ export const supplierUpstreamCartSaveSchema = z.object({
   selectedUpstreamOffer: z.record(z.string(), z.union([z.string(), z.number()])),
   suggestions: z.array(z.record(z.string(), z.any())).optional().default([]),
   brandFilter: z.string().optional().default(''),
-  searchTerm: z.string().optional().default('')
+  searchTerm: z.string().optional().default(''),
+  cartName: z.string().max(120).optional().default('')
 });
 
 export const supplierInventoryAdjustSchema = z.object({

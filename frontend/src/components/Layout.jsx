@@ -3,6 +3,7 @@ import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search, Paintbrush, Mic, CreditCard } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { normalizeUserType } from '../utils/userType';
+import { getApiUrl } from '../config/api';
 import {
   getServiceProviderThemePrefs,
   loadServiceProviderThemePrefsFromApi,
@@ -30,7 +31,7 @@ const routePrefetchers = {
   '/supplier-bcov': () => import('../pages/SupplierBCOV'),
   '/supplier-upstream': () => import('../pages/SupplierUpstream'),
   '/supplier-place-order': () => import('../pages/SupplierPlaceOrder'),
-  '/supplier-cart': () => import('../pages/Cart'),
+  '/supplier-cart': () => import('../pages/SupplierUpstreamCart'),
   '/supplier-pos': () => import('../pages/SupplierPOS'),
   '/supplier-returns': () => import('../pages/SupplierReturns'),
   '/supplier-select-yourself': () => import('../pages/SupplierSelectYourself'),
@@ -59,6 +60,7 @@ const idleHandleFallback = { id: null };
 const Layout = ({ user, onLogout, children }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [voiceNavTick, setVoiceNavTick] = useState(0);
+  const [supplierCartLineCount, setSupplierCartLineCount] = useState(0);
   const [serviceProviderThemePrefs, setServiceProviderThemePrefs] = useState(() => ({
     themeId: 'default',
     customImageDataUrl: ''
@@ -288,6 +290,41 @@ const Layout = ({ user, onLogout, children }) => {
     return () => window.removeEventListener('voice-guided-updated', onVoiceNav);
   }, []);
 
+  useEffect(() => {
+    if (userType !== 'supplier') return undefined;
+    let active = true;
+    const refreshSupplierCartCount = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          if (active) setSupplierCartLineCount(0);
+          return;
+        }
+        const response = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-cache'
+        });
+        const data = await response.json();
+        if (!active || !response.ok || data?.status !== 'success') return;
+        const selectedMine = data?.cart?.draft?.selectedMine;
+        const nextCount =
+          selectedMine && typeof selectedMine === 'object'
+            ? Object.keys(selectedMine).length
+            : 0;
+        setSupplierCartLineCount(nextCount);
+      } catch (_) {
+        if (active) setSupplierCartLineCount(0);
+      }
+    };
+
+    refreshSupplierCartCount();
+    window.addEventListener('supplier-upstream-cart-updated', refreshSupplierCartCount);
+    return () => {
+      active = false;
+      window.removeEventListener('supplier-upstream-cart-updated', refreshSupplierCartCount);
+    };
+  }, [userType, location.pathname]);
+
   const layoutThemeClass =
     userType === 'service_provider'
       ? 'layout--service-provider-theme'
@@ -340,6 +377,9 @@ const Layout = ({ user, onLogout, children }) => {
                 >
                   <Icon size={20} />
                   <span>{label}</span>
+                  {userType === 'supplier' && path === '/supplier-cart' && supplierCartLineCount > 0 ? (
+                    <span className="nav-step-badge">{supplierCartLineCount}</span>
+                  ) : null}
                 </NavLink>
               </div>
             );

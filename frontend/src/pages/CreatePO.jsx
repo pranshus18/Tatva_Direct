@@ -444,7 +444,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
 
   const payLaterOptionAvailable = useMemo(() => {
     if (!payLaterEligibility.length || !poGroups?.length) return false;
-    return payLaterEligibility.every((r) => r.payLaterOffered);
+    return payLaterEligibility.every((r) => r.allowed && r.payLaterOffered);
   }, [payLaterEligibility, poGroups]);
 
   useEffect(() => {
@@ -692,6 +692,12 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     }
 
     if (poPaymentMethod === 'credit') {
+      if (!payLaterOptionAvailable) {
+        alert(
+          'Pay later is not available for this order (credit limit, loan cycle, or pay-later minimum). Please choose online, COD, bank transfer, or card to continue.'
+        );
+        return;
+      }
       if (!paymentDetails.creditPeriod) {
         alert('Select a credit period for pay-later orders.');
         return;
@@ -959,7 +965,20 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           </p>
           {!payLaterOptionAvailable && poGroups?.length > 0 && !creditCheckLoading ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#b45309', maxWidth: '520px' }}>
-              Pay later is hidden until each vendor&apos;s minimum order amount is met and credit is configured for you.
+              Pay later is unavailable when net revenue is below the minimum, the loan cycle is overdue, or this
+              order would exceed the credit limit — but you can still place the order using{' '}
+              <strong>online, COD, bank transfer, or card</strong>.
+              {payLaterEligibility.some((r) => r.cycleIsOverdue && Number(r.outstanding || 0) > 0) ? (
+                <span style={{ display: 'block', marginTop: '0.25rem' }}>
+                  {payLaterEligibility
+                    .filter((r) => r.cycleIsOverdue && Number(r.outstanding || 0) > 0)
+                    .map((r) => {
+                      const vendor = poGroups.find((g) => String(g.vendorId) === String(r.supplierId));
+                      return `${vendor?.vendorName || 'Supplier'}: settle ₹${Number(r.outstanding || 0).toLocaleString('en-IN')} outstanding before pay later.`;
+                    })
+                    .join(' ')}
+                </span>
+              ) : null}
             </p>
           ) : null}
 
@@ -1074,14 +1093,16 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
               <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.8rem', color: '#475569' }}>
                 {creditChecks.map((row) => {
                   const vendor = poGroups.find((g) => String(g.vendorId) === String(row.supplierId));
-                  const prior = Number(row.priorSalesTotal ?? row.onlineOfflineSalesCombined ?? 0);
-                  const combined = Number(row.combinedSalesTotal ?? prior + (Number(vendor?.total) || 0));
+                  const orderTotal = Number(vendor?.total) || 0;
+                  const prior = Number(row.priorNetRevenue ?? row.priorSalesTotal ?? 0);
                   const min = Number(row.payLaterThreshold || 0);
                   return (
                     <li key={row.supplierId} style={{ marginBottom: '0.35rem' }}>
                       <strong>{vendor?.vendorName || 'Supplier'}:</strong>{' '}
                       {row.allowed
-                        ? `Pay later OK — combined sales ₹${combined.toLocaleString('en-IN')} (online+offline) meets ₹${min.toLocaleString('en-IN')} min. Credit ₹${Number(row.available || 0).toLocaleString('en-IN')} of ₹${Number(row.creditLimit || 0).toLocaleString('en-IN')}.`
+                        ? min > 0
+                          ? `Pay later OK — limit ₹${Number(row.creditLimit || 0).toLocaleString('en-IN')}, ₹${Number(row.outstanding || 0).toLocaleString('en-IN')} outstanding, up to ₹${Number(row.available ?? row.remainingCredit ?? 0).toLocaleString('en-IN')} for this order.`
+                          : `Pay later OK — limit ₹${Number(row.creditLimit || 0).toLocaleString('en-IN')}, up to ₹${Number(row.available ?? row.remainingCredit ?? 0).toLocaleString('en-IN')} for this order.`
                         : row.message}
                     </li>
                   );

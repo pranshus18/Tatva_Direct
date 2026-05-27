@@ -1,34 +1,128 @@
 import { supabase } from '../config/supabase.js';
 import { insertNotification } from '../repositories/notificationsRepository.js';
+import { buildOrderNetRevenueMap, fetchClosedReturnQuantityByOrderItem } from '../utils/netRevenue.js';
+import { recordLedgerEntry } from './ledgerService.js';
 import {
   buildCustomerIdentityKey,
-  getCombinedSalesTotalForCustomer,
   isCountableSalesOrder,
   normalizeCustomerName,
   normalizeCustomerPhone,
+  orderMatchesParty,
   resolvePartyDetails,
-  resolvePartyDetailsForCredit,
-  resolveSalesAggregateKey
+  resolvePartyDetailsForCredit
 } from './customerIdentityService.js';
+import {
+  computePayLaterOffered,
+  computePayLaterCycleLimitGate,
+  isPayLaterThresholdMet,
+  isPaidRecognizedOrder,
+  isRevenueRecognizedOrder,
+  roundMoney
+} from '../utils/salesMetrics.js';
+
+export { isPaidRecognizedOrder, isRevenueRecognizedOrder };
 
 const CREDIT_WARN_UTILIZATION = Number(process.env.CREDIT_WARN_UTILIZATION || 0.8);
 const CREDIT_ALERT_COOLDOWN_MS = Number(process.env.CREDIT_ALERT_COOLDOWN_MS || 24 * 60 * 60 * 1000);
 
-function roundMoney(n) {
-  return Math.round((Number(n) || 0) * 100) / 100;
-}
+export { isPayLaterThresholdMet };
 
-/**
- * Pay-later when combined prior sales (online + offline, same name & phone) plus this order meet minimum.
- */
-export function isPayLaterThresholdMet(orderAmount, paylaterThreshold, priorSalesTotal = 0) {
-  const requested = roundMoney(orderAmount);
-  const threshold = roundMoney(paylaterThreshold);
-  const prior = roundMoney(priorSalesTotal);
-  if (threshold <= 0) return false;
-  const combined = prior + requested;
-  if (combined <= 0) return false;
-  return combined + 0.009 >= threshold;
+/** Sum paid net revenue (after returns) for all orders belonging to this buyer/customer. */
+export async function getCombinedNetRevenueForCustomer({
+  supplierId,
+  customerName = null,
+  customerPhone = null,
+  buyerUserId = null,
+  customerId = null
+}) {
+  if (!supplierId) return 0;
+  if (!buyerUserId && !customerId && !customerName && !customerPhone) return 0;
+
+  const { data: orders, error } = await supabase
+    .from('orders')
+    .select('id, service_provider_id, customer_id, total_amount, status, payment_status')
+    .eq('supplier_id', supplierId);
+
+  if (error) {
+    console.error('[creditAccount] net revenue query error:', error);
+    return 0;
+  }
+
+  const ordersList = orders || [];
+  const recognizedOrders = ordersList.filter(isPaidRecognizedOrder);
+  const recognizedOrderIds = recognizedOrders.map((order) => order.id).filter(Boolean);
+  if (recognizedOrderIds.length === 0) return 0;
+
+  const userIds = [...new Set(ordersList.map((o) => o.service_provider_id).filter(Boolean))];
+  if (buyerUserId) userIds.push(buyerUserId);
+  const customerIds = [...new Set(ordersList.map((o) => o.customer_id).filter(Boolean))];
+  if (customerId) customerIds.push(customerId);
+
+  let usersById = new Map();
+  const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
+  if (uniqueUserIds.length > 0) {
+    const { data: users } = await supabase
+      .from('users')
+      .select('id, name, company, phone')
+      .in('id', uniqueUserIds);
+    usersById = new Map((users || []).map((u) => [u.id, u]));
+  }
+
+  let customersById = new Map();
+  const uniqueCustomerIds = [...new Set(customerIds.filter(Boolean))];
+  if (uniqueCustomerIds.length > 0) {
+    const { data: customers } = await supabase
+      .from('customers')
+      .select('id, name, phone')
+      .in('id', uniqueCustomerIds);
+    customersById = new Map((customers || []).map((c) => [c.id, c]));
+  }
+
+  let name = customerName;
+  let phone = customerPhone;
+  if (buyerUserId) {
+    const user = usersById.get(buyerUserId) || {};
+    name = name || user.name || user.company || null;
+    phone = phone || user.phone || null;
+  }
+  if (customerId) {
+    const customer = customersById.get(customerId) || {};
+    name = name || customer.name || null;
+    phone = phone || customer.phone || null;
+  }
+
+  const party = {
+    buyerUserId,
+    customerId,
+    linkedBuyerUserId: buyerUserId,
+    linkedCustomerId: customerId,
+    name,
+    phone
+  };
+
+  const { data: orderItems, error: itemsError } = await supabase
+    .from('order_items')
+    .select('id, order_id, quantity, unit_price, total_price')
+    .in('order_id', recognizedOrderIds);
+
+  if (itemsError) {
+    console.error('[creditAccount] net revenue items query error:', itemsError);
+    return 0;
+  }
+
+  const closedReturnedQtyByOrderItem = await fetchClosedReturnQuantityByOrderItem(
+    supabase,
+    recognizedOrderIds
+  );
+  const orderNetRevenueById = buildOrderNetRevenueMap(orderItems || [], closedReturnedQtyByOrderItem);
+
+  let total = 0;
+  for (const order of recognizedOrders) {
+    if (!orderMatchesParty(order, party, usersById, customersById)) continue;
+    total += orderNetRevenueById.get(order.id) || 0;
+  }
+
+  return roundMoney(total);
 }
 
 export { buildCustomerIdentityKey, normalizeCustomerName, normalizeCustomerPhone };
@@ -41,16 +135,16 @@ async function resolveCustomerIdsForPhone(phone) {
 }
 
 /**
- * Outstanding credit = sum of unpaid credit orders for this supplier + buyer/customer.
+ * Unpaid credit orders for a supplier + buyer/customer (loan-cycle outstanding).
  */
-export async function getOutstandingCredit({
+export async function getUnpaidCreditOrdersForParty({
   supplierId,
   buyerUserId = null,
   customerId = null,
   customerPhone = null,
   customerName = null
 }) {
-  if (!supplierId) return 0;
+  if (!supplierId) return [];
 
   const { name, phone } = await resolvePartyDetails({
     buyerUserId,
@@ -58,80 +152,113 @@ export async function getOutstandingCredit({
     customerName,
     customerPhone
   });
-  const identityKey = buildCustomerIdentityKey(name, phone);
 
   const { data: orders, error } = await supabase
     .from('orders')
-    .select('id, service_provider_id, customer_id, total_amount, status, payment_method, payment_status')
+    .select(
+      'id, order_number, service_provider_id, customer_id, total_amount, status, payment_method, payment_status, created_at'
+    )
     .eq('supplier_id', supplierId)
     .eq('payment_method', 'credit')
     .in('payment_status', ['pending', 'partial']);
 
   if (error) {
-    console.error('[creditAccount] outstanding query error:', error);
-    return 0;
+    console.error('[creditAccount] unpaid credit query error:', error);
+    return [];
   }
 
   const ordersList = orders || [];
-  if (ordersList.length === 0) return 0;
+  if (ordersList.length === 0) return [];
 
-  if (identityKey) {
-    const userIds = [...new Set(ordersList.map((o) => o.service_provider_id).filter(Boolean))];
-    const customerIds = [...new Set(ordersList.map((o) => o.customer_id).filter(Boolean))];
+  const userIds = [...new Set(ordersList.map((o) => o.service_provider_id).filter(Boolean))];
+  if (buyerUserId) userIds.push(buyerUserId);
+  const customerIds = [...new Set(ordersList.map((o) => o.customer_id).filter(Boolean))];
+  if (customerId) customerIds.push(customerId);
 
-    let usersById = new Map();
-    if (userIds.length > 0) {
-      const { data: users } = await supabase
-        .from('users')
-        .select('id, name, company, phone')
-        .in('id', userIds);
-      usersById = new Map((users || []).map((u) => [u.id, u]));
-    }
-
-    let customersById = new Map();
-    if (customerIds.length > 0) {
-      const { data: customers } = await supabase
-        .from('customers')
-        .select('id, name, phone')
-        .in('id', customerIds);
-      customersById = new Map((customers || []).map((c) => [c.id, c]));
-    }
-
-    let total = 0;
-    for (const order of ordersList) {
-      if (!isCountableSalesOrder(order)) continue;
-      const { identityKey: orderIdentity } = resolveSalesAggregateKey(order, usersById, customersById);
-      if (orderIdentity === identityKey) {
-        total += parseFloat(order.total_amount || 0) || 0;
-      }
-    }
-    return roundMoney(total);
+  let usersById = new Map();
+  const uniqueUserIds = [...new Set(userIds.filter(Boolean))];
+  if (uniqueUserIds.length > 0) {
+    const { data: users } = await supabase
+      .from('users')
+      .select('id, name, company, phone')
+      .in('id', uniqueUserIds);
+    usersById = new Map((users || []).map((u) => [u.id, u]));
   }
 
-  let q = supabase
-    .from('orders')
-    .select('total_amount')
-    .eq('supplier_id', supplierId)
-    .eq('payment_method', 'credit')
-    .in('payment_status', ['pending', 'partial']);
-
-  if (buyerUserId) {
-    q = q.eq('service_provider_id', buyerUserId);
-  } else {
-    const customerIds = new Set();
-    if (customerId) customerIds.add(customerId);
-    const phoneIds = await resolveCustomerIdsForPhone(customerPhone);
-    phoneIds.forEach((id) => customerIds.add(id));
-    if (customerIds.size === 0) return 0;
-    q = q.in('customer_id', [...customerIds]);
+  let customersById = new Map();
+  const uniqueCustomerIds = [...new Set(customerIds.filter(Boolean))];
+  if (uniqueCustomerIds.length > 0) {
+    const { data: customers } = await supabase
+      .from('customers')
+      .select('id, name, phone')
+      .in('id', uniqueCustomerIds);
+    customersById = new Map((customers || []).map((c) => [c.id, c]));
   }
 
-  const { data, error: legacyError } = await q;
-  if (legacyError) {
-    console.error('[creditAccount] outstanding query error:', legacyError);
-    return 0;
+  const party = {
+    buyerUserId,
+    customerId,
+    linkedBuyerUserId: buyerUserId,
+    linkedCustomerId: customerId,
+    name,
+    phone
+  };
+
+  return ordersList.filter(
+    (order) => isCountableSalesOrder(order) && orderMatchesParty(order, party, usersById, customersById)
+  );
+}
+
+/**
+ * Loan cycle: starts at first unpaid credit order; due = start + credit_period_days.
+ * Revenue/metrics recognize only after full cycle settlement (all orders marked paid).
+ */
+export function computeCreditCycleFromOrders(unpaidOrders = [], periodDays = 30) {
+  const period = Math.max(1, Math.floor(Number(periodDays) || 30));
+  const countable = (unpaidOrders || []).filter((order) => isCountableSalesOrder(order));
+  const outstanding = roundMoney(
+    countable.reduce((sum, order) => sum + (parseFloat(order.total_amount || 0) || 0), 0)
+  );
+
+  if (countable.length === 0) {
+    return {
+      outstanding: 0,
+      cycleStartedAt: null,
+      cycleDueAt: null,
+      isOverdue: false,
+      daysRemaining: period,
+      unpaidOrderCount: 0,
+      unpaidOrderIds: []
+    };
   }
-  return roundMoney((data || []).reduce((sum, row) => sum + parseFloat(row.total_amount || 0), 0));
+
+  const sorted = [...countable].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+  const cycleStartedAt = sorted[0].created_at;
+  const dueMs = new Date(cycleStartedAt).getTime() + period * 86400000;
+  const cycleDueAt = new Date(dueMs).toISOString();
+  const now = Date.now();
+  const isOverdue = outstanding > 0 && now > dueMs;
+  const daysRemaining = Math.max(0, Math.ceil((dueMs - now) / 86400000));
+
+  return {
+    outstanding,
+    cycleStartedAt,
+    cycleDueAt,
+    isOverdue,
+    daysRemaining,
+    unpaidOrderCount: countable.length,
+    unpaidOrderIds: countable.map((order) => order.id).filter(Boolean)
+  };
+}
+
+/**
+ * Outstanding credit = sum of unpaid credit orders for this supplier + buyer/customer.
+ */
+export async function getOutstandingCredit(params) {
+  const unpaid = await getUnpaidCreditOrdersForParty(params);
+  return computeCreditCycleFromOrders(unpaid).outstanding;
 }
 
 export async function findCreditAccount({
@@ -206,67 +333,110 @@ export async function buildCreditStatus({
   const payLaterThreshold = roundMoney(account?.paylater_threshold ?? 0);
   const enabled = account?.is_enabled !== false;
   const periodDays = Number(account?.credit_period_days) || 30;
-  const priorSalesTotal = await getCombinedSalesTotalForCustomer({
+  const priorNetRevenue = await getCombinedNetRevenueForCustomer({
     supplierId,
     customerName: name,
     customerPhone: phone,
     buyerUserId,
     customerId
   });
-  const outstanding = await getOutstandingCredit({
+  const unpaidOrders = await getUnpaidCreditOrdersForParty({
     supplierId,
     buyerUserId,
     customerId,
     customerPhone: phone || customerPhone,
     customerName: name
   });
-  const available = roundMoney(Math.max(0, limit - outstanding));
+  const cycle = computeCreditCycleFromOrders(unpaidOrders, periodDays);
+  const outstanding = cycle.outstanding;
   const requested = roundMoney(orderAmount);
-  const combinedSalesTotal = roundMoney(priorSalesTotal + requested);
-  const payLaterThresholdMet = isPayLaterThresholdMet(requested, payLaterThreshold, priorSalesTotal);
-  const payLaterOffered =
-    Boolean(account) &&
-    enabled &&
-    limit > 0 &&
-    payLaterThreshold > 0 &&
-    payLaterThresholdMet;
+  const projectedNetRevenue = roundMoney(priorNetRevenue + requested);
+  const hasCreditParty = Boolean(
+    normalizeCustomerPhone(phone || customerPhone)
+  );
+  let { payLaterOffered, payLaterThresholdMet, thresholdOptional } = computePayLaterOffered({
+    hasAccount: Boolean(account),
+    isEnabled: enabled,
+    creditLimit: limit,
+    paylaterThreshold: payLaterThreshold,
+    priorNetRevenue,
+    hasCreditParty,
+    buyerType: null
+  });
+  const { cycleBlocksPayLater, exceedsCreditLimit, remainingCredit } = computePayLaterCycleLimitGate({
+    cycleIsOverdue: cycle.isOverdue,
+    outstanding,
+    creditLimit: limit,
+    orderAmount: requested
+  });
+  const available = remainingCredit;
 
   let allowed = false;
   let message = '';
 
+  const formatDue = (iso) => {
+    if (!iso) return '';
+    try {
+      return new Date(iso).toLocaleDateString('en-IN');
+    } catch {
+      return '';
+    }
+  };
+
   if (!account) {
     message = 'No credit account configured for this buyer. Ask your supplier to set a credit limit.';
+    payLaterOffered = false;
   } else if (!enabled) {
     message = 'Credit on account is disabled for this buyer.';
+    payLaterOffered = false;
   } else if (limit <= 0) {
     message = 'Credit limit is zero. Update the limit before placing on-account orders.';
-  } else if (payLaterThreshold <= 0) {
+    payLaterOffered = false;
+  } else if (!thresholdOptional && !payLaterThresholdMet) {
+    message = `Pay later unlocks when net revenue reaches ₹${payLaterThreshold.toLocaleString('en-IN')}. Current net revenue: ₹${priorNetRevenue.toLocaleString('en-IN')}.`;
+    payLaterOffered = false;
+  } else if (!thresholdOptional && !hasCreditParty) {
     message =
-      'Pay later is not enabled until your supplier sets a minimum order amount on your account.';
-  } else if (!identityKey && payLaterThreshold > 0) {
-    message =
-      'Pay later needs the same customer name and phone on online orders and POS sales. Add phone to the buyer profile or enter both at POS.';
-  } else if (!payLaterThresholdMet) {
-    message = `Pay later when combined online + offline sales reach ₹${payLaterThreshold.toLocaleString('en-IN')}. Prior sales: ₹${priorSalesTotal.toLocaleString('en-IN')}${requested > 0 ? `, this order: ₹${requested.toLocaleString('en-IN')}, total: ₹${combinedSalesTotal.toLocaleString('en-IN')}` : ''}.`;
-  } else if (requested > 0 && outstanding + requested > limit + 0.009) {
-    message = `Credit limit exceeded. Available: ₹${available.toLocaleString('en-IN')}, requested: ₹${requested.toLocaleString('en-IN')}.`;
+      'Pay later mapping requires customer phone number. Add phone to buyer profile or enter phone at POS.';
+    payLaterOffered = false;
+  } else if (cycleBlocksPayLater) {
+    payLaterOffered = false;
+    message = `Loan cycle ended${cycle.cycleDueAt ? ` on ${formatDue(cycle.cycleDueAt)}` : ''}. Pay the full outstanding ₹${outstanding.toLocaleString('en-IN')} before using pay later. You can still pay by cash, UPI, card, or online.`;
+  } else if (exceedsCreditLimit) {
+    payLaterOffered = false;
+    message = `Credit limit is ₹${limit.toLocaleString('en-IN')}. Outstanding ₹${outstanding.toLocaleString('en-IN')} — you can use up to ₹${available.toLocaleString('en-IN')} more on pay later, but this order is ₹${requested.toLocaleString('en-IN')}. Choose another payment method to complete this order.`;
   } else if (payLaterOffered) {
     allowed = true;
-    message = `Pay later available. Combined sales ₹${combinedSalesTotal.toLocaleString('en-IN')} meet the ₹${payLaterThreshold.toLocaleString('en-IN')} minimum. Credit available: ₹${available.toLocaleString('en-IN')} of ₹${limit.toLocaleString('en-IN')}.`;
-  } else if (requested <= 0 && payLaterThreshold > 0) {
-    message = `Pay later when combined online + offline sales (same name & phone) reach ₹${payLaterThreshold.toLocaleString('en-IN')}. Prior sales: ₹${priorSalesTotal.toLocaleString('en-IN')}.`;
+    const cycleHint =
+      cycle.unpaidOrderCount > 0
+        ? ` Loan cycle due ${formatDue(cycle.cycleDueAt)} (${cycle.daysRemaining} day${cycle.daysRemaining === 1 ? '' : 's'} left).`
+        : ` New loan cycle: ${periodDays} days.`;
+    if (thresholdOptional) {
+      message = `Credit limit ₹${limit.toLocaleString('en-IN')}: ₹${outstanding.toLocaleString('en-IN')} outstanding, ₹${available.toLocaleString('en-IN')} remaining for this order.${cycleHint}`;
+    } else {
+      message = `Pay later available. Credit limit ₹${limit.toLocaleString('en-IN')}: ₹${outstanding.toLocaleString('en-IN')} outstanding, ₹${available.toLocaleString('en-IN')} remaining for this order.${cycleHint}`;
+    }
+  } else if (requested <= 0 && !thresholdOptional && payLaterThreshold > 0) {
+    message = `Pay later when net revenue reaches ₹${payLaterThreshold.toLocaleString('en-IN')}. Current net revenue: ₹${priorNetRevenue.toLocaleString('en-IN')}.`;
   } else {
     message = 'Pay later is not available for this order.';
+    payLaterOffered = false;
   }
+
+  allowed = payLaterOffered;
 
   return {
     allowed,
     payLaterOffered,
     payLaterThreshold,
     payLaterThresholdMet,
-    priorSalesTotal,
-    combinedSalesTotal,
-    onlineOfflineSalesCombined: priorSalesTotal,
+    thresholdOptional,
+    priorNetRevenue,
+    priorSalesTotal: priorNetRevenue,
+    projectedNetRevenue,
+    combinedNetRevenue: projectedNetRevenue,
+    combinedSalesTotal: projectedNetRevenue,
+    onlineOfflineSalesCombined: priorNetRevenue,
     identityKey: identityKey || null,
     message,
     account: account
@@ -282,20 +452,131 @@ export async function buildCreditStatus({
     creditLimit: limit,
     payLaterThreshold,
     payLaterThresholdMet,
-    priorSalesTotal,
-    combinedSalesTotal,
-    onlineOfflineSalesCombined: priorSalesTotal,
+    thresholdOptional,
+    priorNetRevenue,
+    priorSalesTotal: priorNetRevenue,
+    projectedNetRevenue,
+    combinedNetRevenue: projectedNetRevenue,
+    combinedSalesTotal: projectedNetRevenue,
+    onlineOfflineSalesCombined: priorNetRevenue,
     identityKey: identityKey || null,
     creditPeriodDays: periodDays,
     isEnabled: enabled,
     outstanding,
     available,
-    requestedAmount: requested
+    remainingCredit: available,
+    maxOrderAmount: available,
+    requestedAmount: requested,
+    cycleStartedAt: cycle.cycleStartedAt,
+    cycleDueAt: cycle.cycleDueAt,
+    cycleIsOverdue: cycle.isOverdue,
+    cycleDaysRemaining: cycle.daysRemaining,
+    unpaidOrderCount: cycle.unpaidOrderCount,
+    requiresFullSettlement: outstanding > 0
   };
 }
 
 export async function validateCreditForOrder(params) {
   return buildCreditStatus(params);
+}
+
+/**
+ * Settle the full loan cycle: mark all unpaid credit orders paid so revenue/metrics recognize.
+ */
+export async function settleCreditCycle({
+  supplierId,
+  buyerUserId = null,
+  customerId = null,
+  customerPhone = null,
+  customerName = null
+}) {
+  if (!supplierId) {
+    throw new Error('supplierId is required');
+  }
+
+  const unpaidOrders = await getUnpaidCreditOrdersForParty({
+    supplierId,
+    buyerUserId,
+    customerId,
+    customerPhone,
+    customerName
+  });
+
+  if (unpaidOrders.length === 0) {
+    const credit = await buildCreditStatus({
+      supplierId,
+      buyerUserId,
+      customerId,
+      customerPhone,
+      customerName,
+      orderAmount: 0
+    });
+    return {
+      settled: false,
+      settledAmount: 0,
+      settledOrderCount: 0,
+      message: 'No outstanding credit to settle.',
+      credit
+    };
+  }
+
+  const orderIds = unpaidOrders.map((order) => order.id).filter(Boolean);
+  const settledAmount = roundMoney(
+    unpaidOrders.reduce((sum, order) => sum + (parseFloat(order.total_amount || 0) || 0), 0)
+  );
+
+  const { error: updateError } = await supabase
+    .from('orders')
+    .update({
+      payment_status: 'paid',
+      updated_at: new Date().toISOString()
+    })
+    .in('id', orderIds)
+    .eq('supplier_id', supplierId);
+
+  if (updateError) {
+    throw updateError;
+  }
+
+  for (const order of unpaidOrders) {
+    const amount = parseFloat(order.total_amount || 0) || 0;
+    if (amount <= 0) continue;
+    try {
+      await recordLedgerEntry({
+        debitAccount: 'Cash/Bank',
+        creditAccount: 'Accounts Receivable',
+        amount,
+        referenceType: 'credit_cycle_settlement',
+        referenceId: order.id,
+        description: `Loan cycle settlement for order ${order.order_number || order.id}`,
+        metadata: {
+          supplierId,
+          buyerUserId: buyerUserId || null,
+          customerId: customerId || null,
+          customerPhone: normalizeCustomerPhone(customerPhone) || null
+        }
+      });
+    } catch (ledgerErr) {
+      console.error('[creditAccount] settlement ledger error (non-fatal):', ledgerErr);
+    }
+  }
+
+  const credit = await buildCreditStatus({
+    supplierId,
+    buyerUserId,
+    customerId,
+    customerPhone,
+    customerName,
+    orderAmount: 0
+  });
+
+  return {
+    settled: true,
+    settledAmount,
+    settledOrderCount: orderIds.length,
+    message: `Settled ₹${settledAmount.toLocaleString('en-IN')} across ${orderIds.length} credit order${orderIds.length === 1 ? '' : 's'}. Revenue and dashboard totals are updated.`,
+    credit
+  };
 }
 
 export async function listCreditAccountsForSupplier(supplierId) {
@@ -327,12 +608,15 @@ export async function listCreditAccountsForSupplier(supplierId) {
 
   const enriched = [];
   for (const account of accounts || []) {
-    const outstanding = await getOutstandingCredit({
+    const periodDays = Number(account.credit_period_days) || 30;
+    const unpaidOrders = await getUnpaidCreditOrdersForParty({
       supplierId,
       buyerUserId: account.buyer_user_id,
       customerId: account.customer_id,
       customerPhone: account.customer_phone
     });
+    const cycle = computeCreditCycleFromOrders(unpaidOrders, periodDays);
+    const outstanding = cycle.outstanding;
     const limit = roundMoney(account.credit_limit);
     const buyer = account.buyer_user_id ? buyersById.get(account.buyer_user_id) : null;
     const customer = account.customer_id ? customersById.get(account.customer_id) : null;
@@ -344,11 +628,16 @@ export async function listCreditAccountsForSupplier(supplierId) {
       customerPhone: account.customer_phone,
       creditLimit: limit,
       payLaterThreshold: roundMoney(account.paylater_threshold ?? 0),
-      creditPeriodDays: Number(account.credit_period_days) || 30,
+      creditPeriodDays: periodDays,
       isEnabled: account.is_enabled !== false,
       notes: account.notes || null,
       outstanding,
       available: roundMoney(Math.max(0, limit - outstanding)),
+      cycleStartedAt: cycle.cycleStartedAt,
+      cycleDueAt: cycle.cycleDueAt,
+      cycleIsOverdue: cycle.isOverdue,
+      cycleDaysRemaining: cycle.daysRemaining,
+      unpaidOrderCount: cycle.unpaidOrderCount,
       partyName:
         buyer?.name ||
         buyer?.company ||

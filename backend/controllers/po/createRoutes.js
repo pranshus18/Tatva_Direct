@@ -335,10 +335,10 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           buyerUserId: req.userId,
           orderAmount: totalAmount
         });
-        if (!creditCheck.allowed) {
+        if (!creditCheck.payLaterOffered || !creditCheck.allowed) {
           return res.status(400).json({
             status: 'error',
-            message: `Credit not available for "${group.vendorName}": ${creditCheck.message}`,
+            message: `Pay later not available for "${group.vendorName}": ${creditCheck.message} Use online, COD, bank transfer, or card to place this order.`,
             credit: creditCheck
           });
         }

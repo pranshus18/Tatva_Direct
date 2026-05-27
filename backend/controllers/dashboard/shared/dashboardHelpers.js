@@ -76,11 +76,7 @@ export function normalizeUserAddress(address = {}, profile = {}) {
   };
 }
 
-export function isRevenueRecognizedOrder(order) {
-  const paymentStatus = String(order?.payment_status || '').toLowerCase();
-  const status = String(order?.status || '').toLowerCase();
-  return paymentStatus === 'paid' && status !== 'cancelled' && status !== 'returned';
-}
+export { isRevenueRecognizedOrder } from '../../../utils/salesMetrics.js';
 
 export async function restockInventoryForCancelledOrder({ orderId, actorUserId }) {
   if (!orderId) return { ok: false, reason: 'missing_order_id' };

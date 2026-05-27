@@ -2,9 +2,14 @@ import {
   buildCreditStatus,
   listCreditAccountsForSupplier,
   maybeNotifySupplierCreditAlert,
+  settleCreditCycle,
   upsertCreditAccount
 } from '../../services/creditAccountService.js';
-import { creditAccountUpsertSchema, creditCheckQuerySchema } from '../../contracts/creditContracts.js';
+import {
+  creditAccountUpsertSchema,
+  creditCheckQuerySchema,
+  creditSettleSchema
+} from '../../contracts/creditContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 import { supabase } from '../../config/supabase.js';
 
@@ -93,6 +98,26 @@ export function registerSupplierCreditRoutes(ctx) {
       }
       console.error('[Supplier Credit] upsert error:', e);
       return res.status(500).json({ status: 'error', message: e.message || 'Failed to save credit account' });
+    }
+  });
+
+  router.post('/credit-accounts/settle', authenticateToken, async (req, res) => {
+    try {
+      const payload = parseWithSchema(creditSettleSchema, req.body || {});
+      const result = await settleCreditCycle({
+        supplierId: req.userId,
+        buyerUserId: payload.buyerUserId || null,
+        customerId: payload.customerId || null,
+        customerPhone: payload.customerPhone || null,
+        customerName: payload.customerName || null
+      });
+      return res.json({ status: 'success', ...result });
+    } catch (e) {
+      if (String(e?.name || '') === 'ZodError') {
+        return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+      }
+      console.error('[Supplier Credit] settle error:', e);
+      return res.status(500).json({ status: 'error', message: e.message || 'Failed to settle credit cycle' });
     }
   });
 }

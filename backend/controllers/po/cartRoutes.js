@@ -243,6 +243,70 @@ router.patch('/cart/items/:itemId/quantity', authenticateToken, isServiceProvide
   }
 });
 
+router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const groupId = String(req.params?.groupId || '').trim();
+    const nextName = String(req.body?.boqName || '').trim();
+    if (!groupId) {
+      return res.status(400).json({ status: 'error', message: 'Cart group id is required' });
+    }
+    if (!nextName) {
+      return res.status(400).json({ status: 'error', message: 'Project name is required' });
+    }
+    if (nextName.length > 120) {
+      return res.status(400).json({ status: 'error', message: 'Project name must be 120 characters or fewer' });
+    }
+
+    const { data: cart, error: cartError } = await supabase
+      .from('po_carts')
+      .select('id, draft_payload')
+      .eq('service_provider_id', req.userId)
+      .maybeSingle();
+    if (cartError) throw cartError;
+    if (!cart) {
+      return res.status(404).json({ status: 'error', message: 'Saved cart not found' });
+    }
+
+    const currentDraft = normalizePoCartDraft(
+      cart.draft_payload && typeof cart.draft_payload === 'object' ? cart.draft_payload : {}
+    );
+    const groups = Array.isArray(currentDraft.boqGroups) ? [...currentDraft.boqGroups] : [];
+    let found = false;
+    const nextGroups = groups.map((group) => {
+      if (String(group?.groupId || '') !== groupId) return group;
+      found = true;
+      return { ...group, boqName: nextName };
+    });
+    if (!found) {
+      return res.status(404).json({ status: 'error', message: 'Cart group not found' });
+    }
+
+    const nextDraftPayload = normalizePoCartDraft({
+      ...currentDraft,
+      boqGroups: nextGroups
+    });
+
+    const { error: updateError } = await supabase
+      .from('po_carts')
+      .update({ draft_payload: nextDraftPayload })
+      .eq('id', cart.id)
+      .eq('service_provider_id', req.userId);
+    if (updateError) throw updateError;
+
+    return res.json({
+      status: 'success',
+      message: 'Project name updated',
+      group: {
+        groupId,
+        boqName: nextName
+      }
+    });
+  } catch (error) {
+    console.error('Update PO cart project name error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to update project name' });
+  }
+});
+
 router.delete('/cart', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const { error } = await supabase

@@ -34,3 +34,15 @@ export const poCreditCheckBodySchema = z.object({
     )
     .min(1)
 });
+
+export const creditSettleSchema = z
+  .object({
+    buyerUserId: z.string().uuid().optional().nullable(),
+    customerId: z.string().uuid().optional().nullable(),
+    customerPhone: z.string().max(20).optional().nullable(),
+    customerName: z.string().max(200).optional().nullable()
+  })
+  .refine(
+    (v) => Boolean(v.buyerUserId || v.customerId || String(v.customerPhone || '').trim()),
+    { message: 'buyerUserId, customerId, or customerPhone is required' }
+  );

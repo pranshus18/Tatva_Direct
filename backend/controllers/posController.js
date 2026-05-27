@@ -364,13 +364,14 @@ router.post('/offline-order', authenticateToken, async (req, res) => {
     let paymentDueAt = null;
     let creditPeriodDays = null;
 
+    if (!trimmedPhone) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Customer phone is required for offline POS sales.'
+      });
+    }
+
     if (isCreditPayment) {
-      if (!trimmedPhone && !customerId) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Customer phone is required for credit (pay later) sales.'
-        });
-      }
       if (!trimmedName) {
         return res.status(400).json({
           status: 'error',
@@ -384,16 +385,18 @@ router.post('/offline-order', authenticateToken, async (req, res) => {
         customerPhone: trimmedPhone,
         orderAmount: totalAmount
       });
-      if (!creditCheck.allowed) {
+      if (!creditCheck.payLaterOffered || !creditCheck.allowed) {
         return res.status(400).json({
           status: 'error',
-          message: creditCheck.message,
+          message: `${creditCheck.message} Use cash, UPI, card, or bank transfer instead.`,
           credit: creditCheck
         });
       }
       paymentStatus = 'pending';
       creditPeriodDays = creditCheck.creditPeriodDays || 30;
-      paymentDueAt = new Date(Date.now() + Number(creditPeriodDays) * 86400000).toISOString();
+      paymentDueAt =
+        creditCheck.cycleDueAt ||
+        new Date(Date.now() + Number(creditPeriodDays) * 86400000).toISOString();
     } else if (paymentMethod !== 'credit') {
       paymentStatus = payment?.status || 'paid';
     }

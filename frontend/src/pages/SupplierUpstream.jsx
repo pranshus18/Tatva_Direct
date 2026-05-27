@@ -23,6 +23,7 @@ import ProductImageCarousel from '../components/ProductImageCarousel';
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
+const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
 
 /** Display names for each supply-chain tier (must match backend role keys). */
 const SELLER_LAYER_LABELS = {
@@ -66,6 +67,7 @@ const SupplierUpstream = ({ user }) => {
 
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState(null);
+  const [cartName, setCartName] = useState('');
   /** From API: rankPriority, limit — sort order for upstream options */
   const [suggestionMeta, setSuggestionMeta] = useState(null);
 
@@ -74,6 +76,7 @@ const SupplierUpstream = ({ user }) => {
 
   const [creating, setCreating] = useState(false);
   const [savingCart, setSavingCart] = useState(false);
+  const [addingCartByMineId, setAddingCartByMineId] = useState({});
   const [createdOrders, setCreatedOrders] = useState([]);
 
   const [supplierDetailsOpen, setSupplierDetailsOpen] = useState(false);
@@ -172,6 +175,7 @@ const SupplierUpstream = ({ user }) => {
         }
         if (typeof draft.brandFilter === 'string') setBrandFilter(draft.brandFilter);
         if (typeof draft.searchTerm === 'string') setSearchTerm(draft.searchTerm);
+        if (typeof draft.cartName === 'string') setCartName(draft.cartName);
       }
 
       // Cart resume is one-time; order draft is resumable until Place Order succeeds.
@@ -345,39 +349,90 @@ const SupplierUpstream = ({ user }) => {
       alert('Select at least one item before saving cart.');
       return;
     }
-    setSavingCart(true);
-    try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          selectedMine,
-          selectedUpstreamOffer,
-          suggestions: Array.isArray(suggestions) ? suggestions : [],
-          brandFilter,
-          searchTerm
-        })
-      });
-      const data = await res.json();
-      if (!res.ok || data.status !== 'success') {
-        alert(data.message || 'Failed to save upstream cart');
-        return;
-      }
+    const ok = await persistUpstreamCartDraft({
+      selectedMine,
+      selectedUpstreamOffer,
+      suggestions: Array.isArray(suggestions) ? suggestions : [],
+      brandFilter,
+      searchTerm,
+      cartName
+    });
+    if (ok) {
       setSelectedMine({});
       setSelectedUpstreamOffer({});
       setSuggestions(null);
       setSuggestionMeta(null);
       setBrandFilter('');
       setSearchTerm('');
+      emitSupplierCartUpdated();
       alert('Upstream cart saved successfully.');
       navigate('/supplier-cart');
-    } catch (e) {
-      console.error('Save upstream cart error:', e);
-      alert('Failed to save upstream cart.');
-    } finally {
-      setSavingCart(false);
     }
+  };
+
+  const persistUpstreamCartDraft = async (nextDraft, options = {}) => {
+    const silent = options.silent === true;
+    if (!silent) setSavingCart(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(nextDraft)
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to save upstream cart');
+      }
+      return true;
+    } catch (e) {
+      if (!silent) {
+        alert(e?.message || 'Failed to save upstream cart');
+      }
+      return false;
+    } finally {
+      if (!silent) setSavingCart(false);
+    }
+  };
+
+  const handleAddSingleProductToCart = async (product) => {
+    const mineId = product?.supplier_product_id;
+    if (!mineId) return;
+    const minQty = Math.max(1, parseInt(product?.min_order_quantity || 1, 10) || 1);
+    const nextQty = selectedMine?.[mineId] ? Number(selectedMine[mineId]) || minQty : minQty;
+
+    setAddingCartByMineId((prev) => ({ ...prev, [mineId]: true }));
+    let ok = false;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(getApiUrl('/api/supplier/upstream/cart/items'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          mineSupplierProductId: mineId,
+          quantity: nextQty
+        })
+      });
+      const data = await res.json();
+      ok = res.ok && data.status === 'success';
+    } catch (e) {
+      ok = false;
+    }
+    setAddingCartByMineId((prev) => {
+      const { [mineId]: _removed, ...rest } = prev;
+      return rest;
+    });
+    if (!ok) {
+      alert('Failed to add this product to cart.');
+      return;
+    }
+
+    setSelectedMine((prev) => ({
+      ...(prev || {}),
+      [mineId]: nextQty
+    }));
+    emitSupplierCartUpdated();
+    alert('Product added to cart.');
   };
 
   const fetchOrderDetails = async (orderNumberOrId) => {
@@ -573,6 +628,7 @@ const SupplierUpstream = ({ user }) => {
               filteredProducts.map((p) => {
                 const mineId = p.supplier_product_id;
                 const isSelected = !!selectedMine[mineId];
+                const isAddingToCart = !!addingCartByMineId[mineId];
 
                 return (
                   <div
@@ -621,9 +677,27 @@ const SupplierUpstream = ({ user }) => {
                             }}
                             style={{ width: 110, padding: '0.45rem 0.6rem', borderRadius: 8, border: '1px solid #e5e7eb' }}
                           />
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => handleAddSingleProductToCart(p)}
+                            disabled={isAddingToCart}
+                          >
+                            {isAddingToCart ? 'Adding...' : 'Add to Cart'}
+                          </button>
                         </div>
                       ) : (
-                        <div style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Select to order upstream</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
+                          <div style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Select to order upstream</div>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => handleAddSingleProductToCart(p)}
+                            disabled={isAddingToCart}
+                          >
+                            {isAddingToCart ? 'Adding...' : 'Add to Cart'}
+                          </button>
+                        </div>
                       )}
                     </div>
                   </div>

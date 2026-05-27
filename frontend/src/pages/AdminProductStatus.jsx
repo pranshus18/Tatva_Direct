@@ -680,6 +680,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
   const [editedProduct, setEditedProduct] = useState({
     name: product?.name || '',
     category: product?.category || '',
+    gtin: product?.gtin || '',
     price: product?.price || '',
     unit: product?.unit || '',
     stock: product?.stock || '',
@@ -705,6 +706,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     setEditedProduct({
       name: product?.name || '',
       category: product?.category || '',
+      gtin: product?.gtin || '',
       price: product?.price || '',
       unit: product?.unit || '',
       stock: product?.stock || '',
@@ -1092,6 +1094,22 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 />
               ) : (
                 <span>{product.category || 'N/A'}</span>
+              )}
+            </div>
+            <div className="detail-item">
+              <label>GTIN / UPC / EAN</label>
+              {isEditing ? (
+                <input
+                  type="text"
+                  value={editedProduct.gtin || ''}
+                  onChange={(e) => setEditedProduct({ ...editedProduct, gtin: e.target.value.replace(/\s+/g, '') })}
+                  placeholder="8/12/13/14 digit code"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%' }}
+                />
+              ) : (
+                <span>{product.gtin || 'N/A'}</span>
               )}
             </div>
             <div className="detail-item">

@@ -8,6 +8,7 @@ import {
   Mail,
   MessageCircle,
   Package,
+  Pencil,
   RefreshCw,
   Share2,
   ShoppingCart,
@@ -37,6 +38,9 @@ const Cart = ({ onLoadCart }) => {
   const [sharingCart, setSharingCart] = useState(false);
   const [shareLink, setShareLink] = useState('');
   const [copyingShareLink, setCopyingShareLink] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState('');
+  const [draftGroupNames, setDraftGroupNames] = useState({});
+  const [busyByGroupId, setBusyByGroupId] = useState({});
 
   const token = localStorage.getItem('token');
   const cartRef = useRef(null);
@@ -78,6 +82,19 @@ const Cart = ({ onLoadCart }) => {
       ? draft.items.map((it) => (String(it?.id) === id ? { ...it, quantity: qty } : it))
       : draft.items;
     return { ...draft, items: nextFlat };
+  };
+
+  const mergeGroupNameIntoDraft = (draft, groupId, nextName) => {
+    if (!draft || typeof draft !== 'object') return draft;
+    const normalizedGroupId = String(groupId || '').trim();
+    if (!normalizedGroupId) return draft;
+    const groups = Array.isArray(draft.boqGroups) ? [...draft.boqGroups] : [];
+    const nextGroups = groups.map((group) =>
+      String(group?.groupId || '') === normalizedGroupId
+        ? { ...group, boqName: nextName }
+        : group
+    );
+    return { ...draft, boqGroups: nextGroups };
   };
 
   /**
@@ -187,6 +204,60 @@ const Cart = ({ onLoadCart }) => {
     } finally {
       setBusyByItemId((prev) => {
         const { [normalizedItemId]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
+  };
+
+  const updateProjectName = async (groupId, nextNameInput) => {
+    if (!token) {
+      setError('Please log in again to update project name.');
+      return;
+    }
+    const normalizedGroupId = String(groupId || '').trim();
+    const nextName = String(nextNameInput || '').trim();
+    if (!normalizedGroupId) return;
+    if (!nextName) {
+      setError('Project name cannot be empty.');
+      return;
+    }
+
+    setBusyByGroupId((prev) => ({ ...prev, [normalizedGroupId]: true }));
+    setError('');
+    try {
+      const response = await fetch(
+        getApiUrl(`/api/po/cart/groups/${encodeURIComponent(normalizedGroupId)}/name`),
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ boqName: nextName })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to update project name');
+      }
+
+      const prev = cartRef.current;
+      if (prev?.draft) {
+        const nextDraft = mergeGroupNameIntoDraft(prev.draft, normalizedGroupId, nextName);
+        setCart({ ...prev, draft: nextDraft });
+        if (typeof onLoadCart === 'function') {
+          onLoadCart(nextDraft);
+        }
+      } else {
+        await loadCart({ silent: true, syncWorkflow: true });
+      }
+      setEditingGroupId('');
+      setDraftGroupNames((prev) => ({ ...prev, [normalizedGroupId]: nextName }));
+    } catch (e) {
+      setError(e.message || 'Failed to update project name');
+    } finally {
+      setBusyByGroupId((prev) => {
+        const { [normalizedGroupId]: _removed, ...rest } = prev;
         return rest;
       });
     }
@@ -436,7 +507,72 @@ const Cart = ({ onLoadCart }) => {
                   <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 border-b bg-muted/30 pb-4">
                     <div>
                       <CardTitle className="text-base">
-                        {String(group?.boqName || `BOQ group ${groupIndex + 1}`)}
+                        {editingGroupId === String(group?.groupId || '') ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              className="h-9 min-w-[220px] rounded-md border bg-background px-2 text-sm"
+                              maxLength={120}
+                              value={
+                                draftGroupNames[String(group?.groupId || '')] ??
+                                String(group?.boqName || '')
+                              }
+                              onChange={(e) =>
+                                setDraftGroupNames((prev) => ({
+                                  ...prev,
+                                  [String(group?.groupId || '')]: e.target.value
+                                }))
+                              }
+                            />
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              disabled={Boolean(busyByGroupId[String(group?.groupId || '')])}
+                              onClick={() =>
+                                updateProjectName(
+                                  String(group?.groupId || ''),
+                                  draftGroupNames[String(group?.groupId || '')] ??
+                                    String(group?.boqName || '')
+                                )
+                              }
+                            >
+                              <Check className="h-4 w-4" />
+                              Save
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => {
+                                setEditingGroupId('');
+                                setDraftGroupNames((prev) => ({
+                                  ...prev,
+                                  [String(group?.groupId || '')]: String(group?.boqName || '')
+                                }));
+                              }}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-2">
+                            {String(group?.boqName || `BOQ group ${groupIndex + 1}`)}
+                            <button
+                              type="button"
+                              className="inline-flex items-center text-muted-foreground hover:text-foreground"
+                              onClick={() => {
+                                const gid = String(group?.groupId || '');
+                                setEditingGroupId(gid);
+                                setDraftGroupNames((prev) => ({
+                                  ...prev,
+                                  [gid]: String(group?.boqName || '')
+                                }));
+                              }}
+                              aria-label="Edit project name"
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                          </span>
+                        )}
                       </CardTitle>
                       {group?.boqProject?.name ? (
                         <p className="mt-1 text-sm text-muted-foreground">

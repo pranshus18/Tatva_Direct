@@ -20,6 +20,7 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
   const [editedProduct, setEditedProduct] = useState({
     ...product,
     hsnCode: product?.hsnCode || product?.hsn_code || '',
+    gtin: product?.gtin || '',
     igst_rate: product?.igst_rate != null ? String(product.igst_rate) : '',
     cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
     sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : ''
@@ -177,6 +178,7 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
   };
 
   const currentProduct = isEditing ? editedProduct : product;
+  const gtinValue = currentProduct?.gtin || '';
   
   const productSchema = {
     "@context": "https://schema.org/",
@@ -295,6 +297,24 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
           <div className="detail-cards-grid">
             {isEditing ? (
               <>
+                <div className="detail-card-editable">
+                  <div className="detail-icon" style={{ background: '#7c3aed15' }}>
+                    <Tag size={20} color="#7c3aed" />
+                  </div>
+                  <div className="detail-content-editable">
+                    <label>GTIN / UPC / EAN</label>
+                    <input
+                      type="text"
+                      value={editedProduct.gtin || ''}
+                      onChange={(e) => setEditedProduct({ ...editedProduct, gtin: e.target.value.replace(/\s+/g, '') })}
+                      className="detail-input"
+                      placeholder="8/12/13/14 digit code"
+                      inputMode="numeric"
+                      autoComplete="off"
+                    />
+                    <span className="detail-subtitle">Product identifier</span>
+                  </div>
+                </div>
                 <div className="detail-card-editable">
                   <div className="detail-icon" style={{ background: '#05966915' }}>
                     <DollarSign size={20} color="#059669" />
@@ -436,6 +456,17 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
                     <span className="detail-label">SKU</span>
                     <span className="detail-value">PROD-{String(currentProduct.id || currentProduct._id || '000000').padStart(6, '0')}</span>
                     <span className="detail-subtitle">Product Code</span>
+                  </div>
+                </div>
+
+                <div className="detail-card">
+                  <div className="detail-icon" style={{ background: '#7c3aed15' }}>
+                    <Tag size={20} color="#7c3aed" />
+                  </div>
+                  <div className="detail-content">
+                    <span className="detail-label">GTIN / UPC / EAN</span>
+                    <span className="detail-value">{gtinValue || 'N/A'}</span>
+                    <span className="detail-subtitle">Product identifier</span>
                   </div>
                 </div>
                 <div className="detail-card">

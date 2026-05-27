@@ -321,7 +321,7 @@ const SupplierPOS = () => {
   };
 
   const totalAmount = cartItems.reduce((sum, item) => sum + (parseFloat(item.total_price) || 0), 0);
-  const payLaterAvailable = Boolean(creditInfo?.payLaterOffered);
+  const payLaterAvailable = Boolean(creditInfo?.allowed && creditInfo?.payLaterOffered);
 
   useEffect(() => {
     if (paymentMethod === 'credit' && !payLaterAvailable) {
@@ -388,8 +388,8 @@ const SupplierPOS = () => {
         (method === 'credit'
           ? { method: 'credit', status: 'pending', reference: null }
           : { method: 'cash', status: 'paid' });
-      if (method === 'credit' && !(customerPhone || '').trim()) {
-        setError('Customer phone is required for credit (pay later) sales.');
+      if (!(customerPhone || '').trim()) {
+        setError('Customer phone is required for offline POS sales.');
         return;
       }
       if (method === 'credit' && !(customerName || '').trim()) {
@@ -397,7 +397,9 @@ const SupplierPOS = () => {
         return;
       }
       if (method === 'credit' && creditInfo && !creditInfo.allowed) {
-        setError(creditInfo.message || 'Credit limit exceeded for this customer.');
+        setError(
+          `${creditInfo.message || 'Pay later is not available.'} Use cash, UPI, card, or bank transfer instead.`
+        );
         return;
       }
       const payload = {
@@ -465,8 +467,8 @@ const SupplierPOS = () => {
           (method === 'credit'
             ? { method: 'credit', status: 'pending', reference: null }
             : { method: 'cash', status: 'paid' });
-        if (method === 'credit' && !(customerPhone || '').trim()) {
-          setError('Customer phone is required for credit (pay later) sales.');
+        if (!(customerPhone || '').trim()) {
+          setError('Customer phone is required for offline POS sales.');
           return;
         }
         if (!trimmedName) {
@@ -536,16 +538,16 @@ const SupplierPOS = () => {
       setError('Enter customer name before payment.');
       return;
     }
-    if (method === 'credit' && !(customerPhone || '').trim()) {
-      setError('Phone number is required for credit sales.');
+    if (!(customerPhone || '').trim()) {
+      setError('Enter customer phone before payment.');
       return;
     }
     if (method === 'credit' && !(customerName || '').trim()) {
       setError('Customer name is required for credit sales.');
       return;
     }
-    if (method === 'credit' && creditInfo && !creditInfo.payLaterOffered) {
-      setError(creditInfo.message || 'Pay later is not available for this order amount.');
+    if (method === 'credit' && creditInfo && !payLaterAvailable) {
+      setError(creditInfo.message || 'Pay later is not available for this order.');
       return;
     }
     setPaymentReference('');
@@ -836,13 +838,13 @@ const SupplierPOS = () => {
                   />
                 </div>
                 <div>
-                  <label htmlFor="pos-customer-phone">Phone (required for pay later)</label>
+                  <label htmlFor="pos-customer-phone">Phone (required)</label>
                   <input
                     id="pos-customer-phone"
                     type="tel"
                     value={customerPhone}
                     onChange={(e) => setCustomerPhone(e.target.value)}
-                    placeholder="Required only for credit"
+                    placeholder="Required for checkout"
                     autoComplete="tel"
                   />
                 </div>
@@ -856,10 +858,15 @@ const SupplierPOS = () => {
                 >
                   {creditLoading
                     ? 'Checking pay later…'
-                    : creditInfo?.message || (
+                    : payLaterAvailable
+                      ? creditInfo?.message
+                      : creditInfo?.message
+                        ? `${creditInfo.message} Cash, UPI, and card checkout are still available.`
+                        : (
                         <>
-                          No credit account.{' '}
+                          Pay later not set up.{' '}
                           <Link to="/supplier-credit-accounts">Set limit & minimum</Link>
+                          {' '}— use cash, UPI, or card to checkout.
                         </>
                       )}
                 </p>
@@ -1092,8 +1099,17 @@ const SupplierPOS = () => {
                       'Set this customer’s credit limit before pay-later checkout.'}
                   {creditInfo?.account ? (
                     <span className="mt-1 block text-xs opacity-90">
-                      Terms: {creditInfo.creditPeriodDays} days · Outstanding:{' '}
-                      {formatInr(creditInfo.outstanding)}
+                      Loan cycle: {creditInfo.creditPeriodDays} days · Limit:{' '}
+                      {formatInr(creditInfo.creditLimit)} · Outstanding:{' '}
+                      {formatInr(creditInfo.outstanding)} · Remaining for this order:{' '}
+                      {formatInr(creditInfo.available ?? creditInfo.remainingCredit)}
+                      {creditInfo.cycleDueAt ? (
+                        <>
+                          {' '}
+                          · Due {new Date(creditInfo.cycleDueAt).toLocaleDateString('en-IN')}
+                          {creditInfo.cycleIsOverdue ? ' (overdue — settle full amount)' : ''}
+                        </>
+                      ) : null}
                     </span>
                   ) : null}
                 </AlertDescription>

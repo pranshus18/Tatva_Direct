@@ -62,16 +62,22 @@ export default function SupplierBuyerPurchases() {
     if (buyer.buyerId === 'walk_in' || buyer.buyerType === 'walk_in') return;
     const raw = thresholdDrafts[buyer.buyerId];
     const threshold = Number(raw);
-    if (!Number.isFinite(threshold) || threshold <= 0) {
-      alert(
-        'Pay-later minimum must be greater than ₹0. Pay later only appears when the order total reaches this amount.'
-      );
+    if (!Number.isFinite(threshold) || threshold < 0) {
+      alert('Enter a valid pay-later minimum (₹0 or more).');
       return;
     }
     const buyerUserId = buyer.linkedBuyerUserId || null;
     const customerId = buyer.linkedCustomerId || null;
-    if (!buyerUserId && !customerId) {
-      alert('Cannot set pay-later threshold for this row.');
+    const customerPhone = buyer.phone || null;
+    if (!buyerUserId && !customerId && !customerPhone) {
+      alert('Cannot set pay-later threshold for this buyer — link a user profile or phone first.');
+      return;
+    }
+    const creditLimit = Number(buyer.creditLimit || 0);
+    if (threshold > 0 && creditLimit <= 0) {
+      alert(
+        'Set a credit limit (₹) for this buyer on Credit on account first, then set the pay-later minimum.'
+      );
       return;
     }
     try {
@@ -86,9 +92,10 @@ export default function SupplierBuyerPurchases() {
         body: JSON.stringify({
           buyerUserId,
           customerId,
-          creditLimit: Number(buyer.creditLimit || 0),
+          customerPhone,
+          creditLimit,
           paylaterThreshold: threshold,
-          creditPeriodDays: 30,
+          creditPeriodDays: buyer.creditPeriodDays || 30,
           isEnabled: true
         })
       });
@@ -135,10 +142,12 @@ export default function SupplierBuyerPurchases() {
       <div className="profile-content">
         <div className="profile-section">
           <p style={{ color: '#64748b', fontSize: '0.92rem', marginTop: 0, marginBottom: '0.75rem' }}>
-            Net revenue includes paid online (platform) and offline (POS) sales per buyer. Set{' '}
-            <strong>Pay-later minimum</strong> per customer (must be &gt; ₹0): online and offline sales are
-            added only when <strong>name and phone both match</strong>. Pay later appears as a payment method
-            after combined sales (plus the current order) reach that minimum. Also set credit limits on{' '}
+            Gross sales are order totals (online + offline) excluding cancelled/returned orders. Period
+            columns follow your date filter; all-time columns include every matching order. Net revenue
+            is paid sales after returns. Set{' '}
+            <strong>Pay-later minimum</strong> per customer: pay later unlocks once{' '}
+            <strong>all-time net revenue</strong> (paid sales after returns) reaches that amount and a credit
+            limit is configured. Manage limits on{' '}
             <Link to="/supplier-credit-accounts">Credit on account</Link>.
           </p>
           <div className="supplier-summary-grid">
@@ -151,25 +160,45 @@ export default function SupplierBuyerPurchases() {
               <p className="supplier-summary-value">{data.summary?.totalOrders ?? 0}</p>
             </div>
             <div className="supplier-summary-card">
-              <p className="supplier-summary-label">Total order value</p>
+              <p className="supplier-summary-label">
+                Gross sales {data.summary?.hasDateFilter ? '(period)' : '(all time)'}
+              </p>
               <p className="supplier-summary-value">
                 ₹{Number(data.summary?.totalOrderValue || 0).toLocaleString()}
               </p>
             </div>
+            {data.summary?.hasDateFilter ? (
+              <div className="supplier-summary-card">
+                <p className="supplier-summary-label">Gross sales (all time)</p>
+                <p className="supplier-summary-value">
+                  ₹{Number(data.summary?.totalAllTimeGrossSales || 0).toLocaleString()}
+                </p>
+              </div>
+            ) : null}
             <div className="supplier-summary-card">
-              <p className="supplier-summary-label">Net revenue (all channels)</p>
+              <p className="supplier-summary-label">
+                Net revenue {data.summary?.hasDateFilter ? '(period)' : '(all time)'}
+              </p>
               <p className="supplier-summary-value">
                 ₹{Number(data.summary?.totalNetRevenue || 0).toLocaleString()}
               </p>
             </div>
+            {data.summary?.hasDateFilter ? (
+              <div className="supplier-summary-card">
+                <p className="supplier-summary-label">Net revenue (all time)</p>
+                <p className="supplier-summary-value">
+                  ₹{Number(data.summary?.totalAllTimeNetRevenue || 0).toLocaleString()}
+                </p>
+              </div>
+            ) : null}
             <div className="supplier-summary-card">
-              <p className="supplier-summary-label">Online net revenue</p>
+              <p className="supplier-summary-label">Online net revenue (period)</p>
               <p className="supplier-summary-value">
                 ₹{Number(data.summary?.totalOnlineNetRevenue || 0).toLocaleString()}
               </p>
             </div>
             <div className="supplier-summary-card">
-              <p className="supplier-summary-label">Offline net revenue</p>
+              <p className="supplier-summary-label">Offline net revenue (period)</p>
               <p className="supplier-summary-value">
                 ₹{Number(data.summary?.totalOfflineNetRevenue || 0).toLocaleString()}
               </p>
@@ -220,19 +249,19 @@ export default function SupplierBuyerPurchases() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1400px' }}>
                 <thead>
                   <tr>
-                    <th style={th}>Buyer</th>
                     <th style={th}>Company</th>
                     <th style={th}>Phone</th>
                     <th style={th}>Total Orders</th>
                     <th style={th}>Paid Orders</th>
-                    <th style={th}>Total Order Value</th>
-                    <th style={th}>Combined sales (online+offline)</th>
+                    <th style={th}>Gross sales (period)</th>
+                    <th style={th}>Gross sales (all time)</th>
                     <th style={th}>Pay later eligible</th>
                     <th style={th}>Online sales</th>
-                    <th style={th}>Online net revenue</th>
+                    <th style={th}>Online net (period)</th>
                     <th style={th}>Offline sales</th>
-                    <th style={th}>Offline net revenue</th>
-                    <th style={th}>Net revenue</th>
+                    <th style={th}>Offline net (period)</th>
+                    <th style={th}>Net revenue (period)</th>
+                    <th style={th}>All-time net revenue</th>
                     <th style={th}>Pay-later minimum (₹)</th>
                     <th style={th}>Last Order</th>
                   </tr>
@@ -240,16 +269,22 @@ export default function SupplierBuyerPurchases() {
                 <tbody>
                   {filteredBuyers.map((buyer) => (
                     <tr key={buyer.buyerId}>
-                      <td style={td}>{buyer.name || '—'}</td>
-                      <td style={td}>{buyer.company || '—'}</td>
+                      <td style={td}>{buyer.company || buyer.name || '—'}</td>
                       <td style={td}>{buyer.phone || '—'}</td>
                       <td style={td}>{Number(buyer.totalOrders || 0).toLocaleString()}</td>
                       <td style={td}>{Number(buyer.paidOrders || 0).toLocaleString()}</td>
-                      <td style={td}>₹{Number(buyer.totalOrderValue || 0).toLocaleString()}</td>
                       <td style={td}>
-                        ₹{Number(buyer.combinedSalesTotal ?? 0).toLocaleString()}
+                        ₹{Number(buyer.totalOrderValue || 0).toLocaleString()}
                         <span style={{ display: 'block', fontSize: '0.75rem', color: '#64748b' }}>
-                          all time · online+offline
+                          {fromDate || toDate
+                            ? `${fromDate || '…'} to ${toDate || '…'} · online+offline`
+                            : 'all time · online+offline'}
+                        </span>
+                      </td>
+                      <td style={td}>
+                        ₹{Number(buyer.allTimeGrossSales ?? buyer.combinedSalesTotal ?? buyer.totalOrderValue ?? 0).toLocaleString()}
+                        <span style={{ display: 'block', fontSize: '0.75rem', color: '#64748b' }}>
+                          all time · online+offline · excl. cancelled/returned
                         </span>
                       </td>
                       <td style={td}>
@@ -257,7 +292,10 @@ export default function SupplierBuyerPurchases() {
                           <span style={{ color: '#15803d', fontWeight: 600 }}>Yes</span>
                         ) : buyer.paylaterThreshold > 0 ? (
                           <span style={{ color: '#b45309' }}>
-                            No (need ₹{Number(buyer.paylaterThreshold).toLocaleString()})
+                            No (need net revenue ₹{Number(buyer.paylaterThreshold).toLocaleString()} ·
+                            current ₹
+                            {Number(buyer.allTimeNetRevenue ?? 0).toLocaleString()}
+                            )
                           </span>
                         ) : (
                           '—'
@@ -284,6 +322,7 @@ export default function SupplierBuyerPurchases() {
                       </td>
                       <td style={td}>₹{Number(buyer.offlineNetRevenue || 0).toLocaleString()}</td>
                       <td style={tdStrong}>₹{Number(buyer.netRevenue || 0).toLocaleString()}</td>
+                      <td style={tdStrong}>₹{Number(buyer.allTimeNetRevenue || 0).toLocaleString()}</td>
                       <td style={td}>
                         {buyer.buyerId === 'walk_in' || buyer.buyerType === 'walk_in' ? (
                           '—'

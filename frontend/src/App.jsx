@@ -40,6 +40,10 @@ const ProductManagement = safeLazy(() => import('./pages/ProductManagement'), 'P
 const SupplierReturns = safeLazy(() => import('./pages/SupplierReturns'), 'Supplier Returns page');
 const SupplierUpstream = safeLazy(() => import('./pages/SupplierUpstream'), 'Supplier Upstream page');
 const SupplierPlaceOrder = safeLazy(() => import('./pages/SupplierPlaceOrder'), 'Supplier Place Order page');
+const SupplierUpstreamCart = safeLazy(
+  () => import('./pages/SupplierUpstreamCart'),
+  'Supplier Upstream Cart page'
+);
 const SupplierSelectYourself = safeLazy(
   () => import('./pages/SupplierSelectYourself'),
   'Supplier Select Yourself page'
@@ -400,7 +404,7 @@ function App() {
               <Navigate to="/" replace />
             ) : (
               <Layout user={user} onLogout={handleLogout}>
-                <Cart />
+                <SupplierUpstreamCart />
               </Layout>
             )
           }
