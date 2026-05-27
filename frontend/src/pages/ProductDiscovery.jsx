@@ -1,8 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { toast } from 'sonner';
 import { Check, ChevronLeft, ChevronRight, ImageOff, MapPin, Package, Search, ShoppingCart, Star, Tag, Users } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
+import SpEmptyState from '../components/sp/SpEmptyState';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent, CardFooter } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
 import './ProductDiscovery.css';
 
 function formatPrice(price) {
@@ -66,7 +76,9 @@ function TagList({ tags }) {
 }
 
 const ProductDiscovery = () => {
-  const [searchQuery, setSearchQuery] = useState('');
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') || '');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [products, setProducts] = useState([]);
   const [total, setTotal] = useState(0);
@@ -171,6 +183,8 @@ const ProductDiscovery = () => {
         throw new Error(saveData.message || 'Failed to save cart');
       }
       setCartAddedByProductId((prev) => ({ ...prev, [String(productId)]: true }));
+      window.dispatchEvent(new Event('sp-workflow-updated'));
+      toast.success('Added to cart');
       setTimeout(() => {
         setCartAddedByProductId((prev) => {
           const { [String(productId)]: _removed, ...rest } = prev;
@@ -195,30 +209,31 @@ const ProductDiscovery = () => {
   };
 
   return (
-    <div className="product-discovery-container">
+    <SpPageLayout>
       <VoiceGuidedBanner />
+      <SpPageHeader
+        title="Discover Products"
+        description="Browse construction materials from verified suppliers. Search, compare, and add items to your cart."
+        icon={Search}
+        actions={
+          <Button variant="outline" onClick={() => navigate('/boq-normalize')}>
+            Upload BOQ
+          </Button>
+        }
+      />
 
-      <div className="pd-hero">
-        <h1 className="pd-hero__title">Discover Products</h1>
-        <p className="pd-hero__subtitle">
-          Browse the full catalog of construction materials from verified suppliers.
-          Search, compare, and add items directly to your cart.
-        </p>
-      </div>
-
-      <div className="pd-controls">
-        <div className="pd-search">
-          <Search size={18} className="pd-search__icon" />
-          <input
-            type="text"
-            className="pd-search__input"
+      <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center gap-3 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
             placeholder="Search by name, brand, or description..."
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
           />
         </div>
         <select
-          className="pd-category-select"
+          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
           value={selectedCategory}
           onChange={(event) => setSelectedCategory(event.target.value)}
         >
@@ -231,50 +246,45 @@ const ProductDiscovery = () => {
         </select>
       </div>
 
-      {error ? <div className="pd-error">{error}</div> : null}
+      {error ? <div className="mb-4 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">{error}</div> : null}
 
-      <div className="pd-toolbar">
-        <div className="pd-toolbar__info">
-          <strong>{Number.isFinite(total) ? total : 0}</strong> product{total === 1 ? '' : 's'} available
-          {recommendationMode ? (
-            <span className="pd-rec-pill">Personalized for you</span>
-          ) : null}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-muted-foreground">
+          <strong className="text-foreground">{Number.isFinite(total) ? total : 0}</strong> product{total === 1 ? '' : 's'}
+          {recommendationMode ? <Badge className="ml-2" variant="secondary">Personalized</Badge> : null}
         </div>
-        <div className="pd-pager">
-          <button
-            type="button"
-            className="pd-pager__btn"
-            disabled={loading || safePage <= 1}
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-          >
-            <ChevronLeft size={16} /> Prev
-          </button>
-          <span className="pd-pager__text">
-            {safePage} / {pageCount}
-          </span>
-          <button
-            type="button"
-            className="pd-pager__btn"
-            disabled={loading || safePage >= pageCount}
-            onClick={() => setPage((p) => p + 1)}
-          >
-            Next <ChevronRight size={16} />
-          </button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={loading || safePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            <ChevronLeft className="h-4 w-4" /> Prev
+          </Button>
+          <span className="text-sm text-muted-foreground">{safePage} / {pageCount}</span>
+          <Button variant="outline" size="sm" disabled={loading || safePage >= pageCount} onClick={() => setPage((p) => p + 1)}>
+            Next <ChevronRight className="h-4 w-4" />
+          </Button>
         </div>
       </div>
 
       {loading ? (
-        <div className="pd-state pd-state--loading">
-          <div className="pd-spinner" />
-          <span>Loading products...</span>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="p-4 space-y-3 pt-4">
+                <Skeleton className="h-40 w-full rounded-lg" />
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-1/2" />
+              </CardContent>
+            </Card>
+          ))}
         </div>
       ) : products.length === 0 ? (
-        <div className="pd-state pd-state--empty">
-          <Package size={32} />
-          <span>No products found. Try a different search or category.</span>
-        </div>
+        <SpEmptyState
+          icon={Package}
+          title="No products found"
+          description="Try a different search or category, or start from a BOQ upload."
+          action={<Button onClick={() => navigate('/boq-normalize')}>Upload BOQ</Button>}
+        />
       ) : (
-        <div className="pd-grid">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {products.map((product) => {
             const imgs = imageArray(product);
             const price = formatPrice(product?.price);
@@ -283,7 +293,7 @@ const ProductDiscovery = () => {
             const moq = Number(product?.min_order_quantity);
 
             return (
-              <article className="pd-card" key={product.id || `${product.name}-${product.category}`}>
+              <article className="pd-card flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md" key={product.id || `${product.name}-${product.category}`}>
                 <div className="pd-card__image">
                   {imgs.length > 0 ? (
                     <ProductImageCarousel images={imgs} alt={product.name} height={180} rounded={10} stopPropagation />
@@ -366,7 +376,7 @@ const ProductDiscovery = () => {
           })}
         </div>
       )}
-    </div>
+    </SpPageLayout>
   );
 };
 

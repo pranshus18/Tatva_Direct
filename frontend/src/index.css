@@ -1,21 +1,83 @@
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 239 84% 67%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 214 32% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 214 32% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 226 100% 97%;
+    --accent-foreground: 239 84% 47%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 239 84% 67%;
+    --radius: 0.625rem;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  }
+
+  button {
+    cursor: pointer;
+    font-family: inherit;
+  }
+
+  input,
+  select,
+  textarea {
+    font-family: inherit;
+  }
 }
 
-body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
-  background: #f8f9fa;
-  color: #2d3748;
+@layer utilities {
+  .sp-content-panel {
+    @apply bg-background/80 backdrop-blur-sm min-h-full;
+  }
 }
 
-button {
-  cursor: pointer;
-  border: none;
-  font-family: inherit;
-}
-
-input, select {
-  font-family: inherit;
+/* SP cart: stack table rows on small screens */
+@media (max-width: 768px) {
+  .cart-items-table-wrap {
+    overflow-x: auto;
+  }
+  .cart-items-table thead {
+    display: none;
+  }
+  .cart-items-table tr {
+    display: block;
+    margin-bottom: 0.75rem;
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    padding: 0.5rem;
+  }
+  .cart-items-table td {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.35rem 0.5rem;
+    border: none;
+  }
+  .cart-items-table td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: hsl(var(--muted-foreground));
+    margin-right: 0.5rem;
+  }
 }

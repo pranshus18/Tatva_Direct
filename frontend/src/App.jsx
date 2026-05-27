@@ -1,5 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import ServiceProviderRoute from './components/ServiceProviderRoute';
@@ -49,6 +50,10 @@ const SupplierDiscountInsights = safeLazy(
 const SupplierBuyerPurchases = safeLazy(
   () => import('./pages/SupplierBuyerPurchases'),
   'Supplier Buyer Purchases page'
+);
+const SupplierCreditAccounts = safeLazy(
+  () => import('./pages/SupplierCreditAccounts'),
+  'Supplier Credit Accounts page'
 );
 const SupplierTotalPurchasePlatformCov = safeLazy(
   () => import('./pages/SupplierTotalPurchasePlatformCov'),
@@ -160,6 +165,7 @@ function App() {
     };
     localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(payload));
     if (boqId) localStorage.setItem('lastBoqId', boqId);
+    window.dispatchEvent(new Event('sp-workflow-updated'));
   }, [isAuthenticated, normalizedItems, selectedVendors, substitutions, boqId, boqProject]);
 
   // Update document title based on logged-in user
@@ -396,6 +402,20 @@ function App() {
             ) : (
               <Layout user={user} onLogout={handleLogout}>
                 <SupplierBuyerPurchases />
+              </Layout>
+            )
+          }
+        />
+        <Route
+          path="/supplier-credit-accounts"
+          element={
+            !isAuthenticated ? (
+              <Navigate to="/login" replace />
+            ) : user?.userType !== 'supplier' ? (
+              <Navigate to="/" replace />
+            ) : (
+              <Layout user={user} onLogout={handleLogout}>
+                <SupplierCreditAccounts />
               </Layout>
             )
           }
@@ -721,6 +741,7 @@ function App() {
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
       </Suspense>
+      <Toaster position="top-right" richColors closeButton />
     </BrowserRouter>
   );
 }

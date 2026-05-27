@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Check, X } from 'lucide-react';
+import { Check, Package, X } from 'lucide-react';
+import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { useLocation, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { API_BASE_URL, getApiUrl, resolveApiPath } from '../config/api';
@@ -152,6 +153,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [createdTransportOrders, setCreatedTransportOrders] = useState([]);
   const [selectedTransport, setSelectedTransport] = useState(null);
   const [expandedItemSpecs, setExpandedItemSpecs] = useState({});
+  const [creditChecks, setCreditChecks] = useState([]);
+  const [creditCheckLoading, setCreditCheckLoading] = useState(false);
+  const [payLaterEligibility, setPayLaterEligibility] = useState([]);
 
   const grandTotalAllPos = useMemo(
     () => poGroups.reduce((sum, g) => sum + (Number(g.total) || 0), 0),
@@ -395,6 +399,67 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     };
   }, [showOnlineQrModal, grandTotalAllPos]);
 
+  useEffect(() => {
+    if (!poGroups?.length) {
+      setCreditChecks([]);
+      setPayLaterEligibility([]);
+      return;
+    }
+    const token = localStorage.getItem('token');
+    const checks = poGroups.map((g) => ({
+      supplierId: g.vendorId,
+      orderAmount: Number(g.total) || 0
+    }));
+    let cancelled = false;
+    (async () => {
+      try {
+        setCreditCheckLoading(true);
+        const res = await fetch(getApiUrl('/api/po/credit-check'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ checks })
+        });
+        const data = await res.json();
+        if (!cancelled && data.status === 'success') {
+          const results = data.results || [];
+          setPayLaterEligibility(results);
+          setCreditChecks(results);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setCreditChecks([]);
+          setPayLaterEligibility([]);
+        }
+      } finally {
+        if (!cancelled) setCreditCheckLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [poGroups, poPaymentMethod]);
+
+  const payLaterOptionAvailable = useMemo(() => {
+    if (!payLaterEligibility.length || !poGroups?.length) return false;
+    return payLaterEligibility.every((r) => r.payLaterOffered);
+  }, [payLaterEligibility, poGroups]);
+
+  useEffect(() => {
+    if (poPaymentMethod === 'credit' && !payLaterOptionAvailable) {
+      setPoPaymentMethod('online');
+      setPaymentDetails({});
+    }
+  }, [poPaymentMethod, payLaterOptionAvailable]);
+
+  const creditAllAllowed = useMemo(() => {
+    if (poPaymentMethod !== 'credit') return true;
+    if (!creditChecks.length) return false;
+    return creditChecks.every((r) => r.allowed);
+  }, [poPaymentMethod, creditChecks]);
+
   const createPurchaseOrders = async () => {
     const token = localStorage.getItem('token');
 
@@ -626,6 +691,21 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       }
     }
 
+    if (poPaymentMethod === 'credit') {
+      if (!paymentDetails.creditPeriod) {
+        alert('Select a credit period for pay-later orders.');
+        return;
+      }
+      if (!creditAllAllowed) {
+        const blocked = creditChecks.filter((r) => !r.allowed);
+        alert(
+          blocked.map((r) => r.message).join('\n') ||
+            'Credit limit not available for one or more suppliers. Ask them to set your limit on Sales.'
+        );
+        return;
+      }
+    }
+
     if (poPaymentMethod === 'online') {
       setShowOnlineQrModal(true);
       return;
@@ -790,12 +870,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   }
 
   return (
-    <div className="page">
+    <SpWorkflowPage title="Create Purchase Orders" description="Review and confirm POs grouped by vendor" icon={Package}>
+    <div className="page !p-0">
       <VoiceGuidedBanner />
-      <div className="page-header">
-        <h1>Create Purchase Orders</h1>
-        <p>Review and confirm POs grouped by vendor</p>
-      </div>
 
       <div style={{
         marginBottom: '1.5rem', 
@@ -873,11 +950,18 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             <option value="cod">Cash on delivery</option>
             <option value="bank_transfer">Bank transfer (NEFT / RTGS / IMPS)</option>
             <option value="card">Credit / Debit Card</option>
-            <option value="credit">Credit / pay later (on account)</option>
+            {payLaterOptionAvailable ? (
+              <option value="credit">Credit / pay later (on account)</option>
+            ) : null}
           </select>
           <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#6b7280', maxWidth: '520px' }}>
             This applies to every purchase order created in this step. Pay online: you will see a platform test QR before orders are placed. COD and credit stay pending until the supplier confirms payment or delivery.
           </p>
+          {!payLaterOptionAvailable && poGroups?.length > 0 && !creditCheckLoading ? (
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#b45309', maxWidth: '520px' }}>
+              Pay later is hidden until each vendor&apos;s minimum order amount is met and credit is configured for you.
+            </p>
+          ) : null}
 
           {poPaymentMethod === 'card' && (
             <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
@@ -970,6 +1054,39 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                 />
               </div>
               <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* Required fields. IFSC and date help with faster reconciliation.</p>
+            </div>
+          )}
+
+          {poPaymentMethod === 'credit' && creditChecks.length > 0 && (
+            <div
+              style={{
+                marginTop: '0.75rem',
+                padding: '0.75rem',
+                background: creditAllAllowed ? '#f0fdf4' : '#fef2f2',
+                border: `1px solid ${creditAllAllowed ? '#86efac' : '#fecaca'}`,
+                borderRadius: '8px',
+                maxWidth: '520px'
+              }}
+            >
+              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>
+                Supplier credit limits {creditCheckLoading ? '(checking…)' : ''}
+              </p>
+              <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.8rem', color: '#475569' }}>
+                {creditChecks.map((row) => {
+                  const vendor = poGroups.find((g) => String(g.vendorId) === String(row.supplierId));
+                  const prior = Number(row.priorSalesTotal ?? row.onlineOfflineSalesCombined ?? 0);
+                  const combined = Number(row.combinedSalesTotal ?? prior + (Number(vendor?.total) || 0));
+                  const min = Number(row.payLaterThreshold || 0);
+                  return (
+                    <li key={row.supplierId} style={{ marginBottom: '0.35rem' }}>
+                      <strong>{vendor?.vendorName || 'Supplier'}:</strong>{' '}
+                      {row.allowed
+                        ? `Pay later OK — combined sales ₹${combined.toLocaleString('en-IN')} (online+offline) meets ₹${min.toLocaleString('en-IN')} min. Credit ₹${Number(row.available || 0).toLocaleString('en-IN')} of ₹${Number(row.creditLimit || 0).toLocaleString('en-IN')}.`
+                        : row.message}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           )}
 
@@ -1509,6 +1626,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         </div>
       )}
     </div>
+    </SpWorkflowPage>
   );
 };
 

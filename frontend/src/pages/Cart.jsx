@@ -10,13 +10,22 @@ import {
   Package,
   RefreshCw,
   Share2,
+  ShoppingCart,
   Trash2
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl } from '../config/api';
 import { persistSupplierSelectScopeFromCart } from '../constants/supplierSelectSession';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
-import './Cart.css';
+import SpWorkflowPage from '../components/sp/SpWorkflowPage';
+import SpEmptyState from '../components/sp/SpEmptyState';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/utils';
 
 const Cart = ({ onLoadCart }) => {
   const navigate = useNavigate();
@@ -350,178 +359,269 @@ const Cart = ({ onLoadCart }) => {
     }
   };
 
+  const totalQty = allItems.reduce((sum, it) => sum + (Number(it?.quantity) || 1), 0);
+
   return (
-    <div className="page">
+    <SpWorkflowPage
+      title="Shopping cart"
+      description="Review line items, adjust quantities, then choose suppliers before creating a purchase order."
+      icon={ShoppingCart}
+    >
       <VoiceGuidedBanner />
-      <div className="page-header">
-        <h1>Cart</h1>
-        <p>Review items, change quantity, then use <strong>Select supplier</strong> on a row for that product only, or choose suppliers for the whole group.</p>
+
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <Button variant="outline" size="sm" onClick={loadCart} disabled={loading}>
+          <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+          Refresh
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={handleClearCart}
+          disabled={clearingCart || loading || allItems.length === 0}
+        >
+          <Trash2 className="h-4 w-4" />
+          {clearingCart ? 'Clearing…' : 'Clear cart'}
+        </Button>
+        {allItems.length > 0 ? (
+          <Badge variant="secondary" className="ml-auto">
+            {allItems.length} line{allItems.length === 1 ? '' : 's'} · {totalQty} units
+          </Badge>
+        ) : null}
       </div>
 
-      <div className="cart-shell">
-        {error ? (
-          <div className="cart-alert cart-alert--error">
-            <AlertCircle size={16} />
-            <span>{String(error || 'Unknown cart error')}</span>
-          </div>
-        ) : null}
+      {error ? (
+        <Alert variant="destructive" className="mb-4">
+          <AlertCircle className="h-4 w-4" />
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      ) : null}
 
-        <div className="cart-action-row">
-          <button type="button" className="btn-secondary" onClick={loadCart} disabled={loading}>
-            <RefreshCw size={16} />
-            Refresh Cart
-          </button>
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleClearCart}
-            disabled={clearingCart || loading || allItems.length === 0}
-          >
-            <Trash2 size={16} />
-            {clearingCart ? 'Clearing...' : 'Clear Cart'}
-          </button>
-        </div>
-
-        {loading ? (
-          <div className="cart-loading-card">
-            <Loader2 size={16} />
-            <span>Loading cart...</span>
-          </div>
-        ) : allItems.length === 0 ? (
-          <div className="cart-empty-card">
-            <Package size={18} />
-            <div>
-              <h3>Your cart is empty</h3>
-              <p>Go to Product Discovery, add items, then come back for supplier selection.</p>
+      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
+        <div className="min-w-0 space-y-4">
+          {loading ? (
+            <div className="space-y-4">
+              {[1, 2].map((i) => (
+                <Card key={i}>
+                  <CardHeader>
+                    <Skeleton className="h-5 w-48" />
+                    <Skeleton className="h-4 w-32" />
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-16 w-full" />
+                  </CardContent>
+                </Card>
+              ))}
             </div>
-          </div>
-        ) : (
-          <div className="cart-boq-groups">
-            {groups.map((group, groupIndex) => {
+          ) : allItems.length === 0 ? (
+            <SpEmptyState
+              icon={Package}
+              title="Your cart is empty"
+              description="Browse the catalog or upload a BOQ to add materials to your cart."
+              action={
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Button onClick={() => navigate('/product-discovery')}>Browse catalog</Button>
+                  <Button variant="outline" onClick={() => navigate('/boq-normalize')}>
+                    Upload BOQ
+                  </Button>
+                </div>
+              }
+            />
+          ) : (
+            groups.map((group, groupIndex) => {
               const items = Array.isArray(group?.items) ? group.items : [];
               return (
-                <section className="cart-boq-group" key={String(group?.groupId || groupIndex)}>
-                  <div className="cart-boq-group__head">
+                <Card key={String(group?.groupId || groupIndex)} className="sp-market-card overflow-hidden">
+                  <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 border-b bg-muted/30 pb-4">
                     <div>
-                      <h4>{String(group?.boqName || `Group ${groupIndex + 1}`)}</h4>
+                      <CardTitle className="text-base">
+                        {String(group?.boqName || `BOQ group ${groupIndex + 1}`)}
+                      </CardTitle>
                       {group?.boqProject?.name ? (
-                        <p className="cart-boq-group__meta">Project: {String(group.boqProject.name)}</p>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Project: {String(group.boqProject.name)}
+                        </p>
                       ) : null}
-                      <p className="cart-boq-group__meta">{items.length} item{items.length === 1 ? '' : 's'}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {items.length} item{items.length === 1 ? '' : 's'}
+                      </p>
                     </div>
-                    <div className="cart-boq-group__actions">
-                      <button
-                        type="button"
-                        className="btn-secondary cart-boq-group__btn"
-                        disabled={items.length === 0}
-                        onClick={() => handleContinueToSupplierSelectionForGroup(group)}
-                        title="Choose suppliers for every line in this group at once"
-                      >
-                        All items in group <ArrowRight size={16} />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="cart-items-panel">
-                    <div className="cart-items-table-wrap">
-                      <table className="cart-items-table">
-                        <thead>
-                          <tr>
-                            <th>Item</th>
-                            <th>Unit</th>
-                            <th>Quantity</th>
-                            <th>Supplier</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {items.map((item) => {
-                            const itemId = String(item?.id || '');
-                            const quantity = Number(item?.quantity || 1);
-                            const isBusy = Boolean(busyByItemId[itemId]);
-                            return (
-                              <tr key={itemId || `${groupIndex}-${String(item?.name || '')}`}>
-                                <td>{String(item?.normalizedName || item?.rawName || item?.name || 'Item')}</td>
-                                <td>{String(item?.unit || 'nos')}</td>
-                                <td>
-                                  <div className="cart-qty-control">
-                                    <button
-                                      type="button"
-                                      className="cart-qty-btn"
-                                      disabled={isBusy || quantity <= 1}
-                                      onClick={() => updateQuantity(itemId, quantity - 1)}
-                                    >
-                                      -
-                                    </button>
-                                    <span className="cart-qty-value">{quantity}</span>
-                                    <button
-                                      type="button"
-                                      className="cart-qty-btn"
-                                      disabled={isBusy}
-                                      onClick={() => updateQuantity(itemId, quantity + 1)}
-                                    >
-                                      +
-                                    </button>
-                                  </div>
-                                </td>
-                                <td>
-                                  <button
-                                    type="button"
-                                    className="btn-primary cart-row-supplier-btn"
-                                    disabled={!itemId}
-                                    onClick={() => handleContinueToSupplierSelectionForItem(item, group)}
-                                    title="Rank and choose suppliers for this line only"
-                                  >
-                                    Select supplier <ArrowRight size={14} />
-                                  </button>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </section>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="shrink-0"
+                      disabled={items.length === 0}
+                      onClick={() => handleContinueToSupplierSelectionForGroup(group)}
+                    >
+                      All in group
+                      <ArrowRight className="h-4 w-4" />
+                    </Button>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <ul className="divide-y">
+                      {items.map((item) => {
+                        const itemId = String(item?.id || '');
+                        const quantity = Number(item?.quantity || 1);
+                        const isBusy = Boolean(busyByItemId[itemId]);
+                        const name = String(
+                          item?.normalizedName || item?.rawName || item?.name || 'Item'
+                        );
+                        return (
+                          <li
+                            key={itemId || `${groupIndex}-${name}`}
+                            className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-foreground">{name}</p>
+                              <p className="mt-0.5 text-sm text-muted-foreground">
+                                Unit: {String(item?.unit || 'nos')}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-3 sm:justify-end">
+                              <div className="flex items-center rounded-md border bg-background">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-9 w-9 rounded-none"
+                                  disabled={isBusy || quantity <= 1}
+                                  onClick={() => updateQuantity(itemId, quantity - 1)}
+                                  aria-label="Decrease quantity"
+                                >
+                                  −
+                                </Button>
+                                <span className="min-w-[2.5rem] text-center text-sm font-semibold tabular-nums">
+                                  {isBusy ? '…' : quantity}
+                                </span>
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-9 w-9 rounded-none"
+                                  disabled={isBusy}
+                                  onClick={() => updateQuantity(itemId, quantity + 1)}
+                                  aria-label="Increase quantity"
+                                >
+                                  +
+                                </Button>
+                              </div>
+                              <Button
+                                size="sm"
+                                disabled={!itemId}
+                                onClick={() => handleContinueToSupplierSelectionForItem(item, group)}
+                              >
+                                Select supplier
+                                <ArrowRight className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </CardContent>
+                </Card>
               );
-            })}
-          </div>
-        )}
-
-        <div className="cart-action-row">
-          <button
-            type="button"
-            className="btn-secondary cart-share-btn"
-            onClick={handleShareCart}
-            disabled={sharingCart || loading || allItems.length === 0}
-          >
-            <Share2 size={16} />
-            {sharingCart ? 'Generating...' : 'Share Cart'}
-          </button>
+            })
+          )}
         </div>
 
-        {shareLink ? (
-          <div className="cart-share-link-row">
-            <span className="cart-share-link-label">Share link</span>
-            <a className="cart-share-link" href={shareLink} target="_blank" rel="noreferrer">
-              {shareLink}
-            </a>
-            <button type="button" className="btn-secondary cart-share-copy-mini" onClick={handleCopyShareLink}>
-              {copyingShareLink ? <Check size={16} /> : <Clipboard size={16} />}
-              {copyingShareLink ? 'Copied' : 'Copy'}
-            </button>
-            <button type="button" className="btn-secondary cart-share-copy-mini" onClick={handleShareViaWhatsApp}>
-              <MessageCircle size={16} />
-              WhatsApp
-            </button>
-            <button type="button" className="btn-secondary cart-share-copy-mini" onClick={handleShareViaEmail}>
-              <Mail size={16} />
-              Email
-            </button>
-          </div>
-        ) : null}
+        <div className="space-y-4 lg:sticky lg:top-20 lg:self-start">
+          <Card className="sp-market-card shadow-md">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg">Order summary</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Line items</span>
+                <span className="font-medium">{allItems.length}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total quantity</span>
+                <span className="font-medium">{totalQty}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">BOQ groups</span>
+                <span className="font-medium">{groups.length}</span>
+              </div>
+              <Separator />
+              <p className="text-xs text-muted-foreground">
+                Supplier pricing is confirmed in the next step. Continue when your cart looks correct.
+              </p>
+            </CardContent>
+            <CardFooter className="flex flex-col gap-2 border-t bg-muted/20 pt-4">
+              <Button
+                className="w-full"
+                size="lg"
+                disabled={loading || allItems.length === 0}
+                onClick={() => {
+                  if (groups[0]) handleContinueToSupplierSelectionForGroup(groups[0]);
+                  else navigate('/supplier-select');
+                }}
+              >
+                Continue to suppliers
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                className="w-full"
+                disabled={allItems.length === 0}
+                onClick={() => navigate('/create-po')}
+              >
+                Skip to create PO
+              </Button>
+            </CardFooter>
+          </Card>
 
+          {allItems.length > 0 ? (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">Share cart</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  size="sm"
+                  onClick={handleShareCart}
+                  disabled={sharingCart || loading}
+                >
+                  <Share2 className="h-4 w-4" />
+                  {sharingCart ? 'Generating link…' : 'Generate share link'}
+                </Button>
+                {shareLink ? (
+                  <div className="space-y-2 rounded-lg border bg-muted/40 p-3">
+                    <p className="text-xs font-medium text-muted-foreground">Share link</p>
+                    <a
+                      href={shareLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block break-all text-xs text-primary hover:underline"
+                    >
+                      {shareLink}
+                    </a>
+                    <div className="flex flex-wrap gap-2">
+                      <Button variant="secondary" size="sm" onClick={handleCopyShareLink}>
+                        {copyingShareLink ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
+                        {copyingShareLink ? 'Copied' : 'Copy'}
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={handleShareViaWhatsApp}>
+                        <MessageCircle className="h-4 w-4" />
+                        WhatsApp
+                      </Button>
+                      <Button variant="secondary" size="sm" onClick={handleShareViaEmail}>
+                        <Mail className="h-4 w-4" />
+                        Email
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+          ) : null}
+        </div>
       </div>
-    </div>
+    </SpWorkflowPage>
   );
 };
 

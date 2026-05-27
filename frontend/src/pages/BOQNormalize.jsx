@@ -1,8 +1,9 @@
 import React, { useState, useMemo } from 'react';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import { clearSupplierSelectScopeSession } from '../constants/supplierSelectSession';
-import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, Search, PlusCircle, MapPin, Calendar } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, Search, PlusCircle, MapPin, Calendar, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import './BOQNormalize.css';
 
 // Ask the user to confirm ANY match that is not nearly exact.
@@ -105,8 +106,12 @@ const BOQNormalize = ({ onComplete }) => {
       const data = await res.json();
       
       if (!res.ok) {
-        // Get error message from response
-        const errorMessage = data.message || data.error || res.statusText || 'Upload failed';
+        const errorMessage =
+          data.message ||
+          data.error ||
+          (typeof data.details === 'string' ? data.details : null) ||
+          res.statusText ||
+          'Upload failed';
         throw new Error(errorMessage);
       }
       
@@ -139,8 +144,10 @@ const BOQNormalize = ({ onComplete }) => {
       }
     } catch (error) {
       console.error('Upload failed:', error);
-      // Show the actual error message to the user
-      const errorMessage = error.message || 'Failed to process file. Please try again.';
+      const errorMessage =
+        error?.message ||
+        (typeof error === 'string' ? error : null) ||
+        'Failed to process file. Please check site location, required date, and file format (CSV or Excel).';
       alert(errorMessage);
       setFile(null);
       setItems([]);
@@ -292,7 +299,24 @@ const BOQNormalize = ({ onComplete }) => {
       }
     }
     clearSupplierSelectScopeSession();
-    navigate('/supplier-select', { replace: false });
+    navigate('/supplier-select', {
+      replace: false,
+      state: {
+        supplierSelectItems: items,
+        supplierSelectBoqProject:
+          savedProjectMeta ||
+          (siteLocation.trim() && requiredDate
+            ? {
+                location: siteLocation.trim(),
+                requiredDate,
+                siteGeo:
+                  siteLat.trim() && siteLng.trim()
+                    ? { lat: parseFloat(siteLat), lng: parseFloat(siteLng) }
+                    : null
+              }
+            : null)
+      }
+    });
   };
 
   const handleAddToCart = async () => {
@@ -437,11 +461,12 @@ const BOQNormalize = ({ onComplete }) => {
 
   return (
     <>
-    <div className="page">
-      <div className="page-header">
-        <h1>BOQ Normalize</h1>
-        <p>Upload your Bill of Quantities and map items to normalized catalog</p>
-      </div>
+    <SpWorkflowPage
+      title="BOQ Normalize"
+      description="Upload your Bill of Quantities and map items to normalized catalog"
+      icon={FileText}
+    >
+    <div className="page !p-0">
 
       {!file ? (
         <div>
@@ -1020,6 +1045,7 @@ const BOQNormalize = ({ onComplete }) => {
           </div>
         </div>
       )}
+    </SpWorkflowPage>
     </>
   );
 };

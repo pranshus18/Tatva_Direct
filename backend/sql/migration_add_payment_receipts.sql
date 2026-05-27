@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS payment_receipts (
   supplier_id UUID REFERENCES users(id) ON DELETE SET NULL,
   amount DECIMAL(10,2) NOT NULL CHECK (amount >= 0),
   currency VARCHAR(10) NOT NULL DEFAULT 'INR',
-  payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'bank_transfer', 'cheque', 'online', 'credit')),
+  payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit')),
   payment_reference VARCHAR(120),
   paid_at TIMESTAMP NOT NULL DEFAULT NOW(),
   metadata JSONB DEFAULT '{}',

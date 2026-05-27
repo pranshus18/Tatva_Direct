@@ -20,7 +20,7 @@ export const offlineOrderSchema = z.object({
     .optional(),
   outletId: z.string().optional().nullable(),
   clientOrderId: z.string().optional().nullable(),
-  customerName: z.string().optional(),
+  customerName: z.string().trim().min(1, 'Customer name is required'),
   customerPhone: z.string().optional()
 });
 

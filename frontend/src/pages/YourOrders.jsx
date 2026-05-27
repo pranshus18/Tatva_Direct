@@ -1,8 +1,45 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, resolveApiPath, authFetch } from '../config/api';
-import { Eye, ShoppingCart, CheckCircle, Clock, AlertCircle, X, FileText } from 'lucide-react';
+import {
+  Eye,
+  ShoppingCart,
+  CheckCircle,
+  Clock,
+  AlertCircle,
+  FileText,
+  Search,
+  ShoppingBag,
+  RefreshCw,
+  Loader2
+} from 'lucide-react';
 import { formatDateIST, formatDateTimeIST, parseServerDate } from '../utils/dateTime';
+import {
+  formatOrderStatusLabel,
+  formatPaymentStatusLabel,
+  spStatusBadgeClass,
+  spPaymentBadgeClass
+} from '../utils/orderStatusUi';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
+import SpEmptyState from '../components/sp/SpEmptyState';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { Card, CardContent } from '@/components/ui/card';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import OrderDialogSection from '../components/sp/OrderDialogSection';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
 import './Dashboard.css';
 import './YourOrders.css';
 
@@ -66,6 +103,8 @@ const YourOrders = () => {
   const [feedback, setFeedback] = useState('');
   const [ratingLoading, setRatingLoading] = useState(false);
   const [submittingRating, setSubmittingRating] = useState(false);
+  const [orderSearch, setOrderSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const navigate = useNavigate();
 
@@ -381,37 +420,6 @@ const YourOrders = () => {
     return <AlertCircle size={14} />;
   };
 
-  const statusText = (status) => {
-    if (status === 'delivered') return 'Delivered';
-    if (status === 'pending') return 'Pending';
-    if (status === 'confirmed') return 'Confirmed';
-    if (status === 'processing') return 'Processing';
-    if (status === 'shipped') return 'Shipped';
-    return status || 'Pending';
-  };
-
-  const statusBadgeClass = (status) => {
-    const s = (status || 'pending').toLowerCase();
-    if (s === 'delivered') return 'yo-badge yo-badge--delivered';
-    if (s === 'pending') return 'yo-badge yo-badge--pending';
-    if (s === 'cancelled') return 'yo-badge yo-badge--cancelled';
-    return 'yo-badge yo-badge--confirmed';
-  };
-
-  const paymentBadgeClass = (paymentStatus) => {
-    const p = (paymentStatus || 'pending').toLowerCase();
-    if (p === 'paid') return 'yo-badge yo-badge--paid';
-    return 'yo-badge yo-badge--payment-pending';
-  };
-
-  const paymentBadgeText = (paymentStatus) => {
-    const p = (paymentStatus || 'pending').toLowerCase();
-    if (p === 'paid') return 'Paid';
-    if (p === 'partial') return 'Partially paid';
-    if (p === 'refunded') return 'Refunded';
-    return 'Payment pending';
-  };
-
   const progressPercent = (currentRank) => {
     const pct = Math.round((currentRank / 4) * 100);
     return Math.min(100, Math.max(6, pct));
@@ -592,78 +600,120 @@ const YourOrders = () => {
   const creditChosen = orderPaymentPending && orderPm === 'credit';
   const bankOnlyChosen = orderPaymentPending && orderPm === 'bank_transfer';
 
+  const filteredOrders = useMemo(() => {
+    const q = orderSearch.trim().toLowerCase();
+    return yourOrders.filter((po) => {
+      const status = String(po.status || '').toLowerCase();
+      if (statusFilter !== 'all' && status !== statusFilter) return false;
+      if (!q) return true;
+      const ref = String(po.orderNumber || po.id || '').toLowerCase();
+      const vendor = String(po.vendor || '').toLowerCase();
+      return ref.includes(q) || status.includes(q) || vendor.includes(q);
+    });
+  }, [yourOrders, orderSearch, statusFilter]);
+
+  const closeOrderDialog = () => {
+    setSelectedOrderId(null);
+    setOrderDetails(null);
+    setEditMode(false);
+    setPaymentNotice('');
+  };
+
   return (
-    <div className="page yo-page">
-      <header className="yo-hero">
-        <h1>Your orders</h1>
-        <p>Track purchase orders, delivery milestones, and payment documents in one place.</p>
-      </header>
-      {loadError ? (
-        <div
-          style={{
-            marginBottom: '1rem',
-            padding: '0.75rem 1rem',
-            borderRadius: '8px',
-            border: '1px solid #fecaca',
-            backgroundColor: '#fef2f2',
-            color: '#b91c1c',
-            fontWeight: 500
-          }}
-        >
-          {loadError}
+    <SpPageLayout showStepper={false}>
+      <SpPageHeader
+        title="Your orders"
+        description="Track purchase orders, delivery milestones, and payment documents in one place."
+        icon={ShoppingBag}
+        actions={
+          <Button onClick={() => navigate('/boq-normalize')}>New BOQ / PO</Button>
+        }
+      />
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+        <div className="relative min-w-[200px] flex-1 sm:max-w-md">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="Search order ID, supplier, or status…"
+            value={orderSearch}
+            onChange={(e) => setOrderSearch(e.target.value)}
+          />
         </div>
+        <select
+          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value)}
+        >
+          <option value="all">All statuses</option>
+          <option value="pending">Pending</option>
+          <option value="confirmed">Confirmed</option>
+          <option value="processing">Processing</option>
+          <option value="shipped">Shipped</option>
+          <option value="delivered">Delivered</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+        <Button variant="outline" size="sm" onClick={fetchDashboard} disabled={loading}>
+          <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
+          Refresh
+        </Button>
+        {!loading && yourOrders.length > 0 ? (
+          <span className="text-sm text-muted-foreground sm:ml-auto">
+            {filteredOrders.length} of {yourOrders.length} orders
+          </span>
+        ) : null}
+        </div>
+
+      {loadError ? (
+        <Alert variant="destructive" className="mb-4">
+          <AlertDescription>{loadError}</AlertDescription>
+        </Alert>
       ) : null}
 
       {loading ? (
-        <div className="your-orders-loading-wrap">
-          <div className="your-orders-loading-bar">
-            <div className="your-orders-loading-bar-inner" />
-          </div>
-          <div className="your-orders-runner-area">
-            <div className="boy-runner-stage" aria-hidden="true">
-              <div className="boy-runner-ground" />
-              <div className="boy-runner-moving">
-                <div className="boy-runner">
-                  <div className="boy-head" />
-                  <div className="boy-torso" />
-                  <div className="boy-arm boy-arm-left" />
-                  <div className="boy-arm boy-arm-right" />
-                  <div className="boy-leg boy-leg-left" />
-                  <div className="boy-leg boy-leg-right" />
-                </div>
-                <div className="boy-dust dust-1" />
-                <div className="boy-dust dust-2" />
-                <div className="boy-dust dust-3" />
-              </div>
-            </div>
-            <div style={{ textAlign: 'center', paddingTop: '0.75rem', color: '#64748b', fontWeight: 600, fontSize: '0.875rem' }}>
-              Loading your orders…
-            </div>
-          </div>
+        <div className="space-y-3">
+          {[1, 2, 3, 4].map((i) => (
+            <Card key={i}>
+              <CardContent className="p-5">
+                <Skeleton className="mb-3 h-5 w-40" />
+                <Skeleton className="mb-2 h-4 w-full max-w-md" />
+                <Skeleton className="h-3 w-3/4" />
+              </CardContent>
+            </Card>
+          ))}
         </div>
       ) : yourOrders.length === 0 ? (
-        <div className="empty-state" style={{ borderRadius: 16, border: '1px solid #e8ecf1', background: '#fff' }}>
-          <ShoppingCart size={48} strokeWidth={1.5} color="#94a3b8" />
-          <h3>No orders yet</h3>
-          <p style={{ maxWidth: 360, margin: '0 auto 1.25rem' }}>
-            When you confirm purchase orders from a BOQ, they will appear here with full tracking.
-          </p>
-          <button type="button" className="btn-primary" onClick={() => navigate('/boq-normalize')}>
-            Create BOQ / PO
-          </button>
-        </div>
+        <SpEmptyState
+          icon={ShoppingCart}
+          title="No orders yet"
+          description="When you confirm purchase orders from a BOQ, they will appear here with tracking and documents."
+          action={<Button onClick={() => navigate('/boq-normalize')}>Create BOQ / PO</Button>}
+        />
+      ) : filteredOrders.length === 0 ? (
+        <SpEmptyState
+          icon={Search}
+          title="No matching orders"
+          description="Try a different search or clear the status filter."
+          action={
+            <Button
+              variant="outline"
+              onClick={() => {
+                setOrderSearch('');
+                setStatusFilter('all');
+              }}
+            >
+              Clear filters
+            </Button>
+          }
+        />
       ) : (
-        <div className="yo-list">
-          {yourOrders.map((po, idx) => {
+        <div className="space-y-3">
+          {filteredOrders.map((po) => {
             const { currentRank, steps } = stepsFor(po);
             const orderRef = po.orderNumber || po.id;
             return (
-              <div
+              <Card
                 key={po.id}
-                role="button"
-                tabIndex={0}
-                className="yo-card your-order-card-anim"
-                style={{ animationDelay: `${idx * 60}ms` }}
+                className="sp-market-card cursor-pointer transition-shadow hover:shadow-md"
                 onClick={() => openOrder(po)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -671,102 +721,111 @@ const YourOrders = () => {
                     openOrder(po);
                   }
                 }}
+                role="button"
+                tabIndex={0}
               >
-                <div className="yo-card__main">
-                  <div className="yo-card__top">
-                    <span className="yo-card__ref">{orderRef}</span>
-                    <span className={statusBadgeClass(po.status)}>
-                      {statusIcon(po.status)}
-                      {statusText(po.status)}
-                    </span>
-                    <span className={paymentBadgeClass(po.paymentStatus)}>
-                      {paymentBadgeText(po.paymentStatus)}
-                    </span>
+                <CardContent className="p-5">
+                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0 flex-1 space-y-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-md bg-[#eef2ff] px-2 py-0.5 font-mono text-xs font-semibold text-[#3730a3]">
+                          {orderRef}
+                        </span>
+                        <span className={cn(spStatusBadgeClass(po.status), 'gap-1')}>
+                          {statusIcon(po.status)}
+                          {formatOrderStatusLabel(po.status)}
+                        </span>
+                        <span className={spPaymentBadgeClass(po.paymentStatus)}>
+                          {formatPaymentStatusLabel(po.paymentStatus)}
+                        </span>
                   </div>
 
-                  <p className="yo-card__supplier">
-                    <strong>{po.vendor}</strong>
-                    {po.vendorCompany && po.vendorCompany !== po.vendor && (
-                      <span> · {po.vendorCompany}</span>
-                    )}
-                  </p>
+                      <div>
+                        <p className="font-semibold text-foreground">{po.vendor}</p>
+                        {po.vendorCompany && po.vendorCompany !== po.vendor ? (
+                          <p className="text-sm text-muted-foreground">{po.vendorCompany}</p>
+                        ) : null}
+                      </div>
 
-                  <div className="yo-card__row">
+                      <div className="flex flex-wrap items-end gap-6">
                     <div>
-                      <span className="yo-card__amount-label">Order total</span>
-                      <div className="yo-card__amount">₹{Number(po.amount || 0).toLocaleString('en-IN')}</div>
+                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Order total
+                          </p>
+                          <p className="text-xl font-bold text-foreground">
+                            ₹{Number(po.amount || 0).toLocaleString('en-IN')}
+                          </p>
                     </div>
+                        {(po.expectedDeliveryDate || po.actualDeliveryDate) && (
+                          <div className="text-sm text-muted-foreground">
+                            {po.expectedDeliveryDate && (
+                              <span className="mr-3">
+                                Expected {formatDateShort(po.expectedDeliveryDate)}
+                              </span>
+                            )}
+                            {po.actualDeliveryDate && (
+                              <span className="font-medium text-emerald-700">
+                                Delivered {formatDateShort(po.actualDeliveryDate)}
+                              </span>
+                            )}
+                          </div>
+                        )}
                   </div>
 
                   {String(po.paymentStatus || '').toLowerCase() === 'paid' && (
-                    <div style={{ marginTop: '0.5rem', display: 'flex', gap: '0.45rem', flexWrap: 'wrap' }}>
+                        <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
                       {po.invoicePdfUrl && (
-                        <a
-                          href={po.invoicePdfUrl}
-                          className="yo-doc-link"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          style={{ fontSize: '0.8125rem' }}
-                        >
-                          <FileText size={14} />
-                          Invoice PDF
-                        </a>
-                      )}
-                      {po.receiptPdfUrl && (
-                        <a
-                          href={po.receiptPdfUrl}
-                          className="yo-doc-link yo-doc-link--receipt"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          style={{ fontSize: '0.8125rem' }}
-                        >
-                          <FileText size={14} />
-                          Payment Receipt
-                        </a>
-                      )}
-                      {!po.receiptPdfUrl && (
-                        <button
-                          type="button"
-                          className="yo-doc-link yo-doc-link--receipt"
-                          onClick={(e) => downloadReceiptFallback(po.orderNumber || po.id, e)}
-                          style={{ fontSize: '0.8125rem' }}
-                        >
-                          <FileText size={14} />
-                          Payment Receipt
-                        </button>
+                            <a
+                              href={po.invoicePdfUrl}
+                              className="yo-doc-link"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <FileText size={16} />
+                              Invoice
+                            </a>
+                          )}
+                          {po.receiptPdfUrl ? (
+                            <a
+                              href={po.receiptPdfUrl}
+                              className="yo-doc-link yo-doc-link--receipt"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              <FileText size={16} />
+                              Receipt
+                            </a>
+                          ) : (
+                            <button
+                              type="button"
+                              className="yo-doc-link yo-doc-link--receipt"
+                              onClick={(e) => downloadReceiptFallback(po.orderNumber || po.id, e)}
+                            >
+                              <FileText size={16} />
+                              Receipt
+                            </button>
                       )}
                     </div>
                   )}
 
-                  {(po.expectedDeliveryDate || po.actualDeliveryDate) && (
-                    <div className="yo-card__dates">
-                      {po.expectedDeliveryDate && (
-                        <span>
-                          <strong>Expected</strong> {formatDateShort(po.expectedDeliveryDate)}
-                        </span>
-                      )}
-                      {po.actualDeliveryDate && (
-                        <span className="yo-arrived">
-                          <strong>Delivered</strong> {formatDateShort(po.actualDeliveryDate)}
-                        </span>
-                      )}
+                      <div className="pt-1">
+                        <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary transition-all"
+                            style={{ width: `${progressPercent(currentRank)}%` }}
+                          />
                     </div>
-                  )}
-
-                  <div className="yo-track" aria-hidden="true">
-                    <div className="yo-track__bar-wrap">
-                      <div className="yo-track__bar" style={{ width: `${progressPercent(currentRank)}%` }} />
-                    </div>
-                    <div className="yo-track__labels">
+                        <div className="flex flex-wrap justify-between gap-1 text-[10px] font-medium text-muted-foreground sm:text-xs">
                       {steps.map((step) => {
                         const done = step.rank === 0 ? true : step.rank <= currentRank;
                         const active = step.rank !== 0 && step.rank === currentRank;
                         return (
                           <span
                             key={step.key}
-                            className={`yo-track__step ${done ? 'yo-track__step--done' : ''} ${active ? 'yo-track__step--active' : ''}`}
+                                className={cn(
+                                  done && 'text-[#059669]',
+                                  active && 'font-semibold text-[#4f46e5]'
+                                )}
                           >
                             {step.label}
                           </span>
@@ -776,323 +835,351 @@ const YourOrders = () => {
                   </div>
                 </div>
 
-                <div className="yo-card__action">
-                  <button
-                    type="button"
-                    className="yo-btn-view"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      openOrder(po);
-                    }}
-                    title="View details"
-                    aria-label={`View order ${orderRef}`}
-                  >
-                    <Eye size={18} />
-                  </button>
+                    <button
+                      type="button"
+                      className="btn-secondary shrink-0 self-start inline-flex items-center gap-2"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openOrder(po);
+                      }}
+                    >
+                      <Eye className="h-4 w-4" />
+                      View details
+                    </button>
                 </div>
-              </div>
+                </CardContent>
+              </Card>
             );
           })}
         </div>
       )}
 
-      {selectedOrderId && (
-        <div
-          className="modal-overlay"
-          onClick={() => {
-            setSelectedOrderId(null);
-            setOrderDetails(null);
-          }}
-        >
-          <div className="modal-content yo-modal" onClick={(e) => e.stopPropagation()}>
-            <div className="yo-modal__head">
-              <div>
-                <h2>Order {orderDetails?.orderNumber || selectedOrderId}</h2>
-                <p className="yo-modal__sub">Supplier, timeline, and documents</p>
-                {orderDetails && (
-                  <div className="yo-modal__docs">
-                    {orderDetails.invoicePdfUrl && (
-                      <a
-                        href={orderDetails.invoicePdfUrl}
-                        className="yo-doc-link"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <FileText size={16} />
-                        Invoice PDF
-                      </a>
-                    )}
-                    {orderDetails.receiptPdfUrl && (
-                      <a
-                        href={orderDetails.receiptPdfUrl}
-                        className="yo-doc-link yo-doc-link--receipt"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <FileText size={16} />
-                        Payment receipt
-                      </a>
-                    )}
-                    {!orderDetails.receiptPdfUrl && (
-                      <button
-                        type="button"
-                        className="yo-doc-link yo-doc-link--receipt"
-                        onClick={(e) => downloadReceiptFallback(orderDetails.orderNumber || orderDetails.id, e)}
-                      >
-                        <FileText size={16} />
-                        Payment receipt
-                      </button>
-                    )}
-                  </div>
-                )}
-                {orderDetails && orderPaymentPending && (
-                  <div style={{ marginTop: '0.65rem' }}>
-                    <p style={{ margin: '0 0 0.5rem', fontSize: '0.8125rem', color: '#475569' }}>
-                      <strong>Payment method:</strong> {paymentMethodLabel(orderDetails)}
-                    </p>
-                    {codChosen && (
-                      <p style={{ margin: 0, fontSize: '0.8125rem', color: '#92400e', background: '#fffbeb', padding: '0.5rem 0.65rem', borderRadius: 8, border: '1px solid #fcd34d' }}>
-                        You chose cash on delivery. Pay the supplier in cash when the order is delivered; they will mark payment as received.
-                      </p>
-                    )}
-                    {creditChosen && (
-                      <p style={{ margin: 0, fontSize: '0.8125rem', color: '#1e3a5f', background: '#eff6ff', padding: '0.5rem 0.65rem', borderRadius: 8, border: '1px solid #bfdbfe' }}>
-                        This order is on credit terms. Complete payment per your agreement with the supplier.
-                      </p>
-                    )}
-                    {(showRazorpayForOrder || showBankTransferForOrder) && (
-                      <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.55rem', flexWrap: 'wrap' }}>
-                        {showRazorpayForOrder && (
-                          <button
-                            type="button"
-                            className="btn-primary"
-                            onClick={handlePayWithRazorpay}
-                            disabled={processingPayment}
-                          >
-                            {processingPayment ? 'Processing...' : 'Pay now (Razorpay)'}
-                          </button>
-                        )}
-                        {showBankTransferForOrder && (
-                          <button
-                            type="button"
-                            className={bankOnlyChosen ? 'btn-primary' : 'btn-secondary'}
-                            onClick={handleBankTransferFallback}
-                            disabled={processingPayment}
-                          >
-                            Request bank transfer
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-                {paymentNotice ? (
-                  <p style={{ marginTop: '0.55rem', marginBottom: 0, color: '#1e40af', fontSize: '0.85rem' }}>
-                    {paymentNotice}
-                  </p>
-                ) : null}
-                {orderDetails && (
-                  <div style={{ display: 'flex', gap: '0.55rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
-                    {selfServeEditable && (
-                      <>
-                        <button
-                          type="button"
-                          className={editMode ? 'btn-secondary' : 'btn-primary'}
-                          onClick={() => setEditMode((prev) => !prev)}
-                        >
-                          {editMode ? 'Close edit' : 'Edit order'}
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={handleCancelOrder}
-                          disabled={cancellingOrder}
-                        >
-                          {cancellingOrder ? 'Cancelling...' : 'Cancel order'}
-                        </button>
-                      </>
-                    )}
-                  </div>
-                )}
-                {orderDetails && !selfServeEditable && selfServeLockReason && (
-                  <p
-                    style={{
-                      marginTop: '0.55rem',
-                      marginBottom: 0,
-                      fontSize: '0.82rem',
-                      color: '#9a3412',
-                      background: '#fff7ed',
-                      border: '1px solid #fdba74',
-                      borderRadius: 8,
-                      padding: '0.45rem 0.6rem'
-                    }}
-                  >
-                    {selfServeLockReason}
-                  </p>
-                )}
-              </div>
-              <button
-                type="button"
-                className="btn-icon"
-                onClick={() => {
-                  setSelectedOrderId(null);
-                  setOrderDetails(null);
-                }}
-                title="Close"
-                aria-label="Close"
-              >
-                <X size={20} />
-              </button>
-            </div>
+      <Dialog open={!!selectedOrderId} onOpenChange={(open) => !open && closeOrderDialog()}>
+        <DialogContent className="yo-order-dialog max-h-[90vh] max-w-2xl overflow-y-auto p-0 sm:max-w-3xl">
+          <div className="yo-dialog-head">
+            <DialogHeader className="space-y-3 text-left">
+              <DialogTitle className="text-xl font-bold tracking-tight text-[#0f172a]">
+                Order {orderDetails?.orderNumber || selectedOrderId}
+              </DialogTitle>
+              {orderDetails ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={spStatusBadgeClass(orderDetails.status)}>
+                    {formatOrderStatusLabel(orderDetails.status)}
+                  </span>
+                  <span className={spPaymentBadgeClass(orderDetails.paymentStatus)}>
+                    {formatPaymentStatusLabel(orderDetails.paymentStatus)}
+                  </span>
+                  {orderDetails.totalAmount != null ? (
+                    <span className="ml-auto text-lg font-bold text-[#0f172a]">
+                      ₹{Number(orderDetails.totalAmount).toLocaleString('en-IN')}
+                    </span>
+                  ) : null}
+                </div>
+              ) : (
+                <DialogDescription className="text-[#64748b]">
+                  Loading order information…
+                </DialogDescription>
+              )}
+            </DialogHeader>
+          </div>
 
+          <div className="space-y-4 px-6 py-4">
             {loadingOrderDetails ? (
-              <div className="modal-body yo-section" style={{ textAlign: 'center', padding: '2.5rem' }}>
-                <div className="spinner" />
-                <p style={{ marginTop: '1rem', color: '#64748b' }}>Loading details…</p>
+              <div className="flex flex-col items-center justify-center py-16 text-[#64748b]">
+                <Loader2 className="h-8 w-8 animate-spin text-[#4f46e5]" />
+                <p className="mt-3 text-sm">Loading order details…</p>
               </div>
-            ) : orderDetails ? (
+            ) : !orderDetails ? (
+              <p className="py-8 text-center text-sm text-[#64748b]">
+                Unable to load tracking details for this order.
+              </p>
+            ) : (
               <>
-                <div className="yo-section">
-                  <h3>Supplier</h3>
-                  {orderDetails.supplier ? (
-                    <p style={{ margin: 0, fontSize: '0.9375rem', color: '#334155', lineHeight: 1.6 }}>
-                      <strong style={{ color: '#0f172a' }}>{orderDetails.supplier.name || '—'}</strong>
-                      {orderDetails.supplier.company && (
-                        <>
-                          <br />
-                          <span style={{ color: '#64748b' }}>{orderDetails.supplier.company}</span>
-                        </>
-                      )}
-                    </p>
-                  ) : (
-                    <p style={{ margin: 0, color: '#64748b' }}>Supplier information not available.</p>
-                  )}
-                </div>
-
-                <div className="yo-section">
-                  <h3>Fulfillment timeline</h3>
-                  {selectedOrderSteps ? (
-                    <div className="arrival-timeline">
-                      {selectedOrderSteps.steps.map((step) => {
-                        const done = step.rank === 0 ? true : step.rank <= selectedOrderSteps.currentRank;
-                        const active = step.rank !== 0 && step.rank === selectedOrderSteps.currentRank;
-                        return (
-                          <div
-                            key={step.key}
-                            className={`arrival-step ${done ? 'done' : ''} ${active ? 'active' : ''}`}
-                          >
-                            <div className="arrival-dot" />
-                            <div className="arrival-step-body">
-                              <div className="arrival-step-label">{step.label}</div>
-                              <div className="arrival-step-date">{step.ts ? formatDate(step.ts) : '—'}</div>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <p style={{ color: '#64748b', margin: 0 }}>No timeline data.</p>
-                  )}
-                  <div style={{ marginTop: '1rem', fontSize: '0.8125rem', color: '#64748b' }}>
-                    <div>
-                      Expected delivery:{' '}
-                      {orderDetails.expectedDeliveryDate ? formatDate(orderDetails.expectedDeliveryDate) : '—'}
-                    </div>
-                    <div style={{ marginTop: '0.35rem', fontWeight: 600, color: orderDetails.actualDeliveryDate ? '#047857' : '#64748b' }}>
-                      Delivered: {orderDetails.actualDeliveryDate ? formatDate(orderDetails.actualDeliveryDate) : '—'}
-                    </div>
+                {selfServeEditable ? (
+                  <div className="yo-dialog-actions">
+                    <button
+                      type="button"
+                      className={editMode ? 'btn-secondary' : 'btn-primary'}
+                      onClick={() => setEditMode((prev) => !prev)}
+                    >
+                      {editMode ? 'Close edit' : 'Edit order'}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={handleCancelOrder}
+                      disabled={cancellingOrder}
+                    >
+                      {cancellingOrder ? 'Cancelling…' : 'Cancel order'}
+                    </button>
                   </div>
+                ) : null}
+                {!selfServeEditable && selfServeLockReason ? (
+                  <p className="yo-lock-reason">{selfServeLockReason}</p>
+                ) : null}
+
+                {paymentNotice ? <p className="yo-payment-notice">{paymentNotice}</p> : null}
+
+                {orderPaymentPending ? (
+                  <OrderDialogSection title="Payment">
+                    <p className="mb-3 text-sm text-[#475569]">
+                      <strong className="text-[#0f172a]">Payment method:</strong>{' '}
+                      {paymentMethodLabel(orderDetails)}
+                    </p>
+                    <div className="space-y-3">
+                      {codChosen ? (
+                        <p className="yo-payment-hint yo-payment-hint--cod">
+                          You chose cash on delivery. Pay the supplier in cash when the order is
+                          delivered; they will mark payment as received.
+                        </p>
+                      ) : null}
+                      {creditChosen ? (
+                        <p className="yo-payment-hint yo-payment-hint--credit">
+                          This order is on credit terms. Complete payment per your agreement with
+                          the supplier.
+                        </p>
+                      ) : null}
+                      {(showRazorpayForOrder || showBankTransferForOrder) && (
+                        <div className="yo-dialog-actions">
+                          {showRazorpayForOrder ? (
+                            <button
+                              type="button"
+                              className="btn-primary"
+                              onClick={handlePayWithRazorpay}
+                              disabled={processingPayment}
+                            >
+                              {processingPayment ? 'Processing…' : 'Pay now (Razorpay)'}
+                            </button>
+                          ) : null}
+                          {showBankTransferForOrder ? (
+                            <button
+                              type="button"
+                              className={bankOnlyChosen ? 'btn-primary' : 'btn-secondary'}
+                              onClick={handleBankTransferFallback}
+                              disabled={processingPayment}
+                            >
+                              Request bank transfer
+                            </button>
+                          ) : null}
+                        </div>
+                      )}
+                    </div>
+                  </OrderDialogSection>
+                ) : null}
+
+                {(orderDetails.invoicePdfUrl || orderDetails.receiptPdfUrl || !orderDetails.receiptPdfUrl) && (
+                  <OrderDialogSection title="Documents">
+                    <div className="yo-modal__docs flex flex-wrap gap-2">
+                      {orderDetails.invoicePdfUrl ? (
+                        <a
+                          href={orderDetails.invoicePdfUrl}
+                          className="yo-doc-link"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <FileText size={16} />
+                          Invoice PDF
+                        </a>
+                      ) : null}
+                      {orderDetails.receiptPdfUrl ? (
+                        <a
+                          href={orderDetails.receiptPdfUrl}
+                          className="yo-doc-link yo-doc-link--receipt"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          <FileText size={16} />
+                          Payment receipt
+                        </a>
+                      ) : (
+                        <button
+                          type="button"
+                          className="yo-doc-link yo-doc-link--receipt"
+                          onClick={(e) =>
+                            downloadReceiptFallback(orderDetails.orderNumber || orderDetails.id, e)
+                          }
+                        >
+                          <FileText size={16} />
+                          Payment receipt
+                        </button>
+                      )}
+                    </div>
+                  </OrderDialogSection>
+                )}
+
+                <div className="grid gap-4 md:grid-cols-2">
+                  <OrderDialogSection title="Supplier">
+                    {orderDetails.supplier ? (
+                      <div>
+                        <p className="font-semibold text-foreground">
+                          {orderDetails.supplier.name || '—'}
+                        </p>
+                        {orderDetails.supplier.company ? (
+                          <p className="text-sm text-muted-foreground">{orderDetails.supplier.company}</p>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">Supplier information not available.</p>
+                    )}
+                  </OrderDialogSection>
+
+                  <OrderDialogSection title="Fulfillment timeline">
+                    {selectedOrderSteps ? (
+                      <div className="arrival-timeline">
+                        {selectedOrderSteps.steps.map((step) => {
+                          const done =
+                            step.rank === 0 ? true : step.rank <= selectedOrderSteps.currentRank;
+                          const active =
+                            step.rank !== 0 && step.rank === selectedOrderSteps.currentRank;
+                          return (
+                            <div
+                              key={step.key}
+                              className={`arrival-step ${done ? 'done' : ''} ${active ? 'active' : ''}`}
+                            >
+                              <div className="arrival-dot" />
+                              <div className="arrival-step-body">
+                                <div className="arrival-step-label">{step.label}</div>
+                                <div className="arrival-step-date">
+                                  {step.ts ? formatDate(step.ts) : '—'}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="m-0 text-sm text-[#64748b]">No timeline data.</p>
+                    )}
+                    <div className="mt-4 text-[0.8125rem] text-[#64748b]">
+                      <div>
+                        Expected delivery:{' '}
+                        {orderDetails.expectedDeliveryDate
+                          ? formatDate(orderDetails.expectedDeliveryDate)
+                          : '—'}
+                      </div>
+                      <div
+                        className="mt-1 font-semibold"
+                        style={{
+                          color: orderDetails.actualDeliveryDate ? '#047857' : '#64748b'
+                        }}
+                      >
+                        Delivered:{' '}
+                        {orderDetails.actualDeliveryDate
+                          ? formatDate(orderDetails.actualDeliveryDate)
+                          : '—'}
+                      </div>
+                    </div>
+                  </OrderDialogSection>
                 </div>
 
-                {orderDetails.deliveryAddress && (
-                  <div className="yo-section">
-                    <h3>Delivery address</h3>
-                    <p style={{ margin: 0, fontSize: '0.9375rem', color: '#475569', lineHeight: 1.55 }}>
+                {orderDetails.deliveryAddress ? (
+                  <OrderDialogSection title="Delivery address">
+                    <p className="text-sm leading-relaxed text-foreground">
                       {formatAddress(orderDetails.deliveryAddress)}
                     </p>
                     {(orderDetails.deliveryAddress.shippingAddress ||
                       orderDetails.deliveryAddress.billingAddress ||
                       orderDetails.deliveryAddress.deliveryDestination ||
                       orderDetails.deliveryAddress.gstin) && (
-                      <div style={{ marginTop: '0.65rem', fontSize: '0.84rem', color: '#475569' }}>
-                        <p style={{ margin: 0 }}>
-                          <strong>Delivery destination:</strong>{' '}
+                      <dl className="mt-3 space-y-2 border-t pt-3 text-sm">
+                        {orderDetails.deliveryAddress.deliveryDestination ? (
+                          <div>
+                            <dt className="text-muted-foreground">Destination</dt>
+                            <dd className="font-medium">
                           {orderDetails.deliveryAddress.deliveryDestination === 'billing'
                             ? 'Billing address'
                             : 'Shipping address'}
-                        </p>
-                        {orderDetails.deliveryAddress.gstin && (
-                          <p style={{ margin: '0.25rem 0 0' }}>
-                            <strong>GSTIN:</strong> {orderDetails.deliveryAddress.gstin}
-                          </p>
-                        )}
-                        {orderDetails.deliveryAddress.shippingAddress && (
-                          <p style={{ margin: '0.25rem 0 0' }}>
-                            <strong>Shipping:</strong> {formatAddress(orderDetails.deliveryAddress.shippingAddress)}
-                          </p>
-                        )}
-                        {orderDetails.deliveryAddress.billingAddress && (
-                          <p style={{ margin: '0.25rem 0 0' }}>
-                            <strong>Billing (GST):</strong> {formatAddress(orderDetails.deliveryAddress.billingAddress)}
-                          </p>
-                        )}
+                            </dd>
                       </div>
-                    )}
+                        ) : null}
+                        {orderDetails.deliveryAddress.gstin ? (
+                          <div>
+                            <dt className="text-muted-foreground">GSTIN</dt>
+                            <dd className="font-medium">{orderDetails.deliveryAddress.gstin}</dd>
                   </div>
-                )}
+                        ) : null}
+                        {orderDetails.deliveryAddress.shippingAddress ? (
+                          <div>
+                            <dt className="text-muted-foreground">Shipping</dt>
+                            <dd>{formatAddress(orderDetails.deliveryAddress.shippingAddress)}</dd>
+                          </div>
+                        ) : null}
+                        {orderDetails.deliveryAddress.billingAddress ? (
+                          <div>
+                            <dt className="text-muted-foreground">Billing (GST)</dt>
+                            <dd>{formatAddress(orderDetails.deliveryAddress.billingAddress)}</dd>
+                          </div>
+                        ) : null}
+                      </dl>
+                    )}
+                  </OrderDialogSection>
+                ) : null}
 
-                <div className="yo-section">
-                  <h3>Status history</h3>
-                  {Array.isArray(orderDetails.status_history) && orderDetails.status_history.length > 0 ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <OrderDialogSection title="Status history">
+                  {Array.isArray(orderDetails.status_history) &&
+                  orderDetails.status_history.length > 0 ? (
+                    <ul className="max-h-48 space-y-2 overflow-y-auto pr-1">
                       {[...orderDetails.status_history]
                         .sort((a, b) => {
-                          const ta = a?.timestamp ? (parseServerDate(a.timestamp)?.getTime() || 0) : 0;
-                          const tb = b?.timestamp ? (parseServerDate(b.timestamp)?.getTime() || 0) : 0;
+                          const ta = a?.timestamp
+                            ? parseServerDate(a.timestamp)?.getTime() || 0
+                            : 0;
+                          const tb = b?.timestamp
+                            ? parseServerDate(b.timestamp)?.getTime() || 0
+                            : 0;
                           return ta - tb;
                         })
                         .map((h, idx) => (
-                          <div
-                            key={`${h.status || 'status'}-${idx}`}
-                            style={{
-                              padding: '0.85rem 1rem',
-                              border: '1px solid #f1f5f9',
-                              borderRadius: 10,
-                              background: '#fafbfc'
-                            }}
-                          >
-                            <div style={{ fontWeight: 600, textTransform: 'capitalize', color: '#0f172a' }}>
+                          <li key={`${h.status || 'status'}-${idx}`} className="yo-status-history-item">
+                            <div className="font-semibold capitalize text-[#0f172a]">
                               {h.status || '—'}
                             </div>
-                            <div style={{ fontSize: '0.8125rem', color: '#64748b', marginTop: '0.2rem' }}>
+                            <div className="mt-0.5 text-[0.8125rem] text-[#64748b]">
                               {h.timestamp ? formatDate(h.timestamp) : '—'}
                             </div>
-                            {h.notes && (
-                              <div style={{ fontSize: '0.8125rem', color: '#475569', marginTop: '0.45rem' }}>
-                                {h.notes}
-                              </div>
-                            )}
-                          </div>
+                            {h.notes ? (
+                              <div className="mt-2 text-[0.8125rem] text-[#475569]">{h.notes}</div>
+                            ) : null}
+                          </li>
                         ))}
-                    </div>
+                    </ul>
                   ) : (
-                    <p style={{ color: '#64748b', margin: 0 }}>No status history.</p>
+                    <p className="text-sm text-muted-foreground">No status history.</p>
                   )}
-                </div>
-                {editMode && editingOrder && (
-                  <div className="yo-section">
-                    <h3>Self-serve edits</h3>
-                    <div style={{ display: 'grid', gap: '0.55rem' }}>
-                      <input
+                </OrderDialogSection>
+
+                {editMode && editingOrder ? (
+                  <OrderDialogSection title="Edit order">
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="edit-expected-delivery">Expected delivery</Label>
+                        <Input
+                          id="edit-expected-delivery"
                         type="datetime-local"
-                        value={editingOrder.expectedDeliveryDate ? new Date(editingOrder.expectedDeliveryDate).toISOString().slice(0, 16) : ''}
-                        onChange={(e) => setEditingOrder((prev) => ({ ...prev, expectedDeliveryDate: e.target.value ? new Date(e.target.value).toISOString() : null }))}
-                      />
+                          value={
+                            editingOrder.expectedDeliveryDate
+                              ? new Date(editingOrder.expectedDeliveryDate).toISOString().slice(0, 16)
+                              : ''
+                          }
+                          onChange={(e) =>
+                            setEditingOrder((prev) => ({
+                              ...prev,
+                              expectedDeliveryDate: e.target.value
+                                ? new Date(e.target.value).toISOString()
+                                : null
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-payment-method">Payment method</Label>
                       <select
+                          id="edit-payment-method"
+                          className="flex h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                         value={editingOrder.paymentMethod || ''}
-                        onChange={(e) => setEditingOrder((prev) => ({ ...prev, paymentMethod: e.target.value }))}
+                          onChange={(e) =>
+                            setEditingOrder((prev) => ({ ...prev, paymentMethod: e.target.value }))
+                          }
                       >
                         <option value="">Select payment method</option>
                         <option value="online">Online</option>
@@ -1100,116 +1187,157 @@ const YourOrders = () => {
                         <option value="cash">Cash</option>
                         <option value="credit">Credit</option>
                       </select>
-                      <textarea
+                      </div>
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="edit-notes">Order notes</Label>
+                        <Textarea
+                          id="edit-notes"
                         rows={2}
-                        placeholder="Order notes"
+                          placeholder="Notes for the supplier"
                         value={editingOrder.notes || ''}
-                        onChange={(e) => setEditingOrder((prev) => ({ ...prev, notes: e.target.value }))}
-                      />
-                      <input
-                        placeholder="Address line 1"
-                        value={editingOrder.deliveryAddress?.line1 || ''}
-                        onChange={(e) => setEditingOrder((prev) => ({ ...prev, deliveryAddress: { ...prev.deliveryAddress, line1: e.target.value } }))}
-                      />
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: '0.5rem' }}>
-                        <input
-                          placeholder="City"
-                          value={editingOrder.deliveryAddress?.city || ''}
-                          onChange={(e) => setEditingOrder((prev) => ({ ...prev, deliveryAddress: { ...prev.deliveryAddress, city: e.target.value } }))}
-                        />
-                        <input
-                          placeholder="State"
-                          value={editingOrder.deliveryAddress?.state || ''}
-                          onChange={(e) => setEditingOrder((prev) => ({ ...prev, deliveryAddress: { ...prev.deliveryAddress, state: e.target.value } }))}
-                        />
-                        <input
-                          placeholder="Pincode"
-                          value={editingOrder.deliveryAddress?.pincode || ''}
-                          onChange={(e) => setEditingOrder((prev) => ({ ...prev, deliveryAddress: { ...prev.deliveryAddress, pincode: e.target.value } }))}
-                        />
-                        <input
-                          placeholder="Country"
-                          value={editingOrder.deliveryAddress?.country || ''}
-                          onChange={(e) => setEditingOrder((prev) => ({ ...prev, deliveryAddress: { ...prev.deliveryAddress, country: e.target.value } }))}
+                          onChange={(e) =>
+                            setEditingOrder((prev) => ({ ...prev, notes: e.target.value }))
+                          }
                         />
                       </div>
-                      <input
-                        placeholder="Cancellation reason (optional)"
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="edit-line1">Address line 1</Label>
+                        <Input
+                          id="edit-line1"
+                        value={editingOrder.deliveryAddress?.line1 || ''}
+                          onChange={(e) =>
+                            setEditingOrder((prev) => ({
+                              ...prev,
+                              deliveryAddress: { ...prev.deliveryAddress, line1: e.target.value }
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-city">City</Label>
+                        <Input
+                          id="edit-city"
+                          value={editingOrder.deliveryAddress?.city || ''}
+                          onChange={(e) =>
+                            setEditingOrder((prev) => ({
+                              ...prev,
+                              deliveryAddress: { ...prev.deliveryAddress, city: e.target.value }
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-state">State</Label>
+                        <Input
+                          id="edit-state"
+                          value={editingOrder.deliveryAddress?.state || ''}
+                          onChange={(e) =>
+                            setEditingOrder((prev) => ({
+                              ...prev,
+                              deliveryAddress: { ...prev.deliveryAddress, state: e.target.value }
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-pincode">Pincode</Label>
+                        <Input
+                          id="edit-pincode"
+                          value={editingOrder.deliveryAddress?.pincode || ''}
+                          onChange={(e) =>
+                            setEditingOrder((prev) => ({
+                              ...prev,
+                              deliveryAddress: { ...prev.deliveryAddress, pincode: e.target.value }
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="edit-country">Country</Label>
+                        <Input
+                          id="edit-country"
+                          value={editingOrder.deliveryAddress?.country || ''}
+                          onChange={(e) =>
+                            setEditingOrder((prev) => ({
+                              ...prev,
+                              deliveryAddress: { ...prev.deliveryAddress, country: e.target.value }
+                            }))
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2 sm:col-span-2">
+                        <Label htmlFor="cancel-reason">Cancellation reason (optional)</Label>
+                        <Input
+                          id="cancel-reason"
                         value={cancelReason}
                         onChange={(e) => setCancelReason(e.target.value)}
                       />
-                      <div>
-                        <button type="button" className="btn-primary" onClick={handleUpdateOrder} disabled={savingOrderEdit}>
-                          {savingOrderEdit ? 'Saving...' : 'Save changes'}
-                        </button>
                       </div>
                     </div>
-                  </div>
-                )}
-                {canRateOrder && (
-                  <div className="yo-section">
-                    <h3>Reviews & ratings</h3>
+                    <button
+                      type="button"
+                      className="btn-primary mt-4"
+                      onClick={handleUpdateOrder}
+                      disabled={savingOrderEdit}
+                    >
+                      {savingOrderEdit ? 'Saving…' : 'Save changes'}
+                    </button>
+                  </OrderDialogSection>
+                ) : null}
+
+                {canRateOrder ? (
+                  <OrderDialogSection title="Rate this order">
                     {ratingLoading ? (
-                      <p style={{ margin: 0, color: '#64748b' }}>Loading rating...</p>
+                      <p className="text-sm text-muted-foreground">Loading your previous rating…</p>
                     ) : (
-                      <>
-                        <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.5rem' }}>
+                      <div className="space-y-3">
+                        <div className="flex gap-1">
                           {[1, 2, 3, 4, 5].map((star) => (
                             <button
                               key={star}
                               type="button"
                               onClick={() => setRating(star)}
+                              className="rounded border-none bg-transparent p-0 text-[1.35rem] leading-none"
                               style={{
-                                border: 'none',
-                                background: 'transparent',
-                                fontSize: '1.35rem',
                                 cursor: 'pointer',
-                                color: star <= rating ? '#f59e0b' : '#cbd5e1',
-                                padding: 0
+                                color: star <= rating ? '#f59e0b' : '#cbd5e1'
                               }}
+                              aria-label={`Rate ${star} stars`}
                             >
                               ★
                             </button>
                           ))}
                         </div>
-                        <textarea
+                        <Textarea
                           rows={3}
-                          placeholder="Share your review"
+                          placeholder="Share your experience with this order"
                           value={feedback}
                           onChange={(e) => setFeedback(e.target.value)}
                         />
-                        <div style={{ marginTop: '0.5rem' }}>
-                          <button type="button" className="btn-primary" onClick={handleSubmitRating} disabled={submittingRating}>
-                            {submittingRating ? 'Submitting...' : 'Submit review'}
-                          </button>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={handleSubmitRating}
+                          disabled={submittingRating}
+                        >
+                          {submittingRating ? 'Submitting…' : 'Submit review'}
+                        </button>
                         </div>
-                      </>
                     )}
-                  </div>
-                )}
+                  </OrderDialogSection>
+                ) : null}
               </>
-            ) : (
-              <div className="modal-body yo-section" style={{ textAlign: 'center', color: '#64748b' }}>
-                Unable to load tracking details.
-              </div>
             )}
-
-            <div className="yo-modal-footer">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setSelectedOrderId(null);
-                  setOrderDetails(null);
-                }}
-              >
-                Close
-              </button>
-            </div>
           </div>
-        </div>
-      )}
-    </div>
+
+          <DialogFooter className="yo-modal-footer p-0">
+            <button type="button" className="btn-secondary" onClick={closeOrderDialog}>
+              Close
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </SpPageLayout>
   );
 };
 

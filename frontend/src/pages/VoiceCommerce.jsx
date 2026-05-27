@@ -5,6 +5,8 @@ import { normalizeUserType } from '../utils/userType';
 import { useVoiceSessionContext } from '../voice/VoiceSessionContext';
 import { VoiceAssistantOrb } from '../voice/VoiceAssistantOrb.jsx';
 import { voiceText } from '../voice/voiceText.js';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
 import './VoiceCommerce.css';
 
 const VoiceCommerce = ({ user }) => {
@@ -56,10 +58,9 @@ const VoiceCommerce = ({ user }) => {
   const micActive = inCall && displayState === 'listening';
 
   return (
-    <div className="voice-page">
-      <div className="voice-page__header">
-        <h1>Voice shopping</h1>
-      </div>
+    <SpPageLayout>
+    <div className="voice-page mx-auto max-w-lg">
+      <SpPageHeader title="Voice shopping" description="Shop hands-free with voice commands" icon={Mic} className="!border-0 !pb-2" />
 
       <VoiceAssistantOrb
         micActive={micActive}
@@ -98,6 +99,7 @@ const VoiceCommerce = ({ user }) => {
 
       {error ? <p className="voice-error">{error}</p> : null}
     </div>
+    </SpPageLayout>
   );
 };
 

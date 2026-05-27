@@ -360,6 +360,79 @@
   border-top: 1px solid #f1f5f9;
 }
 
+/* Order detail dialog — legacy colors (Dashboard btn-primary / btn-secondary) */
+.yo-order-dialog .yo-dialog-section {
+  padding: 1.25rem 1.35rem;
+  background: #ffffff;
+  border: 1px solid #e8ecf1;
+  border-radius: 14px;
+  box-shadow: none;
+}
+
+.yo-order-dialog .yo-dialog-section h3 {
+  margin: 0 0 0.75rem;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #94a3b8;
+}
+
+.yo-order-dialog .yo-dialog-head {
+  padding: 1.35rem 1.5rem;
+  background: linear-gradient(180deg, #fafbfc 0%, #ffffff 100%);
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.yo-order-dialog .yo-payment-hint {
+  margin: 0;
+  font-size: 0.8125rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 8px;
+  line-height: 1.45;
+}
+
+.yo-order-dialog .yo-payment-hint--cod {
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+}
+
+.yo-order-dialog .yo-payment-hint--credit {
+  color: #1e3a5f;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+
+.yo-order-dialog .yo-payment-notice {
+  margin: 0;
+  color: #1e40af;
+  font-size: 0.85rem;
+}
+
+.yo-order-dialog .yo-lock-reason {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #9a3412;
+  background: #fff7ed;
+  border: 1px solid #fdba74;
+  border-radius: 8px;
+  padding: 0.45rem 0.6rem;
+}
+
+.yo-order-dialog .yo-status-history-item {
+  padding: 0.85rem 1rem;
+  border: 1px solid #f1f5f9;
+  border-radius: 10px;
+  background: #fafbfc;
+}
+
+.yo-order-dialog .yo-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
 @media (max-width: 640px) {
   .yo-card {
     grid-template-columns: 1fr auto;

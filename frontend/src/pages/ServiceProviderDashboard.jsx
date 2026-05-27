@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { getApiUrl, authFetch } from '../config/api';
 import { 
-  FileText, 
+  FileText,
+  BarChart3,
   Users, 
   ShoppingCart, 
   TrendingUp, 
@@ -22,6 +23,13 @@ import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
+import SpStatCard from '../components/sp/SpStatCard';
+import { Button } from '@/components/ui/button';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import './Dashboard.css';
 
 const DASHBOARD_CACHE_KEY = 'sp_dashboard_cache_v1';
@@ -47,9 +55,35 @@ const ServiceProviderDashboard = ({ user }) => {
   const [rating, setRating] = useState(0);
   const [feedback, setFeedback] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
+  const [notificationsPanelVisible, setNotificationsPanelVisible] = useState(false);
   const [dashboardError, setDashboardError] = useState('');
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const onPanelToggle = (event) => {
+      if (typeof event.detail?.visible === 'boolean') {
+        setNotificationsPanelVisible(event.detail.visible);
+      }
+    };
+    const onOpenOrder = (event) => {
+      const orderRef = event.detail?.orderRef;
+      if (orderRef) handleViewOrder(orderRef);
+    };
+
+    window.addEventListener('sp-notifications-panel-toggle', onPanelToggle);
+    window.addEventListener('sp-open-order', onOpenOrder);
+
+    const pendingOrder = sessionStorage.getItem('pendingSpOrderView');
+    if (pendingOrder) {
+      sessionStorage.removeItem('pendingSpOrderView');
+      handleViewOrder(pendingOrder);
+    }
+
+    return () => {
+      window.removeEventListener('sp-notifications-panel-toggle', onPanelToggle);
+      window.removeEventListener('sp-open-order', onOpenOrder);
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -68,19 +102,6 @@ const ServiceProviderDashboard = ({ user }) => {
 
     Promise.allSettled([fetchDashboardData(), fetchNotifications()]);
   }, []);
-
-  useEffect(() => {
-    const handleClickOutside = (event) => {
-      if (showNotifications && !event.target.closest('[data-sp-notification-container]')) {
-        setShowNotifications(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [showNotifications]);
 
   const fetchDashboardData = async () => {
     try {
@@ -638,230 +659,45 @@ const ServiceProviderDashboard = ({ user }) => {
   };
 
   return (
-    <div className="dashboard-container">
-      <div className="dashboard-header">
-        <div>
-          <h1>Welcome back, {user?.name}!</h1>
-          <p>Here's what's happening with your procurement activities</p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <button
-            className="btn-secondary"
-            onClick={() => navigate('/returns')}
-            style={{ whiteSpace: 'nowrap' }}
-          >
-            View Returns
-          </button>
-          <div style={{ position: 'relative' }} data-sp-notification-container>
-            <button
-              onClick={() => {
-                if (!showNotifications) {
-                  fetchNotifications();
-                }
-                setShowNotifications(!showNotifications);
-              }}
-              style={{
-                position: 'relative',
-                padding: '0.5rem',
-                background: 'transparent',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center'
-              }}
-            >
-              <Bell size={20} />
-              {unreadCount > 0 && (
-                <span style={{
-                  position: 'absolute',
-                  top: '-4px',
-                  right: '-4px',
-                  background: '#ef4444',
-                  color: 'white',
-                  borderRadius: '50%',
-                  width: '20px',
-                  height: '20px',
-                  fontSize: '0.75rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontWeight: 'bold'
-                }}>
-                  {unreadCount > 9 ? '9+' : unreadCount}
-                </span>
-              )}
-            </button>
+    <SpPageLayout showStepper={false}>
+      <div className="dashboard-container !max-w-none !p-0">
+      <div
+        className={`grid gap-6 ${
+          notificationsPanelVisible ? 'lg:grid-cols-[1fr_320px]' : 'lg:grid-cols-1'
+        }`}
+      >
+        <div className="min-w-0">
+      <SpPageHeader
+        title={`Welcome back, ${user?.name || 'there'}`}
+        description="Here's what's happening with your procurement activities"
+        icon={BarChart3}
+        actions={
+          <>
+            <Button variant="outline" onClick={() => navigate('/returns')}>
+              View Returns
+            </Button>
+            <Button variant="outline" onClick={() => navigate('/product-discovery')}>
+              Browse catalog
+            </Button>
+            <Button onClick={() => navigate('/boq-normalize')}>
+              <Plus className="h-4 w-4" />
+              New BOQ
+            </Button>
+          </>
+        }
+      />
 
-            {showNotifications && (
-              <div
-                data-sp-notification-container
-                style={{
-                  position: 'absolute',
-                  top: '100%',
-                  right: 0,
-                  marginTop: '0.5rem',
-                  background: 'white',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '8px',
-                  boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                  width: '350px',
-                  maxHeight: '500px',
-                  overflowY: 'auto',
-                  zIndex: 1000
-                }}
-              >
-                <div style={{
-                  padding: '1rem',
-                  borderBottom: '1px solid #e5e7eb',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center'
-                }}>
-                  <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: 600 }}>Notifications</h3>
-                </div>
-                <div>
-                  {notifications.length === 0 ? (
-                    <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b' }}>
-                      No notifications
-                    </div>
-                  ) : (
-                    notifications.map((notification) => {
-                      const notificationId = notification.id || notification._id;
-                      const meta = getNotificationMeta(notification);
-                      const receiptPdfUrl = meta.receiptPdfUrl || null;
-                      const invoicePdfUrl = meta.invoicePdfUrl || null;
-                      const orderRef = getNotificationOrderRef(notification);
-                      return (
-                      <div
-                        key={notificationId}
-                        onClick={() => {
-                          if (!notification.is_read && !notification.isRead) {
-                            markNotificationAsRead(notificationId);
-                          }
-                          if (orderRef) {
-                            handleViewOrder(orderRef);
-                            setShowNotifications(false);
-                          }
-                        }}
-                        style={{
-                          padding: '1rem',
-                          borderBottom: '1px solid #f3f4f6',
-                          cursor: 'pointer',
-                          backgroundColor: notification.is_read || notification.isRead ? 'white' : '#f0f9ff',
-                          transition: 'background-color 0.2s'
-                        }}
-                      >
-                        <div style={{ fontWeight: notification.is_read || notification.isRead ? 500 : 600, marginBottom: '0.25rem', color: '#111827' }}>
-                          {notification.title}
-                        </div>
-                        <div style={{ fontSize: '0.875rem', color: '#64748b', marginBottom: '0.25rem' }}>
-                          {notification.message}
-                        </div>
-                        <div style={{ fontSize: '0.75rem', color: '#9ca3af' }}>
-                          {formatDate(notification.created_at || notification.createdAt)}
-                        </div>
-                        {(receiptPdfUrl || invoicePdfUrl) && (
-                          <div style={{ display: 'flex', gap: '0.45rem', marginTop: '0.55rem' }}>
-                            {receiptPdfUrl && (
-                              <a
-                                href={receiptPdfUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                style={{ fontSize: '0.78rem', color: '#2563eb', textDecoration: 'underline' }}
-                              >
-                                Download Receipt
-                              </a>
-                            )}
-                            {invoicePdfUrl && (
-                              <a
-                                href={invoicePdfUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => e.stopPropagation()}
-                                style={{ fontSize: '0.78rem', color: '#2563eb', textDecoration: 'underline' }}
-                              >
-                                Download Invoice
-                              </a>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-          <button 
-            className="btn-primary"
-            onClick={() => navigate('/boq-normalize')}
-          >
-            <Plus size={18} />
-            New BOQ
-          </button>
-        </div>
-      </div>
+      {dashboardError ? (
+        <Alert variant="destructive" className="mb-4">
+          <AlertDescription>{dashboardError}</AlertDescription>
+        </Alert>
+      ) : null}
 
-      {/* Stats Cards */}
-      {dashboardError && (
-        <div
-          style={{
-            marginBottom: '1rem',
-            padding: '0.75rem 1rem',
-            borderRadius: '8px',
-            border: '1px solid #fecaca',
-            backgroundColor: '#fef2f2',
-            color: '#b91c1c',
-            fontWeight: 500
-          }}
-        >
-          {dashboardError}
-        </div>
-      )}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-icon boq">
-            <FileText size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{stats.totalBOQs}</h3>
-            <p>Total BOQs</p>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon po">
-            <ShoppingCart size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{stats.activePOs}</h3>
-            <p>Active POs</p>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon spent">
-            <TrendingUp size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{stats.totalSpent.toLocaleString()}</h3>
-            <p>Total Spent</p>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon pending">
-            <Clock size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{stats.pendingApprovals}</h3>
-            <p>Pending Approvals</p>
-          </div>
-        </div>
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <SpStatCard label="Total BOQs" value={stats.totalBOQs} icon={FileText} accent="indigo" />
+        <SpStatCard label="Active POs" value={stats.activePOs} icon={ShoppingCart} accent="emerald" />
+        <SpStatCard label="Total Spent" value={`₹${Number(stats.totalSpent || 0).toLocaleString()}`} icon={TrendingUp} accent="amber" />
+        <SpStatCard label="Pending Approvals" value={stats.pendingApprovals} icon={Clock} accent="rose" />
       </div>
 
       <div className="dashboard-content">
@@ -1004,6 +840,73 @@ const ServiceProviderDashboard = ({ user }) => {
             )}
           </div>
         </div>
+      </div>
+        </div>
+
+        <Card
+          className={`hidden h-fit max-h-[calc(100vh-8rem)] lg:sticky lg:top-20 lg:flex-col data-sp-notification-container ${
+            notificationsPanelVisible ? 'lg:flex' : 'lg:hidden'
+          }`}
+        >
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-base font-semibold">Notifications</CardTitle>
+            {unreadCount > 0 ? (
+              <span className="rounded-full bg-destructive px-2 py-0.5 text-xs font-bold text-destructive-foreground">
+                {unreadCount}
+              </span>
+            ) : null}
+          </CardHeader>
+          <CardContent className="p-0">
+            <ScrollArea className="h-[min(420px,calc(100vh-12rem))]">
+              {notifications.length === 0 ? (
+                <p className="px-4 py-8 text-center text-sm text-muted-foreground">No notifications</p>
+              ) : (
+                notifications.map((notification) => {
+                  const notificationId = notification.id || notification._id;
+                  const meta = getNotificationMeta(notification);
+                  const receiptPdfUrl = meta.receiptPdfUrl || null;
+                  const invoicePdfUrl = meta.invoicePdfUrl || null;
+                  const orderRef = getNotificationOrderRef(notification);
+                  const isRead = notification.is_read || notification.isRead;
+                  return (
+                    <button
+                      key={notificationId}
+                      type="button"
+                      className={`block w-full border-b px-4 py-3 text-left transition-colors hover:bg-muted/50 ${
+                        isRead ? 'bg-background' : 'bg-primary/5'
+                      }`}
+                      onClick={() => {
+                        if (!isRead) markNotificationAsRead(notificationId);
+                        if (orderRef) handleViewOrder(orderRef);
+                      }}
+                    >
+                      <div className="text-sm font-medium text-foreground">{notification.title}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">{notification.message}</div>
+                      <div className="mt-1 text-[11px] text-muted-foreground/80">
+                        {formatDate(notification.created_at || notification.createdAt)}
+                      </div>
+                      {(receiptPdfUrl || invoicePdfUrl) && (
+                        <div className="mt-2 flex gap-2 text-xs text-primary">
+                          {receiptPdfUrl ? (
+                            <a href={receiptPdfUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                              Receipt
+                            </a>
+                          ) : null}
+                          {invoicePdfUrl ? (
+                            <a href={invoicePdfUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+                              Invoice
+                            </a>
+                          ) : null}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })
+              )}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      </div>
       </div>
 
       {/* Order Details Modal */}
@@ -1538,7 +1441,7 @@ const ServiceProviderDashboard = ({ user }) => {
           </div>
         </div>
       )}
-    </div>
+    </SpPageLayout>
   );
 };
 

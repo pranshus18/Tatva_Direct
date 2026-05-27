@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getApiUrl } from '../config/api';
 import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Users } from 'lucide-react';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
 import './Profile.css';
 
 const Profile = ({ user }) => {
@@ -100,8 +102,11 @@ const Profile = ({ user }) => {
     );
   }
 
-  return (
+  const isServiceProvider = user?.userType === 'service_provider';
+
+  const profileBody = (
     <div className="profile-container">
+      {!isServiceProvider ? (
       <div className="profile-header">
         <div className="profile-title">
           <User size={24} />
@@ -127,6 +132,7 @@ const Profile = ({ user }) => {
           )}
         </div>
       </div>
+      ) : null}
 
       {user?.userType === 'supplier' ? (
         <SupplierProfile
@@ -144,6 +150,40 @@ const Profile = ({ user }) => {
       )}
     </div>
   );
+
+  if (isServiceProvider) {
+    return (
+      <SpPageLayout showStepper={false}>
+        <SpPageHeader
+          title="Company Profile"
+          description="Manage your company details, projects, and billing addresses."
+          icon={User}
+          actions={
+            editing ? (
+              <>
+                <button type="button" className="btn-secondary" onClick={handleCancel}>
+                  <X size={18} strokeWidth={2} aria-hidden />
+                  Cancel
+                </button>
+                <button type="button" className="btn-primary" onClick={handleSave}>
+                  <Save size={18} strokeWidth={2} aria-hidden />
+                  Save Changes
+                </button>
+              </>
+            ) : (
+              <button type="button" className="btn-primary" onClick={() => setEditing(true)}>
+                <Edit size={18} strokeWidth={2} aria-hidden />
+                Edit Profile
+              </button>
+            )
+          }
+        />
+        {profileBody}
+      </SpPageLayout>
+    );
+  }
+
+  return profileBody;
 };
 
 const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false }) => {

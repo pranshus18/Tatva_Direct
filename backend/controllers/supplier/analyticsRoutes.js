@@ -4,9 +4,14 @@ import {
   fetchClosedReturnQuantityByOrderItem,
   getNetItemMetrics
 } from './supplierImports.js';
+import { normalizeCustomerPhone } from '../../services/creditAccountService.js';
 import {
-  isRevenueRecognizedOrder
-} from './shared/productHelpers.js';
+  buildCustomerIdentityKey,
+  isCountableSalesOrder,
+  isOfflineSaleChannel,
+  resolveSalesAggregateKey
+} from '../../services/customerIdentityService.js';
+import { isRevenueRecognizedOrder } from './shared/productHelpers.js';
 
 export function registerSupplierAnalyticsRoutes(ctx) {
   const {
@@ -438,6 +443,42 @@ router.get('/analytics/upstream-supplier-purchase-totals', authenticateToken, as
   }
 });
 
+function createEmptyBuyerPurchaseRecord({
+  buyerKey,
+  buyerType,
+  name,
+  company,
+  email,
+  phone = null,
+  linkedBuyerUserId = null,
+  linkedCustomerId = null
+}) {
+  return {
+    buyerId: buyerKey,
+    buyerType,
+    name: name || 'Unknown Buyer',
+    company: company || null,
+    email: email || null,
+    phone,
+    linkedBuyerUserId,
+    linkedCustomerId,
+    totalOrders: 0,
+    paidOrders: 0,
+    onlineOrders: 0,
+    offlineOrders: 0,
+    totalOrderValue: 0,
+    onlineOrderValue: 0,
+    offlineOrderValue: 0,
+    netRevenue: 0,
+    onlineNetRevenue: 0,
+    offlineNetRevenue: 0,
+    paylaterThreshold: 0,
+    creditLimit: 0,
+    priorSalesTotal: 0,
+    lastOrderAt: null
+  };
+}
+
 // Buyer-wise purchase tracking for supplier portal.
 router.get('/analytics/buyer-purchases', authenticateToken, async (req, res) => {
   try {
@@ -448,7 +489,9 @@ router.get('/analytics/buyer-purchases', authenticateToken, async (req, res) => 
 
     let ordersQuery = supabase
       .from('orders')
-      .select('id, service_provider_id, total_amount, status, payment_status, created_at')
+      .select(
+        'id, service_provider_id, customer_id, channel, total_amount, status, payment_status, created_at'
+      )
       .eq('supplier_id', supplierId);
 
     if (from) {
@@ -472,7 +515,9 @@ router.get('/analytics/buyer-purchases', authenticateToken, async (req, res) => 
           totalBuyers: 0,
           totalOrders: 0,
           totalOrderValue: 0,
-          totalNetRevenue: 0
+          totalNetRevenue: 0,
+          totalOnlineNetRevenue: 0,
+          totalOfflineNetRevenue: 0
         },
         buyers: []
       });
@@ -499,43 +544,126 @@ router.get('/analytics/buyer-purchases', authenticateToken, async (req, res) => 
       orderNetRevenueById = buildOrderNetRevenueMap(orderItems || [], closedReturnedQtyByOrderItem);
     }
 
-    const buyerIds = [
+    const { data: creditAccounts } = await supabase
+      .from('supplier_credit_accounts')
+      .select('buyer_user_id, customer_id, customer_phone, paylater_threshold, credit_limit')
+      .eq('supplier_id', supplierId);
+
+    const serviceProviderIds = [
       ...new Set(ordersList.map((order) => order.service_provider_id).filter(Boolean))
     ];
-    let buyersById = new Map();
-    if (buyerIds.length > 0) {
+    const customerIds = [...new Set(ordersList.map((order) => order.customer_id).filter(Boolean))];
+    for (const account of creditAccounts || []) {
+      if (account.buyer_user_id) serviceProviderIds.push(account.buyer_user_id);
+      if (account.customer_id) customerIds.push(account.customer_id);
+    }
+
+    let usersById = new Map();
+    const uniqueUserIds = [...new Set(serviceProviderIds)];
+    if (uniqueUserIds.length > 0) {
       const { data: buyersData } = await supabase
         .from('users')
-        .select('id, name, company, email')
-        .in('id', buyerIds);
-      buyersById = new Map((buyersData || []).map((buyer) => [buyer.id, buyer]));
+        .select('id, name, company, email, phone')
+        .in('id', uniqueUserIds);
+      usersById = new Map((buyersData || []).map((buyer) => [buyer.id, buyer]));
+    }
+
+    let customersById = new Map();
+    const uniqueCustomerIds = [...new Set(customerIds)];
+    if (uniqueCustomerIds.length > 0) {
+      const { data: customersData } = await supabase
+        .from('customers')
+        .select('id, name, phone, email')
+        .in('id', uniqueCustomerIds);
+      customersById = new Map((customersData || []).map((customer) => [customer.id, customer]));
     }
 
     const buyerAgg = new Map();
     for (const order of ordersList) {
-      const buyerId = order.service_provider_id || 'unknown';
-      if (!buyerAgg.has(buyerId)) {
-        const buyer = buyersById.get(buyerId) || {};
-        buyerAgg.set(buyerId, {
-          buyerId,
-          name: buyer.name || buyer.company || 'Unknown Buyer',
-          company: buyer.company || null,
-          email: buyer.email || null,
-          totalOrders: 0,
-          paidOrders: 0,
-          totalOrderValue: 0,
-          netRevenue: 0,
-          lastOrderAt: null
-        });
+      const { aggregateKey, buyerType, party } = resolveSalesAggregateKey(
+        order,
+        usersById,
+        customersById
+      );
+      const isOffline = isOfflineSaleChannel(order.channel);
+      const orderValue = parseFloat(order.total_amount || 0) || 0;
+      const orderNetRevenue = isRevenueRecognizedOrder(order)
+        ? orderNetRevenueById.get(order.id) || 0
+        : 0;
+
+      if (!buyerAgg.has(aggregateKey)) {
+        let displayName = party.name || 'Unknown Buyer';
+        let company = null;
+        let email = null;
+
+        if (buyerType === 'unified') {
+          if (party.buyerUserId) {
+            const buyer = usersById.get(party.buyerUserId) || {};
+            company = buyer.company || null;
+            email = buyer.email || null;
+            party.phone = party.phone || buyer.phone || null;
+          } else if (party.customerId) {
+            const customer = customersById.get(party.customerId) || {};
+            email = customer.email || null;
+            company = null;
+            party.phone = party.phone || customer.phone || null;
+          }
+        } else if (buyerType === 'b2b_partial' && party.buyerUserId) {
+          const buyer = usersById.get(party.buyerUserId) || {};
+          displayName = buyer.name || buyer.company || displayName;
+          company = buyer.company || 'Online (incomplete profile)';
+          email = buyer.email || null;
+          party.phone = party.phone || buyer.phone || null;
+        } else if (buyerType === 'pos_partial' && party.customerId) {
+          const customer = customersById.get(party.customerId) || {};
+          displayName = customer.name || customer.phone || 'POS customer';
+          company = 'Offline (name or phone missing)';
+          email = customer.email || null;
+          party.phone = party.phone || customer.phone || null;
+        } else if (buyerType === 'walk_in') {
+          displayName = 'Walk-in (no customer)';
+          company = 'Offline POS';
+        }
+
+        buyerAgg.set(
+          aggregateKey,
+          createEmptyBuyerPurchaseRecord({
+            buyerKey: aggregateKey,
+            buyerType,
+            name: displayName,
+            company,
+            email,
+            phone: party.phone || null,
+            linkedBuyerUserId: party.buyerUserId,
+            linkedCustomerId: party.customerId
+          })
+        );
+      } else {
+        const rec = buyerAgg.get(aggregateKey);
+        if (!rec.linkedBuyerUserId && party.buyerUserId) rec.linkedBuyerUserId = party.buyerUserId;
+        if (!rec.linkedCustomerId && party.customerId) rec.linkedCustomerId = party.customerId;
+        if (!rec.phone && party.phone) rec.phone = party.phone;
       }
 
-      const rec = buyerAgg.get(buyerId);
+      const rec = buyerAgg.get(aggregateKey);
       rec.totalOrders += 1;
-      rec.totalOrderValue += parseFloat(order.total_amount || 0) || 0;
+      rec.totalOrderValue += orderValue;
+      if (isOffline) {
+        rec.offlineOrders += 1;
+        rec.offlineOrderValue += orderValue;
+      } else {
+        rec.onlineOrders += 1;
+        rec.onlineOrderValue += orderValue;
+      }
 
       if (isRevenueRecognizedOrder(order)) {
         rec.paidOrders += 1;
-        rec.netRevenue += orderNetRevenueById.get(order.id) || 0;
+        rec.netRevenue += orderNetRevenue;
+        if (isOffline) {
+          rec.offlineNetRevenue += orderNetRevenue;
+        } else {
+          rec.onlineNetRevenue += orderNetRevenue;
+        }
       }
 
       const createdTs = order.created_at ? new Date(order.created_at).getTime() : 0;
@@ -545,14 +673,105 @@ router.get('/analytics/buyer-purchases', authenticateToken, async (req, res) => 
       }
     }
 
-    const buyers = [...buyerAgg.values()].sort((a, b) => b.totalOrderValue - a.totalOrderValue);
+    const paylaterThresholdByBuyerKey = new Map();
+    const creditLimitByBuyerKey = new Map();
+    for (const account of creditAccounts || []) {
+      const threshold = Math.max(0, parseFloat(account.paylater_threshold || 0) || 0);
+      const limit = Math.max(0, parseFloat(account.credit_limit || 0) || 0);
+
+      let accountName = null;
+      let accountPhone = normalizeCustomerPhone(account.customer_phone) || null;
+      if (account.buyer_user_id) {
+        const buyer = usersById.get(account.buyer_user_id) || {};
+        accountName = buyer.name || buyer.company || null;
+        accountPhone = accountPhone || normalizeCustomerPhone(buyer.phone) || null;
+      } else if (account.customer_id) {
+        const customer = customersById.get(account.customer_id) || {};
+        accountName = customer.name || null;
+        accountPhone = accountPhone || normalizeCustomerPhone(customer.phone) || null;
+      }
+
+      const identityKey = buildCustomerIdentityKey(accountName, accountPhone);
+      const aggregateKey = identityKey
+        ? `identity:${identityKey}`
+        : account.buyer_user_id
+          ? `user:${account.buyer_user_id}`
+          : account.customer_id
+            ? `customer:${account.customer_id}`
+            : accountPhone
+              ? `phone:${accountPhone}`
+              : null;
+
+      if (!aggregateKey) continue;
+      paylaterThresholdByBuyerKey.set(aggregateKey, threshold);
+      creditLimitByBuyerKey.set(aggregateKey, limit);
+    }
+    const { data: allOrders } = await supabase
+      .from('orders')
+      .select('id, service_provider_id, customer_id, total_amount, status')
+      .eq('supplier_id', supplierId);
+
+    const extraUserIds = [
+      ...new Set(
+        (allOrders || [])
+          .map((o) => o.service_provider_id)
+          .filter((id) => id && !usersById.has(id))
+      )
+    ];
+    if (extraUserIds.length > 0) {
+      const { data: extraUsers } = await supabase
+        .from('users')
+        .select('id, name, company, email, phone')
+        .in('id', extraUserIds);
+      for (const user of extraUsers || []) {
+        usersById.set(user.id, user);
+      }
+    }
+
+    const extraCustomerIds = [
+      ...new Set(
+        (allOrders || []).map((o) => o.customer_id).filter((id) => id && !customersById.has(id))
+      )
+    ];
+    if (extraCustomerIds.length > 0) {
+      const { data: extraCustomers } = await supabase
+        .from('customers')
+        .select('id, name, phone, email')
+        .in('id', extraCustomerIds);
+      for (const customer of extraCustomers || []) {
+        customersById.set(customer.id, customer);
+      }
+    }
+
+    const allTimeByAggregateKey = new Map();
+    for (const order of allOrders || []) {
+      if (!isCountableSalesOrder(order)) continue;
+      const { aggregateKey } = resolveSalesAggregateKey(order, usersById, customersById);
+      const amount = parseFloat(order.total_amount || 0) || 0;
+      allTimeByAggregateKey.set(aggregateKey, (allTimeByAggregateKey.get(aggregateKey) || 0) + amount);
+    }
+
+    for (const rec of buyerAgg.values()) {
+      rec.paylaterThreshold = paylaterThresholdByBuyerKey.get(rec.buyerId) ?? 0;
+      rec.creditLimit = creditLimitByBuyerKey.get(rec.buyerId) ?? 0;
+      rec.combinedSalesTotal = allTimeByAggregateKey.get(rec.buyerId) || 0;
+      rec.priorSalesTotal = rec.combinedSalesTotal;
+      rec.payLaterThresholdMet =
+        rec.paylaterThreshold > 0 && rec.combinedSalesTotal + 0.009 >= rec.paylaterThreshold;
+      rec.payLaterEligible =
+        rec.payLaterThresholdMet && rec.creditLimit > 0 && rec.buyerType !== 'walk_in';
+    }
+
+    const buyers = [...buyerAgg.values()].sort((a, b) => b.netRevenue - a.netRevenue || b.totalOrderValue - a.totalOrderValue);
     const normalizedTop = Number.isFinite(top) && top > 0 ? Math.min(top, 500) : null;
     const buyersSlice = normalizedTop ? buyers.slice(0, normalizedTop) : buyers;
     const summary = {
       totalBuyers: buyersSlice.length,
       totalOrders: ordersList.length,
       totalOrderValue: buyersSlice.reduce((sum, buyer) => sum + buyer.totalOrderValue, 0),
-      totalNetRevenue: buyersSlice.reduce((sum, buyer) => sum + buyer.netRevenue, 0)
+      totalNetRevenue: buyersSlice.reduce((sum, buyer) => sum + buyer.netRevenue, 0),
+      totalOnlineNetRevenue: buyersSlice.reduce((sum, buyer) => sum + buyer.onlineNetRevenue, 0),
+      totalOfflineNetRevenue: buyersSlice.reduce((sum, buyer) => sum + buyer.offlineNetRevenue, 0)
     };
 
     return res.json({

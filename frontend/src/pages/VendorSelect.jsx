@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { TrendingUp, Clock, RefreshCw, MapPin } from 'lucide-react';
-import { getApiUrl } from '../config/api';
+import { resolveApiPath, authFetch } from '../config/api';
+import { readSpWorkflow } from '../utils/spWorkflow';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import {
@@ -17,22 +18,66 @@ import {
 } from '../utils/vendorRankCache';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import { isVoiceGuidedActive, prepareSupplierSelectFromVoiceCart } from '../voice/voiceCartBridge';
+import SpWorkflowPage from '../components/sp/SpWorkflowPage';
+import { Users } from 'lucide-react';
 import './VendorSelect.css';
 
+function hydrateItemsFromWorkflow() {
+  const wf = readSpWorkflow();
+  if (!Array.isArray(wf?.normalizedItems) || wf.normalizedItems.length === 0) {
+    return { items: [], project: null };
+  }
+  return {
+    items: dedupeSupplierSelectItems(wf.normalizedItems),
+    project: wf.boqProject && typeof wf.boqProject === 'object' ? wf.boqProject : null
+  };
+}
+
 const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete }) => {
+  const workflowSeed = useMemo(() => hydrateItemsFromWorkflow(), []);
   const [itemVendors, setItemVendors] = useState({});
   const [selections, setSelections] = useState({});
   const [expandedSpecifications, setExpandedSpecifications] = useState({});
   const [loading, setLoading] = useState(false);
-  const [effectiveItems, setEffectiveItems] = useState([]);
+  const [effectiveItems, setEffectiveItems] = useState(() =>
+    items?.length ? dedupeSupplierSelectItems(items) : workflowSeed.items
+  );
   const [loadingItems, setLoadingItems] = useState(false);
-  const [boqMeta, setBoqMeta] = useState(boqProject || null);
+  const [itemsLoadError, setItemsLoadError] = useState('');
+  const [rankNotice, setRankNotice] = useState('');
+  const [boqMeta, setBoqMeta] = useState(boqProject || workflowSeed.project || null);
   const navigate = useNavigate();
   const location = useLocation();
   const itemsPropRef = useRef(items);
   const rankFetchAbortRef = useRef(null);
   /** When set, parent `items` is ignored until it matches these line ids (avoids stale full cart overwriting one-line selection). */
   const lockedLineIdsRef = useRef(null);
+
+  const seedItemVendorShell = (itemsList) => {
+    const shell = {};
+    (itemsList || []).forEach((item) => {
+      const itemId = item.id?.toString() || String(item.id);
+      if (itemId) shell[itemId] = [];
+    });
+    return shell;
+  };
+
+  // Show supplier selection UI immediately; ranking loads in the background.
+  useEffect(() => {
+    if (!effectiveItems?.length) return;
+    setItemVendors((prev) => {
+      const next = { ...prev };
+      let changed = false;
+      effectiveItems.forEach((item) => {
+        const itemId = item.id?.toString() || String(item.id);
+        if (itemId && !(itemId in next)) {
+          next[itemId] = [];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [effectiveItems]);
 
   const rankCacheKey = useMemo(() => {
     if (!effectiveItems?.length) return '';
@@ -161,40 +206,58 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       lockedLineIdsRef.current = null;
     }
     setEffectiveItems(dedupeSupplierSelectItems(items));
+    setLoadingItems(false);
+    setItemsLoadError('');
   }, [items]);
 
-  // If items are missing (e.g., user returns later), load them from the saved BOQ — not when continuing from cart.
+  // If items are missing (sidebar revisit), use saved workflow first, then BOQ API — not when coming from cart.
   useEffect(() => {
     let cancelled = false;
+
     const loadItems = async () => {
-      if (effectiveItems && effectiveItems.length > 0) return;
+      setItemsLoadError('');
+
+      if (effectiveItems?.length > 0 || itemsPropRef.current?.length > 0) {
+        setLoadingItems(false);
+        return;
+      }
+
+      if (cartSupplierHandoff) {
+        setLoadingItems(false);
+        return;
+      }
+
+      const wf = hydrateItemsFromWorkflow();
+      if (wf.items.length > 0) {
+        if (cancelled) return;
+        if (itemsPropRef.current?.length > 0) return;
+        setEffectiveItems(wf.items);
+        if (wf.project) setBoqMeta(wf.project);
+        setLoadingItems(false);
+        return;
+      }
 
       const token = localStorage.getItem('token');
-      if (!token) return;
-
-      if (cartSupplierHandoff) return;
+      if (!token) {
+        setLoadingItems(false);
+        return;
+      }
 
       const id = boqId || localStorage.getItem('lastBoqId');
-      if (!id) return;
-
-      const boqListTimeoutMs = 30000;
-      const abortController = new AbortController();
-      const timeoutId = window.setTimeout(() => abortController.abort(), boqListTimeoutMs);
+      if (!id) {
+        setLoadingItems(false);
+        return;
+      }
 
       setLoadingItems(true);
       try {
-        const res = await fetch(getApiUrl(`/api/boq/${encodeURIComponent(id)}/items`), {
-          signal: abortController.signal,
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
+        const res = await authFetch(`/api/boq/${encodeURIComponent(id)}/items`, {
+          timeoutMs: 12000
         });
         const data = await res.json().catch(() => ({}));
         if (cancelled) return;
-        // Parent may have supplied a focused list while this request was in flight; do not overwrite.
-        if (itemsPropRef.current && itemsPropRef.current.length > 0) {
-          return;
-        }
+        if (itemsPropRef.current?.length > 0) return;
+
         if (res.ok && data.status === 'success' && Array.isArray(data.items)) {
           const withBoq = data.items.map((it) => ({
             ...it,
@@ -204,14 +267,19 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           if (data.project && (data.project.location || data.project.requiredDate)) {
             setBoqMeta(data.project);
           }
+        } else {
+          setItemsLoadError(data.message || 'Could not load saved BOQ items.');
         }
       } catch (e) {
-        // ignore - UI will prompt to upload again
+        if (cancelled) return;
+        if (itemsPropRef.current?.length > 0) return;
+        const msg =
+          e?.name === 'AbortError'
+            ? 'Loading BOQ items timed out. Check your connection and try again.'
+            : e?.message || 'Could not load saved BOQ items.';
+        setItemsLoadError(msg);
       } finally {
-        window.clearTimeout(timeoutId);
-        if (!cancelled) {
-          setLoadingItems(false);
-        }
+        if (!cancelled) setLoadingItems(false);
       }
     };
 
@@ -271,37 +339,34 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       return;
     }
 
-    const showBlockingLoader = !silent && Object.keys(itemVendors).length === 0;
-    if (showBlockingLoader) {
+    if (!silent) {
       setLoading(true);
+      setRankNotice('');
     }
 
     rankFetchAbortRef.current?.abort();
     const abortController = new AbortController();
     rankFetchAbortRef.current = abortController;
-    const rankTimeoutMs = 90000;
-    const timeoutId = window.setTimeout(() => abortController.abort(), rankTimeoutMs);
+    const rankTimeoutMs = 120000;
 
     try {
       const timestamp = Date.now();
       const random = Math.random().toString(36).substring(7);
-      const isDevelopment = import.meta.env.DEV || window.location.hostname === 'localhost';
-      const apiUrl = isDevelopment ? `/api/vendors/rank` : getApiUrl('/api/vendors/rank');
-      const fullUrl = `${apiUrl}?_t=${timestamp}&_r=${random}`;
+      const fullUrl = `${resolveApiPath('/api/vendors/rank')}?_t=${timestamp}&_r=${random}`;
       const effectiveBoqId =
         boqId ||
         effectiveItems[0]?.boqId ||
         (typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null);
 
-      const res = await fetch(fullUrl, {
+      const res = await authFetch(fullUrl, {
         method: 'POST',
         signal: abortController.signal,
+        timeoutMs: rankTimeoutMs,
         headers: {
           'Content-Type': 'application/json',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           Pragma: 'no-cache',
-          'X-Request-ID': `${timestamp}-${random}`,
-          Authorization: `Bearer ${token}`
+          'X-Request-ID': `${timestamp}-${random}`
         },
         body: JSON.stringify({
           items: effectiveItems,
@@ -326,36 +391,32 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       const data = await res.json();
       const cleanedVendors = normalizeRankResponse(data);
       setItemVendors(cleanedVendors);
+      setRankNotice('');
       if (cacheKey) {
         setVendorRankCache(cacheKey, cleanedVendors);
       }
     } catch (error) {
-      if (error?.name === 'AbortError') {
-        if (!silent && showBlockingLoader) {
-          alert(
-            'Supplier ranking is taking too long. Please try Refresh, or try again in a few minutes.'
+      console.error('[VendorSelect] Failed to fetch vendors:', error);
+      setItemVendors((prev) => ({ ...seedItemVendorShell(effectiveItems), ...prev }));
+
+      if (!silent) {
+        if (error?.name === 'AbortError') {
+          setRankNotice(
+            'Supplier ranking is still loading in the background. Review your items below and tap Refresh to load suppliers.'
+          );
+        } else if (error.message?.includes('Failed to fetch') || error.name === 'TypeError') {
+          setRankNotice(
+            'Could not reach the server. Check your connection and tap Refresh to load suppliers.'
+          );
+        } else {
+          setRankNotice(
+            error?.message
+              ? `${error.message} Tap Refresh to try again.`
+              : 'Could not load suppliers. Tap Refresh to try again.'
           );
         }
-        return;
-      }
-      console.error('[VendorSelect] Failed to fetch vendors:', error);
-      if (error.message?.includes('Failed to fetch') || error.name === 'TypeError') {
-        alert(
-          'Unable to connect to the server. Check your connection and try Refresh.'
-        );
-      } else if (!silent) {
-        alert(`Error fetching suppliers: ${error.message}`);
-      }
-      if (Object.keys(itemVendors).length === 0) {
-        const emptyVendors = {};
-        effectiveItems.forEach((item) => {
-          const itemId = item.id?.toString() || String(item.id);
-          emptyVendors[itemId] = [];
-        });
-        setItemVendors(emptyVendors);
       }
     } finally {
-      window.clearTimeout(timeoutId);
       if (rankFetchAbortRef.current === abortController) {
         rankFetchAbortRef.current = null;
       }
@@ -462,15 +523,16 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   // Show loading or error state if items are not available
   if (loadingItems) {
     return (
-      <div className="page">
-        <div className="page-header">
-          <h1>Supplier Selection</h1>
-          <p>Loading saved BOQ items…</p>
+      <SpWorkflowPage
+        title="Supplier Selection"
+        description="Loading your BOQ line items…"
+        icon={Users}
+      >
+        <div className="flex flex-col items-center justify-center gap-3 py-16 text-[#64748b]">
+          <RefreshCw className="h-8 w-8 animate-spin text-[#4f46e5]" aria-hidden />
+          <p className="text-sm">This should only take a few seconds.</p>
         </div>
-        <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
-          Loading…
-        </div>
-      </div>
+      </SpWorkflowPage>
     );
   }
 
@@ -485,11 +547,13 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         <div className="page-header">
           <h1>Supplier Selection</h1>
           <p>
-            {cartSupplierHandoff
-              ? 'Your cart lines did not load on this page (common in production when a new tab opens or browser storage is restricted). Go back to the cart and use Select supplier again.'
-              : canTrySavedBoq
-                ? 'No line items are on this screen yet. If you expected your last uploaded BOQ, open BOQ Normalize and continue again, or use the cart to pick supplier lines.'
-                : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
+            {itemsLoadError
+              ? itemsLoadError
+              : cartSupplierHandoff
+                ? 'Your cart lines did not load on this page (common in production when a new tab opens or browser storage is restricted). Go back to the cart and use Select supplier again.'
+                : canTrySavedBoq
+                  ? 'No line items are on this screen yet. If you expected your last uploaded BOQ, open BOQ Normalize and continue again, or use the cart to pick supplier lines.'
+                  : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
           </p>
         </div>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
@@ -505,9 +569,10 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   }
 
   return (
-    <div className="page">
+    <SpWorkflowPage title="Supplier Selection" description="Choose the best vendor for each item" icon={Users}>
+    <div className="page !p-0">
       <VoiceGuidedBanner />
-      <div className="page-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+      <div className="page-header hidden">
         <div>
           <h1>Supplier Selection</h1>
           <p>Choose the best vendor for each item</p>
@@ -585,9 +650,30 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         </button>
       </div>
 
-      {loading && effectiveItems.length > 0 && Object.keys(itemVendors).length === 0 && (
-        <div style={{ textAlign: 'center', padding: '2rem', color: '#64748b' }}>
-          Loading suppliers...
+      {(loading || rankNotice) && effectiveItems.length > 0 && (
+        <div
+          className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2.5 text-sm"
+          style={{
+            borderColor: loading ? '#bfdbfe' : '#fcd34d',
+            background: loading ? '#eff6ff' : '#fffbeb',
+            color: loading ? '#1e3a5f' : '#92400e'
+          }}
+        >
+          <span className="flex-1 min-w-[200px]">
+            {loading
+              ? 'Loading supplier options for your items…'
+              : rankNotice}
+          </span>
+          {!loading && rankNotice ? (
+            <button
+              type="button"
+              className="btn-secondary inline-flex shrink-0 items-center gap-1"
+              onClick={handleRefresh}
+            >
+              <RefreshCw size={14} />
+              Refresh
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -871,6 +957,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         Continue to Substitutions
       </button>
     </div>
+    </SpWorkflowPage>
   );
 };
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Outlet, NavLink, useLocation } from 'react-router-dom';
-import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search, Paintbrush, Mic } from 'lucide-react';
+import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search, Paintbrush, Mic, CreditCard } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { normalizeUserType } from '../utils/userType';
 import {
@@ -11,6 +11,7 @@ import {
 import './Layout.css';
 import { VoiceSessionProvider } from '../voice/VoiceSessionContext.jsx';
 import { getVoiceGuidedPath, isVoiceGuidedActive } from '../voice/voiceCartBridge';
+import SpAppShell from './sp/SpAppShell';
 
 const routePrefetchers = {
   '/dashboard': () => import('../pages/ServiceProviderDashboard'),
@@ -34,6 +35,7 @@ const routePrefetchers = {
   '/supplier-select-yourself': () => import('../pages/SupplierSelectYourself'),
   '/supplier-discount-insights': () => import('../pages/SupplierDiscountInsights'),
   '/supplier-buyer-purchases': () => import('../pages/SupplierBuyerPurchases'),
+  '/supplier-credit-accounts': () => import('../pages/SupplierCreditAccounts'),
   '/supplier-total-purchase-platform-cov': () => import('../pages/SupplierTotalPurchasePlatformCov'),
   '/supplier-purchase-total': () => import('../pages/SupplierPurchaseTotal'),
   '/portal-theme': () => import('../pages/ServiceProviderThemeSettings'),
@@ -193,6 +195,11 @@ const Layout = ({ user, onLogout, children }) => {
         icon: Users
       },
       {
+        path: '/supplier-credit-accounts',
+        label: 'Credit on account',
+        icon: CreditCard
+      },
+      {
         path: '/supplier-total-purchase-platform-cov',
         label: 'total_purchase_PlatformCOV',
         icon: ShoppingCart
@@ -290,6 +297,15 @@ const Layout = ({ user, onLogout, children }) => {
       : undefined;
 
   const layoutToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+
+  if (userType === 'service_provider') {
+    const spBody = <SpAppShell user={user} onLogout={onLogout} children={children} />;
+    if (layoutToken) {
+      return <VoiceSessionProvider token={layoutToken}>{spBody}</VoiceSessionProvider>;
+    }
+    return spBody;
+  }
+
   const layoutBody = (
     <div
       className={`layout ${layoutThemeClass}${isVoiceGuidedActive() ? ' layout--voice-guided' : ''}`.trim()}
@@ -381,10 +397,6 @@ const Layout = ({ user, onLogout, children }) => {
       </main>
     </div>
   );
-
-  if (userType === 'service_provider' && layoutToken) {
-    return <VoiceSessionProvider token={layoutToken}>{layoutBody}</VoiceSessionProvider>;
-  }
 
   return layoutBody;
 };

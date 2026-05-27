@@ -699,13 +699,20 @@ const SupplierDashboard = ({ user }) => {
                         <div style={{
                           padding: '0.5rem',
                           borderRadius: '8px',
-                          background: notification.type === 'payment_received' ? '#d1fae5' : '#dbeafe',
+                          background:
+                            notification.type === 'payment_received'
+                              ? '#d1fae5'
+                              : notification.type === 'credit_limit'
+                                ? '#fef3c7'
+                                : '#dbeafe',
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center'
                         }}>
                           {notification.type === 'payment_received' ? (
                             <DollarSign size={20} color="#059669" />
+                          ) : notification.type === 'credit_limit' ? (
+                            <AlertTriangle size={20} color="#d97706" />
                           ) : (
                             <Bell size={20} color="#3b82f6" />
                           )}

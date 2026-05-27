@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { BarChart3 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import './Profile.css';
@@ -10,6 +11,8 @@ export default function SupplierBuyerPurchases() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [topBuyers, setTopBuyers] = useState('20');
+  const [thresholdDrafts, setThresholdDrafts] = useState({});
+  const [savingThresholdId, setSavingThresholdId] = useState(null);
 
   const fetchBuyerPurchases = async () => {
     try {
@@ -28,16 +31,23 @@ export default function SupplierBuyerPurchases() {
       });
       const payload = await response.json();
       if (payload.status === 'success') {
+        const buyers = payload.buyers || [];
         setData({
           summary: payload.summary || null,
-          buyers: payload.buyers || []
+          buyers
         });
+        const drafts = {};
+        buyers.forEach((buyer) => {
+          if (buyer.buyerId === 'walk_in') return;
+          drafts[buyer.buyerId] = String(buyer.paylaterThreshold ?? 0);
+        });
+        setThresholdDrafts(drafts);
       } else {
-        alert(payload.message || 'Failed to load buyer purchases');
+        alert(payload.message || 'Failed to load sales');
       }
     } catch (error) {
       console.error('Failed to fetch buyer purchases:', error);
-      alert('Failed to load buyer purchases');
+      alert('Failed to load sales');
     } finally {
       setLoading(false);
     }
@@ -48,11 +58,57 @@ export default function SupplierBuyerPurchases() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fromDate, toDate, topBuyers]);
 
+  const savePaylaterThreshold = async (buyer) => {
+    if (buyer.buyerId === 'walk_in' || buyer.buyerType === 'walk_in') return;
+    const raw = thresholdDrafts[buyer.buyerId];
+    const threshold = Number(raw);
+    if (!Number.isFinite(threshold) || threshold <= 0) {
+      alert(
+        'Pay-later minimum must be greater than ₹0. Pay later only appears when the order total reaches this amount.'
+      );
+      return;
+    }
+    const buyerUserId = buyer.linkedBuyerUserId || null;
+    const customerId = buyer.linkedCustomerId || null;
+    if (!buyerUserId && !customerId) {
+      alert('Cannot set pay-later threshold for this row.');
+      return;
+    }
+    try {
+      setSavingThresholdId(buyer.buyerId);
+      const token = localStorage.getItem('token');
+      const res = await fetch(getApiUrl('/api/supplier/credit-accounts'), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          buyerUserId,
+          customerId,
+          creditLimit: Number(buyer.creditLimit || 0),
+          paylaterThreshold: threshold,
+          creditPeriodDays: 30,
+          isEnabled: true
+        })
+      });
+      const payload = await res.json();
+      if (!res.ok || payload.status !== 'success') {
+        throw new Error(payload.message || 'Failed to save pay-later threshold');
+      }
+      await fetchBuyerPurchases();
+    } catch (e) {
+      alert(e.message || 'Failed to save pay-later threshold');
+    } finally {
+      setSavingThresholdId(null);
+    }
+  };
+
   const filteredBuyers = useMemo(() => {
     const q = String(query || '').trim().toLowerCase();
     if (!q) return data.buyers || [];
     return (data.buyers || []).filter((buyer) =>
-      [buyer.name, buyer.company, buyer.email]
+      [buyer.name, buyer.company, buyer.phone]
         .map((v) => String(v || '').toLowerCase())
         .some((v) => v.includes(q))
     );
@@ -62,7 +118,7 @@ export default function SupplierBuyerPurchases() {
     return (
       <div className="dashboard-loading">
         <div className="spinner" />
-        <p>Loading buyer purchase tracking...</p>
+        <p>Loading sales...</p>
       </div>
     );
   }
@@ -78,8 +134,12 @@ export default function SupplierBuyerPurchases() {
 
       <div className="profile-content">
         <div className="profile-section">
-          <p style={{ color: '#64748b', fontSize: '0.92rem', marginTop: 0, marginBottom: '1rem' }}>
-            Track each buyer&apos;s order count and order value.
+          <p style={{ color: '#64748b', fontSize: '0.92rem', marginTop: 0, marginBottom: '0.75rem' }}>
+            Net revenue includes paid online (platform) and offline (POS) sales per buyer. Set{' '}
+            <strong>Pay-later minimum</strong> per customer (must be &gt; ₹0): online and offline sales are
+            added only when <strong>name and phone both match</strong>. Pay later appears as a payment method
+            after combined sales (plus the current order) reach that minimum. Also set credit limits on{' '}
+            <Link to="/supplier-credit-accounts">Credit on account</Link>.
           </p>
           <div className="supplier-summary-grid">
             <div className="supplier-summary-card">
@@ -97,9 +157,21 @@ export default function SupplierBuyerPurchases() {
               </p>
             </div>
             <div className="supplier-summary-card">
-              <p className="supplier-summary-label">Net revenue</p>
+              <p className="supplier-summary-label">Net revenue (all channels)</p>
               <p className="supplier-summary-value">
                 ₹{Number(data.summary?.totalNetRevenue || 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="supplier-summary-card">
+              <p className="supplier-summary-label">Online net revenue</p>
+              <p className="supplier-summary-value">
+                ₹{Number(data.summary?.totalOnlineNetRevenue || 0).toLocaleString()}
+              </p>
+            </div>
+            <div className="supplier-summary-card">
+              <p className="supplier-summary-label">Offline net revenue</p>
+              <p className="supplier-summary-value">
+                ₹{Number(data.summary?.totalOfflineNetRevenue || 0).toLocaleString()}
               </p>
             </div>
           </div>
@@ -133,7 +205,7 @@ export default function SupplierBuyerPurchases() {
               </select>
               <input
                 type="text"
-                placeholder="Search buyer name, company, email"
+                placeholder="Search buyer name, company, phone"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 style={{ ...inputStyle, minWidth: '280px' }}
@@ -142,19 +214,26 @@ export default function SupplierBuyerPurchases() {
           </div>
 
           {filteredBuyers.length === 0 ? (
-            <p style={{ color: '#64748b', marginTop: '1rem' }}>No buyer purchase data found.</p>
+            <p style={{ color: '#64748b', marginTop: '1rem' }}>No sales data found.</p>
           ) : (
             <div style={{ overflowX: 'auto', marginTop: '1rem' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '900px' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1400px' }}>
                 <thead>
                   <tr>
                     <th style={th}>Buyer</th>
                     <th style={th}>Company</th>
-                    <th style={th}>Email</th>
+                    <th style={th}>Phone</th>
                     <th style={th}>Total Orders</th>
                     <th style={th}>Paid Orders</th>
                     <th style={th}>Total Order Value</th>
-                    <th style={th}>Net Revenue</th>
+                    <th style={th}>Combined sales (online+offline)</th>
+                    <th style={th}>Pay later eligible</th>
+                    <th style={th}>Online sales</th>
+                    <th style={th}>Online net revenue</th>
+                    <th style={th}>Offline sales</th>
+                    <th style={th}>Offline net revenue</th>
+                    <th style={th}>Net revenue</th>
+                    <th style={th}>Pay-later minimum (₹)</th>
                     <th style={th}>Last Order</th>
                   </tr>
                 </thead>
@@ -163,11 +242,78 @@ export default function SupplierBuyerPurchases() {
                     <tr key={buyer.buyerId}>
                       <td style={td}>{buyer.name || '—'}</td>
                       <td style={td}>{buyer.company || '—'}</td>
-                      <td style={td}>{buyer.email || '—'}</td>
+                      <td style={td}>{buyer.phone || '—'}</td>
                       <td style={td}>{Number(buyer.totalOrders || 0).toLocaleString()}</td>
                       <td style={td}>{Number(buyer.paidOrders || 0).toLocaleString()}</td>
                       <td style={td}>₹{Number(buyer.totalOrderValue || 0).toLocaleString()}</td>
-                      <td style={td}>₹{Number(buyer.netRevenue || 0).toLocaleString()}</td>
+                      <td style={td}>
+                        ₹{Number(buyer.combinedSalesTotal ?? 0).toLocaleString()}
+                        <span style={{ display: 'block', fontSize: '0.75rem', color: '#64748b' }}>
+                          all time · online+offline
+                        </span>
+                      </td>
+                      <td style={td}>
+                        {buyer.payLaterEligible ? (
+                          <span style={{ color: '#15803d', fontWeight: 600 }}>Yes</span>
+                        ) : buyer.paylaterThreshold > 0 ? (
+                          <span style={{ color: '#b45309' }}>
+                            No (need ₹{Number(buyer.paylaterThreshold).toLocaleString()})
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td style={td}>
+                        {Number(buyer.onlineOrders || 0).toLocaleString()} orders
+                        {Number(buyer.onlineOrderValue || 0) > 0 ? (
+                          <>
+                            {' '}
+                            · ₹{Number(buyer.onlineOrderValue || 0).toLocaleString()}
+                          </>
+                        ) : null}
+                      </td>
+                      <td style={td}>₹{Number(buyer.onlineNetRevenue || 0).toLocaleString()}</td>
+                      <td style={td}>
+                        {Number(buyer.offlineOrders || 0).toLocaleString()} orders
+                        {Number(buyer.offlineOrderValue || 0) > 0 ? (
+                          <>
+                            {' '}
+                            · ₹{Number(buyer.offlineOrderValue || 0).toLocaleString()}
+                          </>
+                        ) : null}
+                      </td>
+                      <td style={td}>₹{Number(buyer.offlineNetRevenue || 0).toLocaleString()}</td>
+                      <td style={tdStrong}>₹{Number(buyer.netRevenue || 0).toLocaleString()}</td>
+                      <td style={td}>
+                        {buyer.buyerId === 'walk_in' || buyer.buyerType === 'walk_in' ? (
+                          '—'
+                        ) : (
+                          <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={thresholdDrafts[buyer.buyerId] ?? '0'}
+                              onChange={(e) =>
+                                setThresholdDrafts((prev) => ({
+                                  ...prev,
+                                  [buyer.buyerId]: e.target.value
+                                }))
+                              }
+                              style={{ ...inputStyle, width: '100px', padding: '0.35rem 0.5rem' }}
+                              aria-label={`Pay-later minimum for ${buyer.name}`}
+                            />
+                            <button
+                              type="button"
+                              style={saveBtnStyle}
+                              disabled={savingThresholdId === buyer.buyerId}
+                              onClick={() => savePaylaterThreshold(buyer)}
+                            >
+                              {savingThresholdId === buyer.buyerId ? '…' : 'Save'}
+                            </button>
+                          </div>
+                        )}
+                      </td>
                       <td style={td}>
                         {buyer.lastOrderAt ? new Date(buyer.lastOrderAt).toLocaleString() : '—'}
                       </td>
@@ -199,8 +345,23 @@ const td = {
   color: '#0f172a'
 };
 
+const tdStrong = {
+  ...td,
+  fontWeight: 700
+};
+
 const inputStyle = {
   padding: '0.55rem 0.7rem',
   border: '1px solid #e2e8f0',
   borderRadius: 8
+};
+
+const saveBtnStyle = {
+  padding: '0.35rem 0.65rem',
+  border: '1px solid #cbd5e1',
+  borderRadius: 6,
+  background: '#f8fafc',
+  fontSize: '0.8rem',
+  fontWeight: 600,
+  cursor: 'pointer'
 };

@@ -16,7 +16,7 @@ BEGIN
   -- Add new constraint with UPI and Card
   ALTER TABLE orders
     ADD CONSTRAINT orders_payment_method_check
-    CHECK (payment_method IN ('cash', 'bank_transfer', 'cheque', 'online', 'credit', 'upi', 'card'));
+    CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit', 'upi', 'card'));
 END $$;
 
 -- Update payment_receipts table payment_method constraint
@@ -29,7 +29,7 @@ BEGIN
   -- Add new constraint with UPI and Card
   ALTER TABLE payment_receipts
     ADD CONSTRAINT payment_receipts_payment_method_check
-    CHECK (payment_method IN ('cash', 'bank_transfer', 'cheque', 'online', 'credit', 'upi', 'card'));
+    CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit', 'upi', 'card'));
 END $$;
 
 -- Verify the constraints

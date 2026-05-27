@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS orders (
   status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'returned')),
   total_amount DECIMAL(10,2) NOT NULL CHECK (total_amount >= 0),
   payment_status VARCHAR(20) DEFAULT 'pending' CHECK (payment_status IN ('pending', 'partial', 'paid', 'refunded')),
-  payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'bank_transfer', 'cheque', 'online', 'credit')),
+  payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit', 'upi', 'card')),
   delivery_address JSONB, -- {street, city, state, zipCode, country, contactPerson, contactPhone}
   expected_delivery_date TIMESTAMP,
   actual_delivery_date TIMESTAMP,
@@ -255,7 +255,7 @@ CREATE TABLE IF NOT EXISTS payment_receipts (
   supplier_id UUID REFERENCES users(id) ON DELETE SET NULL,
   amount DECIMAL(10,2) NOT NULL CHECK (amount >= 0),
   currency VARCHAR(10) NOT NULL DEFAULT 'INR',
-  payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'bank_transfer', 'cheque', 'online', 'credit')),
+  payment_method VARCHAR(20) CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit', 'upi', 'card')),
   payment_reference VARCHAR(120),
   paid_at TIMESTAMP NOT NULL DEFAULT NOW(),
   metadata JSONB DEFAULT '{}',

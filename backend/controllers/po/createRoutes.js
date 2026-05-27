@@ -26,6 +26,10 @@ import {
   supplierMatchesBrandTerminalRole,
   toLifecycleStateFromStatus
 } from './poImports.js';
+import {
+  maybeNotifySupplierCreditAlert,
+  validateCreditForOrder
+} from '../../services/creditAccountService.js';
 
 export function registerPoCreateRoutes(ctx) {
   const {
@@ -324,6 +328,22 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       const lineTaxBreakdown = lineBuilt.map((b) => b.lineGst);
       const gstSummary = sumGstLines(lineTaxBreakdown);
       const totalAmount = gstSummary.totalAmount;
+
+      if (poPaymentMethod === 'credit') {
+        const creditCheck = await validateCreditForOrder({
+          supplierId: supplier.id,
+          buyerUserId: req.userId,
+          orderAmount: totalAmount
+        });
+        if (!creditCheck.allowed) {
+          return res.status(400).json({
+            status: 'error',
+            message: `Credit not available for "${group.vendorName}": ${creditCheck.message}`,
+            credit: creditCheck
+          });
+        }
+      }
+
       const groupItemDetails = (Array.isArray(group.items) ? group.items : []).map((line) => ({
         name: line.name || 'Item',
         quantity: Number(line.quantity) || 0,
@@ -582,6 +602,21 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         gstin: hasGstin ? profileGstin : null,
         items: groupItemDetails
       });
+
+      if (poPaymentMethod === 'credit') {
+        try {
+          await maybeNotifySupplierCreditAlert({
+            supplierId: supplier.id,
+            buyerUserId: req.userId,
+            partyName:
+              serviceProvider?.name ||
+              serviceProvider?.company ||
+              'Service provider buyer'
+          });
+        } catch (creditNotifyErr) {
+          logger.error('[PO] credit limit notification error (non-fatal):', creditNotifyErr);
+        }
+      }
     }
 
     // Update BOQ status if it exists

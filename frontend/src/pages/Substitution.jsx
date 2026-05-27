@@ -4,6 +4,8 @@ import { Check, X } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import { fetchVoiceCartDraft, isVoiceGuidedActive } from '../voice/voiceCartBridge';
+import SpWorkflowPage from '../components/sp/SpWorkflowPage';
+import { RefreshCw } from 'lucide-react';
 import './Substitution.css';
 
 const Substitution = ({ selectedVendors, onComplete, items }) => {
@@ -92,12 +94,9 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
   };
 
   return (
-    <div className="page">
+    <SpWorkflowPage title="Substitution" description="Review AI-recommended alternatives to optimize cost and availability" icon={RefreshCw}>
+    <div className="page !p-0">
       <VoiceGuidedBanner />
-      <div className="page-header">
-        <h1>Substitution Suggestions</h1>
-        <p>Review AI-recommended alternatives to optimize cost and availability</p>
-      </div>
 
       {suggestions.length === 0 ? (
         <div className="empty-state">
@@ -158,6 +157,7 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
         </>
       )}
     </div>
+    </SpWorkflowPage>
   );
 };
 

@@ -8,6 +8,12 @@ import { createReceiptIfMissing } from '../services/paymentReceiptService.js';
 import { computeLineGst, sumGstLines } from '../services/gstService.js';
 import { offlineOrderSchema, offlineReturnSchema } from '../contracts/posContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
+import {
+  buildCreditStatus,
+  linkCustomerToPhoneCreditAccount,
+  maybeNotifySupplierCreditAlert,
+  normalizeCustomerPhone
+} from '../services/creditAccountService.js';
 
 const router = express.Router();
 const ORDER_INSERT_MAX_RETRIES = 3;
@@ -352,6 +358,46 @@ router.post('/offline-order', authenticateToken, async (req, res) => {
     const gstSummary = sumGstLines(lineTaxBreakdown);
     const totalAmount = gstSummary.totalAmount;
 
+    const paymentMethod = String(payment?.method || 'cash').toLowerCase().trim();
+    const isCreditPayment = paymentMethod === 'credit';
+    let paymentStatus = payment?.status || 'paid';
+    let paymentDueAt = null;
+    let creditPeriodDays = null;
+
+    if (isCreditPayment) {
+      if (!trimmedPhone && !customerId) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Customer phone is required for credit (pay later) sales.'
+        });
+      }
+      if (!trimmedName) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Customer name is required for credit (pay later) sales.'
+        });
+      }
+      const creditCheck = await buildCreditStatus({
+        supplierId,
+        customerId,
+        customerName: trimmedName,
+        customerPhone: trimmedPhone,
+        orderAmount: totalAmount
+      });
+      if (!creditCheck.allowed) {
+        return res.status(400).json({
+          status: 'error',
+          message: creditCheck.message,
+          credit: creditCheck
+        });
+      }
+      paymentStatus = 'pending';
+      creditPeriodDays = creditCheck.creditPeriodDays || 30;
+      paymentDueAt = new Date(Date.now() + Number(creditPeriodDays) * 86400000).toISOString();
+    } else if (paymentMethod !== 'credit') {
+      paymentStatus = payment?.status || 'paid';
+    }
+
     let validOutletId = null;
     if (outletId) {
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -371,8 +417,10 @@ router.post('/offline-order', authenticateToken, async (req, res) => {
           boq_id: null,
           total_amount: totalAmount,
           status: 'confirmed',
-          payment_status: payment?.status || 'paid',
-          payment_method: payment?.method || 'cash',
+          payment_status: paymentStatus,
+          payment_method: paymentMethod || 'cash',
+          payment_due_at: paymentDueAt,
+          credit_line_days: creditPeriodDays,
           channel: 'offline_sale',
           outlet_id: validOutletId,
           customer_id: customerId || null,
@@ -462,17 +510,44 @@ router.post('/offline-order', authenticateToken, async (req, res) => {
     } catch (e) {
       console.error('Offline order invoice creation error (non-fatal):', e);
     }
-    try {
-      const { receipt } = await createReceiptIfMissing({
-        order,
-        paymentMethod: payment?.method || null,
-        paymentReference: payment?.reference || payment?.payment_reference || null,
-        paidAt: payment?.paidAt || null,
-        actorUserId: supplierId
-      });
-      receiptNumber = receipt?.receipt_number || null;
-    } catch (e) {
-      console.error('Offline order receipt creation error (non-fatal):', e);
+    if (!isCreditPayment) {
+      try {
+        const { receipt } = await createReceiptIfMissing({
+          order,
+          paymentMethod: paymentMethod || null,
+          paymentReference: payment?.reference || payment?.payment_reference || null,
+          paidAt: payment?.paidAt || null,
+          actorUserId: supplierId
+        });
+        receiptNumber = receipt?.receipt_number || null;
+      } catch (e) {
+        console.error('Offline order receipt creation error (non-fatal):', e);
+      }
+    }
+
+    if (customerId && trimmedPhone) {
+      try {
+        await linkCustomerToPhoneCreditAccount({
+          supplierId,
+          customerId,
+          customerPhone: normalizeCustomerPhone(trimmedPhone)
+        });
+      } catch (linkErr) {
+        console.error('POS credit account link error (non-fatal):', linkErr);
+      }
+    }
+
+    if (isCreditPayment) {
+      try {
+        await maybeNotifySupplierCreditAlert({
+          supplierId,
+          customerId,
+          customerPhone: trimmedPhone,
+          partyName: trimmedName || trimmedPhone || 'POS customer'
+        });
+      } catch (notifyErr) {
+        console.error('POS credit alert notification error (non-fatal):', notifyErr);
+      }
     }
 
     try {

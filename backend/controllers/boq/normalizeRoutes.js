@@ -1,13 +1,18 @@
 /** BOQ routes: normalize */
+import path from 'path';
+import fs from 'fs-extra';
 import {
   buildSupplyChainInfoForProducts,
+  normalizeProductName,
   parseCSV,
   parseExcel,
   parsePDF
 } from './boqCore.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
-import { boqDeleteSchema, boqNormalizeBodySchema, boqRequestProductSchema } from '../../contracts/boqContracts.js';
-import { supabase } from '../../config/supabase.js';
+import { boqNormalizeBodySchema } from '../../contracts/boqContracts.js';
+import { deleteBoqById } from '../../repositories/boqsRepository.js';
+import { inferUnitAndCategory } from '../../services/materialClassificationService.js';
+import { geocodeAddressNominatim, parseOptionalGeo } from '../../utils/geoUtils.js';
 
 export function registerBoqNormalizeRoutes(ctx) {
   const {
@@ -375,10 +380,11 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     console.error('BOQ normalization error:', error);
-    res.status(500).json({ 
+    const detail = error?.message ? String(error.message) : 'Unknown error';
+    res.status(500).json({
       status: 'error',
-      message: 'Failed to normalize BOQ',
-      error: error.message 
+      message: `Failed to normalize BOQ: ${detail}`,
+      error: detail
     });
   }
 });

@@ -8,7 +8,7 @@ export const paymentConfirmSchema = z.object({
   razorpayOrderId: z.string().min(1),
   razorpayPaymentId: z.string().min(1),
   razorpaySignature: z.string().min(1),
-  method: z.enum(['upi', 'card', 'online', 'netbanking', 'bank_transfer', 'cash', 'credit', 'cheque']).optional()
+  method: z.enum(['upi', 'card', 'online', 'netbanking', 'bank_transfer', 'cash', 'credit']).optional()
 });
 
 export const bankTransferMarkSchema = z.object({

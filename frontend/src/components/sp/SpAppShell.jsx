@@ -1,0 +1,124 @@
+import React, { useEffect, useState } from 'react';
+import '@/styles/sp-portal-theme.css';
+import '@/pages/Dashboard.css';
+import { Outlet, useLocation } from 'react-router-dom';
+import {
+  getServiceProviderThemePrefs,
+  loadServiceProviderThemePrefsFromApi,
+  resolveServiceProviderThemeBackground
+} from '@/utils/serviceProviderTheme';
+import { isVoiceGuidedActive } from '@/voice/voiceCartBridge';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { cn } from '@/lib/utils';
+import SpSidebar from './SpSidebar';
+import SpTopBar from './SpTopBar';
+
+const routePrefetchers = {
+  '/dashboard': () => import('@/pages/ServiceProviderDashboard'),
+  '/boq-normalize': () => import('@/pages/BOQNormalize'),
+  '/product-discovery': () => import('@/pages/ProductDiscovery'),
+  '/voice': () => import('@/pages/VoiceCommerce'),
+  '/supplier-select': () => import('@/pages/VendorSelect'),
+  '/substitution': () => import('@/pages/Substitution'),
+  '/cart': () => import('@/pages/Cart'),
+  '/create-po': () => import('@/pages/CreatePO'),
+  '/your-orders': () => import('@/pages/YourOrders'),
+  '/returns': () => import('@/pages/ServiceProviderReturns'),
+  '/transport-suggestion': () => import('@/pages/TransportSuggestion'),
+  '/portal-theme': () => import('@/pages/ServiceProviderThemeSettings'),
+  '/profile': () => import('@/pages/Profile')
+};
+
+const prefetchedRoutes = new Set();
+
+function prefetchRoute(path) {
+  const loader = routePrefetchers[path];
+  if (!loader || prefetchedRoutes.has(path)) return;
+  prefetchedRoutes.add(path);
+  loader().catch(() => prefetchedRoutes.delete(path));
+}
+
+export default function SpAppShell({ user, onLogout, children }) {
+  const location = useLocation();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [themePrefs, setThemePrefs] = useState(() => getServiceProviderThemePrefs());
+
+  useEffect(() => {
+    setThemePrefs(getServiceProviderThemePrefs());
+    let cancelled = false;
+    loadServiceProviderThemePrefsFromApi()
+      .then((remote) => {
+        if (!cancelled && remote) setThemePrefs(remote);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const refresh = () => setThemePrefs(getServiceProviderThemePrefs());
+    window.addEventListener('storage', refresh);
+    window.addEventListener('service-provider-theme-updated', refresh);
+    return () => {
+      window.removeEventListener('storage', refresh);
+      window.removeEventListener('service-provider-theme-updated', refresh);
+    };
+  }, []);
+
+  useEffect(() => {
+    const paths = Object.keys(routePrefetchers).filter((p) => p !== location.pathname);
+    paths.forEach((path, idx) => {
+      window.setTimeout(() => prefetchRoute(path), idx * 120);
+    });
+  }, [location.pathname]);
+
+  useEffect(() => {
+    document.body.classList.add('sp-portal-active');
+    return () => document.body.classList.remove('sp-portal-active');
+  }, []);
+
+  const bgImage = resolveServiceProviderThemeBackground(themePrefs);
+  const themeClass =
+    themePrefs.themeId && themePrefs.themeId !== 'custom'
+      ? `layout--service-provider-theme-${themePrefs.themeId}`
+      : 'layout--service-provider-theme-default';
+
+  return (
+    <div
+      className={cn(
+        'sp-portal flex min-h-screen bg-background',
+        themeClass,
+        isVoiceGuidedActive() && 'layout--voice-guided'
+      )}
+      style={{
+        backgroundImage: bgImage,
+        backgroundAttachment: 'fixed',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center'
+      }}
+    >
+      <div className="hidden lg:flex">
+        <SpSidebar />
+      </div>
+
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent side="left" className="sp-portal w-[280px] p-0">
+          <SpSidebar onNavigate={() => setMobileNavOpen(false)} />
+        </SheetContent>
+      </Sheet>
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        <SpTopBar
+          user={user}
+          pathname={location.pathname}
+          onMenuClick={() => setMobileNavOpen(true)}
+          onLogout={onLogout}
+        />
+        <main className="sp-content-panel flex-1 overflow-auto">
+          {children || <Outlet />}
+        </main>
+      </div>
+    </div>
+  );
+}

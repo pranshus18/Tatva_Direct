@@ -483,7 +483,7 @@ export async function buildSupplyChainInfoForProducts(productIds, siteGeo) {
 }
 
 // Helper function to normalize product name by matching with database products
-const normalizeProductName = async (rawName) => {
+export const normalizeProductName = async (rawName) => {
   const normalizedInput = normalizeText(String(rawName || ''));
   if (!normalizedInput) {
     return {

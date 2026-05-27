@@ -205,7 +205,7 @@ export const poCartSaveSchema = z
 
 export const poSelfServePatchSchema = z.object({
   expectedDeliveryDate: z.string().optional().nullable(),
-  paymentMethod: z.enum(['cash', 'bank_transfer', 'cheque', 'online', 'credit', 'upi', 'card']).optional(),
+  paymentMethod: z.enum(['cash', 'bank_transfer', 'online', 'credit', 'upi', 'card']).optional(),
   notes: z.string().max(4000).optional(),
   deliveryAddress: z.record(z.string(), z.any()).optional()
 });

@@ -1,0 +1,247 @@
+/**
+ * Service Provider portal — legacy indigo/slate palette (Dashboard.css / YourOrders).
+ * Scoped via body.sp-portal-active (set in SpAppShell) so portaled dialogs/menus match.
+ */
+
+body.sp-portal-active,
+.sp-portal {
+  --primary: 243 76% 59%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 243 76% 59%;
+  --accent: 226 100% 97%;
+  --accent-foreground: 243 47% 40%;
+  --secondary: 210 40% 98%;
+  --secondary-foreground: 215 16% 47%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --border: 214 32% 91%;
+  --input: 214 32% 91%;
+  --destructive: 0 72% 51%;
+}
+
+/* Primary actions — same gradient as .btn-primary */
+body.sp-portal-active button.inline-flex.bg-primary,
+body.sp-portal-active .btn-primary,
+.sp-portal button.inline-flex.bg-primary,
+.sp-portal .btn-primary {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
+  color: #fff !important;
+  border: none !important;
+}
+
+body.sp-portal-active button.inline-flex.bg-primary:hover:not(:disabled),
+body.sp-portal-active .btn-primary:hover:not(:disabled),
+.sp-portal button.inline-flex.bg-primary:hover:not(:disabled),
+.sp-portal .btn-primary:hover:not(:disabled) {
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+  transform: translateY(-1px);
+}
+
+/* Secondary / outline — .btn-secondary */
+body.sp-portal-active button.inline-flex.bg-secondary,
+body.sp-portal-active .btn-secondary,
+.sp-portal button.inline-flex.bg-secondary,
+.sp-portal .btn-secondary {
+  background: #fff !important;
+  color: #64748b !important;
+  border: 1px solid #e5e7eb !important;
+  font-weight: 600;
+}
+
+body.sp-portal-active button.inline-flex.bg-secondary:hover:not(:disabled),
+body.sp-portal-active .btn-secondary:hover:not(:disabled),
+.sp-portal button.inline-flex.bg-secondary:hover:not(:disabled),
+.sp-portal .btn-secondary:hover:not(:disabled) {
+  border-color: #4f46e5 !important;
+  color: #4f46e5 !important;
+  background: #fff !important;
+}
+
+body.sp-portal-active button.inline-flex.border-input.bg-background,
+.sp-portal button.inline-flex.border-input.bg-background {
+  background: #fff !important;
+  color: #64748b !important;
+  border-color: #e5e7eb !important;
+  font-weight: 600;
+}
+
+body.sp-portal-active button.inline-flex.border-input.bg-background:hover:not(:disabled),
+.sp-portal button.inline-flex.border-input.bg-background:hover:not(:disabled) {
+  border-color: #4f46e5 !important;
+  color: #4f46e5 !important;
+  background: #fff !important;
+}
+
+/* Ghost icon buttons */
+body.sp-portal-active button.inline-flex.hover\:bg-accent:hover:not(:disabled),
+.sp-portal button.inline-flex.hover\:bg-accent:hover:not(:disabled) {
+  background: rgba(79, 70, 229, 0.08) !important;
+  color: #4f46e5 !important;
+}
+
+/* Nav & stepper active — solid indigo, not gradient */
+body.sp-portal-active .sp-nav-active,
+body.sp-portal-active .sp-step-current,
+.sp-portal .sp-nav-active,
+.sp-portal .sp-step-current {
+  background: #4f46e5 !important;
+  color: #fff !important;
+  box-shadow: 0 1px 2px rgba(79, 70, 229, 0.2);
+}
+
+body.sp-portal-active .sp-nav-link:hover,
+.sp-portal .sp-nav-link:hover {
+  background: #eef2ff !important;
+  color: #3730a3 !important;
+}
+
+body.sp-portal-active .sp-step-done,
+.sp-portal .sp-step-done {
+  color: #4f46e5 !important;
+}
+
+/* Badges — match yo-badge palette */
+body.sp-portal-active .sp-badge,
+.sp-portal .sp-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: capitalize;
+  letter-spacing: 0.02em;
+}
+
+body.sp-portal-active .sp-badge--delivered,
+.sp-portal .sp-badge--delivered {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+body.sp-portal-active .sp-badge--confirmed,
+body.sp-portal-active .sp-badge--processing,
+body.sp-portal-active .sp-badge--shipped,
+.sp-portal .sp-badge--confirmed,
+.sp-portal .sp-badge--processing,
+.sp-portal .sp-badge--shipped {
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+body.sp-portal-active .sp-badge--pending,
+.sp-portal .sp-badge--pending {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+body.sp-portal-active .sp-badge--cancelled,
+.sp-portal .sp-badge--cancelled {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+body.sp-portal-active .sp-badge--paid,
+.sp-portal .sp-badge--paid {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+body.sp-portal-active .sp-badge--payment-pending,
+.sp-portal .sp-badge--payment-pending {
+  background: #f8fafc;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+/* Shadcn default badge (cart count etc.) — softer indigo */
+body.sp-portal-active div.inline-flex.rounded-full.border-transparent.bg-primary,
+.sp-portal div.inline-flex.rounded-full.border-transparent.bg-primary {
+  background: #4f46e5 !important;
+  color: #fff !important;
+}
+
+/* Progress / track fills */
+body.sp-portal-active .bg-primary.h-full,
+body.sp-portal-active .bg-primary.h-1,
+body.sp-portal-active .bg-primary.h-1\.5,
+.sp-portal .bg-primary.h-full,
+.sp-portal .bg-primary.h-1,
+.sp-portal .bg-primary.h-1\.5 {
+  background: linear-gradient(90deg, #4f46e5, #10b981) !important;
+}
+
+/* Document links */
+body.sp-portal-active .yo-doc-link,
+.sp-portal .yo-doc-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  border-radius: 8px;
+  text-decoration: none;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+  color: #3730a3;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+body.sp-portal-active .yo-doc-link:hover,
+.sp-portal .yo-doc-link:hover {
+  border-color: #a5b4fc;
+  background: #eef2ff;
+}
+
+body.sp-portal-active .yo-doc-link--receipt,
+.sp-portal .yo-doc-link--receipt {
+  color: #047857;
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+}
+
+body.sp-portal-active .yo-doc-link--receipt:hover,
+.sp-portal .yo-doc-link--receipt:hover {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+}
+
+/* Cards — marketplace borders */
+body.sp-portal-active .sp-market-card,
+.sp-portal .sp-market-card {
+  border-color: #e8ecf1 !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
+}
+
+body.sp-portal-active .sp-market-card:hover,
+.sp-portal .sp-market-card:hover {
+  border-color: #c7d2fe !important;
+}
+
+body.sp-portal-active .sp-page-icon,
+.sp-portal .sp-page-icon {
+  border-color: #e8ecf1 !important;
+  background: linear-gradient(180deg, #fafbfc 0%, #eef2ff 100%) !important;
+  color: #4f46e5 !important;
+}
+
+/* Product discovery cards */
+body.sp-portal-active .pd-card,
+.sp-portal .pd-card {
+  border-color: #e8ecf1 !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
+}
+
+body.sp-portal-active .pd-card:hover,
+.sp-portal .pd-card:hover {
+  border-color: #c7d2fe !important;
+}
+
+body.sp-portal-active .bg-primary\/10.text-primary,
+.sp-portal .bg-primary\/10.text-primary {
+  background: #eef2ff !important;
+  color: #4f46e5 !important;
+}

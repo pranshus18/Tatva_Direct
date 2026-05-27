@@ -111,9 +111,9 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       userId: req.userId
     });
 
-    // For each item, find matching products from database based on product name (and brand when available),
-    // then list suppliers whose role matches the terminal role in admin-defined brand supply chain.
-    for (const item of items) {
+    // Rank each BOQ line in parallel (was sequential — very slow for large BOQs).
+    const rankingResults = await Promise.all(
+      items.map(async (item) => {
       const itemId = item.id?.toString() || String(item.id);
       // Try multiple possible field names for item name
       const itemName = item.normalizedName || item.rawName || item.name || item.description || item.itemName || '';
@@ -127,8 +127,7 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
 
       if (!itemName || itemName.trim() === '') {
         rankLog(`[Vendor Ranking] Skipping item ${itemId}: No name found`);
-        itemVendors[itemId] = [];
-        continue;
+        return { itemId, validVendors: [], itemName, vendors: [], referenceProduct: null };
       }
 
       // Determine category from item name
@@ -286,8 +285,12 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         }
       }
       
+      return { itemId, validVendors, itemName, vendors, referenceProduct };
+      })
+    );
+
+    for (const { itemId, validVendors, itemName, vendors, referenceProduct } of rankingResults) {
       itemVendors[itemId] = validVendors;
-      
       logItemVendorResult({ itemId, itemName, validVendors });
       if (validVendors.length === 0) {
         logNoVendorsDebug({ itemId, itemName, vendors, referenceProduct });

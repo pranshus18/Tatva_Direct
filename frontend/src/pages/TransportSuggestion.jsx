@@ -2,6 +2,8 @@ import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { resolveApiPath } from '../config/api';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
+import SpWorkflowPage from '../components/sp/SpWorkflowPage';
+import { Truck } from 'lucide-react';
 import { useVoiceSessionContext } from '../voice/VoiceSessionContext';
 import { isVoiceGuidedActive } from '../voice/voiceCartBridge';
 
@@ -433,14 +435,13 @@ const TransportSuggestion = () => {
   };
 
   return (
-    <div className="page">
+    <SpWorkflowPage
+      title="Transport suggestion"
+      description="Review courier (Shiprocket) and trucking (Borzo) quotes — pick one provider per supplier shipment."
+      icon={Truck}
+    >
+    <div className="page !p-0">
       <VoiceGuidedBanner />
-      <div className="page-header">
-        <h1>Transport suggestion</h1>
-        <p>
-          Review courier (Shiprocket) and trucking (Borzo) quotes — pick one provider per supplier shipment.
-        </p>
-      </div>
 
       {poGroups.length === 0 ? (
         <div
@@ -725,6 +726,7 @@ const TransportSuggestion = () => {
         </button>
       </div>
     </div>
+    </SpWorkflowPage>
   );
 };
 

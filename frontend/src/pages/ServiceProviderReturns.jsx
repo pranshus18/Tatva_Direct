@@ -1,6 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { resolveApiPath } from '../config/api';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
+import { RotateCcw } from 'lucide-react';
 import './ServiceProviderReturns.css';
 
 const STATUS_LABEL = {
@@ -150,37 +157,34 @@ const ServiceProviderReturns = () => {
     });
 
   return (
-    <div className="dashboard-container">
-      <div className="dashboard-header">
-        <div>
-          <h1>My Returns</h1>
-          <p>Track return requests raised on your orders</p>
-        </div>
-        <button className="btn-secondary" onClick={() => navigate('/dashboard')}>Back</button>
-      </div>
+    <SpPageLayout showStepper={false}>
+      <SpPageHeader
+        title="My Returns"
+        description="Track return requests raised on your orders"
+        icon={RotateCcw}
+        actions={<Button variant="outline" onClick={() => navigate('/your-orders')}>View orders</Button>}
+      />
 
       {loading ? (
-        <div className="dashboard-loading">
-          <div className="spinner" />
-          <p>Loading return requests...</p>
+        <div className="space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-28 w-full rounded-lg" />
+          ))}
         </div>
       ) : (
-        <div className="dashboard-section">
-          <div className="spr-toolbar">
-            <div className="spr-toolbar__left">
-              <div className="spr-toolbar__title">Requests</div>
-              <div className="spr-toolbar__subtitle">{filteredReturns.length} shown</div>
+        <div className="dashboard-section !p-0">
+          <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border bg-card p-4">
+            <div className="min-w-[200px] flex-1">
+              <p className="mb-1 text-xs font-medium text-muted-foreground">Search</p>
+              <Input
+                placeholder="Reason, tracking ID, return ID..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
             </div>
-            <div className="spr-toolbar__controls">
-              <div className="search-box spr-search">
-                <input
-                  type="text"
-                  placeholder="Search reason, tracking ID, return ID"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-              <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">Status</p>
+              <select className="h-10 rounded-md border border-input bg-background px-3 text-sm" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <option value="all">All statuses</option>
                 <option value="requested">Requested</option>
                 <option value="approved">Approved</option>
@@ -191,11 +195,15 @@ const ServiceProviderReturns = () => {
                 <option value="replaced">Replaced</option>
                 <option value="closed">Closed</option>
               </select>
-              <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+            </div>
+            <div>
+              <p className="mb-1 text-xs font-medium text-muted-foreground">Sort</p>
+              <select className="h-10 rounded-md border border-input bg-background px-3 text-sm" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
                 <option value="newest">Newest first</option>
                 <option value="oldest">Oldest first</option>
               </select>
             </div>
+            <p className="w-full text-sm text-muted-foreground sm:ml-auto sm:w-auto">{filteredReturns.length} shown</p>
           </div>
 
           {filteredReturns.length === 0 ? (
@@ -274,7 +282,7 @@ const ServiceProviderReturns = () => {
           )}
         </div>
       )}
-    </div>
+    </SpPageLayout>
   );
 };
 

@@ -7,6 +7,9 @@ import {
   saveServiceProviderThemePrefsToApi,
   resolveServiceProviderThemeBackground
 } from '../utils/serviceProviderTheme';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
+import { Paintbrush } from 'lucide-react';
 import './ServiceProviderThemeSettings.css';
 
 const ServiceProviderThemeSettings = () => {
@@ -177,11 +180,13 @@ const ServiceProviderThemeSettings = () => {
   };
 
   return (
-    <div className="sp-theme-settings">
-      <div className="sp-theme-settings__header">
-        <h1>Portal Theme Settings</h1>
-        <p>Customize wallpaper for the Service Provider portal.</p>
-      </div>
+    <SpPageLayout showStepper={false}>
+    <SpPageHeader
+      title="Portal Theme"
+      description="Customize wallpaper for your service provider portal."
+      icon={Paintbrush}
+    />
+    <div className="sp-theme-settings !max-w-3xl">
 
       <div className="sp-theme-settings__preview" style={{ backgroundImage: previewBackground }}>
         <div className="sp-theme-settings__preview-overlay">
@@ -308,6 +313,7 @@ const ServiceProviderThemeSettings = () => {
         {saving ? <p className="sp-theme-settings__hint">Saving theme...</p> : null}
       </div>
     </div>
+    </SpPageLayout>
   );
 };
 

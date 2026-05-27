@@ -9,6 +9,7 @@ import { registerPoCreateRoutes } from './po/createRoutes.js';
 import { registerPoTransportRoutes } from './po/transportRoutes.js';
 import { registerPoCartRoutes } from './po/cartRoutes.js';
 import { registerPoOrderActionRoutes } from './po/orderActionRoutes.js';
+import { registerPoCreditRoutes } from './po/creditRoutes.js';
 
 const router = express.Router();
 const ctx = createPoRouteContext(router, authenticateToken, isServiceProvider);
@@ -18,5 +19,6 @@ registerPoCreateRoutes(ctx);
 registerPoTransportRoutes(ctx);
 registerPoCartRoutes(ctx);
 registerPoOrderActionRoutes(ctx);
+registerPoCreditRoutes(ctx);
 
 export { router as poRouter };
