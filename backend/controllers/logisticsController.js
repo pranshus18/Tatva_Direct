@@ -2,7 +2,7 @@ import express from 'express';
 import { randomBytes } from 'node:crypto';
 import {
   requireAuthentication as authenticateToken,
-  requireServiceProvider as isServiceProvider
+  requireServiceProviderOrSupplier as isServiceProviderOrSupplier
 } from '../middleware/authMiddleware.js';
 import { supabase } from '../config/supabase.js';
 import {
@@ -819,7 +819,7 @@ router.get('/bridge-session/:id', (req, res) => {
 router.post(
   '/bridge-session',
   authenticateToken,
-  isServiceProvider,
+  isServiceProviderOrSupplier,
   async (req, res) => {
     try {
       const body = req.body || {};
@@ -864,7 +864,7 @@ router.post(
 router.post(
   '/service-providers',
   authenticateToken,
-  isServiceProvider,
+  isServiceProviderOrSupplier,
   async (req, res) => {
     try {
       const body = req.body || {};

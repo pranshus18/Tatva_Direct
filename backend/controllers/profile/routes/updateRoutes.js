@@ -12,6 +12,10 @@ import {
 import { insertNotifications } from '../../../repositories/notificationsRepository.js';
 import { findAdmins } from '../../../repositories/usersRepository.js';
 import { profileUpdateSchema } from '../../../contracts/profileContracts.js';
+import {
+  isSupplierBranchAddressComplete,
+  primaryBranchToUsersAddress
+} from '../../../services/upstreamOrderInputService.js';
 import { getContractErrorMessage, parseWithSchema } from '../../../utils/contractValidation.js';
 import {
   createProfileResponse,
@@ -43,7 +47,8 @@ export function registerProfileUpdateRoutes(router) {
         phone: profileData.phone
       };
 
-      if (profileData.address) {
+      // Suppliers sync users.address from profile.branches (see supplier block below).
+      if (profileData.address && profileData.userType !== 'supplier') {
         updateData.address = {
           ...(currentUser.address || {}),
           ...profileData.address
@@ -106,6 +111,59 @@ export function registerProfileUpdateRoutes(router) {
         }));
         profileUpdate.projects = projects;
       } else if (profileData.userType === 'supplier') {
+        const branches = (profileData.branches || []).map((branch) => ({
+          ...branch,
+          id: branch.id || uuidv4()
+        }));
+        const hasCompleteShippingBranch = branches.some((branch) => isSupplierBranchAddressComplete(branch));
+        if (!hasCompleteShippingBranch) {
+          return res.status(400).json({
+            status: 'error',
+            code: 'supplier_shipping_branch_required',
+            message:
+              'At least one complete branch location (shipping address) is required. Fill address, city, state, PIN, and country.'
+          });
+        }
+        for (let i = 0; i < branches.length; i += 1) {
+          const branch = branches[i] || {};
+          const hasAnyField = ['address', 'city', 'state', 'zipCode', 'pincode', 'country'].some((field) =>
+            String(branch?.[field] || '').trim()
+          );
+          if (!hasAnyField) continue;
+          if (!isSupplierBranchAddressComplete(branch)) {
+            const label = String(branch?.name || '').trim() || `Branch ${i + 1}`;
+            return res.status(400).json({
+              status: 'error',
+              code: 'supplier_branch_address_incomplete',
+              message: `Branch "${label}" is missing required address fields.`
+            });
+          }
+        }
+        profileUpdate.branches = branches;
+        updateData.address = primaryBranchToUsersAddress(branches);
+
+        const billingAddresses = Array.isArray(profileData.billingAddresses)
+          ? profileData.billingAddresses.map((entry) => ({
+              ...entry,
+              id: entry.id || uuidv4()
+            }))
+          : [];
+        const requiredBillingFields = ['line1', 'city', 'state', 'pincode', 'country'];
+        for (let i = 0; i < billingAddresses.length; i += 1) {
+          const entry = billingAddresses[i] || {};
+          const missingBillingField = requiredBillingFields.find(
+            (field) => !String(entry?.[field] || '').trim()
+          );
+          if (missingBillingField) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'supplier_billing_address_incomplete',
+              message: `Billing address ${i + 1} is missing required field "${missingBillingField}".`
+            });
+          }
+        }
+        profileUpdate.billingAddresses = billingAddresses;
+
         profileUpdate.businessType = profileData.businessType;
         profileUpdate.categories = profileData.categories || [];
         profileUpdate.gstin = profileData.gstin || profileData.mainGstin;
@@ -118,11 +176,6 @@ export function registerProfileUpdateRoutes(router) {
         if (profileData.authorizationCertificateUrl) {
           profileUpdate.authorizationCertificateUrl = profileData.authorizationCertificateUrl;
         }
-        const branches = (profileData.branches || []).map((branch) => ({
-          ...branch,
-          id: branch.id || uuidv4()
-        }));
-        profileUpdate.branches = branches;
 
         const incomingChain = buildChainPayloadFromProfileData(profileData);
         const baselineChain = baselineChainFromProfile(currentProfile);

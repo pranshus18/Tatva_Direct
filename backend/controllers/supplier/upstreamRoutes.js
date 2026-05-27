@@ -35,6 +35,17 @@ import {
   ORDER_INSERT_MAX_RETRIES,
   isOrderNumberConflictError
 } from './shared/productHelpers.js';
+import { validateCreditForOrder } from '../../services/creditAccountService.js';
+import {
+  isAddressComplete,
+  mapToDeliveryAddress,
+  normalizeAddress
+} from '../po/shared/poHelpers.js';
+import {
+  normalizeRequiredDateForUpstream,
+  resolvePrimarySupplierShippingAddress,
+  resolveUpstreamPaymentSelection
+} from '../../services/upstreamOrderInputService.js';
 
 export function registerSupplierUpstreamRoutes(ctx) {
   const {
@@ -662,7 +673,66 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     }
 
     const payloadInput = parseWithSchema(supplierUpstreamOrdersSchema, req.body || {});
-    const { lines } = payloadInput;
+    const { lines, requiredDate, paymentMethod, shippingAddress, billingAddress, deliveryDestination } = payloadInput;
+
+    const { expectedDeliveryDate, error: requiredDateError } =
+      normalizeRequiredDateForUpstream(requiredDate);
+    if (requiredDateError) {
+      return res.status(400).json({ status: 'error', message: requiredDateError });
+    }
+
+    // Map UI-friendly paymentMethod (online|cod|bank_transfer|credit|card)
+    // to DB payment_method + derived payment_status.
+    const { payment_method: upstreamPaymentMethod, payment_status: upstreamPaymentStatus } =
+      resolveUpstreamPaymentSelection(paymentMethod);
+
+    // Preload supplier profile for defaults + GSTIN detection.
+    const { data: supplierProfileRow, error: supplierProfileErr } = await supabase
+      .from('users')
+      .select('address, profile, user_type')
+      .eq('id', req.userId)
+      .single();
+    if (supplierProfileErr || !supplierProfileRow) {
+      return res.status(404).json({ status: 'error', message: 'Supplier profile not found' });
+    }
+
+    const profileGstin = String(supplierProfileRow?.profile?.gstin || supplierProfileRow?.profile?.mainGstin || '').trim();
+    const hasGstin = Boolean(profileGstin);
+
+    const normalizedShippingAddress = resolvePrimarySupplierShippingAddress({
+      shippingAddress,
+      profileRow: supplierProfileRow
+    });
+    const normalizedBillingAddress = normalizeAddress(billingAddress || normalizedShippingAddress);
+
+    const selectedDeliveryDestination = (() => {
+      const raw = String(deliveryDestination || 'shipping').toLowerCase().trim();
+      if (hasGstin && raw === 'billing') return 'billing';
+      return 'shipping';
+    })();
+
+    const selectedDeliveryAddress =
+      selectedDeliveryDestination === 'billing' ? normalizedBillingAddress : normalizedShippingAddress;
+
+    if (!isAddressComplete(normalizedShippingAddress)) {
+      return res.status(400).json({
+        status: 'error',
+        message:
+          'Shipping address is incomplete. Add a complete branch location (shipping address) in your supplier profile.'
+      });
+    }
+    if (hasGstin && selectedDeliveryDestination === 'billing' && !isAddressComplete(normalizedBillingAddress)) {
+      return res.status(400).json({ status: 'error', message: 'Billing address is required when GSTIN is present.' });
+    }
+
+    const deliveryAddressForOrder = {
+      ...mapToDeliveryAddress(selectedDeliveryAddress),
+      shippingAddress: mapToDeliveryAddress(normalizedShippingAddress),
+      billingAddress: mapToDeliveryAddress(normalizedBillingAddress),
+      deliveryDestination: selectedDeliveryDestination,
+      gstin: hasGstin ? profileGstin : null,
+      gstTaxApplicableOnBillingAddressOnly: hasGstin
+    };
 
     const mineIds = [...new Set(lines.map((l) => l?.mineSupplierProductId).filter(Boolean))];
     const upstreamOfferIds = [...new Set(lines.map((l) => l?.upstreamSupplierProductId).filter(Boolean))];
@@ -867,6 +937,24 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       const totalAmount = orderItems.reduce((sum, li) => sum + parseFloat(li.total_price || 0), 0);
       let order = null;
       let orderErr = null;
+
+      // If buyer chose "credit", validate seller credit-account eligibility for this buyer.
+      if (upstreamPaymentMethod === 'credit') {
+        const creditCheck = await validateCreditForOrder({
+          supplierId,
+          buyerUserId: req.userId,
+          orderAmount: totalAmount
+        });
+
+        if (!creditCheck.allowed) {
+          return res.status(400).json({
+            status: 'error',
+            message: `Credit not available: ${creditCheck.message}`,
+            credit: creditCheck
+          });
+        }
+      }
+
       for (let attempt = 0; attempt <= ORDER_INSERT_MAX_RETRIES; attempt++) {
         const orderInsertResult = await supabase
           .from('orders')
@@ -874,10 +962,11 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
             service_provider_id: req.userId, // buyer = current supplier
             supplier_id: supplierId, // seller = upstream supplier
             total_amount: totalAmount,
-            expected_delivery_date: null,
+            expected_delivery_date: expectedDeliveryDate,
+            delivery_address: deliveryAddressForOrder,
             status: 'confirmed',
-            payment_status: 'pending',
-            payment_method: 'online',
+            payment_status: upstreamPaymentStatus,
+            payment_method: upstreamPaymentMethod,
             channel: 'b2b_po',
             outlet_id: null,
             status_history: [{
@@ -973,7 +1062,9 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         supplierId: order.supplier_id,
         totalAmount,
         status: order.status,
-        paymentStatus: order.payment_status
+        paymentStatus: order.payment_status,
+        paymentMethod: order.payment_method,
+        expectedDeliveryDate: order.expected_delivery_date
       });
     }
 
@@ -1148,6 +1239,7 @@ router.get('/upstream/orders', authenticateToken, async (req, res) => {
         totalAmount: parseFloat(o.total_amount || 0),
         status: o.status,
         paymentStatus: o.payment_status || 'pending',
+        paymentMethod: o.payment_method || null,
         channel: o.channel || null,
         createdAt: o.created_at,
         updatedAt: o.updated_at || o.created_at,

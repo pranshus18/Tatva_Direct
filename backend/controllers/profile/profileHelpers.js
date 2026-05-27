@@ -525,6 +525,7 @@ export async function createProfileResponse(user) {
       ...baseProfile,
       businessType: base.businessType || '',
       categories: base.categories || [],
+      billingAddresses: base.billingAddresses || [],
       branches: base.branches || [],
       skus: base.skus || [],
       supplierRole: displayChain.supplierRole || (firstEntry?.role || ''),

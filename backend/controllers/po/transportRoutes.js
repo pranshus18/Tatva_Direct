@@ -12,11 +12,11 @@ export function registerPoTransportRoutes(ctx) {
   const {
     router,
     authenticateToken,
-    isServiceProvider,
+    isServiceProviderOrSupplier,
     supabase
   } = ctx;
 
-router.post('/transport/confirm', authenticateToken, isServiceProvider, async (req, res) => {
+router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier, async (req, res) => {
   try {
     const transportBookDebug =
       String(process.env.LOGISTICS_BOOK_DEBUG || '').toLowerCase() === 'true';

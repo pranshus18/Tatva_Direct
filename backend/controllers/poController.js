@@ -1,7 +1,8 @@
 import express from 'express';
 import {
   requireAuthentication as authenticateToken,
-  requireServiceProvider as isServiceProvider
+  requireServiceProvider as isServiceProvider,
+  requireServiceProviderOrSupplier as isServiceProviderOrSupplier
 } from '../middleware/authMiddleware.js';
 import { createPoRouteContext } from './po/createRouteContext.js';
 import { registerPoGroupRoutes } from './po/groupRoutes.js';
@@ -12,7 +13,7 @@ import { registerPoOrderActionRoutes } from './po/orderActionRoutes.js';
 import { registerPoCreditRoutes } from './po/creditRoutes.js';
 
 const router = express.Router();
-const ctx = createPoRouteContext(router, authenticateToken, isServiceProvider);
+const ctx = createPoRouteContext(router, authenticateToken, isServiceProvider, isServiceProviderOrSupplier);
 
 registerPoGroupRoutes(ctx);
 registerPoCreateRoutes(ctx);

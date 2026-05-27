@@ -39,6 +39,7 @@ const SupplierBCOV = safeLazy(() => import('./pages/SupplierBCOV'), 'Supplier BC
 const ProductManagement = safeLazy(() => import('./pages/ProductManagement'), 'Product Management page');
 const SupplierReturns = safeLazy(() => import('./pages/SupplierReturns'), 'Supplier Returns page');
 const SupplierUpstream = safeLazy(() => import('./pages/SupplierUpstream'), 'Supplier Upstream page');
+const SupplierPlaceOrder = safeLazy(() => import('./pages/SupplierPlaceOrder'), 'Supplier Place Order page');
 const SupplierSelectYourself = safeLazy(
   () => import('./pages/SupplierSelectYourself'),
   'Supplier Select Yourself page'
@@ -360,6 +361,32 @@ function App() {
             ) : (
               <Layout user={user} onLogout={handleLogout}>
                 <SupplierUpstream user={user} />
+              </Layout>
+            )
+          }
+        />
+        <Route
+          path="/supplier-place-order"
+          element={
+            !isAuthenticated ? (
+              <Navigate to="/login" replace />
+            ) : (
+              <Layout user={user} onLogout={handleLogout}>
+                <SupplierPlaceOrder user={user} />
+              </Layout>
+            )
+          }
+        />
+        <Route
+          path="/supplier-transport-suggestion"
+          element={
+            !isAuthenticated ? (
+              <Navigate to="/login" replace />
+            ) : user?.userType !== 'supplier' ? (
+              <Navigate to="/" replace />
+            ) : (
+              <Layout user={user} onLogout={handleLogout}>
+                <TransportSuggestion />
               </Layout>
             )
           }

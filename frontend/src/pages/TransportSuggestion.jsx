@@ -156,6 +156,10 @@ function TransportPickCard({ provider, selected, onPick, disabled = false, disab
 const TransportSuggestion = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const returnPath = location.state?.returnPath || '/create-po';
+  const isSupplierFlow = returnPath === '/supplier-place-order';
+  const backLabel = isSupplierFlow ? 'Back to Place order' : 'Back to Create PO';
+  const returnNoun = isSupplierFlow ? 'Place order' : 'Create PO';
   const voiceSession = useVoiceSessionContext();
   const notifyTransportSelected = voiceSession?.notifyTransportSelected;
 
@@ -418,7 +422,8 @@ const TransportSuggestion = () => {
       notifyTransportSelected(transportSelection);
     }
 
-    navigate('/create-po', {
+    navigate(returnPath, {
+      replace: returnPath === '/supplier-place-order',
       state: {
         transportSelection,
         createdOrders,
@@ -454,7 +459,7 @@ const TransportSuggestion = () => {
             marginBottom: '1rem'
           }}
         >
-          No order data found. Please return to Create PO and click Transport suggestion again.
+          No order data found. Please return to {returnNoun} and click Transport suggestion again.
         </div>
       ) : (
         <>
@@ -713,8 +718,8 @@ const TransportSuggestion = () => {
       )}
 
       <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', flexWrap: 'wrap' }}>
-        <button type="button" className="btn-secondary" onClick={() => navigate('/create-po')}>
-          Back to Create PO
+        <button type="button" className="btn-secondary" onClick={() => navigate(returnPath)}>
+          {backLabel}
         </button>
         <button
           type="button"

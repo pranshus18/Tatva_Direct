@@ -62,6 +62,62 @@ const Profile = ({ user }) => {
         }
       }
 
+      if (profile?.userType === 'supplier') {
+        const branches = Array.isArray(profile?.branches) ? profile.branches : [];
+        const isBranchComplete = (branch) =>
+          ['address', 'city', 'state', 'country'].every((key) => String(branch?.[key] || '').trim()) &&
+          String(branch?.zipCode || branch?.pincode || '').trim();
+
+        if (!branches.some(isBranchComplete)) {
+          alert(
+            'Please add at least one complete branch location (shipping address) with address, city, state, PIN, and country.'
+          );
+          return;
+        }
+
+        const billingAddresses = Array.isArray(profile?.billingAddresses) ? profile.billingAddresses : [];
+        const requiredBillingFields = [
+          { key: 'line1', label: 'Address' },
+          { key: 'city', label: 'City' },
+          { key: 'state', label: 'State' },
+          { key: 'pincode', label: 'PIN code' },
+          { key: 'country', label: 'Country' }
+        ];
+        for (let i = 0; i < billingAddresses.length; i += 1) {
+          const entry = billingAddresses[i] || {};
+          const missingBillingField = requiredBillingFields.find(
+            (f) => !String(entry?.[f.key] || '').trim()
+          );
+          if (missingBillingField) {
+            const label = String(entry?.label || '').trim() || `Billing Address ${i + 1}`;
+            alert(`Please enter ${missingBillingField.label} in ${label}.`);
+            return;
+          }
+        }
+      }
+
+      let payload = profile;
+      if (profile?.userType === 'supplier') {
+        const branches = Array.isArray(profile?.branches) ? profile.branches : [];
+        const primaryBranch = branches.find(
+          (branch) =>
+            ['address', 'city', 'state', 'country'].every((key) => String(branch?.[key] || '').trim()) &&
+            String(branch?.zipCode || branch?.pincode || '').trim()
+        );
+        if (primaryBranch) {
+          payload = {
+            ...profile,
+            address: {
+              line1: String(primaryBranch.address || primaryBranch.line1 || '').trim(),
+              city: String(primaryBranch.city || '').trim(),
+              state: String(primaryBranch.state || '').trim(),
+              pincode: String(primaryBranch.zipCode || primaryBranch.pincode || '').trim(),
+              country: String(primaryBranch.country || 'India').trim() || 'India'
+            }
+          };
+        }
+      }
+
       const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl('/api/profile'), {
         method: 'PUT',
@@ -69,7 +125,7 @@ const Profile = ({ user }) => {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`
         },
-        body: JSON.stringify(profile)
+        body: JSON.stringify(payload)
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.status !== 'success') {
@@ -748,6 +804,38 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
     });
   };
 
+  const addBillingAddress = () => {
+    const newAddress = {
+      id: Date.now(),
+      label: '',
+      line1: '',
+      city: '',
+      state: '',
+      pincode: '',
+      country: 'India'
+    };
+    setProfile((prev) => ({
+      ...prev,
+      billingAddresses: [...(prev?.billingAddresses || []), newAddress]
+    }));
+  };
+
+  const updateBillingAddress = (addressId, field, value) => {
+    setProfile((prev) => ({
+      ...prev,
+      billingAddresses: (prev?.billingAddresses || []).map((addr) =>
+        addr.id === addressId ? { ...addr, [field]: value } : addr
+      )
+    }));
+  };
+
+  const removeBillingAddress = (addressId) => {
+    setProfile((prev) => ({
+      ...prev,
+      billingAddresses: (prev?.billingAddresses || []).filter((addr) => addr.id !== addressId)
+    }));
+  };
+
   const getCurrentPositionAsync = () =>
     new Promise((resolve, reject) => {
       if (!navigator.geolocation) {
@@ -957,6 +1045,215 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
       </div>
 
       <div className="profile-section">
+        <div className="section-header">
+          <h2>
+            <MapPin size={20} />
+            Shipping addresses (branch locations)
+          </h2>
+          {editing ? (
+            <button className="btn-add" onClick={addBranch}>
+              <Plus size={16} />
+              Add shipping branch
+            </button>
+          ) : null}
+        </div>
+        <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
+          Branch locations are your shipping addresses — used for upstream place order, transport quotes, and delivery.
+          Add at least one complete branch.
+        </p>
+
+        {(profile?.branches || []).length === 0 ? (
+          <p style={{ color: '#64748b', margin: 0 }}>No shipping branches added yet.</p>
+        ) : (
+          <div className="branches-list">
+            {(profile?.branches || []).map((branch) => (
+              <div key={branch.id} className="branch-card">
+                <div className="branch-header">
+                  <input
+                    type="text"
+                    value={branch.name}
+                    onChange={(e) => updateBranch(branch.id, 'name', e.target.value)}
+                    disabled={!editing}
+                    placeholder="Branch / warehouse name"
+                    className="branch-name-input"
+                  />
+                  {editing ? (
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => fillBranchFromCurrentLocation(branch.id)}
+                        disabled={locatingBranchId === branch.id}
+                        style={{ padding: '0.45rem 0.7rem', fontSize: '0.82rem' }}
+                      >
+                        {locatingBranchId === branch.id ? 'Detecting...' : 'Use my current location'}
+                      </button>
+                      <button className="btn-remove" onClick={() => removeBranch(branch.id)}>
+                        <X size={16} />
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="form-grid">
+                  <div className="form-group span-2">
+                    <label>Address (Street / Area)</label>
+                    <textarea
+                      value={branch.address || ''}
+                      onChange={(e) => updateBranch(branch.id, 'address', e.target.value)}
+                      disabled={!editing}
+                      rows="2"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>City</label>
+                    <input
+                      type="text"
+                      value={branch.city || ''}
+                      onChange={(e) => updateBranch(branch.id, 'city', e.target.value)}
+                      disabled={!editing}
+                      placeholder="e.g. Pune"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>State / Region</label>
+                    <input
+                      type="text"
+                      value={branch.state || ''}
+                      onChange={(e) => updateBranch(branch.id, 'state', e.target.value)}
+                      disabled={!editing}
+                      placeholder="e.g. Maharashtra"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>PIN / ZIP Code</label>
+                    <input
+                      type="text"
+                      value={branch.zipCode || ''}
+                      onChange={(e) => updateBranch(branch.id, 'zipCode', e.target.value)}
+                      disabled={!editing}
+                      placeholder="e.g. 411026"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Country</label>
+                    <input
+                      type="text"
+                      value={branch.country || ''}
+                      onChange={(e) => updateBranch(branch.id, 'country', e.target.value)}
+                      disabled={!editing}
+                      placeholder="e.g. India"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Phone Number</label>
+                    <input
+                      type="tel"
+                      value={branch.phone || ''}
+                      onChange={(e) => updateBranch(branch.id, 'phone', e.target.value)}
+                      disabled={!editing}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="profile-section">
+        <div className="section-header">
+          <h2>
+            <FileText size={20} />
+            Billing Addresses
+          </h2>
+          {editing ? (
+            <button type="button" className="btn-add" onClick={addBillingAddress}>
+              <Plus size={16} />
+              Add Billing Address
+            </button>
+          ) : null}
+        </div>
+        <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
+          Add one or more GST billing addresses. The first entry is used by default on upstream place order when GSTIN is set.
+        </p>
+        {(profile?.billingAddresses || []).length === 0 ? (
+          <p style={{ color: '#64748b', margin: 0 }}>
+            No billing addresses added yet. For GST billing on upstream orders, add at least one billing address here.
+          </p>
+        ) : (
+          <div className="branches-list">
+            {(profile?.billingAddresses || []).map((addr) => (
+              <div key={addr.id} className="branch-card">
+                <div className="branch-header">
+                  <input
+                    type="text"
+                    value={addr.label || ''}
+                    onChange={(e) => updateBillingAddress(addr.id, 'label', e.target.value)}
+                    disabled={!editing}
+                    placeholder="Address label (e.g. Head Office GST)"
+                    className="branch-name-input"
+                  />
+                  {editing ? (
+                    <button className="btn-remove" onClick={() => removeBillingAddress(addr.id)}>
+                      <X size={16} />
+                    </button>
+                  ) : null}
+                </div>
+                <div className="form-grid">
+                  <div className="form-group span-2">
+                    <label>Address (Street / Area)</label>
+                    <textarea
+                      rows="2"
+                      value={addr.line1 || ''}
+                      onChange={(e) => updateBillingAddress(addr.id, 'line1', e.target.value)}
+                      disabled={!editing}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>City</label>
+                    <input
+                      type="text"
+                      value={addr.city || ''}
+                      onChange={(e) => updateBillingAddress(addr.id, 'city', e.target.value)}
+                      disabled={!editing}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>State / Region</label>
+                    <input
+                      type="text"
+                      value={addr.state || ''}
+                      onChange={(e) => updateBillingAddress(addr.id, 'state', e.target.value)}
+                      disabled={!editing}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>PIN / ZIP Code</label>
+                    <input
+                      type="text"
+                      value={addr.pincode || ''}
+                      onChange={(e) => updateBillingAddress(addr.id, 'pincode', e.target.value)}
+                      disabled={!editing}
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label>Country</label>
+                    <input
+                      type="text"
+                      value={addr.country || ''}
+                      onChange={(e) => updateBillingAddress(addr.id, 'country', e.target.value)}
+                      disabled={!editing}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="profile-section">
         <h2>
           <FileText size={20} />
           Order Summary
@@ -1039,119 +1336,6 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
             </div>
           ))
         )}
-      </div>
-
-      {/* Branch Locations */}
-      <div className="profile-section">
-        <div className="section-header">
-          <h2>
-            <MapPin size={20} />
-            Branch Locations
-          </h2>
-          {editing && (
-            <button className="btn-add" onClick={addBranch}>
-              <Plus size={16} />
-              Add Branch
-            </button>
-          )}
-        </div>
-
-        <div className="branches-list">
-          {(profile?.branches || []).map((branch) => (
-            <div key={branch.id} className="branch-card">
-              <div className="branch-header">
-                <input
-                  type="text"
-                  value={branch.name}
-                  onChange={(e) => updateBranch(branch.id, 'name', e.target.value)}
-                  disabled={!editing}
-                  placeholder="Branch Name"
-                  className="branch-name-input"
-                />
-                {editing && (
-                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => fillBranchFromCurrentLocation(branch.id)}
-                      disabled={locatingBranchId === branch.id}
-                      style={{ padding: '0.45rem 0.7rem', fontSize: '0.82rem' }}
-                    >
-                      {locatingBranchId === branch.id ? 'Detecting...' : 'Use my current location'}
-                    </button>
-                    <button
-                      className="btn-remove"
-                      onClick={() => removeBranch(branch.id)}
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-                )}
-              </div>
-              
-              <div className="form-grid">
-                <div className="form-group span-2">
-                  <label>Address (Street / Area)</label>
-                  <textarea
-                    value={branch.address || ''}
-                    onChange={(e) => updateBranch(branch.id, 'address', e.target.value)}
-                    disabled={!editing}
-                    rows="2"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>City</label>
-                  <input
-                    type="text"
-                    value={branch.city || ''}
-                    onChange={(e) => updateBranch(branch.id, 'city', e.target.value)}
-                    disabled={!editing}
-                    placeholder="e.g. Pune"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>State / Region</label>
-                  <input
-                    type="text"
-                    value={branch.state || ''}
-                    onChange={(e) => updateBranch(branch.id, 'state', e.target.value)}
-                    disabled={!editing}
-                    placeholder="e.g. Maharashtra"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>PIN / ZIP Code</label>
-                  <input
-                    type="text"
-                    value={branch.zipCode || ''}
-                    onChange={(e) => updateBranch(branch.id, 'zipCode', e.target.value)}
-                    disabled={!editing}
-                    placeholder="e.g. 411026"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Country</label>
-                  <input
-                    type="text"
-                    value={branch.country || ''}
-                    onChange={(e) => updateBranch(branch.id, 'country', e.target.value)}
-                    disabled={!editing}
-                    placeholder="e.g. India"
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Phone Number</label>
-                  <input
-                    type="tel"
-                    value={branch.phone || ''}
-                    onChange={(e) => updateBranch(branch.id, 'phone', e.target.value)}
-                    disabled={!editing}
-                  />
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
       </div>
 
     </div>

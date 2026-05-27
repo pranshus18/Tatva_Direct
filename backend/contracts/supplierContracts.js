@@ -16,6 +16,17 @@ export const supplierBcovResolvePriceSchema = z.object({
 });
 
 export const supplierUpstreamOrdersSchema = z.object({
+  requiredDate: z.string().optional().nullable(),
+  // Mirrors the service-provider PO checkout values:
+  // online | cod | bank_transfer | credit | card
+  paymentMethod: z
+    .enum(['online', 'cod', 'bank_transfer', 'credit', 'card'])
+    .optional()
+    .nullable(),
+  deliveryDestination: z.enum(['shipping', 'billing']).optional().nullable(),
+  // Address objects are validated/normalized in the controller (field-level completeness).
+  shippingAddress: z.record(z.any()).optional().nullable(),
+  billingAddress: z.record(z.any()).optional().nullable(),
   lines: z
     .array(
       z.object({

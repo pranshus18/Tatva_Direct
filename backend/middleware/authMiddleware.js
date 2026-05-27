@@ -123,6 +123,48 @@ export const requireServiceProvider = async (req, res, next) => {
   }
 };
 
+export const requireServiceProviderOrSupplier = async (req, res, next) => {
+  try {
+    // When auth middleware attaches `req.user`, prefer it.
+    if (req.user?.user_type !== undefined) {
+      const u = normalizeUserType(req.user.user_type);
+      if (u === 'service_provider' || u === 'supplier') return next();
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. This feature is only available for service providers or suppliers.'
+      });
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('user_type')
+      .eq('id', req.userId)
+      .single();
+
+    if (error || !user) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Access denied. User not found.'
+      });
+    }
+
+    const normalizedUserType = normalizeUserType(user.user_type);
+    if (normalizedUserType === 'service_provider' || normalizedUserType === 'supplier') {
+      return next();
+    }
+
+    return res.status(403).json({
+      status: 'error',
+      message: 'Access denied. This feature is only available for service providers or suppliers.'
+    });
+  } catch (_error) {
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error checking user permissions'
+    });
+  }
+};
+
 export const requireAdminRole = async (req, res, next) => {
   try {
     if (req.user?.user_type !== undefined) {
@@ -167,4 +209,5 @@ export const requireAdminRole = async (req, res, next) => {
 // Backward-compatible aliases for existing route/controller references.
 export const authenticateToken = requireAuthentication;
 export const isServiceProvider = requireServiceProvider;
+export const isServiceProviderOrSupplier = requireServiceProviderOrSupplier;
 export const isAdmin = requireAdminRole;

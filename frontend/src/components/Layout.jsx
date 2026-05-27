@@ -29,6 +29,7 @@ const routePrefetchers = {
   '/manage-inventory': () => import('../pages/ProductManagement'),
   '/supplier-bcov': () => import('../pages/SupplierBCOV'),
   '/supplier-upstream': () => import('../pages/SupplierUpstream'),
+  '/supplier-place-order': () => import('../pages/SupplierPlaceOrder'),
   '/supplier-cart': () => import('../pages/Cart'),
   '/supplier-pos': () => import('../pages/SupplierPOS'),
   '/supplier-returns': () => import('../pages/SupplierReturns'),

@@ -22,6 +22,7 @@ import { formatDateTimeIST } from '../utils/dateTime';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
+const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
 
 /** Display names for each supply-chain tier (must match backend role keys). */
 const SELLER_LAYER_LABELS = {
@@ -153,8 +154,11 @@ const SupplierUpstream = ({ user }) => {
 
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
+      const cartRaw = localStorage.getItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
+      const orderRaw = localStorage.getItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+      const raw = cartRaw || orderRaw;
       if (!raw) return;
+
       const draft = JSON.parse(raw);
       if (draft && typeof draft === 'object') {
         if (draft.selectedMine && typeof draft.selectedMine === 'object') {
@@ -169,7 +173,9 @@ const SupplierUpstream = ({ user }) => {
         if (typeof draft.brandFilter === 'string') setBrandFilter(draft.brandFilter);
         if (typeof draft.searchTerm === 'string') setSearchTerm(draft.searchTerm);
       }
-      localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
+
+      // Cart resume is one-time; order draft is resumable until Place Order succeeds.
+      if (cartRaw) localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
     } catch (_) {
       localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
     }
@@ -255,7 +261,7 @@ const SupplierUpstream = ({ user }) => {
     return (products || []).find((p) => p?.supplier_product_id === mineSupplierProductId) || null;
   };
 
-  const handleCreateOrders = async () => {
+  const handleProceedToPlaceOrder = async () => {
     if (!suggestions || !Array.isArray(suggestions) || suggestions.length === 0) {
       alert('Load upstream suggestions first.');
       return;
@@ -266,13 +272,35 @@ const SupplierUpstream = ({ user }) => {
       const selectedItems = suggestions
         .filter((it) => selectedMineIds.includes(String(it.mineSupplierProductId)));
 
-      const lines = selectedItems
+      const selectedLinesDetailed = selectedItems
         .filter((it) => selectedUpstreamOffer[it.mineSupplierProductId])
-        .map((it) => ({
-          mineSupplierProductId: it.mineSupplierProductId,
-          upstreamSupplierProductId: selectedUpstreamOffer[it.mineSupplierProductId],
-          quantity: selectedMine[it.mineSupplierProductId]
-        }));
+        .map((it) => {
+          const mineId = it.mineSupplierProductId;
+          const upstreamOfferId = selectedUpstreamOffer[mineId];
+          const mine = resolveMineProduct(mineId);
+          const chosenOffer = Array.isArray(it.upstreamOffers)
+            ? it.upstreamOffers.find((o) => String(o.upstreamSupplierProductId) === String(upstreamOfferId))
+            : null;
+          const qty = Number(selectedMine[mineId] || 1) || 1;
+          const unitPrice = Number(chosenOffer?.price || 0) || 0;
+
+          return {
+            mineSupplierProductId: mineId,
+            upstreamSupplierProductId: upstreamOfferId,
+            quantity: qty,
+            productName: mine?.name || 'Product',
+            supplierName: chosenOffer?.supplierName || 'Supplier',
+            supplierId: chosenOffer?.supplierId || null,
+            unitPrice,
+            lineTotal: unitPrice * qty
+          };
+        });
+
+      const lines = selectedLinesDetailed.map((l) => ({
+        mineSupplierProductId: l.mineSupplierProductId,
+        upstreamSupplierProductId: l.upstreamSupplierProductId,
+        quantity: l.quantity
+      }));
 
       const skipped = selectedItems.length - lines.length;
       if (lines.length === 0) {
@@ -283,36 +311,30 @@ const SupplierUpstream = ({ user }) => {
         alert(`Skipped ${skipped} item(s) that had no upstream offer selected.`);
       }
 
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/supplier/upstream/orders'), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ lines })
-      });
+      const totalAmountEstimate = selectedLinesDetailed.reduce((sum, l) => sum + (Number(l.lineTotal) || 0), 0);
 
-      const data = await res.json();
-      if (!res.ok || data.status !== 'success') {
-        alert(data.message || 'Failed to create upstream orders.');
-        return;
-      }
+      // Persist a draft so the next page can ask required date + payment method.
+      localStorage.setItem(
+        SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY,
+        JSON.stringify({
+          lines,
+          requiredDate: '',
+          paymentMethod: 'online',
+          itemCount: lines.length,
+          totalAmountEstimate,
+          reviewLines: selectedLinesDetailed,
+          selectedMine,
+          selectedUpstreamOffer,
+          suggestions,
+          brandFilter,
+          searchTerm
+        })
+      );
 
-      alert(data.message || 'Upstream order(s) created successfully.');
-      await fetchUpstreamOrders();
-      setCreatedOrders((prev) => {
-        const existingOrderNumbers = new Set((prev || []).map((o) => o.orderNumber));
-        const merged = [
-          ...(data.orders || []),
-          ...(prev || []).filter((o) => !existingOrderNumbers.has(o.orderNumber))
-        ];
-        return merged;
-      });
-      // Keep selections so user can refine; but remove old suggestions to avoid confusion.
-      setSuggestions(null);
-      setSelectedMine({});
-      setSelectedUpstreamOffer({});
+      navigate('/supplier-place-order');
     } catch (e) {
-      console.error('Create upstream orders error:', e);
-      alert('Failed to create upstream orders. Please try again.');
+      console.error('Proceed to place order error:', e);
+      alert('Failed to proceed to place order. Please try again.');
     } finally {
       setCreating(false);
     }
@@ -386,6 +408,10 @@ const SupplierUpstream = ({ user }) => {
 
   const handleMarkAsPaid = async () => {
     if (!orderModalId) return;
+    if (String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit') {
+      alert('Credit / pay-later orders are settled on account. Mark as paid is disabled for credit mode.');
+      return;
+    }
 
     const confirmed = window.confirm(
       `Mark payment as paid for Order ${orderDetails?.orderNumber}?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
@@ -404,7 +430,7 @@ const SupplierUpstream = ({ user }) => {
         },
         body: JSON.stringify({
           paymentStatus: 'paid',
-          paymentMethod: 'online'
+          paymentMethod: orderDetails?.paymentMethod || 'online'
         })
       });
 
@@ -443,6 +469,18 @@ const SupplierUpstream = ({ user }) => {
         {normalized}
       </span>
     );
+  };
+
+  const paymentMethodLabel = (method) => {
+    const pm = String(method || '').toLowerCase();
+    if (pm === 'cash') return 'Cash on delivery';
+    if (pm === 'online') return 'Pay online';
+    if (pm === 'upi') return 'UPI';
+    if (pm === 'bank_transfer') return 'Bank transfer';
+    if (pm === 'card') return 'Credit / Debit Card';
+    if (pm === 'credit') return 'Credit / pay later';
+    if (!pm) return 'Pay online';
+    return pm.replace(/_/g, ' ');
   };
 
   const openSupplierDetailsForOffer = (offer) => {
@@ -661,12 +699,12 @@ const SupplierUpstream = ({ user }) => {
             </div>
             <button
               className="btn-primary"
-              onClick={handleCreateOrders}
+              onClick={handleProceedToPlaceOrder}
               disabled={creating || !suggestions || !Array.isArray(suggestions) || suggestions.length === 0}
               style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
             >
               {creating ? <Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <ShoppingCart size={18} />}
-              Create Upstream Order(s)
+              Proceed to Place Order
             </button>
             <button
               className="btn-secondary"
@@ -891,6 +929,11 @@ const SupplierUpstream = ({ user }) => {
                         <span> • Updated {formatDateTimeIST(o.updatedAt, 'N/A')}</span>
                       ) : null}
                     </p>
+                    <p style={{ color: '#64748b', fontSize: '0.85rem', marginTop: 0 }}>
+                      Payment: <strong>{paymentMethodLabel(o.paymentMethod)}</strong>
+                      {' • '}Required by:{' '}
+                      <strong>{o.expectedDeliveryDate ? formatDateTimeIST(o.expectedDeliveryDate, 'N/A') : '—'}</strong>
+                    </p>
                     {o.trackingNumber ? (
                       <p style={{ color: '#475569', fontSize: '0.85rem', marginTop: 6, marginBottom: 0 }}>
                         Tracking: <strong>{o.trackingNumber}</strong>
@@ -980,7 +1023,14 @@ const SupplierUpstream = ({ user }) => {
                   <p><strong>Name:</strong> {orderDetails?.supplier?.name || orderDetails?.supplier?.company || 'N/A'}</p>
                   <p><strong>Amount:</strong> ₹{Number(orderDetails?.totalAmount || 0).toLocaleString()}</p>
                   <p><strong>Status:</strong> {orderDetails?.status}</p>
-                  <p><strong>Payment:</strong> {orderDetails?.paymentStatus || 'pending'}</p>
+                  <p>
+                    <strong>Payment:</strong> {orderDetails?.paymentStatus || 'pending'}{' '}
+                    • {paymentMethodLabel(orderDetails?.paymentMethod)}
+                  </p>
+                  <p>
+                    <strong>Required by:</strong>{' '}
+                    {orderDetails?.expectedDeliveryDate ? formatDateTimeIST(orderDetails.expectedDeliveryDate, 'N/A') : '—'}
+                  </p>
                   {orderDetails?.updatedAt ? (
                     <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
                       <strong>Last updated:</strong> {formatDateTimeIST(orderDetails.updatedAt, 'N/A')}
@@ -1111,45 +1161,61 @@ const SupplierUpstream = ({ user }) => {
                       border: '2px solid #e2e8f0'
                     }}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                      <QrCode size={20} color="#4f46e5" />
-                      <h3 style={{ margin: 0, color: '#1e293b' }}>Payment QR code</h3>
-                    </div>
-                    <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                      After delivery, scan to pay ₹{Number(orderDetails.totalAmount || 0).toLocaleString()} to the supplier (UPI).
-                    </p>
-                    <div
-                      style={{
-                        display: 'flex',
-                        justifyContent: 'center',
-                        padding: '1.5rem',
-                        backgroundColor: 'white',
-                        borderRadius: '8px',
-                        marginBottom: '1rem',
-                        boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                      }}
-                    >
-                      {(() => {
-                        const upiUri = buildOrderUpiPayUri({
-                          amountRupees: orderDetails.totalAmount,
-                          orderNumber: orderDetails.orderNumber,
-                          payeeName: orderDetails.supplier?.company || orderDetails.supplier?.name,
-                          payeeVpa: orderDetails.supplier?.upiVpa
-                        });
-                        return (
-                          <img
-                            src={qrServerImageUrl(upiUri, 200)}
-                            alt="UPI payment QR"
-                            style={{
-                              width: '200px',
-                              height: '200px',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: '4px'
-                            }}
-                          />
-                        );
-                      })()}
-                    </div>
+                    {orderDetails?.paymentMethod === 'online' ? (
+                      <>
+                        <div
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.5rem',
+                            marginBottom: '1rem'
+                          }}
+                        >
+                          <QrCode size={20} color="#4f46e5" />
+                          <h3 style={{ margin: 0, color: '#1e293b' }}>Payment QR code</h3>
+                        </div>
+                        <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+                          After delivery, scan to pay ₹{Number(orderDetails.totalAmount || 0).toLocaleString()} to the supplier (UPI).
+                        </p>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'center',
+                            padding: '1.5rem',
+                            backgroundColor: 'white',
+                            borderRadius: '8px',
+                            marginBottom: '1rem',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
+                          }}
+                        >
+                          {(() => {
+                            const upiUri = buildOrderUpiPayUri({
+                              amountRupees: orderDetails.totalAmount,
+                              orderNumber: orderDetails.orderNumber,
+                              payeeName: orderDetails.supplier?.company || orderDetails.supplier?.name,
+                              payeeVpa: orderDetails.supplier?.upiVpa
+                            });
+                            return (
+                              <img
+                                src={qrServerImageUrl(upiUri, 200)}
+                                alt="UPI payment QR"
+                                style={{
+                                  width: '200px',
+                                  height: '200px',
+                                  border: '1px solid #e5e7eb',
+                                  borderRadius: '4px'
+                                }}
+                              />
+                            );
+                          })()}
+                        </div>
+                      </>
+                    ) : (
+                      <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
+                        Payment method: <strong>{paymentMethodLabel(orderDetails?.paymentMethod)}</strong>. After payment, mark payment as paid.
+                      </p>
+                    )}
                     <div
                       style={{
                         fontSize: '0.85rem',
@@ -1173,7 +1239,7 @@ const SupplierUpstream = ({ user }) => {
                         type="button"
                         className="btn-primary"
                         onClick={handleMarkAsPaid}
-                        disabled={updatingPayment}
+                        disabled={updatingPayment || String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit'}
                         style={{
                           width: '100%',
                           marginTop: '1rem',
@@ -1182,7 +1248,11 @@ const SupplierUpstream = ({ user }) => {
                           fontWeight: '600'
                         }}
                       >
-                        {updatingPayment ? 'Processing…' : '✓ Mark payment as paid'}
+                        {String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit'
+                          ? 'Credit order (auto settle on account)'
+                          : updatingPayment
+                            ? 'Processing…'
+                            : '✓ Mark payment as paid'}
                       </button>
                     )}
                     {orderDetails.paymentStatus === 'paid' && (
