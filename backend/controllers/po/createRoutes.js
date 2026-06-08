@@ -86,7 +86,8 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       });
     }
 
-    // Verify BOQ exists and belongs to the service provider
+    // BOQ is optional metadata. Cart checkout can carry a stale boqId
+    // from previous BOQ flows, so do not block PO creation if not found.
     let boq = null;
     if (boqId) {
       const { data: boqData, error: boqError } = await supabase
@@ -94,15 +95,23 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         .select('*')
         .eq('id', boqId)
         .eq('service_provider_id', req.userId)
-        .single();
-      
-      if (boqError || !boqData) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'BOQ not found or access denied'
+        .maybeSingle();
+
+      if (boqError) {
+        logger.warn('[PO] BOQ lookup failed; proceeding without BOQ link', {
+          boqId,
+          userId: req.userId,
+          code: boqError.code,
+          message: boqError.message
         });
+      } else if (!boqData) {
+        logger.warn('[PO] BOQ not accessible or not found; proceeding as cart checkout', {
+          boqId,
+          userId: req.userId
+        });
+      } else {
+        boq = boqData;
       }
-      boq = boqData;
     }
 
     const { data: serviceProvider, error: serviceProviderError } = await supabase
