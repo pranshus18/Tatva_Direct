@@ -125,7 +125,13 @@ export function registerSupplierUpstreamRoutes(ctx) {
         ];
       }
     }
-    const latestProject = projects.length > 0 ? projects[projects.length - 1] : null;
+    projects.sort((a, b) => {
+      const aTs = Date.parse(a?.createdAt || 0) || 0;
+      const bTs = Date.parse(b?.createdAt || 0) || 0;
+      if (bTs !== aTs) return bTs - aTs;
+      return String(a?.projectId || '').localeCompare(String(b?.projectId || ''));
+    });
+    const latestProject = projects.length > 0 ? projects[0] : null;
     return {
       mode: 'supplier_upstream',
       projects,
@@ -1293,7 +1299,8 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
     });
     const nextDraftPayload = normalizeUpstreamCartDraft({
       ...currentDraft,
-      projects: [...(currentDraft.projects || []), newProject]
+      // New add must appear first in cart.
+      projects: [newProject, ...(currentDraft.projects || [])]
     });
 
     const { data: saved, error: saveError } = await supabase
@@ -1402,8 +1409,8 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
     } else {
       const idx = targetProjectId
         ? projects.findIndex((p) => String(p?.projectId || '') === targetProjectId)
-        : projects.length - 1;
-      const safeIdx = idx >= 0 ? idx : projects.length - 1;
+        : 0;
+      const safeIdx = idx >= 0 ? idx : 0;
       projects[safeIdx] = buildUpstreamProject({
         ...projects[safeIdx],
         cartName
@@ -1477,11 +1484,11 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       if (idx >= 0) {
         nextProjects[idx] = nextProject;
       } else {
-        nextProjects = [...nextProjects, nextProject];
+        nextProjects = [nextProject, ...nextProjects];
       }
     } else {
       // No projectId means user intentionally saved a fresh project from upstream flow.
-      nextProjects = [...nextProjects, nextProject];
+      nextProjects = [nextProject, ...nextProjects];
     }
     const draftPayload = normalizeUpstreamCartDraft({
       ...currentDraft,

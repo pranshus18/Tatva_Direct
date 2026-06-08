@@ -354,6 +354,28 @@ export async function ensureBrandApprovedOrRequest({ brandName, requesterUserId 
   const status = String(brandRow?.status || 'pending');
   if (status === 'approved') return { ok: true, brand: brandRow };
 
+  // Re-submit flow: if rejected earlier, convert to pending on the next supplier attempt
+  // so admin sees it again for review.
+  if (status === 'rejected' && brandRow?.id) {
+    const nowIso = new Date().toISOString();
+    const { data: reopened, error: reopenErr } = await supabase
+      .from('brands')
+      .update({
+        status: 'pending',
+        requested_by: requesterUserId || brandRow.requested_by || null,
+        requested_at: nowIso,
+        updated_at: nowIso,
+        approved_at: null,
+        rejection_reason: null
+      })
+      .eq('id', brandRow.id)
+      .select()
+      .single();
+    if (!reopenErr && reopened) {
+      brandRow = reopened;
+    }
+  }
+
   const { data: approvedOffers, error: offerErr } = await supabase
     .from('supplier_products')
     .select(`
@@ -421,8 +443,10 @@ export async function ensureBrandApprovedOrRequest({ brandName, requesterUserId 
     ok: false,
     code: 'brand_approval_required',
     message:
-      status === 'rejected'
+      String(brandRow?.status || '').toLowerCase() === 'rejected'
         ? `Brand "${brandRow?.name || name}" was rejected by admin. Please use another brand or request approval again.`
+        : String(brandRow?.status || '').toLowerCase() === 'pending'
+          ? `Brand "${brandRow?.name || name}" request is pending admin approval.`
         : `Brand "${brandRow?.name || name}" is pending admin approval. Please wait for approval before proceeding.`,
     brand: brandRow
   };

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
 import { CheckCircle, Clock, ExternalLink, FileText, RefreshCw, User, XCircle } from 'lucide-react';
+import { certificateLabelFromUrl } from '../utils/authorizationCertificateUrls';
 import './AdminDashboard.css';
 
 const ROLE_LABELS = {
@@ -40,7 +41,11 @@ function documentsFromPayload(payload) {
     const value = String(url || '').trim();
     if (!value || seen.has(value)) return;
     seen.add(value);
-    docs.push({ url: value, label });
+    docs.push({
+      url: value,
+      label,
+      fileName: certificateLabelFromUrl(value)
+    });
   };
 
   for (const e of entries) {
@@ -86,7 +91,7 @@ function RequestDocumentsCell({ payload }) {
             title={doc.label}
           >
             <FileText size={14} aria-hidden />
-            <span className="admin-chain-doc-link-label">{doc.label}</span>
+            <span className="admin-chain-doc-link-label">{doc.fileName || 'Document'}</span>
             <ExternalLink size={12} aria-hidden className="admin-chain-doc-external" />
           </a>
         </li>

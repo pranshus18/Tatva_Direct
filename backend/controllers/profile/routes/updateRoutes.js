@@ -184,7 +184,13 @@ export function registerProfileUpdateRoutes(router) {
 
         const incomingChain = buildChainPayloadFromProfileData(profileData);
         const baselineChain = baselineChainFromProfile(currentProfile);
-        const hasRole = hasAnySupplyChainRole(incomingChain);
+        const incomingEntries = Array.isArray(incomingChain.companyInfoEntries)
+          ? incomingChain.companyInfoEntries
+          : [];
+        const hasRole =
+          incomingEntries.length > 0
+            ? incomingEntries.some((e) => String(e?.role || '').trim())
+            : hasAnySupplyChainRole(incomingChain);
 
         if (supplierProfileIncludesChainDraft(profileData)) {
           const chainEntriesForValidation = resolveCompanyInfoEntriesForValidation(profileData);
@@ -259,20 +265,56 @@ export function registerProfileUpdateRoutes(router) {
           }
 
           const roleBrandSelections = [];
+          const brandSelectionsWithoutRole = [];
           const entriesForValidation = Array.isArray(incomingChain.companyInfoEntries)
             ? incomingChain.companyInfoEntries
             : [];
           for (const e of entriesForValidation) {
             const role = String(e?.role || '').trim();
             const brandsStr = String(e?.brands || '').trim();
-            if (!role) continue;
-            roleBrandSelections.push({ role, brands: parseBrandTokens(brandsStr) });
+            const parsedBrands = parseBrandTokens(brandsStr);
+            if (!parsedBrands || parsedBrands.length === 0) continue;
+            if (!role) {
+              brandSelectionsWithoutRole.push({ brands: parsedBrands });
+              continue;
+            }
+            roleBrandSelections.push({ role, brands: parsedBrands });
           }
-          if (roleBrandSelections.length === 0 && incomingChain.supplierRole) {
+          if (
+            entriesForValidation.length === 0 &&
+            roleBrandSelections.length === 0 &&
+            incomingChain.supplierRole
+          ) {
             roleBrandSelections.push({
               role: String(incomingChain.supplierRole).trim(),
               brands: parseBrandTokens(incomingChain.brands || '')
             });
+          }
+          if (
+            brandSelectionsWithoutRole.length === 0 &&
+            roleBrandSelections.length === 0 &&
+            parseBrandTokens(incomingChain.brands || '').length > 0
+          ) {
+            brandSelectionsWithoutRole.push({
+              brands: parseBrandTokens(incomingChain.brands || '')
+            });
+          }
+
+          // Brand-first flow: when admin chain is not defined yet, allow saving without selecting a role.
+          // Once admin chain is available for that brand, role becomes mandatory.
+          for (const selection of brandSelectionsWithoutRole) {
+            const resolved = await resolveChainRoleOptionsForBrands(selection.brands);
+            if (resolved.eligible) {
+              return res.status(403).json({
+                status: 'error',
+                code: 'role_required_after_chain_defined',
+                message:
+                  'Supply chain is now defined by admin for the selected brand. Please select your supply-chain role before saving.',
+                details: {
+                  brands: resolved.brands || []
+                }
+              });
+            }
           }
 
           for (const selection of roleBrandSelections) {

@@ -42,7 +42,7 @@ test('appendDiscoveryItemAsNewProject creates a new group per add', () => {
   );
   assert.equal(second.boqGroups.length, 2);
   assert.notEqual(second.boqGroups[0].groupId, second.boqGroups[1].groupId);
-  assert.equal(second.boqGroups[1].items[0].quantity, 5);
+  assert.equal(second.boqGroups[0].items[0].quantity, 5);
 });
 
 test('normalizePoCartDraft keeps separate lines for the same productId', () => {

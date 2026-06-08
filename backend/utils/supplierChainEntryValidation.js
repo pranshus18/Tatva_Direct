@@ -39,7 +39,7 @@ export function validateCompanyInfoEntriesList(entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
     return {
       ok: false,
-      message: 'Add at least one supply-chain entry (role, brands, and other required fields).'
+      message: 'Add at least one supply-chain entry (brand is required).'
     };
   }
 
@@ -48,13 +48,8 @@ export function validateCompanyInfoEntriesList(entries) {
     const entryNum = i + 1;
     const role = String(entry.role || '').trim();
     const brandList = parseBrandsListForValidation(entry.brands);
-    const gstin = String(entry.gstin || '').trim();
-    const companyName = String(entry.companyName || '').trim();
     const certificateUrls = resolveAuthorizationCertificateUrls(entry);
 
-    if (!role) {
-      return { ok: false, message: `Entry ${entryNum}: Select your supply-chain role.` };
-    }
     if (brandList.length === 0) {
       return { ok: false, message: `Entry ${entryNum}: Select a brand.` };
     }
@@ -64,12 +59,6 @@ export function validateCompanyInfoEntriesList(entries) {
         message: `Entry ${entryNum}: Only one brand is allowed per entry. Add another block for a second brand.`
       };
     }
-    if (!gstin) {
-      return { ok: false, message: `Entry ${entryNum}: GSTIN is required.` };
-    }
-    if (!companyName) {
-      return { ok: false, message: `Entry ${entryNum}: Company name is required.` };
-    }
     if (certificateUrls.length === 0) {
       return {
         ok: false,
@@ -77,7 +66,7 @@ export function validateCompanyInfoEntriesList(entries) {
       };
     }
 
-    if (role !== 'retailer') {
+    if (role && role !== 'retailer') {
       const movRaw = entry.minimumOrderValue;
       if (movRaw === '' || movRaw === null || movRaw === undefined) {
         return {

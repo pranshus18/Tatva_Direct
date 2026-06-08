@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickLockedVariantPriceFromOffers } from '../services/supplierProductWriteService.js';
+import {
+  pickLockedProductPriceFromOffers,
+  pickLockedVariantPriceFromOffers
+} from '../services/supplierProductWriteService.js';
 
 test('pickLockedVariantPriceFromOffers prefers approved active offer price', () => {
   const price = pickLockedVariantPriceFromOffers([
@@ -25,4 +28,12 @@ test('pickLockedVariantPriceFromOffers ignores invalid prices', () => {
     { price: 'abc', status: 'approved', is_active: true }
   ]);
   assert.equal(price, null);
+});
+
+test('pickLockedProductPriceFromOffers applies same lock across variants', () => {
+  const price = pickLockedProductPriceFromOffers([
+    { price: 210, status: 'approved', is_active: true, variant_key: 'v1' },
+    { price: 190, status: 'pending', is_active: false, variant_key: 'v2' }
+  ]);
+  assert.equal(price, 210);
 });

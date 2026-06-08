@@ -57,10 +57,8 @@ function genEntryId() {
 function isEntryCompletedForCompact(entry) {
   const brand = normalizeSingleBrand(entry?.brands);
   const role = String(entry?.role || '').trim();
-  const gstin = String(entry?.gstin || '').trim();
-  const companyName = String(entry?.companyName || '').trim();
   const certificateUrls = resolveAuthorizationCertificateUrls(entry);
-  return !!(brand && role && gstin && companyName && certificateUrls.length > 0);
+  return !!(brand && role && certificateUrls.length > 0);
 }
 
 function RequiredMark() {
@@ -70,6 +68,27 @@ function RequiredMark() {
       *
     </span>
   );
+}
+
+function syncProfileFromEntries(currentProfile, entries) {
+  const nextEntries = Array.isArray(entries) ? entries : [];
+  const first = nextEntries[0] || {};
+  const certificateFields = setAuthorizationCertificateUrls(
+    {},
+    resolveAuthorizationCertificateUrls(first)
+  );
+  return {
+    ...currentProfile,
+    companyInfoEntries: nextEntries,
+    supplierRole: first.role ?? '',
+    brands: first.brands ?? '',
+    gstin: first.gstin ?? '',
+    companyName: first.companyName ?? '',
+    ownershipDetails: first.ownershipDetails ?? '',
+    minimumOrderValue: first.minimumOrderValue ?? '',
+    authorizationCertificateUrls: certificateFields.authorizationCertificateUrls,
+    authorizationCertificateUrl: certificateFields.authorizationCertificateUrl
+  };
 }
 
 const CompanyInfoEntryCard = ({
@@ -237,7 +256,7 @@ const CompanyInfoEntryCard = ({
             <div className="chain-field chain-field--full">
               <label className="chain-field__label" htmlFor={`role-${entry.id}`}>
                 Supply-chain role
-                <RequiredMark />
+                {adminChainReady ? <RequiredMark /> : null}
               </label>
               <select
                 id={`role-${entry.id}`}
@@ -245,8 +264,8 @@ const CompanyInfoEntryCard = ({
                 value={entry.role || ''}
                 onChange={(e) => onUpdate('role', e.target.value)}
                 disabled={!editing || roleOptionsLoading || availableRoleOptions.length === 0}
-                required={editing}
-                aria-required="true"
+                required={editing && adminChainReady}
+                aria-required={editing && adminChainReady ? 'true' : 'false'}
               >
                 <option value="">Select your role</option>
                 {availableRoleOptions.map((o) => (
@@ -261,46 +280,6 @@ const CompanyInfoEntryCard = ({
               {!roleOptionsLoading && roleOptionsMessage ? (
                 <p className="chain-callout chain-callout--info">{roleOptionsMessage}</p>
               ) : null}
-            </div>
-          </div>
-        </section>
-
-        <section className="chain-section">
-          <h3 className="chain-section__title">Business details</h3>
-          <div className="chain-form-grid">
-            <div className="chain-field">
-              <label className="chain-field__label" htmlFor={`gstin-${entry.id}`}>
-                GSTIN
-                <RequiredMark />
-              </label>
-              <input
-                id={`gstin-${entry.id}`}
-                type="text"
-                className="chain-field__control"
-                value={entry.gstin || ''}
-                onChange={(e) => onUpdate('gstin', e.target.value)}
-                disabled={!editing}
-                placeholder="22AAAAA0000A1Z5"
-                required={editing}
-                aria-required="true"
-              />
-            </div>
-            <div className="chain-field">
-              <label className="chain-field__label" htmlFor={`company-${entry.id}`}>
-                Company name
-                <RequiredMark />
-              </label>
-              <input
-                id={`company-${entry.id}`}
-                type="text"
-                className="chain-field__control"
-                value={entry.companyName || ''}
-                onChange={(e) => onUpdate('companyName', e.target.value)}
-                disabled={!editing}
-                placeholder="Registered business name"
-                required={editing}
-                aria-required="true"
-              />
             </div>
           </div>
         </section>
@@ -412,7 +391,7 @@ export default function SupplierSupplyChainEntriesEditor({
         ? removeAuthorizationCertificateUrl(entry, url)
         : appendAuthorizationCertificateUrl(entry, url);
     });
-    setProfile({ ...profile, companyInfoEntries: entries });
+    setProfile(syncProfileFromEntries(profile, entries));
   };
 
   const displayEntries = getDisplayEntries();
@@ -556,16 +535,7 @@ export default function SupplierSupplyChainEntriesEditor({
         minimumOrderValue: ''
       }
     ];
-    const first = next[0] || {};
-    setProfile({
-      ...profile,
-      companyInfoEntries: next,
-      supplierRole: first.role ?? '',
-      brands: first.brands ?? '',
-      gstin: first.gstin ?? '',
-      companyName: first.companyName ?? '',
-      ownershipDetails: first.ownershipDetails ?? ''
-    });
+    setProfile(syncProfileFromEntries(profile, next));
   };
 
   const updateCompanyInfoEntry = (entryId, field, value) => {
@@ -580,31 +550,19 @@ export default function SupplierSupplyChainEntriesEditor({
         minimumOrderValue: profile?.minimumOrderValue ?? ''
       };
       const updated = { ...legacy, [field]: nextValue };
-      setProfile({
-        ...profile,
-        companyInfoEntries: [
-          {
-            id: genEntryId(),
-            ...updated,
-            authorizationCertificateUrl:
-              updated.authorizationCertificateUrl || profile?.authorizationCertificateUrl || ''
-          }
-        ],
-        supplierRole: updated.role,
-        brands: updated.brands,
-        gstin: updated.gstin,
-        companyName: updated.companyName,
-        ownershipDetails: updated.ownershipDetails,
-        minimumOrderValue: updated.minimumOrderValue,
+      const legacyEntry = {
+        id: genEntryId(),
+        ...updated,
         authorizationCertificateUrl:
           updated.authorizationCertificateUrl || profile?.authorizationCertificateUrl || ''
-      });
+      };
+      setProfile(syncProfileFromEntries(profile, [legacyEntry]));
       return;
     }
     const entries = (profile?.companyInfoEntries || []).map((e) =>
       e.id === entryId ? { ...e, [field]: nextValue } : e
     );
-    setProfile({ ...profile, companyInfoEntries: entries });
+    setProfile(syncProfileFromEntries(profile, entries));
   };
 
   const removeCompanyInfoEntry = (entryId) => {
@@ -621,7 +579,7 @@ export default function SupplierSupplyChainEntriesEditor({
       return;
     }
     const entries = (profile?.companyInfoEntries || []).filter((e) => e.id !== entryId);
-    setProfile({ ...profile, companyInfoEntries: entries });
+    setProfile(syncProfileFromEntries(profile, entries));
   };
 
   const handleCertificateRemoveForEntry = async (entryId, url) => {

@@ -239,7 +239,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
       }
 
       const payload = reqRow.payload || {};
-      const entries = normalizeCompanyInfoEntries(payload.companyInfoEntries || []);
+      const payloadEntries = normalizeCompanyInfoEntries(payload.companyInfoEntries || []);
 
       const { data: userRow, error: uErr } = await supabase
         .from('users')
@@ -251,11 +251,47 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         return res.status(404).json({ status: 'error', message: 'Supplier not found' });
       }
 
+      const existingProfile = userRow.profile || {};
+      const existingEntries = normalizeCompanyInfoEntries(existingProfile.companyInfoEntries || []);
+      const entries = payloadEntries.length > 0 ? payloadEntries : existingEntries;
+      const firstEntry = entries[0] || {};
+      const payloadRole = String(payload.supplierRole || '').trim();
+      const payloadBrands = typeof payload.brands === 'string' ? payload.brands.trim() : '';
+      const existingRole = String(existingProfile.supplierRole || '').trim();
+      const existingBrands = typeof existingProfile.brands === 'string' ? existingProfile.brands.trim() : '';
+      const finalEntries =
+        entries.length > 0
+          ? entries
+          : normalizeCompanyInfoEntries([
+              {
+                role: payloadRole || existingRole || '',
+                brands: payloadBrands || existingBrands || '',
+                gstin: String(existingProfile.gstin || '').trim(),
+                companyName: String(existingProfile.companyName || '').trim(),
+                ownershipDetails: String(existingProfile.ownershipDetails || '').trim(),
+                authorizationCertificateUrl: String(existingProfile.authorizationCertificateUrl || '').trim(),
+                authorizationCertificateUrls: Array.isArray(existingProfile.authorizationCertificateUrls)
+                  ? existingProfile.authorizationCertificateUrls
+                  : [],
+                minimumOrderValue: existingProfile.minimumOrderValue ?? ''
+              }
+            ]);
+
       const mergedProfile = {
-        ...(userRow.profile || {}),
-        supplierRole: String(payload.supplierRole || '').trim(),
-        brands: typeof payload.brands === 'string' ? payload.brands : '',
-        companyInfoEntries: entries
+        ...existingProfile,
+        supplierRole:
+          payloadRole ||
+          firstEntry.role ||
+          finalEntries[0]?.role ||
+          existingRole ||
+          '',
+        brands:
+          payloadBrands ||
+          firstEntry.brands ||
+          finalEntries[0]?.brands ||
+          existingBrands ||
+          '',
+        companyInfoEntries: finalEntries
       };
 
       const { error: upUserErr } = await supabase

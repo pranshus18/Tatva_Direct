@@ -85,10 +85,39 @@ export function buildChainPayloadFromProfileData(profileData) {
 
 export function baselineChainFromProfile(profile) {
   const p = profile || {};
+  let entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);
+  if (entries.length === 0) {
+    const legacyHasValues = Boolean(
+      String(p.supplierRole || '').trim() ||
+      String(p.brands || '').trim() ||
+      String(p.gstin || '').trim() ||
+      String(p.companyName || '').trim() ||
+      String(p.ownershipDetails || '').trim() ||
+      String(p.authorizationCertificateUrl || '').trim() ||
+      (Array.isArray(p.authorizationCertificateUrls) && p.authorizationCertificateUrls.length > 0) ||
+      (p.minimumOrderValue !== '' && p.minimumOrderValue !== null && p.minimumOrderValue !== undefined)
+    );
+    if (legacyHasValues) {
+      entries = normalizeCompanyInfoEntries([
+        {
+          role: String(p.supplierRole || '').trim(),
+          brands: typeof p.brands === 'string' ? p.brands : '',
+          gstin: String(p.gstin || '').trim(),
+          companyName: String(p.companyName || '').trim(),
+          ownershipDetails: String(p.ownershipDetails || '').trim(),
+          authorizationCertificateUrl: String(p.authorizationCertificateUrl || '').trim(),
+          authorizationCertificateUrls: Array.isArray(p.authorizationCertificateUrls)
+            ? p.authorizationCertificateUrls
+            : [],
+          minimumOrderValue: p.minimumOrderValue ?? ''
+        }
+      ]);
+    }
+  }
   return {
     supplierRole: String(p.supplierRole || '').trim(),
     brands: typeof p.brands === 'string' ? p.brands : p.brands ? String(p.brands) : '',
-    companyInfoEntries: normalizeCompanyInfoEntries(p.companyInfoEntries || [])
+    companyInfoEntries: entries
   };
 }
 

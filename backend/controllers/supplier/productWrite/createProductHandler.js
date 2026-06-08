@@ -247,10 +247,7 @@ export function buildSupplierProductCreateHandler(ctx) {
       const parsedStock = parseSupplierStockQuantity(otherData.stock);
       const parsedMinOrderQty = parseInt(otherData.min_order_quantity);
       const normalizedRequestedPrice = Number.isFinite(parsedPrice) ? Number(parsedPrice.toFixed(2)) : null;
-      const lockedVariantPrice = await resolveLockedVariantPrice(supabase, {
-        productId,
-        variantKey: variantIdentityBundle.variantKey
-      });
+      const lockedVariantPrice = await resolveLockedVariantPrice(supabase, { productId });
       if (
         lockedVariantPrice !== null &&
         (normalizedRequestedPrice === null || normalizedRequestedPrice !== lockedVariantPrice)
@@ -258,7 +255,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         return res.status(400).json({
           status: 'error',
           code: 'variant_price_locked',
-          message: `MRP is locked for this variant. Use ₹${lockedVariantPrice.toFixed(2)} for all suppliers.`
+          message: `MRP is locked for this product. Use ₹${lockedVariantPrice.toFixed(2)} for all suppliers and variants.`
         });
       }
       const { data: approvedVariantOffer } = await supabase

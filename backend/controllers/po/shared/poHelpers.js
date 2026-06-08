@@ -135,6 +135,7 @@ export function appendDiscoveryItemAsNewProject(boqGroups, item, productName) {
   const resultGroupId = `pd-group-${newPoCartGroupId()}`;
   const newGroup = {
     groupId: resultGroupId,
+    createdAt: new Date().toISOString(),
     boqId: null,
     boqName: `Discovery - ${label}`,
     boqProject: { source: 'product_discovery' },
@@ -143,7 +144,8 @@ export function appendDiscoveryItemAsNewProject(boqGroups, item, productName) {
     items: [{ ...item, quantity: qty }]
   };
   return {
-    boqGroups: [...groups, newGroup],
+    // Newest discovery add first (top of cart).
+    boqGroups: [newGroup, ...groups],
     groupId: resultGroupId
   };
 }

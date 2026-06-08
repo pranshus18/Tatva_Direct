@@ -30,6 +30,7 @@ import {
   maybeNotifySupplierCreditAlert,
   validateCreditForOrder
 } from '../../services/creditAccountService.js';
+import { loadSupplierProductForPoCreate } from './groupRoutes.js';
 
 export function registerPoCreateRoutes(ctx) {
   const {
@@ -255,7 +256,17 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           }
 
           const baseUnitPrice = parseFloat(supplierProduct.price) || 0;
-          const quantity = parseFloat(item.quantity) || 0;
+          const rawQuantity = parseFloat(item?.quantity);
+          // order_items.quantity is integer in DB. Validate early and fail
+          // with a clear client error instead of a generic DB insert failure.
+          const quantity = Number.isFinite(rawQuantity) ? rawQuantity : null;
+          if (!Number.isInteger(quantity) || quantity < 1) {
+            const err = new Error(
+              `Invalid quantity for "${item?.name || 'item'}". Quantity must be a whole number (1 or more).`
+            );
+            err.statusCode = 400;
+            throw err;
+          }
           const bcovVariantKey = supplierProduct?.variant_key || item?.variantKey || '';
           const bcovBrandKey = extractBrandForBcov({ supplierProduct, item });
           const bcovScopeKeys = extractBcovScopeKeys({ supplierProduct, item });
@@ -485,8 +496,20 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         logger.error('Order items creation error:', itemsError);
         // Delete the order if items creation fails
         await supabase.from('orders').delete().eq('id', order.id);
-        const err = new Error(itemsError?.message || 'Failed to create order items');
-        err.statusCode = 500;
+        const dbCode = String(itemsError?.code || '');
+        const details = String(itemsError?.details || '');
+        const message = String(itemsError?.message || '');
+        const quantityConstraintIssue =
+          dbCode === '22P02' ||
+          (dbCode === '23514' && /quantity/i.test(details + message)) ||
+          /quantity/i.test(message) ||
+          /quantity/i.test(details);
+        const err = new Error(
+          quantityConstraintIssue
+            ? 'One or more line quantities are invalid. Please set a quantity of at least 1 and try again.'
+            : (itemsError?.message || 'Failed to create order items')
+        );
+        err.statusCode = quantityConstraintIssue ? 400 : 500;
         throw err;
       }
 

@@ -3492,7 +3492,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   />
                   {priceLocked && typeof lockedPrice === 'number' && Number.isFinite(lockedPrice) && (
                     <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#16a34a' }}>
-                      Variant MRP is locked for all suppliers: <strong>{formatRupee(lockedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                      Product MRP is locked for all suppliers and variants: <strong>{formatRupee(lockedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                     </div>
                   )}
                   {typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (

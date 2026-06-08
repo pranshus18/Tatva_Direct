@@ -11,7 +11,7 @@ import {
   supplierUnitCreateSchema
 } from './supplierImports.js';
 import { listSupplierSelectableBrands } from '../../services/supplierBrandCatalogService.js';
-import { pickLockedVariantPriceFromOffers } from '../../services/supplierProductWriteService.js';
+import { pickLockedProductPriceFromOffers } from '../../services/supplierProductWriteService.js';
 
 export function registerSupplierCatalogRoutes(ctx) {
   const {
@@ -43,18 +43,22 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       offset,
       legacyManualDiscoveryCategoryFilter: true
     });
-    const visibleSuggestions = (result.suggestions || []).filter((s) => {
-      const brandLabel = resolveUpstreamBrandLabel(
-        { brandModel: s?.brandModel || s?.modelBrand || s?.brand, brand: s?.brand },
-        s?.brand
-      );
-      return supplierCanAccessBrandStrict(req.user?.profile || {}, brandLabel).allowed;
-    });
+    const isSupplierUser = String(req.user?.user_type || '').trim().toLowerCase() === 'supplier';
+    const visibleSuggestions = isSupplierUser
+      ? (result.suggestions || []).filter((s) => {
+          const brandLabel = resolveUpstreamBrandLabel(
+            { brandModel: s?.brandModel || s?.modelBrand || s?.brand, brand: s?.brand },
+            s?.brand
+          );
+          return supplierCanAccessBrandStrict(req.user?.profile || {}, brandLabel).allowed;
+        })
+      : (result.suggestions || []);
+    const responseTotal = isSupplierUser ? visibleSuggestions.length : result.total;
 
     return res.json({
       status: 'success',
       suggestions: visibleSuggestions,
-      total: visibleSuggestions.length,
+      total: responseTotal,
       limit: result.limit,
       offset: result.offset,
       recommendationMode: result.recommendationMode
@@ -284,13 +288,13 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
         .from('supplier_products')
         .select('price, supplier_id, status, is_active, variant_key')
         .eq('product_id', product.id)
-        .eq('is_active', true)
-        .eq('status', 'approved');
+        .neq('status', 'rejected');
 
       if (offersError) {
         console.error('Recommended price lookup error:', offersError);
       } else {
         const offers = (supplierOffers || [])
+          .filter((o) => String(o?.status || '').toLowerCase() === 'approved' && o?.is_active === true)
           .map(o => ({
             price: typeof o.price === 'string' ? parseFloat(o.price) : Number(o.price),
             supplier_id: o.supplier_id
@@ -314,15 +318,10 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
           recommendedPrice = supplierCountOthers > 0 ? avgPriceOthers : avgPriceAll;
         }
 
-        const variantKeys = [
-          ...new Set((supplierOffers || []).map((o) => String(o?.variant_key || '').trim()).filter(Boolean))
-        ];
-        if (variantKeys.length === 1) {
-          const lockCandidate = pickLockedVariantPriceFromOffers(supplierOffers || []);
-          if (lockCandidate !== null) {
-            lockedPrice = lockCandidate;
-            priceLocked = true;
-          }
+        const lockCandidate = pickLockedProductPriceFromOffers(supplierOffers || []);
+        if (lockCandidate !== null) {
+          lockedPrice = lockCandidate;
+          priceLocked = true;
         }
       }
     }

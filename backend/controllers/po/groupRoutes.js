@@ -421,6 +421,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
     });
   }
 });
+}
 
 /** Avoid user-supplied % / _ widening ILIKE matches unintentionally. */
 function sanitizeIlikeFragment(value) {
@@ -433,7 +434,7 @@ function sanitizeIlikeFragment(value) {
  * Resolve supplier_products for PO insert — mirrors /api/po/group so a line that grouped
  * successfully will not fail at create (e.g. pending offers, same variant/product lookups).
  */
-async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
+export async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
   const select = `
     *,
     product:products(*)
@@ -544,6 +545,4 @@ async function loadSupplierProductForPoCreate(supabase, supplierId, item) {
   }
 
   return null;
-}
-
 }

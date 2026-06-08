@@ -33,17 +33,18 @@ export function pickLockedVariantPriceFromOffers(offers = []) {
   return bucket[0].price;
 }
 
+export const pickLockedProductPriceFromOffers = pickLockedVariantPriceFromOffers;
+
 export async function resolveLockedVariantPrice(
   supabase,
-  { productId, variantKey, excludeSupplierProductId = null } = {}
+  { productId, excludeSupplierProductId = null } = {}
 ) {
-  if (!productId || !variantKey) return null;
+  if (!productId) return null;
 
   let query = supabase
     .from('supplier_products')
     .select('id, price, status, is_active, updated_at')
     .eq('product_id', productId)
-    .eq('variant_key', variantKey)
     .neq('status', 'rejected')
     .order('updated_at', { ascending: true });
 

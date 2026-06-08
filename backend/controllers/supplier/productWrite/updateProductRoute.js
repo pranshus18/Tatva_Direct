@@ -162,7 +162,6 @@ export function registerSupplierProductUpdateRoute(ctx) {
             : null;
           const lockedVariantPrice = await resolveLockedVariantPrice(supabase, {
             productId: supplierProduct.product_id,
-            variantKey: variantIdentity.variantKey,
             excludeSupplierProductId: id
           });
           if (
@@ -172,7 +171,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
             return res.status(400).json({
               status: 'error',
               code: 'variant_price_locked',
-              message: `MRP is locked for this variant. Use ₹${lockedVariantPrice.toFixed(2)} for all suppliers.`
+              message: `MRP is locked for this product. Use ₹${lockedVariantPrice.toFixed(2)} for all suppliers and variants.`
             });
           }
         }
