@@ -288,6 +288,10 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           });
           const unitPrice = bcovResolved?.price ?? baseUnitPrice;
           const taxableAmount = unitPrice * quantity;
+          const itemSpecifications =
+            item?.specifications && typeof item.specifications === 'object' && !Array.isArray(item.specifications)
+              ? item.specifications
+              : {};
           assertSupplierProductTaxRates({
             supplierProduct,
             context: 'Order GST calculation',
@@ -308,6 +312,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             unit_price: unitPrice,
             total_price: taxableAmount,
             specifications: JSON.stringify({
+              ...itemSpecifications,
               productIdentification: item.productIdentification || null,
               parentAsin: supplierProduct?.product?.asin || null,
               variantAsin: supplierProduct?.variant_asin || null,

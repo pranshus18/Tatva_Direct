@@ -237,11 +237,27 @@ function digitsPin6(value) {
 
 function parseKgFromText(raw) {
   if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
+  }
   const s = String(raw).trim();
   if (!s) return null;
-  const m = s.match(/(\d+(?:\.\d+)?)\s*kg/i);
-  if (m) return parseFloat(m[1]);
-  const n = parseFloat(s.replace(/,/g, ''));
+  const normalized = s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const unitMatch = normalized.match(/([-+]?\d+(?:[.,]\d+)?)\s*(kg|kgs|kilogram|kilograms|g|gm|gram|grams)\b/i);
+  if (unitMatch) {
+    const rawNum = String(unitMatch[1]).replace(',', '.');
+    const value = Number(rawNum);
+    if (!Number.isFinite(value) || value <= 0) return null;
+    const unit = String(unitMatch[2] || '').toLowerCase();
+    if (unit === 'g' || unit === 'gm' || unit === 'gram' || unit === 'grams') {
+      return value / 1000;
+    }
+    return value;
+  }
+  const rawNum = normalized.includes(',') && !normalized.includes('.')
+    ? normalized.replace(',', '.')
+    : normalized.replace(/,/g, '');
+  const n = Number(rawNum);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 

@@ -307,8 +307,20 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
             return;
           }
 
+          const explicitTruckingWeight = Number(truckingWeightKg);
+          const fallbackOrderWeight = Number(weightKg);
           const bookWeight =
-            Number(truckingWeightKg) > 0 ? Number(truckingWeightKg) : weightKg;
+            Number.isFinite(explicitTruckingWeight) && explicitTruckingWeight > 0
+              ? explicitTruckingWeight
+              : fallbackOrderWeight;
+          if (!Number.isFinite(bookWeight) || bookWeight <= 0) {
+            const err = new Error(
+              `Order ${row.id}: Trucking requires a positive shipment weight. Add item weight in product specifications (e.g. "Weight: 25 kg"), re-create order, and retry transport confirmation.`
+            );
+            err.statusCode = 400;
+            err.orderId = row.id;
+            throw err;
+          }
           const booked = await bookTrucking({
             vehicleTypeId: bookingIntent.vehicleTypeId,
             carrier: bookingIntent.carrier,

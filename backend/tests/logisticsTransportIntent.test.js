@@ -5,6 +5,7 @@ import {
   resolveBookingIntent,
   TRANSPORT_KIND
 } from '../utils/logisticsTransportIntent.js';
+import { computeGroupWeightKg } from '../controllers/logisticsController.js';
 import { resolveShipmentQuoteStrategy } from '../utils/logisticsQuotePolicy.js';
 import {
   buildBookCourierCheckoutPayload,
@@ -119,4 +120,22 @@ test('buildTruckingBookPayload requires coordinates', () => {
       }),
     /delivery_lat/
   );
+});
+
+test('computeGroupWeightKg supports decimal kilogram values', () => {
+  const weight = computeGroupWeightKg({
+    items: [
+      { quantity: 2, specifications: { Weight: '1.25 kg' } }
+    ]
+  });
+  assert.equal(weight, 2.5);
+});
+
+test('computeGroupWeightKg parses gram values into decimal kg', () => {
+  const weight = computeGroupWeightKg({
+    items: [
+      { quantity: 3, specifications: { weight: '250 g' } }
+    ]
+  });
+  assert.equal(weight, 0.75);
 });
