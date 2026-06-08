@@ -217,7 +217,7 @@ const ProductDiscovery = () => {
       <VoiceGuidedBanner />
       <SpPageHeader
         title="Discover Products"
-        description="Browse construction materials from verified suppliers. Search, compare, and add items to your cart."
+        description=""
         icon={Search}
         actions={
           <Button variant="outline" onClick={() => navigate('/boq-normalize')}>
@@ -319,10 +319,6 @@ const ProductDiscovery = () => {
                   </div>
 
                   <RatingStars rating={product.average_rating} reviews={product.total_reviews} />
-
-                  <p className="pd-card__desc">
-                    {product.description || 'No description available.'}
-                  </p>
 
                   <SpecBadges specifications={product.specifications} />
                   <TagList tags={product.tags} />

@@ -969,14 +969,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             }}
           />
         </div>
-        <p style={{ 
-          margin: 0, 
-          fontSize: '0.8rem', 
-          color: '#6b7280',
-          maxWidth: '420px'
-        }}>
-          This is the date by which you need all materials delivered. It will be stored on the purchase orders and shown to suppliers as the expected delivery date.
-        </p>
         <div style={{ width: '100%', flexBasis: '100%', marginTop: '0.5rem' }}>
           <label style={{ 
             display: 'block', 
@@ -1013,9 +1005,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
               <option value="credit">Credit / pay later (on account)</option>
             ) : null}
           </select>
-          <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#6b7280', maxWidth: '520px' }}>
-            This applies to every purchase order created in this step. Pay online: you will see a platform test QR before orders are placed. COD and credit stay pending until the supplier confirms payment or delivery.
-          </p>
           {creditCheckFailed && poGroups?.length > 0 && !creditCheckLoading ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#b45309', maxWidth: '520px' }}>
               We could not verify pay-later eligibility right now. You can still choose credit and continue; final
@@ -1615,9 +1604,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
               {creatingOrders ? 'Finalizing...' : 'Confirm & Create All POs'}
             </button>
           </div>
-          <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#64748b' }}>
-            Step 1: Click Transport suggestion and choose transport details. Step 2: Confirm & Create All POs will create orders and apply transport details in one flow.
-          </p>
         </>
       )}
 

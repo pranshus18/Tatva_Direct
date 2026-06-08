@@ -36,21 +36,21 @@
 .yo-card {
   display: grid;
   grid-template-columns: 1fr auto;
-  gap: 1rem 1.25rem;
+  gap: 0.75rem 1rem;
   align-items: start;
-  padding: 1.25rem 1.35rem;
+  padding: 0.9rem 1rem;
   background: #ffffff;
-  border: 1px solid #e8ecf1;
-  border-radius: 14px;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
+  border: 1px solid #dfe6ee;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   cursor: pointer;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
   text-align: left;
 }
 
 .yo-card:hover {
-  border-color: #c7d2fe;
-  box-shadow: 0 4px 20px rgba(79, 70, 229, 0.08), 0 1px 3px rgba(15, 23, 42, 0.06);
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
 }
 
 .yo-card:focus-visible {
@@ -68,16 +68,16 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem 0.75rem;
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.4rem;
 }
 
 .yo-card__ref {
   font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, monospace;
-  font-size: 0.8125rem;
+  font-size: 0.76rem;
   font-weight: 600;
   color: #3730a3;
   background: #eef2ff;
-  padding: 0.2rem 0.55rem;
+  padding: 0.14rem 0.45rem;
   border-radius: 6px;
   letter-spacing: 0.01em;
 }
@@ -86,9 +86,9 @@
   display: inline-flex;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem 0.65rem;
+  padding: 0.16rem 0.5rem;
   border-radius: 999px;
-  font-size: 0.6875rem;
+  font-size: 0.64rem;
   font-weight: 600;
   text-transform: capitalize;
   letter-spacing: 0.02em;
@@ -128,10 +128,10 @@
 }
 
 .yo-card__supplier {
-  font-size: 0.875rem;
+  font-size: 0.83rem;
   color: #475569;
   line-height: 1.45;
-  margin: 0 0 0.5rem;
+  margin: 0 0 0.35rem;
 }
 
 .yo-card__supplier strong {
@@ -145,32 +145,32 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 0.5rem 1rem;
-  margin-top: 0.35rem;
+  margin-top: 0.2rem;
 }
 
 .yo-card__amount {
-  font-size: 1.125rem;
+  font-size: 1.02rem;
   font-weight: 700;
   color: #0f172a;
   letter-spacing: -0.01em;
 }
 
 .yo-card__amount-label {
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   font-weight: 500;
   color: #94a3b8;
   text-transform: uppercase;
   letter-spacing: 0.06em;
   display: block;
-  margin-bottom: 0.15rem;
+  margin-bottom: 0.08rem;
 }
 
 .yo-card__dates {
   display: flex;
   flex-wrap: wrap;
   gap: 1rem;
-  margin-top: 0.65rem;
-  font-size: 0.75rem;
+  margin-top: 0.4rem;
+  font-size: 0.7rem;
   color: #64748b;
 }
 
@@ -186,23 +186,23 @@
 
 /* Horizontal progress */
 .yo-track {
-  margin-top: 1rem;
-  padding-top: 1rem;
+  margin-top: 0.6rem;
+  padding-top: 0.65rem;
   border-top: 1px solid #f1f5f9;
 }
 
 .yo-track__bar-wrap {
-  height: 6px;
-  background: #f1f5f9;
+  height: 5px;
+  background: #eef2f7;
   border-radius: 999px;
   overflow: hidden;
-  margin-bottom: 0.65rem;
+  margin-bottom: 0.45rem;
 }
 
 .yo-track__bar {
   height: 100%;
   border-radius: 999px;
-  background: linear-gradient(90deg, #4f46e5, #10b981);
+  background: linear-gradient(90deg, #0ea5e9, #14b8a6);
   transition: width 0.35s ease;
 }
 
@@ -216,7 +216,7 @@
   flex: 1;
   min-width: 0;
   text-align: center;
-  font-size: 0.625rem;
+  font-size: 0.58rem;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -229,7 +229,7 @@
 }
 
 .yo-track__step--active {
-  color: #4f46e5;
+  color: #0f172a;
 }
 
 .yo-card__action {
@@ -256,6 +256,27 @@
   background: #fff;
   border-color: #4f46e5;
   color: #4f46e5;
+}
+
+.yo-btn-detail {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid #dbe3ef;
+  background: #ffffff;
+  color: #0f172a;
+  border-radius: 8px;
+  padding: 0.42rem 0.72rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1;
+  box-shadow: 0 1px 1px rgba(15, 23, 42, 0.03);
+  transition: all 0.2s ease;
+}
+
+.yo-btn-detail:hover {
+  border-color: #cbd5e1;
+  background: #f6f8fb;
 }
 
 /* Modal */

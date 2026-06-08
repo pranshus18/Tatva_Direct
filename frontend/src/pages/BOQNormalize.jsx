@@ -463,7 +463,7 @@ const BOQNormalize = ({ onComplete }) => {
     <>
     <SpWorkflowPage
       title="BOQ Normalize"
-      description="Upload your Bill of Quantities and map items to normalized catalog"
+      description=""
       icon={FileText}
     >
     <div className="page !p-0">
@@ -472,9 +472,6 @@ const BOQNormalize = ({ onComplete }) => {
         <div>
           <div className="boq-site-fields">
             <h3 className="boq-site-fields-title">Project site and timeline</h3>
-            <p className="boq-site-fields-hint">
-              Suppliers are ranked nearer to this location when they have outlet coordinates on file; otherwise we match by city or state from your address text.
-            </p>
             <div className="boq-site-field-grid">
               <label className="boq-site-label">
                 <span className="boq-site-label-text">

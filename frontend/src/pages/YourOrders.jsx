@@ -77,6 +77,19 @@ const paymentMethodLabel = (order) => {
   return pm.replace(/_/g, ' ');
 };
 
+const statusBadgeVariant = (status) => {
+  const s = String(status || '').toLowerCase();
+  if (s === 'delivered') return 'yo-badge--delivered';
+  if (s === 'pending') return 'yo-badge--pending';
+  if (s === 'cancelled') return 'yo-badge--cancelled';
+  return 'yo-badge--confirmed';
+};
+
+const paymentBadgeVariant = (paymentStatus) => {
+  const s = String(paymentStatus || '').toLowerCase();
+  return s === 'paid' ? 'yo-badge--paid' : 'yo-badge--payment-pending';
+};
+
 const getSelfServeLockReason = (order) => {
   const paymentStatus = String(order?.paymentStatus || '').toLowerCase();
   const status = String(order?.status || '').toLowerCase();
@@ -713,7 +726,7 @@ const YourOrders = () => {
             return (
               <Card
                 key={po.id}
-                className="sp-market-card cursor-pointer transition-shadow hover:shadow-md"
+                className="yo-card"
                 onClick={() => openOrder(po)}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -724,56 +737,53 @@ const YourOrders = () => {
                 role="button"
                 tabIndex={0}
               >
-                <CardContent className="p-5">
-                  <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0 flex-1 space-y-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded-md bg-[#eef2ff] px-2 py-0.5 font-mono text-xs font-semibold text-[#3730a3]">
+                <CardContent className="p-4">
+                  <div className="yo-card__main">
+                    <div className="yo-card__top">
+                      <span className="yo-card__ref">
                           {orderRef}
-                        </span>
-                        <span className={cn(spStatusBadgeClass(po.status), 'gap-1')}>
+                      </span>
+                      <span className={cn('yo-badge', statusBadgeVariant(po.status))}>
                           {statusIcon(po.status)}
                           {formatOrderStatusLabel(po.status)}
-                        </span>
-                        <span className={spPaymentBadgeClass(po.paymentStatus)}>
+                      </span>
+                      <span className={cn('yo-badge', paymentBadgeVariant(po.paymentStatus))}>
                           {formatPaymentStatusLabel(po.paymentStatus)}
-                        </span>
-                  </div>
+                      </span>
+                    </div>
 
-                      <div>
-                        <p className="font-semibold text-foreground">{po.vendor}</p>
+                    <div>
+                      <p className="font-semibold text-foreground">{po.vendor}</p>
                         {po.vendorCompany && po.vendorCompany !== po.vendor ? (
                           <p className="text-sm text-muted-foreground">{po.vendorCompany}</p>
                         ) : null}
-                      </div>
+                    </div>
 
-                      <div className="flex flex-wrap items-end gap-6">
+                    <div className="yo-card__row">
                     <div>
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Order total
-                          </p>
-                          <p className="text-xl font-bold text-foreground">
+                        <span className="yo-card__amount-label">Order total</span>
+                        <p className="yo-card__amount">
                             ₹{Number(po.amount || 0).toLocaleString('en-IN')}
                           </p>
                     </div>
+                    </div>
                         {(po.expectedDeliveryDate || po.actualDeliveryDate) && (
-                          <div className="text-sm text-muted-foreground">
+                      <div className="yo-card__dates">
                             {po.expectedDeliveryDate && (
-                              <span className="mr-3">
-                                Expected {formatDateShort(po.expectedDeliveryDate)}
+                          <span>
+                            Expected <strong>{formatDateShort(po.expectedDeliveryDate)}</strong>
                               </span>
                             )}
                             {po.actualDeliveryDate && (
-                              <span className="font-medium text-emerald-700">
-                                Delivered {formatDateShort(po.actualDeliveryDate)}
+                          <span className="yo-arrived">
+                            Delivered {formatDateShort(po.actualDeliveryDate)}
                               </span>
                             )}
                           </div>
                         )}
-                  </div>
 
                   {String(po.paymentStatus || '').toLowerCase() === 'paid' && (
-                        <div className="flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
+                      <div className="mt-1 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
                       {po.invoicePdfUrl && (
                             <a
                               href={po.invoicePdfUrl}
@@ -808,36 +818,37 @@ const YourOrders = () => {
                     </div>
                   )}
 
-                      <div className="pt-1">
-                        <div className="mb-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div className="yo-track">
+                      <div className="yo-track__bar-wrap">
                           <div
-                            className="h-full rounded-full bg-primary transition-all"
+                            className="yo-track__bar"
                             style={{ width: `${progressPercent(currentRank)}%` }}
                           />
-                    </div>
-                        <div className="flex flex-wrap justify-between gap-1 text-[10px] font-medium text-muted-foreground sm:text-xs">
+                      </div>
+                      <div className="yo-track__labels">
                       {steps.map((step) => {
                         const done = step.rank === 0 ? true : step.rank <= currentRank;
                         const active = step.rank !== 0 && step.rank === currentRank;
                         return (
                           <span
                             key={step.key}
-                                className={cn(
-                                  done && 'text-[#059669]',
-                                  active && 'font-semibold text-[#4f46e5]'
-                                )}
+                            className={cn(
+                              'yo-track__step',
+                              done && 'yo-track__step--done',
+                              active && 'yo-track__step--active'
+                            )}
                           >
                             {step.label}
                           </span>
                         );
                       })}
+                      </div>
                     </div>
                   </div>
-                </div>
-
+                  <div className="yo-card__action">
                     <button
                       type="button"
-                      className="btn-secondary shrink-0 self-start inline-flex items-center gap-2"
+                      className="yo-btn-detail"
                       onClick={(e) => {
                         e.stopPropagation();
                         openOrder(po);
@@ -846,7 +857,7 @@ const YourOrders = () => {
                       <Eye className="h-4 w-4" />
                       View details
                     </button>
-                </div>
+                  </div>
                 </CardContent>
               </Card>
             );
