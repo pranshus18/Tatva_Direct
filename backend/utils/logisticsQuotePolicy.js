@@ -20,6 +20,10 @@ export const LOGISTICS_TRUCKING_MIN_WEIGHT_KG = Math.max(
   Number.parseFloat(String(process.env.LOGISTICS_TRUCKING_MIN_WEIGHT_KG || '30')) || 30
 );
 
+/** When true, same-city trucking with no vehicles may fall back to courier quotes. Default: off. */
+export const LOGISTICS_COURIER_FALLBACK_AFTER_TRUCKING =
+  String(process.env.LOGISTICS_COURIER_FALLBACK_AFTER_TRUCKING || '').toLowerCase() === 'true';
+
 /** Max straight-line distance (km) to treat pickup/delivery as same-city for Borzo. */
 export const LOGISTICS_SAME_CITY_MAX_KM = Math.max(
   5,
@@ -117,25 +121,7 @@ const BULK_CATEGORY_RE = /\b(paint|primer|putty|cement|sand|aggregate|brick|tile
  */
 export function inferLogisticsCategory(group, weightKg = null) {
   const items = Array.isArray(group?.items) ? group.items : [];
-  let sum = 0;
-  if (weightKg == null) {
-    for (const item of items) {
-      const q = Math.max(0, Number(item.quantity) || 0);
-      const specs =
-        item?.specifications && typeof item.specifications === 'object' ? item.specifications : {};
-      let unit = 0.5;
-      for (const [k, v] of Object.entries(specs)) {
-        if (!String(k).toLowerCase().includes('weight')) continue;
-        const m = String(v).match(/(\d+(?:\.\d+)?)\s*kg/i);
-        if (m) {
-          unit = parseFloat(m[1]);
-          break;
-        }
-      }
-      sum += unit * q;
-    }
-    weightKg = Math.max(0.01, sum);
-  }
+  const parsedWeightKg = Number(weightKg);
 
   const text = items
     .map((i) => {
@@ -149,7 +135,7 @@ export function inferLogisticsCategory(group, weightKg = null) {
   if (BULK_CATEGORY_RE.test(text)) return 'paint';
   if (/\b(laptop|notebook|macbook|chromebook)\b/.test(text)) return 'laptop';
   if (/\b(phone|mobile|tablet|ipad|electronics)\b/.test(text)) return 'electronics';
-  if (weightKg >= LOGISTICS_TRUCKING_MIN_WEIGHT_KG) return 'paint';
+  if (Number.isFinite(parsedWeightKg) && parsedWeightKg >= LOGISTICS_TRUCKING_MIN_WEIGHT_KG) return 'paint';
   return 'general';
 }
 
@@ -182,27 +168,38 @@ export function resolveShipmentQuoteStrategy({
   const cat = String(category || 'general').trim() || 'general';
   const bulkCat = cat === 'general' && heavy ? 'paint' : cat;
 
-  if (heavy && intercity) {
+  if (intercity) {
+    if (heavy) {
+      return {
+        mode: 'auto',
+        category: bulkCat,
+        sameCity: false,
+        intercity: true,
+        heavy: true,
+        quoteNote: 'Inter-city heavy lane: logistics module selects the best carrier mode.',
+        allowCourierFallback: false
+      };
+    }
     return {
-      mode: 'auto',
-      category: bulkCat,
+      mode: 'courier',
+      category: cat,
       sameCity: false,
       intercity: true,
-      heavy: true,
-      quoteNote: null,
+      heavy: false,
+      quoteNote: 'Inter-city lane: courier (Shiprocket) quotes only — trucking is same-city.',
       allowCourierFallback: false
     };
   }
 
   if (heavy && sameCity) {
     return {
-      mode: 'auto',
+      mode: 'trucking',
       category: bulkCat,
       sameCity: true,
       intercity: false,
       heavy: true,
-      quoteNote: null,
-      allowCourierFallback: true
+      quoteNote: 'Same-city heavy shipment: trucking (Borzo) quotes.',
+      allowCourierFallback: LOGISTICS_COURIER_FALLBACK_AFTER_TRUCKING
     };
   }
 
@@ -215,12 +212,24 @@ export function resolveShipmentQuoteStrategy({
       heavy: true,
       quoteNote:
         'Add complete pickup and delivery addresses (or wait for geocoding) so we can confirm same-city trucking.',
-      allowCourierFallback: true
+      allowCourierFallback: LOGISTICS_COURIER_FALLBACK_AFTER_TRUCKING
+    };
+  }
+
+  if (sameCity) {
+    return {
+      mode: 'courier',
+      category: cat,
+      sameCity: true,
+      intercity: false,
+      heavy: false,
+      quoteNote: 'Same-city parcel: courier (Shiprocket) quotes.',
+      allowCourierFallback: false
     };
   }
 
   return {
-    mode: 'auto',
+    mode: 'courier',
     category: cat,
     sameCity,
     intercity,

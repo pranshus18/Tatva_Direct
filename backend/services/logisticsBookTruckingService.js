@@ -4,6 +4,8 @@
  * Called from transport/confirm when the user selected a Borzo / trucking quote.
  */
 
+import { buildTruckingBookPayload } from '../utils/logisticsApiPayload.js';
+
 const LOGISTICS_BASE = String(process.env.LOGISTICS_MODULE_URL || 'http://localhost:8001').replace(
   /\/$/,
   ''
@@ -150,35 +152,17 @@ export async function bookTrucking({
   matter = null,
   displayName = null
 }) {
-  const plat = Number(pickupLat);
-  const plng = Number(pickupLng);
-  const dlat = Number(deliveryLat);
-  const dlng = Number(deliveryLng);
-  if (![plat, plng, dlat, dlng].every((n) => Number.isFinite(n))) {
-    throw new Error('Pickup and delivery coordinates are required for trucking booking');
-  }
-
-  let digits = String(contactPhone || '').replace(/\D/g, '');
-  if (digits.length >= 12 && digits.startsWith('91')) digits = digits.slice(-10);
-  else if (digits.length > 10) digits = digits.slice(-10);
-  const phone =
-    digits.length === 10 && /^[6-9]\d{9}$/.test(digits) ? digits : '9876543210';
-
-  const body = {
-    carrier: String(carrier || 'Borzo').trim() || 'Borzo',
-    pickup_lat: plat,
-    pickup_lng: plng,
-    delivery_lat: dlat,
-    delivery_lng: dlng,
-    contact_phone: phone,
-    weight_kg: Number(weightKg) > 0 ? Number(weightKg) : 1
-  };
-  const vid = Number(vehicleTypeId);
-  if (Number.isFinite(vid) && vid > 0) {
-    body.vehicle_type_id = vid;
-  }
-  const m = pickStr(matter);
-  if (m) body.matter = m.slice(0, 500);
+  const body = buildTruckingBookPayload({
+    vehicleTypeId,
+    carrier,
+    pickupLat,
+    pickupLng,
+    deliveryLat,
+    deliveryLng,
+    contactPhone,
+    weightKg,
+    matter
+  });
 
   let res = await postJson(truckingBookUrl(), body);
   if (!res.ok && RETRYABLE.has(res.status)) {

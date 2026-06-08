@@ -694,7 +694,7 @@ const ServiceProviderDashboard = ({ user }) => {
       ) : null}
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <SpStatCard label="Total BOQs" value={stats.totalBOQs} icon={FileText} accent="indigo" />
+        <SpStatCard label="Total BOQs" value={stats.totalBOQs} icon={FileText} accent="sky" />
         <SpStatCard label="Active POs" value={stats.activePOs} icon={ShoppingCart} accent="emerald" />
         <SpStatCard label="Total Spent" value={`₹${Number(stats.totalSpent || 0).toLocaleString()}`} icon={TrendingUp} accent="amber" />
         <SpStatCard label="Pending Approvals" value={stats.pendingApprovals} icon={Clock} accent="rose" />

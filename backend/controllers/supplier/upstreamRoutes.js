@@ -16,18 +16,25 @@ import {
   insertNotification,
   isValidGeoLocation,
   loadAdminBrandChainsByName,
+  normalizeChainRolesFromStages,
   mapSupplyChainPartner,
   minHaversineKmBuyerOutletsToSeller,
   normalizeBrandKeyFromAttributes,
-  normalizeText,
   parseBrandTokens,
+  resolveUpstreamBrandLabel,
+  supplierCanAccessBrandStrict,
   parseWithSchema,
+  getAllowedUpstreamRolesForBrand,
   pickMatchingUpstreamRoleForSeller,
+  pickUpstreamSellerRoleForBrand,
   rankUpstreamOffersForProduct,
+  sortRolesByChainDepthDesc,
+  getMySupplierRoles,
   recordInventoryMovement,
   resolveGeoFromOutletAddress,
+  buildAllowedUpstreamRolesSet,
   resolveRequiredUpstreamRoleFromAdminChain,
-  sellerMatchesUpstreamRoles,
+  sellerMatchesUpstreamForBrand,
   supplierUpstreamCartSaveSchema,
   supplierUpstreamOrdersSchema
 } from './supplierImports.js';
@@ -46,6 +53,7 @@ import {
   resolvePrimarySupplierShippingAddress,
   resolveUpstreamPaymentSelection
 } from '../../services/upstreamOrderInputService.js';
+import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuantity.js';
 
 export function registerSupplierUpstreamRoutes(ctx) {
   const {
@@ -54,6 +62,82 @@ export function registerSupplierUpstreamRoutes(ctx) {
     supabase,
     resolveTaxRatesForProductCreate
   } = ctx;
+
+  const normalizeSelectedMineQuantities = (raw = {}) => {
+    const out = {};
+    if (!raw || typeof raw !== 'object') return out;
+    Object.entries(raw).forEach(([key, val]) => {
+      const mineId = String(key || '').trim();
+      if (!mineId) return;
+      const qty = parseSupplierStockQuantity(val);
+      if (qty != null && qty > 0) out[mineId] = qty;
+    });
+    return out;
+  };
+
+  const isOfferBrandVisibleForSupplierProfile = (profile, attributes, productBrand) => {
+    const brandCandidate = resolveUpstreamBrandLabel(attributes, productBrand);
+    return supplierCanAccessBrandStrict(profile || {}, brandCandidate).allowed;
+  };
+
+  const buildUpstreamProject = (payload = {}) => {
+    const projectId = String(payload.projectId || `sup-proj-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
+    const cartNameRaw = String(payload.cartName || '').trim();
+    return {
+      projectId,
+      cartName: cartNameRaw || `Project ${new Date().toLocaleDateString('en-IN')}`,
+      selectedMine: normalizeSelectedMineQuantities(
+        payload.selectedMine && typeof payload.selectedMine === 'object' ? payload.selectedMine : {}
+      ),
+      selectedUpstreamOffer:
+        payload.selectedUpstreamOffer && typeof payload.selectedUpstreamOffer === 'object'
+          ? payload.selectedUpstreamOffer
+          : {},
+      suggestions: Array.isArray(payload.suggestions) ? payload.suggestions : [],
+      brandFilter: String(payload.brandFilter || '').trim(),
+      searchTerm: String(payload.searchTerm || '').trim(),
+      createdAt: payload.createdAt || new Date().toISOString()
+    };
+  };
+
+  const normalizeUpstreamCartDraft = (rawDraft = {}) => {
+    const raw = rawDraft && typeof rawDraft === 'object' ? rawDraft : {};
+    let projects = [];
+    if (Array.isArray(raw.projects) && raw.projects.length > 0) {
+      projects = raw.projects.map((p) => buildUpstreamProject(p));
+    } else {
+      const legacyHasData =
+        (raw.selectedMine && Object.keys(raw.selectedMine || {}).length > 0) ||
+        (raw.selectedUpstreamOffer && Object.keys(raw.selectedUpstreamOffer || {}).length > 0) ||
+        (Array.isArray(raw.suggestions) && raw.suggestions.length > 0);
+      if (legacyHasData) {
+        projects = [
+          buildUpstreamProject({
+            projectId: raw.projectId || null,
+            cartName: raw.cartName || 'Supplier Cart',
+            selectedMine: raw.selectedMine || {},
+            selectedUpstreamOffer: raw.selectedUpstreamOffer || {},
+            suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
+            brandFilter: String(raw.brandFilter || '').trim(),
+            searchTerm: String(raw.searchTerm || '').trim(),
+            createdAt: raw.createdAt || new Date().toISOString()
+          })
+        ];
+      }
+    }
+    const latestProject = projects.length > 0 ? projects[projects.length - 1] : null;
+    return {
+      mode: 'supplier_upstream',
+      projects,
+      projectId: latestProject?.projectId || null,
+      cartName: latestProject?.cartName || String(raw.cartName || 'Supplier Cart'),
+      selectedMine: latestProject?.selectedMine || {},
+      selectedUpstreamOffer: latestProject?.selectedUpstreamOffer || {},
+      suggestions: latestProject?.suggestions || [],
+      brandFilter: latestProject?.brandFilter || '',
+      searchTerm: latestProject?.searchTerm || ''
+    };
+  };
 
 router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
   try {
@@ -81,7 +165,9 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
     // Load my selected supplier offers
     const { data: myRows, error: myErr } = await supabase
       .from('supplier_products')
-      .select('id, product_id, stock, min_order_quantity, outlet_id, location, attributes, is_active, status')
+      .select(
+        'id, product_id, variant_key, variant_asin, stock, min_order_quantity, outlet_id, location, attributes, is_active, status, product:products(brand)'
+      )
       .eq('supplier_id', req.userId)
       .in('id', supplierProductIds)
       .eq('is_active', true)
@@ -89,7 +175,9 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
 
     if (myErr) throw myErr;
 
-    const myOffers = myRows || [];
+    const myOffers = (myRows || []).filter((r) =>
+      isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, r?.attributes, r?.product?.brand)
+    );
     if (myOffers.length === 0) {
       return res.json({ status: 'success', parentRole: null, parentRoles: [], items: [] });
     }
@@ -117,7 +205,7 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
     const selectedBrandNames = [
       ...new Set(
         myOffers
-          .map((r) => String(r?.attributes?.brandModel || '').trim())
+          .map((r) => resolveUpstreamBrandLabel(r?.attributes, r?.product?.brand))
           .filter(Boolean)
       )
     ];
@@ -126,82 +214,20 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       brandNames: selectedBrandNames
     });
 
-    // Fetch upstream offers for selected product_ids (plus same-name products).
-    // We match by product name (and category) because identity fields can differ across suppliers.
+    // Fetch upstream offers for the same variant only.
+    // Priority:
+    // 1) Same variant_key
+    // 2) Same variant_asin
+    // 3) Fallback for legacy rows (no variant identity): same product_id
     const productIds = [...new Set(myOffers.map((r) => r.product_id).filter(Boolean))];
+    const myVariantKeys = [
+      ...new Set(myOffers.map((r) => String(r?.variant_key || '').trim()).filter(Boolean))
+    ];
+    const myVariantAsins = [
+      ...new Set(myOffers.map((r) => String(r?.variant_asin || '').trim()).filter(Boolean))
+    ];
 
-    const { data: myProductRows } = await supabase
-      .from('products')
-      .select('id, name, category')
-      .in('id', productIds);
-
-    // Build "equivalent" product ids by name similarity within the same category.
-    // Keep it bounded: for each selected product, search a small set and then verify by normalized text in JS.
-    const equivalentProductIdsSet = new Set(productIds);
-    const matchProductIdsByMineProductId = {};
-
-    const normalizeNameForMatch = (value) =>
-      normalizeText(String(value || ''))
-        .replace(/\b(the|a|an|new|model|edition)\b/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-
-    const tokenSet = (value) =>
-      new Set(
-        normalizeNameForMatch(value)
-          .split(' ')
-          .map((t) => t.trim())
-          .filter((t) => t && t.length >= 2)
-      );
-
-    const jaccard = (a, b) => {
-      if (!a || !b || a.size === 0 || b.size === 0) return 0;
-      let inter = 0;
-      for (const t of a) if (b.has(t)) inter += 1;
-      const union = a.size + b.size - inter;
-      return union > 0 ? inter / union : 0;
-    };
-
-    for (const p of myProductRows || []) {
-      const rawName = String(p?.name || '').trim();
-      const category = String(p?.category || '').trim();
-      if (!rawName || !category) {
-        matchProductIdsByMineProductId[p?.id] = [p?.id].filter(Boolean);
-        continue;
-      }
-
-      // Search by ILIKE name in the same category.
-      const { data: nameMatches } = await supabase
-        .from('products')
-        .select('id, name')
-        .eq('category', category)
-        .ilike('name', `%${rawName}%`)
-        .limit(25);
-
-      const normalizedInput = normalizeNameForMatch(rawName);
-      const inputTokens = tokenSet(rawName);
-      const verified = (nameMatches || [])
-        .filter((row) => {
-          const n = normalizeNameForMatch(row?.name || '');
-          if (!n) return false;
-          if (n === normalizedInput) return true;
-          // Allow containment when names differ by minor suffix/prefix (e.g. "Mac Air M1 8GB" vs "Mac Air M1")
-          if (normalizedInput.length >= 4 && (n.includes(normalizedInput) || normalizedInput.includes(n))) return true;
-          // Token overlap fallback
-          const score = jaccard(inputTokens, tokenSet(row?.name || ''));
-          return score >= 0.65;
-        })
-        .map((row) => row.id)
-        .filter(Boolean);
-
-      // Always include itself.
-      const merged = [...new Set([p.id, ...verified].filter(Boolean))];
-      matchProductIdsByMineProductId[p.id] = merged;
-      merged.forEach((id) => equivalentProductIdsSet.add(id));
-    }
-
-    const equivalentProductIds = [...equivalentProductIdsSet].filter(Boolean);
-    if (equivalentProductIds.length === 0) {
+    if (productIds.length === 0 && myVariantKeys.length === 0 && myVariantAsins.length === 0) {
       return res.json({
         status: 'success',
         parentRole,
@@ -219,13 +245,43 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
     }
 
     // Load upstream offers directly (source of truth) and then load supplier profiles for display.
-    const { data: upstreamOffers } = await supabase
-      .from('supplier_products')
-      .select('id, product_id, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, min_order_quantity')
-      .in('product_id', equivalentProductIds)
-      .eq('is_active', true)
-      .neq('status', 'rejected')
-      .gt('stock', 0);
+    const upstreamOffersById = new Map();
+    const registerUpstreamRows = (rows = []) => {
+      for (const row of rows || []) {
+        if (row?.id) upstreamOffersById.set(row.id, row);
+      }
+    };
+    if (productIds.length > 0) {
+      const { data: rowsByProductId } = await supabase
+        .from('supplier_products')
+        .select('id, product_id, variant_key, variant_asin, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, min_order_quantity')
+        .in('product_id', productIds)
+        .eq('is_active', true)
+        .neq('status', 'rejected')
+        .gt('stock', 0);
+      registerUpstreamRows(rowsByProductId || []);
+    }
+    if (myVariantKeys.length > 0) {
+      const { data: rowsByVariantKey } = await supabase
+        .from('supplier_products')
+        .select('id, product_id, variant_key, variant_asin, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, min_order_quantity')
+        .in('variant_key', myVariantKeys)
+        .eq('is_active', true)
+        .neq('status', 'rejected')
+        .gt('stock', 0);
+      registerUpstreamRows(rowsByVariantKey || []);
+    }
+    if (myVariantAsins.length > 0) {
+      const { data: rowsByVariantAsin } = await supabase
+        .from('supplier_products')
+        .select('id, product_id, variant_key, variant_asin, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, min_order_quantity')
+        .in('variant_asin', myVariantAsins)
+        .eq('is_active', true)
+        .neq('status', 'rejected')
+        .gt('stock', 0);
+      registerUpstreamRows(rowsByVariantAsin || []);
+    }
+    const upstreamOffers = [...upstreamOffersById.values()];
 
     const upstreamSupplierIds = [
       ...new Set((upstreamOffers || []).map((o) => o.supplier_id).filter(Boolean))
@@ -266,15 +322,6 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
     (upstreamUsers || []).forEach((u) => {
       upstreamUserMap[u.id] = u;
     });
-
-    const upstreamByProduct = new Map();
-    for (const row of upstreamOffers || []) {
-      if (!row?.product_id) continue;
-      // Never suggest the buyer's own listing as "upstream" (missing profile row used to pass the old !hasAnyRole bypass).
-      if (row.supplier_id === req.userId) continue;
-      if (!upstreamByProduct.has(row.product_id)) upstreamByProduct.set(row.product_id, []);
-      upstreamByProduct.get(row.product_id).push(row);
-    }
 
     // All of your outlet coordinates — distance to each upstream offer is the minimum km from ANY of these
     // (so a new dealer opening near any of your locations surfaces as #1 on the next fetch; not fixed to one outlet).
@@ -503,42 +550,58 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
     };
 
     const items = myOffers.map((mine) => {
-      const desiredBrand = String(mine?.attributes?.brandModel || '').trim().toLowerCase();
-      const brandKey = normalizeBrandKeyFromAttributes(mine?.attributes?.brandModel);
+      const mineVariantKey = String(mine?.variant_key || '').trim();
+      const mineVariantAsin = String(mine?.variant_asin || '').trim();
+      const brandLabel = resolveUpstreamBrandLabel(mine?.attributes, mine?.product?.brand);
+      const desiredBrand = String(brandLabel || '').trim().toLowerCase();
+      const brandKey = normalizeBrandKeyFromAttributes(brandLabel);
       const chainRow = adminBrandChainMap.get(brandKey) || null;
-      const chainRouting = resolveRequiredUpstreamRoleFromAdminChain({
+      const buyerRole =
+        sortRolesByChainDepthDesc(getMySupplierRoles(req.user.profile || {}, ''))[0] || null;
+      const allowedRolesSet = getAllowedUpstreamRolesForBrand({
         profile: req.user.profile || {},
         brandKey,
-        chainRow
+        chainRow,
+        buyerRole,
+        parentRolesUnion
       });
-      const allowedRolesSet =
-        chainRouting.requiredUpstreamRole && SUPPLIER_ROLE_SET.has(chainRouting.requiredUpstreamRole)
-          ? new Set([chainRouting.requiredUpstreamRole])
-          : parentRolesUnion;
+      const { chainRouting } = buildAllowedUpstreamRolesSet({
+        profile: req.user.profile || {},
+        brandKey,
+        chainRow,
+        parentRolesUnion
+      });
 
-      // Collect offers for this exact product_id AND any same-name equivalents in the same category.
-      const equivalentIdsForMine =
-        matchProductIdsByMineProductId[mine.product_id] && Array.isArray(matchProductIdsByMineProductId[mine.product_id])
-          ? matchProductIdsByMineProductId[mine.product_id]
-          : [mine.product_id].filter(Boolean);
+      const sameVariantOnlyPool = (upstreamOffers || []).filter((offer) => {
+        if (!offer) return false;
+        const offerVariantKey = String(offer?.variant_key || '').trim();
+        const offerVariantAsin = String(offer?.variant_asin || '').trim();
+        if (mineVariantKey) return Boolean(offerVariantKey) && offerVariantKey === mineVariantKey;
+        if (mineVariantAsin) return Boolean(offerVariantAsin) && offerVariantAsin === mineVariantAsin;
+        // Legacy fallback when variant identity is missing.
+        return Boolean(offer?.product_id) && offer.product_id === mine.product_id;
+      });
 
-      const upstreamOfferPool = [];
-      for (const pid of equivalentIdsForMine) {
-        const rows = upstreamByProduct.get(pid) || [];
-        upstreamOfferPool.push(...rows);
-      }
+      const brandMatchedPool = sameVariantOnlyPool.filter((u) => {
+        if (!desiredBrand) return true;
+        const offerBrand = resolveUpstreamBrandLabel(u?.attributes, null).toLowerCase();
+        return offerBrand
+          ? offerBrand === desiredBrand || offerBrand.includes(desiredBrand) || desiredBrand.includes(offerBrand)
+          : true;
+      });
 
-      const candidates = upstreamOfferPool
-        .filter((u) => {
-          if (!desiredBrand) return true;
-          const b = String(u?.attributes?.brandModel || '').trim().toLowerCase();
-          return b ? b === desiredBrand || b.includes(desiredBrand) || desiredBrand.includes(b) : true;
-        })
+      const brandTokenForMatch = brandLabel || desiredBrand || '';
+      const candidates = brandMatchedPool
         .filter((offer) => {
           if (!offer.supplier_id || offer.supplier_id === req.userId) return false;
           const sup = upstreamUserMap[offer.supplier_id];
           if (!sup?.profile) return false;
-          return sellerMatchesUpstreamRoles(sup.profile, allowedRolesSet);
+          return sellerMatchesUpstreamForBrand(
+            sup.profile,
+            allowedRolesSet,
+            brandTokenForMatch,
+            chainRouting
+          );
         })
         .map((u) => {
           const geoInfo = offerGeoByOfferId[u.id] || null;
@@ -566,7 +629,14 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             locationDisplay = supplierBranchAddressText;
             locationSource = 'supplier_profile_branches';
           }
-          const matchedRole = sup ? pickMatchingUpstreamRoleForSeller(sup.profile, allowedRolesSet) : null;
+          const matchedRole = sup
+            ? pickUpstreamSellerRoleForBrand(
+                sup.profile,
+                allowedRolesSet,
+                brandTokenForMatch,
+                chainRouting
+              )
+            : null;
           const roleForMap = matchedRole || parentRole;
           const { averageRating, ratingCount } = getSupplierRatingSummary(u.supplier_id);
           const supplierDetails =
@@ -591,9 +661,10 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             mineSupplierProductId: mine.id,
             upstreamSupplierProductId: u.id,
             productId: mine.product_id,
+            upstreamProductId: u.product_id,
             offerStatus: u.status,
             isActive: u.is_active,
-            stock: u.stock,
+            stock: parseSupplierStockQuantity(u.stock) ?? 0,
             price: u.price,
             minOrderQuantity: u.min_order_quantity,
             location: locationDisplay,
@@ -602,6 +673,10 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             offerGeoLocation: geo || null,
             distanceSource: geoInfo?.source || null,
             brandModel: u?.attributes?.brandModel || null,
+            mineVariantKey: mineVariantKey || null,
+            mineVariantAsin: mineVariantAsin || null,
+            upstreamVariantKey: String(u?.variant_key || '').trim() || null,
+            upstreamVariantAsin: String(u?.variant_asin || '').trim() || null,
             supplierDetails,
             distanceKm: dist,
             distanceKmRaw: distRaw,
@@ -617,20 +692,43 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       const ranked = rankUpstreamOffersForProduct(deduped);
       const top = ranked.slice(0, limitPerItem).map(({ distanceKmRaw: _r, ...rest }) => rest);
 
+      let itemMessage = null;
+      if (top.length === 0) {
+        if (sameVariantOnlyPool.length === 0) {
+          itemMessage = 'No other suppliers list this exact variant with stock right now.';
+        } else if (brandMatchedPool.length === 0) {
+          itemMessage = `No upstream listings matched brand "${brandLabel || desiredBrand}".`;
+        } else if (candidates.length === 0 && allowedRolesSet.size > 0) {
+          const tierLabels = [...allowedRolesSet]
+            .sort((a, b) => (ROLE_DEPTH[a] ?? 99) - (ROLE_DEPTH[b] ?? 99))
+            .map((r) => SUPPLY_CHAIN_ROLE_LABELS[r] || r)
+            .join(', ');
+          itemMessage = `Partners exist for this product, but none are registered upstream for brand "${brandLabel || desiredBrand}" at: ${tierLabels}. They need one of those roles and the same brand on Who are you.`;
+        } else if (candidates.length === 0) {
+          itemMessage =
+            'Partners exist for this product, but none match your allowed upstream supply-chain layer.';
+        } else {
+          itemMessage = 'No upstream offers available after ranking.';
+        }
+      }
+
       return {
         mineSupplierProductId: mine.id,
         productId: mine.product_id,
-        brandModel: mine?.attributes?.brandModel || null,
-        upstreamRole: parentRole,
+        mineVariantKey: mineVariantKey || null,
+        mineVariantAsin: mineVariantAsin || null,
+        brandModel: brandLabel || mine?.attributes?.brandModel || null,
+        upstreamRole: chainRouting.requiredUpstreamRole || parentRole,
         upstreamRoles: parentRolesSorted,
         chainRouting: {
           source: chainRouting.source,
-          brand: chainRow?.category_name || mine?.attributes?.brandModel || null,
+          brand: chainRow?.category_name || brandLabel || null,
           buyerRole: chainRouting.buyerRole,
           requiredUpstreamRole: chainRouting.requiredUpstreamRole,
-          chainRoles: chainRouting.chainRoles
+          chainRoles: chainRouting.chainRoles || normalizeChainRolesFromStages(chainRow?.stages)
         },
-        upstreamOffers: top
+        upstreamOffers: top,
+        message: itemMessage
       };
     });
 
@@ -643,7 +741,8 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       distanceAvailable: buyerOutletGeos.length > 0,
       buyerGeoSource,
       buyerGeoDiagnostics,
-      chainPolicy: 'brand_admin_chain_with_profile_fallback',
+      chainPolicy:
+        'Uses Admin → Supply Chain per brand. Upstream seller = tier directly above you in that chain (walkback skips absent tiers e.g. dealer).',
       distanceRanking:
         buyerOutletGeos.length > 0
           ? 'Each run uses current outlet coordinates. Distance is the minimum km from any of your outlets to the partner’s outlet; the nearest partner ranks first (not a fixed previous choice).'
@@ -740,16 +839,22 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     // Validate my selected supplier products
     const { data: myRows, error: myErr } = await supabase
       .from('supplier_products')
-      .select('id, product_id, attributes')
+      .select('id, product_id, variant_key, variant_asin, attributes')
       .eq('supplier_id', req.userId)
       .in('id', mineIds);
     if (myErr) throw myErr;
     const myByMineId = {};
-    (myRows || []).forEach((r) => (myByMineId[r.id] = r));
+    (myRows || [])
+      .filter((r) =>
+        isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, r?.attributes, null)
+      )
+      .forEach((r) => {
+        myByMineId[r.id] = r;
+      });
 
     const { data: upstreamOffers, error: upstreamErr } = await supabase
       .from('supplier_products')
-      .select('id, supplier_id, product_id, price, stock, min_order_quantity, attributes, outlet_id, location, product:products(id, name, category, unit, description, specifications, brand)')
+      .select('id, supplier_id, product_id, variant_key, variant_asin, price, stock, min_order_quantity, attributes, outlet_id, location, product:products(id, name, category, unit, description, specifications, brand)')
       .eq('is_active', true)
       .neq('status', 'rejected')
       .in('id', upstreamOfferIds);
@@ -762,7 +867,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     const parentRolesUnion = getImmediateParentRolesUnion(req.user.profile);
     const selectedBrandNames = [
       ...new Set(
-        (myRows || [])
+        Object.values(myByMineId)
           .map((r) => String(r?.attributes?.brandModel || '').trim())
           .filter(Boolean)
       )
@@ -790,6 +895,17 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       upstreamProfileById[u.id] = u.profile;
     });
 
+    const sameVariantMatch = (mineOffer, upstreamOffer) => {
+      const mineVariantKey = String(mineOffer?.variant_key || '').trim();
+      const mineVariantAsin = String(mineOffer?.variant_asin || '').trim();
+      const upstreamVariantKey = String(upstreamOffer?.variant_key || '').trim();
+      const upstreamVariantAsin = String(upstreamOffer?.variant_asin || '').trim();
+
+      if (mineVariantKey) return Boolean(upstreamVariantKey) && upstreamVariantKey === mineVariantKey;
+      if (mineVariantAsin) return Boolean(upstreamVariantAsin) && upstreamVariantAsin === mineVariantAsin;
+      return Boolean(mineOffer?.product_id) && upstreamOffer?.product_id === mineOffer.product_id;
+    };
+
     // Group lines by upstream supplier (order per supplier)
     const groups = new Map(); // supplier_id -> { supplierId, items: [...] }
 
@@ -797,13 +913,16 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       const mineSupplierProductId = line?.mineSupplierProductId;
       const upstreamSupplierProductId = line?.upstreamSupplierProductId;
       const rawQty = line?.quantity;
-      const quantity = parseInt(rawQty, 10);
+      const quantity = parseSupplierStockQuantity(rawQty);
 
       if (!mineSupplierProductId || !upstreamSupplierProductId) {
         return res.status(400).json({ status: 'error', message: 'mineSupplierProductId and upstreamSupplierProductId are required for each line' });
       }
-      if (!Number.isFinite(quantity) || quantity <= 0) {
-        return res.status(400).json({ status: 'error', message: 'quantity must be a positive integer for each line' });
+      if (quantity === null || quantity <= 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'quantity must be a valid whole number (1 or greater) for each line'
+        });
       }
 
       const myOffer = myByMineId[mineSupplierProductId];
@@ -817,13 +936,22 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         return res.status(404).json({ status: 'error', message: 'One of the selected upstream offers no longer exists' });
       }
 
-      if (upstreamOffer.product_id !== myProductId) {
-        return res.status(400).json({ status: 'error', message: 'Selected upstream offer does not match the chosen product' });
+      if (!sameVariantMatch(myOffer, upstreamOffer)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Selected upstream offer does not match the same variant as your chosen product.'
+        });
       }
 
-      const minQty = parseInt(upstreamOffer.min_order_quantity || 1, 10) || 1;
+      const minQty = Math.max(
+        1,
+        parseSupplierStockQuantity(upstreamOffer.min_order_quantity) ?? 1
+      );
       if (quantity < minQty) {
-        return res.status(400).json({ status: 'error', message: `Quantity for ${upstreamOffer.product_id} must be >= ${minQty}` });
+        return res.status(400).json({
+          status: 'error',
+          message: `Quantity must be at least ${minQty} (minimum order for this upstream offer)`
+        });
       }
 
       const supplierId = upstreamOffer.supplier_id;
@@ -833,25 +961,32 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       }
 
       const upProfile = upstreamProfileById[supplierId];
-      const brandKey = normalizeBrandKeyFromAttributes(myOffer?.attributes?.brandModel);
+      const brandKey = normalizeBrandKeyFromAttributes(
+        resolveUpstreamBrandLabel(myOffer?.attributes, null)
+      );
       const chainRow = adminBrandChainMap.get(brandKey) || null;
-      const chainRouting = resolveRequiredUpstreamRoleFromAdminChain({
+      const buyerRole =
+        sortRolesByChainDepthDesc(getMySupplierRoles(req.user.profile || {}, ''))[0] || null;
+      const allowedRolesSet = getAllowedUpstreamRolesForBrand({
         profile: req.user.profile || {},
         brandKey,
-        chainRow
+        chainRow,
+        buyerRole,
+        parentRolesUnion
       });
-      const allowedRolesSet =
-        chainRouting.requiredUpstreamRole && SUPPLIER_ROLE_SET.has(chainRouting.requiredUpstreamRole)
-          ? new Set([chainRouting.requiredUpstreamRole])
-          : parentRolesUnion;
+      const { chainRouting } = buildAllowedUpstreamRolesSet({
+        profile: req.user.profile || {},
+        brandKey,
+        chainRow,
+        parentRolesUnion
+      });
 
-      if (!sellerMatchesUpstreamRoles(upProfile, allowedRolesSet)) {
+      const cartBrandToken =
+        resolveUpstreamBrandLabel(myOffer?.attributes, myOffer?.product?.brand) || brandKey;
+      if (!sellerMatchesUpstreamForBrand(upProfile, allowedRolesSet, cartBrandToken, chainRouting)) {
         return res.status(403).json({
           status: 'error',
-          message:
-            chainRouting.source === 'admin_chain' && chainRouting.requiredUpstreamRole
-              ? `Selected upstream offer is not in the admin-defined next role for this brand. Required role: ${SUPPLY_CHAIN_ROLE_LABELS[chainRouting.requiredUpstreamRole] || chainRouting.requiredUpstreamRole}.`
-              : 'Selected upstream offer is not allowed for your supply-chain role(s).'
+          message: `Selected upstream supplier is not registered for brand "${cartBrandToken}" at any allowed supply-chain tier above you (per admin chain for that brand).`
         });
       }
 
@@ -874,7 +1009,19 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         .filter((r) => r && SUPPLIER_ROLE_SET.has(r));
       const allowedRolesForMov =
         requiredRoles.length > 0 ? new Set(requiredRoles) : parentRolesUnion;
-      const matchedRole = pickMatchingUpstreamRoleForSeller(upProfile, allowedRolesForMov);
+      const movBrandToken =
+        resolveUpstreamBrandLabel(
+          group.items[0]?.upstreamOffer?.attributes,
+          group.items[0]?.upstreamOffer?.product?.brand
+        ) || '';
+      const movChainRouting = group.items[0]?.chainRouting || {};
+      const matchedRole =
+        pickUpstreamSellerRoleForBrand(
+          upProfile,
+          allowedRolesForMov,
+          movBrandToken,
+          movChainRouting
+        ) || pickMatchingUpstreamRoleForSeller(upProfile, allowedRolesForMov);
       const mov = getMinimumOrderValueInrForSellerRole(upProfile || {}, matchedRole || '');
       if (mov <= 0) continue;
       let subtotal = 0;
@@ -1089,14 +1236,20 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
     }
 
     const mineSupplierProductId = String(req.body?.mineSupplierProductId || '').trim();
-    const requestedQuantity = parseInt(req.body?.quantity, 10);
+    const requestedQuantity = parseSupplierStockQuantity(req.body?.quantity);
     if (!mineSupplierProductId) {
       return res.status(400).json({ status: 'error', message: 'mineSupplierProductId is required' });
+    }
+    if (requestedQuantity === null || requestedQuantity < 1) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'quantity must be a valid whole number (1 or greater)'
+      });
     }
 
     const { data: mineRow, error: mineError } = await supabase
       .from('supplier_products')
-      .select('id, supplier_id, min_order_quantity')
+      .select('id, supplier_id, min_order_quantity, attributes, product:products(brand)')
       .eq('id', mineSupplierProductId)
       .eq('supplier_id', req.userId)
       .maybeSingle();
@@ -1104,11 +1257,19 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
     if (!mineRow) {
       return res.status(404).json({ status: 'error', message: 'Selected product was not found in your inventory' });
     }
+    if (!isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, mineRow?.attributes, mineRow?.product?.brand)) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Selected product brand is not approved in your current supplier profile.'
+      });
+    }
 
-    const minQty = Math.max(1, parseInt(mineRow.min_order_quantity || 1, 10) || 1);
-    const quantity = Number.isFinite(requestedQuantity) && requestedQuantity > 0
-      ? Math.max(minQty, requestedQuantity)
-      : minQty;
+    const minQty = Math.max(
+      1,
+      parseSupplierStockQuantity(mineRow.min_order_quantity) ?? 1
+    );
+    const quantity = Math.max(minQty, requestedQuantity);
+    const quantityAdjusted = quantity !== requestedQuantity;
 
     const { data: cartRow, error: cartError } = await supabase
       .from('po_carts')
@@ -1117,29 +1278,23 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       .maybeSingle();
     if (cartError) throw cartError;
 
-    const currentDraft =
+    const currentDraft = normalizeUpstreamCartDraft(
       cartRow?.draft_payload && typeof cartRow.draft_payload === 'object'
         ? cartRow.draft_payload
-        : {};
-
-    const nextSelectedMine =
-      currentDraft?.selectedMine && typeof currentDraft.selectedMine === 'object'
-        ? { ...currentDraft.selectedMine }
-        : {};
-    nextSelectedMine[mineSupplierProductId] = quantity;
-
-    const nextDraftPayload = {
-      mode: 'supplier_upstream',
-      selectedMine: nextSelectedMine,
-      selectedUpstreamOffer:
-        currentDraft?.selectedUpstreamOffer && typeof currentDraft.selectedUpstreamOffer === 'object'
-          ? currentDraft.selectedUpstreamOffer
-          : {},
-      suggestions: Array.isArray(currentDraft?.suggestions) ? currentDraft.suggestions : [],
-      brandFilter: String(currentDraft?.brandFilter || '').trim(),
-      searchTerm: String(currentDraft?.searchTerm || '').trim(),
-      cartName: String(currentDraft?.cartName || '').trim()
-    };
+        : {}
+    );
+    const newProject = buildUpstreamProject({
+      cartName: req.body?.cartName || `Quick Add - ${mineSupplierProductId.slice(0, 8)}`,
+      selectedMine: { [mineSupplierProductId]: quantity },
+      selectedUpstreamOffer: {},
+      suggestions: [],
+      brandFilter: '',
+      searchTerm: ''
+    });
+    const nextDraftPayload = normalizeUpstreamCartDraft({
+      ...currentDraft,
+      projects: [...(currentDraft.projects || []), newProject]
+    });
 
     const { data: saved, error: saveError } = await supabase
       .from('po_carts')
@@ -1156,10 +1311,18 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
 
     return res.json({
       status: 'success',
-      message: 'Item added to upstream cart',
+      message: quantityAdjusted
+        ? `Item added. Quantity adjusted to minimum order quantity (${quantity}).`
+        : 'Item added to upstream cart',
       item: {
         mineSupplierProductId,
-        quantity
+        quantity,
+        requestedQuantity,
+        quantityAdjusted
+      },
+      project: {
+        projectId: newProject.projectId,
+        cartName: newProject.cartName
       },
       cart: {
         id: saved.id,
@@ -1190,7 +1353,7 @@ router.get('/upstream/cart', authenticateToken, async (req, res) => {
       cart: cart
         ? {
             id: cart.id,
-            draft: cart.draft_payload || {},
+            draft: normalizeUpstreamCartDraft(cart.draft_payload || {}),
             updatedAt: cart.updated_at,
             createdAt: cart.created_at
           }
@@ -1208,6 +1371,7 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
       return res.status(403).json({ status: 'error', message: 'Only suppliers can update upstream cart name' });
     }
     const cartName = String(req.body?.cartName || '').trim();
+    const targetProjectId = String(req.body?.projectId || '').trim();
     if (!cartName) {
       return res.status(400).json({ status: 'error', message: 'Project name is required' });
     }
@@ -1222,26 +1386,33 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
       .maybeSingle();
     if (cartError) throw cartError;
 
-    const currentDraft =
+    const currentDraft = normalizeUpstreamCartDraft(
       cartRow?.draft_payload && typeof cartRow.draft_payload === 'object'
         ? cartRow.draft_payload
-        : {};
-
-    const nextDraftPayload = {
-      mode: 'supplier_upstream',
-      selectedMine:
-        currentDraft?.selectedMine && typeof currentDraft.selectedMine === 'object'
-          ? currentDraft.selectedMine
-          : {},
-      selectedUpstreamOffer:
-        currentDraft?.selectedUpstreamOffer && typeof currentDraft.selectedUpstreamOffer === 'object'
-          ? currentDraft.selectedUpstreamOffer
-          : {},
-      suggestions: Array.isArray(currentDraft?.suggestions) ? currentDraft.suggestions : [],
-      brandFilter: String(currentDraft?.brandFilter || '').trim(),
-      searchTerm: String(currentDraft?.searchTerm || '').trim(),
-      cartName
-    };
+        : {}
+    );
+    const projects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
+    if (projects.length === 0) {
+      projects.push(
+        buildUpstreamProject({
+          projectId: targetProjectId || null,
+          cartName
+        })
+      );
+    } else {
+      const idx = targetProjectId
+        ? projects.findIndex((p) => String(p?.projectId || '') === targetProjectId)
+        : projects.length - 1;
+      const safeIdx = idx >= 0 ? idx : projects.length - 1;
+      projects[safeIdx] = buildUpstreamProject({
+        ...projects[safeIdx],
+        cartName
+      });
+    }
+    const nextDraftPayload = normalizeUpstreamCartDraft({
+      ...currentDraft,
+      projects
+    });
 
     const { data: saved, error: saveError } = await supabase
       .from('po_carts')
@@ -1262,6 +1433,7 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
       cart: {
         id: saved.id,
         updatedAt: saved.updated_at,
+        projectId: targetProjectId || null,
         cartName
       }
     });
@@ -1278,15 +1450,43 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
     }
 
     const payloadInput = parseWithSchema(supplierUpstreamCartSaveSchema, req.body || {});
-    const draftPayload = {
-      mode: 'supplier_upstream',
+    const { data: currentCart, error: currentCartError } = await supabase
+      .from('po_carts')
+      .select('id, draft_payload')
+      .eq('service_provider_id', req.userId)
+      .maybeSingle();
+    if (currentCartError) throw currentCartError;
+    const currentDraft = normalizeUpstreamCartDraft(
+      currentCart?.draft_payload && typeof currentCart.draft_payload === 'object'
+        ? currentCart.draft_payload
+        : {}
+    );
+
+    const nextProject = buildUpstreamProject({
+      projectId: payloadInput.projectId || null,
+      cartName: String(payloadInput.cartName || '').trim(),
       selectedMine: payloadInput.selectedMine || {},
       selectedUpstreamOffer: payloadInput.selectedUpstreamOffer || {},
       suggestions: Array.isArray(payloadInput.suggestions) ? payloadInput.suggestions : [],
       brandFilter: String(payloadInput.brandFilter || '').trim(),
-      searchTerm: String(payloadInput.searchTerm || '').trim(),
-      cartName: String(payloadInput.cartName || '').trim()
-    };
+      searchTerm: String(payloadInput.searchTerm || '').trim()
+    });
+    let nextProjects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
+    if (payloadInput.projectId) {
+      const idx = nextProjects.findIndex((p) => String(p?.projectId || '') === String(payloadInput.projectId));
+      if (idx >= 0) {
+        nextProjects[idx] = nextProject;
+      } else {
+        nextProjects = [...nextProjects, nextProject];
+      }
+    } else {
+      // No projectId means user intentionally saved a fresh project from upstream flow.
+      nextProjects = [...nextProjects, nextProject];
+    }
+    const draftPayload = normalizeUpstreamCartDraft({
+      ...currentDraft,
+      projects: nextProjects
+    });
 
     const { data: saved, error } = await supabase
       .from('po_carts')
@@ -1355,6 +1555,13 @@ router.get('/upstream/orders', authenticateToken, async (req, res) => {
         ? Math.min(requestedLimit, 500)
         : 50;
 
+    const statusFilter = String(req.query.status || '')
+      .trim()
+      .toLowerCase();
+    const paymentStatusFilter = String(req.query.paymentStatus || req.query.payment_status || '')
+      .trim()
+      .toLowerCase();
+
     let query = supabase
       .from('orders')
       .select(`
@@ -1381,6 +1588,13 @@ router.get('/upstream/orders', authenticateToken, async (req, res) => {
       .eq('channel', 'b2b_po')
       .order('created_at', { ascending: false });
 
+    if (statusFilter && statusFilter !== 'all') {
+      query = query.eq('status', statusFilter);
+    }
+    if (paymentStatusFilter && paymentStatusFilter !== 'all') {
+      query = query.eq('payment_status', paymentStatusFilter);
+    }
+
     if (limit != null) {
       query = query.limit(limit);
     }
@@ -1389,9 +1603,28 @@ router.get('/upstream/orders', authenticateToken, async (req, res) => {
 
     if (error) throw error;
 
+    const searchQuery = String(req.query.q || req.query.search || '')
+      .trim()
+      .toLowerCase();
+    const filteredOrders = searchQuery
+      ? (orders || []).filter((o) => {
+          const supplierName = String(o.supplier?.name || o.supplier?.company || '').toLowerCase();
+          const haystack = [
+            o.order_number,
+            supplierName,
+            o.status,
+            o.payment_status,
+            o.payment_method
+          ]
+            .map((v) => String(v || '').toLowerCase())
+            .join(' ');
+          return haystack.includes(searchQuery);
+        })
+      : orders || [];
+
     return res.json({
       status: 'success',
-      orders: (orders || []).map((o) => ({
+      orders: filteredOrders.map((o) => ({
         id: o.id,
         orderNumber: o.order_number,
         supplierId: o.supplier_id,

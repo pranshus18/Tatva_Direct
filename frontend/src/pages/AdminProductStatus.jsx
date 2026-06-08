@@ -13,7 +13,6 @@ import {
   Check,
   AlertCircle,
   Tag,
-  DollarSign,
   Box,
   Building,
   Edit,
@@ -43,6 +42,19 @@ const getProductIdentification = (product = {}) => {
   const parts = [skuNo, modelBrand];
   if (parts.every((p) => !p)) return '';
   return parts.join('');
+};
+
+/** Hide legacy AI-instruction text that was saved in the description field. */
+const looksLikeAiInstructions = (text) => {
+  if (!text || !String(text).trim()) return false;
+  const lower = String(text).toLowerCase();
+  return /\b(give me|generate all|extract|list all|supplier can fill|specification keys?|ai fetch)\b/i.test(lower);
+};
+
+const getDisplayDescription = (product) => {
+  const desc = product?.description;
+  if (!desc || !String(desc).trim() || looksLikeAiInstructions(desc)) return '';
+  return String(desc).trim();
 };
 
 const AdminProductStatus = ({ user }) => {
@@ -528,8 +540,8 @@ const AdminProductStatus = ({ user }) => {
                         )}
                       </div>
 
-                      {product.description && (
-                        <p className="product-description" style={{ marginBottom: 0 }}>{product.description}</p>
+                      {getDisplayDescription(product) && (
+                        <p className="product-description" style={{ marginBottom: 0 }}>{getDisplayDescription(product)}</p>
                       )}
                     </div>
 
@@ -698,11 +710,20 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
   const [enhancing, setEnhancing] = useState(false);
   const [enhancingGst, setEnhancingGst] = useState(false);
   const [aiProvider, setAiProvider] = useState('auto'); // 'auto', 'openai', 'gemini', 'claude'
+  const [aiEnhancePrompt, setAiEnhancePrompt] = useState('');
   const [gstAiPrompt, setGstAiPrompt] = useState('');
   const [gstSuggestion, setGstSuggestion] = useState(null);
   
   // Update editedProduct when product changes
   useEffect(() => {
+    if (!isEditing) {
+      setAiEnhancePrompt('');
+    }
+    const rawDesc = product?.description || '';
+    const instructionInDescription = looksLikeAiInstructions(rawDesc);
+    if (isEditing && instructionInDescription) {
+      setAiEnhancePrompt(rawDesc);
+    }
     setEditedProduct({
       name: product?.name || '',
       category: product?.category || '',
@@ -715,11 +736,11 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
       sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
       location: product?.location || '',
-      description: product?.description || '',
+      description: isEditing && instructionInDescription ? '' : rawDesc,
       minOrderQuantity: product?.minOrderQuantity || 1,
       specifications: product?.specifications || {}
     });
-  }, [product]);
+  }, [product, isEditing]);
   
   const supplier = product.supplier || {};
   const productIdentification = getProductIdentification(product);
@@ -738,6 +759,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       // Prepare product data with specifications
       const productData = {
         ...editedProduct,
+        description: looksLikeAiInstructions(editedProduct.description) ? '' : (editedProduct.description || ''),
         specifications: editedProduct.specifications || {},
         // Ensure category is included (it's needed for syncing specs to category)
         category: editedProduct.category || product.category
@@ -942,6 +964,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
           productName: productData.name,
           category: productData.category,
           description: productData.description || '',
+          prompt: aiEnhancePrompt || '',
           provider: aiProvider
         })
       });
@@ -960,9 +983,6 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
         if (data.categoryMismatchWarning) {
           alert(`⚠️ ${data.categoryMismatchWarning}`);
         }
-        
-        // Update description with AI-generated content
-        const generatedDesc = data.enhancedDescription || data.description;
         
         // Update specifications with extracted attributes and key-value pairs
         // IMPORTANT: Replace existing specs completely, don't merge - user requested exact count
@@ -1023,9 +1043,9 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
         // This ensures we get exactly the count requested by the user
         setEditedProduct(prev => ({
           ...prev,
-          ...(generatedDesc && { description: generatedDesc }),
-          specifications: newSpecs  // Replace, don't merge
+          specifications: newSpecs
         }));
+        setAiEnhancePrompt('');
         
         if (Object.keys(newSpecs).length > 0) {
           console.log('✅ Specifications received from AI:', newSpecs);
@@ -1260,26 +1280,23 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
             )}
           </div>
 
-          {(product.description || isEditing) && (
-            <div className="description-section">
-              <h3 style={{ 
-                display: 'flex', 
-                justifyContent: 'space-between', 
-                alignItems: 'center', 
-                flexWrap: 'wrap', 
-                gap: '0.5rem', 
-                marginBottom: '1rem',
+          <div className="description-section">
+              <h3 style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+                marginBottom: '0.75rem',
                 width: '100%'
               }}>
-                <span>Description</span>
-                <div style={{ 
-                  display: 'flex', 
-                  alignItems: 'center', 
-                  gap: '0.5rem', 
+                <span>AI specification assistant</span>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
                   flexWrap: 'wrap',
-                  marginLeft: 'auto',
-                  visibility: 'visible',
-                  opacity: 1
+                  marginLeft: 'auto'
                 }}>
                   <select
                     value={aiProvider}
@@ -1304,7 +1321,6 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                   <button
                     type="button"
                     onClick={async () => {
-                      // If not editing, enter edit mode first
                       if (!isEditing) {
                         const updatedProduct = {
                           ...product,
@@ -1312,7 +1328,6 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                         };
                         setEditedProduct(updatedProduct);
                         setIsEditing(true);
-                        // Wait a moment for state to update, then fetch
                         setTimeout(() => {
                           performAIFetch(updatedProduct);
                         }, 50);
@@ -1338,21 +1353,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                       whiteSpace: 'nowrap',
                       boxShadow: enhancing ? 'none' : '0 2px 4px rgba(79, 70, 229, 0.2)'
                     }}
-                    title="Fetch product description and attributes from AI (ChatGPT, Gemini, or Claude)"
-                    onMouseEnter={(e) => {
-                      if (!enhancing && product.name) {
-                        e.currentTarget.style.background = '#4338ca';
-                        e.currentTarget.style.transform = 'translateY(-1px)';
-                        e.currentTarget.style.boxShadow = '0 4px 8px rgba(79, 70, 229, 0.3)';
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (!enhancing && product.name) {
-                        e.currentTarget.style.background = '#4f46e5';
-                        e.currentTarget.style.transform = 'translateY(0)';
-                        e.currentTarget.style.boxShadow = '0 2px 4px rgba(79, 70, 229, 0.2)';
-                      }
-                    }}
+                    title="Generate specification keys from AI (instructions are not saved on the product)"
                   >
                     <Sparkles size={16} />
                     <span>{enhancing ? 'Fetching...' : 'AI Fetch'}</span>
@@ -1360,15 +1361,38 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 </div>
               </h3>
               {isEditing ? (
+                <>
+                  <textarea
+                    value={aiEnhancePrompt}
+                    onChange={(e) => setAiEnhancePrompt(e.target.value)}
+                    rows="3"
+                    placeholder="Optional: tell AI what specification keys to generate (e.g. top 10 cement specs). This text is not saved on the product."
+                    style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%', fontFamily: 'inherit' }}
+                  />
+                  <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                    Use AI Fetch to generate specification field names. Your instructions stay here and are not shown on product cards.
+                  </p>
+                </>
+              ) : (
+                <p style={{ margin: 0, fontSize: '0.875rem', color: '#64748b' }}>
+                  Click Edit to add AI instructions, then use AI Fetch to generate specification keys.
+                </p>
+              )}
+            </div>
+
+          {(getDisplayDescription(product) || isEditing) && (
+            <div className="description-section">
+              <h3 style={{ marginBottom: '0.75rem' }}>Product description</h3>
+              {isEditing ? (
                 <textarea
                   value={editedProduct.description}
-                  onChange={(e) => setEditedProduct({...editedProduct, description: e.target.value})}
+                  onChange={(e) => setEditedProduct({ ...editedProduct, description: e.target.value })}
                   rows="4"
-                  placeholder="Enter product name and category, then click 'AI Fetch' to generate description from AI platforms (ChatGPT, Gemini, or Claude). You can also enter a description manually."
+                  placeholder="Optional customer-facing description for suppliers and buyers."
                   style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%', fontFamily: 'inherit' }}
                 />
               ) : (
-                <p>{product.description || 'No description'}</p>
+                <p>{getDisplayDescription(product) || 'No description'}</p>
               )}
             </div>
           )}

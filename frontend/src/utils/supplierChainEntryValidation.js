@@ -1,0 +1,148 @@
+import { resolveAuthorizationCertificateUrls } from './authorizationCertificateUrls';
+
+/** @typedef {{ id?: string, role?: string, brands?: string, gstin?: string, companyName?: string, ownershipDetails?: string, authorizationCertificateUrl?: string, authorizationCertificateUrls?: string[], minimumOrderValue?: string|number|null }} ChainEntry */
+
+export function parseBrandsListForValidation(brands) {
+  if (brands == null || brands === '') return [];
+  if (Array.isArray(brands)) {
+    return [...new Set(brands.map(String).map((s) => s.trim()).filter(Boolean))];
+  }
+  return [
+    ...new Set(
+      String(brands)
+        .split(/[,;\n]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  ];
+}
+
+/**
+ * Same shape as the supply-chain editor display (legacy row vs companyInfoEntries).
+ * @param {Record<string, unknown>|null|undefined} profile
+ * @returns {ChainEntry[]}
+ */
+/** Mirrors SupplierSupplyChainEntriesEditor display (always at least one row). */
+export function resolveCompanyInfoEntriesForValidation(profile) {
+  if (!profile) return [];
+  const entries = profile.companyInfoEntries;
+  if (Array.isArray(entries) && entries.length > 0) return entries;
+
+  return [
+    {
+      id: 'legacy',
+      role: profile.supplierRole || '',
+      brands: profile.brands || '',
+      gstin: profile.gstin || '',
+      companyName: profile.companyName || '',
+      ownershipDetails: profile.ownershipDetails || '',
+      authorizationCertificateUrl: profile.authorizationCertificateUrl || '',
+      minimumOrderValue: profile.minimumOrderValue ?? ''
+    }
+  ];
+}
+
+/**
+ * @param {ChainEntry[]} entries
+ * @returns {{ ok: true } | { ok: false, message: string, entryIndex?: number, field?: string }}
+ */
+export function validateCompanyInfoEntriesList(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return {
+      ok: false,
+      message: 'Add at least one supply-chain entry (role, brands, and other required fields).',
+      entryIndex: 0,
+      field: 'entry'
+    };
+  }
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i] || {};
+    const entryNum = i + 1;
+    const role = String(entry.role || '').trim();
+    const brandList = parseBrandsListForValidation(entry.brands);
+    const gstin = String(entry.gstin || '').trim();
+    const companyName = String(entry.companyName || '').trim();
+    const certificateUrls = resolveAuthorizationCertificateUrls(entry);
+
+    if (!role) {
+      return {
+        ok: false,
+        message: `Entry ${entryNum}: Select your supply-chain role.`,
+        entryIndex: i,
+        field: 'role'
+      };
+    }
+    if (brandList.length === 0) {
+      return {
+        ok: false,
+        message: `Entry ${entryNum}: Select a brand.`,
+        entryIndex: i,
+        field: 'brands'
+      };
+    }
+    if (brandList.length > 1) {
+      return {
+        ok: false,
+        message: `Entry ${entryNum}: Only one brand is allowed per entry. Add another block for a second brand.`,
+        entryIndex: i,
+        field: 'brands'
+      };
+    }
+    if (!gstin) {
+      return {
+        ok: false,
+        message: `Entry ${entryNum}: GSTIN is required.`,
+        entryIndex: i,
+        field: 'gstin'
+      };
+    }
+    if (!companyName) {
+      return {
+        ok: false,
+        message: `Entry ${entryNum}: Company name is required.`,
+        entryIndex: i,
+        field: 'companyName'
+      };
+    }
+    if (certificateUrls.length === 0) {
+      return {
+        ok: false,
+        message: `Entry ${entryNum}: Upload at least one brand authorisation document.`,
+        entryIndex: i,
+        field: 'authorizationCertificateUrls'
+      };
+    }
+
+    if (role !== 'retailer') {
+      const movRaw = entry.minimumOrderValue;
+      if (movRaw === '' || movRaw === null || movRaw === undefined) {
+        return {
+          ok: false,
+          message: `Entry ${entryNum}: Minimum order value (₹) is required for this role.`,
+          entryIndex: i,
+          field: 'minimumOrderValue'
+        };
+      }
+      const mov = parseFloat(String(movRaw));
+      if (!Number.isFinite(mov) || mov < 0) {
+        return {
+          ok: false,
+          message: `Entry ${entryNum}: Enter a valid minimum order value (₹).`,
+          entryIndex: i,
+          field: 'minimumOrderValue'
+        };
+      }
+    }
+  }
+
+  return { ok: true };
+}
+
+/**
+ * @param {Record<string, unknown>|null|undefined} profile
+ */
+export function validateSupplierChainProfile(profile) {
+  const entries = resolveCompanyInfoEntriesForValidation(profile);
+  return validateCompanyInfoEntriesList(entries);
+}

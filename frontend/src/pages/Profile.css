@@ -41,6 +41,33 @@
   gap: 0.75rem;
 }
 
+.profile-page-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 0.625rem;
+}
+
+.profile-page-header-actions .btn-primary,
+.profile-page-header-actions .btn-secondary {
+  height: 2.5rem;
+  min-height: 2.5rem;
+  width: auto !important;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding-inline: 1rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  white-space: nowrap;
+}
+
+.profile-page-header-actions .btn-primary svg,
+.profile-page-header-actions .btn-secondary svg {
+  width: 1rem;
+  height: 1rem;
+}
+
 /* Shared action buttons: same height, radius, and icon–label spacing */
 .btn-primary,
 .btn-secondary {
@@ -121,6 +148,13 @@
   color: #1e293b;
   margin-bottom: 1.5rem;
   font-size: 1.25rem;
+}
+
+.profile-section-lead {
+  margin: -0.75rem 0 1.25rem;
+  color: #64748b;
+  font-size: 0.92rem;
+  line-height: 1.55;
 }
 
 .supplier-summary-grid {
@@ -502,6 +536,41 @@
   color: #4f46e5;
 }
 
+.cert-upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  margin-top: 0.35rem;
+}
+
+.cert-upload-remove {
+  padding: 0.25rem 0.65rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cert-upload-remove:hover {
+  background: #fee2e2;
+  border-color: #f87171;
+}
+
+.cert-upload-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.8rem;
+  color: #94a3b8;
+}
+
+.field-required {
+  color: #dc2626;
+  font-weight: 700;
+}
+
 .company-info-entry-badge {
   font-size: 0.8rem;
   font-weight: 600;
@@ -601,6 +670,30 @@
   cursor: not-allowed;
 }
 
+.brand-custom-input-wrap {
+  margin-bottom: 0.75rem;
+}
+
+.brand-custom-input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 1rem;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.brand-custom-input:focus {
+  outline: none;
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+.brand-custom-input:disabled {
+  background: #f8fafc;
+  cursor: not-allowed;
+}
+
 .brand-chips {
   display: flex;
   flex-wrap: wrap;
@@ -664,6 +757,16 @@
   margin-top: 0.5rem;
   padding-top: 0;
   border-top: none;
+}
+
+.supply-chain-group-brand {
+  color: #0f766e;
+  font-weight: 700;
+}
+
+.supply-chain-group-sep {
+  color: #94a3b8;
+  font-weight: 400;
 }
 
 .supply-chain-group-title {

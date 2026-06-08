@@ -1,25 +1,198 @@
-import fs from 'fs';
 import multer from 'multer';
 import { requireAuthentication as authenticateToken } from '../../../middleware/authMiddleware.js';
 import { supabase } from '../../../config/supabase.js';
-import { uploadFile } from '../../../services/storage.js';
+import { uploadFile, SUPPLIER_DOCUMENTS_BUCKET } from '../../../services/storage.js';
 import {
   fetchPendingChainRequest,
   normalizeCompanyInfoEntries
 } from '../../../services/supplierChainProfileService.js';
 import { profileUploadCertificateBodySchema } from '../../../contracts/profileContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../../utils/contractValidation.js';
+import { clientErrorMessage } from '../../../utils/clientErrorMessage.js';
+import {
+  appendAuthorizationCertificateUrl,
+  removeAuthorizationCertificateUrl,
+  resolveAuthorizationCertificateUrls,
+  setAuthorizationCertificateUrls
+} from '../../../utils/authorizationCertificateUrls.js';
 
-const upload = multer({ dest: 'uploads/' });
+const CERTIFICATE_MAX_BYTES = 15 * 1024 * 1024;
+const CERTIFICATE_MAX_SIZE_LABEL = '15 MB';
+
+const ALLOWED_CERT_MIME_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+]);
+
+const MIME_BY_EXTENSION = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+};
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: CERTIFICATE_MAX_BYTES }
+});
+
+function sanitizeStorageFileName(name) {
+  const base = String(name || 'document')
+    .replace(/[/\\]+/g, '_')
+    .replace(/[^\w.\-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 120);
+  return base || 'document';
+}
+
+function resolveCertificateContentType(file) {
+  const mime = String(file?.mimetype || '').toLowerCase().split(';')[0].trim();
+  if (ALLOWED_CERT_MIME_TYPES.has(mime)) return mime;
+  const ext = String(file?.originalname || '')
+    .split('.')
+    .pop()
+    ?.toLowerCase();
+  return ext && MIME_BY_EXTENSION[ext] ? MIME_BY_EXTENSION[ext] : null;
+}
+
+function handleCertificateUpload(req, res, next) {
+  upload.single('file')(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        status: 'error',
+        message: `File is too large. Maximum size is ${CERTIFICATE_MAX_SIZE_LABEL}.`
+      });
+    }
+    return res.status(400).json({
+      status: 'error',
+      message: err.message || 'Failed to read uploaded file'
+    });
+  });
+}
+
+async function attachCertificateToPending(userId, entryId, url) {
+  const pending = await fetchPendingChainRequest(userId);
+  if (!pending?.payload) return false;
+
+  const p = pending.payload;
+  const entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);
+  if (!entries.some((e) => e.id === entryId)) return false;
+
+  const updatedEntries = entries.map((e) =>
+    e.id === entryId ? appendAuthorizationCertificateUrl(e, url) : e
+  );
+  const { error: prErr } = await supabase
+    .from('supplier_chain_profile_requests')
+    .update({
+      payload: { ...p, companyInfoEntries: updatedEntries },
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', pending.id)
+    .eq('status', 'pending');
+
+  if (prErr) {
+    console.error('Failed to attach certificate to pending chain request:', prErr);
+    throw new Error('File uploaded, but failed to save URL on pending profile request');
+  }
+  return true;
+}
+
+async function attachCertificateToProfile(userId, currentProfile, entryId, url) {
+  const entries = normalizeCompanyInfoEntries(currentProfile?.companyInfoEntries || []);
+  if (!entries.some((e) => e.id === entryId)) return false;
+
+  const updatedEntries = entries.map((e) =>
+    e.id === entryId ? appendAuthorizationCertificateUrl(e, url) : e
+  );
+  const updatedProfile = {
+    ...(currentProfile || {}),
+    companyInfoEntries: updatedEntries
+  };
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ profile: updatedProfile })
+    .eq('id', userId);
+
+  if (updateError) {
+    console.error('Failed to save certificate URL for entry:', updateError);
+    throw new Error('File uploaded, but failed to save URL for this entry');
+  }
+  return true;
+}
+
+async function clearCertificateFromPending(userId, entryId, urlToRemove = null) {
+  const pending = await fetchPendingChainRequest(userId);
+  if (!pending?.payload) return false;
+
+  const p = pending.payload;
+  const entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);
+  if (!entries.some((e) => e.id === entryId)) return false;
+
+  const updatedEntries = entries.map((e) =>
+    e.id === entryId ? removeAuthorizationCertificateUrl(e, urlToRemove) : e
+  );
+  const { error: prErr } = await supabase
+    .from('supplier_chain_profile_requests')
+    .update({
+      payload: { ...p, companyInfoEntries: updatedEntries },
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', pending.id)
+    .eq('status', 'pending');
+
+  if (prErr) {
+    console.error('Failed to remove certificate from pending chain request:', prErr);
+    throw new Error('Failed to remove certificate from pending profile request');
+  }
+  return true;
+}
+
+async function clearCertificateFromProfile(userId, currentProfile, entryId, urlToRemove = null) {
+  const entries = normalizeCompanyInfoEntries(currentProfile?.companyInfoEntries || []);
+  if (!entries.some((e) => e.id === entryId)) return false;
+
+  const updatedEntries = entries.map((e) =>
+    e.id === entryId ? removeAuthorizationCertificateUrl(e, urlToRemove) : e
+  );
+  const updatedProfile = {
+    ...(currentProfile || {}),
+    companyInfoEntries: updatedEntries
+  };
+  const { error: updateError } = await supabase
+    .from('users')
+    .update({ profile: updatedProfile })
+    .eq('id', userId);
+
+  if (updateError) {
+    console.error('Failed to remove certificate URL for entry:', updateError);
+    throw new Error('Failed to remove certificate from profile');
+  }
+  return true;
+}
+
+function parseCertificateRequestBody(req) {
+  const raw = req.body && Object.keys(req.body).length > 0 ? req.body : req.query || {};
+  return parseWithSchema(profileUploadCertificateBodySchema, raw);
+}
 
 export function registerProfileCertificateRoutes(router) {
   router.post(
     '/supplier/authorization-certificate',
     authenticateToken,
-    upload.single('file'),
+    handleCertificateUpload,
     async (req, res) => {
       try {
-        const uploadBody = parseWithSchema(profileUploadCertificateBodySchema, req.body || {});
+        const uploadBody = parseCertificateRequestBody(req);
         if (!req.file) {
           return res.status(400).json({
             status: 'error',
@@ -27,21 +200,26 @@ export function registerProfileCertificateRoutes(router) {
           });
         }
 
-        const filePath = req.file.path;
-        const fileBuffer = fs.readFileSync(filePath);
-
-        const storagePath = `${req.userId}/authorization-certificates/${Date.now()}-${req.file.originalname}`;
-
-        const { url, path } = await uploadFile('supplier-documents', storagePath, fileBuffer, {
-          contentType: req.file.mimetype,
-          upsert: false
-        });
-
-        try {
-          fs.unlinkSync(filePath);
-        } catch (cleanupError) {
-          console.error('Failed to cleanup temp file:', cleanupError);
+        const contentType = resolveCertificateContentType(req.file);
+        if (!contentType) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Please upload a PDF, Word document (.doc/.docx), or image (JPEG, PNG, WebP, GIF).'
+          });
         }
+
+        const safeName = sanitizeStorageFileName(req.file.originalname);
+        const storagePath = `${req.userId}/authorization-certificates/${Date.now()}-${safeName}`;
+
+        const { url, path } = await uploadFile(
+          SUPPLIER_DOCUMENTS_BUCKET,
+          storagePath,
+          req.file.buffer,
+          {
+            contentType,
+            upsert: false
+          }
+        );
 
         const { data: currentUser, error: fetchError } = await supabase
           .from('users')
@@ -59,81 +237,63 @@ export function registerProfileCertificateRoutes(router) {
         const entryId = uploadBody.entryId ? String(uploadBody.entryId).trim() : null;
 
         if (entryId) {
-          const pending = await fetchPendingChainRequest(req.userId);
-          if (pending?.payload) {
-            const p = pending.payload;
-            const entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);
-            const updatedEntries = entries.map((e) =>
-              e.id === entryId ? { ...e, authorizationCertificateUrl: url } : e
-            );
-            if (!updatedEntries.some((e) => e.id === entryId)) {
-              return res.status(400).json({
-                status: 'error',
-                message: 'Entry not found on your pending profile submission'
-              });
-            }
-            const { error: prErr } = await supabase
-              .from('supplier_chain_profile_requests')
-              .update({
-                payload: { ...p, companyInfoEntries: updatedEntries },
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', pending.id)
-              .eq('status', 'pending');
-            if (prErr) {
-              console.error('Failed to attach certificate to pending chain request:', prErr);
-              return res.status(500).json({
-                status: 'error',
-                message: 'File uploaded, but failed to save URL on pending profile request'
-              });
-            }
-            return res.status(200).json({
-              status: 'success',
-              message: 'Authorization certificate attached to your pending profile submission',
-              url,
-              entryId
-            });
-          }
+          let savedToProfile = false;
+          let message = 'Authorization certificate uploaded for this entry';
 
-          const entries = Array.isArray(currentUser.profile?.companyInfoEntries)
-            ? currentUser.profile.companyInfoEntries
-            : [];
-          const updatedEntries = entries.map((e) =>
-            e.id === entryId ? { ...e, authorizationCertificateUrl: url } : e
-          );
-          if (!updatedEntries.some((e) => e.id === entryId)) {
-            return res.status(400).json({
-              status: 'error',
-              message: 'Entry not found for this certificate'
-            });
-          }
-          const updatedProfile = {
-            ...(currentUser.profile || {}),
-            companyInfoEntries: updatedEntries
-          };
-          const { error: updateError } = await supabase
-            .from('users')
-            .update({ profile: updatedProfile })
-            .eq('id', req.userId);
-
-          if (updateError) {
-            console.error('Failed to save certificate URL for entry:', updateError);
+          try {
+            savedToProfile = await attachCertificateToPending(req.userId, entryId, url);
+            if (savedToProfile) {
+              message = 'Authorization certificate attached to your pending profile submission';
+            }
+          } catch (pendingErr) {
             return res.status(500).json({
               status: 'error',
-              message: 'File uploaded, but failed to save URL for this entry'
+              message: pendingErr.message || 'Failed to save certificate on pending profile'
             });
           }
+
+          if (!savedToProfile) {
+            try {
+              savedToProfile = await attachCertificateToProfile(
+                req.userId,
+                currentUser.profile,
+                entryId,
+                url
+              );
+            } catch (profileErr) {
+              return res.status(500).json({
+                status: 'error',
+                message: profileErr.message || 'Failed to save certificate on profile'
+              });
+            }
+          }
+
+          if (!savedToProfile) {
+            return res.status(200).json({
+              status: 'success',
+              message:
+                'Certificate uploaded. It is attached in this form — click Save on Select yourself to store it with your profile.',
+              url,
+              entryId,
+              savedToProfile: false
+            });
+          }
+
           return res.status(200).json({
             status: 'success',
-            message: 'Authorization certificate uploaded for this entry',
+            message,
             url,
-            entryId
+            entryId,
+            savedToProfile: true
           });
         }
 
+        const legacyCertificates = setAuthorizationCertificateUrls(
+          currentUser.profile || {},
+          [...resolveAuthorizationCertificateUrls(currentUser.profile || {}), url]
+        );
         const updatedProfile = {
-          ...(currentUser.profile || {}),
-          authorizationCertificateUrl: url,
+          ...legacyCertificates,
           authorizationCertificatePath: path
         };
 
@@ -153,7 +313,8 @@ export function registerProfileCertificateRoutes(router) {
         return res.status(200).json({
           status: 'success',
           message: 'Authorization certificate uploaded successfully',
-          url
+          url,
+          savedToProfile: true
         });
       } catch (error) {
         if (String(error?.name || '') === 'ZodError') {
@@ -162,9 +323,133 @@ export function registerProfileCertificateRoutes(router) {
         console.error('Authorization certificate upload error:', error);
         return res.status(500).json({
           status: 'error',
-          message: 'Failed to upload authorization certificate'
+          message: clientErrorMessage(
+            error,
+            'Failed to upload authorization certificate',
+            500
+          )
         });
       }
     }
   );
+
+  router.delete('/supplier/authorization-certificate', authenticateToken, async (req, res) => {
+    try {
+      const deleteBody = parseCertificateRequestBody(req);
+
+      const { data: currentUser, error: fetchError } = await supabase
+        .from('users')
+        .select('id, profile')
+        .eq('id', req.userId)
+        .single();
+
+      if (fetchError || !currentUser) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'User not found'
+        });
+      }
+
+      const entryId = deleteBody.entryId ? String(deleteBody.entryId).trim() : null;
+      const urlToRemove = deleteBody.url ? String(deleteBody.url).trim() : null;
+
+      if (entryId) {
+        let savedToProfile = false;
+        let message = urlToRemove
+          ? 'Authorization document removed for this entry'
+          : 'Authorization certificate removed for this entry';
+
+        try {
+          savedToProfile = await clearCertificateFromPending(req.userId, entryId, urlToRemove);
+          if (savedToProfile) {
+            message = urlToRemove
+              ? 'Document removed from your pending profile submission'
+              : 'Certificate removed from your pending profile submission';
+          }
+        } catch (pendingErr) {
+          return res.status(500).json({
+            status: 'error',
+            message: pendingErr.message || 'Failed to remove certificate from pending profile'
+          });
+        }
+
+        if (!savedToProfile) {
+          try {
+            savedToProfile = await clearCertificateFromProfile(
+              req.userId,
+              currentUser.profile,
+              entryId,
+              urlToRemove
+            );
+          } catch (profileErr) {
+            return res.status(500).json({
+              status: 'error',
+              message: profileErr.message || 'Failed to remove certificate from profile'
+            });
+          }
+        }
+
+        if (!savedToProfile) {
+          return res.status(200).json({
+            status: 'success',
+            message:
+              'Certificate removed in this form. Click Save on Select yourself to persist the change.',
+            entryId,
+            savedToProfile: false
+          });
+        }
+
+        return res.status(200).json({
+          status: 'success',
+          message,
+          entryId,
+          savedToProfile: true
+        });
+      }
+
+      const updatedProfile = setAuthorizationCertificateUrls(
+        { ...(currentUser.profile || {}) },
+        urlToRemove
+          ? resolveAuthorizationCertificateUrls(currentUser.profile || {}).filter(
+              (u) => u !== urlToRemove
+            )
+          : []
+      );
+      if (!urlToRemove || resolveAuthorizationCertificateUrls(updatedProfile).length === 0) {
+        delete updatedProfile.authorizationCertificatePath;
+      }
+
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ profile: updatedProfile })
+        .eq('id', req.userId);
+
+      if (updateError) {
+        console.error('Failed to remove certificate from profile:', updateError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to remove authorization certificate from profile'
+        });
+      }
+
+      return res.status(200).json({
+        status: 'success',
+        message: 'Authorization certificate removed successfully',
+        savedToProfile: true
+      });
+    } catch (error) {
+      if (String(error?.name || '') === 'ZodError') {
+        return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+      }
+      console.error('Authorization certificate delete error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: clientErrorMessage(
+          error,
+          'Failed to remove authorization certificate',
+          500
+        )
+      });
+    }
+  });
 }

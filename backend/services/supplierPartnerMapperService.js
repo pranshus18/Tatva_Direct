@@ -1,9 +1,10 @@
 import { entryOverlapsViewerBrands } from './supplierBrandGuardService.js';
 import { SUPPLY_CHAIN_ROLE_LABELS } from './supplierUpstreamRankingService.js';
 
-export function mapSupplyChainPartner(user, chainRole, viewerBrandTokens) {
+export function mapSupplyChainPartner(user, chainRole, viewerBrandTokens, options = {}) {
   const profile = user.profile || {};
   const address = user.address || {};
+  const filterByBrand = options.filterByBrand !== false;
 
   const roleEntries = Array.isArray(profile.companyInfoEntries)
     ? profile.companyInfoEntries
@@ -12,7 +13,7 @@ export function mapSupplyChainPartner(user, chainRole, viewerBrandTokens) {
       : [];
   let rawMatching = roleEntries.filter((e) => e && e.role === chainRole);
 
-  if (viewerBrandTokens && viewerBrandTokens.size > 0) {
+  if (filterByBrand && viewerBrandTokens && viewerBrandTokens.size > 0) {
     rawMatching = rawMatching.filter((e) => entryOverlapsViewerBrands(e, viewerBrandTokens));
   }
 
@@ -26,7 +27,12 @@ export function mapSupplyChainPartner(user, chainRole, viewerBrandTokens) {
       ownershipDetails: profile.ownershipDetails || '',
       authorizationCertificateUrl: profile.authorizationCertificateUrl || ''
     };
-    if (!viewerBrandTokens || viewerBrandTokens.size === 0 || entryOverlapsViewerBrands(legacyEntry, viewerBrandTokens)) {
+    if (
+      !filterByBrand ||
+      !viewerBrandTokens ||
+      viewerBrandTokens.size === 0 ||
+      entryOverlapsViewerBrands(legacyEntry, viewerBrandTokens)
+    ) {
       rawMatching = [legacyEntry];
     }
   }

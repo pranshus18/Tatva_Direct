@@ -1,0 +1,36 @@
+.brand-select {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.brand-select__dropdown,
+.brand-select__other,
+.brand-select__input {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.5rem;
+  font-size: inherit;
+  background: #fff;
+}
+
+.brand-select__dropdown:focus,
+.brand-select__other:focus,
+.brand-select__input:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 1px;
+  border-color: #3b82f6;
+}
+
+.brand-select__hint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: #64748b;
+  line-height: 1.35;
+}
+
+.brand-select__hint--error {
+  color: #b91c1c;
+}

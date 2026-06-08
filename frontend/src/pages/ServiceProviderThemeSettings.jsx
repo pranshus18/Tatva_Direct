@@ -183,7 +183,7 @@ const ServiceProviderThemeSettings = () => {
     <SpPageLayout showStepper={false}>
     <SpPageHeader
       title="Portal Theme"
-      description="Customize wallpaper for your service provider portal."
+      description="Choose a sky-blue background variant matching the Tatva Direct supplier portal."
       icon={Paintbrush}
     />
     <div className="sp-theme-settings !max-w-3xl">
@@ -200,7 +200,7 @@ const ServiceProviderThemeSettings = () => {
       </div>
 
       <div className="sp-theme-settings__section">
-        <h2>Preset wallpapers</h2>
+        <h2>Background presets</h2>
         <div className="sp-theme-settings__themes">
           {SERVICE_PROVIDER_THEMES.filter((theme) => theme.id !== 'custom').map((theme) => (
             <button

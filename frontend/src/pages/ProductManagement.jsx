@@ -17,7 +17,7 @@ import {
   Image as ImageIcon,
   Loader,
   ChevronDown,
-  DollarSign
+  Wallet
 } from 'lucide-react';
 import './Dashboard.css';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
@@ -32,6 +32,20 @@ import {
   applyExtractResultToSpecs,
   extractSpecificationsFromDescription
 } from '../utils/extractSpecificationsApi';
+import {
+  SUPPLIER_CURRENT_STOCK_LABEL,
+  SUPPLIER_MRP_FIELD_LABEL,
+  SUPPLIER_MRP_LABEL
+} from '../utils/supplierStockLabel';
+import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
+import RupeeInput from '../components/RupeeInput';
+import BrandSelect from '../components/BrandSelect';
+import {
+  getSupplierOfferRowId,
+  matchSupplierOfferRow,
+  normalizeSupplierProductsFromApi
+} from '../utils/supplierProductRow';
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -168,10 +182,12 @@ const ProductManagement = ({ user }) => {
       const data = await response.json();
       if (data.status === 'success') {
         // Ensure all products have a status field (default to 'pending' if missing)
-        const productsWithStatus = data.products.map(product => ({
-          ...product,
-          status: product.status || 'pending'
-        }));
+        const productsWithStatus = normalizeSupplierProductsFromApi(data.products || []).map(
+          (product) => ({
+            ...product,
+            status: product.status || 'pending'
+          })
+        );
         setProducts(productsWithStatus);
       }
     } catch (error) {
@@ -217,7 +233,7 @@ const ProductManagement = ({ user }) => {
   };
 
   const handleSaveSpecifications = async (product, specificationValues) => {
-    const productId = product?.supplier_product_id || product?.id || product?._id;
+    const productId = getSupplierOfferRowId(product) || product?.id || product?._id;
     if (!productId) {
       alert('Unable to save: missing product id.');
       return { ok: false };
@@ -250,17 +266,25 @@ const ProductManagement = ({ user }) => {
 
       setProducts((prev) =>
         prev.map((p) =>
-          p.supplier_product_id === productId || p.id === productId || p._id === productId
-            ? { ...p, ...updatedProduct }
+          matchSupplierOfferRow(p, productId)
+            ? {
+                ...p,
+                ...updatedProduct,
+                supplier_product_id: getSupplierOfferRowId(p) || getSupplierOfferRowId(updatedProduct) || productId
+              }
             : p
         )
       );
 
       setViewingItem((prev) => {
         if (!prev) return prev;
-        const sameRow =
-          prev.supplier_product_id === productId || prev.id === productId || prev._id === productId;
-        return sameRow ? { ...prev, ...updatedProduct } : prev;
+        return matchSupplierOfferRow(prev, productId)
+          ? {
+              ...prev,
+              ...updatedProduct,
+              supplier_product_id: getSupplierOfferRowId(prev) || getSupplierOfferRowId(updatedProduct) || productId
+            }
+          : prev;
       });
 
       if (String(updatedProduct.status || '').toLowerCase() === 'pending') {
@@ -278,7 +302,33 @@ const ProductManagement = ({ user }) => {
     }
   };
 
-  const handleUpdateProduct = async (productId, productData) => {
+  const buildInventoryUpdatePayload = (item, data) => {
+    const stock = parseSupplierStockQuantity(data.stock);
+    if (stock === null) return null;
+    const priceRaw = data.price;
+    const price =
+      priceRaw !== '' && priceRaw !== undefined && priceRaw !== null
+        ? parseFloat(priceRaw)
+        : undefined;
+    const payload = {
+      stock,
+      location: data.location,
+      unit: data.unit,
+      igst_rate: data.igst_rate,
+      cgst_rate: data.cgst_rate,
+      sgst_rate: data.sgst_rate,
+      hsnCode: data.hsnCode || data.hsn_code,
+      brandModel: item?.brandModel || item?.attributes?.brandModel,
+      mpn: item?.mpn,
+      gtin: item?.gtin
+    };
+    if (price !== undefined && Number.isFinite(price)) {
+      payload.price = price;
+    }
+    return payload;
+  };
+
+  const handleUpdateProduct = async (productId, productData, options = {}) => {
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl(`/api/supplier/products/${productId}`), {
@@ -291,20 +341,38 @@ const ProductManagement = ({ user }) => {
       });
       const data = await response.json();
       if (response.ok && data.status === 'success') {
-        // Ensure the updated product includes specifications
+        const savedStock =
+          options.expectedStock ??
+          parseSupplierStockQuantity(productData.stock) ??
+          parseSupplierStockQuantity(data.product?.stock);
         const updatedProduct = {
           ...data.product,
-          specifications: data.product.specifications || {}
+          specifications: data.product.specifications || {},
+          ...(savedStock != null ? { stock: savedStock } : {})
         };
-        
-        // Update the products list with the updated product (including specifications)
-        setProducts(products.map(p =>
-          (p.supplier_product_id === productId || p.id === productId || p._id === productId)
-            ? updatedProduct
-            : p
-        ));
-        
-        // Close the modal
+
+        setProducts((prev) =>
+          prev.map((p) =>
+            matchSupplierOfferRow(p, productId)
+              ? {
+                  ...p,
+                  ...updatedProduct,
+                  supplier_product_id:
+                    getSupplierOfferRowId(p) ||
+                    getSupplierOfferRowId(updatedProduct) ||
+                    productId,
+                  stock: savedStock != null ? savedStock : p.stock,
+                  price:
+                    updatedProduct.price !== undefined ? updatedProduct.price : p.price
+                }
+              : p
+          )
+        );
+
+        if (isInventoryView && savedStock != null) {
+          void fetchProducts();
+        }
+
         setEditingItem(null);
 
         // After inventory (step 2), go straight to ProductCOV (step 3)
@@ -353,7 +421,7 @@ const ProductManagement = ({ user }) => {
 
   const handleDeleteProduct = async (supplierProductId) => {
     // Show confirmation dialog
-    const product = products.find(p => p.supplier_product_id === supplierProductId || p.id === supplierProductId || p._id === supplierProductId);
+    const product = products.find((p) => matchSupplierOfferRow(p, supplierProductId));
     const productName = product?.name || 'this product';
     
     if (!window.confirm(`Are you sure you want to delete "${productName}"? This action cannot be undone.`)) {
@@ -372,7 +440,7 @@ const ProductManagement = ({ user }) => {
       const data = await response.json();
       if (data.status === 'success') {
         // Remove the product from the list
-        setProducts(products.filter(p => p.supplier_product_id !== supplierProductId && p.id !== supplierProductId && p._id !== supplierProductId));
+        setProducts((prev) => prev.filter((p) => !matchSupplierOfferRow(p, supplierProductId)));
         alert('Product deleted successfully');
       } else {
         alert(data.message || 'Failed to delete product');
@@ -413,7 +481,7 @@ const ProductManagement = ({ user }) => {
             )}
             {user?.name && ' - '}
             {isInventoryView 
-              ? 'Update stock, price, and location for your existing products'
+              ? `Update ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, ${SUPPLIER_MRP_LABEL}, and location for your existing products`
               : 'Add new products to your catalog (saved products are read-only here)'}
           </p>
           <div style={{ 
@@ -486,7 +554,7 @@ const ProductManagement = ({ user }) => {
         variant={isInventoryView ? 'inventory' : 'add-product'}
         hint={
           isInventoryView
-            ? 'You are on step 2. After price and stock are set, open ProductCOV (step 3) to finish so this product can price correctly on orders.'
+            ? `You are on step 2. After ${SUPPLIER_MRP_LABEL} and ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} are set, open ProductCOV (step 3) to finish so this product can be priced correctly on orders.`
             : 'You are on step 1. Add catalog details here, then use Manage Inventory for step 2, then ProductCOV for step 3.'
         }
       />
@@ -579,7 +647,7 @@ const ProductManagement = ({ user }) => {
                 
                 return (
                 <div
-                  key={product.id || product._id}
+                  key={rowKey}
                   className="product-card product-card--list-row"
                   style={{
                     border: productStatus === 'pending' ? `2px solid ${status.borderColor}` : '1px solid #e5e7eb',
@@ -747,9 +815,9 @@ const ProductManagement = ({ user }) => {
                         minWidth: '4.5rem'
                       }}
                     >
-                      <span style={{ fontSize: '0.6rem', color: '#64748b', fontWeight: 600 }}>Price</span>
+                      <span style={{ fontSize: '0.6rem', color: '#64748b', fontWeight: 600 }}>{SUPPLIER_MRP_LABEL}</span>
                       <span style={{ fontSize: '0.78rem', color: '#334155', fontWeight: 700, textAlign: 'right' }}>
-                        {product.price} <span style={{ fontWeight: 600, color: '#64748b' }}>per {product.unit}</span>
+                        {formatRupeePerUnit(product.price, product.unit)}
                       </span>
                     </div>
 
@@ -760,10 +828,21 @@ const ProductManagement = ({ user }) => {
                         alignItems: 'flex-end',
                         flexShrink: 0,
                         gap: '0.08rem',
-                        minWidth: '3.5rem'
+                        minWidth: '5.75rem'
                       }}
                     >
-                      <span style={{ fontSize: '0.6rem', color: '#64748b', fontWeight: 600 }}>Stock</span>
+                      <span
+                        style={{
+                          fontSize: '0.55rem',
+                          color: '#64748b',
+                          fontWeight: 600,
+                          textAlign: 'right',
+                          lineHeight: 1.15,
+                          maxWidth: '5.75rem'
+                        }}
+                      >
+                        {SUPPLIER_CURRENT_STOCK_LABEL}
+                      </span>
                       <span style={{ fontSize: '0.78rem', color: '#334155', fontWeight: 700, textAlign: 'right' }}>
                         {product.stock} {product.unit}
                       </span>
@@ -811,7 +890,7 @@ const ProductManagement = ({ user }) => {
                           }}
                           title="Set ProductCOV pricing levels for this variant"
                         >
-                          <DollarSign size={14} />
+                          <Wallet size={14} />
                         </button>
                       )}
                       {isInventoryView && (
@@ -827,7 +906,7 @@ const ProductManagement = ({ user }) => {
                             transition: 'all 0.2s ease',
                             color: '#3b82f6'
                           }}
-                          title="Edit inventory (stock, price, location)"
+                          title={`Edit inventory (${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, ${SUPPLIER_MRP_LABEL}, location)`}
                         >
                           <Edit size={14} />
                         </button>
@@ -837,7 +916,9 @@ const ProductManagement = ({ user }) => {
                           className="btn-icon"
                           onClick={(e) => {
                             e.stopPropagation();
-                            handleDeleteProduct(product.supplier_product_id || product.id || product._id);
+                            handleDeleteProduct(
+                              getSupplierOfferRowId(product) || product.id || product._id
+                            );
                           }}
                           style={{
                             padding: '0.3rem',
@@ -997,12 +1078,19 @@ const ProductManagement = ({ user }) => {
           showInventoryFields={isInventoryView}
           onClose={() => setEditingItem(null)}
           onSave={(data) => {
-            // Always prefer supplier_products.id. Variants share one products.id (TSIN) but
-            // each variant has its own supplier_product row (Variant TSIN); using products.id
-            // would update the shared catalog row and bleed changes across variants.
-            const productId =
-              editingItem.supplier_product_id || editingItem.id || editingItem._id;
-            handleUpdateProduct(productId, data);
+            const productId = getSupplierOfferRowId(editingItem);
+            if (!productId) {
+              alert(
+                'Cannot save inventory: missing variant offer id. Refresh Manage Inventory and try again.'
+              );
+              return;
+            }
+            const payload = buildInventoryUpdatePayload(editingItem, data);
+            if (!payload) {
+              alert('Enter a valid whole-number stock quantity (0 or greater).');
+              return;
+            }
+            handleUpdateProduct(productId, payload, { expectedStock: payload.stock });
           }}
         />
       )}
@@ -1014,10 +1102,14 @@ const ProductManagement = ({ user }) => {
           canEditInventory={isInventoryView}
           onClose={() => setViewingItem(null)}
           onSaveSpecifications={handleSaveSpecifications}
-          onEdit={(item) => {
-            setViewingItem(null);
-            setEditingItem(item);
-          }}
+          onEdit={
+            isInventoryView
+              ? (item) => {
+                  setViewingItem(null);
+                  setEditingItem(item);
+                }
+              : undefined
+          }
         />
       )}
     </div>
@@ -1258,8 +1350,12 @@ const ProductDetailsModal = ({
             <div><strong>Category:</strong> {product.category || 'N/A'}</div>
             <div><strong>Supplier:</strong> {supplierName || 'N/A'}</div>
             <div><strong>Status:</strong> {(product.status || 'pending').toUpperCase()}</div>
-            <div><strong>Price:</strong> {product.price} per {product.unit || 'unit'}</div>
-            <div><strong>Stock:</strong> {product.stock} {product.unit || 'unit'}</div>
+            <div>
+              <strong>{SUPPLIER_MRP_LABEL}:</strong> {formatRupeePerUnit(product.price, product.unit)}
+            </div>
+            <div>
+              <strong>{SUPPLIER_CURRENT_STOCK_LABEL}:</strong> {product.stock} {product.unit || 'unit'}
+            </div>
             {gtinValue ? <div><strong>GTIN / UPC / EAN:</strong> {gtinValue}</div> : null}
             {product.lsa ? <div><strong>LSA:</strong> {product.lsa}</div> : null}
             {product.location ? <div><strong>Location:</strong> {product.location}</div> : null}
@@ -1289,8 +1385,13 @@ const ProductDetailsModal = ({
                 }}
               >
                 <h4 style={{ margin: 0 }}>Specifications</h4>
-                {onSaveSpecifications && !isEditingSpecs ? (
-                  <button type="button" className="btn-secondary" onClick={beginSpecificationEdit}>
+                {!isEditingSpecs && onSaveSpecifications ? (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={beginSpecificationEdit}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                  >
                     <Edit size={16} />
                     Edit values
                   </button>
@@ -1424,7 +1525,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     category: product?.category || '',
     price: product?.price || '',
     unit: product?.unit || '',
-    stock: product?.stock || '',
+    stock: product?.stock != null && product?.stock !== '' ? String(product.stock) : '',
     igst_rate: product?.igst_rate != null ? String(product.igst_rate) : '',
     cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
     sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
@@ -1435,6 +1536,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [recommendedPrice, setRecommendedPrice] = useState(null);
   const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
   const [priceTouched, setPriceTouched] = useState(false);
+  const [lockedPrice, setLockedPrice] = useState(null);
+  const [priceLocked, setPriceLocked] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchTimeout, setSearchTimeout] = useState(null);
@@ -1477,6 +1580,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
     return {}; // Start with empty object for new products
   });
+  const [isEditingSpecValues, setIsEditingSpecValues] = useState(false);
 
   const MIN_AI_PRODUCT_IMAGES = 3;
   const MAX_AI_PRODUCT_IMAGES = 8;
@@ -1568,6 +1672,16 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     });
   };
 
+  const updateSpecificationValue = (specKey, nextValueRaw) => {
+    setSpecifications((prev) => {
+      if (!prev || !Object.prototype.hasOwnProperty.call(prev, specKey)) return prev;
+      return {
+        ...prev,
+        [specKey]: parseSpecInputToValue(nextValueRaw, prev[specKey])
+      };
+    });
+  };
+
   const fetchSuggestions = async (query) => {
     if (!query || query.trim().length === 0) {
       setSuggestions([]);
@@ -1628,7 +1742,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       ...formData,
       catalogProductId: suggestion.id || '',
       name: suggestion.name,
-      brand: suggestion.brand || formData.brand,
+      brand: formData.brand || suggestion.brand || '',
       gtin: suggestion.gtin || formData.gtin,
       hsnCode: suggestion.hsnCode || suggestion.hsn_code || formData.hsnCode,
       description: suggestion.description || formData.description,
@@ -1686,17 +1800,27 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           setSpecifications(data.specifications);
         }
         if (data.status === 'success' && data.found) {
+          const hasLockedPrice =
+            data.priceLocked === true &&
+            typeof data.lockedPrice === 'number' &&
+            Number.isFinite(data.lockedPrice);
+          setPriceLocked(hasLockedPrice);
+          setLockedPrice(hasLockedPrice ? data.lockedPrice : null);
           setRecommendedPrice(
             typeof data.recommendedPrice === 'number' ? data.recommendedPrice : null
           );
           setRecommendedPriceStats(data.priceStats || null);
-          // Prefill price only when ADDING a product and supplier hasn't typed a price yet
-          if (!product && !priceTouched && (formData.price === '' || formData.price === null || formData.price === undefined)) {
+          if (hasLockedPrice) {
+            setFormData(prev => ({ ...prev, price: String(Number(data.lockedPrice).toFixed(2)) }));
+          } else if (!product && !priceTouched && (formData.price === '' || formData.price === null || formData.price === undefined)) {
+            // Prefill price only when ADDING a product and supplier hasn't typed a price yet
             if (typeof data.recommendedPrice === 'number' && Number.isFinite(data.recommendedPrice)) {
               setFormData(prev => ({ ...prev, price: String(Number(data.recommendedPrice).toFixed(2)) }));
             }
           }
         } else {
+          setPriceLocked(false);
+          setLockedPrice(null);
           setRecommendedPrice(null);
           setRecommendedPriceStats(null);
         }
@@ -2748,13 +2872,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   <label style={{ display: 'block', marginBottom: '0.35rem' }}>
                     Brand
                   </label>
-                  <input
-                    type="text"
+                  <BrandSelect
                     value={formData.brand}
-                    onChange={(e) => setFormData({ ...formData, brand: e.target.value })}
-                    placeholder='e.g. "ACC", "TATA", "Havells"'
-                    autoComplete="off"
-                    style={{ width: '100%' }}
+                    onChange={(brand) => setFormData((prev) => ({ ...prev, brand }))}
+                    disabled={!!product}
+                    required={!product}
+                    searchable
                   />
                 </div>
 
@@ -3354,19 +3477,27 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   position: 'relative',
                   zIndex: showCategorySuggestions ? 1 : 'auto'
                 }}>
-                  <label>Price</label>
-                  <input
+                  <label>{SUPPLIER_MRP_FIELD_LABEL}</label>
+                  <RupeeInput
                     type="number"
+                    min="0"
+                    step="0.01"
                     value={formData.price}
                     onChange={(e) => {
                       setPriceTouched(true);
                       setFormData({...formData, price: e.target.value});
                     }}
                     required
+                    readOnly={priceLocked}
                   />
+                  {priceLocked && typeof lockedPrice === 'number' && Number.isFinite(lockedPrice) && (
+                    <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#16a34a' }}>
+                      Variant MRP is locked for all suppliers: <strong>{formatRupee(lockedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                    </div>
+                  )}
                   {typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
                     <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#0369a1' }}>
-                      Recommended avg price: <strong>₹{Number(recommendedPrice).toFixed(2)}</strong>
+                      Recommended avg {SUPPLIER_MRP_LABEL}: <strong>{formatRupee(recommendedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                       {recommendedPriceStats?.supplierCountOthers > 0 && (
                         <span style={{ color: '#64748b' }}>
                           {' '}({recommendedPriceStats.supplierCountOthers} other supplier{recommendedPriceStats.supplierCountOthers > 1 ? 's' : ''})
@@ -3381,9 +3512,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   pointerEvents: showSuggestions && suggestions.length > 0 ? 'none' : 'auto',
                   transition: 'opacity 0.2s ease'
                 }}>
-                  <label>Stock Quantity</label>
+                  <label>{SUPPLIER_CURRENT_STOCK_LABEL}</label>
                   <input
                     type="number"
+                    min="0"
+                    step="1"
+                    inputMode="numeric"
                     value={formData.stock}
                     onChange={(e) => setFormData({...formData, stock: e.target.value})}
                     required
@@ -3585,16 +3719,28 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                         <label style={{ marginBottom: 0, fontWeight: '600', color: '#1e293b', fontSize: '0.875rem' }}>
-                          Specifications - edit keys and values
+                          {isEditingSpecValues
+                            ? 'Specifications - edit keys and values'
+                            : 'Specifications - edit keys (values are read-only)'}
                         </label>
-                        <button
-                          type="button"
-                          className="btn-secondary"
-                          onClick={addSpecificationKey}
-                          style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
-                        >
-                          + Add key
-                        </button>
+                        <div style={{ display: 'flex', gap: '0.45rem' }}>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => setIsEditingSpecValues((prev) => !prev)}
+                            style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                          >
+                            {isEditingSpecValues ? 'Lock values' : 'Edit values'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={addSpecificationKey}
+                            style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
+                          >
+                            + Add key
+                          </button>
+                        </div>
                       </div>
                       <div style={{
                         display: 'flex',
@@ -3639,35 +3785,42 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                                 background: 'white'
                               }}
                             />
-                            <input
-                              type="text"
-                              value={specifications[key] || ''}
-                              onChange={(e) => {
-                                setSpecifications({
-                                  ...specifications,
-                                  [key]: e.target.value
-                                });
-                              }}
-                              placeholder={`Enter ${key.toLowerCase()} value`}
-                              style={{
-                                flex: '1',
-                                padding: '0.5rem 0.75rem',
-                                border: '1px solid #d1d5db',
-                                borderRadius: '6px',
-                                fontSize: '0.875rem',
-                                color: '#1e293b',
-                                background: 'white',
-                                transition: 'all 0.2s ease'
-                              }}
-                              onFocus={(e) => {
-                                e.target.style.borderColor = '#4f46e5';
-                                e.target.style.boxShadow = '0 0 0 3px rgba(79, 70, 229, 0.1)';
-                              }}
-                              onBlur={(e) => {
-                                e.target.style.borderColor = '#d1d5db';
-                                e.target.style.boxShadow = 'none';
-                              }}
-                            />
+                            {isEditingSpecValues ? (
+                              <input
+                                type="text"
+                                value={specValueToInput(specifications[key])}
+                                onChange={(e) => updateSpecificationValue(key, e.target.value)}
+                                placeholder="Specification value"
+                                style={{
+                                  flex: '1',
+                                  padding: '0.5rem 0.75rem',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: '6px',
+                                  fontSize: '0.875rem',
+                                  color: '#1e293b',
+                                  background: '#ffffff',
+                                  minHeight: '36px'
+                                }}
+                              />
+                            ) : (
+                              <div
+                                style={{
+                                  flex: '1',
+                                  padding: '0.5rem 0.75rem',
+                                  border: '1px solid #d1d5db',
+                                  borderRadius: '6px',
+                                  fontSize: '0.875rem',
+                                  color: '#1e293b',
+                                  background: '#f8fafc',
+                                  minHeight: '36px',
+                                  display: 'flex',
+                                  alignItems: 'center'
+                                }}
+                                title={String(specifications[key] || '')}
+                              >
+                                {String(specifications[key] || '').trim() || '—'}
+                              </div>
+                            )}
                             <button
                               type="button"
                               onClick={() => removeSpecificationKey(key)}

@@ -1,10 +1,11 @@
 import React from 'react';
 import { Check } from 'lucide-react';
+import { SUPPLIER_CURRENT_STOCK_LABEL, SUPPLIER_MRP_LABEL } from '../utils/supplierStockLabel';
 import './SupplierProductAdditionSteps.css';
 
 const STEPS = [
   { n: 1, title: 'Product', sub: 'Name, brand, specs' },
-  { n: 2, title: 'Inventory', sub: 'Price, stock, location' },
+  { n: 2, title: 'Inventory', sub: `${SUPPLIER_MRP_LABEL}, ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, location` },
   { n: 3, title: 'ProductCOV', sub: 'Brand quantity pricing' }
 ];
 

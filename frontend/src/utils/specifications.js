@@ -192,6 +192,27 @@ export const parseSpecInputToValue = (raw, originalValue) => {
   return trimmed;
 };
 
+/** Flat spec map for logistics quotes (preserves keys like weight / dimensions). */
+export const specificationsObjectForLogistics = (specifications) => {
+  const parsedObject = parseSpecificationsObject(specifications);
+  if (!parsedObject) return {};
+
+  const out = {};
+  Object.keys(parsedObject)
+    .filter((key) => isDisplayableSpecKey(key))
+    .forEach((key) => {
+      const value = parsedObject[key];
+      if (!isMeaningfullyFilled(value)) return;
+      if (typeof value === 'object' && value !== null) {
+        const formatted = formatSpecValue(value);
+        if (formatted) out[key] = formatted;
+      } else {
+        out[key] = String(value);
+      }
+    });
+  return out;
+};
+
 export const mergeSpecificationObjects = (templateSpecs = {}, storedSpecs = {}) => {
   const merged = { ...(templateSpecs || {}) };
   Object.entries(storedSpecs || {}).forEach(([key, value]) => {

@@ -8,21 +8,27 @@ import {
   Package,
   ShoppingCart,
   Search,
-  Trash2,
   Loader2,
   AlertTriangle,
-  CheckCircle,
   X,
-  Info,
-  RefreshCw,
-  QrCode
+  Info
 } from 'lucide-react';
-import { buildOrderUpiPayUri, qrServerImageUrl } from '../utils/upiPaymentQr';
-import { formatDateTimeIST } from '../utils/dateTime';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
+import SpStatCard from '../components/sp/SpStatCard';
+import UpstreamProductDisplay, { collectProductImages } from '../components/UpstreamProductDisplay';
+import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
+import { formatRupee } from '../utils/formatRupee';
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
+import { normalizeSupplierProductsFromApi } from '../utils/supplierProductRow';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
+/** Set when returning from Place Order so upstream page restores in-progress draft once. */
+const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
 
 /** Display names for each supply-chain tier (must match backend role keys). */
@@ -35,6 +41,38 @@ const SELLER_LAYER_LABELS = {
   retailer: 'Retailer'
 };
 const formatLayerLabel = (role) => (role ? SELLER_LAYER_LABELS[role] || role : 'N/A');
+
+/** Stable keys for supplier_products junction IDs (avoids string/UUID mismatches in selection state). */
+const normalizeSupplierProductKey = (value) => String(value ?? '').trim();
+
+const normalizeSelectionMap = (raw) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const next = {};
+  Object.entries(raw).forEach(([key, val]) => {
+    const normalizedKey = normalizeSupplierProductKey(key);
+    if (normalizedKey) next[normalizedKey] = val;
+  });
+  return next;
+};
+
+const normalizeVariantToken = (value) => String(value ?? '').trim().toLowerCase();
+
+const isSameVariantOfferForMine = (mineProduct, offer, mineSupplierProductId) => {
+  if (!offer) return false;
+
+  const mineVariantKey = normalizeVariantToken(mineProduct?.variantKey);
+  const mineVariantAsin = normalizeVariantToken(mineProduct?.variantAsin);
+  const offerVariantKey = normalizeVariantToken(offer?.upstreamVariantKey || offer?.variantKey);
+  const offerVariantAsin = normalizeVariantToken(offer?.upstreamVariantAsin || offer?.variantAsin);
+
+  if (mineVariantKey) return Boolean(offerVariantKey) && offerVariantKey === mineVariantKey;
+  if (mineVariantAsin) return Boolean(offerVariantAsin) && offerVariantAsin === mineVariantAsin;
+
+  const upstreamProductId = String(offer?.upstreamProductId || offer?.productId || '').trim();
+  const mineProductId = String(mineProduct?.id || offer?.productId || '').trim();
+  const mineId = normalizeSupplierProductKey(mineSupplierProductId);
+  return Boolean(upstreamProductId) && Boolean(mineProductId) && upstreamProductId === mineProductId && Boolean(mineId);
+};
 
 const formatAddressText = (address) => {
   if (!address) return '';
@@ -77,24 +115,10 @@ const SupplierUpstream = ({ user }) => {
   const [creating, setCreating] = useState(false);
   const [savingCart, setSavingCart] = useState(false);
   const [addingCartByMineId, setAddingCartByMineId] = useState({});
-  const [createdOrders, setCreatedOrders] = useState([]);
 
   const [supplierDetailsOpen, setSupplierDetailsOpen] = useState(false);
   const [supplierDetails, setSupplierDetails] = useState(null);
   const [supplierOfferDetails, setSupplierOfferDetails] = useState(null);
-
-  const [orderModalId, setOrderModalId] = useState(null);
-  const [orderDetails, setOrderDetails] = useState(null);
-  const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
-  const [ordersRefreshing, setOrdersRefreshing] = useState(false);
-  const [updatingPayment, setUpdatingPayment] = useState(false);
-
-  const sortStatusHistory = (raw) =>
-    [...(raw || [])].sort((a, b) => {
-      const ta = new Date(a.timestamp || a.at || 0).getTime();
-      const tb = new Date(b.timestamp || b.at || 0).getTime();
-      return ta - tb;
-    });
 
   const filteredProducts = useMemo(() => {
     const bf = brandFilter.trim().toLowerCase();
@@ -116,7 +140,9 @@ const SupplierUpstream = ({ user }) => {
         cache: 'no-cache'
       });
       const data = await res.json();
-      if (data.status === 'success') setProducts(data.products || []);
+      if (data.status === 'success') {
+        setProducts(normalizeSupplierProductsFromApi(data.products || []));
+      }
     } catch (e) {
       console.error('Failed to fetch supplier products:', e);
     } finally {
@@ -124,51 +150,25 @@ const SupplierUpstream = ({ user }) => {
     }
   };
 
-  const fetchUpstreamOrders = async () => {
-    try {
-      const res = await authFetch('/api/supplier/upstream/orders', {
-        cache: 'no-cache'
-      });
-      const data = await res.json();
-      if (data.status === 'success') setCreatedOrders(data.orders || []);
-    } catch (e) {
-      console.error('Failed to fetch upstream orders:', e);
-    }
-  };
-
-  const refreshUpstreamOrdersList = async () => {
-    setOrdersRefreshing(true);
-    try {
-      await fetchUpstreamOrders();
-    } finally {
-      setOrdersRefreshing(false);
-    }
-  };
-
   useEffect(() => {
-    const init = async () => {
-      await Promise.allSettled([
-        fetchMyProducts(),
-        fetchUpstreamOrders()
-      ]);
-    };
-    init();
+    fetchMyProducts();
   }, []);
 
   useEffect(() => {
     try {
       const cartRaw = localStorage.getItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
-      const orderRaw = localStorage.getItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+      const restoreFromOrder = sessionStorage.getItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY) === '1';
+      const orderRaw = restoreFromOrder ? localStorage.getItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY) : null;
       const raw = cartRaw || orderRaw;
       if (!raw) return;
 
       const draft = JSON.parse(raw);
       if (draft && typeof draft === 'object') {
         if (draft.selectedMine && typeof draft.selectedMine === 'object') {
-          setSelectedMine(draft.selectedMine);
+          setSelectedMine(normalizeSelectionMap(draft.selectedMine));
         }
         if (draft.selectedUpstreamOffer && typeof draft.selectedUpstreamOffer === 'object') {
-          setSelectedUpstreamOffer(draft.selectedUpstreamOffer);
+          setSelectedUpstreamOffer(normalizeSelectionMap(draft.selectedUpstreamOffer));
         }
         if (Array.isArray(draft.suggestions)) {
           setSuggestions(draft.suggestions);
@@ -178,23 +178,64 @@ const SupplierUpstream = ({ user }) => {
         if (typeof draft.cartName === 'string') setCartName(draft.cartName);
       }
 
-      // Cart resume is one-time; order draft is resumable until Place Order succeeds.
       if (cartRaw) localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
+      if (restoreFromOrder) sessionStorage.removeItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY);
     } catch (_) {
       localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
+      sessionStorage.removeItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY);
     }
   }, []);
 
-  const selectedMineIds = useMemo(() => Object.keys(selectedMine || {}), [selectedMine]);
+  const selectedMineIds = useMemo(
+    () => Object.keys(normalizeSelectionMap(selectedMine || {})),
+    [selectedMine]
+  );
+  const visibleInventoryCount = filteredProducts.length;
+  const suggestedGroupCount = Array.isArray(suggestions) ? suggestions.length : 0;
+
+  function resolveMineProduct(mineSupplierProductId) {
+    const key = normalizeSupplierProductKey(mineSupplierProductId);
+    return (
+      (products || []).find(
+        (p) => normalizeSupplierProductKey(p?.supplier_product_id) === key
+      ) || null
+    );
+  }
+
+  function getCompatibleOffersForItem(item) {
+    const mineKey = normalizeSupplierProductKey(item?.mineSupplierProductId);
+    const mine = resolveMineProduct(mineKey);
+    const offers = Array.isArray(item?.upstreamOffers) ? item.upstreamOffers : [];
+    return offers.filter((offer) => isSameVariantOfferForMine(mine, offer, mineKey));
+  }
+
+  const linesReadyToPlace = useMemo(() => {
+    if (!Array.isArray(suggestions) || suggestions.length === 0) return 0;
+    return suggestions.filter((it) => {
+      const mineId = normalizeSupplierProductKey(it.mineSupplierProductId);
+      const offers = getCompatibleOffersForItem(it);
+      if (!mineId || offers.length === 0) return false;
+      const pick = normalizeSupplierProductKey(selectedUpstreamOffer[mineId]);
+      if (!pick) return false;
+      return offers.some(
+        (o) => normalizeSupplierProductKey(o.upstreamSupplierProductId) === pick
+      );
+    }).length;
+  }, [suggestions, selectedUpstreamOffer, products]);
 
   const handleToggleMine = (mineId) => {
+    const key = normalizeSupplierProductKey(mineId);
+    if (!key) return;
     setSelectedMine((prev) => {
       const next = { ...(prev || {}) };
-      if (next[mineId]) {
-        delete next[mineId];
+      if (next[key]) {
+        delete next[key];
       } else {
-        // Default quantity: 1 (backend will also validate min_order_quantity)
-        next[mineId] = 1;
+        const product = (products || []).find(
+          (p) => normalizeSupplierProductKey(p.supplier_product_id) === key
+        );
+        const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+        next[key] = minQty;
       }
       return next;
     });
@@ -245,24 +286,31 @@ const SupplierUpstream = ({ user }) => {
         buyerGeoDiagnostics: data.buyerGeoDiagnostics || null
       });
 
-      // Auto-pick the first upstream offer for each item (when available)
-      const auto = {};
-      (data.items || []).forEach((it) => {
-        if (Array.isArray(it.upstreamOffers) && it.upstreamOffers.length > 0) {
-          auto[it.mineSupplierProductId] = String(it.upstreamOffers[0].upstreamSupplierProductId);
-        }
+      // Keep only upstream picks that still match this suggestion set (no auto-select).
+      setSelectedUpstreamOffer((prev) => {
+        const next = {};
+        const normalizedPrev = normalizeSelectionMap(prev);
+        (data.items || []).forEach((it) => {
+          const mineId = normalizeSupplierProductKey(it.mineSupplierProductId);
+          const prevPick = normalizedPrev[mineId];
+          if (!mineId || !prevPick) return;
+          const offers = getCompatibleOffersForItem(it);
+          if (
+            offers.some(
+              (o) => normalizeSupplierProductKey(o.upstreamSupplierProductId) === prevPick
+            )
+          ) {
+            next[mineId] = prevPick;
+          }
+        });
+        return next;
       });
-      setSelectedUpstreamOffer(auto);
     } catch (e) {
       console.error('Upstream suggestions error:', e);
       alert(`Failed to load upstream suggestions: ${e?.message || 'Please check your connection and try again.'}`);
     } finally {
       setSuggestionsLoading(false);
     }
-  };
-
-  const resolveMineProduct = (mineSupplierProductId) => {
-    return (products || []).find((p) => p?.supplier_product_id === mineSupplierProductId) || null;
   };
 
   const handleProceedToPlaceOrder = async () => {
@@ -273,19 +321,27 @@ const SupplierUpstream = ({ user }) => {
 
     setCreating(true);
     try {
-      const selectedItems = suggestions
-        .filter((it) => selectedMineIds.includes(String(it.mineSupplierProductId)));
+      const selectedItems = suggestions.filter((it) => {
+        const mineId = normalizeSupplierProductKey(it.mineSupplierProductId);
+        const pick = normalizeSupplierProductKey(selectedUpstreamOffer[mineId]);
+        const offers = getCompatibleOffersForItem(it);
+        return (
+          mineId &&
+          pick &&
+          offers.some((o) => normalizeSupplierProductKey(o.upstreamSupplierProductId) === pick)
+        );
+      });
 
-      const selectedLinesDetailed = selectedItems
-        .filter((it) => selectedUpstreamOffer[it.mineSupplierProductId])
-        .map((it) => {
-          const mineId = it.mineSupplierProductId;
-          const upstreamOfferId = selectedUpstreamOffer[mineId];
+      const selectedLinesDetailed = selectedItems.map((it) => {
+          const mineId = normalizeSupplierProductKey(it.mineSupplierProductId);
+          const upstreamOfferId = normalizeSupplierProductKey(selectedUpstreamOffer[mineId]);
           const mine = resolveMineProduct(mineId);
-          const chosenOffer = Array.isArray(it.upstreamOffers)
-            ? it.upstreamOffers.find((o) => String(o.upstreamSupplierProductId) === String(upstreamOfferId))
-            : null;
-          const qty = Number(selectedMine[mineId] || 1) || 1;
+          const chosenOffer = getCompatibleOffersForItem(it).find(
+                (o) => normalizeSupplierProductKey(o.upstreamSupplierProductId) === upstreamOfferId
+              ) || null;
+          const qty =
+            parseSupplierStockQuantity(selectedMine[mineId]) ??
+            Math.max(1, mine?.min_order_quantity ?? 1);
           const unitPrice = Number(chosenOffer?.price || 0) || 0;
 
           return {
@@ -296,7 +352,12 @@ const SupplierUpstream = ({ user }) => {
             supplierName: chosenOffer?.supplierName || 'Supplier',
             supplierId: chosenOffer?.supplierId || null,
             unitPrice,
-            lineTotal: unitPrice * qty
+            lineTotal: unitPrice * qty,
+            specifications: mine?.specifications || null,
+            images: collectProductImages(mine),
+            brandModel: mine?.brandModel || mine?.brand || null,
+            unit: mine?.unit || 'units',
+            description: mine?.description || ''
           };
         });
 
@@ -306,13 +367,16 @@ const SupplierUpstream = ({ user }) => {
         quantity: l.quantity
       }));
 
-      const skipped = selectedItems.length - lines.length;
+      const suggestedWithOffers = suggestions.filter(
+        (it) => getCompatibleOffersForItem(it).length > 0
+      );
+      const skipped = suggestedWithOffers.length - lines.length;
       if (lines.length === 0) {
-        alert('No upstream offers selected for any of your items.');
+        alert('No upstream offers selected. Click a supplier row to choose who to buy from.');
         return;
       }
       if (skipped > 0) {
-        alert(`Skipped ${skipped} item(s) that had no upstream offer selected.`);
+        alert(`Skipped ${skipped} item(s) that had no upstream supplier selected.`);
       }
 
       const totalAmountEstimate = selectedLinesDetailed.reduce((sum, l) => sum + (Number(l.lineTotal) || 0), 0);
@@ -396,13 +460,15 @@ const SupplierUpstream = ({ user }) => {
   };
 
   const handleAddSingleProductToCart = async (product) => {
-    const mineId = product?.supplier_product_id;
+    const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return;
-    const minQty = Math.max(1, parseInt(product?.min_order_quantity || 1, 10) || 1);
-    const nextQty = selectedMine?.[mineId] ? Number(selectedMine[mineId]) || minQty : minQty;
+    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+    const parsedQty = parseSupplierStockQuantity(selectedMine?.[mineId]);
+    const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
 
     setAddingCartByMineId((prev) => ({ ...prev, [mineId]: true }));
     let ok = false;
+    let responseMessage = '';
     try {
       const token = localStorage.getItem('token');
       const res = await fetch(getApiUrl('/api/supplier/upstream/cart/items'), {
@@ -415,6 +481,11 @@ const SupplierUpstream = ({ user }) => {
       });
       const data = await res.json();
       ok = res.ok && data.status === 'success';
+      responseMessage = data?.message || '';
+      if (ok && data?.item?.quantity != null) {
+        const savedQty = parseSupplierStockQuantity(data.item.quantity) ?? nextQty;
+        setSelectedMine((prev) => ({ ...prev, [mineId]: savedQty }));
+      }
     } catch (e) {
       ok = false;
     }
@@ -427,115 +498,8 @@ const SupplierUpstream = ({ user }) => {
       return;
     }
 
-    setSelectedMine((prev) => ({
-      ...(prev || {}),
-      [mineId]: nextQty
-    }));
     emitSupplierCartUpdated();
-    alert('Product added to cart.');
-  };
-
-  const fetchOrderDetails = async (orderNumberOrId) => {
-    if (!orderNumberOrId) return;
-    setLoadingOrderDetails(true);
-    setOrderDetails(null);
-
-    try {
-      const token = localStorage.getItem('token');
-      const encoded = encodeURIComponent(orderNumberOrId);
-      const res = await fetch(getApiUrl(`/api/dashboard/service-provider/orders/${encoded}`), {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-cache'
-      });
-      const data = await res.json();
-      if (data.status === 'success') {
-        setOrderDetails(data.order);
-      } else {
-        alert(data.message || 'Failed to load order details.');
-      }
-    } catch (e) {
-      console.error('Order details fetch error:', e);
-      alert('Failed to load order details. Please try again.');
-    } finally {
-      setLoadingOrderDetails(false);
-    }
-  };
-
-  const handleMarkAsPaid = async () => {
-    if (!orderModalId) return;
-    if (String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit') {
-      alert('Credit / pay-later orders are settled on account. Mark as paid is disabled for credit mode.');
-      return;
-    }
-
-    const confirmed = window.confirm(
-      `Mark payment as paid for Order ${orderDetails?.orderNumber}?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
-    );
-    if (!confirmed) return;
-
-    setUpdatingPayment(true);
-    try {
-      const token = localStorage.getItem('token');
-      const encodedOrderId = encodeURIComponent(orderModalId);
-      const response = await fetch(getApiUrl(`/api/dashboard/service-provider/orders/${encodedOrderId}/payment`), {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          paymentStatus: 'paid',
-          paymentMethod: orderDetails?.paymentMethod || 'online'
-        })
-      });
-
-      const data = await response.json();
-      if (data.status === 'success') {
-        alert('Payment status updated to paid successfully');
-        await fetchOrderDetails(orderModalId);
-        await fetchUpstreamOrders();
-      } else {
-        alert(data.message || 'Failed to update payment status. Please try again.');
-      }
-    } catch (error) {
-      console.error('Failed to update payment status:', error);
-      alert('Failed to update payment status. Please check your connection and try again.');
-    } finally {
-      setUpdatingPayment(false);
-    }
-  };
-
-  const statusBadge = (status) => {
-    const normalized = String(status || 'pending');
-    const map = {
-      delivered: { bg: '#d1fae5', color: '#065f46', icon: CheckCircle },
-      confirmed: { bg: '#dbeafe', color: '#1d4ed8', icon: CheckCircle },
-      pending: { bg: '#fef3c7', color: '#92400e', icon: AlertTriangle },
-      cancelled: { bg: '#fee2e2', color: '#991b1b', icon: AlertTriangle },
-      processing: { bg: '#e0f2fe', color: '#075985', icon: AlertTriangle },
-      shipped: { bg: '#e0f2fe', color: '#075985', icon: AlertTriangle },
-      returned: { bg: '#fee2e2', color: '#991b1b', icon: AlertTriangle }
-    };
-    const cfg = map[normalized] || map.pending;
-    const Icon = cfg.icon;
-    return (
-      <span style={{ background: cfg.bg, color: cfg.color, padding: '0.25rem 0.5rem', borderRadius: 999, fontWeight: 700 }}>
-        <Icon size={14} style={{ marginRight: 6 }} />
-        {normalized}
-      </span>
-    );
-  };
-
-  const paymentMethodLabel = (method) => {
-    const pm = String(method || '').toLowerCase();
-    if (pm === 'cash') return 'Cash on delivery';
-    if (pm === 'online') return 'Pay online';
-    if (pm === 'upi') return 'UPI';
-    if (pm === 'bank_transfer') return 'Bank transfer';
-    if (pm === 'card') return 'Credit / Debit Card';
-    if (pm === 'credit') return 'Credit / pay later';
-    if (!pm) return 'Pay online';
-    return pm.replace(/_/g, ' ');
+    alert(responseMessage || 'Product added to cart.');
   };
 
   const openSupplierDetailsForOffer = (offer) => {
@@ -569,34 +533,53 @@ const SupplierUpstream = ({ user }) => {
   }
 
   return (
-    <div className="dashboard-container">
-      <div className="dashboard-header">
-        <div>
-          <h1>Upstream Orders</h1>
-          <p style={{ maxWidth: '56rem', lineHeight: 1.55, color: '#334155' }}>
-            <strong>You are the buyer here.</strong> You place stock orders to partners in the tier <em>above</em> yours (upstream). For each brand, routing follows the admin-defined
-            chain first; if no brand chain exists, it falls back to your profile role flow (<strong>Manufacturer → Stockist → Regional → Local → Dealer → Retailer</strong>).
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <button className="btn-secondary" onClick={() => navigate('/supplier-dashboard')} style={{ whiteSpace: 'nowrap' }}>
-            Back to Dashboard
-          </button>
-        </div>
+    <SpPageLayout showStepper={false}>
+      <div className="dashboard-container supplier-upstream-page !max-w-none !p-0">
+      <SpPageHeader
+        title="Upstream Sourcing"
+        description="Select inventory, find tier-above partners via brand chain routing, and build your purchase cart. Track placed orders on My Upstream Orders."
+        icon={Network}
+        actions={
+          <>
+            <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-upstream-orders')}>
+              My orders
+            </Button>
+            <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-cart')}>
+              View Cart
+            </Button>
+            <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-dashboard')}>
+              Back to Dashboard
+            </Button>
+          </>
+        }
+      />
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <SpStatCard label="Selected Items" value={selectedMineIds.length} icon={ShoppingCart} accent="indigo" />
+        <SpStatCard label="Visible Inventory Lines" value={visibleInventoryCount} icon={Package} accent="emerald" />
+        <SpStatCard label="Suggested Groups" value={suggestedGroupCount} icon={Network} accent="amber" />
+        <Card className="sp-market-card">
+          <CardContent className="p-4">
+            <p className="upstream-hero-copy !m-0">
+              <strong>Routing:</strong> Brand chain first, fallback to role flow
+              {' '}Layers follow the <strong>admin brand chain</strong> (e.g. MGF → Stockist → … → Retailer). Tiers not in admin—such as Dealer—are skipped; you buy from the layer directly above you.
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       <div className="dashboard-content">
-        <div className="dashboard-section">
-          <div className="section-header">
+        <div className="dashboard-section upstream-section">
+          <div className="section-header upstream-section-header">
             <h2>Select Brand + Products</h2>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: '#64748b', fontSize: '0.9rem' }}>
+            <span className="upstream-section-hint">
               <Network size={18} />
               Inventory tied to role and brand-chain routing
             </span>
           </div>
 
-          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-            <div className="search-box" style={{ flex: '1 1 260px', minWidth: 240 }}>
+          <div className="upstream-filters-row">
+            <div className="search-box upstream-filter">
               <Search size={16} />
               <input
                 type="text"
@@ -606,7 +589,7 @@ const SupplierUpstream = ({ user }) => {
               />
             </div>
 
-            <div className="search-box" style={{ flex: '1 1 260px', minWidth: 240 }}>
+            <div className="search-box upstream-filter">
               <Search size={16} />
               <input
                 type="text"
@@ -617,7 +600,7 @@ const SupplierUpstream = ({ user }) => {
             </div>
           </div>
 
-          <div className="items-list" style={{ maxHeight: '44vh', overflowY: 'auto' }}>
+          <div className="items-list upstream-products-scroll">
             {filteredProducts.length === 0 ? (
               <div className="empty-state">
                 <Package size={48} />
@@ -626,56 +609,86 @@ const SupplierUpstream = ({ user }) => {
               </div>
             ) : (
               filteredProducts.map((p) => {
-                const mineId = p.supplier_product_id;
+                const mineId = normalizeSupplierProductKey(p.supplier_product_id);
+                const minQty = Math.max(1, p.min_order_quantity ?? 1);
                 const isSelected = !!selectedMine[mineId];
                 const isAddingToCart = !!addingCartByMineId[mineId];
+                const productImages = collectProductImages(p);
 
                 return (
                   <div
                     key={mineId}
-                    className="item-card upstream-select-card"
-                    style={{
-                      borderColor: isSelected ? '#4f46e5' : '#e5e7eb',
-                      background: isSelected ? '#eef2ff' : 'white'
-                    }}
+                    className={`item-card upstream-select-card ${isSelected ? 'upstream-select-card-selected' : ''}`}
                   >
                     <div className="item-info upstream-select-card-info">
-                      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'flex-start' }}>
-                        <div style={{ minWidth: 18 }}>
+                      <div className="upstream-product-main-row">
+                        <div className="upstream-product-checkbox-wrap">
                           <input
                             type="checkbox"
                             checked={isSelected}
                             onChange={() => handleToggleMine(mineId)}
                           />
                         </div>
-                        <div>
-                          <h4 style={{ marginBottom: 6 }}>{p.name}</h4>
-                          <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: 4 }}>
-                            Brand: <strong>{p.brandModel || p.brand || 'N/A'}</strong>
-                          </p>
-                          <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: 0 }}>
-                            Stock: <strong>{p.stock ?? 0}</strong> • Min order: <strong>{p.min_order_quantity ?? 1}</strong>
-                          </p>
+                        <div className="upstream-product-details">
+                          <div className="upstream-product-header">
+                            {productImages.length > 0 ? (
+                              <div className="upstream-product-thumb">
+                                <ProductImageCarousel
+                                  images={productImages}
+                                  alt={p.name || 'Product'}
+                                  height={96}
+                                  rounded={8}
+                                />
+                              </div>
+                            ) : null}
+                            <div className="upstream-product-header-text">
+                              <h4 className="upstream-product-name">{p.name}</h4>
+                              <p className="upstream-product-meta">
+                                Brand: <strong>{p.brandModel || p.brand || 'N/A'}</strong>
+                                {p.category ? (
+                                  <>
+                                    {' '}
+                                    • Category: <strong>{p.category}</strong>
+                                  </>
+                                ) : null}
+                              </p>
+                              <p className="upstream-product-meta upstream-product-meta-tight">
+                                {SUPPLIER_CURRENT_STOCK_LABEL}: <strong>{p.stock ?? 0}</strong> • Min order:{' '}
+                                <strong>{p.min_order_quantity ?? 1}</strong>
+                                {p.unit ? (
+                                  <>
+                                    {' '}
+                                    • Unit: <strong>{p.unit}</strong>
+                                  </>
+                                ) : null}
+                              </p>
+                            </div>
+                          </div>
+                          <UpstreamProductDisplay product={p} showImage={false} maxSpecs={12} />
                         </div>
                       </div>
                     </div>
 
                     <div className="item-status upstream-select-card-status">
                       {isSelected ? (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
-                          <label style={{ fontSize: '0.9rem', color: '#334155' }}>
+                        <div className="upstream-qty-controls">
+                          <label className="upstream-qty-label">
                             Quantity
                           </label>
                           <input
                             type="number"
-                            min={1}
+                            min={minQty}
                             step={1}
-                            value={selectedMine[mineId]}
+                            inputMode="numeric"
+                            value={selectedMine[mineId] ?? minQty}
                             onChange={(e) => {
-                              const v = parseInt(e.target.value, 10);
-                              setSelectedMine((prev) => ({ ...prev, [mineId]: Number.isFinite(v) && v > 0 ? v : 1 }));
+                              const v = parseSupplierStockQuantity(e.target.value);
+                              setSelectedMine((prev) => ({
+                                ...prev,
+                                [mineId]: v != null && v > 0 ? Math.max(minQty, v) : minQty
+                              }));
                             }}
-                            style={{ width: 110, padding: '0.45rem 0.6rem', borderRadius: 8, border: '1px solid #e5e7eb' }}
+                            className="upstream-qty-input"
                           />
                           <button
                             type="button"
@@ -687,8 +700,8 @@ const SupplierUpstream = ({ user }) => {
                           </button>
                         </div>
                       ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', alignItems: 'flex-end' }}>
-                          <div style={{ color: '#94a3b8', fontSize: '0.9rem' }}>Select to order upstream</div>
+                        <div className="upstream-qty-controls">
+                          <div className="upstream-not-selected">Select to order upstream</div>
                           <button
                             type="button"
                             className="btn-secondary"
@@ -706,14 +719,9 @@ const SupplierUpstream = ({ user }) => {
             )}
           </div>
 
-          <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button
-              className="btn-primary"
-              onClick={fetchUpstreamSuggestions}
-              disabled={suggestionsLoading}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-            >
-              {suggestionsLoading ? <Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} /> : null}
+          <div className="upstream-primary-actions">
+            <button className="btn-primary upstream-inline-btn" onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading}>
+              {suggestionsLoading ? <Loader2 size={18} className="upstream-spin" /> : null}
               Find Upstream Suppliers
             </button>
 
@@ -732,226 +740,189 @@ const SupplierUpstream = ({ user }) => {
           </div>
         </div>
 
-        <div className="dashboard-section">
-          <div className="section-header">
+        <div className="dashboard-section upstream-section">
+          <div className="section-header upstream-section-header upstream-suggestions-header">
             <div>
-              <h2 style={{ marginBottom: suggestionMeta?.rankPriority ? 8 : 0 }}>Choose upstream supplier (top {suggestionMeta?.limit ?? 5} matches)</h2>
-              {suggestionMeta?.rankPriority ? (
-                <p style={{ margin: 0, fontSize: '0.88rem', color: '#64748b', maxWidth: '52rem', lineHeight: 1.45 }}>
-                  Order: <strong>1)</strong> nearest upstream partners (km — minimum distance from <strong>any</strong> of your outlets to theirs, so a new dealer closer to you can jump to #1 next time){' '}
-                  <strong>2)</strong> highest stock <strong>3)</strong> lowest price <strong>4)</strong> highest supplier rating. Unrated partners are last on ties.
-                </p>
-              ) : null}
-              {suggestionMeta?.distanceRanking ? (
-                <p style={{ margin: '0.35rem 0 0', fontSize: '0.82rem', color: '#94a3b8', maxWidth: '52rem', lineHeight: 1.4 }}>
-                  {suggestionMeta.distanceRanking}
-                </p>
-              ) : null}
-              {suggestionMeta?.distanceAvailable === false ? (
-                <p style={{ margin: '0.35rem 0 0', fontSize: '0.82rem', color: '#b45309', maxWidth: '52rem', lineHeight: 1.4 }}>
-                  Distance priority is currently off. Update your outlet/profile address to enable nearest-first ranking.
-                  {suggestionMeta?.buyerGeoDiagnostics ? (
-                    <>
-                      {' '}
-                      (outlets checked: {suggestionMeta.buyerGeoDiagnostics.outletsChecked || 0}, resolved:{' '}
-                      {suggestionMeta.buyerGeoDiagnostics.outletsResolved || 0}; profile address tried:{' '}
-                      {suggestionMeta.buyerGeoDiagnostics.profileAddressTried ? 'yes' : 'no'}, resolved:{' '}
-                      {suggestionMeta.buyerGeoDiagnostics.profileAddressResolved ? 'yes' : 'no'}; branches tried:{' '}
-                      {suggestionMeta.buyerGeoDiagnostics.branchesTried || 0}, resolved:{' '}
-                      {suggestionMeta.buyerGeoDiagnostics.branchesResolved || 0}; inventory locations tried:{' '}
-                      {suggestionMeta.buyerGeoDiagnostics.inventoryLocationTried || 0}, resolved:{' '}
-                      {suggestionMeta.buyerGeoDiagnostics.inventoryLocationResolved || 0}).
-                    </>
-                  ) : null}
-                </p>
-              ) : null}
-              {suggestionMeta?.distanceAvailable && suggestionMeta?.buyerGeoSource ? (
-                <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#64748b', maxWidth: '52rem', lineHeight: 1.4 }}>
-                  Buyer location source: <strong>{suggestionMeta.buyerGeoSource.replace(/_/g, ' ')}</strong>.
-                </p>
-              ) : null}
+              <h2 className={suggestionMeta?.rankPriority ? 'upstream-title-with-meta' : ''}>
+                Choose upstream supplier (top {suggestionMeta?.limit ?? 5} matches)
+              </h2>
+              
             </div>
-            <button
-              className="btn-primary"
-              onClick={handleProceedToPlaceOrder}
-              disabled={creating || !suggestions || !Array.isArray(suggestions) || suggestions.length === 0}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
-            >
-              {creating ? <Loader2 size={18} style={{ animation: 'spin 1s linear infinite' }} /> : <ShoppingCart size={18} />}
-              Proceed to Place Order
-            </button>
-            <button
-              className="btn-secondary"
-              onClick={handleSaveToCart}
-              disabled={savingCart}
-              style={{ marginLeft: '0.75rem' }}
-            >
-              {savingCart ? 'Saving Cart...' : 'Save to Cart'}
-            </button>
+            <div className="upstream-suggestions-actions">
+              <button
+                className="btn-primary upstream-inline-btn"
+                onClick={handleProceedToPlaceOrder}
+                disabled={
+                  creating ||
+                  !suggestions ||
+                  !Array.isArray(suggestions) ||
+                  suggestions.length === 0 ||
+                  linesReadyToPlace === 0
+                }
+              >
+                {creating ? <Loader2 size={18} className="upstream-spin" /> : <ShoppingCart size={18} />}
+                Proceed to Place Order
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={handleSaveToCart}
+                disabled={savingCart}
+              >
+                {savingCart ? 'Saving Cart...' : 'Save to Cart'}
+              </button>
+            </div>
           </div>
 
           {!suggestionsLoading && !suggestions ? (
-            <div className="empty-state" style={{ marginTop: '1rem' }}>
+            <div className="empty-state upstream-empty-top">
               <Network size={48} />
               <h3>No upstream suggestions yet</h3>
               <p>Select your products above and click “Find Upstream Suppliers”.</p>
             </div>
           ) : suggestions && suggestions.length === 0 ? (
-            <div className="empty-state" style={{ marginTop: '1rem' }}>
+            <div className="empty-state upstream-empty-top">
               <AlertTriangle size={48} />
               <h3>No upstream offers found</h3>
               <p>Try a different brand or select fewer products.</p>
             </div>
           ) : (
-            <div style={{ display: 'grid', gap: '0.75rem', marginTop: '1rem' }}>
+            <div className="upstream-suggestions-list">
               {(suggestions || []).map((it) => {
                 const mine = resolveMineProduct(it.mineSupplierProductId);
-                const mineSelectedQty = selectedMine[it.mineSupplierProductId] || 1;
-                const offers = Array.isArray(it.upstreamOffers) ? it.upstreamOffers : [];
-                const chosen = selectedUpstreamOffer[it.mineSupplierProductId] || '';
-                const radioGroup = `upstream-offer-${it.mineSupplierProductId}`;
+                const mineKey = normalizeSupplierProductKey(it.mineSupplierProductId);
+                const mineSelectedQty = selectedMine[mineKey] || 1;
+                const offers = getCompatibleOffersForItem(it);
+                const chosen = normalizeSupplierProductKey(selectedUpstreamOffer[mineKey]);
 
                 const selectUpstreamOffer = (nextUpstreamOfferId) => {
-                  const chosenOffer = offers.find((o) => String(o.upstreamSupplierProductId) === String(nextUpstreamOfferId));
+                  const offerKey = normalizeSupplierProductKey(nextUpstreamOfferId);
+                  if (!mineKey || !offerKey) return;
+                  const chosenOffer = offers.find(
+                    (o) => normalizeSupplierProductKey(o.upstreamSupplierProductId) === offerKey
+                  );
                   const minQty = parseInt(chosenOffer?.minOrderQuantity || 1, 10) || 1;
-                  setSelectedUpstreamOffer((prev) => ({ ...prev, [it.mineSupplierProductId]: String(nextUpstreamOfferId) }));
+                  setSelectedUpstreamOffer((prev) => ({ ...prev, [mineKey]: offerKey }));
                   setSelectedMine((prev) => {
-                    const current = parseInt(prev?.[it.mineSupplierProductId] || 1, 10) || 1;
+                    const current = parseInt(prev?.[mineKey] || 1, 10) || 1;
                     const nextQty = current < minQty ? minQty : current;
-                    return { ...prev, [it.mineSupplierProductId]: nextQty };
+                    return { ...prev, [mineKey]: nextQty };
                   });
                 };
 
                 return (
-                  <div
-                    key={it.mineSupplierProductId}
-                    className="item-card"
-                    style={{ flexDirection: 'column', alignItems: 'stretch', gap: '0.75rem' }}
-                  >
-                    <div className="item-info" style={{ width: '100%' }}>
-                      <h4 style={{ marginBottom: 6 }}>{mine?.name || 'Product'}</h4>
-                      <p style={{ color: '#64748b', fontSize: '0.9rem', marginBottom: 0 }}>
+                  <div key={it.mineSupplierProductId} className="item-card upstream-offer-card">
+                    <div className="item-info upstream-offer-item-info">
+                      <h4 className="upstream-offer-product-title">{mine?.name || 'Product'}</h4>
+                      <p className="upstream-offer-product-meta">
                         Brand: <strong>{it.brandModel || mine?.brandModel || 'N/A'}</strong> • Qty: <strong>{mineSelectedQty}</strong>
                       </p>
+                      {mine ? <UpstreamProductDisplay product={mine} imageHeight={88} maxSpecs={10} /> : null}
                       {it.chainRouting?.requiredUpstreamRole ? (
-                        <p style={{ color: '#4338ca', fontSize: '0.84rem', marginTop: 6, marginBottom: 0 }}>
+                        <p className="upstream-route-rule upstream-route-rule-primary">
                           Route rule: <strong>Your layer:</strong> {formatLayerLabel(it.chainRouting.buyerRole)} {' | '}
                           <strong>Next allowed seller layer:</strong> {formatLayerLabel(it.chainRouting.requiredUpstreamRole)}
-                          {it.chainRouting?.source === 'admin_chain' ? ' (admin brand chain)' : ''}
+                          {it.chainRouting?.source === 'admin_chain'
+                            ? ' (admin brand chain)'
+                            : it.chainRouting?.source === 'admin_chain_inferred' ||
+                                it.chainRouting?.source === 'admin_chain_walkback'
+                              ? ' (from admin chain — uses the tier directly above you, skipping layers not in admin)'
+                              : it.chainRouting?.source === 'standard_chain_walkback'
+                                ? ' (default chain — no admin definition for this brand)'
+                                : ''}
                         </p>
                       ) : (
-                        <p style={{ color: '#64748b', fontSize: '0.82rem', marginTop: 6, marginBottom: 0 }}>
-                          Route rule: using profile fallback chain for this brand.
+                        <p className="upstream-route-rule">
+                          Route rule: no seller layer resolved for this brand. Ask admin to define the supply chain in
+                          Admin → Supply Chain, or ensure upstream partners are registered at the correct layer.
                         </p>
                       )}
+                      {Array.isArray(it.chainRouting?.chainRoles) && it.chainRouting.chainRoles.length > 0 ? (
+                        <p className="upstream-route-rule upstream-route-chain-stages">
+                          Admin chain for this brand:{' '}
+                          {it.chainRouting.chainRoles.map((r) => formatLayerLabel(r)).join(' → ')}
+                        </p>
+                      ) : null}
                     </div>
 
                     {offers.length === 0 ? (
-                      <div style={{ color: '#94a3b8', fontSize: '0.9rem' }}>No upstream offers for this item.</div>
+                      <div className="upstream-offer-empty upstream-offer-empty-detailed">
+                        {it.message || 'No upstream offers for this exact variant.'}
+                      </div>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', width: '100%' }}>
-                        <p style={{ margin: 0, fontSize: '0.85rem', fontWeight: 600, color: '#475569' }}>
-                          Best options first — choose the upstream seller ({offers.length} shown). Each row shows that seller’s <strong>layer</strong> (not yours).
+                      <div className="upstream-offers-stack">
+                        <p className="upstream-offers-help">
+                          Best options first — <strong>select</strong> an upstream seller ({offers.length} shown). Each row shows that seller’s <strong>layer</strong> (not yours).
                         </p>
                         {offers.map((o, offerIdx) => {
-                          const id = String(o.upstreamSupplierProductId);
-                          const isSelected = chosen === id;
+                          const id = normalizeSupplierProductKey(o.upstreamSupplierProductId);
+                          const isSelected = Boolean(id && chosen === id);
                           const ratingLabel =
                             o.averageRating != null && o.ratingCount > 0
                               ? `${o.averageRating}★ (${o.ratingCount} review${o.ratingCount === 1 ? '' : 's'})`
                               : 'no ratings yet';
                           return (
-                            <label
-                              key={id}
-                              style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.65rem',
-                                padding: '0.65rem 0.75rem',
-                                borderRadius: 10,
-                                border: isSelected ? '2px solid #4f46e5' : '1px solid #e5e7eb',
-                                background: isSelected ? '#eef2ff' : '#fff',
-                                cursor: 'pointer',
-                                flexWrap: 'wrap'
-                              }}
-                            >
-                              <input
-                                type="radio"
-                                name={radioGroup}
-                                checked={isSelected}
-                                onChange={() => selectUpstreamOffer(id)}
-                                style={{ flexShrink: 0 }}
-                              />
-                              <div style={{ flex: '1 1 200px', minWidth: 0 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                  <span style={{ fontWeight: 700, color: '#0f172a' }}>{o.supplierName}</span>
-                                  {o.upstreamRole ? (
-                                    <span
-                                      style={{
-                                        fontSize: '0.7rem',
-                                        fontWeight: 600,
-                                        color: '#4338ca',
-                                        background: '#eef2ff',
-                                        padding: '0.12rem 0.45rem',
-                                        borderRadius: 6,
-                                        whiteSpace: 'nowrap'
-                                      }}
-                                      title="This partner's supply-chain layer (seller)"
-                                    >
-                                      Seller layer: {formatLayerLabel(o.upstreamRole)}
-                                    </span>
-                                  ) : null}
-                                  {offerIdx === 0 ? (
-                                    <span
-                                      style={{
-                                        fontSize: '0.7rem',
-                                        fontWeight: 700,
-                                        textTransform: 'uppercase',
-                                        letterSpacing: '0.04em',
-                                        background: '#ecfdf5',
-                                        color: '#047857',
-                                        padding: '0.15rem 0.45rem',
-                                        borderRadius: 6
-                                      }}
-                                    >
-                                      {typeof o.distanceKm === 'number' ? '#1 nearest' : '#1 best match'}
-                                    </span>
-                                  ) : (
-                                    <span style={{ fontSize: '0.75rem', color: '#94a3b8', fontWeight: 600 }}>#{offerIdx + 1}</span>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: 4 }}>
-                                  ₹{Number(o.price || 0).toLocaleString()} • stock {o.stock ?? 0}
-                                  {typeof o.distanceKm === 'number' ? ` • ${o.distanceKm} km` : ' • distance n/a'}
-                                  {' • '}
-                                  {ratingLabel}
-                                  {Number(o.minimumOrderValueInr) > 0
-                                    ? ` • min order ₹${Number(o.minimumOrderValueInr).toLocaleString('en-IN')}`
-                                    : ''}
-                                </div>
-                                {o.rankComponents ? (
-                                  <div style={{ fontSize: '0.75rem', color: '#94a3b8', marginTop: 4 }}>
-                                    Sort keys: {o.rankComponents.distanceKm != null ? `${o.rankComponents.distanceKm} km` : '—'} · stock {o.rankComponents.stock} · ₹
-                                    {Number(o.rankComponents.price || 0).toLocaleString()} · rating{' '}
-                                    {o.rankComponents.averageRating != null ? `${o.rankComponents.averageRating} (${o.rankComponents.ratingCount || 0})` : '—'}
+                            <div key={id || `offer-${offerIdx}`} className="upstream-offer-option-wrap">
+                              <div
+                                role="radio"
+                                aria-checked={isSelected}
+                                tabIndex={0}
+                                className={`upstream-offer-option ${isSelected ? 'upstream-offer-option-selected' : ''}`}
+                                onClick={() => selectUpstreamOffer(id)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    selectUpstreamOffer(id);
+                                  }
+                                }}
+                              >
+                                <span
+                                  className={`upstream-offer-radio-dot ${isSelected ? 'upstream-offer-radio-dot-checked' : ''}`}
+                                  aria-hidden
+                                />
+                                <div className="upstream-offer-main">
+                                  <div className="upstream-offer-head">
+                                    <span className="upstream-offer-supplier-name">{o.supplierName}</span>
+                                    {o.upstreamRole ? (
+                                      <span className="upstream-role-chip" title="This partner's supply-chain layer (seller)">
+                                        Seller layer: {formatLayerLabel(o.upstreamRole)}
+                                      </span>
+                                    ) : null}
+                                    {offerIdx === 0 ? (
+                                      <span className="upstream-rank-chip">
+                                        {typeof o.distanceKm === 'number' ? '#1 nearest' : '#1 best match'}
+                                      </span>
+                                    ) : (
+                                      <span className="upstream-rank-index">#{offerIdx + 1}</span>
+                                    )}
                                   </div>
-                                ) : null}
+                                  <div className="upstream-offer-meta">
+                                    {formatRupee(o.price || 0)} • {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} {o.stock ?? 0}
+                                    {typeof o.distanceKm === 'number' ? ` • ${o.distanceKm} km` : ' • distance n/a'}
+                                    {' • '}
+                                    {ratingLabel}
+                                    {Number(o.minimumOrderValueInr) > 0
+                                      ? ` • min order ${formatRupee(o.minimumOrderValueInr)}`
+                                      : ''}
+                                  </div>
+                                  {o.rankComponents ? (
+                                    <div className="upstream-offer-rank-keys">
+                                      Sort keys: {o.rankComponents.distanceKm != null ? `${o.rankComponents.distanceKm} km` : '—'} · {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} {o.rankComponents.stock} ·{' '}
+                                      {formatRupee(o.rankComponents.price || 0)} · rating{' '}
+                                      {o.rankComponents.averageRating != null ? `${o.rankComponents.averageRating} (${o.rankComponents.ratingCount || 0})` : '—'}
+                                    </div>
+                                  ) : null}
+                                </div>
                               </div>
                               <button
                                 type="button"
-                                className="btn-secondary"
-                                style={{ whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}
+                                className="btn-secondary upstream-details-btn"
                                 title="View this supplier’s details"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  openSupplierDetailsForOffer(o);
-                                }}
+                                onClick={() => openSupplierDetailsForOffer(o)}
                               >
                                 <Info size={16} />
                                 Details
                               </button>
-                            </label>
+                            </div>
                           );
                         })}
                       </div>
@@ -963,398 +934,7 @@ const SupplierUpstream = ({ user }) => {
           )}
         </div>
 
-        <div className="dashboard-section">
-          <div className="section-header">
-            <h2>Your Upstream Orders (track status)</h2>
-            <button
-              type="button"
-              className="btn-secondary"
-              disabled={ordersRefreshing}
-              onClick={refreshUpstreamOrdersList}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
-              title="Refresh list from server"
-            >
-              <RefreshCw size={16} style={ordersRefreshing ? { animation: 'spin 1s linear infinite' } : undefined} />
-              Refresh
-            </button>
-          </div>
-          <p style={{ color: '#64748b', fontSize: '0.9rem', margin: '-0.5rem 0 1rem' }}>
-            Orders you place to upstream partners appear here. When your supplier updates status (processing, shipped, delivered), you will see it here and in notifications.
-          </p>
-
-          <div className="items-list">
-            {createdOrders.length === 0 ? (
-              <div className="empty-state">
-                <ShoppingCart size={48} />
-                <h3>No upstream orders yet</h3>
-                <p>Create your first upstream order above.</p>
-              </div>
-            ) : (
-              createdOrders.slice(0, 10).map((o) => (
-                <div key={o.id} className="item-card" style={{ cursor: 'pointer' }} onClick={() => { setOrderModalId(o.orderNumber); fetchOrderDetails(o.orderNumber); }}>
-                  <div className="item-info">
-                    <h4>Order {o.orderNumber}</h4>
-                    <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: 0 }}>
-                      Supplier: <strong>{o.supplierName || 'Supplier'}</strong> • Items: <strong>{o.itemCount}</strong>
-                    </p>
-                    <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: 0 }}>
-                      Amount: <strong>₹{Number(o.totalAmount || 0).toLocaleString()}</strong>
-                      {o.updatedAt ? (
-                        <span> • Updated {formatDateTimeIST(o.updatedAt, 'N/A')}</span>
-                      ) : null}
-                    </p>
-                    <p style={{ color: '#64748b', fontSize: '0.85rem', marginTop: 0 }}>
-                      Payment: <strong>{paymentMethodLabel(o.paymentMethod)}</strong>
-                      {' • '}Required by:{' '}
-                      <strong>{o.expectedDeliveryDate ? formatDateTimeIST(o.expectedDeliveryDate, 'N/A') : '—'}</strong>
-                    </p>
-                    {o.trackingNumber ? (
-                      <p style={{ color: '#475569', fontSize: '0.85rem', marginTop: 6, marginBottom: 0 }}>
-                        Tracking: <strong>{o.trackingNumber}</strong>
-                        {o.shippingProvider ? ` (${o.shippingProvider})` : ''}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="item-status">
-                    {statusBadge(o.status)}
-                    <button
-                      className="btn-icon"
-                      title="Delete order"
-                      style={{ marginLeft: 10, color: '#dc2626' }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const confirmed = window.confirm(`Delete order ${o.orderNumber}?`);
-                        if (!confirmed) return;
-                        (async () => {
-                          try {
-                            const token = localStorage.getItem('token');
-                            const res = await fetch(getApiUrl(`/api/dashboard/service-provider/orders/${encodeURIComponent(o.orderNumber)}`), {
-                              method: 'DELETE',
-                              headers: { Authorization: `Bearer ${token}` }
-                            });
-                            const data = await res.json().catch(() => ({}));
-                            if (!res.ok || data.status !== 'success') {
-                              alert(data.message || 'Failed to delete order.');
-                              return;
-                            }
-                            // Optimistic UI removal
-                            setCreatedOrders((prev) => (prev || []).filter((x) => x.orderNumber !== o.orderNumber));
-                            await fetchUpstreamOrders();
-                          } catch (err) {
-                            console.error('Delete upstream order error:', err);
-                            alert('Failed to delete order.');
-                          }
-                        })();
-                      }}
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
       </div>
-
-      {orderModalId && (
-        <div
-          className="modal-overlay"
-          onClick={() => {
-            setOrderModalId(null);
-            setOrderDetails(null);
-          }}
-        >
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '850px', maxHeight: '90vh', overflowY: 'auto' }}>
-            <div className="modal-header">
-              <h2>Order Details - {orderModalId}</h2>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  disabled={loadingOrderDetails}
-                  onClick={() => fetchOrderDetails(orderModalId)}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
-                >
-                  <RefreshCw size={16} style={loadingOrderDetails ? { animation: 'spin 1s linear infinite' } : undefined} />
-                  Refresh
-                </button>
-                <button className="btn-icon" onClick={() => setOrderModalId(null)}>
-                  <X size={20} />
-                </button>
-              </div>
-            </div>
-
-            {loadingOrderDetails ? (
-              <div className="modal-body" style={{ textAlign: 'center', padding: '2rem' }}>
-                <div className="spinner" />
-                <p>Loading order details…</p>
-              </div>
-            ) : orderDetails ? (
-              <div className="modal-body">
-                <div className="order-info-section">
-                  <h3>Supplier</h3>
-                  <p><strong>Name:</strong> {orderDetails?.supplier?.name || orderDetails?.supplier?.company || 'N/A'}</p>
-                  <p><strong>Amount:</strong> ₹{Number(orderDetails?.totalAmount || 0).toLocaleString()}</p>
-                  <p><strong>Status:</strong> {orderDetails?.status}</p>
-                  <p>
-                    <strong>Payment:</strong> {orderDetails?.paymentStatus || 'pending'}{' '}
-                    • {paymentMethodLabel(orderDetails?.paymentMethod)}
-                  </p>
-                  <p>
-                    <strong>Required by:</strong>{' '}
-                    {orderDetails?.expectedDeliveryDate ? formatDateTimeIST(orderDetails.expectedDeliveryDate, 'N/A') : '—'}
-                  </p>
-                  {orderDetails?.updatedAt ? (
-                    <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
-                      <strong>Last updated:</strong> {formatDateTimeIST(orderDetails.updatedAt, 'N/A')}
-                    </p>
-                  ) : null}
-                </div>
-
-                {orderDetails?.receiptPdfUrl && (
-                  <div className="order-info-section">
-                    <h3>Receipt</h3>
-                    <a
-                      href={orderDetails.receiptPdfUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-primary"
-                    >
-                      Download payment receipt
-                    </a>
-                  </div>
-                )}
-
-                {orderDetails?.invoicePdfUrl && (
-                  <div className="order-info-section">
-                    <h3>Invoice</h3>
-                    <a
-                      href={orderDetails.invoicePdfUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-primary"
-                    >
-                      Download invoice PDF
-                    </a>
-                  </div>
-                )}
-
-                {(orderDetails?.trackingNumber || orderDetails?.trackingUrl || orderDetails?.shippingProvider) && (
-                  <div className="order-info-section">
-                    <h3>Shipment</h3>
-                    {orderDetails.shippingProvider ? <p><strong>Carrier:</strong> {orderDetails.shippingProvider}</p> : null}
-                    {orderDetails.trackingNumber ? <p><strong>Tracking #:</strong> {orderDetails.trackingNumber}</p> : null}
-                    {orderDetails.trackingUrl ? (
-                      <p>
-                        <a href={orderDetails.trackingUrl} target="_blank" rel="noopener noreferrer">
-                          Open tracking link
-                        </a>
-                      </p>
-                    ) : null}
-                  </div>
-                )}
-
-                {Array.isArray(orderDetails?.statusHistory) && orderDetails.statusHistory.length > 0 && (
-                  <div className="order-info-section">
-                    <h3>Status timeline</h3>
-                    <ol style={{ margin: 0, paddingLeft: '1.25rem', color: '#334155', fontSize: '0.9rem' }}>
-                      {sortStatusHistory(orderDetails.statusHistory).map((ev, idx) => (
-                        <li key={idx} style={{ marginBottom: '0.5rem' }}>
-                          <strong>{ev.status || '—'}</strong>
-                          {ev.timestamp || ev.at ? (
-                            <span style={{ color: '#64748b' }}> — {formatDateTimeIST(ev.timestamp || ev.at, 'N/A')}</span>
-                          ) : null}
-                          {ev.notes ? <div style={{ color: '#64748b', marginTop: 2 }}>{ev.notes}</div> : null}
-                        </li>
-                      ))}
-                    </ol>
-                  </div>
-                )}
-
-                <div className="order-info-section">
-                  <h3>Items</h3>
-                  {Array.isArray(orderDetails.items) && orderDetails.items.length > 0 ? (
-                    <table className="order-items-table">
-                      <thead>
-                        <tr>
-                          <th>Product</th>
-                          <th>Qty</th>
-                          <th>Unit</th>
-                          <th>Total</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {orderDetails.items.map((item, idx) => (
-                          <tr key={idx}>
-                            <td>
-                              {(item.productImage || item.product?.image || item.images?.[0] || item.product?.images?.[0]) && (
-                                <div style={{ marginBottom: '0.35rem' }}>
-                                  <ProductImageCarousel
-                                    images={[
-                                      item.productImage,
-                                      item.product?.image,
-                                      ...(Array.isArray(item.images) ? item.images : []),
-                                      ...(Array.isArray(item.product?.images) ? item.product.images : [])
-                                    ]}
-                                    alt={item.product?.name || item.name || 'Product'}
-                                    height={80}
-                                    rounded={6}
-                                  />
-                                </div>
-                              )}
-                              <div>
-                                <strong>{item.product?.name || item.name || 'Product'}</strong>
-                              </div>
-                              {item.brandModel && (
-                                <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: 4 }}>
-                                  {item.brandModel}
-                                </div>
-                              )}
-                            </td>
-                            <td>{item.quantity}</td>
-                            <td>₹{Number(item.unitPrice || 0).toLocaleString()}</td>
-                            <td>₹{Number(item.totalPrice || 0).toLocaleString()}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  ) : (
-                    <p style={{ color: '#64748b' }}>No items found in this order.</p>
-                  )}
-                </div>
-
-                {orderDetails.status === 'delivered' && (
-                  <div
-                    className="order-info-section"
-                    style={{
-                      textAlign: 'center',
-                      padding: '2rem',
-                      backgroundColor: '#f8fafc',
-                      borderRadius: '12px',
-                      border: '2px solid #e2e8f0'
-                    }}
-                  >
-                    {orderDetails?.paymentMethod === 'online' ? (
-                      <>
-                        <div
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '0.5rem',
-                            marginBottom: '1rem'
-                          }}
-                        >
-                          <QrCode size={20} color="#4f46e5" />
-                          <h3 style={{ margin: 0, color: '#1e293b' }}>Payment QR code</h3>
-                        </div>
-                        <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                          After delivery, scan to pay ₹{Number(orderDetails.totalAmount || 0).toLocaleString()} to the supplier (UPI).
-                        </p>
-                        <div
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'center',
-                            padding: '1.5rem',
-                            backgroundColor: 'white',
-                            borderRadius: '8px',
-                            marginBottom: '1rem',
-                            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                          }}
-                        >
-                          {(() => {
-                            const upiUri = buildOrderUpiPayUri({
-                              amountRupees: orderDetails.totalAmount,
-                              orderNumber: orderDetails.orderNumber,
-                              payeeName: orderDetails.supplier?.company || orderDetails.supplier?.name,
-                              payeeVpa: orderDetails.supplier?.upiVpa
-                            });
-                            return (
-                              <img
-                                src={qrServerImageUrl(upiUri, 200)}
-                                alt="UPI payment QR"
-                                style={{
-                                  width: '200px',
-                                  height: '200px',
-                                  border: '1px solid #e5e7eb',
-                                  borderRadius: '4px'
-                                }}
-                              />
-                            );
-                          })()}
-                        </div>
-                      </>
-                    ) : (
-                      <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                        Payment method: <strong>{paymentMethodLabel(orderDetails?.paymentMethod)}</strong>. After payment, mark payment as paid.
-                      </p>
-                    )}
-                    <div
-                      style={{
-                        fontSize: '0.85rem',
-                        color: '#64748b',
-                        lineHeight: '1.6',
-                        marginBottom: '1rem'
-                      }}
-                    >
-                      <p style={{ margin: '0.25rem 0' }}>
-                        <strong>Order:</strong> {orderDetails.orderNumber}
-                      </p>
-                      <p style={{ margin: '0.25rem 0' }}>
-                        <strong>Amount:</strong> ₹{Number(orderDetails.totalAmount || 0).toLocaleString()}
-                      </p>
-                      <p style={{ margin: '0.25rem 0' }}>
-                        <strong>Pay to:</strong> {orderDetails.supplier?.name || orderDetails.supplier?.company || 'Supplier'}
-                      </p>
-                    </div>
-                    {orderDetails.paymentStatus !== 'paid' && (
-                      <button
-                        type="button"
-                        className="btn-primary"
-                        onClick={handleMarkAsPaid}
-                        disabled={updatingPayment || String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit'}
-                        style={{
-                          width: '100%',
-                          marginTop: '1rem',
-                          padding: '0.75rem 1.5rem',
-                          fontSize: '1rem',
-                          fontWeight: '600'
-                        }}
-                      >
-                        {String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit'
-                          ? 'Credit order (auto settle on account)'
-                          : updatingPayment
-                            ? 'Processing…'
-                            : '✓ Mark payment as paid'}
-                      </button>
-                    )}
-                    {orderDetails.paymentStatus === 'paid' && (
-                      <div
-                        style={{
-                          padding: '0.75rem',
-                          backgroundColor: '#d1fae5',
-                          borderRadius: '8px',
-                          color: '#065f46',
-                          fontWeight: '600',
-                          textAlign: 'center',
-                          marginTop: '1rem'
-                        }}
-                      >
-                        ✓ Payment completed
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="modal-body" style={{ textAlign: 'center', padding: '2rem' }}>
-                <p style={{ color: '#dc2626' }}>Failed to load order details.</p>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {supplierDetailsOpen && supplierDetails && (
         <div
@@ -1365,7 +945,7 @@ const SupplierUpstream = ({ user }) => {
             setSupplierOfferDetails(null);
           }}
         >
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '780px', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="modal-content upstream-modal-content upstream-modal-content-narrow" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Upstream Supplier Details</h2>
               <button className="btn-icon" onClick={() => setSupplierDetailsOpen(false)}>
@@ -1383,7 +963,7 @@ const SupplierUpstream = ({ user }) => {
                 {supplierOfferDetails?.offerGeoLocation &&
                 typeof supplierOfferDetails.offerGeoLocation.lat === 'number' &&
                 typeof supplierOfferDetails.offerGeoLocation.lng === 'number' ? (
-                  <p style={{ color: '#64748b' }}>
+                  <p className="upstream-muted-meta">
                     <strong>Geo:</strong> {supplierOfferDetails.offerGeoLocation.lat}, {supplierOfferDetails.offerGeoLocation.lng}
                   </p>
                 ) : null}
@@ -1415,7 +995,7 @@ const SupplierUpstream = ({ user }) => {
 
               <div className="order-info-section">
                 <h3>Address</h3>
-                <p style={{ color: '#64748b' }}>
+                <p className="upstream-muted-meta">
                   {[
                     supplierDetails?.address?.street || supplierDetails?.address?.line1,
                     supplierDetails?.address?.city,
@@ -1428,7 +1008,8 @@ const SupplierUpstream = ({ user }) => {
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </SpPageLayout>
   );
 };
 

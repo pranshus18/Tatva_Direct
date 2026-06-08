@@ -59,8 +59,24 @@ export async function placeOrderAndConfirmTransport(toolCtx, memory) {
         trackingUrl: null,
         transportNotes: 'Voice checkout'
       };
-      if (det?.courier_company_id) row.courierCompanyId = Number(det.courier_company_id);
-      if (det?.vehicle_type_id) row.vehicleTypeId = Number(det.vehicle_type_id);
+      const transportMode = String(det?.transport_mode || det?.transportMode || '').toLowerCase();
+      const isTrucking =
+        transportMode === 'trucking' ||
+        String(det?.source || '').toLowerCase() === 'borzo' ||
+        (det?.vehicle_type_id != null && Number(det.vehicle_type_id) > 0);
+      if (isTrucking) {
+        row.transportMode = 'trucking';
+        if (det?.vehicle_type_id) row.vehicleTypeId = Number(det.vehicle_type_id);
+        if (det?.pickup_lat != null) row.pickupLat = Number(det.pickup_lat);
+        if (det?.pickup_lng != null) row.pickupLng = Number(det.pickup_lng);
+        if (det?.delivery_lat != null) row.deliveryLat = Number(det.delivery_lat);
+        if (det?.delivery_lng != null) row.deliveryLng = Number(det.delivery_lng);
+        if (det?.carrier) row.carrier = String(det.carrier);
+        if (det?.weightKg != null) row.weightKg = Number(det.weightKg);
+      } else {
+        row.transportMode = 'courier';
+        if (det?.courier_company_id) row.courierCompanyId = Number(det.courier_company_id);
+      }
       if (det?.rate != null) {
         row.quotedTransportAmount = Number(String(det.rate).replace(/,/g, '')) || null;
       }

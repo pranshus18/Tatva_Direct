@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { TrendingUp, Clock, RefreshCw, MapPin } from 'lucide-react';
+import { Clock, RefreshCw, MapPin } from 'lucide-react';
 import { resolveApiPath, authFetch } from '../config/api';
 import { readSpWorkflow } from '../utils/spWorkflow';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -20,6 +20,7 @@ import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import { isVoiceGuidedActive, prepareSupplierSelectFromVoiceCart } from '../voice/voiceCartBridge';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { Users } from 'lucide-react';
+import { formatRupee } from '../utils/formatRupee';
 import './VendorSelect.css';
 
 function hydrateItemsFromWorkflow() {
@@ -809,11 +810,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                             Supplier product: {vendor.supplierProductName}
                           </div>
                       )}
-                      {vendor.description && (
-                        <div className="product-description">
-                          {vendor.description.substring(0, 50)}...
-                        </div>
-                      )}
                       {getProductIdentification(item, vendor) && (
                         <div className="product-description">
                           ID: {getProductIdentification(item, vendor)}
@@ -870,10 +866,9 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     </div>
                     <div className="vendor-details" style={{ pointerEvents: 'none' }}>
                       <div className="detail">
-                        <TrendingUp size={16} />
                         <span>
                           {vendor.price > 0
-                            ? `${vendor.price?.toLocaleString()} / ${vendor.unit || 'unit'}`
+                            ? `${formatRupee(vendor.price)} / ${vendor.unit || 'unit'}`
                             : `Price on request / ${vendor.unit || 'unit'}`}
                         </span>
                       </div>

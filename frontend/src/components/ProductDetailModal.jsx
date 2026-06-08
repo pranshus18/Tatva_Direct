@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { getApiUrl } from '../config/api';
 import { 
   Package,
-  DollarSign,
+  Wallet,
   Box,
   Tag,
   Edit2,
@@ -11,6 +11,8 @@ import {
   Save,
   X
 } from 'lucide-react';
+import { formatRupeePerUnit } from '../utils/formatRupee';
+import RupeeInput from './RupeeInput';
 
 const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
 const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
@@ -317,15 +319,17 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
                 </div>
                 <div className="detail-card-editable">
                   <div className="detail-icon" style={{ background: '#05966915' }}>
-                    <DollarSign size={20} color="#059669" />
+                    <Wallet size={20} color="#059669" />
                   </div>
                   <div className="detail-content-editable">
-                    <label>Price</label>
-                    <input
+                    <label>Price (₹)</label>
+                    <RupeeInput
                       type="number"
+                      min="0"
+                      step="0.01"
                       value={editedProduct.price}
                       onChange={(e) => setEditedProduct({ ...editedProduct, price: parseFloat(e.target.value) || 0 })}
-                      className="detail-input"
+                      inputClassName="detail-input"
                     />
                     <span className="detail-subtitle">per {editedProduct.unit}</span>
                   </div>
@@ -428,12 +432,11 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
               <>
                 <div className="detail-card">
                   <div className="detail-icon" style={{ background: '#05966915' }}>
-                    <DollarSign size={20} color="#059669" />
+                    <Wallet size={20} color="#059669" />
                   </div>
                   <div className="detail-content">
                     <span className="detail-label">Price</span>
-                    <span className="detail-value">{currentProduct.price.toLocaleString()}</span>
-                    <span className="detail-subtitle">per {currentProduct.unit}</span>
+                    <span className="detail-value">{formatRupeePerUnit(currentProduct.price, currentProduct.unit)}</span>
                   </div>
                 </div>
                 

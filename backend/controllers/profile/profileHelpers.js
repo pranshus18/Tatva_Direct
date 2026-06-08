@@ -5,7 +5,12 @@ import {
   fetchPendingChainRequest,
   normalizeCompanyInfoEntries
 } from '../../services/supplierChainProfileService.js';
-import { SUPPLY_CHAIN_ROLES_IN_ORDER, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
+import {
+  SUPPLY_CHAIN_ROLES_IN_ORDER,
+  findCategorySupplyChainRowForBrandKey,
+  normalizeBrandKey,
+  normalizeChainRolesFromStages
+} from '../../services/supplyChainSharedService.js';
 
 const SERVICE_PROVIDER_THEME_IDS = new Set([
   'default',
@@ -16,11 +21,33 @@ const SERVICE_PROVIDER_THEME_IDS = new Set([
   'blueprint',
   'custom'
 ]);
+const SUPPLIER_PORTAL_THEME_IDS = new Set(['default', 'ocean', 'sky', 'slate', 'custom']);
 const MAX_THEME_IMAGE_DATA_URL_LENGTH = 3_500_000;
+
+/** Max upload size for profile avatar (multer + API validation). */
+export const PROFILE_PHOTO_MAX_BYTES = 20 * 1024 * 1024;
+export const PROFILE_PHOTO_MAX_SIZE_LABEL = '20MB';
 
 export function sanitizeServiceProviderThemePrefs(rawTheme) {
   const themeId = String(rawTheme?.themeId || 'default').trim() || 'default';
   const safeThemeId = SERVICE_PROVIDER_THEME_IDS.has(themeId) ? themeId : 'default';
+  const customImageDataUrl =
+    safeThemeId === 'custom' ? String(rawTheme?.customImageDataUrl || '').trim() : '';
+  if (customImageDataUrl.length > MAX_THEME_IMAGE_DATA_URL_LENGTH) {
+    throw new Error('Custom wallpaper image is too large. Please upload a smaller image.');
+  }
+  if (customImageDataUrl && !customImageDataUrl.startsWith('data:image/')) {
+    throw new Error('Custom wallpaper must be an image.');
+  }
+  return {
+    themeId: safeThemeId,
+    customImageDataUrl
+  };
+}
+
+export function sanitizeSupplierPortalThemePrefs(rawTheme) {
+  const themeId = String(rawTheme?.themeId || 'default').trim() || 'default';
+  const safeThemeId = SUPPLIER_PORTAL_THEME_IDS.has(themeId) ? themeId : 'default';
   const customImageDataUrl =
     safeThemeId === 'custom' ? String(rawTheme?.customImageDataUrl || '').trim() : '';
   if (customImageDataUrl.length > MAX_THEME_IMAGE_DATA_URL_LENGTH) {
@@ -41,20 +68,6 @@ export function parseBrandTokens(str) {
     .split(/[,;\n]/)
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-function normalizeChainRolesFromStages(stages) {
-  if (!Array.isArray(stages)) return [];
-  const out = [];
-  const seen = new Set();
-  for (const raw of stages) {
-    const role = typeof raw === 'string' ? raw : raw?.role;
-    if (!role || seen.has(role)) continue;
-    if (!SUPPLY_CHAIN_ROLES_IN_ORDER.includes(role)) continue;
-    seen.add(role);
-    out.push(role);
-  }
-  return out;
 }
 
 function intersectRoleLists(roleLists) {
@@ -102,30 +115,6 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
     const key = normalizeBrandKey(row?.normalized_name || row?.name);
     if (key && !brandByKey.has(key)) brandByKey.set(key, row);
   }
-  const chainByKey = new Map();
-  for (const row of chainRows || []) {
-    const key = normalizeBrandKey(row?.category_name);
-    if (!key) continue;
-    const existing = chainByKey.get(key);
-    if (!existing) {
-      chainByKey.set(key, row);
-      continue;
-    }
-    const existingRoles = normalizeChainRolesFromStages(existing?.stages);
-    const nextRoles = normalizeChainRolesFromStages(row?.stages);
-    if (nextRoles.length > existingRoles.length) {
-      chainByKey.set(key, row);
-      continue;
-    }
-    if (nextRoles.length === existingRoles.length) {
-      const existingTs = Date.parse(existing?.updated_at || 0) || 0;
-      const nextTs = Date.parse(row?.updated_at || 0) || 0;
-      if (nextTs > existingTs) {
-        chainByKey.set(key, row);
-      }
-    }
-  }
-
   const perBrand = [];
   const roleLists = [];
   const rolesByBrand = {};
@@ -136,7 +125,7 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
     const brandRow = brandByKey.get(b.normalized) || null;
     const brandStatus = String(brandRow?.status || 'missing');
 
-    const chainRow = chainByKey.get(b.normalized) || null;
+    const chainRow = findCategorySupplyChainRowForBrandKey(chainRows, b.normalized);
     const roles = normalizeChainRolesFromStages(chainRow?.stages);
     if (brandStatus !== 'approved' && roles.length === 0) {
       blockedReason = 'brand_not_approved';
@@ -449,6 +438,7 @@ export async function createProfileResponse(user) {
     address: user.address || {},
     website: user.profile?.website || '',
     description: user.profile?.description || '',
+    profilePhotoUrl: String(user.profile?.profilePhotoUrl || '').trim(),
     userType: user.user_type,
     createdAt: user.created_at
   };
@@ -521,6 +511,13 @@ export async function createProfileResponse(user) {
       console.error('[Profile] Failed to compute supplier order stats:', statsError);
     }
 
+    let supplierPortalTheme = { themeId: 'default', customImageDataUrl: '' };
+    try {
+      supplierPortalTheme = sanitizeSupplierPortalThemePrefs(base.supplierPortalTheme || {});
+    } catch {
+      supplierPortalTheme = { themeId: 'default', customImageDataUrl: '' };
+    }
+
     return {
       ...baseProfile,
       businessType: base.businessType || '',
@@ -550,7 +547,8 @@ export async function createProfileResponse(user) {
             companyInfoEntries: approvedChain.companyInfoEntries
           }
         : null,
-      chainProfileLastRejection
+      chainProfileLastRejection,
+      supplierPortalTheme
     };
   }
 

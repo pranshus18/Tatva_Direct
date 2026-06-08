@@ -1,3 +1,62 @@
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
+
+function normalizeOfferPrice(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === '') return null;
+  const n = Number(rawValue);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Number(n.toFixed(2));
+}
+
+function pickBestOfferBucket(offers = []) {
+  const approvedActive = offers.filter(
+    (o) => String(o?.status || '').toLowerCase() === 'approved' && o?.is_active === true
+  );
+  if (approvedActive.length > 0) return approvedActive;
+
+  const approved = offers.filter((o) => String(o?.status || '').toLowerCase() === 'approved');
+  if (approved.length > 0) return approved;
+
+  return offers;
+}
+
+export function pickLockedVariantPriceFromOffers(offers = []) {
+  const normalizedOffers = (offers || [])
+    .map((offer) => ({
+      ...offer,
+      price: normalizeOfferPrice(offer?.price)
+    }))
+    .filter((offer) => offer.price !== null);
+  if (normalizedOffers.length === 0) return null;
+
+  const bucket = pickBestOfferBucket(normalizedOffers);
+  if (bucket.length === 0) return null;
+  return bucket[0].price;
+}
+
+export async function resolveLockedVariantPrice(
+  supabase,
+  { productId, variantKey, excludeSupplierProductId = null } = {}
+) {
+  if (!productId || !variantKey) return null;
+
+  let query = supabase
+    .from('supplier_products')
+    .select('id, price, status, is_active, updated_at')
+    .eq('product_id', productId)
+    .eq('variant_key', variantKey)
+    .neq('status', 'rejected')
+    .order('updated_at', { ascending: true });
+
+  if (excludeSupplierProductId) {
+    query = query.neq('id', excludeSupplierProductId);
+  }
+
+  const { data, error } = await query.limit(200);
+  if (error || !Array.isArray(data) || data.length === 0) return null;
+
+  return pickLockedVariantPriceFromOffers(data);
+}
+
 export async function findCanonicalProductFromIdentifiers(supabase, { gtinInput, resolvedBarcodeForPos }) {
   let canonicalProductFromIdentifier = null;
   if (gtinInput) {
@@ -144,7 +203,8 @@ export async function createBaseProductIfNeeded(
   }
 
   const basePrice = otherData.price !== undefined ? parseFloat(otherData.price) : 0;
-  const baseStock = otherData.stock !== undefined ? parseInt(otherData.stock) : 0;
+  const baseStock =
+    otherData.stock !== undefined ? parseSupplierStockQuantity(otherData.stock) : 0;
   const baseMinOrderQty = otherData.min_order_quantity !== undefined ? parseInt(otherData.min_order_quantity) : 1;
   const baseLocation = (otherData.location || '').trim() || 'Not specified';
   const productData = {
@@ -156,7 +216,7 @@ export async function createBaseProductIfNeeded(
     specifications: normalizedSpecs,
     supplier_id: reqUserId,
     price: isNaN(basePrice) ? 0 : basePrice,
-    stock: isNaN(baseStock) ? 0 : baseStock,
+    stock: baseStock == null ? 0 : baseStock,
     min_order_quantity: isNaN(baseMinOrderQty) || baseMinOrderQty < 1 ? 1 : baseMinOrderQty,
     location: baseLocation,
     asin: identityBundle.asinLikeId,
@@ -192,7 +252,8 @@ export function buildSupplierProductUpdatePayload({
   shouldMoveToPendingForSpecChange
 }) {
   const parsedPrice = parseFloat(reqBody.price);
-  const parsedStock = parseInt(reqBody.stock);
+  const parsedStock =
+    reqBody.stock !== undefined ? parseSupplierStockQuantity(reqBody.stock) : null;
   const parsedMinOrderQty = parseInt(
     reqBody.min_order_quantity !== undefined ? reqBody.min_order_quantity : supplierProduct.min_order_quantity || 1
   );
@@ -211,8 +272,10 @@ export function buildSupplierProductUpdatePayload({
     updateSupplierProductData.price_updated_at = new Date().toISOString();
   }
   if (reqBody.stock !== undefined) {
-    updateSupplierProductData.stock =
-      Number.isInteger(parsedStock) && parsedStock >= 0 ? parsedStock : supplierProduct.stock;
+    if (parsedStock === null) {
+      return { error: 'Enter a valid whole-number stock quantity (0 or greater).' };
+    }
+    updateSupplierProductData.stock = parsedStock;
   }
   if (reqBody.location !== undefined) {
     const newLocation = (reqBody.location || '').trim();

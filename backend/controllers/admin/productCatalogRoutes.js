@@ -2,6 +2,7 @@
 import { adminUpdateProductSchema } from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 import { normalizeModelIdentifier, sanitizeSpecifications } from '../../services/supplierCatalogHelpersService.js';
+import { buildProductIdentification, firstNonEmpty } from '../../services/procurementSharedService.js';
 
 export function registerAdminProductCatalogRoutes({ router, authenticateToken, isAdmin, supabase, console }) {
 router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
@@ -231,7 +232,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
     // skuNo+modelBrand
     allProducts = (allProducts || []).map((p) => {
       const specs = p?.specifications || {};
-      const skuNo = pickFirstNonEmpty(
+      const skuNo = firstNonEmpty(
         p?.skuNo,
         p?.sku_no,
         specs?.skuNo,
@@ -241,7 +242,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
         specs?.gsku,
         specs?.GSKU
       );
-      const modelBrand = pickFirstNonEmpty(p?.brandModel, p?.brand_model, specs?.brandModel, specs?.brand_model, specs?.brand, specs?.modelBrand);
+      const modelBrand = firstNonEmpty(p?.brandModel, p?.brand_model, specs?.brandModel, specs?.brand_model, specs?.brand, specs?.modelBrand);
       const productIdentification = buildProductIdentification({ skuNo, modelBrand });
 
       return {
@@ -366,7 +367,7 @@ router.get('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
     }
 
     const specs = product?.specifications || {};
-    const skuNo = pickFirstNonEmpty(
+    const skuNo = firstNonEmpty(
       product?.skuNo,
       product?.sku_no,
       specs?.skuNo,
@@ -376,7 +377,7 @@ router.get('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
       specs?.gsku,
       specs?.GSKU
     );
-    const modelBrand = pickFirstNonEmpty(product?.brandModel, product?.brand_model, specs?.brandModel, specs?.brand_model, specs?.brand, specs?.modelBrand);
+    const modelBrand = firstNonEmpty(product?.brandModel, product?.brand_model, specs?.brandModel, specs?.brand_model, specs?.brand, specs?.modelBrand);
     const productIdentification = buildProductIdentification({ skuNo, modelBrand });
     product.skuNo = skuNo || null;
     product.modelBrand = modelBrand || null;

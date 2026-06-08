@@ -6,10 +6,13 @@ export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmi
   // Same as supplier endpoint but for admin use
   router.post('/products/ai-enhance', authenticateToken, isAdmin, async (req, res) => {
     try {
-      const { productName, category, description, provider = 'auto' } = parseWithSchema(
+      const { productName, category, description, prompt: adminPrompt, provider = 'auto' } = parseWithSchema(
         adminAiEnhanceSchema,
         req.body || {}
       );
+      const productDescription = (description || '').trim();
+      const hasAdminPrompt = Boolean((adminPrompt || '').trim());
+      const aiInstructions = hasAdminPrompt ? adminPrompt.trim() : productDescription;
 
       if (!productName) {
         return res.status(400).json({
@@ -96,7 +99,7 @@ export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmi
         electrical: ['Havells', 'Legrand', 'Schneider Electric', 'Siemens', 'ABB', 'Anchor', 'Polycab', 'Finolex', 'RR Kabel'],
         plumbing: ['Jaguar', 'Parryware', 'Cera', 'Kohler', 'Hindware', 'Roca', 'Jaquar', 'Toto', 'American Standard'],
         hardware: ['Godrej', 'Yale', 'Dormakaba', 'Onida', 'Hafele', 'Blum', 'Hettich', 'Assa Abloy'],
-        paint: ['Asian Paints', 'Berger', 'Nerolac', 'Dulux', 'Indigo Paints', 'JSW Paints', 'Kansai Nerolac'],
+        paint: ['Berger', 'Nerolac', 'Dulux', 'Indigo Paints', 'JSW Paints', 'Kansai Nerolac'],
         tiles: ['Kajaria', 'Somany', 'Hindware', 'Johnson', 'Orient Bell', 'NITCO', 'Regency', 'Rak Ceramics']
       };
 
@@ -172,7 +175,7 @@ export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmi
       // Extract number from description if user specified one (e.g., "top 10", "best 10", "first 10")
       // Only extract if it's in specific contexts like "top X", "best X", "first X", etc.
       let requestedCount = null;
-      if (description && description.trim().length > 0) {
+      if (aiInstructions.length > 0) {
         // Look for patterns like "top 10", "best 10", "first 10", "only 10", "exactly 10"
         // Case-insensitive matching
         const patterns = [
@@ -183,7 +186,7 @@ export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmi
         let numberMatch = null;
         let matchedPattern = null;
         for (const pattern of patterns) {
-          numberMatch = description.match(pattern);
+          numberMatch = aiInstructions.match(pattern);
           if (numberMatch) {
             matchedPattern = numberMatch[0];
             // Extract the number (could be in group 1 or 2 depending on pattern)
@@ -205,7 +208,7 @@ export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmi
             requestedCount = null; // Ignore if out of range
           }
         } else {
-          console.log(`ℹ️  No number found in description with keywords like "top X", "best X", "first X", "X specifications": "${description.substring(0, 100)}..."`);
+          console.log(`ℹ️  No number found in AI instructions with keywords like "top X", "best X", "first X", "X specifications": "${aiInstructions.substring(0, 100)}..."`);
         }
       }
 
@@ -230,25 +233,26 @@ Rules:
 6) Use category + description context; avoid unrelated keys.
 7) If information is insufficient, still return best generic keys for that category in the same JSON format.`;
 
-      if (description && description.trim().length > 0) {
+      if (aiInstructions.length > 0) {
         // Check if user specified a number - if so, enforce it; otherwise extract all relevant keys
         if (requestedCount) {
           prompt = `Generate product specification keys for an ecommerce product page.
 
 Product Name: ${productName}
 Product Category: ${category || 'Not specified'}
-Product Description: ${description}
+Admin instructions: ${aiInstructions}
+${productDescription ? `Product description (context): ${productDescription}` : ''}
 
 CRITICAL: You MUST generate EXACTLY ${requestedCount} specification keys. NOT ${requestedCount + 1}, NOT ${requestedCount - 1}, NOT ${requestedCount + 2}. EXACTLY ${requestedCount}.
 
-Use BOTH the category "${category || 'Not specified'}" AND the description to determine the most relevant specification keys.
+Use BOTH the category "${category || 'Not specified'}" AND the admin instructions to determine the most relevant specification keys.
 
 ABSOLUTE REQUIREMENTS:
 1. Generate EXACTLY ${requestedCount} specification keys - NO MORE, NO LESS
 2. Generate specification KEY NAMES only (e.g., "Material Grade", "Core Dimensions", "Weight", "Tensile Strength")
 3. All values must be null - we only want the key names
 4. Use proper, professional specification key names relevant to this product type
-5. Consider BOTH the category "${category || 'Not specified'}" AND the description when generating keys
+5. Consider BOTH the category "${category || 'Not specified'}" AND the admin instructions when generating keys
 6. Return keys that would be appropriate for an ecommerce product page
 7. No descriptions, no explanations, no examples, no additional text
 8. COUNT YOUR KEYS BEFORE RETURNING: The specifications object MUST have exactly ${requestedCount} keys
@@ -271,10 +275,11 @@ VERIFICATION: Before returning, count the keys in your specifications object. It
 
 Product Name: ${productName}
 Product Category: ${category || 'Not specified'}
-Product Description: ${description}
+Admin instructions: ${aiInstructions}
+${productDescription ? `Product description (context): ${productDescription}` : ''}
 
 IMPORTANT: Extract all relevant specification KEY NAMES for this product.
-Use BOTH the category "${category || 'Not specified'}" AND the description to determine specification keys.
+Use BOTH the category "${category || 'Not specified'}" AND the admin instructions to determine specification keys.
 
 CRITICAL REQUIREMENTS:
 1. Generate specification KEY NAMES only (e.g., "Material Grade", "Core Dimensions", "Weight", "Tensile Strength")
@@ -291,7 +296,7 @@ Return ONLY this JSON structure:
   }
 }
 
-Remember: Generate keys based on BOTH the category "${category || 'Not specified'}" AND the description provided.`;
+Remember: Generate keys based on BOTH the category "${category || 'Not specified'}" AND the admin instructions provided.`;
         }
       } else {
         // No description - generate specification keys from product name and category only
@@ -675,8 +680,8 @@ IMPORTANT: Return ONLY the JSON object with specification key names (all values 
         }
       }
 
-      // Use description from user input or result, but prioritize specifications
-      const finalDescription = description || result.enhancedDescription || result.description || '';
+      // Never echo admin AI instructions back as the product description
+      const finalDescription = result.enhancedDescription || result.description || productDescription || '';
 
       res.json({
         status: 'success',

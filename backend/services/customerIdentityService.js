@@ -36,11 +36,13 @@ export function buildCreditAggregateKeys({
   name = null
 } = {}) {
   const keys = [];
+  if (buyerUserId) keys.push(`user:${buyerUserId}`);
+  if (customerId) keys.push(`customer:${customerId}`);
   const normalizedPhone = normalizeCustomerPhone(phone);
   const identityKey = buildCustomerIdentityKey(name, phone);
   if (normalizedPhone) keys.push(`phone:${normalizedPhone}`);
   if (identityKey) keys.push(`identity:${identityKey}`);
-  return keys;
+  return [...new Set(keys)];
 }
 
 export function lookupCreditAccountValue(
@@ -128,7 +130,13 @@ export function sumNetRevenueForParty(
 }
 
 export function hasCreditPartyFromRecord(rec = {}) {
-  return Boolean(normalizeCustomerPhone(rec.phone));
+  return Boolean(
+    normalizeCustomerPhone(rec.phone) ||
+    rec.linkedBuyerUserId ||
+    rec.buyerUserId ||
+    rec.linkedCustomerId ||
+    rec.customerId
+  );
 }
 
 export function isOfflineSaleChannel(channel) {
@@ -170,6 +178,22 @@ export function resolveSalesAggregateKey(order, usersById = new Map(), customers
       aggregateKey: `identity:${identityKey}`,
       identityKey,
       buyerType: 'unified',
+      party
+    };
+  }
+  if (party.buyerUserId) {
+    return {
+      aggregateKey: `user:${party.buyerUserId}`,
+      identityKey: null,
+      buyerType: 'b2b_partial',
+      party
+    };
+  }
+  if (party.customerId) {
+    return {
+      aggregateKey: `customer:${party.customerId}`,
+      identityKey: null,
+      buyerType: 'pos_partial',
       party
     };
   }

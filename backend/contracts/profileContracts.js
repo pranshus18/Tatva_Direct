@@ -24,6 +24,7 @@ export const profileUpdateSchema = z.object({
 });
 
 export const profileUploadCertificateBodySchema = z.object({
-  entryId: z.string().optional()
+  entryId: z.string().optional(),
+  url: z.string().optional()
 });
 

@@ -1,0 +1,376 @@
+/*
+ * Supplier portal visual system
+ * Energetic + professional look independent from service provider theme.
+ */
+
+body.supplier-portal-active,
+.supplier-portal {
+  --primary: 210 90% 52%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 210 90% 52%;
+  --accent: 194 100% 96%;
+  --accent-foreground: 211 78% 28%;
+  --secondary: 210 40% 98%;
+  --secondary-foreground: 215 25% 28%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --border: 214 32% 90%;
+  --input: 214 32% 90%;
+}
+
+body.supplier-portal-active {
+  background: linear-gradient(180deg, #f6fbff 0%, #f4f8ff 100%);
+}
+
+.supplier-portal {
+  background-image:
+    radial-gradient(circle at 0% 0%, rgba(14, 165, 233, 0.14), transparent 34%),
+    radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.1), transparent 36%);
+}
+
+.supplier-portal.supplier-portal--themed {
+  background-image: none;
+}
+
+.supplier-portal.supplier-portal--themed .supplier-sidebar,
+.supplier-portal.supplier-portal--themed .supplier-topbar {
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(8px);
+}
+
+.supplier-portal .supplier-sidebar {
+  background: linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+  border-right-color: #dbe7f5;
+  box-shadow: inset -1px 0 0 rgba(148, 163, 184, 0.18);
+}
+
+.supplier-portal .supplier-topbar {
+  border-bottom-color: #dbe7f5;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.supplier-portal .sp-nav-active {
+  background: linear-gradient(135deg, #0ea5e9, #3b82f6) !important;
+  color: #fff !important;
+  box-shadow: 0 6px 14px rgba(14, 116, 217, 0.25);
+}
+
+.supplier-portal .sp-nav-link:hover {
+  background: #eaf5ff !important;
+  color: #075985 !important;
+}
+
+.supplier-portal .sp-content-panel {
+  background: transparent;
+}
+
+/* POS register: edge-to-edge without negative margins that clip under the sidebar */
+.supplier-portal .sp-content-panel:has(.supplier-pos-page) {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.supplier-portal .supplier-pos-page {
+  isolation: isolate;
+}
+
+.supplier-portal .sp-market-card,
+.supplier-portal .dashboard-section {
+  border-color: #dbe7f5 !important;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+}
+
+/* Compact layout: reduce oversized boxes across supplier pages */
+.supplier-portal .dashboard-section {
+  padding: 1.05rem !important;
+  border-radius: 14px !important;
+}
+
+.supplier-portal .item-card {
+  padding: 0.72rem !important;
+  border-radius: 10px !important;
+  gap: 0.7rem !important;
+}
+
+.supplier-portal .section-header {
+  margin-bottom: 0.85rem !important;
+}
+
+.supplier-portal .empty-state {
+  padding: 1.4rem 1rem !important;
+}
+
+.supplier-portal .order-info-section {
+  margin-bottom: 1.2rem !important;
+  padding-bottom: 1.2rem !important;
+}
+
+.supplier-portal .modal-header {
+  padding: 1.05rem 1.05rem 0.8rem !important;
+}
+
+.supplier-portal .modal-body {
+  padding: 1.05rem !important;
+}
+
+.supplier-portal .supplier-dashboard-notifications-panel {
+  width: 310px !important;
+}
+
+.supplier-portal .upstream-products-scroll {
+  max-height: 40vh;
+}
+
+.supplier-portal .supplier-project-card {
+  padding: 0.85rem !important;
+}
+
+/* Compact level 2 (desktop only) */
+@media (min-width: 1024px) {
+  .supplier-portal.supplier-density-compact .dashboard-container {
+    padding: 1.1rem !important;
+  }
+
+  .supplier-portal.supplier-density-compact .dashboard-section {
+    padding: 0.92rem !important;
+    border-radius: 12px !important;
+  }
+
+  .supplier-portal.supplier-density-compact .section-header h2 {
+    font-size: 1.18rem !important;
+  }
+
+  .supplier-portal.supplier-density-compact .item-card {
+    padding: 0.62rem !important;
+    border-radius: 9px !important;
+    gap: 0.6rem !important;
+  }
+
+  .supplier-portal.supplier-density-compact .item-info h4 {
+    font-size: 0.94rem !important;
+    margin-bottom: 0.15rem !important;
+  }
+
+  .supplier-portal.supplier-density-compact .item-info p {
+    font-size: 0.8rem !important;
+    line-height: 1.35 !important;
+  }
+
+  .supplier-portal.supplier-density-compact .status {
+    font-size: 0.68rem !important;
+    padding: 0.24rem 0.5rem !important;
+  }
+
+  .supplier-portal.supplier-density-compact .btn-primary,
+  .supplier-portal.supplier-density-compact .btn-secondary {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+    font-size: 0.8rem !important;
+  }
+
+  .supplier-portal.supplier-density-compact .sp-market-card .p-4 {
+    padding: 0.75rem !important;
+  }
+
+  .supplier-portal.supplier-density-compact .modal-header {
+    padding: 0.85rem 0.85rem 0.65rem !important;
+  }
+
+  .supplier-portal.supplier-density-compact .modal-body {
+    padding: 0.85rem !important;
+  }
+}
+
+/* Comfortable density: larger touch targets and spacing */
+@media (min-width: 1024px) {
+  .supplier-portal.supplier-density-comfortable .dashboard-container {
+    padding: 1.45rem !important;
+  }
+
+  .supplier-portal.supplier-density-comfortable .dashboard-section {
+    padding: 1.25rem !important;
+    border-radius: 16px !important;
+  }
+
+  .supplier-portal.supplier-density-comfortable .section-header h2 {
+    font-size: 1.3rem !important;
+  }
+
+  .supplier-portal.supplier-density-comfortable .item-card {
+    padding: 0.9rem !important;
+    border-radius: 12px !important;
+    gap: 0.75rem !important;
+  }
+
+  .supplier-portal.supplier-density-comfortable .item-info h4 {
+    font-size: 1rem !important;
+    margin-bottom: 0.25rem !important;
+  }
+
+  .supplier-portal.supplier-density-comfortable .item-info p {
+    font-size: 0.88rem !important;
+    line-height: 1.45 !important;
+  }
+
+  .supplier-portal.supplier-density-comfortable .status {
+    font-size: 0.74rem !important;
+    padding: 0.3rem 0.62rem !important;
+  }
+
+  .supplier-portal.supplier-density-comfortable .btn-primary,
+  .supplier-portal.supplier-density-comfortable .btn-secondary {
+    padding-top: 0.62rem !important;
+    padding-bottom: 0.62rem !important;
+    font-size: 0.86rem !important;
+  }
+}
+
+.supplier-portal .btn-primary,
+.supplier-portal button.inline-flex.bg-primary {
+  background: linear-gradient(135deg, #0ea5e9, #2563eb) !important;
+  color: #fff !important;
+  border: none !important;
+}
+
+.supplier-portal .btn-primary:hover,
+.supplier-portal button.inline-flex.bg-primary:hover {
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.3);
+  transform: translateY(-1px);
+}
+
+.supplier-portal .btn-secondary,
+.supplier-portal button.inline-flex.bg-secondary,
+.supplier-portal button.inline-flex.border-input.bg-background {
+  background: #fff !important;
+  color: #334155 !important;
+  border: 1px solid #d8e5f3 !important;
+}
+
+.supplier-portal .btn-secondary:hover,
+.supplier-portal button.inline-flex.bg-secondary:hover,
+.supplier-portal button.inline-flex.border-input.bg-background:hover {
+  border-color: #60a5fa !important;
+  color: #0369a1 !important;
+}
+
+/* Select yourself / profile header actions — avoid full-width buttons from dashboard form styles */
+.supplier-portal .profile-actions.profile-page-header-actions .btn-primary,
+.supplier-portal .profile-actions.profile-page-header-actions .btn-secondary {
+  height: 2.5rem;
+  min-height: 2.5rem;
+  width: auto !important;
+  min-width: 0;
+  max-width: none;
+  flex: 0 0 auto;
+  padding-inline: 1rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.supplier-portal .profile-actions.profile-page-header-actions .btn-secondary:disabled,
+.supplier-portal .profile-actions.profile-page-header-actions .btn-primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.supplier-portal .profile-header {
+  position: relative;
+  z-index: 2;
+}
+
+/* Keep supplier action rows visually consistent with profile header actions */
+.supplier-portal .supplier-dashboard-danger-actions,
+.supplier-portal .upstream-primary-actions,
+.supplier-portal .upstream-suggestions-actions,
+.supplier-portal .supplier-cart-toolbar-actions,
+.supplier-portal .supplier-project-edit-row,
+.supplier-portal .supplier-cart-share-actions {
+  gap: 0.625rem;
+}
+
+.supplier-portal .supplier-dashboard-danger-actions .btn-primary,
+.supplier-portal .supplier-dashboard-danger-actions .btn-secondary,
+.supplier-portal .upstream-primary-actions .btn-primary,
+.supplier-portal .upstream-primary-actions .btn-secondary,
+.supplier-portal .upstream-suggestions-actions .btn-primary,
+.supplier-portal .upstream-suggestions-actions .btn-secondary,
+.supplier-portal .supplier-cart-toolbar-actions .btn-primary,
+.supplier-portal .supplier-cart-toolbar-actions .btn-secondary,
+.supplier-portal .supplier-project-edit-row .btn-primary,
+.supplier-portal .supplier-project-edit-row .btn-secondary,
+.supplier-portal .supplier-cart-share-actions .btn-primary,
+.supplier-portal .supplier-cart-share-actions .btn-secondary {
+  height: 2.5rem;
+  min-height: 2.5rem;
+  width: auto;
+  min-width: 0;
+  padding-inline: 1rem;
+  border-radius: 12px;
+  font-size: 0.875rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.supplier-portal .supplier-dashboard-danger-actions .btn-primary svg,
+.supplier-portal .supplier-dashboard-danger-actions .btn-secondary svg,
+.supplier-portal .upstream-primary-actions .btn-primary svg,
+.supplier-portal .upstream-primary-actions .btn-secondary svg,
+.supplier-portal .upstream-suggestions-actions .btn-primary svg,
+.supplier-portal .upstream-suggestions-actions .btn-secondary svg,
+.supplier-portal .supplier-cart-toolbar-actions .btn-primary svg,
+.supplier-portal .supplier-cart-toolbar-actions .btn-secondary svg,
+.supplier-portal .supplier-project-edit-row .btn-primary svg,
+.supplier-portal .supplier-project-edit-row .btn-secondary svg,
+.supplier-portal .supplier-cart-share-actions .btn-primary svg,
+.supplier-portal .supplier-cart-share-actions .btn-secondary svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.supplier-portal .supplier-dashboard-chain-chip,
+.supplier-portal .upstream-role-chip {
+  background: #e0f2fe !important;
+  color: #0c4a6e !important;
+}
+
+/* ₹ prefix on price / MRP inputs */
+.rupee-input-field {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+  border: 1px solid hsl(var(--input, 214 32% 90%));
+  border-radius: 0.5rem;
+  background: #fff;
+  overflow: hidden;
+}
+
+.rupee-input-field:focus-within {
+  outline: 2px solid hsl(var(--ring, 210 90% 52%));
+  outline-offset: 1px;
+  border-color: hsl(var(--ring, 210 90% 52%));
+}
+
+.rupee-input-field__symbol {
+  display: flex;
+  align-items: center;
+  padding: 0 0.65rem;
+  font-weight: 700;
+  color: #0f766e;
+  background: #f0fdfa;
+  border-right: 1px solid hsl(var(--input, 214 32% 90%));
+  flex-shrink: 0;
+}
+
+.rupee-input-field__control {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  padding: 0.5rem 0.65rem;
+  font-size: inherit;
+  background: transparent;
+}

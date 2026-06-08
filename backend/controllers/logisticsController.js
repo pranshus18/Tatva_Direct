@@ -16,6 +16,7 @@ import {
   resolveShipmentQuoteStrategy,
   LOGISTICS_TRUCKING_MIN_WEIGHT_KG
 } from '../utils/logisticsQuotePolicy.js';
+import { classifyQuoteProvider, TRANSPORT_KIND } from '../utils/logisticsTransportIntent.js';
 
 export { inferLogisticsCategory } from '../utils/logisticsQuotePolicy.js';
 
@@ -67,14 +68,12 @@ function providerFare(p = {}) {
 
 function normalizeProviderForUi(p = {}) {
   const row = { ...p };
-  const src = String(row.source || '').toLowerCase();
-  const isTrucking =
-    src === 'borzo' || (row.vehicle_type_id != null && row.vehicle_type_id !== '');
-  if (isTrucking) {
-    row.transportKind = 'trucking';
+  const kind = classifyQuoteProvider(row);
+  if (kind === TRANSPORT_KIND.TRUCKING) {
+    row.transportKind = TRANSPORT_KIND.TRUCKING;
     row.rate = providerFare(row);
-  } else if (row.courier_company_id != null && row.courier_company_id !== '') {
-    row.transportKind = 'courier';
+  } else if (kind === TRANSPORT_KIND.COURIER) {
+    row.transportKind = TRANSPORT_KIND.COURIER;
     row.rate = row.rate ?? providerFare(row);
   }
   return row;
@@ -266,7 +265,7 @@ function unitWeightKgFromItem(item) {
       if (w !== null) return w;
     }
   }
-  return 0.5;
+  return null;
 }
 
 export function computeGroupWeightKg(group) {
@@ -274,9 +273,13 @@ export function computeGroupWeightKg(group) {
   let sum = 0;
   for (const item of items) {
     const q = Math.max(0, Number(item.quantity) || 0);
-    sum += unitWeightKgFromItem(item) * q;
+    if (q <= 0) continue;
+    const unitWeight = unitWeightKgFromItem(item);
+    if (unitWeight === null) return null;
+    sum += unitWeight * q;
   }
-  return Math.max(0.01, Math.round(sum * 1000) / 1000);
+  if (sum <= 0) return null;
+  return Math.round(sum * 1000) / 1000;
 }
 
 /**
@@ -707,7 +710,7 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
           ? `${summaryParts.join(', ')} · PIN ${pickupPincode}`
           : resolved.summary;
       const weightKg = computeGroupWeightKg(group);
-      const category = inferLogisticsCategory(group, weightKg);
+      const category = weightKg === null ? 'general' : inferLogisticsCategory(group, weightKg);
       const matter = inferMatterFromGroup(group);
       const totalVolumeCbm = parseVolumeCbmFromGroup(group);
 
@@ -735,6 +738,9 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
       if (!pickupPincode) {
         logistics.message =
           'Supplier warehouse pincode is missing. Ask the supplier to complete their profile or outlet address (PIN / postal code).';
+      } else if (weightKg === null) {
+        logistics.message =
+          'Product weight is required for logistics quotes. Add valid weight in item specifications (for example: "Weight: 25 kg"), then retry.';
       } else {
         const laneKey = `${vendorId || ''}|${pickupPincode}|${deliveryPincode}|${weightKg}|${quoteStrategyWithCoords.mode}|${quoteStrategyWithCoords.category}|${totalVolumeCbm}|${quoteStrategyWithCoords.sameCity}`;
         logistics = await getCachedLaneQuote(laneKey, () =>

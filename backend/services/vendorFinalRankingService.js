@@ -78,7 +78,7 @@ export function mapSupplierProductsToRankedVendors({
       leadTime,
       rank: index + 1,
       rating: supplier.bestRating,
-      stock: supplier.totalStock,
+      stock: parseInt(bestProduct?.stock, 10) || 0,
       productCount: supplier.products.length,
       rankScore,
       distanceKm,

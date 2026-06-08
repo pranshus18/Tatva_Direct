@@ -11,6 +11,7 @@ export default function SupplierBuyerPurchases() {
   const [fromDate, setFromDate] = useState('');
   const [toDate, setToDate] = useState('');
   const [topBuyers, setTopBuyers] = useState('20');
+  const [showBuyerName, setShowBuyerName] = useState(true);
   const [thresholdDrafts, setThresholdDrafts] = useState({});
   const [savingThresholdId, setSavingThresholdId] = useState(null);
 
@@ -239,6 +240,26 @@ export default function SupplierBuyerPurchases() {
                 onChange={(e) => setQuery(e.target.value)}
                 style={{ ...inputStyle, minWidth: '280px' }}
               />
+              <label
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  padding: '0.45rem 0.65rem',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 8,
+                  color: '#334155',
+                  fontSize: '0.85rem',
+                  background: '#fff'
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={showBuyerName}
+                  onChange={(e) => setShowBuyerName(e.target.checked)}
+                />
+                Show buyer name
+              </label>
             </div>
           </div>
 
@@ -249,6 +270,7 @@ export default function SupplierBuyerPurchases() {
               <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: '1400px' }}>
                 <thead>
                   <tr>
+                    {showBuyerName ? <th style={th}>Buyer</th> : null}
                     <th style={th}>Company</th>
                     <th style={th}>Phone</th>
                     <th style={th}>Total Orders</th>
@@ -269,6 +291,15 @@ export default function SupplierBuyerPurchases() {
                 <tbody>
                   {filteredBuyers.map((buyer) => (
                     <tr key={buyer.buyerId}>
+                      {showBuyerName ? (
+                        <td style={td}>
+                          {buyer.name
+                            ? buyer.name
+                            : buyer.buyerId === 'walk_in' || buyer.buyerType === 'walk_in'
+                              ? 'Walk-in (no customer)'
+                              : '—'}
+                        </td>
+                      ) : null}
                       <td style={td}>{buyer.company || buyer.name || '—'}</td>
                       <td style={td}>{buyer.phone || '—'}</td>
                       <td style={td}>{Number(buyer.totalOrders || 0).toLocaleString()}</td>

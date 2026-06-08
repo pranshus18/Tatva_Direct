@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { getApiUrl, authFetch } from '../config/api';
+import { authFetch, getApiUrl, resolveApiPath } from '../config/api';
 import { useNavigate } from 'react-router-dom';
 import { 
   Package,
@@ -12,16 +12,23 @@ import {
   X,
   Save,
   Bell,
-  DollarSign,
+  Wallet,
   Trash2,
   FileText,
   Search
 } from 'lucide-react';
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
+import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
+import SpStatCard from '../components/sp/SpStatCard';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
 import './Dashboard.css';
+import './SupplierDashboard.css';
 
 const SupplierDashboard = ({ user }) => {
   const navigate = useNavigate();
@@ -208,11 +215,7 @@ const SupplierDashboard = ({ user }) => {
       // Encode the orderId to handle special characters
       const encodedOrderId = encodeURIComponent(orderId);
       
-      // Use proxy in development, full URL in production
-      const isDevelopment = import.meta.env.DEV || window.location.hostname === 'localhost';
-      const apiUrl = isDevelopment 
-        ? `/api/supplier/orders/${encodedOrderId}`
-        : getApiUrl(`/api/supplier/orders/${encodedOrderId}`);
+      const apiUrl = resolveApiPath(`/api/supplier/orders/${encodedOrderId}`);
       
       console.log('[Supplier Order Details] Fetching order details from:', apiUrl);
       console.log('[Supplier Order Details] Order ID:', orderId, 'Encoded:', encodedOrderId);
@@ -549,52 +552,34 @@ const SupplierDashboard = ({ user }) => {
   }
 
   return (
-    <div className="dashboard-container">
-      <div className="dashboard-header">
-        <div>
-          <h1>Welcome back, {user?.name || 'Supplier'}!</h1>
-          <p>Manage your products, inventory, POS sales and incoming orders</p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-          <button
-            className="btn-secondary"
-            onClick={() => navigate('/supplier-returns')}
-            style={{ whiteSpace: 'nowrap' }}
-          >
-            View Returns
-          </button>
-        <div style={{ position: 'relative' }} data-notification-container>
+    <SpPageLayout showStepper={false}>
+      <div className="dashboard-container supplier-dashboard-page !max-w-none !p-0">
+        <SpPageHeader
+          title={`Welcome back, ${user?.name || 'Supplier'}`}
+          description="Manage your products, inventory, POS sales and incoming orders"
+          icon={Package}
+          actions={
+            <>
+              <Button variant="outline" onClick={() => navigate('/supplier-returns')}>
+                View Returns
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/product-management')}>
+                Manage Products
+              </Button>
+              <Button variant="outline" onClick={() => navigate('/supplier-upstream')}>Upstream sourcing</Button>
+              <Button onClick={() => navigate('/supplier-upstream-orders')}>My upstream orders</Button>
+            </>
+          }
+        />
+        <div className="supplier-dashboard-notifications-wrap">
+        <div className="supplier-dashboard-notifications-anchor" data-notification-container>
           <button
             onClick={() => setShowNotifications(!showNotifications)}
-            style={{
-              position: 'relative',
-              padding: '0.5rem',
-              background: 'transparent',
-              border: '1px solid #e5e7eb',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
+            className="supplier-dashboard-notifications-toggle"
           >
             <Bell size={20} />
             {unreadCount > 0 && (
-              <span style={{
-                position: 'absolute',
-                top: '-4px',
-                right: '-4px',
-                background: '#ef4444',
-                color: 'white',
-                borderRadius: '50%',
-                width: '20px',
-                height: '20px',
-                fontSize: '0.75rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 'bold'
-              }}>
+              <span className="supplier-dashboard-notifications-badge">
                 {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
@@ -603,29 +588,10 @@ const SupplierDashboard = ({ user }) => {
           {showNotifications && (
             <div 
               data-notification-container
-              style={{
-                position: 'absolute',
-                top: '100%',
-                right: 0,
-                marginTop: '0.5rem',
-                background: 'white',
-                border: '1px solid #e5e7eb',
-                borderRadius: '8px',
-                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
-                width: '350px',
-                maxHeight: '500px',
-                overflowY: 'auto',
-                zIndex: 1000
-              }}
+              className="supplier-dashboard-notifications-panel"
             >
-              <div style={{
-                padding: '1rem',
-                borderBottom: '1px solid #e5e7eb',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
-                <h3 style={{ margin: 0, fontSize: '1rem', fontWeight: '600' }}>Notifications</h3>
+              <div className="supplier-dashboard-notifications-header">
+                <h3 className="supplier-dashboard-notifications-title">Notifications</h3>
                 {unreadCount > 0 && (
                   <button
                     onClick={async () => {
@@ -642,13 +608,7 @@ const SupplierDashboard = ({ user }) => {
                         console.error('Failed to mark all as read:', error);
                       }
                     }}
-                    style={{
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#3b82f6',
-                      cursor: 'pointer',
-                      fontSize: '0.875rem'
-                    }}
+                    className="supplier-dashboard-notifications-read-all"
                   >
                     Mark all as read
                   </button>
@@ -656,7 +616,7 @@ const SupplierDashboard = ({ user }) => {
               </div>
               <div>
                 {notifications.length === 0 ? (
-                  <div style={{ padding: '2rem', textAlign: 'center', color: '#64748b' }}>
+                  <div className="supplier-dashboard-notifications-empty">
                     No notifications
                   </div>
                 ) : (
@@ -677,70 +637,62 @@ const SupplierDashboard = ({ user }) => {
                           setShowNotifications(false);
                         }
                       }}
-                      style={{
-                        padding: '1rem',
-                        borderBottom: '1px solid #f3f4f6',
-                        cursor: 'pointer',
-                        backgroundColor: notification.isRead ? 'white' : '#f0f9ff',
-                        transition: 'background-color 0.2s'
-                      }}
+                      className={`supplier-dashboard-notification-item ${
+                        notification.isRead ? 'supplier-dashboard-notification-item-read' : 'supplier-dashboard-notification-item-unread'
+                      }`}
                       onMouseEnter={(e) => {
                         if (notification.isRead) {
-                          e.currentTarget.style.backgroundColor = '#f9fafb';
+                          e.currentTarget.classList.add('supplier-dashboard-notification-item-hover');
                         }
                       }}
                       onMouseLeave={(e) => {
                         if (notification.isRead) {
-                          e.currentTarget.style.backgroundColor = 'white';
+                          e.currentTarget.classList.remove('supplier-dashboard-notification-item-hover');
                         }
                       }}
                     >
-                      <div style={{ display: 'flex', gap: '0.75rem' }}>
-                        <div style={{
-                          padding: '0.5rem',
-                          borderRadius: '8px',
-                          background:
+                      <div className="supplier-dashboard-notification-row">
+                        <div
+                          className="supplier-dashboard-notification-icon-wrap"
+                          style={{
+                            background:
                             notification.type === 'payment_received'
                               ? '#d1fae5'
                               : notification.type === 'credit_limit'
                                 ? '#fef3c7'
                                 : '#dbeafe',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center'
-                        }}>
+                          }}
+                        >
                           {notification.type === 'payment_received' ? (
-                            <DollarSign size={20} color="#059669" />
+                            <Wallet size={20} color="#059669" />
                           ) : notification.type === 'credit_limit' ? (
                             <AlertTriangle size={20} color="#d97706" />
                           ) : (
                             <Bell size={20} color="#3b82f6" />
                           )}
                         </div>
-                        <div style={{ flex: 1 }}>
-                          <div style={{
-                            fontWeight: notification.isRead ? '500' : '600',
-                            marginBottom: '0.25rem',
-                            color: notification.isRead ? '#374151' : '#111827'
-                          }}>
+                        <div className="supplier-dashboard-notification-content">
+                          <div
+                            className={`supplier-dashboard-notification-title ${
+                              notification.isRead
+                                ? 'supplier-dashboard-notification-title-read'
+                                : 'supplier-dashboard-notification-title-unread'
+                            }`}
+                          >
                             {notification.title}
                           </div>
-                          <div style={{
-                            fontSize: '0.875rem',
-                            color: '#64748b',
-                            marginBottom: '0.25rem'
-                          }}>
+                          <div className="supplier-dashboard-notification-message">
                             {notification.message}
                           </div>
                           {(receiptPdfUrl || invoicePdfUrl) && (
-                            <div style={{ display: 'flex', gap: '0.45rem', marginBottom: '0.25rem' }}>
+                            <div className="supplier-dashboard-notification-links">
                               {receiptPdfUrl && (
                                 <a
                                   href={receiptPdfUrl}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   onClick={(e) => e.stopPropagation()}
-                                  style={{ fontSize: '0.78rem', color: '#2563eb', textDecoration: 'underline' }}
+                                  className="supplier-dashboard-notification-link"
                                 >
                                   Download Receipt
                                 </a>
@@ -751,28 +703,19 @@ const SupplierDashboard = ({ user }) => {
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   onClick={(e) => e.stopPropagation()}
-                                  style={{ fontSize: '0.78rem', color: '#2563eb', textDecoration: 'underline' }}
+                                  className="supplier-dashboard-notification-link"
                                 >
                                   Download Invoice
                                 </a>
                               )}
                             </div>
                           )}
-                          <div style={{
-                            fontSize: '0.75rem',
-                            color: '#9ca3af'
-                          }}>
+                          <div className="supplier-dashboard-notification-time">
                             {formatDate(notification.createdAt)}
                           </div>
                         </div>
                         {!notification.isRead && (
-                          <div style={{
-                            width: '8px',
-                            height: '8px',
-                            borderRadius: '50%',
-                            background: '#3b82f6',
-                            marginTop: '0.5rem'
-                          }} />
+                          <div className="supplier-dashboard-notification-dot" />
                         )}
                       </div>
                     </div>
@@ -784,93 +727,53 @@ const SupplierDashboard = ({ user }) => {
           )}
         </div>
         </div>
-      </div>
-
       {/* Stats Cards */}
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-icon products">
-            <Package size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{stats.totalProducts}</h3>
-            <p>Total Products</p>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon orders">
-            <ShoppingCart size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{stats.activeOrders}</h3>
-            <p>Active Orders</p>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon revenue">
-            <TrendingUp size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{stats.totalRevenue.toLocaleString()}</h3>
-            <p>Net Platform Revenue (after returns)</p>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon quotes">
-            <Clock size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{stats.pendingQuotes}</h3>
-            <p>Pending Quotes</p>
-          </div>
-        </div>
-
-        <div className="stat-card">
-          <div className="stat-icon info">
-            <Package size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{inventorySummary?.summary?.totalStockQty ?? 0}</h3>
-            <p>Total Inventory Units</p>
-            <p className="stat-subtitle">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <SpStatCard label="Total Products" value={stats.totalProducts} icon={Package} accent="indigo" />
+        <SpStatCard label="Active Orders" value={stats.activeOrders} icon={ShoppingCart} accent="emerald" />
+        <SpStatCard
+          label="Net Platform Revenue"
+          value={`₹${Number(stats.totalRevenue || 0).toLocaleString()}`}
+          icon={TrendingUp}
+          accent="amber"
+        />
+        <SpStatCard label="Pending Quotes" value={stats.pendingQuotes} icon={Clock} accent="rose" />
+        <Card className="sp-market-card">
+          <CardContent className="p-4">
+            <div className="text-sm font-semibold text-slate-800">Inventory Snapshot</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              {inventorySummary?.summary?.totalStockQty ?? 0}
+            </div>
+            <p className="text-xs text-slate-500">
               Value: ₹{Number(inventorySummary?.summary?.totalStockValue || 0).toLocaleString()}
             </p>
-            {Array.isArray(restockSuggestions?.items) && restockSuggestions.items.length > 0 && (
-              <div style={{ marginTop: '0.6rem', fontSize: '0.85rem', color: '#0f172a' }}>
-                <div style={{ fontWeight: 700, color: '#1d4ed8' }}>Restock suggestions</div>
-                <div style={{ color: '#64748b', fontSize: '0.8rem', marginTop: '0.15rem' }}>
-                  Low stock ≤ {restockSuggestions.threshold}
+            {Array.isArray(restockSuggestions?.items) && restockSuggestions.items.length > 0 ? (
+              <div className="supplier-dashboard-restock-wrap">
+                <div className="supplier-dashboard-restock-title">Restock suggestions</div>
+                <div className="supplier-dashboard-restock-subtitle">
+                  Low {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} ≤ {restockSuggestions.threshold}
                 </div>
-                <div style={{ display: 'grid', gap: '0.4rem', marginTop: '0.45rem' }}>
+                <div className="supplier-dashboard-restock-list">
                   {restockSuggestions.items.slice(0, 3).map((it) => (
-                    <div
-                      key={it.supplierProductId}
-                      style={{
-                        border: '1px solid #e5e7eb',
-                        borderRadius: 8,
-                        padding: '0.45rem 0.55rem',
-                        background: '#f8fafc'
-                      }}
-                    >
-                      <div style={{ fontWeight: 600 }}>
-                        Stock: {it.stock ?? 0}
-                        {it.brandModel ? <span style={{ color: '#64748b' }}> · {it.brandModel}</span> : null}
+                    <div key={it.supplierProductId} className="supplier-dashboard-restock-item">
+                      <div className="supplier-dashboard-restock-item-head">
+                        {SUPPLIER_CURRENT_STOCK_LABEL}: {it.stock ?? 0}
+                        {it.brandModel ? <span className="supplier-dashboard-restock-brand"> · {it.brandModel}</span> : null}
                       </div>
                       {Array.isArray(it.suggestions) && it.suggestions.length > 0 ? (
-                        <div style={{ marginTop: '0.25rem', color: '#334155', fontSize: '0.8rem' }}>
+                        <div className="supplier-dashboard-restock-suggestions">
                           {it.suggestions.map((s) => (
                             <div key={s.supplierProductId}>
                               {s.supplierName}
                               {typeof s.distanceKm === 'number' ? ` · ${s.distanceKm} km` : ''}
-                              {typeof s.stock === 'number' ? ` · stock ${s.stock}` : ''}
+                              {typeof s.stock === 'number'
+                                ? ` · ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} ${s.stock}`
+                                : ''}
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div style={{ marginTop: '0.25rem', color: '#94a3b8', fontSize: '0.8rem' }}>
+                        <div className="supplier-dashboard-restock-empty">
                           No upstream matches found.
                         </div>
                       )}
@@ -878,9 +781,9 @@ const SupplierDashboard = ({ user }) => {
                   ))}
                 </div>
               </div>
-            )}
-          </div>
-        </div>
+            ) : null}
+          </CardContent>
+        </Card>
       </div>
 
       <div className="dashboard-content">
@@ -923,42 +826,15 @@ const SupplierDashboard = ({ user }) => {
             <button className="btn-secondary">View All</button>
           </div>
 
-          <div
-            className="live-orders-search"
-            style={{
-              marginBottom: '1rem',
-              position: 'relative',
-              maxWidth: '420px'
-            }}
-          >
-            <Search
-              size={18}
-              style={{
-                position: 'absolute',
-                left: '12px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                color: '#94a3b8',
-                pointerEvents: 'none'
-              }}
-              aria-hidden
-            />
+          <div className="live-orders-search supplier-dashboard-live-search">
+            <Search size={18} className="supplier-dashboard-live-search-icon" aria-hidden />
             <input
               type="search"
               value={liveOrdersSearch}
               onChange={(e) => setLiveOrdersSearch(e.target.value)}
               placeholder="Search by order number…"
               aria-label="Search orders by order number"
-              style={{
-                width: '100%',
-                padding: '0.65rem 0.85rem 0.65rem 2.5rem',
-                borderRadius: '10px',
-                border: '1px solid #e2e8f0',
-                fontSize: '0.9375rem',
-                outline: 'none',
-                background: '#fff',
-                boxSizing: 'border-box'
-              }}
+              className="supplier-dashboard-live-search-input"
             />
           </div>
           
@@ -968,28 +844,15 @@ const SupplierDashboard = ({ user }) => {
               filteredLiveOrders.map((order) => (
                 <div 
                   key={order.id} 
-                  className="item-card"
-                  style={{ cursor: 'pointer' }}
+                  className="item-card supplier-dashboard-live-order-card"
                   onClick={() => handleViewOrder(order.orderNumber || order.id)}
                   title="Click to view order details"
                 >
                   <div className="item-info">
-                    <h4 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <h4 className="supplier-dashboard-live-order-title">
                       Order {order.orderNumber || `#${order.id}`}
                       {order.chainUpstreamOrder ? (
-                        <span
-                          style={{
-                            fontSize: '0.7rem',
-                            fontWeight: 700,
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.04em',
-                            background: '#eef2ff',
-                            color: '#4338ca',
-                            padding: '0.2rem 0.45rem',
-                            borderRadius: 6
-                          }}
-                          title="Buyer is a supply-chain partner (upstream purchase)"
-                        >
+                        <span className="supplier-dashboard-chain-chip" title="Buyer is a supply-chain partner (upstream purchase)">
                           Chain / upstream
                         </span>
                       ) : null}
@@ -999,7 +862,7 @@ const SupplierDashboard = ({ user }) => {
                       {order.company && ` • ${order.company}`}
                       {order.itemCount > 0 && ` • ${order.itemCount} item${order.itemCount > 1 ? 's' : ''}`}
                     </p>
-                    <p style={{ fontSize: '0.9rem', color: '#64748b', marginTop: '0.25rem' }}>
+                    <p className="supplier-dashboard-live-order-amount">
                       Amount: ₹{order.amount.toLocaleString()}
                       {order.createdAt && ` • ${order.createdAt}`}
                     </p>
@@ -1012,14 +875,13 @@ const SupplierDashboard = ({ user }) => {
                       {order.status === 'confirmed' ? 'Confirmed' : order.status}
                     </span>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  <div className="supplier-dashboard-live-order-actions">
                     {order.invoicePdfUrl && String(order.paymentStatus || '').toLowerCase() === 'paid' && (
                       <a
                         href={order.invoicePdfUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="btn-icon"
-                        style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#4f46e5' }}
+                        className="btn-icon supplier-dashboard-invoice-link"
                         title="Download invoice PDF"
                         onClick={(e) => e.stopPropagation()}
                       >
@@ -1040,8 +902,8 @@ const SupplierDashboard = ({ user }) => {
                 </div>
               ))
               ) : (
-                <div className="empty-state" style={{ padding: '1.5rem' }}>
-                  <p style={{ margin: 0, color: '#64748b' }}>
+                <div className="empty-state supplier-dashboard-empty-orders">
+                  <p className="supplier-dashboard-empty-orders-text">
                     No orders match <strong>“{liveOrdersSearch.trim()}”</strong>. Try another order number.
                   </p>
                 </div>
@@ -1060,7 +922,7 @@ const SupplierDashboard = ({ user }) => {
       {/* Order Details Modal */}
       {selectedOrder && (
         <div className="modal-overlay" onClick={handleCloseOrderDetails}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="modal-content supplier-dashboard-order-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Order Details - {orderDetails?.orderNumber || 'Loading...'}</h2>
               <button className="btn-icon" onClick={handleCloseOrderDetails}>
@@ -1069,7 +931,7 @@ const SupplierDashboard = ({ user }) => {
             </div>
             
             {loadingOrderDetails ? (
-              <div className="modal-body" style={{ textAlign: 'center', padding: '2rem' }}>
+              <div className="modal-body supplier-dashboard-modal-body-center">
                 <div className="spinner" />
                 <p>Loading order details...</p>
               </div>
@@ -1086,9 +948,9 @@ const SupplierDashboard = ({ user }) => {
                     <p><strong>Phone:</strong> {orderDetails.serviceProvider.phone}</p>
                   )}
                   {orderDetails.serviceProvider?.address && (
-                    <div style={{ marginTop: '0.5rem' }}>
+                    <div className="supplier-dashboard-address-wrap">
                       <p><strong>Address:</strong></p>
-                      <p style={{ marginLeft: '1rem', color: '#64748b' }}>
+                      <p className="supplier-dashboard-address-text">
                         {[
                           orderDetails.serviceProvider.address.line1 || orderDetails.serviceProvider.address.street,
                           orderDetails.serviceProvider.address.line2,
@@ -1119,7 +981,7 @@ const SupplierDashboard = ({ user }) => {
                           <tr key={idx}>
                             <td>
                               {(item.productImage || item.product?.image || item.images?.[0] || item.product?.images?.[0]) && (
-                                <div style={{ marginBottom: '0.35rem' }}>
+                                <div className="supplier-dashboard-item-image-wrap">
                                   <ProductImageCarousel
                                     images={[
                                       item.productImage,
@@ -1140,7 +1002,7 @@ const SupplierDashboard = ({ user }) => {
                                 )}
                               </div>
                               {item.product?.description && (
-                                <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.25rem' }}>
+                                <div className="supplier-dashboard-item-description">
                                   {item.product.description}
                                 </div>
                               )}
@@ -1149,26 +1011,11 @@ const SupplierDashboard = ({ user }) => {
                                 variantAsin={item.variantAsin}
                               />
                               {parseSpecificationsForDisplay(item.specifications).length > 0 && (
-                                <div
-                                  style={{
-                                    display: 'flex',
-                                    flexWrap: 'wrap',
-                                    gap: '0.35rem',
-                                    marginTop: '0.45rem'
-                                  }}
-                                >
+                                <div className="supplier-dashboard-specifications-wrap">
                                   {parseSpecificationsForDisplay(item.specifications).map((entry) => (
                                     <span
                                       key={`${entry.label}-${entry.value}`}
-                                      style={{
-                                        fontSize: '0.78rem',
-                                        color: '#334155',
-                                        background: '#f1f5f9',
-                                        border: '1px solid #e2e8f0',
-                                        borderRadius: '9999px',
-                                        padding: '0.2rem 0.55rem',
-                                        lineHeight: 1.35
-                                      }}
+                                      className="supplier-dashboard-spec-pill"
                                       title={`${entry.label}: ${entry.value}`}
                                     >
                                       <strong>{entry.label}:</strong> {entry.value}
@@ -1177,7 +1024,7 @@ const SupplierDashboard = ({ user }) => {
                                 </div>
                               )}
                               {item.brandModel && (
-                                <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.35rem' }}>
+                                <div className="supplier-dashboard-item-brand-model">
                               {item.brandModel}
                                 </div>
                               )}
@@ -1196,26 +1043,26 @@ const SupplierDashboard = ({ user }) => {
                       </tfoot>
                     </table>
                   ) : (
-                    <p style={{ color: '#64748b' }}>No items found in this order.</p>
+                    <p className="supplier-dashboard-muted-text">No items found in this order.</p>
                   )}
                   {readGstSummary(orderDetails) && (
-                    <div style={{ marginTop: '0.75rem', fontSize: '0.9rem', color: '#334155' }}>
-                      <p style={{ margin: 0 }}>
+                    <div className="supplier-dashboard-gst-summary">
+                      <p className="supplier-dashboard-gst-row supplier-dashboard-gst-row-first">
                         <strong>Taxable subtotal:</strong> ₹{Number(readGstSummary(orderDetails)?.subtotalAmount || 0).toLocaleString('en-IN')}
                       </p>
-                      <p style={{ margin: '0.2rem 0 0' }}>
+                      <p className="supplier-dashboard-gst-row">
                         <strong>GST type:</strong> {readGstSummary(orderDetails)?.taxType === 'IGST' ? 'IGST' : 'CGST + SGST'}
                       </p>
                       {readGstSummary(orderDetails)?.taxType === 'IGST' ? (
-                        <p style={{ margin: '0.2rem 0 0' }}>
+                        <p className="supplier-dashboard-gst-row">
                           <strong>IGST:</strong> ₹{Number(readGstSummary(orderDetails)?.igstAmount || 0).toLocaleString('en-IN')}
                         </p>
                       ) : (
-                        <p style={{ margin: '0.2rem 0 0' }}>
+                        <p className="supplier-dashboard-gst-row">
                           <strong>CGST:</strong> ₹{Number(readGstSummary(orderDetails)?.cgstAmount || 0).toLocaleString('en-IN')} | <strong>SGST:</strong> ₹{Number(readGstSummary(orderDetails)?.sgstAmount || 0).toLocaleString('en-IN')}
                         </p>
                       )}
-                      <p style={{ margin: '0.2rem 0 0' }}>
+                      <p className="supplier-dashboard-gst-row">
                         <strong>Total GST:</strong> ₹{Number(readGstSummary(orderDetails)?.taxAmount || 0).toLocaleString('en-IN')}
                       </p>
                     </div>
@@ -1236,25 +1083,25 @@ const SupplierDashboard = ({ user }) => {
                       orderDetails.deliveryAddress.billingAddress ||
                       orderDetails.deliveryAddress.deliveryDestination ||
                       orderDetails.deliveryAddress.gstin) && (
-                      <div style={{ marginTop: '0.45rem', fontSize: '0.88rem', color: '#475569' }}>
-                        <p style={{ margin: 0 }}>
+                      <div className="supplier-dashboard-delivery-meta">
+                        <p className="supplier-dashboard-delivery-row supplier-dashboard-delivery-row-first">
                           <strong>Delivery destination:</strong>{' '}
                           {orderDetails.deliveryAddress.deliveryDestination === 'billing'
                             ? 'Billing address'
                             : 'Shipping address'}
                         </p>
                         {orderDetails.deliveryAddress.gstin && (
-                          <p style={{ margin: '0.2rem 0 0' }}>
+                          <p className="supplier-dashboard-delivery-row">
                             <strong>GSTIN:</strong> {orderDetails.deliveryAddress.gstin}
                           </p>
                         )}
                         {orderDetails.deliveryAddress.shippingAddress && (
-                          <p style={{ margin: '0.2rem 0 0' }}>
+                          <p className="supplier-dashboard-delivery-row">
                             <strong>Shipping:</strong> {formatAddress(orderDetails.deliveryAddress.shippingAddress)}
                           </p>
                         )}
                         {orderDetails.deliveryAddress.billingAddress && (
-                          <p style={{ margin: '0.2rem 0 0' }}>
+                          <p className="supplier-dashboard-delivery-row">
                             <strong>Billing (GST):</strong> {formatAddress(orderDetails.deliveryAddress.billingAddress)}
                           </p>
                         )}
@@ -1282,38 +1129,38 @@ const SupplierDashboard = ({ user }) => {
                       </select>
                     </label>
                     {newStatus === 'shipped' && (
-                      <div style={{ display: 'grid', gap: '0.5rem', marginTop: '0.75rem', width: '100%' }}>
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                          <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Carrier (optional)</span>
+                      <div className="supplier-dashboard-shipping-fields">
+                        <label className="supplier-dashboard-shipping-label">
+                          <span className="supplier-dashboard-shipping-label-text">Carrier (optional)</span>
                           <input
                             type="text"
                             value={shipCarrier}
                             onChange={(e) => setShipCarrier(e.target.value)}
                             placeholder="e.g. BlueDart"
                             disabled={updatingStatus}
-                            style={{ padding: '0.45rem 0.5rem', borderRadius: 6, border: '1px solid #e5e7eb' }}
+                            className="supplier-dashboard-shipping-input"
                           />
                         </label>
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                          <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Tracking number (optional)</span>
+                        <label className="supplier-dashboard-shipping-label">
+                          <span className="supplier-dashboard-shipping-label-text">Tracking number (optional)</span>
                           <input
                             type="text"
                             value={shipTrackingNumber}
                             onChange={(e) => setShipTrackingNumber(e.target.value)}
                             placeholder="AWB / tracking ID"
                             disabled={updatingStatus}
-                            style={{ padding: '0.45rem 0.5rem', borderRadius: 6, border: '1px solid #e5e7eb' }}
+                            className="supplier-dashboard-shipping-input"
                           />
                         </label>
-                        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                          <span style={{ fontSize: '0.85rem', color: '#64748b' }}>Tracking URL (optional)</span>
+                        <label className="supplier-dashboard-shipping-label">
+                          <span className="supplier-dashboard-shipping-label-text">Tracking URL (optional)</span>
                           <input
                             type="url"
                             value={shipTrackingUrl}
                             onChange={(e) => setShipTrackingUrl(e.target.value)}
                             placeholder="https://..."
                             disabled={updatingStatus}
-                            style={{ padding: '0.45rem 0.5rem', borderRadius: 6, border: '1px solid #e5e7eb' }}
+                            className="supplier-dashboard-shipping-input"
                           />
                         </label>
                       </div>
@@ -1331,7 +1178,7 @@ const SupplierDashboard = ({ user }) => {
                     <p><strong>Payment Method:</strong> {orderDetails.paymentMethod.replace('_', ' ').toUpperCase()}</p>
                   )}
                   {orderDetails.invoicePdfUrl && (
-                    <div style={{ marginTop: '0.75rem' }}>
+                    <div className="supplier-dashboard-invoice-cta-wrap">
                       <a
                         href={orderDetails.invoicePdfUrl}
                         target="_blank"
@@ -1342,7 +1189,7 @@ const SupplierDashboard = ({ user }) => {
                       </a>
                     </div>
                   )}
-                  <div style={{ marginTop: '0.5rem' }}>
+                  <div className="supplier-dashboard-receipt-cta-wrap">
                     <button
                       type="button"
                       onClick={handleDownloadReceipt}
@@ -1361,12 +1208,12 @@ const SupplierDashboard = ({ user }) => {
                     <p><strong>Actual Delivery:</strong> {formatDateIST(orderDetails.actualDeliveryDate)}</p>
                   )}
                   {(orderDetails.trackingNumber || orderDetails.trackingUrl || orderDetails.shippingProvider) && (
-                    <div style={{ marginTop: '0.75rem', padding: '0.65rem', background: '#f8fafc', borderRadius: 8 }}>
+                    <div className="supplier-dashboard-shipment-box">
                       <strong>Shipment</strong>
-                      {orderDetails.shippingProvider ? <p style={{ margin: '0.35rem 0 0' }}>Carrier: {orderDetails.shippingProvider}</p> : null}
-                      {orderDetails.trackingNumber ? <p style={{ margin: '0.35rem 0 0' }}>Tracking: {orderDetails.trackingNumber}</p> : null}
+                      {orderDetails.shippingProvider ? <p className="supplier-dashboard-shipment-row">Carrier: {orderDetails.shippingProvider}</p> : null}
+                      {orderDetails.trackingNumber ? <p className="supplier-dashboard-shipment-row">Tracking: {orderDetails.trackingNumber}</p> : null}
                       {orderDetails.trackingUrl ? (
-                        <p style={{ margin: '0.35rem 0 0' }}>
+                        <p className="supplier-dashboard-shipment-row">
                           <a href={orderDetails.trackingUrl} target="_blank" rel="noopener noreferrer">Open tracking</a>
                         </p>
                       ) : null}
@@ -1377,14 +1224,14 @@ const SupplierDashboard = ({ user }) => {
                 {Array.isArray(orderDetails.statusHistory) && orderDetails.statusHistory.length > 0 && (
                   <div className="order-info-section">
                     <h3>Status timeline</h3>
-                    <ol style={{ margin: 0, paddingLeft: '1.25rem', color: '#334155', fontSize: '0.9rem' }}>
+                    <ol className="supplier-dashboard-status-timeline">
                       {sortStatusHistory(orderDetails.statusHistory).map((ev, idx) => (
-                        <li key={idx} style={{ marginBottom: '0.5rem' }}>
+                        <li key={idx} className="supplier-dashboard-status-timeline-item">
                           <strong>{ev.status || '—'}</strong>
                           {ev.timestamp || ev.at ? (
-                            <span style={{ color: '#64748b' }}> — {new Date(ev.timestamp || ev.at).toLocaleString()}</span>
+                            <span className="supplier-dashboard-muted-text"> — {new Date(ev.timestamp || ev.at).toLocaleString()}</span>
                           ) : null}
-                          {ev.notes ? <div style={{ color: '#64748b', marginTop: 2 }}>{ev.notes}</div> : null}
+                          {ev.notes ? <div className="supplier-dashboard-status-note">{ev.notes}</div> : null}
                         </li>
                       ))}
                     </ol>
@@ -1418,14 +1265,14 @@ const SupplierDashboard = ({ user }) => {
                 <div className="order-info-section">
                   <h3>Return Requests</h3>
                   {Array.isArray(orderDetails.returns) && orderDetails.returns.length > 0 ? (
-                    <div style={{ display: 'grid', gap: '0.6rem' }}>
+                    <div className="supplier-dashboard-returns-grid">
                       {orderDetails.returns.map((ret) => (
-                        <div key={ret.id} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '0.65rem' }}>
+                        <div key={ret.id} className="supplier-dashboard-return-card">
                           <div><strong>Status:</strong> {ret.status}</div>
                           <div><strong>Qty:</strong> {ret.quantity}</div>
                           <div><strong>Reason:</strong> {ret.reason}</div>
                           {ret.tracking_id ? <div><strong>Tracking ID:</strong> {ret.tracking_id}</div> : null}
-                          <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.55rem', flexWrap: 'wrap' }}>
+                          <div className="supplier-dashboard-return-actions">
                             {ret.status === 'requested' && (
                               <>
                                 <button className="btn-secondary" onClick={() => handleUpdateReturnStatus(ret.id, 'approved')}>Approve</button>
@@ -1449,52 +1296,41 @@ const SupplierDashboard = ({ user }) => {
                       ))}
                     </div>
                   ) : (
-                    <p style={{ color: '#64748b' }}>No return requests for this order.</p>
+                    <p className="supplier-dashboard-muted-text">No return requests for this order.</p>
                   )}
                 </div>
 
                 {/* Delete Order Section */}
-                <div className="order-info-section" style={{ 
-                  borderTop: '2px solid #fee2e2',
-                  paddingTop: '1.5rem',
-                  marginTop: '1.5rem'
-                }}>
-                  <h3 style={{ color: '#dc2626' }}>Danger Zone</h3>
-                  <p style={{ color: '#64748b', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                <div className="order-info-section supplier-dashboard-danger-zone">
+                  <h3 className="supplier-dashboard-danger-title">Danger Zone</h3>
+                  <p className="supplier-dashboard-danger-text">
                     Deleting an order will permanently remove it from the system. This action cannot be undone.
                     {orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid' && (
-                      <span style={{ display: 'block', color: '#dc2626', marginTop: '0.5rem', fontWeight: '600' }}>
+                      <span className="supplier-dashboard-danger-warning">
                         ⚠️ This order has been delivered and paid. Deletion may not be allowed.
                       </span>
                     )}
                   </p>
-                  <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+                  <div className="supplier-dashboard-danger-actions">
                     {orderDetails.invoicePdfUrl && (
                       <a
-                        className="btn-secondary"
+                        className="btn-secondary supplier-dashboard-danger-link"
                         href={orderDetails.invoicePdfUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.5rem' }}
                       >
                         <FileText size={16} />
                         Download Invoice
                       </a>
                     )}
                     <button
-                      className="btn-secondary"
+                      className={`btn-secondary supplier-dashboard-danger-delete ${
+                        deletingOrder || (orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid')
+                          ? 'supplier-dashboard-danger-delete-disabled'
+                          : 'supplier-dashboard-danger-delete-active'
+                      }`}
                       onClick={handleDeleteOrder}
                       disabled={deletingOrder || (orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid')}
-                      style={{
-                        backgroundColor: deletingOrder ? '#9ca3af' : '#fee2e2',
-                        color: deletingOrder ? '#6b7280' : '#dc2626',
-                        border: '1px solid #dc2626',
-                        cursor: deletingOrder || (orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid') ? 'not-allowed' : 'pointer',
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '0.5rem',
-                        opacity: deletingOrder || (orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid') ? 0.6 : 1
-                      }}
                     >
                       <Trash2 size={16} />
                       {deletingOrder ? 'Deleting...' : 'Delete Order'}
@@ -1503,15 +1339,16 @@ const SupplierDashboard = ({ user }) => {
                 </div>
               </div>
             ) : (
-              <div className="modal-body" style={{ textAlign: 'center', padding: '2rem' }}>
-                <p style={{ color: '#dc2626' }}>Failed to load order details. Please try again.</p>
+              <div className="modal-body supplier-dashboard-modal-body-center">
+                <p className="supplier-dashboard-error-text">Failed to load order details. Please try again.</p>
               </div>
             )}
           </div>
         </div>
       )}
 
-    </div>
+      </div>
+    </SpPageLayout>
   );
 };
 

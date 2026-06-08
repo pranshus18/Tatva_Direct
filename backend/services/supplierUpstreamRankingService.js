@@ -1,4 +1,5 @@
 import { buildOutletAddressString, haversineKm } from '../utils/geoUtils.js';
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 
 export const SUPPLY_CHAIN_ROLE_LABELS = {
   manufacturer: 'Manufacturers (MGF)',
@@ -61,7 +62,12 @@ export function dedupeUpstreamCandidatesBySupplierPreferClosest(candidates) {
     const pNew = parseFloat(c.price) || 0;
     const pOld = parseFloat(prev.price) || 0;
     if (pNew < pOld) map.set(supplierId, c);
-    else if (pNew === pOld && (parseInt(c.stock, 10) || 0) > (parseInt(prev.stock, 10) || 0)) map.set(supplierId, c);
+    else if (
+      pNew === pOld &&
+      (parseSupplierStockQuantity(c.stock) ?? 0) > (parseSupplierStockQuantity(prev.stock) ?? 0)
+    ) {
+      map.set(supplierId, c);
+    }
   }
   return [...map.values()];
 }
@@ -74,8 +80,8 @@ export function rankUpstreamOffersForProduct(candidates) {
     const db = b.distanceKmRaw != null && Number.isFinite(b.distanceKmRaw) ? b.distanceKmRaw : Infinity;
     if (da !== db) return da - db;
 
-    const sa = Math.max(0, parseInt(a.stock, 10) || 0);
-    const sb = Math.max(0, parseInt(b.stock, 10) || 0);
+    const sa = Math.max(0, parseSupplierStockQuantity(a.stock) ?? 0);
+    const sb = Math.max(0, parseSupplierStockQuantity(b.stock) ?? 0);
     if (sa !== sb) return sb - sa;
 
     const pa = Math.max(0, parseFloat(a.price) || 0);
@@ -89,7 +95,7 @@ export function rankUpstreamOffersForProduct(candidates) {
   });
 
   return sorted.map((c, idx) => {
-    const stock = Math.max(0, parseInt(c.stock, 10) || 0);
+    const stock = Math.max(0, parseSupplierStockQuantity(c.stock) ?? 0);
     const price = Math.max(0, parseFloat(c.price) || 0);
     const rv = getUpstreamRatingSortValue(c);
     return {

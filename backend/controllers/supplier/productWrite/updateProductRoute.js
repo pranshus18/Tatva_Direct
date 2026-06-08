@@ -21,8 +21,10 @@ import {
 import {
   buildSupplierProductUpdatePayload,
   checkDuplicateSupplierVariant,
-  fetchAndValidateSupplierProductForUpdate
+  fetchAndValidateSupplierProductForUpdate,
+  resolveLockedVariantPrice
 } from '../../../services/supplierProductWriteService.js';
+import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 
 export function registerSupplierProductUpdateRoute(ctx) {
   const {
@@ -102,31 +104,37 @@ export function registerSupplierProductUpdateRoute(ctx) {
           },
           parentProduct
         );
-        updateSupplierProductData.variant_key = variantIdentity.variantKey;
-        updatedAttributes.variantAttributes = variantIdentity.variant.variantAttributes;
-        if (updateSupplierProductData.attributes) {
-          updateSupplierProductData.attributes = {
-            ...updateSupplierProductData.attributes,
-            variantAttributes: variantIdentity.variant.variantAttributes
-          };
-        }
-        updateSupplierProductData.variant_asin = buildVariantAsinLikeId(
-          parentProduct?.asin || '',
-          variantIdentity.variantKey
-        );
+        const variantKeyChanged =
+          specificationsChanged ||
+          String(variantIdentity.variantKey || '') !== String(supplierProduct.variant_key || '');
 
-        const duplicateVariant = await checkDuplicateSupplierVariant(supabase, {
-          supplierProduct,
-          reqUserId: req.userId,
-          candidateLocation,
-          variantKey: variantIdentity.variantKey,
-          currentId: id
-        });
-        if (duplicateVariant) {
-          return res.status(400).json({
-            status: 'error',
-            message: 'An identical product variation already exists for this location. Update that offer instead.'
+        if (variantKeyChanged) {
+          updateSupplierProductData.variant_key = variantIdentity.variantKey;
+          updatedAttributes.variantAttributes = variantIdentity.variant.variantAttributes;
+          if (updateSupplierProductData.attributes) {
+            updateSupplierProductData.attributes = {
+              ...updateSupplierProductData.attributes,
+              variantAttributes: variantIdentity.variant.variantAttributes
+            };
+          }
+          updateSupplierProductData.variant_asin = buildVariantAsinLikeId(
+            parentProduct?.asin || '',
+            variantIdentity.variantKey
+          );
+
+          const duplicateVariant = await checkDuplicateSupplierVariant(supabase, {
+            supplierProduct,
+            reqUserId: req.userId,
+            candidateLocation,
+            variantKey: variantIdentity.variantKey,
+            currentId: id
           });
+          if (duplicateVariant) {
+            return res.status(400).json({
+              status: 'error',
+              message: 'An identical product variation already exists for this location. Update that offer instead.'
+            });
+          }
         }
 
         let movedToPendingForSpecReview = false;
@@ -145,6 +153,28 @@ export function registerSupplierProductUpdateRoute(ctx) {
             message: 'No changes detected',
             product: supplierProduct
           });
+        }
+
+        if (req.body.price !== undefined) {
+          const requestedPrice = Number(updateSupplierProductData.price);
+          const normalizedRequestedPrice = Number.isFinite(requestedPrice)
+            ? Number(requestedPrice.toFixed(2))
+            : null;
+          const lockedVariantPrice = await resolveLockedVariantPrice(supabase, {
+            productId: supplierProduct.product_id,
+            variantKey: variantIdentity.variantKey,
+            excludeSupplierProductId: id
+          });
+          if (
+            lockedVariantPrice !== null &&
+            (normalizedRequestedPrice === null || normalizedRequestedPrice !== lockedVariantPrice)
+          ) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'variant_price_locked',
+              message: `MRP is locked for this variant. Use ₹${lockedVariantPrice.toFixed(2)} for all suppliers.`
+            });
+          }
         }
 
         const { data: updatedSupplierProduct, error: spUpdateError } = await supabase
@@ -206,7 +236,10 @@ export function registerSupplierProductUpdateRoute(ctx) {
           lsa: updatedSupplierProduct.attributes?.lsa,
           hsnCode: updatedSupplierProduct.attributes?.hsnCode,
           price: updatedSupplierProduct.price,
-          stock: updatedSupplierProduct.stock,
+          stock:
+            parseSupplierStockQuantity(updatedSupplierProduct.stock) ??
+            parseSupplierStockQuantity(supplierProduct.stock) ??
+            0,
           igst_rate: updatedSupplierProduct.igst_rate ?? updatedSupplierProduct.attributes?.igstRate ?? null,
           cgst_rate: updatedSupplierProduct.cgst_rate ?? updatedSupplierProduct.attributes?.cgstRate ?? null,
           sgst_rate: updatedSupplierProduct.sgst_rate ?? updatedSupplierProduct.attributes?.sgstRate ?? null,
@@ -226,7 +259,9 @@ export function registerSupplierProductUpdateRoute(ctx) {
 
         try {
           const changes = [];
-          if (supplierProduct.price !== updatedSupplierProduct.price) changes.push(`Price: Rs${supplierProduct.price} -> Rs${updatedSupplierProduct.price}`);
+          if (supplierProduct.price !== updatedSupplierProduct.price) {
+            changes.push(`Price: ₹${supplierProduct.price} -> ₹${updatedSupplierProduct.price}`);
+          }
           if (supplierProduct.stock !== updatedSupplierProduct.stock) changes.push(`Stock: ${supplierProduct.stock} -> ${updatedSupplierProduct.stock}`);
           if (supplierProduct.location !== updatedSupplierProduct.location) changes.push(`Location changed`);
           if (supplierProduct.min_order_quantity !== updatedSupplierProduct.min_order_quantity) changes.push(`Min Order Qty changed`);
@@ -264,6 +299,31 @@ export function registerSupplierProductUpdateRoute(ctx) {
 
       if (supplierProductError && supplierProductError.code && supplierProductError.code !== 'PGRST116') {
         console.error('Error checking supplier_products for update:', supplierProductError);
+      }
+
+      const inventoryFieldsTouched =
+        req.body.stock !== undefined ||
+        req.body.price !== undefined ||
+        req.body.location !== undefined ||
+        req.body.min_order_quantity !== undefined;
+
+      if (inventoryFieldsTouched) {
+        const { data: offerRows, error: offerRowsError } = await supabase
+          .from('supplier_products')
+          .select('id')
+          .eq('product_id', id)
+          .eq('supplier_id', req.userId)
+          .neq('status', 'rejected');
+
+        if (!offerRowsError && offerRows && offerRows.length > 0) {
+          return res.status(400).json({
+            status: 'error',
+            message:
+              offerRows.length > 1
+                ? 'This product has multiple variants. Edit each variant separately in Manage Inventory (each row has its own offer id).'
+                : 'Use the variant offer id from Manage Inventory, not the shared catalog product id.'
+          });
+        }
       }
 
       // 2) Fallback: treat ID as products.id (backward compatibility)

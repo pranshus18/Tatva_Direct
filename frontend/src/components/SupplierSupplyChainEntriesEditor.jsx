@@ -1,8 +1,18 @@
-import React, { useEffect, useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ChevronDown, ChevronUp, FileText, Pencil, Plus, X } from 'lucide-react';
 import { getApiUrl } from '../config/api';
-
-const PRESET_SUPPLIER_BRANDS = ['Asian Paints', 'Oil', 'Cement'];
+import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
+import { useSupplierBrands } from '../hooks/useSupplierBrands';
+import { validateCompanyInfoEntriesList } from '../utils/supplierChainEntryValidation';
+import {
+  appendAuthorizationCertificateUrl,
+  certificateLabelFromUrl,
+  isImageCertificateUrl,
+  removeAuthorizationCertificateUrl,
+  resolveAuthorizationCertificateUrls,
+  setAuthorizationCertificateUrls
+} from '../utils/authorizationCertificateUrls';
+import './SupplierSupplyChainEntriesEditor.css';
 
 function parseBrandsList(brands) {
   if (brands == null || brands === '') return [];
@@ -19,8 +29,16 @@ function parseBrandsList(brands) {
   ];
 }
 
-function brandsListToString(list) {
-  return list.join(', ');
+function normalizeSingleBrand(brands) {
+  const list = parseBrandsList(brands);
+  return list[0] || '';
+}
+
+function sanitizeCustomBrandInput(raw) {
+  return String(raw || '')
+    .replace(/[,;\n]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 const SUPPLY_CHAIN_ROLE_OPTIONS = [
@@ -36,6 +54,24 @@ function genEntryId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `entry-${Date.now()}`;
 }
 
+function isEntryCompletedForCompact(entry) {
+  const brand = normalizeSingleBrand(entry?.brands);
+  const role = String(entry?.role || '').trim();
+  const gstin = String(entry?.gstin || '').trim();
+  const companyName = String(entry?.companyName || '').trim();
+  const certificateUrls = resolveAuthorizationCertificateUrls(entry);
+  return !!(brand && role && gstin && companyName && certificateUrls.length > 0);
+}
+
+function RequiredMark() {
+  return (
+    <span className="field-required" aria-hidden="true">
+      {' '}
+      *
+    </span>
+  );
+}
+
 const CompanyInfoEntryCard = ({
   entry,
   entryIndex,
@@ -43,217 +79,299 @@ const CompanyInfoEntryCard = ({
   onUpdate,
   onRemove,
   onCertificateUpload,
+  onCertificateRemove,
   uploadingForThisEntry,
+  removingCertificateUrl,
   editing,
   canRemove,
   availableRoleOptions = SUPPLY_CHAIN_ROLE_OPTIONS,
   roleOptionsLoading = false,
   roleOptionsMessage = '',
   adminChainReady = false,
-  adminChainStatusText = ''
+  adminChainStatusText = '',
+  catalogBrandNames = [],
+  catalogBrandsLoading = false,
+  expanded = true,
+  onToggleExpand = null,
+  onSaveEntry = null,
+  savingThisEntry = false
 }) => {
-  const list = parseBrandsList(entry.brands);
+  const selectedBrand = normalizeSingleBrand(entry.brands);
   const roleLabel = SUPPLY_CHAIN_ROLE_OPTIONS.find((o) => o.value === entry.role)?.label || null;
-  const brandsPreview = (entry.brands || '').trim() || (list.length ? list.join(', ') : '');
+  const isCatalogBrand = selectedBrand && catalogBrandNames.includes(selectedBrand);
+  const certificateUrls = resolveAuthorizationCertificateUrls(entry);
 
-  const addPresetBrand = (e) => {
-    const v = e.target.value;
-    e.target.value = '';
-    if (!v || !editing) return;
-    if (list.includes(v)) return;
-    onUpdate('brands', brandsListToString([...list, v]));
+  const handleCatalogBrandSelect = (e) => {
+    const value = e.target.value;
+    if (value) onUpdate('brands', value);
   };
 
-  const removeBrand = (name) => {
-    onUpdate('brands', brandsListToString(list.filter((b) => b !== name)));
+  const handleBrandNameInput = (e) => {
+    onUpdate('brands', sanitizeCustomBrandInput(e.target.value));
   };
 
   return (
-    <div className="company-info-entry-card">
-      <div className="company-info-entry-header">
-        <div className="company-info-entry-title-block">
-          <span className="company-info-entry-number">
+    <article className="chain-entry-card">
+      <header className="chain-entry-header">
+        <div className="chain-entry-header__main">
+          <span className="chain-entry-header__eyebrow">
             Entry {entryIndex} of {totalEntries}
           </span>
-          <span className="company-info-entry-badge">
-            {roleLabel || 'Role not selected yet'}
-          </span>
-          {(brandsPreview || list.length > 0) && (
-            <p className="company-info-entry-brands-preview">
-              <strong>Brands:</strong> {brandsPreview || list.join(', ')}
-            </p>
-          )}
+          <div className="chain-entry-header__chips">
+            <span className={`chain-chip ${roleLabel ? 'chain-chip--role' : 'chain-chip--muted'}`}>
+              {roleLabel || 'Role pending'}
+            </span>
+            <span className={`chain-chip ${selectedBrand ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
+              {selectedBrand || 'Brand pending'}
+            </span>
+            <span className={`chain-chip ${certificateUrls.length > 0 ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
+              {certificateUrls.length > 0
+                ? `Certification: ${certificateUrls.length} document(s)`
+                : 'Certification pending'}
+            </span>
+          </div>
         </div>
-        {canRemove && editing && (
+        <div className="chain-entry-header__actions">
+          {editing ? (
+            <button
+              type="button"
+              className="chain-entry-save"
+              onClick={() => onSaveEntry?.(entry.id, entryIndex - 1)}
+              disabled={savingThisEntry}
+              title="Save this entry"
+            >
+              {savingThisEntry ? 'Saving…' : 'Save entry'}
+            </button>
+          ) : null}
           <button
             type="button"
-            className="btn-remove"
-            onClick={onRemove}
-            aria-label="Remove this entry"
+            className="chain-entry-toggle"
+            onClick={onToggleExpand}
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse this entry' : 'Expand this entry'}
           >
-            <X size={16} />
+            {expanded ? (
+              <>
+                <ChevronUp size={16} />
+                Collapse
+              </>
+            ) : (
+              <>
+                <ChevronDown size={16} />
+                Expand
+              </>
+            )}
           </button>
-        )}
-      </div>
-      <div className="form-grid company-info-entry-fields">
-        <div className="form-group">
-          <label className="brands-handled-label-cap">Your role for this block (one layer only)</label>
-          <select
-            value={entry.role || ''}
-            onChange={(e) => onUpdate('role', e.target.value)}
-            disabled={!editing || roleOptionsLoading || availableRoleOptions.length === 0}
-            className="brands-preset-select"
-          >
-            <option value="">Select type</option>
-            {availableRoleOptions.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          {roleOptionsLoading ? (
-            <p className="brands-handled-hint" style={{ marginTop: 8 }}>Loading role options...</p>
-          ) : null}
-          {!roleOptionsLoading && roleOptionsMessage ? (
-            <p className="brands-handled-hint" style={{ marginTop: 8 }}>{roleOptionsMessage}</p>
-          ) : null}
-        </div>
-        <div className="form-group span-2">
-          <label className="brands-handled-label-cap">Brands handled</label>
-          {adminChainStatusText ? (
-            <p
-              className="brands-handled-hint"
-              style={{
-                marginTop: 0,
-                marginBottom: 8,
-                color: adminChainReady ? '#166534' : '#b45309',
-                fontWeight: 600
-              }}
+          {canRemove && editing ? (
+            <button
+              type="button"
+              className="chain-entry-remove"
+              onClick={onRemove}
+              aria-label="Remove this entry"
             >
-              {adminChainReady ? 'Admin chain ready:' : 'Admin chain pending:'} {adminChainStatusText}
-            </p>
+              <X size={16} />
+            </button>
           ) : null}
-          <select
-            className="brands-preset-select"
-            value=""
-            onChange={addPresetBrand}
-            disabled={!editing}
-            aria-label="Add preset brand"
-          >
-            <option value="">Add brand from list...</option>
-            {PRESET_SUPPLIER_BRANDS.map((b) => (
-              <option key={b} value={b}>
-                {b}
-              </option>
-            ))}
-          </select>
-          {list.length > 0 && (
-            <div className="brand-chips" role="list">
-              {list.map((b) => (
-                <span key={b} className="brand-chip" role="listitem">
-                  {b}
-                  {editing && (
-                    <button
-                      type="button"
-                      className="brand-chip-remove"
-                      aria-label={`Remove ${b}`}
-                      onClick={() => removeBrand(b)}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </span>
-              ))}
+        </div>
+      </header>
+
+      {expanded ? <div className="chain-entry-body">
+        <section className="chain-section">
+          <h3 className="chain-section__title">Brand &amp; role</h3>
+          <div className="chain-section__panel">
+            {adminChainStatusText ? (
+              <p
+                className={`chain-callout ${
+                  adminChainReady ? 'chain-callout--success' : 'chain-callout--warning'
+                }`}
+              >
+                {adminChainReady ? 'Admin chain ready:' : 'Admin chain pending:'} {adminChainStatusText}
+              </p>
+            ) : null}
+
+            <div className="chain-brand-grid">
+              {catalogBrandNames.length > 0 ? (
+                <div className="chain-field">
+                  <label className="chain-field__sublabel" htmlFor={`catalog-brand-${entry.id}`}>
+                    Pick from catalog
+                  </label>
+                  <select
+                    id={`catalog-brand-${entry.id}`}
+                    className="chain-field__control"
+                    value={isCatalogBrand ? selectedBrand : ''}
+                    onChange={handleCatalogBrandSelect}
+                    disabled={!editing || catalogBrandsLoading}
+                    aria-label="Pick brand from catalog"
+                  >
+                    <option value="">
+                      {catalogBrandsLoading ? 'Loading brands…' : 'Select from catalog…'}
+                    </option>
+                    {catalogBrandNames.map((b) => (
+                      <option key={b} value={b}>
+                        {b}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
+
+              <div className={`chain-field${catalogBrandNames.length === 0 ? ' chain-field--full' : ''}`}>
+                <label className="chain-field__label" htmlFor={`brand-name-${entry.id}`}>
+                  Brand name
+                  <RequiredMark />
+                </label>
+                <input
+                  id={`brand-name-${entry.id}`}
+                  type="text"
+                  className="chain-field__control"
+                  value={selectedBrand}
+                  onChange={handleBrandNameInput}
+                  disabled={!editing}
+                  placeholder="Enter one brand name"
+                  required={editing}
+                  aria-required="true"
+                />
+              </div>
             </div>
-          )}
-          <textarea
-            rows={2}
-            value={entry.brands || ''}
-            onChange={(e) => onUpdate('brands', e.target.value)}
-            disabled={!editing}
-            placeholder="e.g. Asian Paints, Oil, Cement..."
-            className="brands-entry-textarea"
-          />
-        </div>
-        <div className="form-group">
-          <label>GSTIN</label>
-          <input
-            type="text"
-            value={entry.gstin || ''}
-            onChange={(e) => onUpdate('gstin', e.target.value)}
-            disabled={!editing}
-            placeholder="22AAAAA0000A1Z5"
-          />
-        </div>
-        <div className="form-group">
-          <label>Company Name</label>
-          <input
-            type="text"
-            value={entry.companyName || ''}
-            onChange={(e) => onUpdate('companyName', e.target.value)}
-            disabled={!editing}
-          />
-        </div>
-        <div className="form-group span-2">
-          <label>Ownership Details</label>
-          <textarea
-            rows={3}
-            value={entry.ownershipDetails || ''}
-            onChange={(e) => onUpdate('ownershipDetails', e.target.value)}
-            disabled={!editing}
-            placeholder="Proprietorship / Partnership / Pvt. Ltd. / LLP etc."
-          />
-        </div>
-        {entry.role && entry.role !== 'retailer' ? (
-          <div className="form-group span-2">
-            <label>Minimum order value (₹) — upstream B2B buyers</label>
-            <input
-              type="number"
-              min={0}
-              step={1}
-              value={entry.minimumOrderValue ?? ''}
-              onChange={(e) => onUpdate('minimumOrderValue', e.target.value)}
-              disabled={!editing}
-              placeholder="e.g. 25000 — minimum order total when partners buy from you"
-            />
-            <p className="brands-handled-hint" style={{ marginTop: 8 }}>
-              When <strong>you</strong> are the seller in this layer, downstream partners must meet this order total
-              (not used for the Retailer layer). Leave empty for no minimum.
-            </p>
+
+            <div className="chain-field chain-field--full">
+              <label className="chain-field__label" htmlFor={`role-${entry.id}`}>
+                Supply-chain role
+                <RequiredMark />
+              </label>
+              <select
+                id={`role-${entry.id}`}
+                className="chain-field__control"
+                value={entry.role || ''}
+                onChange={(e) => onUpdate('role', e.target.value)}
+                disabled={!editing || roleOptionsLoading || availableRoleOptions.length === 0}
+                required={editing}
+                aria-required="true"
+              >
+                <option value="">Select your role</option>
+                {availableRoleOptions.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              {roleOptionsLoading ? (
+                <p className="chain-callout chain-callout--info">Loading role options…</p>
+              ) : null}
+              {!roleOptionsLoading && roleOptionsMessage ? (
+                <p className="chain-callout chain-callout--info">{roleOptionsMessage}</p>
+              ) : null}
+            </div>
           </div>
+        </section>
+
+        <section className="chain-section">
+          <h3 className="chain-section__title">Business details</h3>
+          <div className="chain-form-grid">
+            <div className="chain-field">
+              <label className="chain-field__label" htmlFor={`gstin-${entry.id}`}>
+                GSTIN
+                <RequiredMark />
+              </label>
+              <input
+                id={`gstin-${entry.id}`}
+                type="text"
+                className="chain-field__control"
+                value={entry.gstin || ''}
+                onChange={(e) => onUpdate('gstin', e.target.value)}
+                disabled={!editing}
+                placeholder="22AAAAA0000A1Z5"
+                required={editing}
+                aria-required="true"
+              />
+            </div>
+            <div className="chain-field">
+              <label className="chain-field__label" htmlFor={`company-${entry.id}`}>
+                Company name
+                <RequiredMark />
+              </label>
+              <input
+                id={`company-${entry.id}`}
+                type="text"
+                className="chain-field__control"
+                value={entry.companyName || ''}
+                onChange={(e) => onUpdate('companyName', e.target.value)}
+                disabled={!editing}
+                placeholder="Registered business name"
+                required={editing}
+                aria-required="true"
+              />
+            </div>
+          </div>
+        </section>
+
+        {entry.role && entry.role !== 'retailer' ? (
+          <section className="chain-section">
+            <h3 className="chain-section__title">Order rules</h3>
+            <div className="chain-field chain-field--full">
+              <label className="chain-field__label" htmlFor={`mov-${entry.id}`}>
+                Minimum order value (₹)
+                <RequiredMark />
+              </label>
+              <input
+                id={`mov-${entry.id}`}
+                type="number"
+                min={0}
+                step={1}
+                className="chain-field__control"
+                value={entry.minimumOrderValue ?? ''}
+                onChange={(e) => onUpdate('minimumOrderValue', e.target.value)}
+                disabled={!editing}
+                placeholder="e.g. 25000"
+                required={editing}
+                aria-required="true"
+              />
+              <p className="chain-callout chain-callout--info">
+                Downstream partners must meet this order total when buying from you in this layer.
+              </p>
+            </div>
+          </section>
         ) : null}
-        <div className="form-group span-2">
-          <label>Brand authorisation certificate (this entry)</label>
-          <input
-            type="file"
-            accept=".pdf,image/*"
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              e.target.value = '';
-              if (file && onCertificateUpload) onCertificateUpload(entry.id, file);
-            }}
-            disabled={!editing || uploadingForThisEntry}
-          />
-          {uploadingForThisEntry && <p className="cert-upload-status">Uploading...</p>}
-          {entry.authorizationCertificateUrl && !uploadingForThisEntry && (
-            <p className="cert-upload-status">
-              <a href={entry.authorizationCertificateUrl} target="_blank" rel="noopener noreferrer">
-                View uploaded certificate
-              </a>
-            </p>
-          )}
-        </div>
-      </div>
-    </div>
+
+        <section className="chain-section">
+          <h3 className="chain-section__title">Authorisation documents</h3>
+          <div className="chain-section__panel">
+            <div className="chain-field chain-field--full">
+              <label className="chain-field__label">
+                Brand authorisation documents
+                <RequiredMark />
+              </label>
+              <BrandAuthorizationDocuments
+                entry={entry}
+                editing={editing}
+                uploading={uploadingForThisEntry}
+                removingUrl={removingCertificateUrl}
+                onUpload={(files) => onCertificateUpload?.(entry.id, files)}
+                onRemove={(url) => onCertificateRemove?.(entry.id, url)}
+              />
+            </div>
+          </div>
+        </section>
+      </div> : null}
+    </article>
   );
 };
 
 /**
  * Supply-chain role + brands + certificates (one block per layer). Used on the dedicated Select yourself page.
  */
-export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, editing }) {
+export default function SupplierSupplyChainEntriesEditor({
+  profile,
+  setProfile,
+  editing,
+  onSaveEntry = null,
+  savingEntryId = null
+}) {
   const [uploadingCertificateEntryId, setUploadingCertificateEntryId] = useState(null);
+  const [removingCertificate, setRemovingCertificate] = useState(null);
   const [entryRoleOptions, setEntryRoleOptions] = useState({});
+  const [expandedEntryIds, setExpandedEntryIds] = useState([]);
+  const { brandNames: catalogBrandNames, loading: catalogBrandsLoading } = useSupplierBrands();
 
   const getDisplayEntries = () => {
     const entries = profile?.companyInfoEntries;
@@ -266,13 +384,61 @@ export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, 
         gstin: profile?.gstin || '',
         companyName: profile?.companyName || '',
         ownershipDetails: profile?.ownershipDetails || '',
-        authorizationCertificateUrl: profile?.authorizationCertificateUrl || '',
+        ...setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(profile || {})),
         minimumOrderValue: profile?.minimumOrderValue ?? ''
       }
     ];
   };
 
+  const applyCertificateUrlToEntry = (entryId, url, mode = 'append') => {
+    if (entryId === 'legacy') {
+      const certificateFields =
+        mode === 'remove'
+          ? removeAuthorizationCertificateUrl(profile, url)
+          : appendAuthorizationCertificateUrl(profile, url);
+      setProfile({
+        ...profile,
+        authorizationCertificateUrls: certificateFields.authorizationCertificateUrls,
+        authorizationCertificateUrl: certificateFields.authorizationCertificateUrl,
+        authorizationCertificatePath:
+          certificateFields.authorizationCertificateUrl ? profile?.authorizationCertificatePath : ''
+      });
+      return;
+    }
+
+    const entries = (profile?.companyInfoEntries || []).map((entry) => {
+      if (entry.id !== entryId) return entry;
+      return mode === 'remove'
+        ? removeAuthorizationCertificateUrl(entry, url)
+        : appendAuthorizationCertificateUrl(entry, url);
+    });
+    setProfile({ ...profile, companyInfoEntries: entries });
+  };
+
   const displayEntries = getDisplayEntries();
+  const compactSignature = JSON.stringify(
+    displayEntries.map((entry) => ({
+      id: entry.id,
+      completed: isEntryCompletedForCompact(entry)
+    }))
+  );
+
+  useEffect(() => {
+    setExpandedEntryIds((prev) => {
+      const prevSet = new Set(prev);
+      const nextExpanded = [];
+      for (const entry of displayEntries) {
+        if (prevSet.has(entry.id)) {
+          nextExpanded.push(entry.id);
+          continue;
+        }
+        if (!isEntryCompletedForCompact(entry)) {
+          nextExpanded.push(entry.id);
+        }
+      }
+      return nextExpanded;
+    });
+  }, [compactSignature]);
 
   const entryBrandSignature = JSON.stringify(
     displayEntries.map((entry) => ({
@@ -372,6 +538,7 @@ export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, 
             gstin: profile?.gstin || '',
             companyName: profile?.companyName || '',
             ownershipDetails: profile?.ownershipDetails || '',
+            authorizationCertificateUrl: profile?.authorizationCertificateUrl || '',
             minimumOrderValue: profile?.minimumOrderValue ?? ''
           }
         ];
@@ -402,6 +569,7 @@ export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, 
   };
 
   const updateCompanyInfoEntry = (entryId, field, value) => {
+    const nextValue = field === 'brands' ? normalizeSingleBrand(value) : value;
     if (entryId === 'legacy') {
       const legacy = {
         role: profile?.supplierRole || '',
@@ -411,21 +579,30 @@ export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, 
         ownershipDetails: profile?.ownershipDetails || '',
         minimumOrderValue: profile?.minimumOrderValue ?? ''
       };
-      const updated = { ...legacy, [field]: value };
+      const updated = { ...legacy, [field]: nextValue };
       setProfile({
         ...profile,
-        companyInfoEntries: [{ id: genEntryId(), ...updated }],
+        companyInfoEntries: [
+          {
+            id: genEntryId(),
+            ...updated,
+            authorizationCertificateUrl:
+              updated.authorizationCertificateUrl || profile?.authorizationCertificateUrl || ''
+          }
+        ],
         supplierRole: updated.role,
         brands: updated.brands,
         gstin: updated.gstin,
         companyName: updated.companyName,
         ownershipDetails: updated.ownershipDetails,
-        minimumOrderValue: updated.minimumOrderValue
+        minimumOrderValue: updated.minimumOrderValue,
+        authorizationCertificateUrl:
+          updated.authorizationCertificateUrl || profile?.authorizationCertificateUrl || ''
       });
       return;
     }
     const entries = (profile?.companyInfoEntries || []).map((e) =>
-      e.id === entryId ? { ...e, [field]: value } : e
+      e.id === entryId ? { ...e, [field]: nextValue } : e
     );
     setProfile({ ...profile, companyInfoEntries: entries });
   };
@@ -447,35 +624,98 @@ export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, 
     setProfile({ ...profile, companyInfoEntries: entries });
   };
 
-  const handleCertificateUploadForEntry = async (entryId, file) => {
-    if (!file) return;
-    setUploadingCertificateEntryId(entryId);
+  const handleCertificateRemoveForEntry = async (entryId, url) => {
+    if (!url) return;
+    if (!window.confirm('Remove this authorisation document?')) {
+      return;
+    }
+
+    setRemovingCertificate({ entryId, url });
     try {
       const token = localStorage.getItem('token');
-      const formData = new FormData();
-      formData.append('file', file);
-      if (entryId !== 'legacy') formData.append('entryId', entryId);
+      if (!token) {
+        alert('Please sign in again to remove certificates.');
+        return;
+      }
 
-      const response = await fetch(getApiUrl('/api/profile/supplier/authorization-certificate'), {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData
-      });
-
-      const data = await response.json();
-
-      if (data.status === 'success' && data.url) {
-        if (entryId === 'legacy') {
-          setProfile({ ...profile, authorizationCertificateUrl: data.url });
-        } else {
-          updateCompanyInfoEntry(entryId, 'authorizationCertificateUrl', data.url);
+      const params = new URLSearchParams();
+      if (entryId !== 'legacy') params.set('entryId', entryId);
+      params.set('url', url);
+      const response = await fetch(
+        getApiUrl(`/api/profile/supplier/authorization-certificate?${params.toString()}`),
+        {
+          method: 'DELETE',
+          headers: { Authorization: `Bearer ${token}` }
         }
-      } else {
-        alert(data.message || 'Failed to upload authorization certificate');
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || data.status !== 'success') {
+        alert(data.message || `Failed to remove document (${response.status})`);
+        return;
+      }
+
+      applyCertificateUrlToEntry(entryId, url, 'remove');
+
+      if (data.savedToProfile === false) {
+        alert(
+          data.message ||
+            'Document removed in this form. Click Save on Select yourself to persist the change.'
+        );
+      }
+    } catch (error) {
+      console.error('Failed to remove authorization certificate:', error);
+      alert('Failed to remove authorization document. Please try again.');
+    } finally {
+      setRemovingCertificate(null);
+    }
+  };
+
+  const uploadSingleCertificateForEntry = async (entryId, file) => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      throw new Error('Please sign in again to upload certificates.');
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+    if (entryId !== 'legacy') formData.append('entryId', entryId);
+
+    const response = await fetch(getApiUrl('/api/profile/supplier/authorization-certificate'), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.status !== 'success' || !data.url) {
+      throw new Error(data.message || `Failed to upload authorization document (${response.status})`);
+    }
+
+    applyCertificateUrlToEntry(entryId, data.url, 'append');
+    return data;
+  };
+
+  const handleCertificateUploadForEntry = async (entryId, files) => {
+    const fileList = Array.from(files || []);
+    if (!fileList.length) return;
+
+    setUploadingCertificateEntryId(entryId);
+    let pendingSaveNotice = false;
+    try {
+      for (const file of fileList) {
+        const data = await uploadSingleCertificateForEntry(entryId, file);
+        if (data.savedToProfile === false) pendingSaveNotice = true;
+      }
+      if (pendingSaveNotice) {
+        alert(
+          'Documents uploaded. Click Save on this page to keep them linked to your profile entry.'
+        );
       }
     } catch (error) {
       console.error('Failed to upload authorization certificate:', error);
-      alert('Failed to upload authorization certificate. Please try again.');
+      alert(error?.message || 'Failed to upload authorization document. Please try again.');
     } finally {
       setUploadingCertificateEntryId(null);
     }
@@ -483,17 +723,15 @@ export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, 
 
   return (
     <div className="supplier-select-yourself-editor">
-      <p className="modal-chain-hint" style={{ marginTop: 0 }}>
-        <strong>One block = one supply-chain layer.</strong> Choose a single role per block (e.g. Dealer only in that
-        block—do not combine layers). Full order toward the customer is:{' '}
-        <strong>Manufacturer → Stockist → Regional → Local → Dealer → Retailer</strong>. Upstream ordering and partner
-        lists use these layers so they stay separate. Each block is a full form (role, brands, GSTIN, company,
-        ownership). Use <strong>Add another</strong> for a <em>different</em> role below.
+      <p className="chain-intro">
+        <strong>One block = one supply-chain layer.</strong> Add a single role per block. Chain order:{' '}
+        <strong>Manufacturer → Stockist → Regional → Local → Dealer → Retailer</strong>.
       </p>
 
-      <div className="company-info-entries-list">
+      <div className="chain-entries">
         {displayEntries.map((entry, idx) => {
           const roleUiState = entryRoleOptions[entry.id] || {};
+          const expanded = expandedEntryIds.includes(entry.id);
           return (
           <CompanyInfoEntryCard
             key={entry.id}
@@ -503,7 +741,11 @@ export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, 
             onUpdate={(field, value) => updateCompanyInfoEntry(entry.id, field, value)}
             onRemove={() => removeCompanyInfoEntry(entry.id)}
             onCertificateUpload={handleCertificateUploadForEntry}
+            onCertificateRemove={handleCertificateRemoveForEntry}
             uploadingForThisEntry={uploadingCertificateEntryId === entry.id}
+            removingCertificateUrl={
+              removingCertificate?.entryId === entry.id ? removingCertificate.url : null
+            }
             editing={editing}
             canRemove={displayEntries.length > 1}
             availableRoleOptions={roleUiState.options || []}
@@ -511,22 +753,32 @@ export default function SupplierSupplyChainEntriesEditor({ profile, setProfile, 
             roleOptionsMessage={roleUiState.message || ''}
             adminChainReady={!!roleUiState.adminChainReady}
             adminChainStatusText={roleUiState.adminChainStatusText || ''}
+            catalogBrandNames={catalogBrandNames}
+            catalogBrandsLoading={catalogBrandsLoading}
+            expanded={expanded}
+            onSaveEntry={onSaveEntry}
+            savingThisEntry={savingEntryId === entry.id}
+            onToggleExpand={() =>
+              setExpandedEntryIds((prev) =>
+                prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]
+              )
+            }
           />
           );
         })}
       </div>
 
-      {editing && (
-        <div className="add-another-entry-block add-another-entry-block--inline">
-          <p className="add-another-entry-hint">
-            When this entry is complete, add another form below for a different role (e.g. Dealer) and its brands.
+      {editing ? (
+        <div className="chain-add-entry">
+          <p className="chain-add-entry__hint">
+            Need another role or brand? Add a separate entry below.
           </p>
-          <button type="button" className="btn-add btn-add-another-entry" onClick={addCompanyInfoEntry}>
+          <button type="button" className="chain-add-entry__btn" onClick={addCompanyInfoEntry}>
             <Plus size={16} />
-            Add another (role + brands)
+            Add another entry
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

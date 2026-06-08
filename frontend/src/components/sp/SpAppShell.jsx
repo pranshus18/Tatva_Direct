@@ -78,25 +78,29 @@ export default function SpAppShell({ user, onLogout, children }) {
     return () => document.body.classList.remove('sp-portal-active');
   }, []);
 
-  const bgImage = resolveServiceProviderThemeBackground(themePrefs);
-  const themeClass =
-    themePrefs.themeId && themePrefs.themeId !== 'custom'
-      ? `layout--service-provider-theme-${themePrefs.themeId}`
-      : 'layout--service-provider-theme-default';
+  const isCustomWallpaper =
+    themePrefs.themeId === 'custom' && Boolean(themePrefs.customImageDataUrl);
+  const shellBackgroundStyle =
+    themePrefs.themeId === 'default'
+      ? undefined
+      : {
+          backgroundImage: resolveServiceProviderThemeBackground(themePrefs),
+          ...(isCustomWallpaper
+            ? {
+                backgroundAttachment: 'fixed',
+                backgroundSize: 'cover',
+                backgroundPosition: 'center'
+              }
+            : {})
+        };
 
   return (
     <div
       className={cn(
         'sp-portal flex min-h-screen bg-background',
-        themeClass,
         isVoiceGuidedActive() && 'layout--voice-guided'
       )}
-      style={{
-        backgroundImage: bgImage,
-        backgroundAttachment: 'fixed',
-        backgroundSize: 'cover',
-        backgroundPosition: 'center'
-      }}
+      style={shellBackgroundStyle}
     >
       <div className="hidden lg:flex">
         <SpSidebar />

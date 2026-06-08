@@ -54,7 +54,10 @@ export {
   getMinDrivingDistanceFromOriginsKm
 } from '../../utils/geoUtils.js';
 export { getMinimumOrderValueInrForSellerRole } from '../../utils/supplierProfile.js';
-export { fetchPendingChainRequest } from '../../services/supplierChainProfileService.js';
+export {
+  baselineChainFromProfile,
+  fetchPendingChainRequest
+} from '../../services/supplierChainProfileService.js';
 export {
   fetchClosedReturnQuantityByOrderItem,
   getNetItemMetrics,
@@ -87,7 +90,10 @@ export {
 export { ensureBrandApprovedOrRequest } from '../../services/brandApprovalService.js';
 export { insertNotification, insertNotifications } from '../../repositories/notificationsRepository.js';
 export { findAdmins, findUserBasicById } from '../../repositories/usersRepository.js';
-export { validateAndNormalizeBcovLevels } from '../../services/supplierBcovService.js';
+export {
+  fetchVariantCatalogMrp,
+  validateAndNormalizeBcovLevels
+} from '../../services/supplierBcovService.js';
 export {
   parseCovThresholdNumber,
   resolveBcovPriceForBuyerMetrics
@@ -96,9 +102,11 @@ export {
   brandIsAllowedForSupplier,
   entryOverlapsViewerBrands,
   getViewerBrandTokensForRole,
+  supplierCanAccessBrandStrict,
   normalizeChainNameKey,
   normalizeBrandKeyFromAttributes,
-  parseBrandTokens
+  parseBrandTokens,
+  resolveUpstreamBrandLabel
 } from '../../services/supplierBrandGuardService.js';
 export {
   dedupeUpstreamCandidatesBySupplierPreferClosest,
@@ -110,6 +118,17 @@ export {
 } from '../../services/supplierUpstreamRankingService.js';
 export { mapSupplyChainPartner } from '../../services/supplierPartnerMapperService.js';
 export {
+  buildSupplyChainPartnerGroups,
+  getAllowedUpstreamRolesForBrand,
+  getImmediateUpstreamRoleForBrand,
+  getUpstreamRolesForBuyerOnBrand,
+  pickUpstreamSellerRoleForBrand,
+  sellerHasAnyUpstreamRoleForBrand,
+  sellerHasRoleForBrand,
+  sellerMatchesUpstreamForBrand
+} from '../../services/supplyChainPartnerGroupsService.js';
+export {
+  buildAllowedUpstreamRolesSet,
   getImmediateParentRolesUnion,
   getMySupplierRoles,
   getViewerBrandTokensUnionForAllRoles,

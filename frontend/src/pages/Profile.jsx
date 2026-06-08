@@ -3,6 +3,8 @@ import { getApiUrl } from '../config/api';
 import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Users } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
+import ProfilePhotoSection from '../components/ProfilePhotoSection';
+import { cacheProfilePhotoUrl } from '../utils/profilePhoto';
 import './Profile.css';
 
 const Profile = ({ user }) => {
@@ -24,6 +26,7 @@ const Profile = ({ user }) => {
       });
       const data = await response.json();
       setProfile(data.profile);
+      cacheProfilePhotoUrl(data.profile?.profilePhotoUrl || '');
     } catch (error) {
       console.error('Failed to fetch profile:', error);
     } finally {
@@ -162,13 +165,14 @@ const Profile = ({ user }) => {
 
   const profileBody = (
     <div className="profile-container">
+      {profile ? <ProfilePhotoSection profile={profile} /> : null}
       {!isServiceProvider ? (
       <div className="profile-header">
         <div className="profile-title">
           <User size={24} />
           <h1>Company Profile</h1>
         </div>
-        <div className="profile-actions">
+        <div className="profile-actions profile-page-header-actions">
           {editing ? (
             <>
               <button type="button" className="btn-secondary" onClick={handleCancel}>
@@ -215,23 +219,25 @@ const Profile = ({ user }) => {
           description="Manage your company details, projects, and billing addresses."
           icon={User}
           actions={
-            editing ? (
-              <>
-                <button type="button" className="btn-secondary" onClick={handleCancel}>
-                  <X size={18} strokeWidth={2} aria-hidden />
-                  Cancel
+            <div className="profile-page-header-actions">
+              {editing ? (
+                <>
+                  <button type="button" className="btn-secondary" onClick={handleCancel}>
+                    <X size={18} strokeWidth={2} aria-hidden />
+                    Cancel
+                  </button>
+                  <button type="button" className="btn-primary" onClick={handleSave}>
+                    <Save size={18} strokeWidth={2} aria-hidden />
+                    Save Changes
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="btn-primary" onClick={() => setEditing(true)}>
+                  <Edit size={18} strokeWidth={2} aria-hidden />
+                  Edit Profile
                 </button>
-                <button type="button" className="btn-primary" onClick={handleSave}>
-                  <Save size={18} strokeWidth={2} aria-hidden />
-                  Save Changes
-                </button>
-              </>
-            ) : (
-              <button type="button" className="btn-primary" onClick={() => setEditing(true)}>
-                <Edit size={18} strokeWidth={2} aria-hidden />
-                Edit Profile
-              </button>
-            )
+              )}
+            </div>
           }
         />
         {profileBody}
@@ -708,7 +714,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
   /** Partner hints should reflect latest selection in real time (including pending chain edits). */
   const profileForChainPartners = useMemo(() => profile, [profile]);
 
-  /** Roles + brands — backend filters upstream partners by matching chain role and brand overlap */
+  /** Roles + brands — refetch upstream partners when supply-chain selection changes */
   const supplyChainRoleKey = useMemo(() => {
     const p = profileForChainPartners;
     const parts = [];
@@ -731,6 +737,14 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
         });
         const data = await res.json();
         if (cancelled) return;
+        if (!res.ok) {
+          setSupplyChainState({
+            loading: false,
+            partnerGroups: [],
+            topMessage: data.message || 'Could not load upstream partners.'
+          });
+          return;
+        }
         if (data.status === 'success') {
           const groups = Array.isArray(data.partnerGroups) ? data.partnerGroups : [];
           setSupplyChainState({
@@ -1311,7 +1325,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
           Upstream partners
         </h2>
         <p style={{ color: '#64748b', fontSize: '0.92rem', marginTop: '-0.25rem', marginBottom: '0.75rem', maxWidth: '48rem', lineHeight: 1.45 }}>
-          Partners listed here are in the <strong>next tier toward the manufacturer</strong> for your current role—each group is one layer, not a mix of roles.
+          Suppliers <strong>one step above you</strong> in the admin supply chain for each of your brands.
         </p>
         {supplyChainState.loading ? (
           <p className="supply-chain-status">Loading partners…</p>
@@ -1319,20 +1333,26 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
           <p className="supply-chain-status">{supplyChainState.topMessage}</p>
         ) : (
           supplyChainState.partnerGroups.map((group) => (
-            <div key={group.parentRole} className="supply-chain-group">
-              <h3 className="supply-chain-group-title">{group.parentRoleLabel}</h3>
-              <p className="supply-chain-group-sub">
-                You are registered as <strong>{group.yourRoleLabel}</strong>.
-              </p>
-              {group.partners.length === 0 ? (
-                <p className="supply-chain-status">{group.message}</p>
-              ) : (
-                <div className="supply-chain-partner-grid">
-                  {group.partners.map((p) => (
-                    <SupplyChainPartnerCard key={p.id} partner={p} />
-                  ))}
-                </div>
-              )}
+            <div
+              key={`${group.brandKey || group.brand || ''}-${group.parentRole}-${group.yourRole}`}
+              className="supply-chain-group"
+            >
+              <h3 className="supply-chain-group-title">
+                {group.brand ? (
+                  <>
+                    <span className="supply-chain-group-brand">{group.brand}</span>
+                    <span className="supply-chain-group-sep"> · </span>
+                    {group.parentRoleLabel}
+                  </>
+                ) : (
+                  group.parentRoleLabel
+                )}
+              </h3>
+              <div className="supply-chain-partner-grid">
+                {group.partners.map((p) => (
+                  <SupplyChainPartnerCard key={`${group.brandKey}-${group.parentRole}-${p.id}`} partner={p} />
+                ))}
+              </div>
             </div>
           ))
         )}

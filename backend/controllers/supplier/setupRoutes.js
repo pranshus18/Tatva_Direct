@@ -1,27 +1,24 @@
 /** Supplier routes: setup */
 import {
-  PARENT_ROLE_BY_MY_ROLE,
   SUPPLY_CHAIN_ROLE_LABELS,
+  baselineChainFromProfile,
   fetchPendingChainRequest,
   getContractErrorMessage,
   getMySupplierRoles,
-  getViewerBrandTokensForRole,
-  loadAdminBrandChainsByName,
-  mapSupplyChainPartner,
   normalizeChainNameKey,
   normalizeChainRolesFromStages,
   parseBcovNotes,
   parseCovThresholdNumber,
   parseWithSchema,
-  pickDisplayRoleFromAllowedSet,
-  pickMatchingUpstreamRoleForSeller,
   resolveBcovPriceForBuyerMetrics,
   sortRolesByChainDepthDesc,
   supplierBcovLevelsUpsertSchema,
   supplierBcovResolvePriceSchema,
   toFiniteNumber,
+  fetchVariantCatalogMrp,
   validateAndNormalizeBcovLevels
 } from './supplierImports.js';
+import { buildSupplyChainPartnerGroups } from '../../services/supplyChainPartnerGroupsService.js';
 
 export function registerSupplierSetupRoutes(ctx) {
   const {
@@ -81,6 +78,7 @@ router.get('/supply-chain-partners', authenticateToken, async (req, res) => {
 
     const pendingChainRequest = await fetchPendingChainRequest(req.userId);
     const pendingPayload = pendingChainRequest?.payload || null;
+    const approvedChain = baselineChainFromProfile(req.user.profile);
     const effectiveViewerProfile = pendingPayload
       ? {
           ...(req.user.profile || {}),
@@ -90,7 +88,7 @@ router.get('/supply-chain-partners', authenticateToken, async (req, res) => {
             ? pendingPayload.companyInfoEntries
             : []
         }
-      : req.user.profile;
+      : { ...(req.user.profile || {}), ...approvedChain };
 
     const previewRole = (req.query.previewRole || '').trim();
     const myRoles = getMySupplierRoles(effectiveViewerProfile, previewRole);
@@ -137,66 +135,11 @@ router.get('/supply-chain-partners', authenticateToken, async (req, res) => {
       throw error;
     }
 
-    const allRows = rows || [];
-    const partnerGroups = [];
-    const seenParentRole = new Set();
-
-    const viewerRoles = getMySupplierRoles(effectiveViewerProfile, '');
-    const viewerBrandTokensByRole = new Map();
-    const allViewerBrandTokens = new Set();
-    for (const role of viewerRoles) {
-      const tokens = getViewerBrandTokensForRole(effectiveViewerProfile, role);
-      viewerBrandTokensByRole.set(role, tokens);
-      for (const t of tokens) allViewerBrandTokens.add(t);
-    }
-    const adminBrandChainMap = await loadAdminBrandChainsByName({
-      supabase,
-      brandNames: [...allViewerBrandTokens]
+    const partnerGroups = await buildSupplyChainPartnerGroups({
+      effectiveViewerProfile,
+      allSupplierRows: rows || [],
+      supabase
     });
-
-    for (const myRole of sortedMyRoles) {
-      const viewerBrandTokens = viewerBrandTokensByRole.get(myRole) || new Set();
-      const allowedParentRolesSet = new Set();
-      for (const token of viewerBrandTokens) {
-        const chainRow = adminBrandChainMap.get(normalizeChainNameKey(token));
-        const chainRoles = normalizeChainRolesFromStages(chainRow?.stages);
-        const idx = chainRoles.indexOf(myRole);
-        if (idx > 0) {
-          allowedParentRolesSet.add(chainRoles[idx - 1]);
-        }
-      }
-      if (allowedParentRolesSet.size === 0) {
-        const fallbackParentRole = PARENT_ROLE_BY_MY_ROLE[myRole];
-        if (fallbackParentRole) allowedParentRolesSet.add(fallbackParentRole);
-      }
-      const parentRole = pickDisplayRoleFromAllowedSet(allowedParentRolesSet);
-      if (!parentRole || seenParentRole.has(parentRole)) continue;
-      seenParentRole.add(parentRole);
-
-      const partners = allRows
-        .map((u) => {
-          if (!u.profile) return null;
-          const matchedRole = pickMatchingUpstreamRoleForSeller(u.profile, allowedParentRolesSet);
-          if (!matchedRole) return null;
-          return mapSupplyChainPartner(u, matchedRole, viewerBrandTokens);
-        })
-        .filter(Boolean);
-
-      const label = SUPPLY_CHAIN_ROLE_LABELS[parentRole] || parentRole;
-      partnerGroups.push({
-        yourRole: myRole,
-        yourRoleLabel: SUPPLY_CHAIN_ROLE_LABELS[myRole] || myRole,
-        parentRole,
-        parentRoleLabel: label,
-        partners,
-        message:
-          partners.length === 0
-            ? viewerBrandTokens.size > 0
-              ? `No ${label} match the brands you listed for your ${SUPPLY_CHAIN_ROLE_LABELS[myRole] || myRole} profile yet. Use the same brand names as in your registration, or clear brands on that role to see all ${label}.`
-              : `No registered ${label} yet. They will appear here once they sign up and set their role.`
-            : null
-      });
-    }
 
     const first = partnerGroups[0];
     return res.json({
@@ -207,9 +150,10 @@ router.get('/supply-chain-partners', authenticateToken, async (req, res) => {
       parentRoleLabel: first?.parentRoleLabel ?? null,
       partners: first?.partners ?? [],
       partnerGroups,
-      message: partnerGroups.every((g) => g.partners.length === 0)
-        ? partnerGroups.map((g) => g.message).filter(Boolean)[0] || null
-        : null
+      message:
+        partnerGroups.length === 0
+          ? 'No upstream partners yet. The supplier one step above you on the admin chain for your brand(s) must register on Who are you with the same brand.'
+          : null
     });
   } catch (err) {
     console.error('supply-chain-partners error:', err);
@@ -240,8 +184,11 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
 
     if (error) throw error;
 
+    const catalogMrp = variantKey ? await fetchVariantCatalogMrp(supabase, req.userId, variantKey) : null;
+
     return res.json({
       status: 'success',
+      catalogMrp,
       levels: (data || []).map((r) => {
         const parsedNotes = parseBcovNotes(r.notes);
         return {
@@ -277,7 +224,11 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'variantKey is required' });
     }
 
-    const parsed = validateAndNormalizeBcovLevels(payloadInput.levels || []);
+    const catalogMrp = await fetchVariantCatalogMrp(supabase, req.userId, variantKey);
+    const parsed = validateAndNormalizeBcovLevels(payloadInput.levels || [], {
+      catalogMrp,
+      requireCatalogMrp: true
+    });
     if (!parsed.ok) {
       return res.status(400).json({ status: 'error', message: parsed.message });
     }

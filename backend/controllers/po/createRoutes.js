@@ -650,11 +650,15 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     }
     logger.error('PO creation error:', error);
     const statusCode = Number(error?.statusCode) || 500;
-    const detail = error?.message || 'Failed to create purchase orders';
+    const isProduction = process.env.NODE_ENV === 'production';
+    const detail =
+      isProduction && statusCode >= 500
+        ? 'Failed to create purchase orders'
+        : (error?.message || 'Failed to create purchase orders');
     res.status(statusCode).json({
       status: 'error',
       message: detail,
-      error: detail
+      ...(isProduction && statusCode >= 500 ? {} : { error: detail })
     });
   }
 });

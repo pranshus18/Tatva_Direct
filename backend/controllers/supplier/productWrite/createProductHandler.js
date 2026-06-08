@@ -25,8 +25,10 @@ import {
   createBaseProductIfNeeded,
   ensureCategoryAndUnit,
   findCanonicalProductFromIdentifiers,
-  findExistingProductCandidate
+  findExistingProductCandidate,
+  resolveLockedVariantPrice
 } from '../../../services/supplierProductWriteService.js';
+import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 
 export function buildSupplierProductCreateHandler(ctx) {
   const {
@@ -242,8 +244,23 @@ export function buildSupplierProductCreateHandler(ctx) {
       }
 
       const parsedPrice = parseFloat(otherData.price);
-      const parsedStock = parseInt(otherData.stock);
+      const parsedStock = parseSupplierStockQuantity(otherData.stock);
       const parsedMinOrderQty = parseInt(otherData.min_order_quantity);
+      const normalizedRequestedPrice = Number.isFinite(parsedPrice) ? Number(parsedPrice.toFixed(2)) : null;
+      const lockedVariantPrice = await resolveLockedVariantPrice(supabase, {
+        productId,
+        variantKey: variantIdentityBundle.variantKey
+      });
+      if (
+        lockedVariantPrice !== null &&
+        (normalizedRequestedPrice === null || normalizedRequestedPrice !== lockedVariantPrice)
+      ) {
+        return res.status(400).json({
+          status: 'error',
+          code: 'variant_price_locked',
+          message: `MRP is locked for this variant. Use ₹${lockedVariantPrice.toFixed(2)} for all suppliers.`
+        });
+      }
       const { data: approvedVariantOffer } = await supabase
         .from('supplier_products')
         .select('id')
@@ -277,8 +294,8 @@ export function buildSupplierProductCreateHandler(ctx) {
       const supplierProductData = {
         product_id: productId,
         supplier_id: req.userId,
-        price: isNaN(parsedPrice) ? 0 : parsedPrice,
-        stock: isNaN(parsedStock) ? 0 : parsedStock,
+        price: lockedVariantPrice ?? (isNaN(parsedPrice) ? 0 : parsedPrice),
+        stock: parsedStock == null ? 0 : parsedStock,
         min_order_quantity: isNaN(parsedMinOrderQty) || parsedMinOrderQty < 1 ? 1 : parsedMinOrderQty,
         location: currentLocation,
         outlet_id: outlet_id || null,
@@ -381,17 +398,19 @@ export function buildSupplierProductCreateHandler(ctx) {
         .eq('supplier_products.variant_key', variantIdentityBundle.variantKey)
         .single();
 
+      const createdOffer = completeProduct?.supplier_products?.[0] || newSupplierProduct;
       const responseProduct = {
         ...completeProduct,
-        price: completeProduct?.supplier_products?.[0]?.price,
-        stock: completeProduct?.supplier_products?.[0]?.stock,
-        location: completeProduct?.supplier_products?.[0]?.location,
-        min_order_quantity: completeProduct?.supplier_products?.[0]?.min_order_quantity,
-        status: completeProduct?.supplier_products?.[0]?.status,
-        is_active: completeProduct?.supplier_products?.[0]?.is_active,
+        price: createdOffer?.price,
+        stock: createdOffer?.stock,
+        location: createdOffer?.location,
+        min_order_quantity: createdOffer?.min_order_quantity,
+        status: createdOffer?.status,
+        is_active: createdOffer?.is_active,
         supplier_id: req.userId,
-        variantKey: completeProduct?.supplier_products?.[0]?.variant_key || variantIdentityBundle.variantKey,
-        variantAsin: completeProduct?.supplier_products?.[0]?.variant_asin || variantAsin
+        supplier_product_id: createdOffer?.id || newSupplierProduct?.id,
+        variantKey: createdOffer?.variant_key || variantIdentityBundle.variantKey,
+        variantAsin: createdOffer?.variant_asin || variantAsin
       };
 
       const { data: supplier } = await findUserBasicById(req.userId, supabase);

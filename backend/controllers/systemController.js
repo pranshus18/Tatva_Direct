@@ -35,11 +35,12 @@ export function getApiInfo(req, res) {
 async function probeDatabase() {
   const { error } = await supabase.from('users').select('count').limit(1);
   const dbConnected = !error || error.code !== '42P01';
+  const isProduction = process.env.NODE_ENV === 'production';
   return {
     type: 'Supabase (PostgreSQL)',
     status: dbConnected ? 'connected' : 'disconnected',
     connected: dbConnected,
-    error: error ? error.message : null
+    ...(isProduction || !error ? {} : { error: error.message })
   };
 }
 
@@ -61,8 +62,7 @@ export async function getHealth(req, res) {
       database: {
         type: 'Supabase (PostgreSQL)',
         status: 'error',
-        connected: false,
-        error: error.message
+        connected: false
       },
       uptime: process.uptime()
     });
@@ -89,8 +89,7 @@ export async function getHealthReady(req, res) {
       database: {
         type: 'Supabase (PostgreSQL)',
         status: 'error',
-        connected: false,
-        error: error.message
+        connected: false
       },
       uptime: process.uptime()
     });

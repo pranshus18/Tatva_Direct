@@ -2,16 +2,17 @@ import React from 'react';
 import { cn } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
 
-export default function SpStatCard({ label, value, hint, icon: Icon, accent = 'indigo', className }) {
+export default function SpStatCard({ label, value, hint, icon: Icon, accent = 'sky', className }) {
   const accents = {
-    indigo: 'from-[#eef2ff] to-white border-[#e8ecf1] text-[#3730a3]',
-    emerald: 'from-[#ecfdf5] to-white border-[#e8ecf1] text-[#047857]',
-    amber: 'from-[#fffbeb] to-white border-[#e8ecf1] text-[#b45309]',
-    rose: 'from-[#fef2f2] to-white border-[#e8ecf1] text-[#b91c1c]'
+    sky: 'from-[#e0f2fe] to-white border-[#dbe7f5] text-[#0369a1]',
+    indigo: 'from-[#e0f2fe] to-white border-[#dbe7f5] text-[#0369a1]',
+    emerald: 'from-[#ecfdf5] to-white border-[#dbe7f5] text-[#047857]',
+    amber: 'from-[#fffbeb] to-white border-[#dbe7f5] text-[#b45309]',
+    rose: 'from-[#fef2f2] to-white border-[#dbe7f5] text-[#b91c1c]'
   };
 
   return (
-    <Card className={cn('overflow-hidden border bg-gradient-to-br shadow-sm', accents[accent] || accents.indigo, className)}>
+    <Card className={cn('overflow-hidden border bg-gradient-to-br shadow-sm', accents[accent] || accents.sky, className)}>
       <CardContent className="p-5">
         <div className="flex items-start justify-between gap-3">
           <div>

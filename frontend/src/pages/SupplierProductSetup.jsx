@@ -6,8 +6,18 @@ import {
   applyExtractResultToSpecs,
   extractSpecificationsFromDescription
 } from '../utils/extractSpecificationsApi';
+import { parseSpecInputToValue, specValueToInput } from '../utils/specifications';
 import tatvaLogo from '../images/tatva_d.png';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
+import {
+  SUPPLIER_CURRENT_STOCK_LABEL,
+  SUPPLIER_MRP_FIELD_LABEL,
+  SUPPLIER_MRP_LABEL
+} from '../utils/supplierStockLabel';
+import { formatRupee } from '../utils/formatRupee';
+import RupeeInput from '../components/RupeeInput';
+import BrandSelect from '../components/BrandSelect';
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import './Auth.css';
 import './SupplierProductSetup.css';
 
@@ -39,7 +49,10 @@ const SupplierProductSetup = ({ user }) => {
   const [recommendedPrice, setRecommendedPrice] = useState(null);
   const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
   const [priceTouched, setPriceTouched] = useState(false);
+  const [lockedPrice, setLockedPrice] = useState(null);
+  const [priceLocked, setPriceLocked] = useState(false);
   const [specifications, setSpecifications] = useState({});
+  const [isEditingSpecValues, setIsEditingSpecValues] = useState(false);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [categories, setCategories] = useState([]);
   const [extractingSpecs, setExtractingSpecs] = useState(false);
@@ -138,6 +151,16 @@ const SupplierProductSetup = ({ user }) => {
     });
   };
 
+  const updateSpecificationValue = (specKey, nextValueRaw) => {
+    setSpecifications((prev) => {
+      if (!prev || !Object.prototype.hasOwnProperty.call(prev, specKey)) return prev;
+      return {
+        ...prev,
+        [specKey]: parseSpecInputToValue(nextValueRaw, prev[specKey])
+      };
+    });
+  };
+
   useEffect(() => {
     const fetchCategories = async () => {
       try {
@@ -207,17 +230,27 @@ const SupplierProductSetup = ({ user }) => {
           setSpecifications(data.specifications);
         }
         if (data.status === 'success' && data.found) {
+          const hasLockedPrice =
+            data.priceLocked === true &&
+            typeof data.lockedPrice === 'number' &&
+            Number.isFinite(data.lockedPrice);
+          setPriceLocked(hasLockedPrice);
+          setLockedPrice(hasLockedPrice ? data.lockedPrice : null);
           setRecommendedPrice(
             typeof data.recommendedPrice === 'number' ? data.recommendedPrice : null
           );
           setRecommendedPriceStats(data.priceStats || null);
-          // Prefill price only if supplier hasn't typed it yet
-          if (!priceTouched && (formData.price === '' || formData.price === null || formData.price === undefined)) {
+          if (hasLockedPrice) {
+            setFormData(prev => ({ ...prev, price: String(Number(data.lockedPrice).toFixed(2)) }));
+          } else if (!priceTouched && (formData.price === '' || formData.price === null || formData.price === undefined)) {
+            // Prefill price only if supplier hasn't typed it yet
             if (typeof data.recommendedPrice === 'number' && Number.isFinite(data.recommendedPrice)) {
               setFormData(prev => ({ ...prev, price: String(Number(data.recommendedPrice).toFixed(2)) }));
             }
           }
         } else {
+          setPriceLocked(false);
+          setLockedPrice(null);
           setRecommendedPrice(null);
           setRecommendedPriceStats(null);
         }
@@ -321,7 +354,7 @@ const SupplierProductSetup = ({ user }) => {
           category: formData.category,
           price: parseFloat(formData.price),
           unit: formData.unit,
-          stock: parseInt(formData.stock),
+          stock: parseSupplierStockQuantity(formData.stock) ?? 0,
           location: formData.location,
           outlet_id: formData.outlet_id || null,
           igst_rate: parseFloat(formData.igst_rate),
@@ -429,16 +462,13 @@ const SupplierProductSetup = ({ user }) => {
 
           <div className="form-group">
             <label htmlFor="brand">Brand</label>
-            <div className="input-wrapper">
-              <input
-                type="text"
-                id="brand"
-                name="brand"
-                value={formData.brand}
-                onChange={handleChange}
-                placeholder="e.g. ACC, TATA"
-              />
-            </div>
+            <BrandSelect
+              id="brand"
+              name="brand"
+              value={formData.brand}
+              onChange={(brand) => setFormData((prev) => ({ ...prev, brand }))}
+              required
+            />
           </div>
 
           <div className="form-row">
@@ -542,23 +572,28 @@ const SupplierProductSetup = ({ user }) => {
           <div className="form-row">
             <div className="form-group">
               <label htmlFor="price">
-                Price *
+                {SUPPLIER_MRP_FIELD_LABEL} *
               </label>
-              <div className="input-wrapper">
-                <input
-                  type="number"
-                  id="price"
-                  name="price"
-                  value={formData.price}
-                  onChange={handleChange}
-                  placeholder="0.00"
-                  min="0"
-                  step="0.01"
-                  required
-                />
+              <RupeeInput
+                type="number"
+                id="price"
+                name="price"
+                value={formData.price}
+                onChange={handleChange}
+                placeholder="0.00"
+                min="0"
+                step="0.01"
+                required
+                readOnly={priceLocked}
+              />
+                {priceLocked && typeof lockedPrice === 'number' && Number.isFinite(lockedPrice) && (
+                  <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#16a34a' }}>
+                    Variant MRP is locked for all suppliers: <strong>{formatRupee(lockedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                  </div>
+                )}
                 {typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
                   <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#0369a1' }}>
-                    Recommended avg price: <strong>₹{Number(recommendedPrice).toFixed(2)}</strong>
+                    Recommended avg {SUPPLIER_MRP_LABEL}: <strong>{formatRupee(recommendedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                     {recommendedPriceStats?.supplierCountOthers > 0 && (
                       <span style={{ color: '#64748b' }}>
                         {' '}({recommendedPriceStats.supplierCountOthers} other supplier{recommendedPriceStats.supplierCountOthers > 1 ? 's' : ''})
@@ -566,7 +601,6 @@ const SupplierProductSetup = ({ user }) => {
                     )}
                   </div>
                 )}
-              </div>
             </div>
 
             <div className="form-group">
@@ -596,7 +630,7 @@ const SupplierProductSetup = ({ user }) => {
           <div className="form-group">
             <label htmlFor="stock">
               <Box size={16} style={{ marginRight: '8px', verticalAlign: 'middle' }} />
-              Available Stock *
+              {SUPPLIER_CURRENT_STOCK_LABEL} *
             </label>
             <div className="input-wrapper">
               <input
@@ -761,9 +795,18 @@ const SupplierProductSetup = ({ user }) => {
                 <span style={{ fontSize: '0.85rem', color: '#334155' }}>
                   Admin/product template keys are auto-loaded when available.
                 </span>
-                <button type="button" className="btn-secondary" onClick={addSpecificationKey}>
-                  + Add key
-                </button>
+                <div style={{ display: 'flex', gap: '0.45rem' }}>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => setIsEditingSpecValues((prev) => !prev)}
+                  >
+                    {isEditingSpecValues ? 'Lock values' : 'Edit values'}
+                  </button>
+                  <button type="button" className="btn-secondary" onClick={addSpecificationKey}>
+                    + Add key
+                  </button>
+                </div>
               </div>
               {formData.category && !loadingSpecs && Object.keys(specifications || {}).length === 0 && (
                 <p style={{ margin: '0 0 0.5rem 0', color: '#92400e', fontSize: '0.82rem' }}>
@@ -779,12 +822,42 @@ const SupplierProductSetup = ({ user }) => {
                       onBlur={(e) => renameSpecificationKey(key, e.target.value)}
                       placeholder="Specification key"
                     />
-                    <input
-                      type="text"
-                      value={specifications[key] || ''}
-                      onChange={(e) => setSpecifications((prev) => ({ ...(prev || {}), [key]: e.target.value }))}
-                      placeholder="Value"
-                    />
+                    {isEditingSpecValues ? (
+                      <input
+                        type="text"
+                        value={specValueToInput(specifications[key])}
+                        onChange={(e) => updateSpecificationValue(key, e.target.value)}
+                        placeholder="Specification value"
+                        style={{
+                          flex: 1,
+                          minHeight: '36px',
+                          padding: '0.45rem 0.6rem',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '6px',
+                          background: '#ffffff',
+                          color: '#334155',
+                          fontSize: '0.9rem'
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          flex: 1,
+                          minHeight: '36px',
+                          padding: '0.45rem 0.6rem',
+                          border: '1px solid #d1d5db',
+                          borderRadius: '6px',
+                          background: '#f8fafc',
+                          color: '#334155',
+                          fontSize: '0.9rem',
+                          display: 'flex',
+                          alignItems: 'center'
+                        }}
+                        title={String(specifications[key] || '')}
+                      >
+                        {String(specifications[key] || '').trim() || '—'}
+                      </div>
+                    )}
                     <button type="button" className="btn-secondary" onClick={() => removeSpecificationKey(key)}>
                       Remove
                     </button>

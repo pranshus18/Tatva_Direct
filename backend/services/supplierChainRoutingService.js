@@ -1,4 +1,12 @@
-import { getViewerBrandTokensForRole, normalizeChainNameKey } from './supplierBrandGuardService.js';
+import { getViewerBrandTokensForRole } from './supplierBrandGuardService.js';
+import {
+  brandKeysMatchForChainLookup,
+  normalizeBrandKey,
+  normalizeChainRolesFromStages,
+  SUPPLY_CHAIN_ROLES_IN_ORDER
+} from './supplyChainSharedService.js';
+
+export { normalizeChainRolesFromStages };
 
 export const SUPPLIER_ROLE_SET = new Set([
   'manufacturer',
@@ -9,6 +17,7 @@ export const SUPPLIER_ROLE_SET = new Set([
   'retailer'
 ]);
 
+/** Legacy single-step fallback when no admin brand chain exists. */
 export const PARENT_ROLE_BY_MY_ROLE = {
   retailer: 'dealer',
   dealer: 'local_distributor',
@@ -64,32 +73,57 @@ export function sortRolesByChainDepthDesc(roles) {
   return [...roles].sort((a, b) => (ROLE_DEPTH[b] ?? -1) - (ROLE_DEPTH[a] ?? -1));
 }
 
-export function normalizeChainRolesFromStages(stages) {
-  if (!Array.isArray(stages)) return [];
-  const seen = new Set();
-  const out = [];
-  for (const raw of stages) {
-    const role = typeof raw === 'string' ? raw : raw?.role;
-    if (!role || !SUPPLIER_ROLE_SET.has(role) || seen.has(role)) continue;
-    out.push(role);
-    seen.add(role);
+/**
+ * Given a buyer role, return the nearest upstream tier that appears in the admin chain
+ * (walking backward through the standard role order). Skips tiers absent from admin
+ * (e.g. retailer → local_distributor when dealer is not in the chain).
+ */
+export function findUpstreamRoleWalkback(buyerRole, rolesInAdminChain) {
+  if (!buyerRole || !Array.isArray(rolesInAdminChain) || rolesInAdminChain.length === 0) {
+    return null;
   }
-  return out;
+  const present = new Set(rolesInAdminChain.filter((r) => SUPPLIER_ROLE_SET.has(r)));
+  const buyerIdx = SUPPLY_CHAIN_ROLES_IN_ORDER.indexOf(buyerRole);
+  if (buyerIdx <= 0) return null;
+  for (let i = buyerIdx - 1; i >= 0; i -= 1) {
+    const tier = SUPPLY_CHAIN_ROLES_IN_ORDER[i];
+    if (present.has(tier)) return tier;
+  }
+  return null;
 }
 
 export async function loadAdminBrandChainsByName({ supabase, brandNames }) {
   const names = [...new Set((brandNames || []).map((b) => String(b || '').trim()).filter(Boolean))];
-  if (names.length === 0) return new Map();
-  const wanted = new Set(names.map((n) => normalizeChainNameKey(n)).filter(Boolean));
+  const wantedKeys = [...new Set(names.map((n) => normalizeBrandKey(n)).filter(Boolean))];
+  if (wantedKeys.length === 0) return new Map();
+
   const { data, error } = await supabase
     .from('category_supply_chains')
     .select('id, category_name, stages, updated_at');
   if (error) throw error;
+
+  const rows = data || [];
   const map = new Map();
-  for (const row of data || []) {
-    const key = normalizeChainNameKey(row?.category_name);
-    if (!key || !wanted.has(key)) continue;
-    map.set(key, row);
+  for (const wantedKey of wantedKeys) {
+    let matched = null;
+    for (const row of rows) {
+      const categoryKey = normalizeBrandKey(row?.category_name);
+      if (!categoryKey) continue;
+      if (categoryKey === wantedKey) {
+        matched = row;
+        break;
+      }
+    }
+    if (!matched) {
+      for (const row of rows) {
+        const categoryKey = normalizeBrandKey(row?.category_name);
+        if (brandKeysMatchForChainLookup(wantedKey, categoryKey)) {
+          matched = row;
+          break;
+        }
+      }
+    }
+    if (matched) map.set(wantedKey, matched);
   }
   return map;
 }
@@ -125,10 +159,21 @@ export function resolveRequiredUpstreamRoleFromAdminChain({ profile, brandKey, c
   }
 
   if (roleCandidates.length === 0) {
+    const myRolesSorted = sortRolesByChainDepthDesc(myRoles);
+    const buyerRole = myRolesSorted[0] || null;
+    const requiredUpstreamRole = buyerRole ? findUpstreamRoleWalkback(buyerRole, chainRoles) : null;
+    if (buyerRole && requiredUpstreamRole) {
+      return {
+        source: 'admin_chain_inferred',
+        chainRoles,
+        buyerRole,
+        requiredUpstreamRole
+      };
+    }
     return {
       source: 'chain_not_applicable',
       chainRoles,
-      buyerRole: null,
+      buyerRole: buyerRole || null,
       requiredUpstreamRole: null
     };
   }
@@ -163,6 +208,54 @@ export function getImmediateParentRolesUnion(profile) {
   return parents;
 }
 
+/**
+ * Resolve which upstream seller role(s) may fulfill an order for this brand.
+ * Prefers the admin-defined chain (including chains that skip dealer, etc.).
+ */
+export function buildAllowedUpstreamRolesSet({ profile, brandKey, chainRow, parentRolesUnion }) {
+  const chainRouting = resolveRequiredUpstreamRoleFromAdminChain({
+    profile,
+    brandKey,
+    chainRow
+  });
+
+  let required = chainRouting.requiredUpstreamRole || null;
+
+  if (!required && chainRow) {
+    const chainRoles = normalizeChainRolesFromStages(chainRow?.stages);
+    const buyerRole =
+      chainRouting.buyerRole || sortRolesByChainDepthDesc(getMySupplierRoles(profile, ''))[0] || null;
+    if (buyerRole && chainRoles.length > 0) {
+      required = findUpstreamRoleWalkback(buyerRole, chainRoles);
+      if (required) {
+        chainRouting.source = 'admin_chain_walkback';
+        chainRouting.requiredUpstreamRole = required;
+        chainRouting.buyerRole = buyerRole;
+        chainRouting.chainRoles = chainRoles;
+      }
+    }
+  }
+
+  if (!required) {
+    const buyerRole = sortRolesByChainDepthDesc(getMySupplierRoles(profile, ''))[0] || null;
+    required = buyerRole ? findUpstreamRoleWalkback(buyerRole, SUPPLY_CHAIN_ROLES_IN_ORDER) : null;
+    if (required) {
+      chainRouting.source = chainRouting.source || 'standard_chain_walkback';
+      chainRouting.requiredUpstreamRole = required;
+      chainRouting.buyerRole = chainRouting.buyerRole || buyerRole;
+    }
+  }
+
+  const allowedRolesSet =
+    required && SUPPLIER_ROLE_SET.has(required)
+      ? new Set([required])
+      : parentRolesUnion && parentRolesUnion.size > 0
+        ? parentRolesUnion
+        : new Set();
+
+  return { allowedRolesSet, chainRouting };
+}
+
 export function sellerMatchesUpstreamRoles(sellerProfile, allowedParentRolesSet) {
   if (!sellerProfile || !allowedParentRolesSet || allowedParentRolesSet.size === 0) return false;
   for (const role of allowedParentRolesSet) {
@@ -171,9 +264,13 @@ export function sellerMatchesUpstreamRoles(sellerProfile, allowedParentRolesSet)
   return false;
 }
 
+/**
+ * Pick the seller's role that is the nearest upstream tier to the buyer among allowed roles
+ * (highest ROLE_DEPTH in the allowed set — e.g. dealer before local_distributor for a retailer).
+ */
 export function pickMatchingUpstreamRoleForSeller(sellerProfile, allowedParentRolesSet) {
   if (!sellerProfile || !allowedParentRolesSet || allowedParentRolesSet.size === 0) return null;
-  const ordered = [...allowedParentRolesSet].sort((a, b) => (ROLE_DEPTH[a] ?? 99) - (ROLE_DEPTH[b] ?? 99));
+  const ordered = [...allowedParentRolesSet].sort((a, b) => (ROLE_DEPTH[b] ?? -1) - (ROLE_DEPTH[a] ?? -1));
   for (const role of ordered) {
     if (userHasSupplierRole(sellerProfile, role)) return role;
   }

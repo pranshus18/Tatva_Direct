@@ -156,6 +156,26 @@ export const poTransportConfirmSchema = z
         });
       }
     }
+    for (const row of rows) {
+      const mode = String(row.transportMode || '').toLowerCase();
+      if (mode === 'courier' && row.courierCompanyId == null) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Order ${row.orderId}: transportMode courier requires courierCompanyId`,
+          path: ['perOrderTransport']
+        });
+      }
+      if (mode === 'trucking') {
+        const coords = [row.pickupLat, row.pickupLng, row.deliveryLat, row.deliveryLng];
+        if (coords.some((v) => v == null || !Number.isFinite(Number(v)))) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: `Order ${row.orderId}: transportMode trucking requires pickup and delivery coordinates`,
+            path: ['perOrderTransport']
+          });
+        }
+      }
+    }
   });
 
 const poCartBoqGroupSchema = z.object({

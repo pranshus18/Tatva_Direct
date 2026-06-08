@@ -1,3 +1,5 @@
+import { normalizeChainRolesFromStages as normalizeChainRolesFromStagesCanonical } from '../services/supplyChainSharedService.js';
+
 export function normalizeBrandChainKey(value) {
   return String(value || '')
     .trim()
@@ -8,16 +10,7 @@ export function normalizeBrandChainKey(value) {
 }
 
 export function normalizeChainRolesFromStages(stages) {
-  if (!Array.isArray(stages)) return [];
-  const out = [];
-  const seen = new Set();
-  for (const raw of stages) {
-    const role = typeof raw === 'string' ? raw : raw?.role;
-    if (!role || seen.has(role)) continue;
-    seen.add(role);
-    out.push(role);
-  }
-  return out;
+  return normalizeChainRolesFromStagesCanonical(stages);
 }
 
 export function getTerminalRoleFromStages(stages) {

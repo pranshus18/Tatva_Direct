@@ -1,6 +1,9 @@
 /** Supplier routes: productList */
+import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuantity.js';
 import {
   PRODUCT_IMAGES_BUCKET,
+  resolveUpstreamBrandLabel,
+  supplierCanAccessBrandStrict,
   mergeSpecificationMaps,
   uploadFile
 } from './supplierImports.js';
@@ -21,6 +24,13 @@ export function registerSupplierProductListRoutes(ctx) {
 
 router.get('/products', authenticateToken, async (req, res) => {
   try {
+    const { data: profileRow } = await supabase
+      .from('users')
+      .select('profile')
+      .eq('id', req.userId)
+      .maybeSingle();
+    const effectiveProfile = profileRow?.profile || req.user?.profile || {};
+
     // Fetch products with supplier_products join
     const { data: supplierProducts, error: supplierProductsError } = await supabase
       .from('supplier_products')
@@ -57,9 +67,14 @@ router.get('/products', authenticateToken, async (req, res) => {
     // Combine product and supplier_products data.
     // If an admin deletes the shared product but a junction row remains (unexpected legacy data),
     // skip the row so the supplier UI doesn't show "ghost" products.
+    const visibleSupplierProducts = (supplierProducts || []).filter((sp) => {
+      const brandCandidate = resolveUpstreamBrandLabel(sp?.attributes, sp?.product?.brand);
+      return supplierCanAccessBrandStrict(effectiveProfile, brandCandidate).allowed;
+    });
+
     const products = (
       await Promise.all(
-        (supplierProducts || []).map(async (sp) => {
+        visibleSupplierProducts.map(async (sp) => {
         if (!sp.product) return null;
 
         const baseSpecs =
@@ -100,7 +115,7 @@ router.get('/products', authenticateToken, async (req, res) => {
           specifications: mergedSpecs,
           images: offerImages.length > 0 ? offerImages : baseImages,
           price: sp.price,
-          stock: sp.stock,
+          stock: parseSupplierStockQuantity(sp.stock) ?? 0,
           igst_rate: sp.igst_rate ?? sp.attributes?.igstRate ?? null,
           cgst_rate: sp.cgst_rate ?? sp.attributes?.cgstRate ?? null,
           sgst_rate: sp.sgst_rate ?? sp.attributes?.sgstRate ?? null,
@@ -127,7 +142,9 @@ router.get('/products', authenticateToken, async (req, res) => {
           brandModel: sp.attributes?.brandModel,
           lsa: sp.attributes?.lsa,
           hsnCode: sp.attributes?.hsnCode,
-          supplier_product_id: sp.id // Include junction table ID
+          supplier_product_id: sp.id,
+          variantKey: sp.variant_key || null,
+          variantAsin: sp.variant_asin || null
         };
       })
       )

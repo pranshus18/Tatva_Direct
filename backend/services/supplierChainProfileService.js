@@ -1,5 +1,9 @@
 import { supabase } from '../config/supabase.js';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  resolveAuthorizationCertificateUrls,
+  setAuthorizationCertificateUrls
+} from '../utils/authorizationCertificateUrls.js';
 
 const ROLE_SET = new Set([
   'manufacturer',
@@ -10,9 +14,30 @@ const ROLE_SET = new Set([
   'retailer'
 ]);
 
+function parseEntryBrandList(brands) {
+  if (brands == null || brands === '') return [];
+  if (Array.isArray(brands)) {
+    return [...new Set(brands.map(String).map((s) => s.trim()).filter(Boolean))];
+  }
+  return [
+    ...new Set(
+      String(brands)
+        .split(/[,;\n]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  ];
+}
+
 export function normalizeCompanyInfoEntries(rawEntries) {
-  const raw = Array.isArray(rawEntries) ? rawEntries : [];
-  return raw.map((e) => {
+  const raw = Array.isArray(rawEntries)
+    ? rawEntries
+    : rawEntries && typeof rawEntries === 'object'
+      ? [rawEntries]
+      : [];
+  const normalized = [];
+
+  for (const e of raw) {
     const role = String(e?.role || '').trim();
     let minimumOrderValue = null;
     if (role && role !== 'retailer') {
@@ -25,21 +50,28 @@ export function normalizeCompanyInfoEntries(rawEntries) {
         }
       }
     }
-    return {
-      id: e.id || uuidv4(),
-      role,
-      brands: typeof e?.brands === 'string' ? e.brands : e?.brands ? String(e.brands) : '',
-      gstin: e?.gstin != null && e.gstin !== '' ? String(e.gstin).trim() : '',
-      companyName: e?.companyName != null && e.companyName !== '' ? String(e.companyName).trim() : '',
-      ownershipDetails:
-        e?.ownershipDetails != null && e.ownershipDetails !== '' ? String(e.ownershipDetails).trim() : '',
-      authorizationCertificateUrl:
-        e?.authorizationCertificateUrl != null && e.authorizationCertificateUrl !== ''
-          ? String(e.authorizationCertificateUrl).trim()
-          : '',
-      ...(minimumOrderValue != null ? { minimumOrderValue } : {})
-    };
-  });
+    const certificateFields = setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(e));
+    const brandList = parseEntryBrandList(e?.brands);
+    const brandsForRows = brandList.length > 0 ? brandList : [''];
+    const baseId = e?.id || uuidv4();
+
+    brandsForRows.forEach((brand, index) => {
+      normalized.push({
+        id: index === 0 ? baseId : uuidv4(),
+        role,
+        brands: brand,
+        gstin: e?.gstin != null && e.gstin !== '' ? String(e.gstin).trim() : '',
+        companyName: e?.companyName != null && e.companyName !== '' ? String(e.companyName).trim() : '',
+        ownershipDetails:
+          e?.ownershipDetails != null && e.ownershipDetails !== '' ? String(e.ownershipDetails).trim() : '',
+        authorizationCertificateUrls: certificateFields.authorizationCertificateUrls,
+        authorizationCertificateUrl: certificateFields.authorizationCertificateUrl,
+        ...(minimumOrderValue != null ? { minimumOrderValue } : {})
+      });
+    });
+  }
+
+  return normalized;
 }
 
 export function buildChainPayloadFromProfileData(profileData) {

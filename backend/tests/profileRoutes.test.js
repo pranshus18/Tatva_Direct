@@ -24,12 +24,17 @@ function collectRoutes(stack, prefix = '') {
 test('profileRouter exposes all expected profile endpoints', () => {
   const routes = collectRoutes(profileRouter.stack).sort();
   const expected = [
+    'DELETE /photo',
     'GET /',
     'GET /service-provider/theme',
     'GET /supplier/chain-role-options',
+    'GET /supplier/theme',
+    'POST /photo',
+    'DELETE /supplier/authorization-certificate',
     'POST /supplier/authorization-certificate',
     'PUT /',
-    'PUT /service-provider/theme'
+    'PUT /service-provider/theme',
+    'PUT /supplier/theme'
   ].sort();
 
   assert.deepEqual(routes, expected);

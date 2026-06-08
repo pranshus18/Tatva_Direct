@@ -5,6 +5,13 @@ import './Dashboard.css';
 import './SupplierBCOV.css';
 import { useLocation } from 'react-router-dom';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
+import {
+  SUPPLIER_COV_PRICE_FIELD_LABEL,
+  SUPPLIER_COV_PRICE_LABEL,
+  SUPPLIER_MRP_LABEL
+} from '../utils/supplierStockLabel';
+import { formatRupee } from '../utils/formatRupee';
+import RupeeInput from '../components/RupeeInput';
 
 const EMPTY_ROW = {
   id: null,
@@ -13,6 +20,20 @@ const EMPTY_ROW = {
   buyerCov: '',
   buyerPcov: '',
   price: ''
+};
+
+const parseCovThresholdNumber = (value) => {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const raw = String(value).trim();
+  if (!raw) return null;
+  const direct = Number(raw);
+  if (Number.isFinite(direct)) return direct;
+  const sanitized = raw.replace(/,/g, '');
+  const match = sanitized.match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
 };
 
 const isBlankRow = (row) => {
@@ -26,15 +47,33 @@ const isBlankRow = (row) => {
   );
 };
 
-const getValidationErrorsForRows = (rowsToValidate) => {
+const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
   const errs = [];
+  const mrp =
+    catalogMrp === null || catalogMrp === undefined || catalogMrp === ''
+      ? null
+      : Number(catalogMrp);
+
+  if (mrp === null || !Number.isFinite(mrp) || mrp < 0) {
+    errs.push(
+      `Set catalog ${SUPPLIER_MRP_LABEL} for this variant in Manage Inventory before saving Product_COV.`
+    );
+    return errs;
+  }
+
   rowsToValidate.forEach((row, idx) => {
     if (isBlankRow(row)) return;
     const label = `Row ${idx + 1}`;
     const levelName = String(row.levelName || '').trim();
     if (!levelName) errs.push(`${label}: Level is required`);
     const buyerBcov = String(row.buyerBcov || '').trim();
-    if (!buyerBcov) errs.push(`${label}: Supplier_COV is required`);
+    if (!buyerBcov) {
+      errs.push(`${label}: Supplier_COV is required`);
+    }
+    const supplierCovThreshold = parseCovThresholdNumber(buyerBcov);
+    if (buyerBcov && (supplierCovThreshold === null || supplierCovThreshold < 0)) {
+      errs.push(`${label}: Supplier_COV must be 0 or more`);
+    }
 
     const buyerCov = Number(row.buyerCov);
     if (!Number.isFinite(buyerCov) || buyerCov < 0) {
@@ -42,13 +81,21 @@ const getValidationErrorsForRows = (rowsToValidate) => {
     }
     const price = Number(row.price);
     if (!Number.isFinite(price) || price < 0) {
-      errs.push(`${label}: Price must be 0 or more`);
+      errs.push(`${label}: ${SUPPLIER_COV_PRICE_LABEL} must be 0 or more`);
+    } else if (price > mrp) {
+      errs.push(
+        `${label}: ${formatRupee(price)} cannot be higher than catalog ${SUPPLIER_MRP_LABEL} ${formatRupee(mrp)}.`
+      );
     }
     const hasBuyerPcov = String(row.buyerPcov).trim() !== '';
     if (hasBuyerPcov) {
       const buyerPcov = Number(row.buyerPcov);
-      if (!Number.isFinite(buyerPcov) || buyerPcov <= buyerCov) {
-        errs.push(`${label}: Platform_COV must be greater than Brand_cov`);
+      if (!Number.isFinite(buyerPcov) || buyerPcov < 0) {
+        errs.push(`${label}: Platform_COV must be 0 or more`);
+      } else if (Number.isFinite(buyerCov) && buyerPcov < buyerCov) {
+        errs.push(`${label}: Platform_COV must be greater than or equal to Brand_cov`);
+      } else if (supplierCovThreshold !== null && buyerPcov < supplierCovThreshold) {
+        errs.push(`${label}: Platform_COV must be greater than or equal to Supplier_COV`);
       }
     }
   });
@@ -62,6 +109,7 @@ const SupplierBCOV = () => {
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [isStepCompleted, setIsStepCompleted] = useState(false);
+  const [catalogMrp, setCatalogMrp] = useState(null);
 
   const { variantKey, variantAsin, variantName } = useMemo(() => {
     const params = new URLSearchParams(location.search || '');
@@ -74,7 +122,10 @@ const SupplierBCOV = () => {
     };
   }, [location.search]);
 
-  const validationErrors = useMemo(() => getValidationErrorsForRows(rows), [rows]);
+  const validationErrors = useMemo(
+    () => getValidationErrorsForRows(rows, catalogMrp),
+    [rows, catalogMrp]
+  );
 
   const loadRows = async () => {
     if (!variantKey) {
@@ -90,6 +141,12 @@ const SupplierBCOV = () => {
       );
       const data = await res.json();
       if (data.status === 'success') {
+        const mrp =
+          data.catalogMrp === null || data.catalogMrp === undefined
+            ? null
+            : Number(data.catalogMrp);
+        setCatalogMrp(Number.isFinite(mrp) && mrp >= 0 ? mrp : null);
+
         const mapped = (data.levels || []).map((item) => ({
           id: item.id || null,
           levelName: item.levelName ?? '',
@@ -226,6 +283,18 @@ const SupplierBCOV = () => {
           <p className="bcov-subtitle" style={{ fontSize: '0.8rem', opacity: 0.7 }}>
             Variant Key: {variantKey}{variantAsin ? ` | TSIN: ${variantAsin}` : ''}
           </p>
+          {catalogMrp != null ? (
+            <p className="bcov-catalog-mrp">
+              Catalog {SUPPLIER_MRP_LABEL} for this variant:{' '}
+              <strong>{formatRupee(catalogMrp)}</strong>
+              {' '}— each level {SUPPLIER_COV_PRICE_LABEL} must be at or below this amount.
+            </p>
+          ) : (
+            <p className="bcov-catalog-mrp bcov-catalog-mrp--missing">
+              Catalog {SUPPLIER_MRP_LABEL} is not set for this variant. Add it in Manage Inventory before
+              saving Product_COV.
+            </p>
+          )}
           <SupplierProductAdditionSteps
             variant={saveMessage || isStepCompleted ? 'bcov-done' : 'bcov'}
             hint="Step 3 of 3: save Product_COV table for this variant to complete product setup for pricing on purchase orders."
@@ -263,7 +332,7 @@ const SupplierBCOV = () => {
                 <th>Supplier_COV</th>
                 <th>Brand_cov</th>
                 <th>Platform_COV</th>
-                <th>Price (INR)</th>
+                <th>{SUPPLIER_COV_PRICE_FIELD_LABEL}</th>
                 <th>Action</th>
               </tr>
             </thead>
@@ -308,13 +377,20 @@ const SupplierBCOV = () => {
                     />
                   </td>
                   <td>
-                    <input
-                      className="bcov-input"
+                    <RupeeInput
+                      className="bcov-rupee-input"
+                      inputClassName="bcov-input"
                       type="number"
                       min="0"
+                      max={catalogMrp != null ? catalogMrp : undefined}
                       step="0.01"
                       value={row.price}
                       onChange={(e) => updateRow(index, 'price', e.target.value)}
+                      title={
+                        catalogMrp != null
+                          ? `Max ${SUPPLIER_COV_PRICE_LABEL}: catalog ${SUPPLIER_MRP_LABEL} ${formatRupee(catalogMrp)}`
+                          : undefined
+                      }
                     />
                   </td>
                   <td>

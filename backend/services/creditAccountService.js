@@ -352,7 +352,11 @@ export async function buildCreditStatus({
   const requested = roundMoney(orderAmount);
   const projectedNetRevenue = roundMoney(priorNetRevenue + requested);
   const hasCreditParty = Boolean(
-    normalizeCustomerPhone(phone || customerPhone)
+    normalizeCustomerPhone(phone || customerPhone) ||
+      buyerUserId ||
+      customerId ||
+      account?.buyer_user_id ||
+      account?.customer_id
   );
   let { payLaterOffered, payLaterThresholdMet, thresholdOptional } = computePayLaterOffered({
     hasAccount: Boolean(account),
@@ -397,7 +401,7 @@ export async function buildCreditStatus({
     payLaterOffered = false;
   } else if (!thresholdOptional && !hasCreditParty) {
     message =
-      'Pay later mapping requires customer phone number. Add phone to buyer profile or enter phone at POS.';
+      'Pay later mapping requires a linked buyer/customer identity. Link this account to a buyer or customer (or add phone) and try again.';
     payLaterOffered = false;
   } else if (cycleBlocksPayLater) {
     payLaterOffered = false;
@@ -450,16 +454,6 @@ export async function buildCreditStatus({
         }
       : null,
     creditLimit: limit,
-    payLaterThreshold,
-    payLaterThresholdMet,
-    thresholdOptional,
-    priorNetRevenue,
-    priorSalesTotal: priorNetRevenue,
-    projectedNetRevenue,
-    combinedNetRevenue: projectedNetRevenue,
-    combinedSalesTotal: projectedNetRevenue,
-    onlineOfflineSalesCombined: priorNetRevenue,
-    identityKey: identityKey || null,
     creditPeriodDays: periodDays,
     isEnabled: enabled,
     outstanding,

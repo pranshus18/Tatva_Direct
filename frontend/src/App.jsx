@@ -4,6 +4,7 @@ import { Toaster } from 'sonner';
 import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import ServiceProviderRoute from './components/ServiceProviderRoute';
+import SupplierRoute from './components/SupplierRoute';
 import AdminRoute from './components/AdminRoute';
 import { getApiUrl } from './config/api';
 import { normalizeUser, normalizeUserType } from './utils/userType';
@@ -44,6 +45,10 @@ const SupplierUpstreamCart = safeLazy(
   () => import('./pages/SupplierUpstreamCart'),
   'Supplier Upstream Cart page'
 );
+const SupplierUpstreamOrders = safeLazy(
+  () => import('./pages/SupplierUpstreamOrders'),
+  'Supplier Upstream Orders page'
+);
 const SupplierSelectYourself = safeLazy(
   () => import('./pages/SupplierSelectYourself'),
   'Supplier Select Yourself page'
@@ -71,6 +76,10 @@ const ServiceProviderReturns = safeLazy(
 );
 const ProductDiscovery = safeLazy(() => import('./pages/ProductDiscovery'), 'Product Discovery page');
 const VoiceCommerce = safeLazy(() => import('./pages/VoiceCommerce'), 'Voice Commerce page');
+const SupplierPortalThemeSettings = safeLazy(
+  () => import('./pages/SupplierPortalThemeSettings'),
+  'Supplier Portal Theme page'
+);
 const ServiceProviderThemeSettings = safeLazy(
   () => import('./pages/ServiceProviderThemeSettings'),
   'Service Provider Theme Settings page'
@@ -294,6 +303,19 @@ function App() {
     </div>
   );
 
+  const supplierPortal = (page) => {
+    if (!isAuthenticated) {
+      return <Navigate to="/login" replace />;
+    }
+    return (
+      <SupplierRoute user={user}>
+        <Layout user={user} onLogout={handleLogout}>
+          {page}
+        </Layout>
+      </SupplierRoute>
+    );
+  };
+
   return (
     <BrowserRouter>
       <Suspense fallback={routeLoader}>
@@ -307,190 +329,24 @@ function App() {
           element={<Navigate to="/supplier-dashboard" replace />} 
         />
         {/* Supplier Dashboard - Accessible without login form */}
-        <Route 
-          path="/supplier-dashboard" 
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierDashboard user={user} />
-              </Layout>
-            )
-          } 
-        />
-        <Route 
-          path="/supplier-pos" 
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierPOS />
-              </Layout>
-            )
-          } 
-        />
-        <Route
-          path="/supplier-returns"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierReturns />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-select-yourself"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : user?.userType !== 'supplier' ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierSelectYourself />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-upstream"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierUpstream user={user} />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-place-order"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierPlaceOrder user={user} />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-transport-suggestion"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : user?.userType !== 'supplier' ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <TransportSuggestion />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-cart"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : user?.userType !== 'supplier' ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierUpstreamCart />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-discount-insights"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : user?.userType !== 'supplier' ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierDiscountInsights />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-buyer-purchases"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : user?.userType !== 'supplier' ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierBuyerPurchases />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-credit-accounts"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : user?.userType !== 'supplier' ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierCreditAccounts />
-              </Layout>
-            )
-          }
-        />
+        <Route path="/supplier-dashboard" element={supplierPortal(<SupplierDashboard user={user} />)} />
+        <Route path="/supplier-pos" element={supplierPortal(<SupplierPOS />)} />
+        <Route path="/supplier-returns" element={supplierPortal(<SupplierReturns />)} />
+        <Route path="/supplier-select-yourself" element={supplierPortal(<SupplierSelectYourself />)} />
+        <Route path="/supplier-upstream" element={supplierPortal(<SupplierUpstream user={user} />)} />
+        <Route path="/supplier-upstream-orders" element={supplierPortal(<SupplierUpstreamOrders />)} />
+        <Route path="/supplier-place-order" element={supplierPortal(<SupplierPlaceOrder user={user} />)} />
+        <Route path="/supplier-transport-suggestion" element={supplierPortal(<TransportSuggestion />)} />
+        <Route path="/supplier-cart" element={supplierPortal(<SupplierUpstreamCart />)} />
+        <Route path="/supplier-discount-insights" element={supplierPortal(<SupplierDiscountInsights />)} />
+        <Route path="/supplier-buyer-purchases" element={supplierPortal(<SupplierBuyerPurchases />)} />
+        <Route path="/supplier-credit-accounts" element={supplierPortal(<SupplierCreditAccounts />)} />
         <Route
           path="/supplier-total-purchase-platform-cov"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : user?.userType !== 'supplier' ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierTotalPurchasePlatformCov />
-              </Layout>
-            )
-          }
+          element={supplierPortal(<SupplierTotalPurchasePlatformCov />)}
         />
-        <Route
-          path="/supplier-purchase-total"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : user?.userType !== 'supplier' ? (
-              <Navigate to="/" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierPurchaseTotal />
-              </Layout>
-            )
-          }
-        />
-        <Route
-          path="/supplier-bcov"
-          element={
-            !isAuthenticated ? (
-              <Navigate to="/login" replace />
-            ) : (
-              <Layout user={user} onLogout={handleLogout}>
-                <SupplierBCOV user={user} />
-              </Layout>
-            )
-          }
-        />
+        <Route path="/supplier-purchase-total" element={supplierPortal(<SupplierPurchaseTotal />)} />
+        <Route path="/supplier-bcov" element={supplierPortal(<SupplierBCOV user={user} />)} />
         <Route 
           path="/login" 
           element={
@@ -656,6 +512,14 @@ function App() {
           <Route 
             path="profile" 
             element={<Profile user={user} />} 
+          />
+          <Route
+            path="supplier-portal-theme"
+            element={
+              <SupplierRoute user={user}>
+                <SupplierPortalThemeSettings />
+              </SupplierRoute>
+            }
           />
           <Route 
             path="boq-normalize" 

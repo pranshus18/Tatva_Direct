@@ -1,3 +1,5 @@
+import { normalizeBrandKey } from './supplyChainSharedService.js';
+
 export function parseBrandTokens(str) {
   if (!str || !String(str).trim()) return [];
   return String(str)
@@ -15,8 +17,33 @@ export function normalizeChainNameKey(value) {
 
 export function normalizeBrandKeyFromAttributes(value) {
   const tokens = parseBrandTokens(value);
-  if (tokens.length > 0) return normalizeChainNameKey(tokens[0]);
-  return normalizeChainNameKey(value);
+  if (tokens.length > 0) return normalizeBrandKey(tokens[0]);
+  return normalizeBrandKey(value);
+}
+
+/** Brand label for upstream routing — offer attributes plus catalog brand. */
+export function resolveUpstreamBrandLabel(attributes, productBrand) {
+  const fromAttrs =
+    attributes?.brandModel != null && String(attributes.brandModel).trim() !== ''
+      ? String(attributes.brandModel).trim()
+      : attributes?.brand != null && String(attributes.brand).trim() !== ''
+        ? String(attributes.brand).trim()
+        : '';
+  const fromProduct = productBrand != null && String(productBrand).trim() !== '' ? String(productBrand).trim() : '';
+  return fromAttrs || fromProduct || '';
+}
+
+function brandTokenKeysMatch(a, b) {
+  const keyA = normalizeBrandKey(String(a).replace(/-/g, ' '));
+  const keyB = normalizeBrandKey(String(b).replace(/-/g, ' '));
+  if (!keyA || !keyB) return false;
+  if (keyA === keyB) return true;
+  const tokenA = keyA.split(' ')[0];
+  const tokenB = keyB.split(' ')[0];
+  if (tokenA.length >= 3 && tokenA === tokenB) return true;
+  if (keyA.length >= 3 && keyB.includes(keyA)) return true;
+  if (keyB.length >= 3 && keyA.includes(keyB)) return true;
+  return false;
 }
 
 export function getViewerBrandTokensForRole(profile, myRole) {
@@ -27,13 +54,16 @@ export function getViewerBrandTokensForRole(profile, myRole) {
     : profile?.companyInfoEntries && typeof profile.companyInfoEntries === 'object'
       ? [profile.companyInfoEntries]
       : [];
+  let roleEntryFound = false;
   for (const e of entries) {
     if (e?.role === myRole) {
+      roleEntryFound = true;
       parseBrandTokens(e.brands).forEach((t) => tokens.add(t));
     }
   }
-  // Legacy fallback should apply only when role-wise entries are absent.
   if (entries.length === 0 && profile?.supplierRole === myRole) {
+    parseBrandTokens(profile.brands).forEach((t) => tokens.add(t));
+  } else if (roleEntryFound && tokens.size === 0) {
     parseBrandTokens(profile.brands).forEach((t) => tokens.add(t));
   }
   return tokens;
@@ -42,7 +72,13 @@ export function getViewerBrandTokensForRole(profile, myRole) {
 export function entryOverlapsViewerBrands(entry, viewerBrandTokens) {
   if (!viewerBrandTokens || viewerBrandTokens.size === 0) return true;
   const entryTokens = parseBrandTokens(entry?.brands);
-  return entryTokens.some((t) => viewerBrandTokens.has(t));
+  if (entryTokens.length === 0) return true;
+  for (const entryToken of entryTokens) {
+    for (const viewerToken of viewerBrandTokens) {
+      if (entryToken === viewerToken || brandTokenKeysMatch(entryToken, viewerToken)) return true;
+    }
+  }
+  return false;
 }
 
 export function getAllDeclaredBrandTokens(profile) {
@@ -69,4 +105,21 @@ export function brandIsAllowedForSupplier(profile, brandInput) {
     if (t.length >= 2 && (b.includes(t) || t.includes(b))) return { allowed: true, reason: 'contains' };
   }
   return { allowed: false, reason: 'not_in_profile', declared: [...declared] };
+}
+
+/**
+ * Strict visibility gate for supplier-facing product surfaces.
+ * If profile has no declared brands, access is denied (show nothing) until profile brands are configured/approved.
+ */
+export function supplierCanAccessBrandStrict(profile, brandInput) {
+  const declared = getAllDeclaredBrandTokens(profile);
+  if (declared.size === 0) {
+    return { allowed: false, reason: 'no_declared_brands' };
+  }
+  const result = brandIsAllowedForSupplier(profile, brandInput);
+  if (!result.allowed) return result;
+  if (result.reason === 'no_brand_lock') {
+    return { allowed: false, reason: 'no_declared_brands' };
+  }
+  return result;
 }

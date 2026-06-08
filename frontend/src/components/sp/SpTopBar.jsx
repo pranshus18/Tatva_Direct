@@ -21,7 +21,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger
 } from '@/components/ui/dropdown-menu';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import UserAvatar from '@/components/UserAvatar';
 import { getSpBreadcrumb } from '@/utils/spNavConfig';
 import { getCartItemCount } from '@/utils/spWorkflow';
 import SpNotificationsBell from './SpNotificationsBell';
@@ -49,15 +49,8 @@ export default function SpTopBar({ user, pathname, onMenuClick, onLogout }) {
     navigate(q ? `/product-discovery?q=${encodeURIComponent(q)}` : '/product-discovery');
   };
 
-  const initials = (user?.name || 'U')
-    .split(' ')
-    .map((p) => p[0])
-    .join('')
-    .slice(0, 2)
-    .toUpperCase();
-
   return (
-    <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+    <header className="sp-topbar sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
       <div className="flex h-14 items-center gap-3 px-4 lg:px-6">
         <Button variant="ghost" size="icon" className="lg:hidden" onClick={onMenuClick} aria-label="Open menu">
           <Menu className="h-5 w-5" />
@@ -117,9 +110,11 @@ export default function SpTopBar({ user, pathname, onMenuClick, onLogout }) {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="gap-2 px-2">
-                <Avatar className="h-8 w-8">
-                  <AvatarFallback className="bg-primary/10 text-xs text-primary">{initials}</AvatarFallback>
-                </Avatar>
+                <UserAvatar
+                  user={user}
+                  className="h-8 w-8"
+                  fallbackClassName="bg-primary/10 text-xs text-primary"
+                />
                 <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">{user?.name}</span>
               </Button>
             </DropdownMenuTrigger>

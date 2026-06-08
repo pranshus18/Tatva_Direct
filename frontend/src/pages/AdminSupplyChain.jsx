@@ -33,6 +33,27 @@ const authHeaders = () => ({
   'Content-Type': 'application/json'
 });
 
+/** Dedupe roles and sort upstream → downstream before save (matches backend). */
+function normalizeStagesForSave(rawStages) {
+  const byRole = new Map();
+  for (const s of rawStages || []) {
+    const role = s?.role;
+    if (!role) continue;
+    const opt = ROLE_OPTIONS.find((o) => o.value === role);
+    if (!opt) continue;
+    if (!byRole.has(role)) {
+      byRole.set(role, {
+        role,
+        roleLabel: opt.label,
+        notes: typeof s?.notes === 'string' ? s.notes : ''
+      });
+    }
+  }
+  return ROLE_OPTIONS.map((o) => o.value)
+    .filter((r) => byRole.has(r))
+    .map((r) => byRole.get(r));
+}
+
 const AdminSupplyChain = ({ user }) => {
   const [brands, setBrands] = useState([]);
   const [brandInput, setBrandInput] = useState('');
@@ -96,7 +117,9 @@ const AdminSupplyChain = ({ user }) => {
         const d = data.definition;
         setDefinitionId(d.id);
         setSummary(d.summary || '');
-        setStages(Array.isArray(d.stages) ? d.stages : []);
+        setStages(
+          normalizeStagesForSave(Array.isArray(d.stages) ? d.stages : [])
+        );
         setPendingAiMark(false);
         const canon = (d.category_name || '').trim();
         setCanonicalBrandName(canon);
@@ -197,24 +220,31 @@ const AdminSupplyChain = ({ user }) => {
     setSaving(true);
     setMessage(null);
     try {
+      const stagesToSave = normalizeStagesForSave(stages);
+      if (stagesToSave.length === 0) {
+        setMessage({ type: 'error', text: 'Add at least one supply-chain stage before saving.' });
+        return;
+      }
+
       const res = await fetch(getApiUrl('/api/admin/supply-chain/definitions'), {
         method: 'PUT',
         headers: authHeaders(),
         body: JSON.stringify({
           brandName: brand,
           summary,
-          stages,
+          stages: stagesToSave,
           markAsAiSuggested: pendingAiMark
         })
       });
-      const data = await res.json();
-      if (data.status !== 'success') {
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status !== 'success') {
         setMessage({ type: 'error', text: data.message || 'Save failed' });
         return;
       }
       const def = data.definition;
       setDefinitionId(def?.id || null);
       setPendingAiMark(false);
+      setStages(Array.isArray(def?.stages) ? def.stages : stagesToSave);
       if (def?.category_name) {
         setBrandInput(def.category_name.trim());
         setCanonicalBrandName(def.category_name.trim());
@@ -264,7 +294,12 @@ const AdminSupplyChain = ({ user }) => {
   };
 
   const addStage = () => {
-    setStages((prev) => [...prev, { role: 'manufacturer', roleLabel: 'Manufacturer (MGF)', notes: '' }]);
+    setStages((prev) => {
+      const used = new Set((prev || []).map((s) => s.role).filter(Boolean));
+      const nextOpt = ROLE_OPTIONS.find((o) => !used.has(o.value));
+      if (!nextOpt) return prev;
+      return [...prev, { role: nextOpt.value, roleLabel: nextOpt.label, notes: '' }];
+    });
   };
 
   const removeStage = (index) => {
@@ -286,7 +321,7 @@ const AdminSupplyChain = ({ user }) => {
     setStages((prev) => {
       const next = [...prev];
       next[index] = { ...next[index], role: value, roleLabel: label };
-      return next;
+      return normalizeStagesForSave(next);
     });
   };
 
@@ -513,7 +548,10 @@ const AdminSupplyChain = ({ user }) => {
         <section className="sc-card sc-chain-card" aria-labelledby="sc-chain-heading">
           <div className="sc-card__head">
             <h2 id="sc-chain-heading">Typical chain &amp; summary</h2>
-            <p>Edit the narrative and each stage. Order must stay manufacturer → retailer with no gaps in sequence logic.</p>
+            <p>
+              Edit the narrative and each stage. You can skip tiers (e.g. manufacturer → dealer → retailer). On save,
+              stages are sorted upstream → downstream; duplicate roles are merged.
+            </p>
           </div>
           <div className="sc-card__body">
             <div className="sc-field sc-summary-field">

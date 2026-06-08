@@ -1,0 +1,341 @@
+.supplier-select-yourself-editor {
+  --chain-border: #e2e8f0;
+  --chain-surface: #ffffff;
+  --chain-muted: #64748b;
+  --chain-text: #0f172a;
+  --chain-accent: #4f46e5;
+  --chain-radius: 14px;
+  --chain-shadow: 0 1px 3px rgba(15, 23, 42, 0.06), 0 8px 24px rgba(15, 23, 42, 0.04);
+}
+
+.supplier-select-yourself-editor .chain-intro {
+  margin: 0 0 1.25rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid #dbeafe;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #f8fafc 0%, #eff6ff 100%);
+  color: #334155;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.supplier-select-yourself-editor .chain-intro strong {
+  color: #1e293b;
+}
+
+.supplier-select-yourself-editor .chain-entries {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.supplier-select-yourself-editor .chain-entry-card {
+  background: var(--chain-surface);
+  border: 1px solid var(--chain-border);
+  border-radius: var(--chain-radius);
+  box-shadow: var(--chain-shadow);
+  overflow: hidden;
+}
+
+.supplier-select-yourself-editor .chain-entry-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid #f1f5f9;
+  background: linear-gradient(180deg, #fafbfc 0%, #ffffff 100%);
+}
+
+.supplier-select-yourself-editor .chain-entry-header__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.supplier-select-yourself-editor .chain-entry-save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.42rem 0.72rem;
+  border: 1px solid #4f46e5;
+  border-radius: 9px;
+  background: #4f46e5;
+  color: #fff;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.supplier-select-yourself-editor .chain-entry-save:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.supplier-select-yourself-editor .chain-entry-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.65rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 9px;
+  background: #fff;
+  color: #334155;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.supplier-select-yourself-editor .chain-entry-toggle:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.supplier-select-yourself-editor .chain-entry-header__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.supplier-select-yourself-editor .chain-entry-header__eyebrow {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--chain-muted);
+}
+
+.supplier-select-yourself-editor .chain-entry-header__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.supplier-select-yourself-editor .chain-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.65rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.supplier-select-yourself-editor .chain-chip--role {
+  color: #4338ca;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+}
+
+.supplier-select-yourself-editor .chain-chip--brand {
+  color: #0f766e;
+  background: #f0fdfa;
+  border: 1px solid #99f6e4;
+}
+
+.supplier-select-yourself-editor .chain-chip--muted {
+  color: #64748b;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.supplier-select-yourself-editor .chain-entry-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border: 1px solid #fecaca;
+  border-radius: 10px;
+  background: #fff;
+  color: #dc2626;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.supplier-select-yourself-editor .chain-entry-remove:hover {
+  background: #fef2f2;
+  border-color: #f87171;
+  color: #b91c1c;
+}
+
+.supplier-select-yourself-editor .chain-entry-body {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.35rem;
+}
+
+.supplier-select-yourself-editor .chain-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.supplier-select-yourself-editor .chain-section__title {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.supplier-select-yourself-editor .chain-section__panel {
+  padding: 1rem;
+  border: 1px solid #e8edf3;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.supplier-select-yourself-editor .chain-section__panel .chain-callout {
+  margin-bottom: 0.85rem;
+}
+
+.supplier-select-yourself-editor .chain-section__panel .chain-brand-grid + .chain-field {
+  margin-top: 1rem;
+}
+
+.supplier-select-yourself-editor .chain-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem 1.15rem;
+}
+
+.supplier-select-yourself-editor .chain-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.supplier-select-yourself-editor .chain-field--full {
+  grid-column: 1 / -1;
+}
+
+.supplier-select-yourself-editor .chain-field__label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #334155;
+  line-height: 1.3;
+}
+
+.supplier-select-yourself-editor .chain-field__sublabel {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.supplier-select-yourself-editor .chain-field__control,
+.supplier-select-yourself-editor .chain-field select,
+.supplier-select-yourself-editor .chain-field input,
+.supplier-select-yourself-editor .chain-field textarea {
+  width: 100%;
+  padding: 0.72rem 0.85rem;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  font-size: 0.95rem;
+  color: var(--chain-text);
+  background: #fff;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.supplier-select-yourself-editor .chain-field__control:focus,
+.supplier-select-yourself-editor .chain-field select:focus,
+.supplier-select-yourself-editor .chain-field input:focus,
+.supplier-select-yourself-editor .chain-field textarea:focus {
+  outline: none;
+  border-color: var(--chain-accent);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+
+.supplier-select-yourself-editor .chain-field__control:disabled,
+.supplier-select-yourself-editor .chain-field select:disabled,
+.supplier-select-yourself-editor .chain-field input:disabled {
+  background: #f8fafc;
+  color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.supplier-select-yourself-editor .chain-brand-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.supplier-select-yourself-editor .chain-callout {
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.supplier-select-yourself-editor .chain-callout--info {
+  color: #475569;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+}
+
+.supplier-select-yourself-editor .chain-callout--success {
+  color: #166534;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+}
+
+.supplier-select-yourself-editor .chain-callout--warning {
+  color: #92400e;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+}
+
+.supplier-select-yourself-editor .chain-add-entry {
+  margin-top: 0.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px dashed #dbe3ee;
+}
+
+.supplier-select-yourself-editor .chain-add-entry__hint {
+  margin: 0 0 0.85rem;
+  font-size: 0.88rem;
+  color: var(--chain-muted);
+  line-height: 1.45;
+}
+
+.supplier-select-yourself-editor .chain-add-entry__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 10px;
+  background: #eef2ff;
+  color: #4338ca;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.supplier-select-yourself-editor .chain-add-entry__btn:hover {
+  background: #e0e7ff;
+  border-color: #a5b4fc;
+}
+
+.supplier-select-yourself-editor .brand-auth-docs__grid {
+  margin-top: 0.15rem;
+}
+
+@media (max-width: 768px) {
+  .supplier-select-yourself-editor .chain-form-grid,
+  .supplier-select-yourself-editor .chain-brand-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .supplier-select-yourself-editor .chain-entry-header {
+    align-items: flex-start;
+  }
+}

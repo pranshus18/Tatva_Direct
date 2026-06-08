@@ -16,7 +16,10 @@ import {
   adminSupplyChainSuggestSchema
 } from '../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
-import { normalizeBrandKey } from '../services/supplyChainSharedService.js';
+import {
+  normalizeBrandKey,
+  prepareSupplyChainStagesForSave
+} from '../services/supplyChainSharedService.js';
 
 const router = express.Router();
 
@@ -29,14 +32,6 @@ const ROLE_DEPTH = {
   dealer: 4,
   retailer: 5
 };
-const ROLE_LABELS = {
-  manufacturer: 'Manufacturer (MGF)',
-  stockist: 'Stockist',
-  regional_distributor: 'Regional Distributor',
-  local_distributor: 'Local Distributor',
-  dealer: 'Dealer',
-  retailer: 'Retailer'
-};
 
 function normalizeBrandName(name) {
   return String(name || '').trim();
@@ -45,29 +40,7 @@ function escapeIlikeExact(value) {
   return String(value).replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_');
 }
 function validateStages(stages) {
-  if (!Array.isArray(stages)) return { ok: false, message: 'stages must be an array' };
-  const cleaned = [];
-  let lastDepth = -1;
-  for (const s of stages) {
-    const role = typeof s === 'string' ? s : s?.role;
-    if (!role || !VALID_ROLES.includes(role)) {
-      return { ok: false, message: `Invalid role: ${role}. Use one of: ${VALID_ROLES.join(', ')}` };
-    }
-    const d = ROLE_DEPTH[role];
-    if (d <= lastDepth) {
-      return {
-        ok: false,
-        message: 'Stages must go strictly upstream→downstream (manufacturer → … → retailer), no duplicates or backwards steps.'
-      };
-    }
-    lastDepth = d;
-    cleaned.push({
-      role,
-      roleLabel: ROLE_LABELS[role] || role,
-      notes: typeof s?.notes === 'string' ? s.notes.slice(0, 2000) : ''
-    });
-  }
-  return { ok: true, stages: cleaned };
+  return prepareSupplyChainStagesForSave(stages);
 }
 function stripMarkdownCodeFences(raw) {
   let t = String(raw).trim();

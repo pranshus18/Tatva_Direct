@@ -91,9 +91,9 @@ const AdminUsers = ({ user }) => {
   };
 
   const filteredUsers = users.filter(user => {
-    const matchesSearch = user.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                         user.company.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesSearch = (user.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (user.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         (user.company || '').toLowerCase().includes(searchTerm.toLowerCase());
     const matchesFilter = filterType === 'all' || user.userType === filterType;
     return matchesSearch && matchesFilter;
   });

@@ -152,6 +152,68 @@
   max-width: 520px;
 }
 
+.spo-order-lines-table td {
+  vertical-align: top;
+}
+
+.spo-line-product-cell {
+  min-width: 280px;
+  max-width: 420px;
+}
+
+.spo-line-product-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+}
+
+.spo-line-product-thumb {
+  flex: 0 0 80px;
+  max-width: 80px;
+}
+
+.spo-line-product-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.spo-line-product-name {
+  font-weight: 600;
+  color: #0f172a;
+  margin-bottom: 0.2rem;
+}
+
+.spo-line-product-meta,
+.spo-line-product-desc {
+  font-size: 0.82rem;
+  color: #64748b;
+  margin-bottom: 0.35rem;
+  line-height: 1.4;
+}
+
+.spo-line-specs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin-top: 0.35rem;
+}
+
+.spo-line-spec-pill {
+  font-size: 0.76rem;
+  color: #334155;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 9999px;
+  padding: 0.18rem 0.5rem;
+  line-height: 1.35;
+}
+
+.spo-line-specs-empty {
+  font-size: 0.78rem;
+  color: #b45309;
+  margin-top: 0.35rem;
+}
+
 .spo-transport-panel {
   border: 1px solid #c7d2fe;
   border-radius: 10px;

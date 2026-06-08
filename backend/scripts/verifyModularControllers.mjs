@@ -26,8 +26,8 @@ function countRoutes(stack) {
 }
 
 const expected = {
-  supplier: 48,
-  po: 12,
+  supplier: 54,
+  po: 14,
   boq: 4,
   dashboard: 11
 };

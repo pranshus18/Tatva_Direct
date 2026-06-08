@@ -88,7 +88,7 @@ export default function SpSidebar({ className, onNavigate }) {
   }, [location.pathname]);
 
   return (
-    <aside className={cn('flex h-full w-[260px] shrink-0 flex-col border-r bg-card', className)}>
+    <aside className={cn('sp-sidebar flex h-full w-[260px] shrink-0 flex-col border-r bg-card', className)}>
       <div className="border-b px-5 py-5">
         <img src={tatvaLogo} alt="Tatva Direct" className="h-8 w-auto object-contain" />
       </div>

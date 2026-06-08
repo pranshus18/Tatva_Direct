@@ -18,6 +18,11 @@ import {
 } from '../../../services/upstreamOrderInputService.js';
 import { getContractErrorMessage, parseWithSchema } from '../../../utils/contractValidation.js';
 import {
+  resolveCompanyInfoEntriesForValidation,
+  supplierProfileIncludesChainDraft,
+  validateCompanyInfoEntriesList
+} from '../../../utils/supplierChainEntryValidation.js';
+import {
   createProfileResponse,
   ensureBrandApprovedOrRequest,
   parseBrandTokens,
@@ -180,6 +185,18 @@ export function registerProfileUpdateRoutes(router) {
         const incomingChain = buildChainPayloadFromProfileData(profileData);
         const baselineChain = baselineChainFromProfile(currentProfile);
         const hasRole = hasAnySupplyChainRole(incomingChain);
+
+        if (supplierProfileIncludesChainDraft(profileData)) {
+          const chainEntriesForValidation = resolveCompanyInfoEntriesForValidation(profileData);
+          const completeness = validateCompanyInfoEntriesList(chainEntriesForValidation);
+          if (!completeness.ok) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'supply_chain_entry_incomplete',
+              message: completeness.message
+            });
+          }
+        }
 
         const collectBrandStringsFromChain = (chain) => {
           const brandStrings = [];

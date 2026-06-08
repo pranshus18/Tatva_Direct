@@ -65,6 +65,8 @@ export const adminAiEnhanceSchema = z.object({
   productName: z.string().min(1),
   category: z.string().optional(),
   description: z.string().optional(),
+  /** Admin-only instructions for spec-key generation; not stored on the product. */
+  prompt: z.string().optional(),
   provider: z.string().optional()
 });
 

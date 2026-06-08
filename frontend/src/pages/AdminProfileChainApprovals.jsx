@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
-import { CheckCircle, Clock, RefreshCw, User, XCircle } from 'lucide-react';
+import { CheckCircle, Clock, ExternalLink, FileText, RefreshCw, User, XCircle } from 'lucide-react';
 import './AdminDashboard.css';
 
 const ROLE_LABELS = {
@@ -27,6 +27,72 @@ function summarizePayload(payload) {
   const r = ROLE_LABELS[payload.supplierRole] || payload.supplierRole || '—';
   const b = String(payload.brands || '').trim() || '—';
   return `${r} — brands: ${b.slice(0, 160)}${b.length > 160 ? '…' : ''}`;
+}
+
+/** Certificates uploaded with the pending supply-chain request (per entry + legacy). */
+function documentsFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return [];
+  const docs = [];
+  const seen = new Set();
+  const entries = Array.isArray(payload.companyInfoEntries) ? payload.companyInfoEntries : [];
+
+  const addDoc = (url, label) => {
+    const value = String(url || '').trim();
+    if (!value || seen.has(value)) return;
+    seen.add(value);
+    docs.push({ url: value, label });
+  };
+
+  for (const e of entries) {
+    const role = ROLE_LABELS[e.role] || e.role || 'Role';
+    const brands = String(e.brands || '').trim();
+    const label = brands ? `${role} — ${brands}` : role;
+    const urls = Array.isArray(e?.authorizationCertificateUrls)
+      ? e.authorizationCertificateUrls
+      : [];
+    if (urls.length > 0) {
+      urls.forEach((url) => addDoc(url, label));
+    } else {
+      addDoc(e?.authorizationCertificateUrl, label);
+    }
+  }
+
+  const legacyUrls = Array.isArray(payload.authorizationCertificateUrls)
+    ? payload.authorizationCertificateUrls
+    : [];
+  if (legacyUrls.length > 0) {
+    legacyUrls.forEach((url) => addDoc(url, 'Profile certificate'));
+  } else {
+    addDoc(payload.authorizationCertificateUrl, 'Profile certificate');
+  }
+
+  return docs;
+}
+
+function RequestDocumentsCell({ payload }) {
+  const docs = documentsFromPayload(payload);
+  if (docs.length === 0) {
+    return <span className="admin-chain-docs-empty">No documents uploaded</span>;
+  }
+  return (
+    <ul className="admin-chain-docs-list">
+      {docs.map((doc) => (
+        <li key={doc.url}>
+          <a
+            href={doc.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="admin-chain-doc-link"
+            title={doc.label}
+          >
+            <FileText size={14} aria-hidden />
+            <span className="admin-chain-doc-link-label">{doc.label}</span>
+            <ExternalLink size={12} aria-hidden className="admin-chain-doc-external" />
+          </a>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 const AdminProfileChainApprovals = () => {
@@ -165,11 +231,12 @@ const AdminProfileChainApprovals = () => {
           </div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table className="admin-table" style={{ minWidth: '960px' }}>
+            <table className="admin-table admin-chain-approvals-table">
               <thead>
                 <tr>
                   <th>Supplier</th>
                   <th>Requested assignment</th>
+                  <th>Document</th>
                   <th>Status</th>
                   <th>Submitted</th>
                   <th>Actions</th>
@@ -190,6 +257,9 @@ const AdminProfileChainApprovals = () => {
                       </td>
                       <td style={{ maxWidth: 420, fontSize: '0.9rem', color: '#334155', lineHeight: 1.4 }}>
                         {summarizePayload(row.payload)}
+                      </td>
+                      <td className="admin-chain-docs-cell">
+                        <RequestDocumentsCell payload={row.payload} />
                       </td>
                       <td>
                         <span className={`status-badge ${st}`}>

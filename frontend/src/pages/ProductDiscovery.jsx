@@ -13,12 +13,16 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { formatRupeePerUnit } from '../utils/formatRupee';
 import './ProductDiscovery.css';
 
-function formatPrice(price) {
+function formatPrice(price, unit) {
   const num = Number(price);
   if (!Number.isFinite(num) || num <= 0) return null;
-  return `₹${num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return formatRupeePerUnit(num, unit, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
 
 function RatingStars({ rating, reviews }) {
@@ -287,7 +291,7 @@ const ProductDiscovery = () => {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {products.map((product) => {
             const imgs = imageArray(product);
-            const price = formatPrice(product?.price);
+            const price = formatPrice(product?.price, product?.unit);
             const pid = String(product?.id || '');
             const inStock = Number(product?.stock) > 0;
             const moq = Number(product?.min_order_quantity);
@@ -324,7 +328,7 @@ const ProductDiscovery = () => {
                   <TagList tags={product.tags} />
 
                   <div className="pd-card__details">
-                    {price && <span className="pd-card__price">{price}<small>/{product.unit || 'unit'}</small></span>}
+                    {price && <span className="pd-card__price">{price}</span>}
                     {!price && <span className="pd-card__price pd-card__price--na">Price on request</span>}
 
                     <div className="pd-card__meta-row">

@@ -46,6 +46,8 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+import { buildBookCourierCheckoutPayload } from '../utils/logisticsApiPayload.js';
+
 function pickStr(...vals) {
   for (const v of vals) {
     if (v === null || v === undefined) continue;
@@ -280,65 +282,6 @@ async function postJson(url, body) {
 
 const BOOK_CARRIER_URL = () => `${LOGISTICS_BASE}/carrier/book`;
 
-/**
- * Build JSON for POST .../api/logistics/book-courier-checkout (BookCourierCheckoutRequest).
- * @see https://tatva-logistic-module.onrender.com/openapi.json — components.schemas.BookCourierCheckoutRequest
- */
-function buildBookCourierCheckoutBody({
-  courierCompanyId,
-  courierDisplayName,
-  deliveryAddress,
-  sessionBuyer,
-  lines,
-  weightKg,
-  orderId,
-  orderNumber,
-  vendorId
-}) {
-  const id = Number(courierCompanyId);
-  const buyerName = pickStr(sessionBuyer?.name, sessionBuyer?.company) || 'Customer';
-  let digits = String(sessionBuyer?.phone || '').replace(/\D/g, '');
-  if (digits.length >= 12 && digits.startsWith('91')) digits = digits.slice(-10);
-  else if (digits.length > 10) digits = digits.slice(-10);
-  const buyerPhone =
-    digits.length === 10 && /^[6-9]\d{9}$/.test(digits) ? digits : '9876543210';
-  const buyerEmail = pickStr(sessionBuyer?.email) || 'noreply@tatva.local';
-  const clientRef =
-    pickStr(orderNumber) || (orderId ? `tatva-order:${orderId}` : `tatva-booking:${Date.now()}`);
-
-  const addr = deliveryAddress && typeof deliveryAddress === 'object' ? deliveryAddress : {};
-  const delivery_address = {
-    line1: String(addr.line1 || '').trim(),
-    city: String(addr.city || '').trim(),
-    state: String(addr.state || '').trim(),
-    pincode: String(addr.pincode || '').replace(/\D/g, '').slice(0, 6),
-    country: String(addr.country || 'India').trim() || 'India'
-  };
-
-  const items = (Array.isArray(lines) ? lines : []).map((row) => ({
-    name: row.name,
-    quantity: row.quantity,
-    unit_price: row.unit_price,
-    total_price: row.total_price,
-    product_id: row.product_id,
-    sku: row.sku
-  }));
-
-  const body = {
-    client_reference: clientRef.slice(0, 240),
-    courier_company_id: id,
-    buyer_name: buyerName.slice(0, 200),
-    buyer_phone: buyerPhone.slice(0, 32),
-    buyer_email: buyerEmail.slice(0, 200),
-    delivery_address,
-    weight_kg: Number(weightKg) > 0 ? Number(weightKg) : 0.5,
-    items
-  };
-  const cn = pickStr(courierDisplayName);
-  if (cn) body.courier_name = cn.slice(0, 200);
-  if (vendorId) body.vendor_id = String(vendorId);
-  return body;
-}
 
 /**
  * @returns {Promise<{
@@ -368,7 +311,7 @@ export async function bookCourierCheckout({
     throw new Error('Invalid courier_company_id for logistics booking');
   }
 
-  const checkoutBody = buildBookCourierCheckoutBody({
+  const checkoutBody = buildBookCourierCheckoutPayload({
     courierCompanyId: id,
     courierDisplayName,
     deliveryAddress,

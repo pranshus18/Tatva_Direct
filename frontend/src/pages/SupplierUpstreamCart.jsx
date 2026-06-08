@@ -2,50 +2,86 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
 import './Dashboard.css';
-import { Pencil } from 'lucide-react';
+import './SupplierUpstreamCart.css';
+import { Check, Clipboard, Mail, MessageCircle, Pencil, Share2 } from 'lucide-react';
+import SpPageLayout from '../components/sp/SpPageLayout';
+import SpPageHeader from '../components/sp/SpPageHeader';
+import SpStatCard from '../components/sp/SpStatCard';
+import UpstreamProductDisplay from '../components/UpstreamProductDisplay';
+import { Button } from '@/components/ui/button';
+import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
+import { formatRupee } from '../utils/formatRupee';
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
+import {
+  buildSupplierProductLookupMap,
+  normalizeSupplierProductsFromApi
+} from '../utils/supplierProductRow';
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
 
+const normalizeSupplierProductKey = (value) => String(value ?? '').trim();
+
+const normalizeSelectionMap = (raw) => {
+  if (!raw || typeof raw !== 'object') return {};
+  const next = {};
+  Object.entries(raw).forEach(([key, val]) => {
+    const normalizedKey = normalizeSupplierProductKey(key);
+    if (normalizedKey) next[normalizedKey] = val;
+  });
+  return next;
+};
 const SupplierUpstreamCart = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [error, setError] = useState('');
-  const [selectedMine, setSelectedMine] = useState({});
-  const [selectedUpstreamOffer, setSelectedUpstreamOffer] = useState({});
-  const [suggestions, setSuggestions] = useState([]);
-  const [brandFilter, setBrandFilter] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [projects, setProjects] = useState([]);
   const [products, setProducts] = useState([]);
-  const [cartName, setCartName] = useState('');
-  const [editingCartName, setEditingCartName] = useState(false);
-  const [cartNameDraft, setCartNameDraft] = useState('');
-  const [savingCartName, setSavingCartName] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState('');
+  const [projectNameDraft, setProjectNameDraft] = useState('');
+  const [savingProjectName, setSavingProjectName] = useState(false);
+  const [sharingCart, setSharingCart] = useState(false);
+  const [shareLink, setShareLink] = useState('');
+  const [copyingShareLink, setCopyingShareLink] = useState(false);
 
-  const productBySupplierProductId = useMemo(() => {
-    const map = {};
-    (products || []).forEach((p) => {
-      if (p?.supplier_product_id) {
-        map[p.supplier_product_id] = p;
-      }
-    });
-    return map;
-  }, [products]);
+  const productBySupplierProductId = useMemo(
+    () => buildSupplierProductLookupMap(products),
+    [products]
+  );
 
-  const selectedRows = useMemo(() => {
-    return Object.entries(selectedMine || {})
-      .map(([mineId, qty]) => {
-        const product = productBySupplierProductId[mineId];
-        return {
-          mineId,
-          quantity: Number.isFinite(Number(qty)) && Number(qty) > 0 ? Math.floor(Number(qty)) : 1,
-          product
-        };
-      })
-      .filter((row) => row.product);
-  }, [selectedMine, productBySupplierProductId]);
+  const projectRows = useMemo(
+    () =>
+      (projects || []).map((project) => {
+        const selectedMine = project?.selectedMine && typeof project.selectedMine === 'object'
+          ? project.selectedMine
+          : {};
+        const rows = Object.entries(selectedMine)
+          .map(([mineId, qty]) => {
+            const key = normalizeSupplierProductKey(mineId);
+            const product = productBySupplierProductId[key];
+            const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+            const parsed = parseSupplierStockQuantity(qty);
+            const quantity =
+              parsed != null && parsed > 0 ? Math.max(minQty, parsed) : minQty;
+            return {
+              mineId: key,
+              quantity,
+              product
+            };
+          })
+          .filter((row) => row.product);
+        return { project, rows };
+      }),
+    [projects, productBySupplierProductId]
+  );
+  const projectCount = projectRows.length;
+  const totalCartLines = projectRows.reduce((sum, item) => sum + item.rows.length, 0);
+  const totalCartQuantity = projectRows.reduce(
+    (sum, item) => sum + item.rows.reduce((rowSum, row) => rowSum + Number(row.quantity || 0), 0),
+    0
+  );
 
   const loadCart = async () => {
     setLoading(true);
@@ -55,30 +91,21 @@ const SupplierUpstreamCart = () => {
         authFetch('/api/supplier/upstream/cart', { cache: 'no-cache' }),
         authFetch('/api/supplier/products', { cache: 'no-cache' })
       ]);
-
       const cartData = await cartRes.json();
       const productsData = await productsRes.json();
-
       if (!cartRes.ok || cartData.status !== 'success') {
         throw new Error(cartData.message || 'Failed to load cart');
       }
       if (!productsRes.ok || productsData.status !== 'success') {
         throw new Error(productsData.message || 'Failed to load products');
       }
-
       const draft = cartData?.cart?.draft && typeof cartData.cart.draft === 'object' ? cartData.cart.draft : {};
-      setSelectedMine(draft.selectedMine && typeof draft.selectedMine === 'object' ? draft.selectedMine : {});
-      setSelectedUpstreamOffer(
-        draft.selectedUpstreamOffer && typeof draft.selectedUpstreamOffer === 'object'
-          ? draft.selectedUpstreamOffer
-          : {}
+      setProjects(Array.isArray(draft.projects) ? draft.projects : []);
+      setProducts(
+        normalizeSupplierProductsFromApi(
+          Array.isArray(productsData.products) ? productsData.products : []
+        )
       );
-      setSuggestions(Array.isArray(draft.suggestions) ? draft.suggestions : []);
-      setBrandFilter(String(draft.brandFilter || ''));
-      setSearchTerm(String(draft.searchTerm || ''));
-      setCartName(String(draft.cartName || 'Supplier Cart'));
-      setCartNameDraft(String(draft.cartName || 'Supplier Cart'));
-      setProducts(Array.isArray(productsData.products) ? productsData.products : []);
       emitSupplierCartUpdated();
     } catch (e) {
       setError(e.message || 'Failed to load supplier cart');
@@ -91,11 +118,17 @@ const SupplierUpstreamCart = () => {
     loadCart();
   }, []);
 
-  const persistCart = async (nextDraft, options = {}) => {
+  const replaceProjectInState = (projectId, nextProject) => {
+    setProjects((prev) =>
+      (prev || []).map((project) =>
+        String(project?.projectId || '') === String(projectId || '') ? nextProject : project
+      )
+    );
+  };
+
+  const persistProject = async (project, options = {}) => {
     const silent = options.silent === true;
-    if (!silent) {
-      setSaving(true);
-    }
+    if (!silent) setSaving(true);
     setError('');
     try {
       const token = localStorage.getItem('token');
@@ -105,62 +138,67 @@ const SupplierUpstreamCart = () => {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(nextDraft)
+        body: JSON.stringify({
+          projectId: project.projectId,
+          cartName: String(project.cartName || '').trim(),
+          selectedMine: project.selectedMine || {},
+          selectedUpstreamOffer: project.selectedUpstreamOffer || {},
+          suggestions: Array.isArray(project.suggestions) ? project.suggestions : [],
+          brandFilter: String(project.brandFilter || '').trim(),
+          searchTerm: String(project.searchTerm || '').trim()
+        })
       });
       const data = await res.json();
       if (!res.ok || data.status !== 'success') {
-        throw new Error(data.message || 'Failed to save cart');
+        throw new Error(data.message || 'Failed to save project');
       }
       return true;
     } catch (e) {
-      setError(e.message || 'Failed to save cart');
+      setError(e.message || 'Failed to save project');
       return false;
     } finally {
-      if (!silent) {
-        setSaving(false);
-      }
+      if (!silent) setSaving(false);
     }
   };
 
-  const updateQuantity = async (mineId, nextQty) => {
-    const qty = Number(nextQty);
-    if (!Number.isFinite(qty) || qty < 1) return;
-    const nextSelectedMine = {
-      ...selectedMine,
-      [mineId]: Math.floor(qty)
+  const updateQuantity = async (projectId, mineId, nextQty) => {
+    const key = normalizeSupplierProductKey(mineId);
+    const parsed = parseSupplierStockQuantity(nextQty);
+    if (parsed === null || parsed < 1) return;
+    const product = productBySupplierProductId[key];
+    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+    const quantity = Math.max(minQty, parsed);
+    const project = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
+    if (!project) return;
+    const nextProject = {
+      ...project,
+      selectedMine: {
+        ...(project.selectedMine || {}),
+        [key]: quantity
+      }
     };
-    const nextDraft = {
-      selectedMine: nextSelectedMine,
-      selectedUpstreamOffer,
-      suggestions,
-      brandFilter,
-      searchTerm,
-      cartName
-    };
-    const ok = await persistCart(nextDraft, { silent: true });
+    const ok = await persistProject(nextProject, { silent: true });
     if (ok) {
-      setSelectedMine(nextSelectedMine);
+      replaceProjectInState(projectId, nextProject);
       emitSupplierCartUpdated();
     }
   };
 
-  const removeLine = async (mineId) => {
-    const nextSelectedMine = { ...selectedMine };
+  const removeLine = async (projectId, mineId) => {
+    const project = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
+    if (!project) return;
+    const nextSelectedMine = { ...(project.selectedMine || {}) };
+    const nextSelectedUpstreamOffer = { ...(project.selectedUpstreamOffer || {}) };
     delete nextSelectedMine[mineId];
-    const nextSelectedUpstreamOffer = { ...selectedUpstreamOffer };
     delete nextSelectedUpstreamOffer[mineId];
-    const nextDraft = {
+    const nextProject = {
+      ...project,
       selectedMine: nextSelectedMine,
-      selectedUpstreamOffer: nextSelectedUpstreamOffer,
-      suggestions,
-      brandFilter,
-      searchTerm,
-      cartName
+      selectedUpstreamOffer: nextSelectedUpstreamOffer
     };
-    const ok = await persistCart(nextDraft, { silent: true });
+    const ok = await persistProject(nextProject, { silent: true });
     if (ok) {
-      setSelectedMine(nextSelectedMine);
-      setSelectedUpstreamOffer(nextSelectedUpstreamOffer);
+      replaceProjectInState(projectId, nextProject);
       emitSupplierCartUpdated();
     }
   };
@@ -180,9 +218,7 @@ const SupplierUpstreamCart = () => {
       if (!res.ok || data.status !== 'success') {
         throw new Error(data.message || 'Failed to clear cart');
       }
-      setSelectedMine({});
-      setSelectedUpstreamOffer({});
-      setSuggestions([]);
+      setProjects([]);
       emitSupplierCartUpdated();
     } catch (e) {
       setError(e.message || 'Failed to clear cart');
@@ -191,124 +227,196 @@ const SupplierUpstreamCart = () => {
     }
   };
 
-  const continueToUpstream = () => {
+  const continueToUpstream = (project) => {
     localStorage.setItem(
       SUPPLIER_UPSTREAM_CART_RESUME_KEY,
       JSON.stringify({
-        selectedMine,
-        selectedUpstreamOffer,
-        suggestions,
-        brandFilter,
-        searchTerm,
-        cartName
+        selectedMine: normalizeSelectionMap(project?.selectedMine),
+        selectedUpstreamOffer: normalizeSelectionMap(project?.selectedUpstreamOffer),
+        suggestions: Array.isArray(project?.suggestions) ? project.suggestions : [],
+        brandFilter: String(project?.brandFilter || ''),
+        searchTerm: String(project?.searchTerm || ''),
+        cartName: String(project?.cartName || '')
       })
     );
     navigate('/supplier-upstream');
   };
 
-  const handleSaveCartName = async () => {
-    const nextName = String(cartNameDraft || '').trim();
-    if (!nextName) {
+  const saveProjectName = async (projectId) => {
+    const cartName = String(projectNameDraft || '').trim();
+    if (!cartName) {
       setError('Project name cannot be empty.');
       return;
     }
-    setSavingCartName(true);
+    setSavingProjectName(true);
     setError('');
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/supplier/upstream/cart/name'), {
+      const res = await fetch(getApiUrl('/api/supplier/upstream/cart/name'), {
         method: 'PATCH',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ cartName: nextName })
+        body: JSON.stringify({ projectId, cartName })
       });
-      const data = await response.json();
-      if (!response.ok || data.status !== 'success') {
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
         throw new Error(data.message || 'Failed to update project name');
       }
-      setCartName(nextName);
-      setEditingCartName(false);
+      const current = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
+      if (current) {
+        replaceProjectInState(projectId, { ...current, cartName });
+      }
+      setEditingProjectId('');
+      setProjectNameDraft('');
       emitSupplierCartUpdated();
     } catch (e) {
       setError(e.message || 'Failed to update project name');
     } finally {
-      setSavingCartName(false);
+      setSavingProjectName(false);
+    }
+  };
+
+  const handleShareCart = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setError('Please log in again to share cart.');
+      return;
+    }
+    setSharingCart(true);
+    setError('');
+    try {
+      const response = await fetch(getApiUrl('/api/cart-share'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ ttlDays: 7 })
+      });
+      const data = await response.json();
+      if (!response.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to create share link');
+      }
+      const baseOrigin = typeof window !== 'undefined' ? window.location.origin : '';
+      const fallbackShareUrl = data?.token && baseOrigin ? `${baseOrigin}/c/${encodeURIComponent(data.token)}` : '';
+      setShareLink(String(data.shareUrl || fallbackShareUrl || ''));
+    } catch (e) {
+      setError(e.message || 'Failed to create share link');
+    } finally {
+      setSharingCart(false);
+    }
+  };
+
+  const handleShareViaWhatsApp = () => {
+    if (!shareLink) {
+      setError('Please generate the share link first.');
+      return;
+    }
+    const text = `Please review this supplier cart: ${shareLink}`;
+    const whatsappUrl = `https://wa.me/?text=${encodeURIComponent(text)}`;
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const handleShareViaEmail = () => {
+    if (!shareLink) {
+      setError('Please generate the share link first.');
+      return;
+    }
+    const subject = 'Shared Supplier Cart';
+    const body = `Hi,\n\nPlease review this supplier cart using the link below:\n${shareLink}\n\nThanks`;
+    const mailtoUrl = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.location.href = mailtoUrl;
+  };
+
+  const handleCopyShareLink = async () => {
+    if (!shareLink) return;
+    try {
+      setCopyingShareLink(true);
+      await navigator.clipboard.writeText(shareLink);
+      window.setTimeout(() => setCopyingShareLink(false), 1000);
+    } catch (_e) {
+      setCopyingShareLink(false);
+      setError('Unable to copy share link. Please copy manually.');
     }
   };
 
   return (
-    <div className="dashboard-container">
-      <div className="dashboard-header">
-        <div>
-          {editingCartName ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <input
-                type="text"
-                maxLength={120}
-                value={cartNameDraft}
-                onChange={(e) => setCartNameDraft(e.target.value)}
-                style={{ height: 38, minWidth: 260, border: '1px solid #cbd5e1', borderRadius: 8, padding: '0 0.65rem' }}
-              />
-              <button className="btn-primary" disabled={savingCartName} onClick={handleSaveCartName}>
-                {savingCartName ? 'Saving...' : 'Save'}
-              </button>
-              <button
-                className="btn-secondary"
-                onClick={() => {
-                  setEditingCartName(false);
-                  setCartNameDraft(cartName || 'Supplier Cart');
-                }}
-              >
-                Cancel
-              </button>
-            </div>
-          ) : (
-            <h1 style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem' }}>
-              {cartName || 'Supplier Cart'}
-              <button
-                type="button"
-                className="btn-icon"
-                onClick={() => setEditingCartName(true)}
-                aria-label="Edit project name"
-                style={{ color: '#64748b' }}
-              >
-                <Pencil size={16} />
-              </button>
-            </h1>
-          )}
-          <p style={{ color: '#475569' }}>
-            Review selected inventory lines, adjust quantities, and continue upstream supplier selection.
-          </p>
-        </div>
+    <SpPageLayout showStepper={false}>
+      <div className="dashboard-container supplier-cart-page !max-w-none !p-0">
+      <SpPageHeader
+        title="Supplier Cart"
+        description="Every save creates a new project. Same product + same supplier will not merge into previous projects."
+        icon={Pencil}
+        actions={
+          <>
+            <Button variant="outline" disabled={loading || saving} onClick={loadCart}>
+              Refresh
+            </Button>
+            <Button variant="outline" onClick={() => navigate('/supplier-upstream')}>
+              Back to Upstream
+            </Button>
+          </>
+        }
+      />
+
+      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        <SpStatCard label="Projects" value={projectCount} icon={Pencil} accent="indigo" />
+        <SpStatCard label="Cart Lines" value={totalCartLines} icon={Pencil} accent="emerald" />
+        <SpStatCard label="Total Quantity" value={totalCartQuantity} icon={Pencil} accent="amber" />
       </div>
 
-      <div className="dashboard-content">
+      <div className="dashboard-content supplier-cart-content">
         <div className="dashboard-section">
-          <div className="section-header">
-            <h2>Cart Items</h2>
-            <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-              <button className="btn-secondary" disabled={loading || saving} onClick={loadCart}>
-                Refresh
-              </button>
+          <div className="section-header supplier-cart-toolbar">
+            <h2>Projects</h2>
+            <div className="supplier-cart-toolbar-actions">
               <button
                 className="btn-secondary"
-                disabled={loading || clearing || selectedRows.length === 0}
+                disabled={loading || clearing || projectRows.length === 0}
                 onClick={clearCart}
               >
                 {clearing ? 'Clearing...' : 'Clear cart'}
               </button>
+              <button
+                className="btn-secondary"
+                disabled={loading || sharingCart || projectRows.length === 0}
+                onClick={handleShareCart}
+              >
+                <Share2 size={14} />
+                {sharingCart ? 'Generating...' : 'Share cart'}
+              </button>
             </div>
           </div>
 
-          {error ? (
-            <div style={{ marginBottom: '0.9rem', color: '#b91c1c', fontWeight: 600 }}>{error}</div>
+          {error ? <div className="supplier-cart-error">{error}</div> : null}
+          {shareLink ? (
+            <div className="supplier-cart-share-panel">
+              <div className="supplier-cart-share-title">Share link</div>
+              <a href={shareLink} target="_blank" rel="noreferrer" className="supplier-cart-share-link">
+                {shareLink}
+              </a>
+              <div className="supplier-cart-share-actions">
+                <button className="btn-secondary" onClick={handleCopyShareLink}>
+                  {copyingShareLink ? <Check size={14} /> : <Clipboard size={14} />}
+                  {copyingShareLink ? 'Copied' : 'Copy'}
+                </button>
+                <button className="btn-secondary" onClick={handleShareViaWhatsApp}>
+                  <MessageCircle size={14} />
+                  WhatsApp
+                </button>
+                <button className="btn-secondary" onClick={handleShareViaEmail}>
+                  <Mail size={14} />
+                  Email
+                </button>
+              </div>
+            </div>
           ) : null}
 
           {loading ? (
             <p>Loading cart...</p>
-          ) : selectedRows.length === 0 ? (
+          ) : projectRows.length === 0 ? (
             <div className="empty-state">
               <h3>Your supplier cart is empty</h3>
               <p>Add products from Upstream Orders.</p>
@@ -317,52 +425,151 @@ const SupplierUpstreamCart = () => {
               </button>
             </div>
           ) : (
-            <div className="items-list">
-              {selectedRows.map((row) => {
-                const mineId = row.mineId;
-                const p = row.product;
-                const minQty = Number(p?.min_order_quantity || 1) || 1;
+            <div className="supplier-projects-stack">
+              {projectRows.map(({ project, rows }) => {
+                const projectId = String(project?.projectId || '');
+                const totalLines = rows.length;
+                const totalQuantity = rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
+                const totalAmount = rows.reduce((sum, row) => {
+                  const offerPrice = Number(project?.selectedUpstreamOffer?.[row.mineId]?.price || 0) || 0;
+                  const productPrice = Number(row?.product?.price || row?.product?.unitPrice || row?.product?.sellingPrice || 0) || 0;
+                  const unitPrice = offerPrice || productPrice;
+                  return sum + (unitPrice * Number(row.quantity || 0));
+                }, 0);
                 return (
-                  <div key={mineId} className="item-card">
-                    <div className="item-info">
-                      <h4>{p?.name || 'Product'}</h4>
-                      <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
-                        Brand: <strong>{p?.brandModel || p?.brand || 'N/A'}</strong>
-                      </p>
-                      <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
-                        Stock: <strong>{p?.stock ?? 0}</strong> | Min order: <strong>{minQty}</strong>
-                      </p>
-                    </div>
-                    <div className="item-status" style={{ alignItems: 'flex-end', gap: '0.6rem' }}>
-                      <label style={{ fontSize: '0.85rem', color: '#334155' }}>Quantity</label>
-                      <input
-                        type="number"
-                        min={1}
-                        step={1}
-                        value={row.quantity}
-                        onChange={(e) => updateQuantity(mineId, e.target.value)}
-                        style={{ width: 110, padding: '0.4rem 0.55rem', border: '1px solid #e2e8f0', borderRadius: 8 }}
-                      />
-                      <button className="btn-secondary" onClick={() => removeLine(mineId)}>
-                        Remove
+                  <section key={projectId} className="supplier-project-card">
+                    <div className="supplier-project-head">
+                      <div>
+                        {editingProjectId === projectId ? (
+                          <div className="supplier-project-edit-row">
+                            <input
+                              type="text"
+                              maxLength={120}
+                              value={projectNameDraft}
+                              onChange={(e) => setProjectNameDraft(e.target.value)}
+                              className="supplier-project-name-input"
+                            />
+                            <button className="btn-primary" disabled={savingProjectName} onClick={() => saveProjectName(projectId)}>
+                              {savingProjectName ? 'Saving...' : 'Save'}
+                            </button>
+                            <button className="btn-secondary" onClick={() => setEditingProjectId('')}>
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <h3 className="supplier-project-title">
+                            {String(project?.cartName || 'Supplier Project')}
+                            <button
+                              type="button"
+                              className="btn-icon supplier-project-edit-icon"
+                              onClick={() => {
+                                setEditingProjectId(projectId);
+                                setProjectNameDraft(String(project?.cartName || ''));
+                              }}
+                              aria-label="Edit project name"
+                            >
+                              <Pencil size={14} />
+                            </button>
+                          </h3>
+                        )}
+                        <p className="supplier-project-id">Project ID: {projectId}</p>
+                      </div>
+                      <button className="btn-primary" disabled={rows.length === 0} onClick={() => continueToUpstream(project)}>
+                        Continue this project
                       </button>
                     </div>
-                  </div>
+
+                    <div className="supplier-table-wrap">
+                      <table className="supplier-cart-table">
+                        <thead>
+                          <tr>
+                            <th>Product</th>
+                            <th>Brand</th>
+                            <th>MRP</th>
+                            <th>{SUPPLIER_CURRENT_STOCK_LABEL}</th>
+                            <th>Min Order</th>
+                            <th>Quantity</th>
+                            <th>Total Price</th>
+                            <th>Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((row) => {
+                            const mineId = row.mineId;
+                            const p = row.product;
+                            const minQty = Math.max(1, p?.min_order_quantity ?? 1);
+                            const offerPrice = Number(project?.selectedUpstreamOffer?.[mineId]?.price || 0) || 0;
+                            const productPrice = Number(p?.price || p?.unitPrice || p?.sellingPrice || 0) || 0;
+                            const unitPrice = offerPrice || productPrice;
+                            return (
+                              <tr key={`${projectId}-${mineId}`}>
+                                <td className="supplier-cart-product-cell">
+                                  <div className="supplier-cart-product-name">{p?.name || 'Product'}</div>
+                                  <UpstreamProductDisplay
+                                    product={p}
+                                    compact
+                                    showDescription={false}
+                                    showSpecifications={false}
+                                    maxSpecs={8}
+                                  />
+                                </td>
+                                <td>{p?.brandModel || p?.brand || 'N/A'}</td>
+                                <td className="supplier-cart-number-cell">{formatRupee(unitPrice)}</td>
+                                <td>{p?.stock ?? 0}</td>
+                                <td>{minQty}</td>
+                                <td>
+                                  <input
+                                    type="number"
+                                    min={minQty}
+                                    step={1}
+                                    inputMode="numeric"
+                                    value={row.quantity}
+                                    onChange={(e) => updateQuantity(projectId, mineId, e.target.value)}
+                                    className="supplier-cart-qty-input"
+                                  />
+                                </td>
+                                <td className="supplier-cart-number-cell">{formatRupee(unitPrice * Number(row.quantity || 0))}</td>
+                                <td>
+                                  <button className="btn-secondary" onClick={() => removeLine(projectId, mineId)}>
+                                    Remove
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr>
+                            <td colSpan={5} className="supplier-cart-summary-label">
+                              Project totals
+                            </td>
+                            <td className="supplier-cart-summary-value">{totalQuantity}</td>
+                            <td className="supplier-cart-summary-value">{formatRupee(totalAmount)}</td>
+                            <td className="supplier-cart-summary-meta">{totalLines} line(s)</td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                    <p
+                      style={{
+                        marginTop: '0.6rem',
+                        fontSize: '0.86rem',
+                        color: '#64748b'
+                      }}
+                    >
+                      <strong>
+                        This is the total MRP price. To get the actual purchase price, select the supplier in the cart.
+                      </strong>
+                    </p>
+                  </section>
                 );
               })}
             </div>
           )}
-
-          {selectedRows.length > 0 ? (
-            <div style={{ marginTop: '1rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <button className="btn-primary" disabled={saving} onClick={continueToUpstream}>
-                {saving ? 'Saving...' : 'Continue to Upstream Suppliers'}
-              </button>
-            </div>
-          ) : null}
         </div>
       </div>
-    </div>
+      </div>
+    </SpPageLayout>
   );
 };
 

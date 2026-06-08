@@ -7,6 +7,16 @@ import {
   parseWithSchema,
   poTransportConfirmSchema
 } from './poImports.js';
+import {
+  buildCourierLinesFromOrderItems,
+  computeOrderWeightKgForCourier,
+  isLogisticsDeliveryAddressComplete,
+  orderDeliveryJsonToLogisticsAddress
+} from '../../utils/logisticsTransportHelpers.js';
+import {
+  resolveBookingIntent,
+  TRANSPORT_KIND
+} from '../../utils/logisticsTransportIntent.js';
 
 export function registerPoTransportRoutes(ctx) {
   const {
@@ -156,32 +166,33 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       const truckingMatter = pick?.matter ?? (isSingleRoot ? rootMatter : null);
 
       const logisticsDelivery = orderDeliveryJsonToLogisticsAddress(prevAddr);
-      const willBookCourier =
-        courierCompanyId != null && Number.isFinite(Number(courierCompanyId));
-      const willBookTrucking =
-        !willBookCourier &&
-        (transportMode === 'trucking' ||
-          transportSource === 'borzo' ||
-          (vehicleTypeId != null && Number.isFinite(Number(vehicleTypeId))));
+      const bookingIntent = resolveBookingIntent({
+        transportMode: transportMode || null,
+        courierCompanyId,
+        vehicleTypeId,
+        source: transportSource,
+        carrier: truckingCarrier,
+        pickupLat,
+        pickupLng,
+        deliveryLat,
+        deliveryLng
+      });
+
+      if (bookingIntent.error) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Order ${row.id}: ${bookingIntent.error}`
+        });
+      }
+
+      const willBookCourier = bookingIntent.kind === TRANSPORT_KIND.COURIER;
+      const willBookTrucking = bookingIntent.kind === TRANSPORT_KIND.TRUCKING;
 
       if (willBookCourier && !isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
         return res.status(400).json({
           status: 'error',
           message: `Order ${row.id}: complete delivery address with a 6-digit pincode is required for courier booking.`
         });
-      }
-
-      if (willBookTrucking) {
-        const plat = Number(pickupLat);
-        const plng = Number(pickupLng);
-        const dlat = Number(deliveryLat);
-        const dlng = Number(deliveryLng);
-        if (![plat, plng, dlat, dlng].every((n) => Number.isFinite(n))) {
-          return res.status(400).json({
-            status: 'error',
-            message: `Order ${row.id}: pickup and delivery coordinates are required for trucking (Borzo) booking. Re-open Transport suggestion and pick a trucking quote.`
-          });
-        }
       }
 
       if (transportBookDebug && !willBookCourier && !willBookTrucking) {
@@ -217,6 +228,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         truckingMatter,
         willBookCourier,
         willBookTrucking,
+        bookingIntent,
         logisticsDelivery,
         lines: buildCourierLinesFromOrderItems(row.order_items),
         weightKg: computeOrderWeightKgForCourier(row.order_items),
@@ -231,8 +243,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       rowContexts.map(async (ctx) => {
         const {
           row,
-          courierCompanyId,
-          vehicleTypeId,
+          bookingIntent,
           transportMode,
           transportSource,
           truckingWeightKg,
@@ -240,11 +251,6 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
           logisticsDelivery,
           lines,
           weightKg,
-          pickupLat,
-          pickupLng,
-          deliveryLat,
-          deliveryLng,
-          truckingCarrier,
           truckingMatter,
           willBookCourier,
           willBookTrucking
@@ -254,7 +260,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         try {
           if (willBookCourier) {
             const booked = await bookCourierCheckout({
-              courierCompanyId: Number(courierCompanyId),
+              courierCompanyId: bookingIntent.courierCompanyId,
               courierDisplayName: String(sp).trim(),
               deliveryAddress: logisticsDelivery,
               sessionBuyer,
@@ -283,7 +289,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
               logger.info('[transport/confirm] courier booking result (before DB update)', {
                 orderId: row.id,
                 orderNumber: row.order_number,
-                courierCompanyId: Number(courierCompanyId),
+                courierCompanyId: bookingIntent.courierCompanyId,
                 tracking_number: ctx.tn,
                 tracking_url: ctx.tu,
                 shipping_provider: ctx.resolvedSp
@@ -303,17 +309,13 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
 
           const bookWeight =
             Number(truckingWeightKg) > 0 ? Number(truckingWeightKg) : weightKg;
-          const vid =
-            vehicleTypeId != null && Number.isFinite(Number(vehicleTypeId))
-              ? Number(vehicleTypeId)
-              : null;
           const booked = await bookTrucking({
-            vehicleTypeId: vid,
-            carrier: truckingCarrier || (transportSource === 'borzo' ? 'Borzo' : 'Borzo'),
-            pickupLat,
-            pickupLng,
-            deliveryLat,
-            deliveryLng,
+            vehicleTypeId: bookingIntent.vehicleTypeId,
+            carrier: bookingIntent.carrier,
+            pickupLat: bookingIntent.pickupLat,
+            pickupLng: bookingIntent.pickupLng,
+            deliveryLat: bookingIntent.deliveryLat,
+            deliveryLng: bookingIntent.deliveryLng,
             contactPhone: sessionBuyer.phone,
             weightKg: bookWeight,
             matter: truckingMatter || lines.map((l) => l.name).filter(Boolean).join(', '),
@@ -326,7 +328,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
           ctx.logisticsBookingMeta = {
             mode: 'trucking',
             borzoOrderId: booked.borzoOrderId,
-            vehicleTypeId: vid,
+            vehicleTypeId: bookingIntent.vehicleTypeId,
             transportMode: transportMode || 'trucking',
             source: transportSource || 'borzo',
             pendingReason: booked.pendingReason || null,
@@ -339,7 +341,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
             logger.info('[transport/confirm] trucking booking result (before DB update)', {
               orderId: row.id,
               orderNumber: row.order_number,
-              vehicleTypeId: vid,
+              vehicleTypeId: bookingIntent.vehicleTypeId,
               transportMode,
               source: transportSource,
               tracking_number: ctx.tn,
@@ -355,9 +357,11 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         } catch (bookErr) {
           logger.error('Logistics booking error:', bookErr);
           const statusCode =
-            Number(bookErr?.statusCode) >= 400 && Number(bookErr?.statusCode) < 600
-              ? Number(bookErr.statusCode)
-              : 502;
+            bookErr?.code === 'LOGISTICS_VALIDATION'
+              ? 400
+              : Number(bookErr?.statusCode) >= 400 && Number(bookErr?.statusCode) < 600
+                ? Number(bookErr.statusCode)
+                : 502;
           const err = new Error(bookErr?.message || 'Transport booking failed');
           err.statusCode = statusCode;
           err.orderId = row.id;

@@ -9,8 +9,6 @@ import {
   AlertCircle,
   Clock,
   FileText,
-  Wifi,
-  WifiOff,
   RefreshCw,
   User,
   Phone,
@@ -44,14 +42,11 @@ import {
   loadPosQueue,
   markPosOrderSynced
 } from '../utils/offlinePosStorage';
+import { formatRupee } from '../utils/formatRupee';
 import './SupplierPOS.css';
 
 const selectClassName =
   'flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50';
-
-function formatInr(value) {
-  return `₹${Number(value || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 const SupplierPOS = () => {
   const [locations, setLocations] = useState([]);
@@ -682,6 +677,7 @@ const SupplierPOS = () => {
   });
 
   return (
+    <div className="supplier-pos-page">
     <div className="pos-register">
       <header className="pos-register__topbar">
         <div className="pos-register__brand">
@@ -693,23 +689,14 @@ const SupplierPOS = () => {
             <div className="pos-register__subtitle">In-store register</div>
           </div>
         </div>
-        <div className="pos-register__status">
-          <span
-            className={cn(
-              'pos-register__status-pill',
-              isOnline ? 'pos-register__status-pill--online' : 'pos-register__status-pill--offline'
-            )}
-          >
-            {isOnline ? <Wifi className="h-3 w-3" /> : <WifiOff className="h-3 w-3" />}
-            {isOnline ? 'Connected' : 'Offline — sales queued'}
-          </span>
-          {pendingQueueCount > 0 ? (
+        {pendingQueueCount > 0 ? (
+          <div className="pos-register__status">
             <span className="pos-register__status-pill pos-register__status-pill--queue">
               <Clock className="h-3 w-3" />
               {pendingQueueCount} to sync
             </span>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
       </header>
 
       <div className="pos-register__body">
@@ -739,10 +726,10 @@ const SupplierPOS = () => {
                     <div className="pos-receipt-line__main">
                       <span className="pos-receipt-line__name">{item.name}</span>
                       <span className="pos-receipt-line__qty">
-                        {item.quantity} × {formatInr(item.unit_price)}
+                        {item.quantity} × {formatRupee(item.unit_price)}
                       </span>
                     </div>
-                    <span className="pos-receipt-line__amt">{formatInr(item.total_price)}</span>
+                    <span className="pos-receipt-line__amt">{formatRupee(item.total_price)}</span>
                     <button
                       type="button"
                       className="pos-receipt-line__remove"
@@ -764,7 +751,7 @@ const SupplierPOS = () => {
               </div>
               <div className="pos-receipt-paper__total">
                 <span className="pos-receipt-paper__total-label">Total</span>
-                <span className="pos-receipt-paper__total-amt">{formatInr(totalAmount)}</span>
+                <span className="pos-receipt-paper__total-amt">{formatRupee(totalAmount)}</span>
               </div>
             </div>
           </div>
@@ -776,7 +763,7 @@ const SupplierPOS = () => {
               onClick={openPaymentModal}
               disabled={!canCheckout}
             >
-              {checkingOut ? 'Processing…' : `Collect payment · ${formatInr(totalAmount)}`}
+              {checkingOut ? 'Processing…' : `Collect payment · ${formatRupee(totalAmount)}`}
             </button>
             <button
               type="button"
@@ -1006,7 +993,7 @@ const SupplierPOS = () => {
                           </a>
                         ) : null}
                       </div>
-                      <strong className="pos-recent-sale__amt">{formatInr(o.total_amount)}</strong>
+                      <strong className="pos-recent-sale__amt">{formatRupee(o.total_amount)}</strong>
                     </div>
                   ))
                 )}
@@ -1050,7 +1037,7 @@ const SupplierPOS = () => {
 
           <div className="pos-pay-total">
             <span>Amount due</span>
-            <strong>{formatInr(totalAmount)}</strong>
+            <strong>{formatRupee(totalAmount)}</strong>
           </div>
 
           <div className="space-y-4 py-2">
@@ -1100,9 +1087,9 @@ const SupplierPOS = () => {
                   {creditInfo?.account ? (
                     <span className="mt-1 block text-xs opacity-90">
                       Loan cycle: {creditInfo.creditPeriodDays} days · Limit:{' '}
-                      {formatInr(creditInfo.creditLimit)} · Outstanding:{' '}
-                      {formatInr(creditInfo.outstanding)} · Remaining for this order:{' '}
-                      {formatInr(creditInfo.available ?? creditInfo.remainingCredit)}
+                      {formatRupee(creditInfo.creditLimit)} · Outstanding:{' '}
+                      {formatRupee(creditInfo.outstanding)} · Remaining for this order:{' '}
+                      {formatRupee(creditInfo.available ?? creditInfo.remainingCredit)}
                       {creditInfo.cycleDueAt ? (
                         <>
                           {' '}
@@ -1132,11 +1119,11 @@ const SupplierPOS = () => {
                   <p className="text-sm font-medium">
                     {parseFloat(amountReceived) >= totalAmount ? (
                       <span className="text-emerald-600">
-                        Change: {formatInr(parseFloat(amountReceived) - totalAmount)}
+                        Change: {formatRupee(parseFloat(amountReceived) - totalAmount)}
                       </span>
                     ) : (
                       <span className="text-destructive">
-                        Short by: {formatInr(totalAmount - parseFloat(amountReceived))}
+                        Short by: {formatRupee(totalAmount - parseFloat(amountReceived))}
                       </span>
                     )}
                   </p>
@@ -1217,13 +1204,13 @@ const SupplierPOS = () => {
             </Alert>
 
             <div className="rounded-xl border bg-muted/30 p-4 text-sm">
-              <p className="text-lg font-bold tabular-nums">{formatInr(receiptData.totalAmount)}</p>
+              <p className="text-lg font-bold tabular-nums">{formatRupee(receiptData.totalAmount)}</p>
               {receiptData.gstSummary ? (
                 <p className="mt-2 text-muted-foreground">
-                  Taxable: {formatInr(receiptData.gstSummary.subtotalAmount)} ·
+                  Taxable: {formatRupee(receiptData.gstSummary.subtotalAmount)} ·
                   {receiptData.gstSummary.taxType === 'IGST'
-                    ? ` IGST: ${formatInr(receiptData.gstSummary.taxAmount)}`
-                    : ` CGST+SGST: ${formatInr(receiptData.gstSummary.taxAmount)}`}
+                    ? ` IGST: ${formatRupee(receiptData.gstSummary.taxAmount)}`
+                    : ` CGST+SGST: ${formatRupee(receiptData.gstSummary.taxAmount)}`}
                 </p>
               ) : null}
               {receiptData.mode !== 'offline_queued' ? (
@@ -1261,6 +1248,7 @@ const SupplierPOS = () => {
           </DialogContent>
         ) : null}
       </Dialog>
+    </div>
     </div>
   );
 };

@@ -4,10 +4,14 @@ import {
   normalizeBrandKey,
   normalizeModelIdentifier,
   parseWithSchema,
+  resolveUpstreamBrandLabel,
   searchProductDiscoveryForUser,
+  supplierCanAccessBrandStrict,
   supplierCategoryCreateSchema,
   supplierUnitCreateSchema
 } from './supplierImports.js';
+import { listSupplierSelectableBrands } from '../../services/supplierBrandCatalogService.js';
+import { pickLockedVariantPriceFromOffers } from '../../services/supplierProductWriteService.js';
 
 export function registerSupplierCatalogRoutes(ctx) {
   const {
@@ -39,11 +43,18 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       offset,
       legacyManualDiscoveryCategoryFilter: true
     });
+    const visibleSuggestions = (result.suggestions || []).filter((s) => {
+      const brandLabel = resolveUpstreamBrandLabel(
+        { brandModel: s?.brandModel || s?.modelBrand || s?.brand, brand: s?.brand },
+        s?.brand
+      );
+      return supplierCanAccessBrandStrict(req.user?.profile || {}, brandLabel).allowed;
+    });
 
     return res.json({
       status: 'success',
-      suggestions: result.suggestions,
-      total: result.total,
+      suggestions: visibleSuggestions,
+      total: visibleSuggestions.length,
       limit: result.limit,
       offset: result.offset,
       recommendationMode: result.recommendationMode
@@ -80,7 +91,7 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     const ilikeNeedle = `%${nameNeedle.replace(/\s+/g, '%')}%`;
     const { data: products, error } = await supabase
       .from('products')
-      .select('id, name, category, unit, specifications, updated_at')
+      .select('id, name, category, brand, unit, specifications, updated_at')
       .eq('category', category)
       .ilike('name', ilikeNeedle)
       .order('updated_at', { ascending: false })
@@ -105,6 +116,13 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     let product = productCandidates.length > 0 ? productCandidates[0] : null;
     const exact = productCandidates.find((p) => normalizeName(p?.name) === needleNorm);
     if (exact) product = exact;
+    if (product) {
+      const productBrandLabel = resolveUpstreamBrandLabel({}, product?.brand || '');
+      const brandAllowed = supplierCanAccessBrandStrict(req.user?.profile || {}, productBrandLabel);
+      if (!brandAllowed.allowed) {
+        product = null;
+      }
+    }
     const toObject = (value) => {
       if (!value) return null;
       if (typeof value === 'object') {
@@ -258,11 +276,13 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     let supplierCountOthers = 0;
     let minPrice = null;
     let maxPrice = null;
+    let lockedPrice = null;
+    let priceLocked = false;
 
     if (product?.id) {
       const { data: supplierOffers, error: offersError } = await supabase
         .from('supplier_products')
-        .select('price, supplier_id, status, is_active')
+        .select('price, supplier_id, status, is_active, variant_key')
         .eq('product_id', product.id)
         .eq('is_active', true)
         .eq('status', 'approved');
@@ -293,6 +313,17 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
 
           recommendedPrice = supplierCountOthers > 0 ? avgPriceOthers : avgPriceAll;
         }
+
+        const variantKeys = [
+          ...new Set((supplierOffers || []).map((o) => String(o?.variant_key || '').trim()).filter(Boolean))
+        ];
+        if (variantKeys.length === 1) {
+          const lockCandidate = pickLockedVariantPriceFromOffers(supplierOffers || []);
+          if (lockCandidate !== null) {
+            lockedPrice = lockCandidate;
+            priceLocked = true;
+          }
+        }
       }
     }
 
@@ -307,6 +338,8 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       ,
       // Price recommendation (average across suppliers for this product)
       recommendedPrice: recommendedPrice,
+      lockedPrice,
+      priceLocked,
       priceStats: {
         avgPriceAll,
         avgPriceOthers,
@@ -645,6 +678,29 @@ router.post('/units', authenticateToken, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Internal server error'
+    });
+  }
+});
+
+router.get('/brands', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can list brands' });
+    }
+
+    const brands = await listSupplierSelectableBrands(supabase, {
+      profile: req.user?.profile || {}
+    });
+
+    return res.json({
+      status: 'success',
+      brands
+    });
+  } catch (error) {
+    console.error('Supplier brands list error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to load brand list'
     });
   }
 });

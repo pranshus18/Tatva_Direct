@@ -1,6 +1,9 @@
 import { requireAuthentication as authenticateToken } from '../../../middleware/authMiddleware.js';
 import { supabase } from '../../../config/supabase.js';
-import { sanitizeServiceProviderThemePrefs } from '../profileHelpers.js';
+import {
+  sanitizeServiceProviderThemePrefs,
+  sanitizeSupplierPortalThemePrefs
+} from '../profileHelpers.js';
 
 export function registerProfileThemeRoutes(router) {
   router.get('/service-provider/theme', authenticateToken, async (req, res) => {
@@ -44,6 +47,67 @@ export function registerProfileThemeRoutes(router) {
       const nextProfile = {
         ...(user.profile || {}),
         serviceProviderPortalTheme: {
+          ...theme,
+          updatedAt: new Date().toISOString()
+        }
+      };
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({ profile: nextProfile })
+        .eq('id', req.userId);
+      if (updateError) {
+        throw updateError;
+      }
+      return res.json({ status: 'success', theme });
+    } catch (error) {
+      return res.status(400).json({
+        status: 'error',
+        message: error?.message || 'Failed to save portal theme.'
+      });
+    }
+  });
+
+  router.get('/supplier/theme', authenticateToken, async (req, res) => {
+    try {
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('id, user_type, profile')
+        .eq('id', req.userId)
+        .single();
+      if (error || !user) {
+        return res.status(404).json({ status: 'error', message: 'User not found' });
+      }
+      if (String(user.user_type) !== 'supplier') {
+        return res
+          .status(403)
+          .json({ status: 'error', message: 'Only suppliers can access portal theme.' });
+      }
+      const theme = sanitizeSupplierPortalThemePrefs(user?.profile?.supplierPortalTheme || {});
+      return res.json({ status: 'success', theme });
+    } catch (error) {
+      return res.status(500).json({ status: 'error', message: 'Failed to load portal theme.' });
+    }
+  });
+
+  router.put('/supplier/theme', authenticateToken, async (req, res) => {
+    try {
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('id, user_type, profile')
+        .eq('id', req.userId)
+        .single();
+      if (error || !user) {
+        return res.status(404).json({ status: 'error', message: 'User not found' });
+      }
+      if (String(user.user_type) !== 'supplier') {
+        return res
+          .status(403)
+          .json({ status: 'error', message: 'Only suppliers can update portal theme.' });
+      }
+      const theme = sanitizeSupplierPortalThemePrefs(req.body || {});
+      const nextProfile = {
+        ...(user.profile || {}),
+        supplierPortalTheme: {
           ...theme,
           updatedAt: new Date().toISOString()
         }

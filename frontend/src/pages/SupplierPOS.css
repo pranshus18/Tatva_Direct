@@ -1,4 +1,13 @@
-/* Offline store register — professional retail palette */
+/* Offline store register — full-width within supplier main panel (no negative bleed) */
+.supplier-pos-page {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: calc(100dvh - 3.5rem);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
 .pos-register {
   --pos-surface: #ffffff;
   --pos-canvas: #f4f6f8;
@@ -19,20 +28,17 @@
   --pos-warning-soft: #fffbeb;
   --pos-danger: #dc2626;
 
-  min-height: calc(100vh - 5rem);
-  margin: -1rem -1.25rem -2rem;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
   display: flex;
   flex-direction: column;
   background: var(--pos-canvas);
   color: var(--pos-ink);
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-}
-
-@media (min-width: 640px) {
-  .pos-register {
-    margin: -1.5rem -1.5rem -2rem;
-    min-height: calc(100vh - 4.5rem);
-  }
+  box-sizing: border-box;
 }
 
 /* —— Top bar —— */
@@ -42,17 +48,22 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem 1rem;
-  padding: 0.875rem 1.25rem;
+  padding: 0.875rem clamp(1rem, 2vw, 1.5rem);
+  padding-left: max(1rem, env(safe-area-inset-left, 0px));
+  padding-right: max(1rem, env(safe-area-inset-right, 0px));
   background: var(--pos-surface);
   border-bottom: 1px solid var(--pos-border);
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
   flex-shrink: 0;
+  min-width: 0;
 }
 
 .pos-register__brand {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  min-width: 0;
+  flex: 1 1 12rem;
 }
 
 .pos-register__brand-icon {
@@ -64,6 +75,11 @@
   border-radius: 8px;
   background: var(--pos-brand);
   color: #fff;
+  flex-shrink: 0;
+}
+
+.pos-register__brand > div:last-child {
+  min-width: 0;
 }
 
 .pos-register__title {
@@ -72,6 +88,7 @@
   letter-spacing: -0.01em;
   color: var(--pos-ink);
   line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 .pos-register__subtitle {
@@ -84,7 +101,10 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
+  flex: 0 1 auto;
+  margin-left: auto;
 }
 
 .pos-register__status-pill {

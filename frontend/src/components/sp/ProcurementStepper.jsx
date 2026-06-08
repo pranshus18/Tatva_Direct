@@ -38,7 +38,7 @@ export default function ProcurementStepper() {
                 className={cn(
                   'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
                   isCurrent && 'sp-step-current',
-                  !isCurrent && (isPast || done) && 'sp-step-done hover:bg-[#eef2ff]',
+                  !isCurrent && (isPast || done) && 'sp-step-done hover:bg-[#eaf5ff]',
                   !isCurrent && !isPast && !done && 'text-muted-foreground hover:bg-muted'
                 )}
               >
@@ -46,7 +46,7 @@ export default function ProcurementStepper() {
                   className={cn(
                     'flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold',
                     isCurrent && 'bg-white/20 text-white',
-                    !isCurrent && (done || isPast) && 'bg-[#eef2ff] text-[#4f46e5]',
+                    !isCurrent && (done || isPast) && 'bg-[#e0f2fe] text-[#0369a1]',
                     !isCurrent && !done && !isPast && 'bg-muted text-muted-foreground'
                   )}
                 >

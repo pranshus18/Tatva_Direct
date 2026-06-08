@@ -2,38 +2,28 @@ import { getApiUrl } from '../config/api';
 
 export const SERVICE_PROVIDER_THEME_STORAGE_KEY = 'serviceProviderPortalThemePrefs';
 
+/** Sky/blue presets aligned with supplier portal branding */
 export const SERVICE_PROVIDER_THEMES = [
   {
     id: 'default',
-    label: 'Default',
-    backgroundImage: 'linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%)'
-  },
-  {
-    id: 'sunset',
-    label: 'Sunset',
-    backgroundImage: 'linear-gradient(135deg, #ffe5d4 0%, #ffd2dd 40%, #dbeafe 100%)'
+    label: 'Tatva Blue',
+    backgroundImage: 'linear-gradient(180deg, #f6fbff 0%, #f4f8ff 100%)'
   },
   {
     id: 'ocean',
     label: 'Ocean',
-    backgroundImage: 'linear-gradient(135deg, #dbeafe 0%, #cffafe 45%, #e0f2fe 100%)'
-  },
-  {
-    id: 'forest',
-    label: 'Forest',
-    backgroundImage: 'linear-gradient(135deg, #dcfce7 0%, #d1fae5 45%, #e2e8f0 100%)'
-  },
-  {
-    id: 'city-lights',
-    label: 'City Lights',
     backgroundImage:
-      "url('https://images.unsplash.com/photo-1489515217757-5fd1be406fef?auto=format&fit=crop&w=1800&q=80')"
+      'radial-gradient(circle at 0% 0%, rgba(14, 165, 233, 0.14), transparent 34%), radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.1), transparent 36%), linear-gradient(180deg, #f6fbff 0%, #e0f2fe 100%)'
   },
   {
-    id: 'blueprint',
-    label: 'Blueprint',
-    backgroundImage:
-      "url('https://images.unsplash.com/photo-1503387762-592deb58ef4e?auto=format&fit=crop&w=1800&q=80')"
+    id: 'sky',
+    label: 'Sky',
+    backgroundImage: 'linear-gradient(135deg, #e0f2fe 0%, #f0f9ff 50%, #f4f8ff 100%)'
+  },
+  {
+    id: 'slate',
+    label: 'Cool Slate',
+    backgroundImage: 'linear-gradient(135deg, #f1f5f9 0%, #e0f2fe 45%, #f6fbff 100%)'
   },
   {
     id: 'custom',

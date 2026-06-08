@@ -3,7 +3,6 @@ import { Outlet, NavLink, useLocation } from 'react-router-dom';
 import { FileText, Users, RefreshCw, ShoppingCart, User, LogOut, ChevronDown, BarChart3, Package, Building, CheckCircle, TrendingUp, Wallet, Network, Tag, UserCheck, Table2, Search, Paintbrush, Mic, CreditCard } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { normalizeUserType } from '../utils/userType';
-import { getApiUrl } from '../config/api';
 import {
   getServiceProviderThemePrefs,
   loadServiceProviderThemePrefsFromApi,
@@ -13,6 +12,7 @@ import './Layout.css';
 import { VoiceSessionProvider } from '../voice/VoiceSessionContext.jsx';
 import { getVoiceGuidedPath, isVoiceGuidedActive } from '../voice/voiceCartBridge';
 import SpAppShell from './sp/SpAppShell';
+import SupplierAppShell from './supplier/SupplierAppShell';
 
 const routePrefetchers = {
   '/dashboard': () => import('../pages/ServiceProviderDashboard'),
@@ -30,6 +30,7 @@ const routePrefetchers = {
   '/manage-inventory': () => import('../pages/ProductManagement'),
   '/supplier-bcov': () => import('../pages/SupplierBCOV'),
   '/supplier-upstream': () => import('../pages/SupplierUpstream'),
+  '/supplier-upstream-orders': () => import('../pages/SupplierUpstreamOrders'),
   '/supplier-place-order': () => import('../pages/SupplierPlaceOrder'),
   '/supplier-cart': () => import('../pages/SupplierUpstreamCart'),
   '/supplier-pos': () => import('../pages/SupplierPOS'),
@@ -60,7 +61,6 @@ const idleHandleFallback = { id: null };
 const Layout = ({ user, onLogout, children }) => {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [voiceNavTick, setVoiceNavTick] = useState(0);
-  const [supplierCartLineCount, setSupplierCartLineCount] = useState(0);
   const [serviceProviderThemePrefs, setServiceProviderThemePrefs] = useState(() => ({
     themeId: 'default',
     customImageDataUrl: ''
@@ -164,7 +164,12 @@ const Layout = ({ user, onLogout, children }) => {
       },
       {
         path: '/supplier-upstream',
-        label: 'Upstream Orders',
+        label: 'Upstream Sourcing',
+        icon: Network
+      },
+      {
+        path: '/supplier-upstream-orders',
+        label: 'My Upstream Orders',
         icon: Network
       },
       {
@@ -290,41 +295,6 @@ const Layout = ({ user, onLogout, children }) => {
     return () => window.removeEventListener('voice-guided-updated', onVoiceNav);
   }, []);
 
-  useEffect(() => {
-    if (userType !== 'supplier') return undefined;
-    let active = true;
-    const refreshSupplierCartCount = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        if (!token) {
-          if (active) setSupplierCartLineCount(0);
-          return;
-        }
-        const response = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: 'no-cache'
-        });
-        const data = await response.json();
-        if (!active || !response.ok || data?.status !== 'success') return;
-        const selectedMine = data?.cart?.draft?.selectedMine;
-        const nextCount =
-          selectedMine && typeof selectedMine === 'object'
-            ? Object.keys(selectedMine).length
-            : 0;
-        setSupplierCartLineCount(nextCount);
-      } catch (_) {
-        if (active) setSupplierCartLineCount(0);
-      }
-    };
-
-    refreshSupplierCartCount();
-    window.addEventListener('supplier-upstream-cart-updated', refreshSupplierCartCount);
-    return () => {
-      active = false;
-      window.removeEventListener('supplier-upstream-cart-updated', refreshSupplierCartCount);
-    };
-  }, [userType, location.pathname]);
-
   const layoutThemeClass =
     userType === 'service_provider'
       ? 'layout--service-provider-theme'
@@ -342,6 +312,9 @@ const Layout = ({ user, onLogout, children }) => {
       return <VoiceSessionProvider token={layoutToken}>{spBody}</VoiceSessionProvider>;
     }
     return spBody;
+  }
+  if (userType === 'supplier') {
+    return <SupplierAppShell user={user} onLogout={onLogout} children={children} />;
   }
 
   const layoutBody = (
@@ -377,9 +350,6 @@ const Layout = ({ user, onLogout, children }) => {
                 >
                   <Icon size={20} />
                   <span>{label}</span>
-                  {userType === 'supplier' && path === '/supplier-cart' && supplierCartLineCount > 0 ? (
-                    <span className="nav-step-badge">{supplierCartLineCount}</span>
-                  ) : null}
                 </NavLink>
               </div>
             );

@@ -1,6 +1,8 @@
 import express from 'express';
 import { requireAuthentication as authenticateToken } from '../middleware/authMiddleware.js';
+import { requireAdminPrivileges } from '../middleware/adminMiddleware.js';
 import { supabase } from '../config/supabase.js';
+import { clientErrorMessage } from '../utils/clientErrorMessage.js';
 import { isFeatureEnabled } from '../utils/featureFlags.js';
 import logger from '../utils/logger.js';
 import {
@@ -32,18 +34,20 @@ import {
 const router = express.Router();
 const isEnabled = (name, fallback = false) => isFeatureEnabled(name, fallback);
 
-router.get('/baseline-kpis', authenticateToken, async (req, res) => {
+router.use(authenticateToken, requireAdminPrivileges);
+
+router.get('/baseline-kpis', async (req, res) => {
   try {
     const { fromDate, toDate } = req.query;
     const data = await computeBaselineKpis({ fromDate, toDate });
     return res.json({ status: 'success', data });
   } catch (error) {
     logger.error('[Phase2] baseline-kpis error:', error);
-    return res.status(500).json({ status: 'error', message: error.message || 'Failed to compute KPIs' });
+    return res.status(500).json({ status: 'error', message: clientErrorMessage(error, 'Failed to compute KPIs', 500) });
   }
 });
 
-router.post('/catalog/completeness/refresh', authenticateToken, async (req, res) => {
+router.post('/catalog/completeness/refresh', async (req, res) => {
   try {
     const payload = parseWithSchema(catalogCompletenessRefreshSchema, req.body || {});
     const { productIds } = payload;
@@ -54,11 +58,11 @@ router.post('/catalog/completeness/refresh', authenticateToken, async (req, res)
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.error('[Phase2] refresh completeness error:', error);
-    return res.status(500).json({ status: 'error', message: error.message || 'Failed to refresh completeness' });
+    return res.status(500).json({ status: 'error', message: clientErrorMessage(error, 'Failed to refresh completeness', 500) });
   }
 });
 
-router.get('/catalog/duplicates', authenticateToken, async (req, res) => {
+router.get('/catalog/duplicates', async (req, res) => {
   try {
     const threshold = Number(req.query.threshold || 70);
     const { data: rows, error } = await supabase
@@ -71,11 +75,11 @@ router.get('/catalog/duplicates', authenticateToken, async (req, res) => {
     return res.json({ status: 'success', duplicates: rows || [] });
   } catch (error) {
     logger.error('[Phase2] duplicate list error:', error);
-    return res.status(500).json({ status: 'error', message: error.message || 'Failed to fetch duplicate queue' });
+    return res.status(500).json({ status: 'error', message: clientErrorMessage(error, 'Failed to fetch duplicate queue', 500) });
   }
 });
 
-router.get('/catalog/triage', authenticateToken, async (req, res) => {
+router.get('/catalog/triage', async (req, res) => {
   try {
     const threshold = Number(req.query.threshold || 70);
     const limit = Number(req.query.limit || 200);
@@ -83,11 +87,11 @@ router.get('/catalog/triage', authenticateToken, async (req, res) => {
     return res.json({ status: 'success', queue });
   } catch (error) {
     logger.error('[Phase2] triage queue error:', error);
-    return res.status(500).json({ status: 'error', message: error.message || 'Failed to fetch triage queue' });
+    return res.status(500).json({ status: 'error', message: clientErrorMessage(error, 'Failed to fetch triage queue', 500) });
   }
 });
 
-router.post('/catalog/duplicates/merge', authenticateToken, async (req, res) => {
+router.post('/catalog/duplicates/merge', async (req, res) => {
   try {
     const payload = parseWithSchema(duplicateMergeSchema, req.body || {});
     const { sourceProductId, targetProductId, confidence = null } = payload;
@@ -111,11 +115,11 @@ router.post('/catalog/duplicates/merge', authenticateToken, async (req, res) => 
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.error('[Phase2] duplicate merge error:', error);
-    return res.status(500).json({ status: 'error', message: error.message || 'Failed to merge duplicate product' });
+    return res.status(500).json({ status: 'error', message: clientErrorMessage(error, 'Failed to merge duplicate product', 500) });
   }
 });
 
-router.post('/inventory/reservations', authenticateToken, async (req, res) => {
+router.post('/inventory/reservations', async (req, res) => {
   try {
     if (!isEnabled('PHASE2_RESERVATION_ENABLED')) {
       return res.status(403).json({ status: 'error', message: 'Reservation feature is disabled' });
@@ -140,11 +144,11 @@ router.post('/inventory/reservations', authenticateToken, async (req, res) => {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.warn('[Phase2] reserve inventory error:', error);
-    return res.status(400).json({ status: 'error', message: error.message || 'Failed to reserve inventory' });
+    return res.status(400).json({ status: 'error', message: clientErrorMessage(error, 'Failed to reserve inventory', 400) });
   }
 });
 
-router.post('/inventory/reservations/:id/consume', authenticateToken, async (req, res) => {
+router.post('/inventory/reservations/:id/consume', async (req, res) => {
   try {
     parseWithSchema(inventoryReservationConsumeSchema, req.body || {});
     if (!isEnabled('PHASE2_RESERVATION_ENABLED')) {
@@ -161,11 +165,11 @@ router.post('/inventory/reservations/:id/consume', authenticateToken, async (req
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.warn('[Phase2] consume reservation error:', error);
-    return res.status(400).json({ status: 'error', message: error.message || 'Failed to consume reservation' });
+    return res.status(400).json({ status: 'error', message: clientErrorMessage(error, 'Failed to consume reservation', 400) });
   }
 });
 
-router.post('/inventory/reservations/:id/release', authenticateToken, async (req, res) => {
+router.post('/inventory/reservations/:id/release', async (req, res) => {
   try {
     parseWithSchema(inventoryReservationReleaseSchema, req.body || {});
     if (!isEnabled('PHASE2_RESERVATION_ENABLED')) {
@@ -182,11 +186,11 @@ router.post('/inventory/reservations/:id/release', authenticateToken, async (req
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.warn('[Phase2] release reservation error:', error);
-    return res.status(400).json({ status: 'error', message: error.message || 'Failed to release reservation' });
+    return res.status(400).json({ status: 'error', message: clientErrorMessage(error, 'Failed to release reservation', 400) });
   }
 });
 
-router.post('/inventory/reservations/expire', authenticateToken, async (_req, res) => {
+router.post('/inventory/reservations/expire', async (_req, res) => {
   try {
     parseWithSchema(inventoryReservationExpireSchema, _req.body || {});
     const result = await expireReservations();
@@ -196,11 +200,11 @@ router.post('/inventory/reservations/expire', authenticateToken, async (_req, re
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.error('[Phase2] expire reservations error:', error);
-    return res.status(500).json({ status: 'error', message: error.message || 'Failed to expire reservations' });
+    return res.status(500).json({ status: 'error', message: clientErrorMessage(error, 'Failed to expire reservations', 500) });
   }
 });
 
-router.get('/inventory/allocation/:supplierProductId', authenticateToken, async (req, res) => {
+router.get('/inventory/allocation/:supplierProductId', async (req, res) => {
   try {
     const quantity = Number(req.query.quantity || 1);
     const plan = await getWarehouseAllocation({
@@ -210,11 +214,11 @@ router.get('/inventory/allocation/:supplierProductId', authenticateToken, async 
     return res.json({ status: 'success', plan });
   } catch (error) {
     logger.warn('[Phase2] allocation error:', error);
-    return res.status(400).json({ status: 'error', message: error.message || 'Failed to compute warehouse allocation' });
+    return res.status(400).json({ status: 'error', message: clientErrorMessage(error, 'Failed to compute warehouse allocation', 400) });
   }
 });
 
-router.post('/orders/:id/transition', authenticateToken, async (req, res) => {
+router.post('/orders/:id/transition', async (req, res) => {
   try {
     if (!isEnabled('PHASE2_STATE_MACHINE_ENABLED')) {
       return res.status(403).json({ status: 'error', message: 'Order state machine is disabled' });
@@ -233,11 +237,11 @@ router.post('/orders/:id/transition', authenticateToken, async (req, res) => {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.warn('[Phase2] order transition error:', error);
-    return res.status(400).json({ status: 'error', message: error.message || 'Failed order transition' });
+    return res.status(400).json({ status: 'error', message: clientErrorMessage(error, 'Failed order transition', 400) });
   }
 });
 
-router.post('/returns/:id/policy-decision', authenticateToken, async (req, res) => {
+router.post('/returns/:id/policy-decision', async (req, res) => {
   try {
     if (!isEnabled('PHASE2_RETURNS_POLICY_ENABLED')) {
       return res.status(403).json({ status: 'error', message: 'Returns policy engine is disabled' });
@@ -273,11 +277,11 @@ router.post('/returns/:id/policy-decision', authenticateToken, async (req, res) 
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.warn('[Phase2] return policy decision error:', error);
-    return res.status(400).json({ status: 'error', message: error.message || 'Failed to apply return policy' });
+    return res.status(400).json({ status: 'error', message: clientErrorMessage(error, 'Failed to apply return policy', 400) });
   }
 });
 
-router.post('/analytics/vendor-scorecards/refresh', authenticateToken, async (req, res) => {
+router.post('/analytics/vendor-scorecards/refresh', async (req, res) => {
   try {
     if (!isEnabled('PHASE2_VENDOR_SCORECARD_ENABLED')) {
       return res.status(403).json({ status: 'error', message: 'Vendor scorecard is disabled' });
@@ -291,11 +295,11 @@ router.post('/analytics/vendor-scorecards/refresh', authenticateToken, async (re
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
     logger.error('[Phase2] refresh scorecards error:', error);
-    return res.status(500).json({ status: 'error', message: error.message || 'Failed to refresh vendor scorecards' });
+    return res.status(500).json({ status: 'error', message: clientErrorMessage(error, 'Failed to refresh vendor scorecards', 500) });
   }
 });
 
-router.get('/analytics/vendor-scorecards', authenticateToken, async (req, res) => {
+router.get('/analytics/vendor-scorecards', async (req, res) => {
   try {
     const { supplierId, limit = 100 } = req.query;
     let query = supabase
@@ -309,7 +313,7 @@ router.get('/analytics/vendor-scorecards', authenticateToken, async (req, res) =
     return res.json({ status: 'success', scorecards: data || [] });
   } catch (error) {
     logger.error('[Phase2] get scorecards error:', error);
-    return res.status(500).json({ status: 'error', message: error.message || 'Failed to fetch vendor scorecards' });
+    return res.status(500).json({ status: 'error', message: clientErrorMessage(error, 'Failed to fetch vendor scorecards', 500) });
   }
 });
 

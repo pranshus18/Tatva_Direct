@@ -1,30 +1,104 @@
-/**
- * Service Provider portal — legacy indigo/slate palette (Dashboard.css / YourOrders).
- * Scoped via body.sp-portal-active (set in SpAppShell) so portaled dialogs/menus match.
+/*
+ * Service Provider portal visual system
+ * Matches supplier portal: sky/blue energetic + professional palette.
  */
 
 body.sp-portal-active,
 .sp-portal {
-  --primary: 243 76% 59%;
+  --primary: 210 90% 52%;
   --primary-foreground: 0 0% 100%;
-  --ring: 243 76% 59%;
-  --accent: 226 100% 97%;
-  --accent-foreground: 243 47% 40%;
+  --ring: 210 90% 52%;
+  --accent: 194 100% 96%;
+  --accent-foreground: 211 78% 28%;
   --secondary: 210 40% 98%;
-  --secondary-foreground: 215 16% 47%;
+  --secondary-foreground: 215 25% 28%;
   --muted: 210 40% 96%;
   --muted-foreground: 215 16% 47%;
-  --border: 214 32% 91%;
-  --input: 214 32% 91%;
+  --border: 214 32% 90%;
+  --input: 214 32% 90%;
   --destructive: 0 72% 51%;
 }
 
-/* Primary actions — same gradient as .btn-primary */
+body.sp-portal-active {
+  background: linear-gradient(180deg, #f6fbff 0%, #f4f8ff 100%);
+}
+
+.sp-portal {
+  background-image:
+    radial-gradient(circle at 0% 0%, rgba(14, 165, 233, 0.14), transparent 34%),
+    radial-gradient(circle at 100% 100%, rgba(59, 130, 246, 0.1), transparent 36%);
+}
+
+.sp-portal .sp-sidebar {
+  background: linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+  border-right-color: #dbe7f5;
+  box-shadow: inset -1px 0 0 rgba(148, 163, 184, 0.18);
+}
+
+.sp-portal .sp-topbar {
+  border-bottom-color: #dbe7f5;
+  background: rgba(255, 255, 255, 0.95);
+}
+
+.sp-portal .sp-nav-active {
+  background: linear-gradient(135deg, #0ea5e9, #3b82f6) !important;
+  color: #fff !important;
+  box-shadow: 0 6px 14px rgba(14, 116, 217, 0.25);
+}
+
+.sp-portal .sp-nav-link:hover {
+  background: #eaf5ff !important;
+  color: #075985 !important;
+}
+
+.sp-portal .sp-content-panel {
+  background: transparent;
+}
+
+.sp-portal .sp-market-card,
+.sp-portal .dashboard-section {
+  border-color: #dbe7f5 !important;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+}
+
+.sp-portal .dashboard-section {
+  padding: 1.05rem !important;
+  border-radius: 14px !important;
+}
+
+.sp-portal .item-card {
+  padding: 0.72rem !important;
+  border-radius: 10px !important;
+  gap: 0.7rem !important;
+}
+
+.sp-portal .section-header {
+  margin-bottom: 0.85rem !important;
+}
+
+.sp-portal .empty-state {
+  padding: 1.4rem 1rem !important;
+}
+
+.sp-portal .order-info-section {
+  margin-bottom: 1.2rem !important;
+  padding-bottom: 1.2rem !important;
+}
+
+.sp-portal .modal-header {
+  padding: 1.05rem 1.05rem 0.8rem !important;
+}
+
+.sp-portal .modal-body {
+  padding: 1.05rem !important;
+}
+
+/* Primary actions */
 body.sp-portal-active button.inline-flex.bg-primary,
 body.sp-portal-active .btn-primary,
 .sp-portal button.inline-flex.bg-primary,
 .sp-portal .btn-primary {
-  background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
+  background: linear-gradient(135deg, #0ea5e9, #2563eb) !important;
   color: #fff !important;
   border: none !important;
 }
@@ -33,18 +107,18 @@ body.sp-portal-active button.inline-flex.bg-primary:hover:not(:disabled),
 body.sp-portal-active .btn-primary:hover:not(:disabled),
 .sp-portal button.inline-flex.bg-primary:hover:not(:disabled),
 .sp-portal .btn-primary:hover:not(:disabled) {
-  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.3);
   transform: translateY(-1px);
 }
 
-/* Secondary / outline — .btn-secondary */
+/* Secondary / outline */
 body.sp-portal-active button.inline-flex.bg-secondary,
 body.sp-portal-active .btn-secondary,
 .sp-portal button.inline-flex.bg-secondary,
 .sp-portal .btn-secondary {
   background: #fff !important;
-  color: #64748b !important;
-  border: 1px solid #e5e7eb !important;
+  color: #334155 !important;
+  border: 1px solid #d8e5f3 !important;
   font-weight: 600;
 }
 
@@ -52,55 +126,51 @@ body.sp-portal-active button.inline-flex.bg-secondary:hover:not(:disabled),
 body.sp-portal-active .btn-secondary:hover:not(:disabled),
 .sp-portal button.inline-flex.bg-secondary:hover:not(:disabled),
 .sp-portal .btn-secondary:hover:not(:disabled) {
-  border-color: #4f46e5 !important;
-  color: #4f46e5 !important;
+  border-color: #60a5fa !important;
+  color: #0369a1 !important;
   background: #fff !important;
 }
 
 body.sp-portal-active button.inline-flex.border-input.bg-background,
 .sp-portal button.inline-flex.border-input.bg-background {
   background: #fff !important;
-  color: #64748b !important;
-  border-color: #e5e7eb !important;
+  color: #334155 !important;
+  border-color: #d8e5f3 !important;
   font-weight: 600;
 }
 
 body.sp-portal-active button.inline-flex.border-input.bg-background:hover:not(:disabled),
 .sp-portal button.inline-flex.border-input.bg-background:hover:not(:disabled) {
-  border-color: #4f46e5 !important;
-  color: #4f46e5 !important;
+  border-color: #60a5fa !important;
+  color: #0369a1 !important;
   background: #fff !important;
 }
 
-/* Ghost icon buttons */
 body.sp-portal-active button.inline-flex.hover\:bg-accent:hover:not(:disabled),
 .sp-portal button.inline-flex.hover\:bg-accent:hover:not(:disabled) {
-  background: rgba(79, 70, 229, 0.08) !important;
-  color: #4f46e5 !important;
+  background: #eaf5ff !important;
+  color: #0369a1 !important;
 }
 
-/* Nav & stepper active — solid indigo, not gradient */
-body.sp-portal-active .sp-nav-active,
+/* Stepper */
 body.sp-portal-active .sp-step-current,
-.sp-portal .sp-nav-active,
 .sp-portal .sp-step-current {
-  background: #4f46e5 !important;
+  background: linear-gradient(135deg, #0ea5e9, #3b82f6) !important;
   color: #fff !important;
-  box-shadow: 0 1px 2px rgba(79, 70, 229, 0.2);
-}
-
-body.sp-portal-active .sp-nav-link:hover,
-.sp-portal .sp-nav-link:hover {
-  background: #eef2ff !important;
-  color: #3730a3 !important;
+  box-shadow: 0 6px 14px rgba(14, 116, 217, 0.25);
 }
 
 body.sp-portal-active .sp-step-done,
 .sp-portal .sp-step-done {
-  color: #4f46e5 !important;
+  color: #0369a1 !important;
 }
 
-/* Badges — match yo-badge palette */
+body.sp-portal-active .sp-step-done:hover,
+.sp-portal .sp-step-done:hover {
+  background: #eaf5ff !important;
+}
+
+/* Badges */
 body.sp-portal-active .sp-badge,
 .sp-portal .sp-badge {
   display: inline-flex;
@@ -126,8 +196,8 @@ body.sp-portal-active .sp-badge--shipped,
 .sp-portal .sp-badge--confirmed,
 .sp-portal .sp-badge--processing,
 .sp-portal .sp-badge--shipped {
-  background: #eff6ff;
-  color: #1d4ed8;
+  background: #e0f2fe;
+  color: #0369a1;
 }
 
 body.sp-portal-active .sp-badge--pending,
@@ -152,27 +222,24 @@ body.sp-portal-active .sp-badge--payment-pending,
 .sp-portal .sp-badge--payment-pending {
   background: #f8fafc;
   color: #475569;
-  border: 1px solid #e2e8f0;
+  border: 1px solid #dbe7f5;
 }
 
-/* Shadcn default badge (cart count etc.) — softer indigo */
 body.sp-portal-active div.inline-flex.rounded-full.border-transparent.bg-primary,
 .sp-portal div.inline-flex.rounded-full.border-transparent.bg-primary {
-  background: #4f46e5 !important;
+  background: linear-gradient(135deg, #0ea5e9, #2563eb) !important;
   color: #fff !important;
 }
 
-/* Progress / track fills */
 body.sp-portal-active .bg-primary.h-full,
 body.sp-portal-active .bg-primary.h-1,
 body.sp-portal-active .bg-primary.h-1\.5,
 .sp-portal .bg-primary.h-full,
 .sp-portal .bg-primary.h-1,
 .sp-portal .bg-primary.h-1\.5 {
-  background: linear-gradient(90deg, #4f46e5, #10b981) !important;
+  background: linear-gradient(90deg, #0ea5e9, #10b981) !important;
 }
 
-/* Document links */
 body.sp-portal-active .yo-doc-link,
 .sp-portal .yo-doc-link {
   display: inline-flex;
@@ -183,17 +250,17 @@ body.sp-portal-active .yo-doc-link,
   font-weight: 600;
   border-radius: 8px;
   text-decoration: none;
-  border: 1px solid #e2e8f0;
+  border: 1px solid #dbe7f5;
   background: #fff;
-  color: #3730a3;
+  color: #0369a1;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s;
 }
 
 body.sp-portal-active .yo-doc-link:hover,
 .sp-portal .yo-doc-link:hover {
-  border-color: #a5b4fc;
-  background: #eef2ff;
+  border-color: #7dd3fc;
+  background: #eaf5ff;
 }
 
 body.sp-portal-active .yo-doc-link--receipt,
@@ -209,39 +276,129 @@ body.sp-portal-active .yo-doc-link--receipt:hover,
   border-color: #6ee7b7;
 }
 
-/* Cards — marketplace borders */
 body.sp-portal-active .sp-market-card,
 .sp-portal .sp-market-card {
-  border-color: #e8ecf1 !important;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
+  border-color: #dbe7f5 !important;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
 }
 
 body.sp-portal-active .sp-market-card:hover,
 .sp-portal .sp-market-card:hover {
-  border-color: #c7d2fe !important;
+  border-color: #7dd3fc !important;
 }
 
 body.sp-portal-active .sp-page-icon,
 .sp-portal .sp-page-icon {
-  border-color: #e8ecf1 !important;
-  background: linear-gradient(180deg, #fafbfc 0%, #eef2ff 100%) !important;
-  color: #4f46e5 !important;
+  border-color: #dbe7f5 !important;
+  background: linear-gradient(180deg, #fafbfc 0%, #eaf5ff 100%) !important;
+  color: #0369a1 !important;
 }
 
-/* Product discovery cards */
 body.sp-portal-active .pd-card,
 .sp-portal .pd-card {
-  border-color: #e8ecf1 !important;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.04);
+  border-color: #dbe7f5 !important;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
 }
 
 body.sp-portal-active .pd-card:hover,
 .sp-portal .pd-card:hover {
-  border-color: #c7d2fe !important;
+  border-color: #7dd3fc !important;
 }
 
 body.sp-portal-active .bg-primary\/10.text-primary,
 .sp-portal .bg-primary\/10.text-primary {
-  background: #eef2ff !important;
-  color: #4f46e5 !important;
+  background: #e0f2fe !important;
+  color: #0369a1 !important;
+}
+
+/* Dashboard.css legacy indigo overrides when inside SP portal */
+.sp-portal .dashboard-section h2,
+.sp-portal .section-header h2 {
+  color: #0c4a6e;
+}
+
+.sp-portal .btn-primary,
+.sp-portal .btn-secondary {
+  border-radius: 12px;
+}
+
+.sp-portal .status.pending {
+  background: #fffbeb;
+  color: #b45309;
+}
+
+.sp-portal .status.confirmed,
+.sp-portal .status.processing,
+.sp-portal .status.shipped {
+  background: #e0f2fe;
+  color: #0369a1;
+}
+
+.sp-portal .status.delivered,
+.sp-portal .status.completed {
+  background: #ecfdf5;
+  color: #047857;
+}
+
+.sp-portal .search-box input:focus {
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
+}
+
+.sp-portal .section-controls select option:checked {
+  background-color: #0ea5e9;
+}
+
+.sp-portal .item-card:hover {
+  border-color: #7dd3fc;
+  box-shadow: 0 4px 12px rgba(14, 165, 233, 0.12);
+}
+
+.sp-portal .btn-icon:hover {
+  background: rgba(14, 165, 233, 0.1);
+  color: #0369a1;
+}
+
+.sp-portal .your-orders-skeleton-line {
+  background: #e0f2fe;
+}
+
+.sp-portal .boy-torso,
+.sp-portal .boy-arm {
+  background: #0ea5e9;
+}
+
+.sp-portal .loading-spinner,
+.sp-portal .spinner {
+  border-top-color: #0ea5e9;
+}
+
+.sp-portal .yo-card {
+  border-color: #dbe7f5;
+}
+
+.sp-portal .yo-card:hover {
+  border-color: #7dd3fc;
+  box-shadow: 0 4px 20px rgba(14, 165, 233, 0.1), 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+.sp-portal .yo-card:focus-visible {
+  outline-color: #0ea5e9;
+}
+
+.sp-portal .yo-card__ref {
+  color: #0369a1;
+  background: #e0f2fe;
+}
+
+.sp-portal .pd-hero__title {
+  background: linear-gradient(135deg, #0ea5e9, #2563eb);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.sp-portal .pd-search:focus-within {
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12);
 }

@@ -10,14 +10,25 @@ import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import { fetchVoiceCartDraft, isVoiceGuidedActive } from '../voice/voiceCartBridge';
 import './CreatePO.css';
 
-/** UPI intent for platform collection QR. Set `VITE_PLATFORM_UPI_VPA` in `.env` for testing; swap to live platform ID when ready. */
+/** Shown when pay-later is blocked (limit, cycle, or minimum). */
+const PAY_LATER_UNAVAILABLE_MESSAGE =
+  'Pay later is unavailable. You can place the order with a different mode of payment.';
+
+/** UPI intent for platform collection QR. Requires `VITE_PLATFORM_UPI_VPA` in production builds. */
 function buildTestPlatformPaymentPayload(grandTotal) {
-  const vpa = String(import.meta.env.VITE_PLATFORM_UPI_VPA || 'pranshu.platform@upi').trim().toLowerCase();
+  const configuredVpa = String(import.meta.env.VITE_PLATFORM_UPI_VPA || '').trim().toLowerCase();
+  const vpa =
+    configuredVpa ||
+    (import.meta.env.PROD ? '' : 'pranshu.platform@upi');
+  if (!vpa) {
+    return null;
+  }
   const payeeName = String(
     import.meta.env.VITE_PLATFORM_UPI_PAYEE_NAME || 'Tatva Direct'
   ).trim();
   const amt = Math.max(0, Number(grandTotal) || 0).toFixed(2);
-  return `upi://pay?pa=${encodeURIComponent(vpa)}&pn=${encodeURIComponent(payeeName || 'Merchant')}&am=${amt}&cu=INR&tn=${encodeURIComponent('B2B PO platform payment (TEST)')}`;
+  const note = import.meta.env.PROD ? 'B2B PO platform payment' : 'B2B PO platform payment (TEST)';
+  return `upi://pay?pa=${encodeURIComponent(vpa)}&pn=${encodeURIComponent(payeeName || 'Merchant')}&am=${amt}&cu=INR&tn=${encodeURIComponent(note)}`;
 }
 
 const blankAddress = {
@@ -155,6 +166,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [expandedItemSpecs, setExpandedItemSpecs] = useState({});
   const [creditChecks, setCreditChecks] = useState([]);
   const [creditCheckLoading, setCreditCheckLoading] = useState(false);
+  const [creditCheckFailed, setCreditCheckFailed] = useState(false);
   const [payLaterEligibility, setPayLaterEligibility] = useState([]);
 
   const grandTotalAllPos = useMemo(
@@ -382,6 +394,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       return;
     }
     const payload = buildTestPlatformPaymentPayload(grandTotalAllPos);
+    if (!payload) {
+      setPlatformQrDataUrl('');
+      return undefined;
+    }
     let cancelled = false;
     QRCode.toDataURL(payload, {
       width: 260,
@@ -403,17 +419,27 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     if (!poGroups?.length) {
       setCreditChecks([]);
       setPayLaterEligibility([]);
+      setCreditCheckFailed(false);
       return;
     }
     const token = localStorage.getItem('token');
-    const checks = poGroups.map((g) => ({
-      supplierId: g.vendorId,
-      orderAmount: Number(g.total) || 0
-    }));
+    const checks = poGroups
+      .filter((g) => g?.vendorId !== null && g?.vendorId !== undefined)
+      .map((g) => ({
+        supplierId: g.vendorId,
+        orderAmount: Number(g.total) || 0
+      }));
+    if (!checks.length) {
+      setCreditChecks([]);
+      setPayLaterEligibility([]);
+      setCreditCheckFailed(true);
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
         setCreditCheckLoading(true);
+        setCreditCheckFailed(false);
         const res = await fetch(getApiUrl('/api/po/credit-check'), {
           method: 'POST',
           headers: {
@@ -427,11 +453,17 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           const results = data.results || [];
           setPayLaterEligibility(results);
           setCreditChecks(results);
+          setCreditCheckFailed(false);
+        } else if (!cancelled) {
+          setCreditChecks([]);
+          setPayLaterEligibility([]);
+          setCreditCheckFailed(true);
         }
       } catch (e) {
         if (!cancelled) {
           setCreditChecks([]);
           setPayLaterEligibility([]);
+          setCreditCheckFailed(true);
         }
       } finally {
         if (!cancelled) setCreditCheckLoading(false);
@@ -440,12 +472,18 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     return () => {
       cancelled = true;
     };
-  }, [poGroups, poPaymentMethod]);
+  }, [poGroups]);
 
   const payLaterOptionAvailable = useMemo(() => {
-    if (!payLaterEligibility.length || !poGroups?.length) return false;
-    return payLaterEligibility.every((r) => r.allowed && r.payLaterOffered);
-  }, [payLaterEligibility, poGroups]);
+    if (!poGroups?.length) return false;
+    if (creditCheckFailed) return true;
+    if (!payLaterEligibility.length) return false;
+    const bySupplier = new Map(payLaterEligibility.map((r) => [String(r.supplierId), r]));
+    return poGroups.every((g) => {
+      const row = bySupplier.get(String(g.vendorId));
+      return Boolean(row?.allowed && row?.payLaterOffered);
+    });
+  }, [creditCheckFailed, payLaterEligibility, poGroups]);
 
   useEffect(() => {
     if (poPaymentMethod === 'credit' && !payLaterOptionAvailable) {
@@ -577,10 +615,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           transportNotes: st.transportNotes || null,
           ...(quotedTransportAmount != null ? { quotedTransportAmount } : {})
         };
-        if (Number.isFinite(courierCompanyId) && courierCompanyId > 0) {
-          row.courierCompanyId = courierCompanyId;
-        } else if (isTruckingDetail(det)) {
+        if (isTruckingDetail(det)) {
           applyTruckingFields(row, det);
+        } else {
+          row.transportMode = 'courier';
+          if (Number.isFinite(courierCompanyId) && courierCompanyId > 0) {
+            row.courierCompanyId = courierCompanyId;
+          }
         }
         return row;
       });
@@ -605,10 +646,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         }
         const cc = det?.courier_company_id;
         const n = cc != null && cc !== '' ? Number(cc) : NaN;
-        if (Number.isFinite(n) && n > 0) {
-          confirmBody.courierCompanyId = n;
-        } else if (isTruckingDetail(det)) {
+        if (isTruckingDetail(det)) {
           applyTruckingFields(confirmBody, det);
+        } else {
+          confirmBody.transportMode = 'courier';
+          if (Number.isFinite(n) && n > 0) {
+            confirmBody.courierCompanyId = n;
+          }
         }
       }
     }
@@ -693,9 +737,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
 
     if (poPaymentMethod === 'credit') {
       if (!payLaterOptionAvailable) {
-        alert(
-          'Pay later is not available for this order (credit limit, loan cycle, or pay-later minimum). Please choose online, COD, bank transfer, or card to continue.'
-        );
+        alert(PAY_LATER_UNAVAILABLE_MESSAGE);
         return;
       }
       if (!paymentDetails.creditPeriod) {
@@ -963,22 +1005,15 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#6b7280', maxWidth: '520px' }}>
             This applies to every purchase order created in this step. Pay online: you will see a platform test QR before orders are placed. COD and credit stay pending until the supplier confirms payment or delivery.
           </p>
-          {!payLaterOptionAvailable && poGroups?.length > 0 && !creditCheckLoading ? (
+          {creditCheckFailed && poGroups?.length > 0 && !creditCheckLoading ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#b45309', maxWidth: '520px' }}>
-              Pay later is unavailable when net revenue is below the minimum, the loan cycle is overdue, or this
-              order would exceed the credit limit — but you can still place the order using{' '}
-              <strong>online, COD, bank transfer, or card</strong>.
-              {payLaterEligibility.some((r) => r.cycleIsOverdue && Number(r.outstanding || 0) > 0) ? (
-                <span style={{ display: 'block', marginTop: '0.25rem' }}>
-                  {payLaterEligibility
-                    .filter((r) => r.cycleIsOverdue && Number(r.outstanding || 0) > 0)
-                    .map((r) => {
-                      const vendor = poGroups.find((g) => String(g.vendorId) === String(r.supplierId));
-                      return `${vendor?.vendorName || 'Supplier'}: settle ₹${Number(r.outstanding || 0).toLocaleString('en-IN')} outstanding before pay later.`;
-                    })
-                    .join(' ')}
-                </span>
-              ) : null}
+              We could not verify pay-later eligibility right now. You can still choose credit and continue; final
+              eligibility will be validated while placing the order.
+            </p>
+          ) : null}
+          {!creditCheckFailed && !payLaterOptionAvailable && poGroups?.length > 0 && !creditCheckLoading ? (
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#b45309', maxWidth: '520px' }}>
+              {PAY_LATER_UNAVAILABLE_MESSAGE}
             </p>
           ) : null}
 

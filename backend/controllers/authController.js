@@ -85,10 +85,10 @@ router.post('/signup', async (req, res) => {
       });
     }
 
-    if (!['supplier', 'service_provider', 'admin'].includes(normalizedUserType)) {
+    if (!['supplier', 'service_provider'].includes(normalizedUserType)) {
       return res.status(400).json({
         status: 'error',
-        message: 'Invalid userType. Allowed values: supplier, service_provider, admin'
+        message: 'Invalid userType. Allowed values: supplier, service_provider'
       });
     }
 
@@ -142,10 +142,11 @@ router.post('/signup', async (req, res) => {
         details: error.details,
         hint: error.hint
       });
+      const isProduction = process.env.NODE_ENV === 'production';
       return res.status(400).json({
         status: 'error',
-        message: error.message || 'Error creating user account',
-        error: error.code || 'UNKNOWN_ERROR'
+        message: isProduction ? 'Error creating user account' : (error.message || 'Error creating user account'),
+        ...(isProduction ? {} : { error: error.code || 'UNKNOWN_ERROR' })
       });
     }
 

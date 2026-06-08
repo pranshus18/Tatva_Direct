@@ -1,11 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { getApiUrl } from '../config/api';
+import ProductImageCarousel from '../components/ProductImageCarousel';
+import { collectProductImages } from '../components/UpstreamProductDisplay';
+import { getApiUrl, authFetch } from '../config/api';
+import {
+  parseSpecificationsForDisplay,
+  specificationsObjectForLogistics
+} from '../utils/specifications';
+import { formatRupee } from '../utils/formatRupee';
 import './Dashboard.css';
 import './CreatePO.css';
 import './SupplierPlaceOrder.css';
 
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
+const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
 
 const isBranchComplete = (branch) =>
   ['address', 'city', 'state', 'country'].every((key) => String(branch?.[key] || '').trim()) &&
@@ -33,7 +41,7 @@ function formatQuoteMoney(rate) {
   if (rate == null || rate === '') return null;
   const n = Number(String(rate).replace(/,/g, ''));
   if (Number.isFinite(n)) {
-    return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return formatRupee(n, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   }
   return String(rate);
 }
@@ -105,6 +113,15 @@ const SupplierPlaceOrder = () => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  const goBackToUpstream = () => {
+    try {
+      sessionStorage.setItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY, '1');
+    } catch (_) {
+      // Non-fatal.
+    }
+    navigate('/supplier-upstream');
+  };
+
   const [draft, setDraft] = useState(null);
   const [requiredDate, setRequiredDate] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('online');
@@ -155,6 +172,58 @@ const SupplierPlaceOrder = () => {
       setLoadingDraft(false);
     }
   }, []);
+
+  // Older drafts may lack specs/images — hydrate from current supplier catalog.
+  useEffect(() => {
+    if (!draft?.lines?.length) return;
+    const reviewLines = Array.isArray(draft.reviewLines) ? draft.reviewLines : [];
+    const needsHydration = reviewLines.some(
+      (line) =>
+        !line?.specifications ||
+        parseSpecificationsForDisplay(line.specifications, { maxEntries: 1 }).length === 0
+    );
+    if (!needsHydration) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch('/api/supplier/products', { cache: 'no-cache' });
+        const data = await res.json();
+        if (cancelled || !res.ok || data.status !== 'success') return;
+
+        const byMineId = new Map();
+        (data.products || []).forEach((p) => {
+          const id = p?.supplier_product_id;
+          if (id) byMineId.set(String(id), p);
+        });
+
+        const nextReviewLines = reviewLines.map((line) => {
+          const mine = byMineId.get(String(line?.mineSupplierProductId || ''));
+          if (!mine) return line;
+          return {
+            ...line,
+            productName: line.productName || mine.name,
+            specifications: line.specifications || mine.specifications || null,
+            images:
+              Array.isArray(line?.images) && line.images.length > 0
+                ? line.images
+                : collectProductImages(mine),
+            brandModel: line.brandModel || mine.brandModel || mine.brand || null,
+            unit: line.unit || mine.unit || 'units',
+            description: line.description || mine.description || ''
+          };
+        });
+
+        setDraft((prev) => (prev ? { ...prev, reviewLines: nextReviewLines } : prev));
+      } catch (e) {
+        console.error('Failed to hydrate order line specifications:', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [draft?.lines, draft?.reviewLines]);
 
   // Persist user's latest choices so navigating back doesn't lose their inputs.
   useEffect(() => {
@@ -329,9 +398,10 @@ const SupplierPlaceOrder = () => {
       g.items.push({
         name: line?.productName || 'Product',
         quantity: qty,
-        unit: 'nos',
+        unit: line?.unit || 'nos',
         price: unitPrice,
-        specifications: {}
+        specifications: specificationsObjectForLogistics(line?.specifications),
+        images: Array.isArray(line?.images) ? line.images : []
       });
     }
 
@@ -467,14 +537,14 @@ const SupplierPlaceOrder = () => {
           alert(confirmData?.message || 'Upstream order(s) created, but transport booking failed.');
           // Still clear draft and go to upstream list.
           localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-          navigate('/supplier-upstream');
+          navigate('/supplier-upstream-orders');
           return;
         }
       }
 
       alert(data.message || 'Upstream order(s) placed successfully.');
       localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-      navigate('/supplier-upstream');
+      navigate('/supplier-upstream-orders');
     } catch (e) {
       console.error('Place upstream orders error:', e);
       alert(e?.message || 'Failed to place upstream orders. Please try again.');
@@ -502,7 +572,7 @@ const SupplierPlaceOrder = () => {
             <h1>Place Order</h1>
             <p>No order draft found. Start from Upstream Orders.</p>
           </div>
-          <button type="button" className="btn-secondary" onClick={() => navigate('/supplier-upstream')}>
+          <button type="button" className="btn-secondary" onClick={goBackToUpstream}>
             Back to Upstream Orders
           </button>
         </div>
@@ -519,7 +589,7 @@ const SupplierPlaceOrder = () => {
             Review delivery, payment, and transport — then confirm your upstream purchase.
           </p>
         </div>
-        <button type="button" className="btn-secondary" onClick={() => navigate('/supplier-upstream')}>
+        <button type="button" className="btn-secondary" onClick={goBackToUpstream}>
           Back
         </button>
       </div>
@@ -536,7 +606,7 @@ const SupplierPlaceOrder = () => {
               <div className="spo-stat">
                 <span className="spo-stat__label">Est. total</span>
                 <span className="spo-stat__value spo-stat__value--accent">
-                  ₹{estimatedTotal.toLocaleString('en-IN')}
+                  {formatRupee(estimatedTotal)}
                 </span>
               </div>
             ) : null}
@@ -714,8 +784,12 @@ const SupplierPlaceOrder = () => {
           {reviewLines.length > 0 ? (
             <section className="spo-section">
               <h2 className="spo-section-title">Order lines</h2>
+              <p className="spo-section-desc">
+                Specifications are used for transport quotes (weight and dimensions). Add weight in product
+                management if courier options look wrong.
+              </p>
               <div className="spo-table-wrap">
-                <table className="po-table">
+                <table className="po-table spo-order-lines-table">
                   <thead>
                     <tr>
                       <th>Product</th>
@@ -726,19 +800,64 @@ const SupplierPlaceOrder = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {reviewLines.map((line, idx) => (
-                      <tr key={`${line.mineSupplierProductId}-${line.upstreamSupplierProductId}-${idx}`}>
-                        <td>{line.productName || 'Product'}</td>
-                        <td>{line.supplierName || 'Supplier'}</td>
-                        <td style={{ textAlign: 'right' }}>{Number(line.quantity || 0)}</td>
-                        <td style={{ textAlign: 'right' }}>
-                          ₹{Number(line.unitPrice || 0).toLocaleString('en-IN')}
-                        </td>
-                        <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                          ₹{Number(line.lineTotal || 0).toLocaleString('en-IN')}
-                        </td>
-                      </tr>
-                    ))}
+                    {reviewLines.map((line, idx) => {
+                      const specEntries = parseSpecificationsForDisplay(line?.specifications, {
+                        maxEntries: 14
+                      });
+                      const images = Array.isArray(line?.images) ? line.images.filter(Boolean) : [];
+                      return (
+                        <tr key={`${line.mineSupplierProductId}-${line.upstreamSupplierProductId}-${idx}`}>
+                          <td className="spo-line-product-cell">
+                            <div className="spo-line-product-row">
+                              {images.length > 0 ? (
+                                <div className="spo-line-product-thumb">
+                                  <ProductImageCarousel
+                                    images={images}
+                                    alt={line.productName || 'Product'}
+                                    height={72}
+                                    rounded={8}
+                                  />
+                                </div>
+                              ) : null}
+                              <div className="spo-line-product-text">
+                                <div className="spo-line-product-name">{line.productName || 'Product'}</div>
+                                {line.brandModel ? (
+                                  <div className="spo-line-product-meta">Brand: {line.brandModel}</div>
+                                ) : null}
+                                {line.description ? (
+                                  <div className="spo-line-product-desc">{line.description}</div>
+                                ) : null}
+                                {specEntries.length > 0 ? (
+                                  <div className="spo-line-specs">
+                                    {specEntries.map((entry) => (
+                                      <span
+                                        key={`${entry.label}-${entry.value}`}
+                                        className="spo-line-spec-pill"
+                                        title={`${entry.label}: ${entry.value}`}
+                                      >
+                                        <strong>{entry.label}:</strong> {entry.value}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <div className="spo-line-specs-empty">No specifications on file for this product.</div>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td>{line.supplierName || 'Supplier'}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            {Number(line.quantity || 0)} {line.unit || 'units'}
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            {formatRupee(line.unitPrice || 0)}
+                          </td>
+                          <td style={{ textAlign: 'right', fontWeight: 600 }}>
+                            {formatRupee(line.lineTotal || 0)}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -746,7 +865,7 @@ const SupplierPlaceOrder = () => {
           ) : null}
 
           <footer className="spo-actions">
-            <button type="button" className="btn-secondary" onClick={() => navigate('/supplier-upstream')} disabled={placing}>
+            <button type="button" className="btn-secondary" onClick={goBackToUpstream} disabled={placing}>
               Cancel
             </button>
             <button

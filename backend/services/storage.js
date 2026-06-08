@@ -12,11 +12,29 @@ export const ORDER_ATTACHMENTS_BUCKET = (
 export const PRODUCT_IMAGES_BUCKET = (
   process.env.SUPABASE_STORAGE_PRODUCT_BUCKET || 'product-images'
 ).trim();
+export const PROFILE_PHOTOS_BUCKET = (
+  process.env.SUPABASE_STORAGE_PROFILE_BUCKET || 'profile-photos'
+).trim();
+export const SUPPLIER_DOCUMENTS_BUCKET = (
+  process.env.SUPABASE_STORAGE_SUPPLIER_DOCS_BUCKET || 'supplier-documents'
+).trim();
+
+const DEFAULT_BUCKET_FILE_SIZE_LIMIT = 10 * 1024 * 1024;
+const PROFILE_BUCKET_FILE_SIZE_LIMIT = 20 * 1024 * 1024;
+const SUPPLIER_DOCUMENTS_BUCKET_FILE_SIZE_LIMIT = 15 * 1024 * 1024;
 
 const bucketEnsureCache = new Set();
 
+function resolveBucketFileSizeLimit(bucket) {
+  if (bucket === PROFILE_PHOTOS_BUCKET) return PROFILE_BUCKET_FILE_SIZE_LIMIT;
+  if (bucket === SUPPLIER_DOCUMENTS_BUCKET) return SUPPLIER_DOCUMENTS_BUCKET_FILE_SIZE_LIMIT;
+  return DEFAULT_BUCKET_FILE_SIZE_LIMIT;
+}
+
 const ensureBucketIsPublic = async (bucket) => {
   if (!bucket || bucketEnsureCache.has(bucket)) return;
+
+  const fileSizeLimit = resolveBucketFileSizeLimit(bucket);
 
   try {
     const { data: existingBucket, error: getError } = await supabase.storage.getBucket(bucket);
@@ -30,19 +48,24 @@ const ensureBucketIsPublic = async (bucket) => {
 
       const { error: createError } = await supabase.storage.createBucket(bucket, {
         public: true,
-        fileSizeLimit: 10485760
+        fileSizeLimit
       });
       if (createError) {
         throw new Error(`Storage bucket create failed: ${createError.message}`);
       }
-    } else if (existingBucket && existingBucket.public !== true) {
-      const { error: updateError } = await supabase.storage.updateBucket(bucket, {
-        public: true,
-        fileSizeLimit: existingBucket.file_size_limit || 10485760,
-        allowedMimeTypes: existingBucket.allowed_mime_types || null
-      });
-      if (updateError) {
-        throw new Error(`Storage bucket update failed: ${updateError.message}`);
+    } else if (existingBucket) {
+      const needsPublic = existingBucket.public !== true;
+      const currentLimit = Number(existingBucket.file_size_limit) || 0;
+      const needsLargerLimit = currentLimit < fileSizeLimit;
+      if (needsPublic || needsLargerLimit) {
+        const { error: updateError } = await supabase.storage.updateBucket(bucket, {
+          public: true,
+          fileSizeLimit: needsLargerLimit ? fileSizeLimit : (existingBucket.file_size_limit || fileSizeLimit),
+          allowedMimeTypes: existingBucket.allowed_mime_types || null
+        });
+        if (updateError) {
+          throw new Error(`Storage bucket update failed: ${updateError.message}`);
+        }
       }
     }
 
@@ -191,6 +214,8 @@ export const uploadOrderAttachment = async (orderId, file, filename) => {
 export default {
   ORDER_ATTACHMENTS_BUCKET,
   PRODUCT_IMAGES_BUCKET,
+  PROFILE_PHOTOS_BUCKET,
+  SUPPLIER_DOCUMENTS_BUCKET,
   uploadFile,
   deleteFile,
   getPublicUrl,
