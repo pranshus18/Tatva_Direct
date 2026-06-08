@@ -7,6 +7,8 @@ import { Truck } from 'lucide-react';
 import { useVoiceSessionContext } from '../voice/VoiceSessionContext';
 import { isVoiceGuidedActive } from '../voice/voiceCartBridge';
 
+const SELF_SHIP_PROVIDER_NAME = 'Self ship';
+
 const formatCurrency = (value) =>
   `₹${(Number(value) || 0).toLocaleString('en-IN', {
     minimumFractionDigits: 2,
@@ -64,11 +66,13 @@ function providerFareInr(provider) {
 function TransportPickCard({ provider, selected, onPick, disabled = false, disabledReason = '' }) {
   const [hover, setHover] = React.useState(false);
   const name = String(provider.name || '').trim() || 'Provider';
+  const isSelfShip = String(provider.transportKind || '').toLowerCase() === 'self_ship';
   const isTrucking =
-    provider.transportKind === 'trucking' ||
+    !isSelfShip &&
+    (provider.transportKind === 'trucking' ||
     String(provider.source || '').toLowerCase() === 'borzo' ||
-    provider.vehicle_type_id != null;
-  const badge = isTrucking ? 'Trucking' : 'Courier';
+    provider.vehicle_type_id != null);
+  const badge = isSelfShip ? 'Self ship' : isTrucking ? 'Trucking' : 'Courier';
   const fare = providerFareInr(provider);
   const overCapacity = Boolean(provider.capacity_exceeded);
 
@@ -108,8 +112,8 @@ function TransportPickCard({ provider, selected, onPick, disabled = false, disab
             style={{
               fontSize: '0.68rem',
               fontWeight: 700,
-              color: isTrucking ? '#9a3412' : '#1e40af',
-              background: isTrucking ? '#ffedd5' : '#dbeafe',
+              color: isSelfShip ? '#166534' : isTrucking ? '#9a3412' : '#1e40af',
+              background: isSelfShip ? '#dcfce7' : isTrucking ? '#ffedd5' : '#dbeafe',
               borderRadius: 9999,
               padding: '0.12rem 0.45rem'
             }}
@@ -133,9 +137,10 @@ function TransportPickCard({ provider, selected, onPick, disabled = false, disab
         </span>
       </div>
       <div style={{ fontSize: '0.8rem', color: '#475569' }}>
+        {isSelfShip ? <span>No external transport booking required</span> : null}
         {provider.carrier ? <span>{provider.carrier} · </span> : null}
         {provider.source ? <span>Source: {provider.source} · </span> : null}
-        {fare != null ? (
+        {fare != null && !isSelfShip ? (
           <span>
             {isTrucking ? 'Fare' : 'Rate'}: {formatCurrency(fare)} ·{' '}
           </span>
@@ -189,6 +194,10 @@ const TransportSuggestion = () => {
   const billingAddress =
     location.state?.billingAddress || location.state?.voiceCart?.billingAddress || {};
   const createdOrders = Array.isArray(location.state?.createdOrders) ? location.state.createdOrders : [];
+  const incomingTransportSelection =
+    location.state?.transportSelection && typeof location.state.transportSelection === 'object'
+      ? location.state.transportSelection
+      : null;
 
   const transportOrderCards =
     createdOrders.length > 0
@@ -205,7 +214,23 @@ const TransportSuggestion = () => {
           items: Array.isArray(group.items) ? group.items : []
         }));
 
+  const isIncomingSelfShip = React.useMemo(() => {
+    const st = incomingTransportSelection;
+    if (!st || typeof st !== 'object') return false;
+    const by = st.byVendorId && typeof st.byVendorId === 'object' ? st.byVendorId : {};
+    const expectedIds = poGroups.map((g) => String(g.vendorId || '')).filter(Boolean);
+    const values = Object.values(by).map((v) => String(v || '').trim().toLowerCase());
+    if (expectedIds.length > 0 && expectedIds.every((id) => String(by[id] || '').trim())) {
+      return values.every((v) => v === 'self ship' || v === 'self-ship');
+    }
+    const root = String(st.shippingProvider || '').trim().toLowerCase();
+    return root === 'self ship' || root === 'self-ship';
+  }, [incomingTransportSelection, poGroups]);
+
   const [selectedByVendorId, setSelectedByVendorId] = React.useState({});
+  const [transportModeChoice, setTransportModeChoice] = React.useState(
+    isIncomingSelfShip ? 'self_ship' : 'external'
+  );
 
   const [logisticsLoading, setLogisticsLoading] = React.useState(false);
   const [logisticsError, setLogisticsError] = React.useState('');
@@ -215,6 +240,14 @@ const TransportSuggestion = () => {
 
   React.useEffect(() => {
     if (poGroups.length === 0) return;
+    if (transportModeChoice === 'self_ship') {
+      setLogisticsLoading(false);
+      setLogisticsError('');
+      setShipments([]);
+      setDeliveryPincode('');
+      setDeliveryAddressUsed(null);
+      return;
+    }
     const shipOk = isCompleteAddress(shippingAddress);
     const billOk = isCompleteAddress(billingAddress);
     const needBilling = hasGstin && deliveryDestination === 'billing';
@@ -301,7 +334,7 @@ const TransportSuggestion = () => {
       clearTimeout(scheduleId);
       ac.abort();
     };
-  }, [poGroups, shippingAddress, billingAddress, deliveryDestination, hasGstin]);
+  }, [poGroups, shippingAddress, billingAddress, deliveryDestination, hasGstin, transportModeChoice]);
 
   /** Vendors that returned at least one transport option (must pick per vendor). */
   const vendorIdsRequiringTransport = React.useMemo(() => {
@@ -324,10 +357,14 @@ const TransportSuggestion = () => {
   };
 
   const allTransportChosen =
+    transportModeChoice === 'self_ship'
+      ? poGroups.length > 0
+      :
     vendorIdsRequiringTransport.length === 0 ||
     vendorIdsRequiringTransport.every((id) => String(selectedByVendorId[id] || '').trim());
 
   const selectedProviderOverCapacity = React.useMemo(() => {
+    if (transportModeChoice === 'self_ship') return null;
     for (const vid of vendorIdsRequiringTransport) {
       const selKey = String(selectedByVendorId[vid] || '').trim();
       if (!selKey) continue;
@@ -335,7 +372,7 @@ const TransportSuggestion = () => {
       if (p?.capacity_exceeded) return { vendorId: vid, provider: p };
     }
     return null;
-  }, [vendorIdsRequiringTransport, selectedByVendorId, shipments]);
+  }, [transportModeChoice, vendorIdsRequiringTransport, selectedByVendorId, shipments]);
 
   const vendorDisplayName = (vendorId) => {
     const s = shipments.find((x) => String(x.vendorId) === String(vendorId));
@@ -345,6 +382,55 @@ const TransportSuggestion = () => {
   };
 
   const handleUseTransport = () => {
+    if (transportModeChoice === 'self_ship') {
+      const byVendorId = {};
+      const byVendorCourierDetail = {};
+      for (const g of poGroups) {
+        const id = String(g.vendorId || '');
+        if (!id) continue;
+        byVendorId[id] = SELF_SHIP_PROVIDER_NAME;
+        byVendorCourierDetail[id] = {
+          name: SELF_SHIP_PROVIDER_NAME,
+          transport_mode: 'self_ship',
+          transportMode: 'self_ship',
+          source: 'self_ship',
+          courier_company_id: null,
+          vehicle_type_id: null,
+          vehicleTypeId: null,
+          rate: null,
+          fareValue: null,
+          etd: null
+        };
+      }
+      const transportSelection = {
+        byVendorId,
+        byVendorCourierDetail,
+        shippingProvider: '',
+        trackingNumber: '',
+        trackingUrl: '',
+        transportNotes: 'Self ship by supplier'
+      };
+      if (isVoiceGuidedActive() && typeof notifyTransportSelected === 'function') {
+        notifyTransportSelected(transportSelection);
+      }
+      navigate(returnPath, {
+        replace: returnPath === '/supplier-place-order',
+        state: {
+          transportSelection,
+          createdOrders,
+          poGroups,
+          grandTotalAllPos,
+          requiredDate,
+          hasGstin,
+          deliveryDestination,
+          shippingAddress,
+          billingAddress,
+          voiceGuided: isVoiceGuidedActive()
+        }
+      });
+      return;
+    }
+
     if (vendorIdsRequiringTransport.length === 0) {
       window.alert('No transport quotes are available yet. Fix quote errors or try again later.');
       return;
@@ -384,8 +470,8 @@ const TransportSuggestion = () => {
       byVendorId[id] = displayName;
       const isTrucking =
         p?.transportKind === 'trucking' ||
-        String(p?.source || '').toLowerCase() === 'borzo' ||
-        p?.vehicle_type_id != null;
+          String(p?.source || '').toLowerCase() === 'borzo' ||
+          p?.vehicle_type_id != null;
       const fareValue = providerFareInr(p);
       byVendorCourierDetail[id] = {
         name: displayName,
@@ -442,7 +528,7 @@ const TransportSuggestion = () => {
   return (
     <SpWorkflowPage
       title="Transport suggestion"
-      description="Review courier (Shiprocket) and trucking (Borzo) quotes — pick one provider per supplier shipment."
+      description="Review courier (Shiprocket), trucking (Borzo), or Self ship — pick one option per supplier shipment."
       icon={Truck}
     >
     <div className="page !p-0">
@@ -497,6 +583,56 @@ const TransportSuggestion = () => {
 
           <div style={{ marginBottom: '1rem' }}>
             <h3 style={{ margin: '0 0 0.5rem', color: '#0f172a' }}>Transport options</h3>
+            <div
+              style={{
+                marginBottom: '0.65rem',
+                padding: '0.65rem 0.75rem',
+                border: '1px solid #e2e8f0',
+                borderRadius: 8,
+                background: '#fff'
+              }}
+            >
+              <div style={{ fontSize: '0.86rem', fontWeight: 600, color: '#1e293b', marginBottom: '0.35rem' }}>
+                Choose transport system
+              </div>
+              <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', fontSize: '0.86rem', color: '#334155' }}>
+                <label>
+                  <input
+                    type="radio"
+                    name="transport-mode-choice"
+                    value="external"
+                    checked={transportModeChoice === 'external'}
+                    onChange={() => setTransportModeChoice('external')}
+                  />{' '}
+                  External transport service (from logistics module)
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="transport-mode-choice"
+                    value="self_ship"
+                    checked={transportModeChoice === 'self_ship'}
+                    onChange={() => setTransportModeChoice('self_ship')}
+                  />{' '}
+                  Self ship (supplier delivers directly)
+                </label>
+              </div>
+            </div>
+            {transportModeChoice === 'self_ship' ? (
+              <div
+                style={{
+                  marginBottom: '0.65rem',
+                  padding: '0.6rem 0.75rem',
+                  border: '1px solid #bbf7d0',
+                  borderRadius: 8,
+                  background: '#f0fdf4',
+                  fontSize: '0.84rem',
+                  color: '#166534'
+                }}
+              >
+                Self ship selected. No external transport quote or booking will be requested from logistics module.
+              </div>
+            ) : null}
             {!logisticsLoading && !logisticsError && formatAddressLines(deliveryAddressUsed).length > 0 ? (
               <div
                 style={{
@@ -514,12 +650,12 @@ const TransportSuggestion = () => {
                 ))}
               </div>
             ) : null}
-            {logisticsLoading ? (
+            {transportModeChoice === 'external' && logisticsLoading ? (
               <p style={{ color: '#64748b', margin: 0 }}>
                 Loading transport providers… (first request to couriers often takes 30s–2 minutes)
               </p>
             ) : null}
-            {logisticsError ? (
+            {transportModeChoice === 'external' && logisticsError ? (
               <div
                 style={{
                   background: '#fef2f2',
@@ -533,10 +669,11 @@ const TransportSuggestion = () => {
                 {logisticsError}
               </div>
             ) : null}
-            {!logisticsLoading && !logisticsError && shipments.length === 0 ? (
+            {transportModeChoice === 'external' && !logisticsLoading && !logisticsError && shipments.length === 0 ? (
               <p style={{ color: '#64748b', margin: 0 }}>No shipment lanes returned.</p>
             ) : null}
 
+            {transportModeChoice === 'external' ? (
             <div style={{ display: 'grid', gap: '1rem', marginTop: '0.75rem' }}>
               {shipments.map((shipment) => (
                 <div
@@ -593,13 +730,19 @@ const TransportSuggestion = () => {
                       {shipment.logistics.quoteNote}
                     </div>
                   ) : null}
-                  {!shipment.logistics?.success ? (
-                    <div style={{ fontSize: '0.85rem', color: '#b45309' }}>
-                      {shipment.logistics?.message || 'No quotes for this lane.'}
-                    </div>
-                  ) : (
-                    <div style={{ display: 'grid', gap: '0.45rem', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
-                      {(shipment.logistics.providers || []).map((p, idx) => {
+                  <div style={{ display: 'grid', gap: '0.45rem', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))' }}>
+                    {!shipment.logistics?.success ? (
+                      <div
+                        style={{
+                          gridColumn: '1 / -1',
+                          fontSize: '0.85rem',
+                          color: '#b45309'
+                        }}
+                      >
+                        {shipment.logistics?.message || 'No quotes for this lane.'}
+                      </div>
+                    ) : (
+                      (shipment.logistics.providers || []).map((p, idx) => {
                         const vid = String(shipment.vendorId || '');
                         const selKey = providerSelectionKey(p);
                         const selected = Boolean(
@@ -621,13 +764,14 @@ const TransportSuggestion = () => {
                             }
                           />
                         );
-                      })}
-                    </div>
-                  )}
+                      })
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
-            {!logisticsLoading && !logisticsError && vendorIdsRequiringTransport.length > 0 ? (
+            ) : null}
+            {transportModeChoice === 'external' && !logisticsLoading && !logisticsError && vendorIdsRequiringTransport.length > 0 ? (
               <div
                 style={{
                   marginTop: '0.85rem',

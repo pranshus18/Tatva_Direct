@@ -571,6 +571,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       const vt = det.vehicle_type_id ?? det.vehicleTypeId;
       return vt != null && vt !== '' && Number(vt) > 0;
     };
+    const isSelfShipDetail = (det, shippingProvider = '') => {
+      const mode = String(det?.transportMode || det?.transport_mode || '').toLowerCase();
+      const providerName = String(shippingProvider || '').trim().toLowerCase();
+      return mode === 'self_ship' || providerName === 'self ship' || providerName === 'self-ship';
+    };
 
     const applyTruckingFields = (target, det) => {
       const vtRaw = det?.vehicle_type_id ?? det?.vehicleTypeId;
@@ -615,7 +620,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           transportNotes: st.transportNotes || null,
           ...(quotedTransportAmount != null ? { quotedTransportAmount } : {})
         };
-        if (isTruckingDetail(det)) {
+        if (isSelfShipDetail(det, sp)) {
+          row.transportMode = 'self_ship';
+          row.source = 'self_ship';
+        } else if (isTruckingDetail(det)) {
           applyTruckingFields(row, det);
         } else {
           row.transportMode = 'courier';
@@ -646,7 +654,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         }
         const cc = det?.courier_company_id;
         const n = cc != null && cc !== '' ? Number(cc) : NaN;
-        if (isTruckingDetail(det)) {
+        if (isSelfShipDetail(det, st.shippingProvider)) {
+          confirmBody.transportMode = 'self_ship';
+          confirmBody.source = 'self_ship';
+        } else if (isTruckingDetail(det)) {
           applyTruckingFields(confirmBody, det);
         } else {
           confirmBody.transportMode = 'courier';
@@ -1507,7 +1518,12 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                             <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '0.25rem' }}>{label}</div>
                             <div>
                               <strong>
-                                {d?.transport_mode === 'trucking' ? 'Trucking' : 'Courier'}:
+                                {d?.transport_mode === 'self_ship'
+                                  ? 'Self ship'
+                                  : d?.transport_mode === 'trucking'
+                                    ? 'Trucking'
+                                    : 'Courier'}
+                                :
                               </strong>{' '}
                               {name}
                             </div>

@@ -85,7 +85,7 @@ const perOrderTransportRowSchema = z.object({
   courierCompanyId: z.coerce.number().int().positive().optional().nullable(),
   /** Borzo / trucking `vehicle_type_id` from quote — optional; Borzo can pick from weight_kg. */
   vehicleTypeId: z.coerce.number().int().positive().optional().nullable(),
-  transportMode: z.enum(['trucking', 'courier']).optional().nullable(),
+  transportMode: z.enum(['trucking', 'courier', 'self_ship']).optional().nullable(),
   source: z.string().max(40).optional().nullable(),
   weightKg: z.coerce.number().positive().optional().nullable(),
   pickupLat: z.coerce.number().optional().nullable(),
@@ -108,7 +108,7 @@ export const poTransportConfirmSchema = z
     /** When confirming a single order without perOrderTransport — passed to logistics booking. */
     courierCompanyId: z.coerce.number().int().positive().optional().nullable(),
     vehicleTypeId: z.coerce.number().int().positive().optional().nullable(),
-    transportMode: z.enum(['trucking', 'courier']).optional().nullable(),
+    transportMode: z.enum(['trucking', 'courier', 'self_ship']).optional().nullable(),
     source: z.string().max(40).optional().nullable(),
     weightKg: z.coerce.number().positive().optional().nullable(),
     pickupLat: z.coerce.number().optional().nullable(),
@@ -174,6 +174,10 @@ export const poTransportConfirmSchema = z
             path: ['perOrderTransport']
           });
         }
+      }
+      if (mode === 'self_ship') {
+        // Self ship intentionally does not require courier/trucking identifiers.
+        continue;
       }
     }
   });

@@ -59,6 +59,11 @@ test('resolveBookingIntent rejects trucking mode without coordinates', () => {
   assert.match(intent.error || '', /coordinates/i);
 });
 
+test('resolveBookingIntent supports self ship without external provider IDs', () => {
+  const intent = resolveBookingIntent({ transportMode: 'self_ship' });
+  assert.equal(intent.kind, TRANSPORT_KIND.SELF_SHIP);
+});
+
 test('inter-city light lane requests courier quotes only', () => {
   const s = resolveShipmentQuoteStrategy({
     weightKg: 5,

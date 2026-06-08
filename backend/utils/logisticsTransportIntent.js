@@ -6,7 +6,8 @@
 
 export const TRANSPORT_KIND = Object.freeze({
   COURIER: 'courier',
-  TRUCKING: 'trucking'
+  TRUCKING: 'trucking',
+  SELF_SHIP: 'self_ship'
 });
 
 function positiveInt(value) {
@@ -43,7 +44,7 @@ export function classifyQuoteProvider(provider = {}) {
  * Resolve which booking API to call. `transportMode` from the UI is authoritative when present.
  *
  * @returns {{
- *   kind: 'courier'|'trucking'|null,
+ *   kind: 'courier'|'trucking'|'self_ship'|null,
  *   courierCompanyId?: number,
  *   vehicleTypeId?: number|null,
  *   carrier?: string,
@@ -106,6 +107,10 @@ export function resolveBookingIntent({
       deliveryLat: dlat,
       deliveryLng: dlng
     };
+  }
+
+  if (mode === TRANSPORT_KIND.SELF_SHIP) {
+    return { kind: TRANSPORT_KIND.SELF_SHIP };
   }
 
   // Legacy path when transportMode was not sent (deprecated).

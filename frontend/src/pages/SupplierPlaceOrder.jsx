@@ -497,15 +497,20 @@ const SupplierPlaceOrder = () => {
 
           const transportMode = det?.transport_mode ?? det?.transportMode ?? null;
           const source = det?.source ?? null;
+          const shippingProviderName = String(shippingProvider || '').trim().toLowerCase();
+          const isSelfShip =
+            String(transportMode || '').toLowerCase() === 'self_ship' ||
+            shippingProviderName === 'self ship' ||
+            shippingProviderName === 'self-ship';
           const isTrucking = String(transportMode || '').toLowerCase() === 'trucking';
 
           return {
             orderId: o.id,
             shippingProvider: String(shippingProvider || '').trim(),
-            courierCompanyId: isTrucking ? null : det?.courier_company_id ?? null,
-            vehicleTypeId: isTrucking ? det?.vehicle_type_id ?? det?.vehicleTypeId ?? null : null,
-            transportMode: isTrucking ? 'trucking' : 'courier',
-            source: source ? String(source) : null,
+            courierCompanyId: isSelfShip || isTrucking ? null : det?.courier_company_id ?? null,
+            vehicleTypeId: isSelfShip ? null : isTrucking ? det?.vehicle_type_id ?? det?.vehicleTypeId ?? null : null,
+            transportMode: isSelfShip ? 'self_ship' : isTrucking ? 'trucking' : 'courier',
+            source: isSelfShip ? 'self_ship' : source ? String(source) : null,
             weightKg: det?.weightKg ?? null,
             pickupLat: det?.pickup_lat ?? det?.pickupLat ?? null,
             pickupLng: det?.pickup_lng ?? det?.pickupLng ?? null,
@@ -764,7 +769,9 @@ const SupplierPlaceOrder = () => {
                           : null;
                       const priceLabel = formatQuoteMoney(d?.rate ?? d?.fareValue);
                       const mode =
-                        d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
+                        d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
+                          ? 'Self ship'
+                          : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
                           ? 'Trucking'
                           : 'Courier';
                       return (

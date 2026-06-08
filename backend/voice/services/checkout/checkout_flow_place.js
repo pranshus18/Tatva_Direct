@@ -60,11 +60,19 @@ export async function placeOrderAndConfirmTransport(toolCtx, memory) {
         transportNotes: 'Voice checkout'
       };
       const transportMode = String(det?.transport_mode || det?.transportMode || '').toLowerCase();
+      const shippingProviderName = String(row.shippingProvider || '').trim().toLowerCase();
+      const isSelfShip =
+        transportMode === 'self_ship' ||
+        shippingProviderName === 'self ship' ||
+        shippingProviderName === 'self-ship';
       const isTrucking =
         transportMode === 'trucking' ||
         String(det?.source || '').toLowerCase() === 'borzo' ||
         (det?.vehicle_type_id != null && Number(det.vehicle_type_id) > 0);
-      if (isTrucking) {
+      if (isSelfShip) {
+        row.transportMode = 'self_ship';
+        row.source = 'self_ship';
+      } else if (isTrucking) {
         row.transportMode = 'trucking';
         if (det?.vehicle_type_id) row.vehicleTypeId = Number(det.vehicle_type_id);
         if (det?.pickup_lat != null) row.pickupLat = Number(det.pickup_lat);
