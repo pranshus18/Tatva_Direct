@@ -20,7 +20,8 @@ export const profileUpdateSchema = z.object({
   branches: z.array(z.record(z.string(), z.any())).optional(),
   supplierRole: z.string().optional(),
   brands: z.any().optional(),
-  companyInfoEntries: z.array(z.record(z.string(), z.any())).optional()
+  companyInfoEntries: z.array(z.record(z.string(), z.any())).optional(),
+  saveAsDraft: z.boolean().optional()
 });
 
 export const profileUploadCertificateBodySchema = z.object({

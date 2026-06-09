@@ -135,21 +135,19 @@ export default function SupplierSelectYourself() {
 
   const handleSave = async () => {
     const validation = validateSupplierChainProfile(profile);
-    if (!validation.ok) {
-      alert(validation.message);
-      return;
-    }
+    const saveAsDraft = !validation.ok;
 
     try {
       setSaving(true);
       const token = localStorage.getItem('token');
+      const payload = saveAsDraft ? { ...profile, saveAsDraft: true } : profile;
       const response = await fetch(getApiUrl('/api/profile'), {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify(profile)
+        body: JSON.stringify(payload)
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.status !== 'success') {
@@ -158,6 +156,10 @@ export default function SupplierSelectYourself() {
       }
       if (data.chainApprovalPending) {
         alert(data.message || 'Submitted for admin approval.');
+      } else if (data.chainDraftSaved || saveAsDraft) {
+        alert('Draft saved. You can come back later and complete remaining fields.');
+      } else {
+        alert('Saved successfully.');
       }
       await fetchProfile();
     } catch (e) {
@@ -337,6 +339,26 @@ export default function SupplierSelectYourself() {
               assignment for upstream matching and orders.
               {profile.chainProfilePendingSubmittedAt
                 ? ` Submitted: ${new Date(profile.chainProfilePendingSubmittedAt).toLocaleString()}.`
+                : ''}
+            </p>
+          </div>
+        ) : null}
+        {profile?.chainProfileApprovalStatus === 'draft' ? (
+          <div
+            className="profile-section"
+            style={{
+              background: '#eff6ff',
+              border: '1px solid #bfdbfe',
+              borderRadius: 10,
+              padding: '1rem 1.1rem'
+            }}
+          >
+            <strong style={{ color: '#1d4ed8' }}>Draft saved</strong>
+            <p style={{ margin: '0.45rem 0 0', color: '#1e3a8a', fontSize: '0.95rem', lineHeight: 1.45 }}>
+              Your latest form values are saved as draft and shown here. Complete the remaining required fields and
+              click Save again to submit for admin approval.
+              {profile.chainProfileDraftSavedAt
+                ? ` Last draft save: ${new Date(profile.chainProfileDraftSavedAt).toLocaleString()}.`
                 : ''}
             </p>
           </div>

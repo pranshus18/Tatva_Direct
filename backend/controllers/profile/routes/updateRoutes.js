@@ -68,6 +68,7 @@ export function registerProfileUpdateRoutes(router) {
       };
 
       let chainApprovalPending = false;
+      let chainDraftSaved = false;
 
       if (profileData.userType === 'service_provider') {
         const mergedAddress = {
@@ -184,6 +185,8 @@ export function registerProfileUpdateRoutes(router) {
 
         const incomingChain = buildChainPayloadFromProfileData(profileData);
         const baselineChain = baselineChainFromProfile(currentProfile);
+        const wantsDraftSave = profileData.saveAsDraft === true;
+        let isIncompleteChainDraft = false;
         const incomingEntries = Array.isArray(incomingChain.companyInfoEntries)
           ? incomingChain.companyInfoEntries
           : [];
@@ -196,11 +199,17 @@ export function registerProfileUpdateRoutes(router) {
           const chainEntriesForValidation = resolveCompanyInfoEntriesForValidation(profileData);
           const completeness = validateCompanyInfoEntriesList(chainEntriesForValidation);
           if (!completeness.ok) {
-            return res.status(400).json({
-              status: 'error',
-              code: 'supply_chain_entry_incomplete',
-              message: completeness.message
-            });
+            if (!wantsDraftSave) {
+              return res.status(400).json({
+                status: 'error',
+                code: 'supply_chain_entry_incomplete',
+                message: completeness.message
+              });
+            }
+            isIncompleteChainDraft = true;
+            chainDraftSaved = true;
+            profileUpdate.chainProfileDraft = incomingChain;
+            profileUpdate.chainProfileDraftUpdatedAt = new Date().toISOString();
           }
         }
 
@@ -243,7 +252,14 @@ export function registerProfileUpdateRoutes(router) {
           return failures.length > 0 ? failures : null;
         };
 
-        if (!hasRole) {
+        if (isIncompleteChainDraft) {
+          // Keep approved profile active; store incomplete edits as draft only.
+          profileUpdate.supplierRole = baselineChain.supplierRole;
+          profileUpdate.brands = baselineChain.brands;
+          profileUpdate.companyInfoEntries = baselineChain.companyInfoEntries;
+        } else if (!hasRole) {
+          profileUpdate.chainProfileDraft = null;
+          profileUpdate.chainProfileDraftUpdatedAt = null;
           try {
             await clearPendingChainRequest(req.userId);
           } catch (e) {
@@ -253,6 +269,8 @@ export function registerProfileUpdateRoutes(router) {
           profileUpdate.brands = incomingChain.brands;
           profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
         } else {
+          profileUpdate.chainProfileDraft = null;
+          profileUpdate.chainProfileDraftUpdatedAt = null;
           const brandFailures = await runGlobalBrandGate(incomingChain);
           if (brandFailures) {
             return res.status(403).json({
@@ -540,11 +558,16 @@ export function registerProfileUpdateRoutes(router) {
         status: 'success',
         message: chainApprovalPending
           ? 'Your supply-chain role and brand assignment was submitted for admin approval. Until it is approved, your previous approved assignment stays active.'
-          : 'Profile updated successfully',
+          : chainDraftSaved
+            ? 'Draft saved. You can return later to complete remaining fields and submit.'
+            : 'Profile updated successfully',
         profile
       };
       if (chainApprovalPending) {
         payload.chainApprovalPending = true;
+      }
+      if (chainDraftSaved) {
+        payload.chainDraftSaved = true;
       }
       return res.json(payload);
     } catch (error) {

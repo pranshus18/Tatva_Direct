@@ -496,13 +496,24 @@ export async function createProfileResponse(user) {
     const latestReq = await fetchLatestChainRequest(user.id);
 
     const approvedChain = baselineChainFromProfile(base);
+    const draftChain = {
+      supplierRole: String(base?.chainProfileDraft?.supplierRole || '').trim(),
+      brands: typeof base?.chainProfileDraft?.brands === 'string' ? base.chainProfileDraft.brands : '',
+      companyInfoEntries: normalizeCompanyInfoEntries(base?.chainProfileDraft?.companyInfoEntries || [])
+    };
+    const draftHasValues =
+      !!draftChain.supplierRole ||
+      !!String(draftChain.brands || '').trim() ||
+      draftChain.companyInfoEntries.length > 0;
     const displayChain = pending?.payload
       ? {
           supplierRole: String(pending.payload.supplierRole || '').trim(),
           brands: typeof pending.payload.brands === 'string' ? pending.payload.brands : '',
           companyInfoEntries: normalizeCompanyInfoEntries(pending.payload.companyInfoEntries || [])
         }
-      : approvedChain;
+      : draftHasValues
+        ? draftChain
+        : approvedChain;
 
     const entries = displayChain.companyInfoEntries || [];
     const firstEntry = entries[0];
@@ -555,9 +566,10 @@ export async function createProfileResponse(user) {
       brands: displayChain.brands || (firstEntry?.brands || ''),
       authorizationCertificateUrl: base.authorizationCertificateUrl || '',
       companyInfoEntries: entries,
-      chainProfileApprovalStatus: pending ? 'pending' : 'approved',
+      chainProfileApprovalStatus: pending ? 'pending' : draftHasValues ? 'draft' : 'approved',
       chainProfilePendingSubmittedAt: pending?.created_at || null,
       chainProfilePendingId: pending?.id || null,
+      chainProfileDraftSavedAt: base.chainProfileDraftUpdatedAt || null,
       totalOrdersPlaced: purchaseSummary.totalOrdersPlaced,
       totalAmountPlaced: purchaseSummary.totalAmountPlaced,
       totalAmountPaid: purchaseSummary.totalAmountPaid,
