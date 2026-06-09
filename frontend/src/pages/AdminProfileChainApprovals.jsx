@@ -13,21 +13,23 @@ const ROLE_LABELS = {
   retailer: 'Retailer'
 };
 
-function summarizePayload(payload) {
-  if (!payload || typeof payload !== 'object') return '—';
+function assignmentEntriesFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return [];
   const entries = Array.isArray(payload.companyInfoEntries) ? payload.companyInfoEntries : [];
   if (entries.length > 0) {
-    return entries
-      .map((e) => {
-        const r = ROLE_LABELS[e.role] || e.role || '—';
-        const b = String(e.brands || '').trim() || '—';
-        return `${r}: ${b.slice(0, 120)}${b.length > 120 ? '…' : ''}`;
-      })
-      .join(' • ');
+    return entries.map((entry, idx) => {
+      const role = ROLE_LABELS[entry.role] || entry.role || '—';
+      const brands = String(entry.brands || '').trim();
+      return { id: `${entry.role || 'role'}-${idx}`, role, brands };
+    });
   }
-  const r = ROLE_LABELS[payload.supplierRole] || payload.supplierRole || '—';
-  const b = String(payload.brands || '').trim() || '—';
-  return `${r} — brands: ${b.slice(0, 160)}${b.length > 160 ? '…' : ''}`;
+  return [
+    {
+      id: 'legacy-entry',
+      role: ROLE_LABELS[payload.supplierRole] || payload.supplierRole || '—',
+      brands: String(payload.brands || '').trim()
+    }
+  ];
 }
 
 /** Certificates uploaded with the pending supply-chain request (per entry + legacy). */
@@ -94,6 +96,25 @@ function RequestDocumentsCell({ payload }) {
             <span className="admin-chain-doc-link-label">{doc.fileName || 'Document'}</span>
             <ExternalLink size={12} aria-hidden className="admin-chain-doc-external" />
           </a>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function RequestAssignmentCell({ payload }) {
+  const entries = assignmentEntriesFromPayload(payload);
+  if (!entries.length) {
+    return <span className="admin-chain-assignment-empty">—</span>;
+  }
+  return (
+    <ul className="admin-chain-assignment-list">
+      {entries.map((entry) => (
+        <li key={entry.id} className="admin-chain-assignment-item">
+          <span className="admin-chain-assignment-role">{entry.role}</span>
+          <span className="admin-chain-assignment-brand">
+            {entry.brands ? `Brands: ${entry.brands}` : 'Brands not provided'}
+          </span>
         </li>
       ))}
     </ul>
@@ -237,6 +258,14 @@ const AdminProfileChainApprovals = () => {
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table className="admin-table admin-chain-approvals-table">
+              <colgroup>
+                <col className="admin-chain-col-supplier" />
+                <col className="admin-chain-col-assignment" />
+                <col className="admin-chain-col-document" />
+                <col className="admin-chain-col-status" />
+                <col className="admin-chain-col-submitted" />
+                <col className="admin-chain-col-actions" />
+              </colgroup>
               <thead>
                 <tr>
                   <th>Supplier</th>
@@ -253,20 +282,20 @@ const AdminProfileChainApprovals = () => {
                   const u = row.user;
                   return (
                     <tr key={row.id}>
-                      <td>
-                        <div style={{ fontWeight: 700, color: '#1e293b' }}>{u?.name || '—'}</div>
-                        <div style={{ fontSize: '0.85rem', color: '#64748b' }}>{u?.email || '—'}</div>
+                      <td className="admin-chain-supplier-cell" data-label="Supplier">
+                        <div className="admin-chain-supplier-name">{u?.name || '—'}</div>
+                        <div className="admin-chain-supplier-email">{u?.email || '—'}</div>
                         {u?.company ? (
-                          <div style={{ fontSize: '0.85rem', color: '#64748b' }}>{u.company}</div>
+                          <div className="admin-chain-supplier-company">{u.company}</div>
                         ) : null}
                       </td>
-                      <td style={{ maxWidth: 420, fontSize: '0.9rem', color: '#334155', lineHeight: 1.4 }}>
-                        {summarizePayload(row.payload)}
+                      <td className="admin-chain-assignment-cell" data-label="Requested assignment">
+                        <RequestAssignmentCell payload={row.payload} />
                       </td>
-                      <td className="admin-chain-docs-cell">
+                      <td className="admin-chain-docs-cell" data-label="Document">
                         <RequestDocumentsCell payload={row.payload} />
                       </td>
-                      <td>
+                      <td className="admin-chain-status-cell" data-label="Status">
                         <span className={`status-badge ${st}`}>
                           {st === 'approved' ? <CheckCircle size={14} /> : null}
                           {st === 'rejected' ? <XCircle size={14} /> : null}
@@ -274,15 +303,15 @@ const AdminProfileChainApprovals = () => {
                           {st}
                         </span>
                         {st === 'rejected' && row.rejection_reason ? (
-                          <div style={{ fontSize: '0.8rem', color: '#b91c1c', marginTop: 6 }}>{row.rejection_reason}</div>
+                          <div className="admin-chain-rejection-reason">{row.rejection_reason}</div>
                         ) : null}
                       </td>
-                      <td style={{ fontSize: '0.85rem', color: '#64748b', whiteSpace: 'nowrap' }}>
+                      <td className="admin-chain-submitted-cell" data-label="Submitted">
                         {row.created_at ? new Date(row.created_at).toLocaleString() : '—'}
                       </td>
-                      <td>
+                      <td className="admin-chain-actions-cell" data-label="Actions">
                         {st === 'pending' ? (
-                          <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <div className="admin-chain-actions-wrap">
                             <button
                               type="button"
                               className="btn-primary"
@@ -301,7 +330,7 @@ const AdminProfileChainApprovals = () => {
                             </button>
                           </div>
                         ) : (
-                          <span style={{ color: '#94a3b8', fontSize: '0.85rem' }}>—</span>
+                          <span className="admin-chain-actions-empty">—</span>
                         )}
                       </td>
                     </tr>
