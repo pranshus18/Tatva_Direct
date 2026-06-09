@@ -11,8 +11,6 @@ import {
   supplierUnitCreateSchema
 } from './supplierImports.js';
 import { listSupplierSelectableBrands } from '../../services/supplierBrandCatalogService.js';
-import { pickLockedProductPriceFromOffers } from '../../services/supplierProductWriteService.js';
-
 export function registerSupplierCatalogRoutes(ctx) {
   const {
     router,
@@ -280,9 +278,6 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     let supplierCountOthers = 0;
     let minPrice = null;
     let maxPrice = null;
-    let lockedPrice = null;
-    let priceLocked = false;
-
     if (product?.id) {
       const { data: supplierOffers, error: offersError } = await supabase
         .from('supplier_products')
@@ -317,12 +312,6 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
 
           recommendedPrice = supplierCountOthers > 0 ? avgPriceOthers : avgPriceAll;
         }
-
-        const lockCandidate = pickLockedProductPriceFromOffers(supplierOffers || []);
-        if (lockCandidate !== null) {
-          lockedPrice = lockCandidate;
-          priceLocked = true;
-        }
       }
     }
 
@@ -337,8 +326,6 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       ,
       // Price recommendation (average across suppliers for this product)
       recommendedPrice: recommendedPrice,
-      lockedPrice,
-      priceLocked,
       priceStats: {
         avgPriceAll,
         avgPriceOthers,

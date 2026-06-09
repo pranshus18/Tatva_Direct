@@ -21,8 +21,7 @@ import {
 import {
   buildSupplierProductUpdatePayload,
   checkDuplicateSupplierVariant,
-  fetchAndValidateSupplierProductForUpdate,
-  resolveLockedVariantPrice
+  fetchAndValidateSupplierProductForUpdate
 } from '../../../services/supplierProductWriteService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 
@@ -153,27 +152,6 @@ export function registerSupplierProductUpdateRoute(ctx) {
             message: 'No changes detected',
             product: supplierProduct
           });
-        }
-
-        if (req.body.price !== undefined) {
-          const requestedPrice = Number(updateSupplierProductData.price);
-          const normalizedRequestedPrice = Number.isFinite(requestedPrice)
-            ? Number(requestedPrice.toFixed(2))
-            : null;
-          const lockedVariantPrice = await resolveLockedVariantPrice(supabase, {
-            productId: supplierProduct.product_id,
-            excludeSupplierProductId: id
-          });
-          if (
-            lockedVariantPrice !== null &&
-            (normalizedRequestedPrice === null || normalizedRequestedPrice !== lockedVariantPrice)
-          ) {
-            return res.status(400).json({
-              status: 'error',
-              code: 'variant_price_locked',
-              message: `MRP is locked for this product. Use ₹${lockedVariantPrice.toFixed(2)} for all suppliers and variants.`
-            });
-          }
         }
 
         const { data: updatedSupplierProduct, error: spUpdateError } = await supabase

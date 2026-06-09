@@ -25,8 +25,7 @@ import {
   createBaseProductIfNeeded,
   ensureCategoryAndUnit,
   findCanonicalProductFromIdentifiers,
-  findExistingProductCandidate,
-  resolveLockedVariantPrice
+  findExistingProductCandidate
 } from '../../../services/supplierProductWriteService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 
@@ -246,18 +245,6 @@ export function buildSupplierProductCreateHandler(ctx) {
       const parsedPrice = parseFloat(otherData.price);
       const parsedStock = parseSupplierStockQuantity(otherData.stock);
       const parsedMinOrderQty = parseInt(otherData.min_order_quantity);
-      const normalizedRequestedPrice = Number.isFinite(parsedPrice) ? Number(parsedPrice.toFixed(2)) : null;
-      const lockedVariantPrice = await resolveLockedVariantPrice(supabase, { productId });
-      if (
-        lockedVariantPrice !== null &&
-        (normalizedRequestedPrice === null || normalizedRequestedPrice !== lockedVariantPrice)
-      ) {
-        return res.status(400).json({
-          status: 'error',
-          code: 'variant_price_locked',
-          message: `MRP is locked for this product. Use ₹${lockedVariantPrice.toFixed(2)} for all suppliers and variants.`
-        });
-      }
       const { data: approvedVariantOffer } = await supabase
         .from('supplier_products')
         .select('id')

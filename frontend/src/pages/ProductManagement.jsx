@@ -1536,8 +1536,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [recommendedPrice, setRecommendedPrice] = useState(null);
   const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
   const [priceTouched, setPriceTouched] = useState(false);
-  const [lockedPrice, setLockedPrice] = useState(null);
-  const [priceLocked, setPriceLocked] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchTimeout, setSearchTimeout] = useState(null);
@@ -1800,27 +1798,17 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           setSpecifications(data.specifications);
         }
         if (data.status === 'success' && data.found) {
-          const hasLockedPrice =
-            data.priceLocked === true &&
-            typeof data.lockedPrice === 'number' &&
-            Number.isFinite(data.lockedPrice);
-          setPriceLocked(hasLockedPrice);
-          setLockedPrice(hasLockedPrice ? data.lockedPrice : null);
           setRecommendedPrice(
             typeof data.recommendedPrice === 'number' ? data.recommendedPrice : null
           );
           setRecommendedPriceStats(data.priceStats || null);
-          if (hasLockedPrice) {
-            setFormData(prev => ({ ...prev, price: String(Number(data.lockedPrice).toFixed(2)) }));
-          } else if (!product && !priceTouched && (formData.price === '' || formData.price === null || formData.price === undefined)) {
+          if (!product && !priceTouched && (formData.price === '' || formData.price === null || formData.price === undefined)) {
             // Prefill price only when ADDING a product and supplier hasn't typed a price yet
             if (typeof data.recommendedPrice === 'number' && Number.isFinite(data.recommendedPrice)) {
               setFormData(prev => ({ ...prev, price: String(Number(data.recommendedPrice).toFixed(2)) }));
             }
           }
         } else {
-          setPriceLocked(false);
-          setLockedPrice(null);
           setRecommendedPrice(null);
           setRecommendedPriceStats(null);
         }
@@ -3488,13 +3476,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       setFormData({...formData, price: e.target.value});
                     }}
                     required
-                    readOnly={priceLocked}
                   />
-                  {priceLocked && typeof lockedPrice === 'number' && Number.isFinite(lockedPrice) && (
-                    <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#16a34a' }}>
-                      Product MRP is locked for all suppliers and variants: <strong>{formatRupee(lockedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-                    </div>
-                  )}
                   {typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
                     <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#0369a1' }}>
                       Recommended avg {SUPPLIER_MRP_LABEL}: <strong>{formatRupee(recommendedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
