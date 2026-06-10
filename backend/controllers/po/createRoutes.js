@@ -162,6 +162,30 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
     const createdOrders = [];
     const resolveBcov = buildBcovResolver(supabase);
+    const GROUP_CREATE_CONCURRENCY = 3;
+    const createHttpError = (statusCode, message) => {
+      const err = new Error(message);
+      err.statusCode = statusCode;
+      return err;
+    };
+    const runWithConcurrency = async (items, limit, worker) => {
+      const values = Array.isArray(items) ? items : [];
+      const safeLimit = Math.max(1, Number(limit) || 1);
+      const out = new Array(values.length);
+      let cursor = 0;
+
+      const lane = async () => {
+        while (cursor < values.length) {
+          const i = cursor;
+          cursor += 1;
+          out[i] = await worker(values[i], i);
+        }
+      };
+
+      const active = Array.from({ length: Math.min(safeLimit, values.length) }, () => lane());
+      await Promise.all(active);
+      return out;
+    };
 
     // Parse required date (if provided) into ISO string for expected_delivery_date
     let expectedDeliveryDate = null;
@@ -174,15 +198,14 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       }
     }
 
-    // Create an Order document for each PO group
-    for (const group of poGroups) {
+    const processPoGroup = async (group) => {
       // Find supplier by vendorId
       if (!group.vendorId) {
         logger.warn('Missing vendorId in PO group:', group);
-        return res.status(400).json({
-          status: 'error',
-          message: `Missing supplier ID for vendor "${group.vendorName}". Cannot create order.`
-        });
+        throw createHttpError(
+          400,
+          `Missing supplier ID for vendor "${group.vendorName}". Cannot create order.`
+        );
       }
 
       // Validate and find supplier by ID
@@ -195,10 +218,10 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
       if (supplierError || !supplier) {
         logger.warn(`Supplier not found with ID: ${group.vendorId}`);
-        return res.status(404).json({
-          status: 'error',
-          message: `Supplier not found for vendor "${group.vendorName}". Please ensure the supplier exists in the system.`
-        });
+        throw createHttpError(
+          404,
+          `Supplier not found for vendor "${group.vendorName}". Please ensure the supplier exists in the system.`
+        );
       }
 
       const firstGroupItem = Array.isArray(group.items) ? group.items[0] : null;
@@ -213,10 +236,10 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       if (requiredRoleForGroup && !supplierMatchesBrandTerminalRole(supplier.profile, groupBrandName, terminalRoleByBrandMap)) {
         const requiredRole = requiredRoleForGroup;
         const requiredRoleText = requiredRole || 'not configured (admin must define brand chain)';
-        return res.status(403).json({
-          status: 'error',
-          message: `Vendor "${group.vendorName}" does not match the terminal role for this brand. Required seller role: ${requiredRoleText}.`
-        });
+        throw createHttpError(
+          403,
+          `Vendor "${group.vendorName}" does not match the terminal role for this brand. Required seller role: ${requiredRoleText}.`
+        );
       }
 
       // Map items to order items format — line work runs in parallel per item for faster PO create.
@@ -361,11 +384,10 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           orderAmount: totalAmount
         });
         if (!creditCheck.payLaterOffered || !creditCheck.allowed) {
-          return res.status(400).json({
-            status: 'error',
-            message: `Pay later not available for "${group.vendorName}": ${creditCheck.message} Use online, COD, bank transfer, or card to place this order.`,
-            credit: creditCheck
-          });
+          throw createHttpError(
+            400,
+            `Pay later not available for "${group.vendorName}": ${creditCheck.message} Use online, COD, bank transfer, or card to place this order.`
+          );
         }
       }
 
@@ -409,7 +431,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       if (recentDuplicate) {
         const existingAmount = parseFloat(recentDuplicate.total_amount || 0);
         if (Math.abs(existingAmount - totalAmount) < 0.01) {
-          createdOrders.push({
+          return {
             id: recentDuplicate.id,
             orderNumber: recentDuplicate.order_number,
             supplierId: supplier.id,
@@ -424,8 +446,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             gstin: hasGstin ? profileGstin : null,
             items: groupItemDetails,
             deduplicated: true
-          });
-          continue;
+          };
         }
       }
 
@@ -624,7 +645,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         // Don't fail the order creation if notification creation fails
       }
 
-      createdOrders.push({
+      const createdOrder = {
         id: order.id,
         orderNumber: order.order_number,
         supplierId: supplier.id,
@@ -638,7 +659,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         billingAddress: mapToDeliveryAddress(billingAddress),
         gstin: hasGstin ? profileGstin : null,
         items: groupItemDetails
-      });
+      };
 
       if (poPaymentMethod === 'credit') {
         try {
@@ -654,7 +675,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           logger.error('[PO] credit limit notification error (non-fatal):', creditNotifyErr);
         }
       }
-    }
+      return createdOrder;
+    };
+
+    const groupOrders = await runWithConcurrency(poGroups, GROUP_CREATE_CONCURRENCY, processPoGroup);
+    createdOrders.push(...groupOrders.filter(Boolean));
 
     // Update BOQ status if it exists
     if (boq) {
