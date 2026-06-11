@@ -1225,10 +1225,23 @@ const ProductDetailsModal = ({
             ) : null}
           </div>
 
-          {product.description ? (
+          {(product.description || product.supplierDescription) ? (
             <div className="pm-details-section">
-              <h4>Description</h4>
-              <p style={{ margin: 0, color: '#475569', lineHeight: 1.55 }}>{product.description}</p>
+              <h4>Your submitted description</h4>
+              <p style={{ margin: 0, color: '#475569', lineHeight: 1.55 }}>
+                {product.supplierDescription || product.description}
+              </p>
+              {product.publishedDescription &&
+              String(product.publishedDescription).trim() &&
+              product.publishedDescription !== (product.supplierDescription || product.description) ? (
+                <p className="pm-description-hint" style={{ marginTop: '0.5rem' }}>
+                  Published for buyers: {product.publishedDescription}
+                </p>
+              ) : product.status === 'approved' && !product.publishedDescription ? (
+                <p className="pm-description-hint" style={{ marginTop: '0.5rem' }}>
+                  A polished buyer-facing description will appear here after admin review.
+                </p>
+              ) : null}
             </div>
           ) : null}
 
@@ -3750,8 +3763,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     value={formData.description}
                     onChange={(e) => setFormData({...formData, description: e.target.value})}
                     rows="3"
-                    placeholder="Enter product description. If you write specifications in the description (e.g., 'Grade: OPC 53, Compressive Strength: 53 MPa'), click 'Extract Specifications' below to automatically fill the specification fields."
+                    placeholder="Describe the product in your own words (grammar does not need to be perfect). An admin will review and publish a polished version for buyers. You can include specs inline, e.g. Grade: OPC 53, Compressive Strength: 53 MPa."
                   />
+                  <p className="pm-description-hint">
+                    Your description is sent to admin for review. Buyers see the admin-published version after approval.
+                  </p>
                   {/* Extract Specifications Button */}
                   {formData.description && formData.description.trim() && (
                     <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem' }}>

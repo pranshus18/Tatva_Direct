@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Menu, User, LogOut, Expand, Shrink } from 'lucide-react';
+import { Menu, User, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -22,7 +22,7 @@ import {
 import UserAvatar from '@/components/UserAvatar';
 import { getSupplierBreadcrumb } from '@/utils/supplierNavConfig';
 
-export default function SupplierTopBar({ user, pathname, onMenuClick, onLogout, densityMode, onToggleDensity }) {
+export default function SupplierTopBar({ user, pathname, onMenuClick, onLogout }) {
   const crumbs = getSupplierBreadcrumb(pathname);
   return (
     <header className="supplier-topbar sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
@@ -51,17 +51,6 @@ export default function SupplierTopBar({ user, pathname, onMenuClick, onLogout, 
         </Breadcrumb>
 
         <div className="ml-auto flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="hidden gap-1.5 text-xs lg:inline-flex"
-            onClick={onToggleDensity}
-            title={`Switch to ${densityMode === 'compact' ? 'comfortable' : 'compact'} density`}
-          >
-            {densityMode === 'compact' ? <Expand className="h-3.5 w-3.5" /> : <Shrink className="h-3.5 w-3.5" />}
-            {densityMode === 'compact' ? 'Compact' : 'Comfortable'}
-          </Button>
-
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="gap-2 px-2">

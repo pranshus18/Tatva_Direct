@@ -291,7 +291,8 @@ export function buildSupplierProductCreateHandler(ctx) {
         variant_key: variantIdentityBundle.variantKey,
         variant_asin: variantAsin,
         attributes: {
-          description: otherData.description || '',
+          supplierDescription: String(otherData.description || '').trim(),
+          description: String(otherData.description || '').trim(),
           specifications: otherData.specifications || normalizedSpecs,
           name: otherData.name,
           category: category,
@@ -334,8 +335,12 @@ export function buildSupplierProductCreateHandler(ctx) {
         .single();
 
       const createdOffer = newSupplierProduct;
+      const supplierSubmittedDescription = String(otherData.description || '').trim();
       const responseProduct = {
         ...(baseProduct || {}),
+        supplierDescription: supplierSubmittedDescription,
+        publishedDescription: baseProduct?.description || '',
+        description: supplierSubmittedDescription,
         price: createdOffer?.price,
         stock: createdOffer?.stock,
         location: createdOffer?.location,

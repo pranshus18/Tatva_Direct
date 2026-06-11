@@ -44,12 +44,6 @@ export default function SupplierAppShell({ user, onLogout, children }) {
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [themePrefs, setThemePrefs] = useState(() => getSupplierPortalThemePrefs());
-  const [densityMode, setDensityMode] = useState(() => {
-    if (typeof window === 'undefined') return 'compact';
-    const saved = localStorage.getItem('supplier-density-mode');
-    return saved === 'comfortable' ? 'comfortable' : 'compact';
-  });
-
   useEffect(() => {
     setThemePrefs(getSupplierPortalThemePrefs());
     let cancelled = false;
@@ -85,15 +79,6 @@ export default function SupplierAppShell({ user, onLogout, children }) {
     return () => document.body.classList.remove('supplier-portal-active');
   }, []);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    localStorage.setItem('supplier-density-mode', densityMode);
-  }, [densityMode]);
-
-  const handleToggleDensity = () => {
-    setDensityMode((prev) => (prev === 'compact' ? 'comfortable' : 'compact'));
-  };
-
   const isCustomWallpaper =
     themePrefs.themeId === 'custom' && Boolean(themePrefs.customImageDataUrl);
   const shellBackgroundStyle =
@@ -113,8 +98,7 @@ export default function SupplierAppShell({ user, onLogout, children }) {
   return (
     <div
       className={cn(
-        'supplier-portal flex min-h-screen bg-background',
-        `supplier-density-${densityMode}`,
+        'supplier-portal supplier-density-compact flex min-h-screen bg-background',
         themePrefs.themeId !== 'default' && 'supplier-portal--themed'
       )}
       style={shellBackgroundStyle}
@@ -135,8 +119,6 @@ export default function SupplierAppShell({ user, onLogout, children }) {
           pathname={location.pathname}
           onMenuClick={() => setMobileNavOpen(true)}
           onLogout={onLogout}
-          densityMode={densityMode}
-          onToggleDensity={handleToggleDensity}
         />
         <main className="sp-content-panel flex-1 overflow-auto">{children || <Outlet />}</main>
       </div>

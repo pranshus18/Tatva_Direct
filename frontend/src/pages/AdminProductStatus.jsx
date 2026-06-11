@@ -22,6 +22,7 @@ import {
   Trash2
 } from 'lucide-react';
 import './AdminProductStatus.css';
+import { polishSupplierListingWithAi } from '../utils/adminPolishListingApi';
 
 const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
 const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
@@ -55,6 +56,16 @@ const getDisplayDescription = (product) => {
   const desc = product?.description;
   if (!desc || !String(desc).trim() || looksLikeAiInstructions(desc)) return '';
   return String(desc).trim();
+};
+
+const getSupplierSubmittedDescription = (product) => {
+  const fromField = product?.supplierDescription;
+  if (fromField && String(fromField).trim()) return String(fromField).trim();
+  const legacy = product?.description;
+  if (legacy && String(legacy).trim() && !looksLikeAiInstructions(legacy)) {
+    return String(legacy).trim();
+  }
+  return '';
 };
 
 const AdminProductStatus = ({ user }) => {
@@ -713,6 +724,8 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
   const [aiEnhancePrompt, setAiEnhancePrompt] = useState('');
   const [gstAiPrompt, setGstAiPrompt] = useState('');
   const [gstSuggestion, setGstSuggestion] = useState(null);
+  const [polishing, setPolishing] = useState(false);
+  const [polishNotes, setPolishNotes] = useState('');
   
   // Update editedProduct when product changes
   useEffect(() => {
@@ -1039,10 +1052,15 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
           }
         }
         
+        const polishedDescription = String(
+          data.enhancedDescription || data.description || ''
+        ).trim();
+
         // REPLACE specifications completely (don't merge with existing)
         // This ensures we get exactly the count requested by the user
-        setEditedProduct(prev => ({
+        setEditedProduct((prev) => ({
           ...prev,
+          ...(polishedDescription ? { description: polishedDescription } : {}),
           specifications: newSpecs
         }));
         setAiEnhancePrompt('');
@@ -1073,6 +1091,66 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     const productToUse = isEditing ? editedProduct : product;
     await performAIFetch(productToUse);
   };
+
+  const performPolishListing = async () => {
+    const productToUse = isEditing ? editedProduct : product;
+    const supplierText = getSupplierSubmittedDescription(productToUse);
+    if (!productToUse?.name) {
+      alert('Product name is required.');
+      return;
+    }
+    if (!supplierText) {
+      alert('No supplier-submitted description found for this product.');
+      return;
+    }
+
+    setPolishing(true);
+    try {
+      const { response, data } = await polishSupplierListingWithAi({
+        productName: productToUse.name,
+        category: productToUse.category || '',
+        supplierDescription: supplierText,
+        existingSpecifications: productToUse.specifications || {},
+        provider: aiProvider,
+        adminNotes: polishNotes || ''
+      });
+
+      if (!response.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to polish listing');
+      }
+
+      if (!isEditing) {
+        setIsEditing(true);
+      }
+
+      setEditedProduct((prev) => ({
+        ...prev,
+        description: data.description || prev.description || '',
+        specifications: data.specifications || prev.specifications || {}
+      }));
+
+      const providerName =
+        data.provider === 'openai'
+          ? 'ChatGPT'
+          : data.provider === 'gemini'
+            ? 'Gemini'
+            : data.provider === 'claude'
+              ? 'Claude'
+              : 'AI';
+      alert(
+        `Listing polished with ${providerName}. Review the customer-facing description and specifications, then Save.`
+      );
+    } catch (error) {
+      console.error('Polish listing error:', error);
+      alert(`Failed to polish listing: ${error.message}`);
+    } finally {
+      setPolishing(false);
+    }
+  };
+
+  const supplierSubmittedDescription = getSupplierSubmittedDescription(
+    isEditing ? editedProduct : product
+  );
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -1380,22 +1458,82 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               )}
             </div>
 
-          {(getDisplayDescription(product) || isEditing) && (
-            <div className="description-section">
-              <h3 style={{ marginBottom: '0.75rem' }}>Product description</h3>
-              {isEditing ? (
+          {supplierSubmittedDescription ? (
+            <div className="description-section" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '0.75rem' }}>
+              <h3 style={{ marginBottom: '0.5rem' }}>Supplier submitted description</h3>
+              <p style={{ margin: 0, color: '#334155', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                {supplierSubmittedDescription}
+              </p>
+              <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+                Raw text from the supplier. Use Polish with AI below to create customer-facing copy.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="description-section">
+            <h3
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: '0.5rem',
+                marginBottom: '0.75rem'
+              }}
+            >
+              <span>Customer-facing description</span>
+              <button
+                type="button"
+                onClick={performPolishListing}
+                disabled={polishing || !supplierSubmittedDescription}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.5rem 0.875rem',
+                  background: polishing ? '#9ca3af' : '#0f766e',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '6px',
+                  fontSize: '0.875rem',
+                  fontWeight: '600',
+                  cursor: polishing || !supplierSubmittedDescription ? 'not-allowed' : 'pointer',
+                  opacity: polishing || !supplierSubmittedDescription ? 0.6 : 1
+                }}
+                title="Rewrite supplier text into professional buyer-facing description and specifications"
+              >
+                <Sparkles size={16} />
+                <span>{polishing ? 'Polishing…' : 'Polish with AI'}</span>
+              </button>
+            </h3>
+            {isEditing ? (
+              <>
+                <textarea
+                  value={polishNotes}
+                  onChange={(e) => setPolishNotes(e.target.value)}
+                  rows="2"
+                  placeholder="Optional notes for AI (tone, missing details to emphasize, etc.)"
+                  style={{
+                    padding: '0.5rem',
+                    border: '1px solid #e5e7eb',
+                    borderRadius: '6px',
+                    width: '100%',
+                    fontFamily: 'inherit',
+                    marginBottom: '0.5rem'
+                  }}
+                />
                 <textarea
                   value={editedProduct.description}
                   onChange={(e) => setEditedProduct({ ...editedProduct, description: e.target.value })}
                   rows="4"
-                  placeholder="Optional customer-facing description for suppliers and buyers."
+                  placeholder="Professional description shown to buyers after you save and approve."
                   style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%', fontFamily: 'inherit' }}
                 />
-              ) : (
-                <p>{getDisplayDescription(product) || 'No description'}</p>
-              )}
-            </div>
-          )}
+              </>
+            ) : (
+              <p>{getDisplayDescription(product) || 'Not published yet — polish supplier text or write a description in Edit mode.'}</p>
+            )}
+          </div>
 
           {isEditing && (
             <div className="description-section" style={{ marginTop: '0.5rem' }}>

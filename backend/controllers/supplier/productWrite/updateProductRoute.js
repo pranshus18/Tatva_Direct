@@ -217,7 +217,9 @@ export function registerSupplierProductUpdateRoute(ctx) {
         const responseProduct = {
           ...(baseProduct || {}),
           name: (ra.listingName != null && String(ra.listingName).trim() !== '') ? String(ra.listingName).trim() : baseProduct?.name,
-          description: ra.description !== undefined && ra.description !== null && String(ra.description) !== '' ? ra.description : baseProduct?.description ?? '',
+          supplierDescription: ra.supplierDescription || ra.description || '',
+          publishedDescription: baseProduct?.description || '',
+          description: ra.supplierDescription || ra.description || '',
           brand: ra.brand || baseProduct?.brand,
           gtin: ra.gtin || baseProduct?.gtin,
           mpn: ra.mpn || baseProduct?.mpn,

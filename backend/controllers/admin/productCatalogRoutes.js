@@ -139,7 +139,11 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
               cgst_rate: best.cgst_rate ?? best?.attributes?.cgstRate ?? p.cgst_rate ?? null,
               sgst_rate: best.sgst_rate ?? best?.attributes?.sgstRate ?? p.sgst_rate ?? null,
               hsnCode: best?.attributes?.hsnCode ?? p.hsnCode ?? p.hsn_code ?? null,
-              brandModel: best?.attributes?.brandModel ?? p.brandModel ?? null
+              brandModel: best?.attributes?.brandModel ?? p.brandModel ?? null,
+              supplierDescription:
+                best?.attributes?.supplierDescription ||
+                best?.attributes?.description ||
+                ''
             };
           });
         } else {
@@ -363,6 +367,10 @@ router.get('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
         product.sgst_rate = bestRowByScore.sgst_rate ?? bestRowByScore?.attributes?.sgstRate ?? product.sgst_rate ?? null;
         product.hsnCode = bestRowByScore?.attributes?.hsnCode ?? product.hsnCode ?? product.hsn_code ?? null;
         product.brandModel = bestRowByScore?.attributes?.brandModel ?? product.brandModel ?? null;
+        product.supplierDescription =
+          bestRowByScore?.attributes?.supplierDescription ||
+          bestRowByScore?.attributes?.description ||
+          '';
       }
     }
 

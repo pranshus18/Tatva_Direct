@@ -210,7 +210,8 @@ export async function createBaseProductIfNeeded(
   const baseLocation = (otherData.location || '').trim() || 'Not specified';
   const productData = {
     name: otherData.name,
-    description: otherData.description || '',
+    // Customer-facing description is curated by admin after supplier submission.
+    description: '',
     category: categoryName,
     unit: unitName,
     images: normalizedImageUrls,
@@ -301,7 +302,11 @@ export function buildSupplierProductUpdatePayload({
 
   const existingAttributes = supplierProduct.attributes || {};
   const updatedAttributes = { ...existingAttributes };
-  if (reqBody.description !== undefined) updatedAttributes.description = reqBody.description;
+  if (reqBody.description !== undefined) {
+    const supplierText = String(reqBody.description || '').trim();
+    updatedAttributes.supplierDescription = supplierText;
+    updatedAttributes.description = supplierText;
+  }
   if (reqBody.name !== undefined) updatedAttributes.listingName = (reqBody.name || '').toString().trim();
   if (reqBody.brand !== undefined) updatedAttributes.brand = (reqBody.brand || '').toString().trim();
   if (reqBody.gtin !== undefined) {

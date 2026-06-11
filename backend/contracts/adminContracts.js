@@ -79,6 +79,15 @@ export const adminAiGstSchema = z.object({
   provider: z.string().optional()
 });
 
+export const adminAiPolishListingSchema = z.object({
+  productName: z.string().min(1),
+  category: z.string().optional(),
+  supplierDescription: z.string().min(1),
+  existingSpecifications: z.record(z.string(), z.any()).optional(),
+  provider: z.string().optional(),
+  adminNotes: z.string().optional()
+});
+
 export const adminProductApproveSchema = z.object({});
 export const adminProductDeleteSchema = z.object({});
 export const adminBrandApproveSchema = z.object({});

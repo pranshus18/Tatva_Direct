@@ -96,10 +96,16 @@ router.get('/products', authenticateToken, async (req, res) => {
           ...sp.product,
           // Per-variant display: offer overrides shared catalog (same merge as PUT response)
           name: listingName,
+          supplierDescription:
+            sp.attributes?.supplierDescription ||
+            sp.attributes?.description ||
+            '',
+          publishedDescription: sp.product?.description || '',
           description:
-            sp.attributes && Object.prototype.hasOwnProperty.call(sp.attributes, 'description')
-              ? sp.attributes.description
-              : (sp.product.description ?? ''),
+            sp.attributes?.supplierDescription ||
+            sp.attributes?.description ||
+            sp.product?.description ||
+            '',
           brand: displayBrand || sp.product.brand,
           gtin: sp.attributes?.gtin || sp.product.gtin,
           mpn: sp.attributes?.mpn || sp.product.mpn,

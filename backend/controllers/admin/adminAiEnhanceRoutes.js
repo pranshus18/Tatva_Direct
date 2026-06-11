@@ -1,5 +1,10 @@
-import { adminAiEnhanceSchema, adminAiGstSchema } from '../../contracts/adminContracts.js';
+import {
+  adminAiEnhanceSchema,
+  adminAiGstSchema,
+  adminAiPolishListingSchema
+} from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
+import { polishSupplierListingWithAi } from '../../services/adminProductListingPolishService.js';
 
 export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmin }) {
   // AI Fetch endpoint - Fetch product description and attributes from AI platforms (ChatGPT, Gemini, Claude)
@@ -995,6 +1000,31 @@ ${aiResponse}`;
       res.status(500).json({
         status: 'error',
         message: error.message || 'Failed to fetch GST rates from AI service.'
+      });
+    }
+  });
+
+  // Polish supplier-submitted description into customer-facing copy + cleaned specs.
+  router.post('/products/ai-polish-listing', authenticateToken, isAdmin, async (req, res) => {
+    try {
+      const payload = parseWithSchema(adminAiPolishListingSchema, req.body || {});
+      const result = await polishSupplierListingWithAi({
+        productName: payload.productName,
+        category: payload.category || '',
+        supplierDescription: payload.supplierDescription,
+        existingSpecifications: payload.existingSpecifications || {},
+        provider: payload.provider || 'auto',
+        adminNotes: payload.adminNotes || ''
+      });
+      return res.status(result.status === 'error' ? 400 : 200).json(result);
+    } catch (error) {
+      if (String(error?.name || '') === 'ZodError') {
+        return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+      }
+      console.error('AI polish listing error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: error.message || 'Failed to polish listing with AI.'
       });
     }
   });
