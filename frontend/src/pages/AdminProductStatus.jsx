@@ -58,13 +58,10 @@ const getDisplayDescription = (product) => {
   return String(desc).trim();
 };
 
+/** Raw supplier draft only — never the admin-published catalog description. */
 const getSupplierSubmittedDescription = (product) => {
   const fromField = product?.supplierDescription;
   if (fromField && String(fromField).trim()) return String(fromField).trim();
-  const legacy = product?.description;
-  if (legacy && String(legacy).trim() && !looksLikeAiInstructions(legacy)) {
-    return String(legacy).trim();
-  }
   return '';
 };
 
@@ -725,7 +722,6 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
   const [gstAiPrompt, setGstAiPrompt] = useState('');
   const [gstSuggestion, setGstSuggestion] = useState(null);
   const [polishing, setPolishing] = useState(false);
-  const [polishNotes, setPolishNotes] = useState('');
   
   // Update editedProduct when product changes
   useEffect(() => {
@@ -1111,8 +1107,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
         category: productToUse.category || '',
         supplierDescription: supplierText,
         existingSpecifications: productToUse.specifications || {},
-        provider: aiProvider,
-        adminNotes: polishNotes || ''
+        provider: aiProvider
       });
 
       if (!response.ok || data.status !== 'success') {
@@ -1458,18 +1453,6 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               )}
             </div>
 
-          {supplierSubmittedDescription ? (
-            <div className="description-section" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '0.75rem' }}>
-              <h3 style={{ marginBottom: '0.5rem' }}>Supplier submitted description</h3>
-              <p style={{ margin: 0, color: '#334155', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
-                {supplierSubmittedDescription}
-              </p>
-              <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
-                Raw text from the supplier. Use Polish with AI below to create customer-facing copy.
-              </p>
-            </div>
-          ) : null}
-
           <div className="description-section">
             <h3
               style={{
@@ -1481,7 +1464,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 marginBottom: '0.75rem'
               }}
             >
-              <span>Customer-facing description</span>
+              <span>Product description</span>
               <button
                 type="button"
                 onClick={performPolishListing}
@@ -1500,39 +1483,51 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                   cursor: polishing || !supplierSubmittedDescription ? 'not-allowed' : 'pointer',
                   opacity: polishing || !supplierSubmittedDescription ? 0.6 : 1
                 }}
-                title="Rewrite supplier text into professional buyer-facing description and specifications"
+                title="Rewrite the supplier draft into professional buyer-facing copy and specifications"
               >
                 <Sparkles size={16} />
                 <span>{polishing ? 'Polishing…' : 'Polish with AI'}</span>
               </button>
             </h3>
+            {supplierSubmittedDescription &&
+            supplierSubmittedDescription !==
+              String(isEditing ? editedProduct.description : getDisplayDescription(product)).trim() ? (
+              <details
+                style={{
+                  marginBottom: '0.75rem',
+                  padding: '0.5rem 0.75rem',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  background: '#f8fafc'
+                }}
+              >
+                <summary style={{ cursor: 'pointer', fontSize: '0.875rem', color: '#475569', fontWeight: 500 }}>
+                  View supplier draft
+                </summary>
+                <p style={{ margin: '0.5rem 0 0', color: '#334155', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                  {supplierSubmittedDescription}
+                </p>
+              </details>
+            ) : null}
             {isEditing ? (
-              <>
-                <textarea
-                  value={polishNotes}
-                  onChange={(e) => setPolishNotes(e.target.value)}
-                  rows="2"
-                  placeholder="Optional notes for AI (tone, missing details to emphasize, etc.)"
-                  style={{
-                    padding: '0.5rem',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: '6px',
-                    width: '100%',
-                    fontFamily: 'inherit',
-                    marginBottom: '0.5rem'
-                  }}
-                />
-                <textarea
-                  value={editedProduct.description}
-                  onChange={(e) => setEditedProduct({ ...editedProduct, description: e.target.value })}
-                  rows="4"
-                  placeholder="Professional description shown to buyers after you save and approve."
-                  style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%', fontFamily: 'inherit' }}
-                />
-              </>
+              <textarea
+                value={editedProduct.description}
+                onChange={(e) => setEditedProduct({ ...editedProduct, description: e.target.value })}
+                rows="5"
+                placeholder="Write or polish the description buyers will see. Save, then approve the product."
+                style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%', fontFamily: 'inherit' }}
+              />
             ) : (
-              <p>{getDisplayDescription(product) || 'Not published yet — polish supplier text or write a description in Edit mode.'}</p>
+              <p style={{ margin: 0, lineHeight: 1.55 }}>
+                {getDisplayDescription(product) ||
+                  (supplierSubmittedDescription
+                    ? 'No published description yet. Click Edit, then Polish with AI or write one manually.'
+                    : 'No description yet. Click Edit to add one.')}
+              </p>
             )}
+            <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
+              This is the only description shown to buyers. Polish with AI uses the supplier draft when available.
+            </p>
           </div>
 
           {isEditing && (
