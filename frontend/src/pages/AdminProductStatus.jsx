@@ -1546,9 +1546,6 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                     : 'No description yet. Click Edit to add one.')}
               </p>
             )}
-            <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
-              Click Edit, write or paste text, then Polish with AI. Save when you are happy with the result.
-            </p>
           </div>
 
           {isEditing && (
