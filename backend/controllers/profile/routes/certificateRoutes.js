@@ -11,8 +11,12 @@ import { getContractErrorMessage, parseWithSchema } from '../../../utils/contrac
 import { clientErrorMessage } from '../../../utils/clientErrorMessage.js';
 import {
   appendAuthorizationCertificateUrl,
+  appendBrandApprovalDocumentUrl,
+  removeBrandApprovalDocumentUrl,
   removeAuthorizationCertificateUrl,
+  resolveBrandApprovalDocumentUrls,
   resolveAuthorizationCertificateUrls,
+  setBrandApprovalDocumentUrls,
   setAuthorizationCertificateUrls
 } from '../../../utils/authorizationCertificateUrls.js';
 
@@ -80,7 +84,7 @@ function handleCertificateUpload(req, res, next) {
   });
 }
 
-async function attachCertificateToPending(userId, entryId, url) {
+async function attachCertificateToPending(userId, entryId, url, documentType) {
   const pending = await fetchPendingChainRequest(userId);
   if (!pending?.payload) return false;
 
@@ -88,9 +92,7 @@ async function attachCertificateToPending(userId, entryId, url) {
   const entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);
   if (!entries.some((e) => e.id === entryId)) return false;
 
-  const updatedEntries = entries.map((e) =>
-    e.id === entryId ? appendAuthorizationCertificateUrl(e, url) : e
-  );
+  const updatedEntries = entries.map((e) => (e.id === entryId ? appendEntryDocument(e, url, documentType) : e));
   const { error: prErr } = await supabase
     .from('supplier_chain_profile_requests')
     .update({
@@ -107,13 +109,11 @@ async function attachCertificateToPending(userId, entryId, url) {
   return true;
 }
 
-async function attachCertificateToProfile(userId, currentProfile, entryId, url) {
+async function attachCertificateToProfile(userId, currentProfile, entryId, url, documentType) {
   const entries = normalizeCompanyInfoEntries(currentProfile?.companyInfoEntries || []);
   if (!entries.some((e) => e.id === entryId)) return false;
 
-  const updatedEntries = entries.map((e) =>
-    e.id === entryId ? appendAuthorizationCertificateUrl(e, url) : e
-  );
+  const updatedEntries = entries.map((e) => (e.id === entryId ? appendEntryDocument(e, url, documentType) : e));
   const updatedProfile = {
     ...(currentProfile || {}),
     companyInfoEntries: updatedEntries
@@ -130,7 +130,7 @@ async function attachCertificateToProfile(userId, currentProfile, entryId, url) 
   return true;
 }
 
-async function clearCertificateFromPending(userId, entryId, urlToRemove = null) {
+async function clearCertificateFromPending(userId, entryId, urlToRemove = null, documentType) {
   const pending = await fetchPendingChainRequest(userId);
   if (!pending?.payload) return false;
 
@@ -139,7 +139,7 @@ async function clearCertificateFromPending(userId, entryId, urlToRemove = null) 
   if (!entries.some((e) => e.id === entryId)) return false;
 
   const updatedEntries = entries.map((e) =>
-    e.id === entryId ? removeAuthorizationCertificateUrl(e, urlToRemove) : e
+    e.id === entryId ? removeEntryDocument(e, urlToRemove, documentType) : e
   );
   const { error: prErr } = await supabase
     .from('supplier_chain_profile_requests')
@@ -157,12 +157,12 @@ async function clearCertificateFromPending(userId, entryId, urlToRemove = null) 
   return true;
 }
 
-async function clearCertificateFromProfile(userId, currentProfile, entryId, urlToRemove = null) {
+async function clearCertificateFromProfile(userId, currentProfile, entryId, urlToRemove = null, documentType) {
   const entries = normalizeCompanyInfoEntries(currentProfile?.companyInfoEntries || []);
   if (!entries.some((e) => e.id === entryId)) return false;
 
   const updatedEntries = entries.map((e) =>
-    e.id === entryId ? removeAuthorizationCertificateUrl(e, urlToRemove) : e
+    e.id === entryId ? removeEntryDocument(e, urlToRemove, documentType) : e
   );
   const updatedProfile = {
     ...(currentProfile || {}),
@@ -185,6 +185,35 @@ function parseCertificateRequestBody(req) {
   return parseWithSchema(profileUploadCertificateBodySchema, raw);
 }
 
+function resolveDocumentType(rawType) {
+  const type = String(rawType || 'role_authorization').trim().toLowerCase();
+  return type === 'brand_approval' ? 'brand_approval' : 'role_authorization';
+}
+
+function appendEntryDocument(entry, url, documentType) {
+  return documentType === 'brand_approval'
+    ? appendBrandApprovalDocumentUrl(entry, url)
+    : appendAuthorizationCertificateUrl(entry, url);
+}
+
+function removeEntryDocument(entry, urlToRemove, documentType) {
+  return documentType === 'brand_approval'
+    ? removeBrandApprovalDocumentUrl(entry, urlToRemove)
+    : removeAuthorizationCertificateUrl(entry, urlToRemove);
+}
+
+function resolveLegacyDocumentUrls(profile, documentType) {
+  return documentType === 'brand_approval'
+    ? resolveBrandApprovalDocumentUrls(profile || {})
+    : resolveAuthorizationCertificateUrls(profile || {});
+}
+
+function setLegacyDocumentUrls(profile, urls, documentType) {
+  return documentType === 'brand_approval'
+    ? setBrandApprovalDocumentUrls(profile || {}, urls)
+    : setAuthorizationCertificateUrls(profile || {}, urls);
+}
+
 export function registerProfileCertificateRoutes(router) {
   router.post(
     '/supplier/authorization-certificate',
@@ -193,6 +222,7 @@ export function registerProfileCertificateRoutes(router) {
     async (req, res) => {
       try {
         const uploadBody = parseCertificateRequestBody(req);
+        const documentType = resolveDocumentType(uploadBody.documentType);
         if (!req.file) {
           return res.status(400).json({
             status: 'error',
@@ -209,7 +239,9 @@ export function registerProfileCertificateRoutes(router) {
         }
 
         const safeName = sanitizeStorageFileName(req.file.originalname);
-        const storagePath = `${req.userId}/authorization-certificates/${Date.now()}-${safeName}`;
+        const storageFolder =
+          documentType === 'brand_approval' ? 'brand-approval-documents' : 'authorization-certificates';
+        const storagePath = `${req.userId}/${storageFolder}/${Date.now()}-${safeName}`;
 
         const { url, path } = await uploadFile(
           SUPPLIER_DOCUMENTS_BUCKET,
@@ -238,12 +270,18 @@ export function registerProfileCertificateRoutes(router) {
 
         if (entryId) {
           let savedToProfile = false;
-          let message = 'Authorization certificate uploaded for this entry';
+          let message =
+            documentType === 'brand_approval'
+              ? 'Brand approval document uploaded for this entry'
+              : 'Supply-chain role document uploaded for this entry';
 
           try {
-            savedToProfile = await attachCertificateToPending(req.userId, entryId, url);
+            savedToProfile = await attachCertificateToPending(req.userId, entryId, url, documentType);
             if (savedToProfile) {
-              message = 'Authorization certificate attached to your pending profile submission';
+              message =
+                documentType === 'brand_approval'
+                  ? 'Brand approval document attached to your pending profile submission'
+                  : 'Supply-chain role document attached to your pending profile submission';
             }
           } catch (pendingErr) {
             return res.status(500).json({
@@ -258,7 +296,8 @@ export function registerProfileCertificateRoutes(router) {
                 req.userId,
                 currentUser.profile,
                 entryId,
-                url
+                url,
+                documentType
               );
             } catch (profileErr) {
               return res.status(500).json({
@@ -272,9 +311,12 @@ export function registerProfileCertificateRoutes(router) {
             return res.status(200).json({
               status: 'success',
               message:
-                'Certificate uploaded. It is attached in this form — click Save on Select yourself to store it with your profile.',
+                documentType === 'brand_approval'
+                  ? 'Brand document uploaded. It is attached in this form — click Save on Select yourself to store it with your profile.'
+                  : 'Supply-chain role document uploaded. It is attached in this form — click Save on Select yourself to store it with your profile.',
               url,
               entryId,
+              documentType,
               savedToProfile: false
             });
           }
@@ -284,17 +326,21 @@ export function registerProfileCertificateRoutes(router) {
             message,
             url,
             entryId,
+            documentType,
             savedToProfile: true
           });
         }
 
-        const legacyCertificates = setAuthorizationCertificateUrls(
+        const legacyCertificates = setLegacyDocumentUrls(
           currentUser.profile || {},
-          [...resolveAuthorizationCertificateUrls(currentUser.profile || {}), url]
+          [...resolveLegacyDocumentUrls(currentUser.profile || {}, documentType), url],
+          documentType
         );
         const updatedProfile = {
           ...legacyCertificates,
-          authorizationCertificatePath: path
+          ...(documentType === 'brand_approval'
+            ? { brandApprovalDocumentPath: path }
+            : { authorizationCertificatePath: path })
         };
 
         const { error: updateError } = await supabase
@@ -312,8 +358,12 @@ export function registerProfileCertificateRoutes(router) {
 
         return res.status(200).json({
           status: 'success',
-          message: 'Authorization certificate uploaded successfully',
+          message:
+            documentType === 'brand_approval'
+              ? 'Brand approval document uploaded successfully'
+              : 'Supply-chain role document uploaded successfully',
           url,
+          documentType,
           savedToProfile: true
         });
       } catch (error) {
@@ -336,6 +386,7 @@ export function registerProfileCertificateRoutes(router) {
   router.delete('/supplier/authorization-certificate', authenticateToken, async (req, res) => {
     try {
       const deleteBody = parseCertificateRequestBody(req);
+      const documentType = resolveDocumentType(deleteBody.documentType);
 
       const { data: currentUser, error: fetchError } = await supabase
         .from('users')
@@ -356,15 +407,23 @@ export function registerProfileCertificateRoutes(router) {
       if (entryId) {
         let savedToProfile = false;
         let message = urlToRemove
-          ? 'Authorization document removed for this entry'
-          : 'Authorization certificate removed for this entry';
+          ? documentType === 'brand_approval'
+            ? 'Brand approval document removed for this entry'
+            : 'Supply-chain role document removed for this entry'
+          : documentType === 'brand_approval'
+            ? 'Brand approval documents removed for this entry'
+            : 'Supply-chain role documents removed for this entry';
 
         try {
-          savedToProfile = await clearCertificateFromPending(req.userId, entryId, urlToRemove);
+          savedToProfile = await clearCertificateFromPending(req.userId, entryId, urlToRemove, documentType);
           if (savedToProfile) {
             message = urlToRemove
-              ? 'Document removed from your pending profile submission'
-              : 'Certificate removed from your pending profile submission';
+              ? documentType === 'brand_approval'
+                ? 'Brand approval document removed from your pending profile submission'
+                : 'Supply-chain role document removed from your pending profile submission'
+              : documentType === 'brand_approval'
+                ? 'Brand approval documents removed from your pending profile submission'
+                : 'Supply-chain role documents removed from your pending profile submission';
           }
         } catch (pendingErr) {
           return res.status(500).json({
@@ -379,7 +438,8 @@ export function registerProfileCertificateRoutes(router) {
               req.userId,
               currentUser.profile,
               entryId,
-              urlToRemove
+              urlToRemove,
+              documentType
             );
           } catch (profileErr) {
             return res.status(500).json({
@@ -395,6 +455,7 @@ export function registerProfileCertificateRoutes(router) {
             message:
               'Certificate removed in this form. Click Save on Select yourself to persist the change.',
             entryId,
+            documentType,
             savedToProfile: false
           });
         }
@@ -403,20 +464,24 @@ export function registerProfileCertificateRoutes(router) {
           status: 'success',
           message,
           entryId,
+          documentType,
           savedToProfile: true
         });
       }
 
-      const updatedProfile = setAuthorizationCertificateUrls(
+      const updatedProfile = setLegacyDocumentUrls(
         { ...(currentUser.profile || {}) },
         urlToRemove
-          ? resolveAuthorizationCertificateUrls(currentUser.profile || {}).filter(
-              (u) => u !== urlToRemove
-            )
-          : []
+          ? resolveLegacyDocumentUrls(currentUser.profile || {}, documentType).filter((u) => u !== urlToRemove)
+          : [],
+        documentType
       );
-      if (!urlToRemove || resolveAuthorizationCertificateUrls(updatedProfile).length === 0) {
-        delete updatedProfile.authorizationCertificatePath;
+      if (!urlToRemove || resolveLegacyDocumentUrls(updatedProfile, documentType).length === 0) {
+        if (documentType === 'brand_approval') {
+          delete updatedProfile.brandApprovalDocumentPath;
+        } else {
+          delete updatedProfile.authorizationCertificatePath;
+        }
       }
 
       const { error: updateError } = await supabase
@@ -434,7 +499,11 @@ export function registerProfileCertificateRoutes(router) {
 
       return res.status(200).json({
         status: 'success',
-        message: 'Authorization certificate removed successfully',
+        message:
+          documentType === 'brand_approval'
+            ? 'Brand approval document removed successfully'
+            : 'Supply-chain role document removed successfully',
+        documentType,
         savedToProfile: true
       });
     } catch (error) {

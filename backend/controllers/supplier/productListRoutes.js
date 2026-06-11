@@ -18,7 +18,6 @@ export function registerSupplierProductListRoutes(ctx) {
     authenticateToken,
     supabase,
     productImageUpload,
-    enrichProductSpecificationsForDisplay,
     resolveTaxRatesForProductCreate
   } = ctx;
 
@@ -72,9 +71,8 @@ router.get('/products', authenticateToken, async (req, res) => {
       return supplierCanAccessBrandStrict(effectiveProfile, brandCandidate).allowed;
     });
 
-    const products = (
-      await Promise.all(
-        visibleSupplierProducts.map(async (sp) => {
+    const products = visibleSupplierProducts
+      .map((sp) => {
         if (!sp.product) return null;
 
         const baseSpecs =
@@ -91,13 +89,6 @@ router.get('/products', authenticateToken, async (req, res) => {
             ? String(sp.attributes.listingName).trim()
             : sp.product.name;
         const displayBrand = sp.attributes?.brand || sp.product.brand || '';
-        const mergedSpecs = await enrichProductSpecificationsForDisplay({
-          category: sp.product.category,
-          name: listingName,
-          brand: displayBrand || listingName,
-          existingSpecs: storedSpecs,
-          productId: sp.product.id
-        });
         const offerImages = sanitizeImageUrls(sp.attributes?.images);
         const baseImages = sanitizeImageUrls(sp.product?.images);
 
@@ -112,7 +103,7 @@ router.get('/products', authenticateToken, async (req, res) => {
           brand: displayBrand || sp.product.brand,
           gtin: sp.attributes?.gtin || sp.product.gtin,
           mpn: sp.attributes?.mpn || sp.product.mpn,
-          specifications: mergedSpecs,
+          specifications: storedSpecs,
           images: offerImages.length > 0 ? offerImages : baseImages,
           price: sp.price,
           stock: parseSupplierStockQuantity(sp.stock) ?? 0,
@@ -147,8 +138,7 @@ router.get('/products', authenticateToken, async (req, res) => {
           variantAsin: sp.variant_asin || null
         };
       })
-      )
-    ).filter(Boolean);
+      .filter(Boolean);
     
     res.json({ 
       status: 'success',

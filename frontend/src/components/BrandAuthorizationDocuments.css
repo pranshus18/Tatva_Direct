@@ -7,13 +7,13 @@
 
 .brand-auth-docs__thumb {
   position: relative;
-  width: 96px;
-  height: 96px;
-  border-radius: 10px;
+  width: 102px;
+  height: 102px;
+  border-radius: 12px;
   overflow: hidden;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #dbe3ee;
   background: #fff;
-  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 6px 14px rgba(15, 23, 42, 0.05);
 }
 
 .brand-auth-docs__preview {
@@ -56,13 +56,13 @@
 
 .brand-auth-docs__remove {
   position: absolute;
-  top: 4px;
-  right: 4px;
+  top: 6px;
+  right: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border: none;
   border-radius: 999px;
   background: #ef4444;
@@ -90,12 +90,12 @@
   align-items: center;
   justify-content: center;
   gap: 0.35rem;
-  width: 96px;
-  height: 96px;
-  border: 2px dashed #93c5fd;
-  border-radius: 10px;
-  background: #eff6ff;
-  color: #2563eb;
+  width: 102px;
+  height: 102px;
+  border: 2px dashed #a5b4fc;
+  border-radius: 12px;
+  background: #eef2ff;
+  color: #4338ca;
   font-size: 0.68rem;
   font-weight: 600;
   text-align: center;
@@ -105,8 +105,8 @@
 }
 
 .brand-auth-docs__add:hover {
-  background: #dbeafe;
-  border-color: #60a5fa;
+  background: #e0e7ff;
+  border-color: #818cf8;
 }
 
 .brand-auth-docs__add--busy {

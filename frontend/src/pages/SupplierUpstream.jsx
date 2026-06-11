@@ -15,15 +15,14 @@ import {
 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
-import SpStatCard from '../components/sp/SpStatCard';
 import UpstreamProductDisplay, { collectProductImages } from '../components/UpstreamProductDisplay';
+import SupplierProductDetailsModal from '../components/SupplierProductDetailsModal';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { formatRupee } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import { normalizeSupplierProductsFromApi } from '../utils/supplierProductRow';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
@@ -119,6 +118,7 @@ const SupplierUpstream = ({ user }) => {
   const [supplierDetailsOpen, setSupplierDetailsOpen] = useState(false);
   const [supplierDetails, setSupplierDetails] = useState(null);
   const [supplierOfferDetails, setSupplierOfferDetails] = useState(null);
+  const [viewingProduct, setViewingProduct] = useState(null);
 
   const filteredProducts = useMemo(() => {
     const bf = brandFilter.trim().toLowerCase();
@@ -554,127 +554,180 @@ const SupplierUpstream = ({ user }) => {
         }
       />
 
-      <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <SpStatCard label="Selected Items" value={selectedMineIds.length} icon={ShoppingCart} accent="indigo" />
-        <SpStatCard label="Visible Inventory Lines" value={visibleInventoryCount} icon={Package} accent="emerald" />
-        <SpStatCard label="Suggested Groups" value={suggestedGroupCount} icon={Network} accent="amber" />
-        <Card className="sp-market-card">
-          <CardContent className="p-4">
-            <p className="upstream-hero-copy !m-0">
-              <strong>Routing:</strong> Brand chain first, fallback to role flow
-              {' '}Layers follow the <strong>admin brand chain</strong> (e.g. MGF → Stockist → … → Retailer). Tiers not in admin—such as Dealer—are skipped; you buy from the layer directly above you.
-            </p>
-          </CardContent>
-        </Card>
+      <div className="us-kpis">
+        <div className="us-kpi">
+          <div className="us-kpi__value">{selectedMineIds.length}</div>
+          <div className="us-kpi__label">Selected items</div>
+        </div>
+        <div className="us-kpi">
+          <div className="us-kpi__value">{visibleInventoryCount}</div>
+          <div className="us-kpi__label">Inventory lines</div>
+        </div>
+        <div className="us-kpi">
+          <div className="us-kpi__value">{suggestedGroupCount}</div>
+          <div className="us-kpi__label">Suggested groups</div>
+        </div>
       </div>
 
+      <p className="us-routing-note">
+        <Info size={15} aria-hidden />
+        <span>
+          <strong>Routing:</strong> purchases follow the admin brand chain (e.g. MGF → Stockist → … → Retailer).
+          Layers not defined in admin are skipped; you buy from the tier directly above you.
+        </span>
+      </p>
+
       <div className="dashboard-content">
-        <div className="dashboard-section upstream-section">
-          <div className="section-header upstream-section-header">
-            <h2>Select Brand + Products</h2>
-            <span className="upstream-section-hint">
-              <Network size={18} />
-              Inventory tied to role and brand-chain routing
-            </span>
-          </div>
-
-          <div className="upstream-filters-row">
-            <div className="search-box upstream-filter">
-              <Search size={16} />
-              <input
-                type="text"
-                placeholder="Filter by brandModel (e.g. Amul)"
-                value={brandFilter}
-                onChange={(e) => setBrandFilter(e.target.value)}
-              />
+        <div className="dashboard-section upstream-section us-select-panel">
+          <div className="us-select-panel__header">
+            <div className="us-select-panel__title-block">
+              <h2>Select Brand + Products</h2>
             </div>
-
-            <div className="search-box upstream-filter">
-              <Search size={16} />
-              <input
-                type="text"
-                placeholder="Search product name"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
+            <div className="us-select-panel__summary">
+              <span className="us-select-panel__summary-item">
+                <strong>{selectedMineIds.length}</strong> selected
+              </span>
+              <span className="us-select-panel__summary-divider" aria-hidden />
+              <span className="us-select-panel__summary-item">
+                <strong>{filteredProducts.length}</strong> lines shown
+              </span>
             </div>
           </div>
 
-          <div className="items-list upstream-products-scroll">
-            {filteredProducts.length === 0 ? (
-              <div className="empty-state">
-                <Package size={48} />
-                <h3>No matching products</h3>
-                <p>Update brand filter or search term.</p>
+          <div className="us-select-panel__filters">
+            <label className="us-field">
+              <span className="us-field__label">Brand / model</span>
+              <div className="us-field__control search-box upstream-filter">
+                <Search size={15} />
+                <input
+                  type="search"
+                  placeholder="e.g. acc, Amul"
+                  value={brandFilter}
+                  onChange={(e) => setBrandFilter(e.target.value)}
+                />
               </div>
-            ) : (
-              filteredProducts.map((p) => {
-                const mineId = normalizeSupplierProductKey(p.supplier_product_id);
-                const minQty = Math.max(1, p.min_order_quantity ?? 1);
-                const isSelected = !!selectedMine[mineId];
-                const isAddingToCart = !!addingCartByMineId[mineId];
-                const productImages = collectProductImages(p);
+            </label>
+            <label className="us-field">
+              <span className="us-field__label">Product name</span>
+              <div className="us-field__control search-box upstream-filter">
+                <Search size={15} />
+                <input
+                  type="search"
+                  placeholder="Search by name"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                />
+              </div>
+            </label>
+          </div>
 
-                return (
-                  <div
-                    key={mineId}
-                    className={`item-card upstream-select-card ${isSelected ? 'upstream-select-card-selected' : ''}`}
-                  >
-                    <div className="item-info upstream-select-card-info">
-                      <div className="upstream-product-main-row">
-                        <div className="upstream-product-checkbox-wrap">
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            onChange={() => handleToggleMine(mineId)}
-                          />
-                        </div>
-                        <div className="upstream-product-details">
-                          <div className="upstream-product-header">
-                            {productImages.length > 0 ? (
-                              <div className="upstream-product-thumb">
-                                <ProductImageCarousel
-                                  images={productImages}
-                                  alt={p.name || 'Product'}
-                                  height={96}
-                                  rounded={8}
-                                />
-                              </div>
-                            ) : null}
-                            <div className="upstream-product-header-text">
-                              <h4 className="upstream-product-name">{p.name}</h4>
-                              <p className="upstream-product-meta">
-                                Brand: <strong>{p.brandModel || p.brand || 'N/A'}</strong>
-                                {p.category ? (
-                                  <>
-                                    {' '}
-                                    • Category: <strong>{p.category}</strong>
-                                  </>
-                                ) : null}
-                              </p>
-                              <p className="upstream-product-meta upstream-product-meta-tight">
-                                {SUPPLIER_CURRENT_STOCK_LABEL}: <strong>{p.stock ?? 0}</strong> • Min order:{' '}
-                                <strong>{p.min_order_quantity ?? 1}</strong>
-                                {p.unit ? (
-                                  <>
-                                    {' '}
-                                    • Unit: <strong>{p.unit}</strong>
-                                  </>
-                                ) : null}
-                              </p>
-                            </div>
-                          </div>
-                          <UpstreamProductDisplay product={p} showImage={false} maxSpecs={12} />
-                        </div>
+          <div className="us-product-table">
+            <div className="us-product-table__head">
+              <span aria-hidden />
+              <span aria-hidden />
+              <span>Product</span>
+              <span>{SUPPLIER_CURRENT_STOCK_LABEL}</span>
+              <span>Order</span>
+            </div>
+
+            <div className="us-product-table__body">
+              {filteredProducts.length === 0 ? (
+                <div className="us-product-table__empty">
+                  <Package size={28} />
+                  <h3>No matching products</h3>
+                  <p>Adjust brand or name filters.</p>
+                </div>
+              ) : (
+                filteredProducts.map((p) => {
+                  const mineId = normalizeSupplierProductKey(p.supplier_product_id);
+                  const minQty = Math.max(1, p.min_order_quantity ?? 1);
+                  const isSelected = !!selectedMine[mineId];
+                  const isAddingToCart = !!addingCartByMineId[mineId];
+                  const productImages = collectProductImages(p);
+                  const brandLabel = p.brandModel || p.brand || '—';
+
+                  return (
+                    <div
+                      key={mineId}
+                      className={`us-product-row ${isSelected ? 'us-product-row--selected' : ''}`}
+                    >
+                      <div className="us-product-row__check">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleMine(mineId)}
+                          aria-label={`Select ${p.name || 'product'}`}
+                        />
                       </div>
-                    </div>
 
-                    <div className="item-status upstream-select-card-status">
-                      {isSelected ? (
-                        <div className="upstream-qty-controls">
-                          <label className="upstream-qty-label">
-                            Quantity
-                          </label>
+                      <div
+                        className="us-product-row__thumb us-product-row__clickable"
+                        onClick={() => setViewingProduct(p)}
+                        onKeyDown={(e) => e.key === 'Enter' && setViewingProduct(p)}
+                        role="button"
+                        tabIndex={0}
+                        title="View full details"
+                      >
+                        {productImages.length > 0 ? (
+                          <ProductImageCarousel
+                            images={productImages}
+                            alt={p.name || 'Product'}
+                            height={56}
+                            rounded={6}
+                          />
+                        ) : (
+                          <div className="us-product-row__thumb-placeholder" aria-hidden />
+                        )}
+                      </div>
+
+                      <div
+                        className="us-product-row__main us-product-row__clickable"
+                        onClick={() => setViewingProduct(p)}
+                        onKeyDown={(e) => e.key === 'Enter' && setViewingProduct(p)}
+                        role="button"
+                        tabIndex={0}
+                        title="View full details"
+                      >
+                        <h4 className="us-product-row__name">{p.name}</h4>
+                        <dl className="us-facts">
+                          <div className="us-facts__item">
+                            <dt>Brand</dt>
+                            <dd>{brandLabel}</dd>
+                          </div>
+                          <div className="us-facts__item">
+                            <dt>Category</dt>
+                            <dd>{p.category || '—'}</dd>
+                          </div>
+                          <div className="us-facts__item">
+                            <dt>Min order</dt>
+                            <dd>
+                              {p.min_order_quantity ?? 1}
+                              {p.unit ? ` ${p.unit}` : ''}
+                            </dd>
+                          </div>
+                        </dl>
+                        <UpstreamProductDisplay
+                          product={p}
+                          showImage={false}
+                          showDescription={false}
+                          maxSpecs={24}
+                          specLayout="grid"
+                          collapsibleSpecs
+                          compact
+                        />
+                      </div>
+
+                      <div className="us-product-row__stock us-product-row__cell">
+                        <span className="us-product-row__cell-label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
+                        <span className="us-product-row__stock-value">
+                          {p.stock ?? 0}
+                          {p.unit ? ` ${p.unit}` : ''}
+                        </span>
+                      </div>
+
+                      <div className="us-product-row__order us-product-row__cell">
+                        <span className="us-product-row__cell-label">Quantity</span>
+                        {isSelected ? (
                           <input
                             type="number"
                             min={minQty}
@@ -688,55 +741,57 @@ const SupplierUpstream = ({ user }) => {
                                 [mineId]: v != null && v > 0 ? Math.max(minQty, v) : minQty
                               }));
                             }}
-                            className="upstream-qty-input"
+                            className="upstream-qty-input us-product-row__qty"
                           />
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => handleAddSingleProductToCart(p)}
-                            disabled={isAddingToCart}
-                          >
-                            {isAddingToCart ? 'Adding...' : 'Add to Cart'}
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="upstream-qty-controls">
-                          <div className="upstream-not-selected">Select to order upstream</div>
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => handleAddSingleProductToCart(p)}
-                            disabled={isAddingToCart}
-                          >
-                            {isAddingToCart ? 'Adding...' : 'Add to Cart'}
-                          </button>
-                        </div>
-                      )}
+                        ) : (
+                          <span className="us-product-row__qty-hint">Select row</span>
+                        )}
+                        <button
+                          type="button"
+                          className="btn-secondary us-product-row__cart-btn"
+                          onClick={() => handleAddSingleProductToCart(p)}
+                          disabled={isAddingToCart}
+                        >
+                          {isAddingToCart ? 'Adding…' : 'Add to cart'}
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                );
-              })
-            )}
+                  );
+                })
+              )}
+            </div>
           </div>
 
-          <div className="upstream-primary-actions">
-            <button className="btn-primary upstream-inline-btn" onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading}>
-              {suggestionsLoading ? <Loader2 size={18} className="upstream-spin" /> : null}
-              Find Upstream Suppliers
-            </button>
-
-            <button
-              className="btn-secondary"
-              onClick={() => {
-                setSelectedMine({});
-                setSuggestions(null);
-                setSuggestionMeta(null);
-                setSelectedUpstreamOffer({});
-              }}
-              disabled={suggestionsLoading || creating}
-            >
-              Clear selection
-            </button>
+          <div className="us-select-panel__footer">
+            <p className="us-select-panel__footer-hint">
+              {selectedMineIds.length > 0
+                ? `${selectedMineIds.length} product${selectedMineIds.length !== 1 ? 's' : ''} ready to find suppliers.`
+                : 'Select one or more products, then find upstream suppliers.'}
+            </p>
+            <div className="us-select-panel__footer-actions">
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => {
+                  setSelectedMine({});
+                  setSuggestions(null);
+                  setSuggestionMeta(null);
+                  setSelectedUpstreamOffer({});
+                }}
+                disabled={suggestionsLoading || creating}
+              >
+                Clear selection
+              </button>
+              <button
+                type="button"
+                className="btn-primary upstream-inline-btn"
+                onClick={fetchUpstreamSuggestions}
+                disabled={suggestionsLoading}
+              >
+                {suggestionsLoading ? <Loader2 size={16} className="upstream-spin" /> : null}
+                Find upstream suppliers
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1008,6 +1063,10 @@ const SupplierUpstream = ({ user }) => {
           </div>
         </div>
       )}
+
+      {viewingProduct ? (
+        <SupplierProductDetailsModal product={viewingProduct} onClose={() => setViewingProduct(null)} />
+      ) : null}
       </div>
     </SpPageLayout>
   );

@@ -18,11 +18,13 @@ import { formatRupee } from '../utils/formatRupee';
 import RupeeInput from '../components/RupeeInput';
 import BrandSelect from '../components/BrandSelect';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
+import {
+  applyIgstToTaxFields,
+  CGST_SGST_OPTIONS,
+  IGST_OPTIONS
+} from '../utils/gstRates';
 import './Auth.css';
 import './SupplierProductSetup.css';
-
-const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
-const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
 
 const SupplierProductSetup = ({ user }) => {
   const [formData, setFormData] = useState({
@@ -100,6 +102,11 @@ const SupplierProductSetup = ({ user }) => {
   const handleChange = (e) => {
     if (e.target?.name === 'price') {
       setPriceTouched(true);
+    }
+    if (e.target?.name === 'igst_rate') {
+      setFormData((prev) => applyIgstToTaxFields(prev, e.target.value));
+      setError('');
+      return;
     }
     setFormData({
       ...formData,

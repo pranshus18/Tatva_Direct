@@ -29,6 +29,7 @@ export function resolveCompanyInfoEntriesForValidation(profileData) {
       gstin: profileData.gstin || '',
       companyName: profileData.companyName || '',
       ownershipDetails: profileData.ownershipDetails || '',
+      brandApprovalDocumentUrl: profileData.brandApprovalDocumentUrl || '',
       authorizationCertificateUrl: profileData.authorizationCertificateUrl || '',
       minimumOrderValue: profileData.minimumOrderValue ?? ''
     }
@@ -48,7 +49,7 @@ export function validateCompanyInfoEntriesList(entries) {
     const entryNum = i + 1;
     const role = String(entry.role || '').trim();
     const brandList = parseBrandsListForValidation(entry.brands);
-    const certificateUrls = resolveAuthorizationCertificateUrls(entry);
+    const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
 
     if (brandList.length === 0) {
       return { ok: false, message: `Entry ${entryNum}: Select a brand.` };
@@ -59,10 +60,10 @@ export function validateCompanyInfoEntriesList(entries) {
         message: `Entry ${entryNum}: Only one brand is allowed per entry. Add another block for a second brand.`
       };
     }
-    if (certificateUrls.length === 0) {
+    if (roleCertificateUrls.length === 0) {
       return {
         ok: false,
-        message: `Entry ${entryNum}: Upload at least one brand authorisation document.`
+        message: `Entry ${entryNum}: Upload at least one supply-chain role document.`
       };
     }
 

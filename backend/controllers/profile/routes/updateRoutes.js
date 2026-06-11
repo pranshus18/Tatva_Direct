@@ -69,6 +69,9 @@ export function registerProfileUpdateRoutes(router) {
 
       let chainApprovalPending = false;
       let chainDraftSaved = false;
+      let brandApprovalRequested = false;
+      let brandApprovalFailures = [];
+      let brandAlreadyApproved = false;
 
       if (profileData.userType === 'service_provider') {
         const mergedAddress = {
@@ -186,6 +189,7 @@ export function registerProfileUpdateRoutes(router) {
         const incomingChain = buildChainPayloadFromProfileData(profileData);
         const baselineChain = baselineChainFromProfile(currentProfile);
         const wantsDraftSave = profileData.saveAsDraft === true;
+        const wantsBrandApprovalSave = profileData.saveBrandApprovalOnly === true;
         let isIncompleteChainDraft = false;
         const incomingEntries = Array.isArray(incomingChain.companyInfoEntries)
           ? incomingChain.companyInfoEntries
@@ -195,7 +199,7 @@ export function registerProfileUpdateRoutes(router) {
             ? incomingEntries.some((e) => String(e?.role || '').trim())
             : hasAnySupplyChainRole(incomingChain);
 
-        if (supplierProfileIncludesChainDraft(profileData)) {
+        if (supplierProfileIncludesChainDraft(profileData) && !wantsBrandApprovalSave) {
           const chainEntriesForValidation = resolveCompanyInfoEntriesForValidation(profileData);
           const completeness = validateCompanyInfoEntriesList(chainEntriesForValidation);
           if (!completeness.ok) {
@@ -222,8 +226,9 @@ export function registerProfileUpdateRoutes(router) {
           return brandStrings;
         };
 
-        const runGlobalBrandGate = async (chain) => {
-          if (!hasAnySupplyChainRole(chain)) return null;
+        const runGlobalBrandGate = async (chain, options = {}) => {
+          const force = options?.force === true;
+          if (!force && !hasAnySupplyChainRole(chain)) return null;
           const brandStrings = collectBrandStringsFromChain(chain);
           const uniqueBrands = [
             ...new Set(
@@ -252,7 +257,55 @@ export function registerProfileUpdateRoutes(router) {
           return failures.length > 0 ? failures : null;
         };
 
-        if (isIncompleteChainDraft) {
+        if (wantsBrandApprovalSave) {
+          const brandStrings = collectBrandStringsFromChain(incomingChain);
+          const uniqueBrands = [
+            ...new Set(
+              brandStrings
+                .flatMap((s) => parseBrandTokens(s))
+                .map((b) => b.trim())
+                .filter(Boolean)
+            )
+          ];
+          if (uniqueBrands.length === 0) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'brand_required_for_brand_approval',
+              message: 'Enter at least one brand name before saving brand approval.'
+            });
+          }
+        }
+
+        if (wantsBrandApprovalSave) {
+          profileUpdate.chainProfileDraft = null;
+          profileUpdate.chainProfileDraftUpdatedAt = null;
+          const brandFailures = await runGlobalBrandGate(incomingChain, { force: true });
+          if (brandFailures) {
+            const nonApprovalErrors = brandFailures.filter(
+              (f) => String(f?.code || '') !== 'brand_approval_required'
+            );
+            if (nonApprovalErrors.length > 0) {
+              return res.status(500).json({
+                status: 'error',
+                code: 'brand_approval_save_failed',
+                message: 'Failed to process one or more brands for approval.',
+                brands: nonApprovalErrors
+              });
+            }
+            brandApprovalRequested = true;
+            brandApprovalFailures = brandFailures;
+          } else {
+            brandAlreadyApproved = true;
+          }
+          try {
+            await clearPendingChainRequest(req.userId);
+          } catch (e) {
+            console.warn('[Profile] clearPendingChainRequest (brand approval save):', e?.message || e);
+          }
+          profileUpdate.supplierRole = incomingChain.supplierRole;
+          profileUpdate.brands = incomingChain.brands;
+          profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
+        } else if (isIncompleteChainDraft) {
           // Keep approved profile active; store incomplete edits as draft only.
           profileUpdate.supplierRole = baselineChain.supplierRole;
           profileUpdate.brands = baselineChain.brands;
@@ -406,11 +459,13 @@ export function registerProfileUpdateRoutes(router) {
             profileUpdate.brands = baselineChain.brands;
             profileUpdate.companyInfoEntries = baselineChain.companyInfoEntries;
 
-            try {
-              const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
-              const { data: adminRows } = await findAdmins(adminEmail, supabase);
-              const adminIds = [...new Set((adminRows || []).map((a) => a.id))];
-              if (adminIds.length > 0) {
+            void (async () => {
+              try {
+                const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
+                const { data: adminRows } = await findAdmins(adminEmail, supabase);
+                const adminIds = [...new Set((adminRows || []).map((a) => a.id))];
+                if (adminIds.length === 0) return;
+
                 const supplierName = currentUser.name || 'Supplier';
                 const supplierEmail = currentUser.email || '';
                 const preview = incomingChain.companyInfoEntries?.length
@@ -430,10 +485,10 @@ export function registerProfileUpdateRoutes(router) {
                   is_read: false
                 }));
                 await insertNotifications(notifications, supabase);
+              } catch (notifErr) {
+                console.error('[Profile] Failed to notify admins (chain pending):', notifErr);
               }
-            } catch (notifErr) {
-              console.error('[Profile] Failed to notify admins (chain pending):', notifErr);
-            }
+            })();
           }
         }
       }
@@ -508,12 +563,13 @@ export function registerProfileUpdateRoutes(router) {
           }
           const shortBrands = brandsStr.length > 280 ? `${brandsStr.slice(0, 277)}…` : brandsStr;
 
-          try {
-            const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
-            const { data: adminRows } = await findAdmins(adminEmail, supabase);
+          void (async () => {
+            try {
+              const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
+              const { data: adminRows } = await findAdmins(adminEmail, supabase);
+              const adminIds = [...new Set((adminRows || []).map((a) => a.id))];
+              if (adminIds.length === 0) return;
 
-            const adminIds = [...new Set((adminRows || []).map((a) => a.id))];
-            if (adminIds.length > 0) {
               const notifications = adminIds.map((adminId) => ({
                 user_id: adminId,
                 type: 'supplier_edit',
@@ -546,23 +602,36 @@ export function registerProfileUpdateRoutes(router) {
               console.log(
                 `[Profile] Notified ${notifications.length} admin(s): supplier ${updatedUser.id} role ${newRole}`
               );
+            } catch (notifErr) {
+              console.error('[Profile] Failed to notify admins about supplier chain role:', notifErr);
             }
-          } catch (notifErr) {
-            console.error('[Profile] Failed to notify admins about supplier chain role:', notifErr);
-          }
+          })();
         }
       }
 
       const profile = await createProfileResponse(updatedUser);
       const payload = {
         status: 'success',
-        message: chainApprovalPending
-          ? 'Your supply-chain role and brand assignment was submitted for admin approval. Until it is approved, your previous approved assignment stays active.'
-          : chainDraftSaved
-            ? 'Draft saved. You can return later to complete remaining fields and submit.'
-            : 'Profile updated successfully',
+        message: brandApprovalRequested
+          ? 'Brand request submitted for admin approval. It will appear in supplier catalog after admin approval.'
+          : brandAlreadyApproved
+            ? 'This brand is already approved by admin.'
+          : chainApprovalPending
+            ? 'Your supply-chain role and brand assignment was submitted for admin approval. Until it is approved, your previous approved assignment stays active.'
+            : chainDraftSaved
+              ? 'Draft saved. You can return later to complete remaining fields and submit.'
+              : 'Profile updated successfully',
         profile
       };
+      if (brandApprovalRequested) {
+        payload.brandApprovalRequested = true;
+      }
+      if (brandApprovalFailures.length > 0) {
+        payload.brandApprovals = brandApprovalFailures;
+      }
+      if (brandAlreadyApproved) {
+        payload.brandAlreadyApproved = true;
+      }
       if (chainApprovalPending) {
         payload.chainApprovalPending = true;
       }

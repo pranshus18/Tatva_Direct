@@ -9,6 +9,7 @@ import {
 } from '../utils/supplierChainEntryValidation';
 import './Profile.css';
 import './Dashboard.css';
+import './SupplierSelectYourself.css';
 
 function cloneProfileSnapshot(profile) {
   return profile ? JSON.parse(JSON.stringify(profile)) : null;
@@ -50,6 +51,8 @@ function chainFormSignature(profile) {
     brands: profile.brands || '',
     companyName: profile.companyName || '',
     gstin: profile.gstin || '',
+    brandApprovalDocumentUrl: profile.brandApprovalDocumentUrl || '',
+    brandApprovalDocumentUrls: profile.brandApprovalDocumentUrls || [],
     authorizationCertificateUrl: profile.authorizationCertificateUrl || '',
     authorizationCertificateUrls: profile.authorizationCertificateUrls || [],
     minimumOrderValue: profile.minimumOrderValue ?? '',
@@ -59,6 +62,8 @@ function chainFormSignature(profile) {
       brands: e.brands || '',
       gstin: e.gstin || '',
       companyName: e.companyName || '',
+      brandApprovalDocumentUrl: e.brandApprovalDocumentUrl || '',
+      brandApprovalDocumentUrls: e.brandApprovalDocumentUrls || [],
       authorizationCertificateUrl: e.authorizationCertificateUrl || '',
       authorizationCertificateUrls: e.authorizationCertificateUrls || [],
       minimumOrderValue: e.minimumOrderValue ?? ''
@@ -74,15 +79,28 @@ export default function SupplierSelectYourself() {
   const [baseline, setBaseline] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingBrandApproval, setSavingBrandApproval] = useState(false);
   const [savingEntryId, setSavingEntryId] = useState(null);
   const [discarding, setDiscarding] = useState(false);
   const [editorResetKey, setEditorResetKey] = useState(0);
   const [discountInsights, setDiscountInsights] = useState(null);
+  const [brandSectionExpanded, setBrandSectionExpanded] = useState(true);
 
   const hasUnsavedChanges = useMemo(() => {
     if (!profile || !baseline) return false;
     return chainFormSignature(profile) !== chainFormSignature(baseline);
   }, [profile, baseline]);
+
+  const applyProfileFromResponse = (profileData) => {
+    if (!profileData) return false;
+    const snapshot = cloneProfileSnapshot(profileData);
+    if (snapshot) {
+      snapshot.companyInfoEntries = mergeDisplayAndApprovedEntries(snapshot);
+    }
+    setProfile(snapshot);
+    setBaseline(cloneProfileSnapshot(snapshot));
+    return true;
+  };
 
   const fetchProfile = async () => {
     try {
@@ -95,13 +113,7 @@ export default function SupplierSelectYourself() {
         console.error('Failed to fetch profile:', data.message || response.status);
         return false;
       }
-      const snapshot = cloneProfileSnapshot(data.profile);
-      if (snapshot) {
-        snapshot.companyInfoEntries = mergeDisplayAndApprovedEntries(snapshot);
-      }
-      setProfile(snapshot);
-      setBaseline(cloneProfileSnapshot(snapshot));
-      return true;
+      return applyProfileFromResponse(data.profile);
     } catch (e) {
       console.error('Failed to fetch profile:', e);
       return false;
@@ -161,12 +173,48 @@ export default function SupplierSelectYourself() {
       } else {
         alert('Saved successfully.');
       }
-      await fetchProfile();
+      if (!applyProfileFromResponse(data.profile)) {
+        await fetchProfile();
+      }
     } catch (e) {
       console.error('Failed to save profile:', e);
       alert('Failed to save. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSaveBrandApproval = async () => {
+    if (!profile || saving || discarding || savingBrandApproval) return;
+    try {
+      setSavingBrandApproval(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(getApiUrl('/api/profile'), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          ...profile,
+          userType: profile?.userType || 'supplier',
+          saveBrandApprovalOnly: true
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.status !== 'success') {
+        alert(data.message || 'Failed to save brand request. Please try again.');
+        return;
+      }
+      alert(data.message || 'Brand request saved.');
+      if (!applyProfileFromResponse(data.profile)) {
+        await fetchProfile();
+      }
+    } catch (e) {
+      console.error('Failed to save brand approval:', e);
+      alert('Failed to save brand request. Please try again.');
+    } finally {
+      setSavingBrandApproval(false);
     }
   };
 
@@ -253,7 +301,9 @@ export default function SupplierSelectYourself() {
       } else {
         alert(`Entry ${entryIndex + 1} saved.`);
       }
-      await fetchProfile();
+      if (!applyProfileFromResponse(data.profile)) {
+        await fetchProfile();
+      }
     } catch (e) {
       console.error('Failed to save entry:', e);
       alert('Failed to save this entry. Please try again.');
@@ -292,7 +342,7 @@ export default function SupplierSelectYourself() {
   }
 
   return (
-    <div className="profile-container">
+    <div className="profile-container supplier-select-yourself-page">
       <div className="profile-header">
         <div className="profile-title">
           <UserCheck size={24} />
@@ -322,18 +372,21 @@ export default function SupplierSelectYourself() {
       </div>
 
       <div className="profile-content">
+        <div className="supplier-select-flow-card">
+          <div className="supplier-select-flow-card__step">
+            <span className="supplier-select-flow-card__badge">Step 1</span>
+          </div>
+          <div className="supplier-select-flow-card__arrow">→</div>
+          <div className="supplier-select-flow-card__step">
+            <span className="supplier-select-flow-card__badge">Step 2</span>
+            <span>Supply-chain role details</span>
+          </div>
+        </div>
+
         {profile?.chainProfileApprovalStatus === 'pending' ? (
-          <div
-            className="profile-section"
-            style={{
-              background: '#fffbeb',
-              border: '1px solid #fcd34d',
-              borderRadius: 10,
-              padding: '1rem 1.1rem'
-            }}
-          >
-            <strong style={{ color: '#92400e' }}>Supply-chain profile pending admin approval</strong>
-            <p style={{ margin: '0.45rem 0 0', color: '#78350f', fontSize: '0.95rem', lineHeight: 1.45 }}>
+          <div className="supplier-select-alert supplier-select-alert--pending">
+            <strong>Supply-chain profile pending admin approval</strong>
+            <p>
               You submitted changes to your role and/or brands. Until an admin approves them on the{' '}
               <strong>Profile brand assignment</strong> page, the platform continues to use your previously approved
               assignment for upstream matching and orders.
@@ -344,17 +397,9 @@ export default function SupplierSelectYourself() {
           </div>
         ) : null}
         {profile?.chainProfileApprovalStatus === 'draft' ? (
-          <div
-            className="profile-section"
-            style={{
-              background: '#eff6ff',
-              border: '1px solid #bfdbfe',
-              borderRadius: 10,
-              padding: '1rem 1.1rem'
-            }}
-          >
-            <strong style={{ color: '#1d4ed8' }}>Draft saved</strong>
-            <p style={{ margin: '0.45rem 0 0', color: '#1e3a8a', fontSize: '0.95rem', lineHeight: 1.45 }}>
+          <div className="supplier-select-alert supplier-select-alert--draft">
+            <strong>Draft saved</strong>
+            <p>
               Your latest form values are saved as draft and shown here. Complete the remaining required fields and
               click Save again to submit for admin approval.
               {profile.chainProfileDraftSavedAt
@@ -364,33 +409,60 @@ export default function SupplierSelectYourself() {
           </div>
         ) : null}
         {profile?.chainProfileLastRejection?.reason && profile?.chainProfileApprovalStatus !== 'pending' ? (
-          <div
-            className="profile-section"
-            style={{
-              background: '#fef2f2',
-              border: '1px solid #fecaca',
-              borderRadius: 10,
-              padding: '1rem 1.1rem'
-            }}
-          >
-            <strong style={{ color: '#991b1b' }}>Previous submission was not approved</strong>
-            <p style={{ margin: '0.45rem 0 0', color: '#7f1d1d', fontSize: '0.95rem' }}>
-              {profile.chainProfileLastRejection.reason}
-            </p>
+          <div className="supplier-select-alert supplier-select-alert--rejected">
+            <strong>Previous submission was not approved</strong>
+            <p>{profile.chainProfileLastRejection.reason}</p>
           </div>
         ) : null}
 
-        <div className="profile-section">
-          <h2>Supply-chain registration</h2>
-          <p className="profile-section-lead">
-            Tell us your supply-chain role and brand for upstream matching and orders. Fields marked with{' '}
-            <span className="field-required">*</span> are required before you save.
-          </p>
+        <div className="profile-section supplier-select-section supplier-select-section--brand">
+          <div className="supplier-select-section__head">
+            <h2>
+              <span className="supplier-select-section__label">Step 1</span>
+              Brand you are dealing with
+            </h2>
+            <div className="supplier-select-section__head-actions">
+              <button
+                type="button"
+                className="btn-secondary supplier-select-section__toggle-btn"
+                onClick={() => setBrandSectionExpanded((prev) => !prev)}
+              >
+                {brandSectionExpanded ? 'Collapse' : 'Expand'}
+              </button>
+              <button
+                type="button"
+                className="btn-primary supplier-select-section__save-btn"
+                onClick={handleSaveBrandApproval}
+                disabled={saving || !!savingEntryId || discarding || savingBrandApproval}
+              >
+                {savingBrandApproval ? 'Saving…' : 'Save brand request'}
+              </button>
+            </div>
+          </div>
+          {brandSectionExpanded ? (
+            <SupplierSupplyChainEntriesEditor
+              key={`brand-${editorResetKey}`}
+              profile={profile}
+              setProfile={setProfile}
+              editing
+              sectionView="brand"
+              selectionMode="dropdown"
+              allowEntryManagement={false}
+            />
+          ) : null}
+        </div>
+
+        <div className="profile-section supplier-select-section supplier-select-section--form">
+          <h2>
+            <span className="supplier-select-section__label">Step 2</span>
+            Supply-chain registration form details
+          </h2>
           <SupplierSupplyChainEntriesEditor
-            key={editorResetKey}
+            key={`form-${editorResetKey}`}
             profile={profile}
             setProfile={setProfile}
             editing
+            sectionView="form"
             onSaveEntry={handleSaveEntry}
             savingEntryId={savingEntryId}
           />

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { getApiUrl } from '../config/api';
 import { 
   Package, 
@@ -9,7 +9,6 @@ import {
   Save,
   X,
   Trash2,
-  Clock,
   CheckCircle,
   Ban,
   Sparkles,
@@ -17,9 +16,14 @@ import {
   Image as ImageIcon,
   Loader,
   ChevronDown,
-  Wallet
+  Wallet,
+  Layers,
+  MapPin,
+  RefreshCw,
+  AlertTriangle
 } from 'lucide-react';
 import './Dashboard.css';
+import './ProductManagement.css';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import {
@@ -46,11 +50,28 @@ import {
   normalizeSupplierProductsFromApi
 } from '../utils/supplierProductRow';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
+import {
+  applyIgstToTaxFields,
+  CGST_SGST_OPTIONS,
+  IGST_OPTIONS
+} from '../utils/gstRates';
 
 import { useLocation, useNavigate } from 'react-router-dom';
 
-const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
-const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
+const LOW_STOCK_THRESHOLD = 10;
+
+const STATUS_CONFIG = {
+  pending: { label: 'Pending', statusClass: 'pm-status--pending' },
+  approved: { label: 'Active', statusClass: 'pm-status--approved' },
+  rejected: { label: 'Rejected', statusClass: 'pm-status--rejected' }
+};
+
+function getStockHealth(stock) {
+  const quantity = parseSupplierStockQuantity(stock);
+  if (quantity === null || quantity === 0) return 'out';
+  if (quantity <= LOW_STOCK_THRESHOLD) return 'low';
+  return 'ok';
+}
 
 const ProductManagement = ({ user }) => {
   const location = useLocation();
@@ -68,6 +89,7 @@ const ProductManagement = ({ user }) => {
   const [categories, setCategories] = useState([]);
   /** Row keys (product ids) expanded to show TSIN, location, etc. */
   const [expandedProductRowKeys, setExpandedProductRowKeys] = useState(() => new Set());
+  const [refreshing, setRefreshing] = useState(false);
 
   const toggleProductRowExpanded = (e, rowKey) => {
     e.stopPropagation();
@@ -169,9 +191,9 @@ const ProductManagement = ({ user }) => {
     }
   };
 
-  const fetchProducts = async () => {
+  const fetchProducts = async ({ silent = false } = {}) => {
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl('/api/supplier/products'), {
         headers: {
@@ -193,7 +215,16 @@ const ProductManagement = ({ user }) => {
     } catch (error) {
       console.error('Failed to fetch products:', error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
+    }
+  };
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await fetchProducts({ silent: true });
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -210,9 +241,10 @@ const ProductManagement = ({ user }) => {
       });
       const data = await response.json();
       if (data.status === 'success') {
-        setProducts([...products, data.product]);
+        const addedProduct =
+          normalizeSupplierProductsFromApi([data.product])[0] || data.product;
+        setProducts((prev) => [...prev, addedProduct]);
         setShowAddModal(false);
-        fetchProducts();
         const nextBrand = String(data?.nextStep?.brand || data?.product?.brand || productData?.brand || '').trim();
         const nextProductName = String(data?.nextStep?.productName || data?.product?.name || productData?.name || '').trim();
         const params = new URLSearchParams();
@@ -369,10 +401,6 @@ const ProductManagement = ({ user }) => {
           )
         );
 
-        if (isInventoryView && savedStock != null) {
-          void fetchProducts();
-        }
-
         setEditingItem(null);
 
         // After inventory (step 2), go straight to ProductCOV (step 3)
@@ -461,602 +489,398 @@ const ProductManagement = ({ user }) => {
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
+  const pageStats = useMemo(() => {
+    const total = products.length;
+    const pending = products.filter((p) => (p.status || 'pending') === 'pending').length;
+    const approved = products.filter((p) => p.status === 'approved').length;
+    const lowStock = products.filter((p) => {
+      const health = getStockHealth(p.stock);
+      return health === 'out' || health === 'low';
+    }).length;
+    const inventoryValue = products.reduce((sum, p) => {
+      const price = parseFloat(p.price) || 0;
+      const stock = parseSupplierStockQuantity(p.stock) ?? 0;
+      return sum + price * stock;
+    }, 0);
+    return { total, pending, approved, lowStock, inventoryValue };
+  }, [products]);
+
   if (loading) {
     return (
-      <div className="dashboard-loading">
+      <div className="pm-page pm-loading">
         <div className="spinner" />
-        <p>Loading products...</p>
+        <p>Loading your catalog…</p>
       </div>
     );
   }
 
   return (
-    <div className="dashboard-container" style={{ maxWidth: '100%', padding: '2rem' }}>
-      <div className="dashboard-header">
-        <div>
+    <div className="pm-page">
+      <header className="pm-page-header">
+        <div className="pm-page-header__main">
+          <span className="pm-page-header__step">
+            {isInventoryView ? 'Step 2 of 3 — Inventory' : 'Step 1 of 3 — Catalog'}
+          </span>
           <h1>{isInventoryView ? 'Manage Inventory' : 'Manage Products'}</h1>
-          <p>
-            {user?.name && (
-              <span style={{ fontWeight: '600', color: '#4f46e5' }}>{user.name}</span>
-            )}
-            {user?.name && ' - '}
-            {isInventoryView 
-              ? `Update ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, ${SUPPLIER_MRP_LABEL}, and location for your existing products`
-              : 'Add new products to your catalog (saved products are read-only here)'}
+          <p className="pm-page-header__lead">
+            {isInventoryView
+              ? `Update ${SUPPLIER_MRP_LABEL}, ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, and location for each variant.`
+              : 'Add and maintain product catalog entries — specifications, images, and brand details.'}
           </p>
-          <div style={{ 
-            display: 'flex', 
-            gap: '1rem', 
-            marginTop: '0.75rem',
-            flexWrap: 'wrap'
-          }}>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              padding: '0.5rem 1rem',
-              background: '#fef3c7',
-              borderRadius: '8px',
-              border: '1px solid #fbbf24',
-              fontSize: '0.875rem',
-              fontWeight: '600',
-              color: '#92400e'
-            }}>
-              <Clock size={16} />
-              <span>Pending: {products.filter(p => (p.status || 'pending') === 'pending').length}</span>
-            </div>
-            <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem',
-              padding: '0.5rem 1rem',
-              background: '#d1fae5',
-              borderRadius: '8px',
-              border: '1px solid #10b981',
-              fontSize: '0.875rem',
-              fontWeight: '600',
-              color: '#065f46'
-            }}>
-              <CheckCircle size={16} />
-              <span>Approved: {products.filter(p => p.status === 'approved').length}</span>
-            </div>
-            {products.filter(p => p.status === 'rejected').length > 0 && (
-              <div style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-                padding: '0.5rem 1rem',
-                background: '#fee2e2',
-                borderRadius: '8px',
-                border: '1px solid #ef4444',
-                fontSize: '0.875rem',
-                fontWeight: '600',
-                color: '#991b1b'
-              }}>
-                <Ban size={16} />
-                <span>Rejected: {products.filter(p => p.status === 'rejected').length}</span>
-              </div>
-            )}
-          </div>
         </div>
-        {!isInventoryView && (
-          <button 
-            className="btn-primary"
-            onClick={() => setShowAddModal(true)}
+        <div className="pm-page-header__actions">
+          <button
+            type="button"
+            className="pm-btn pm-btn--secondary"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            title="Refresh list"
           >
-            <Plus size={18} />
-            Add Product
+            <RefreshCw size={15} className={refreshing ? 'spin' : undefined} />
+            Refresh
           </button>
-        )}
+          {!isInventoryView && (
+            <button type="button" className="pm-btn pm-btn--primary" onClick={() => setShowAddModal(true)}>
+              <Plus size={16} />
+              Add product
+            </button>
+          )}
+        </div>
+      </header>
+
+      <div className="pm-workflow">
+        <nav className="pm-tabs" aria-label="Product workflow">
+          <button
+            type="button"
+            className={`pm-tab ${!isInventoryView ? 'pm-tab--active' : ''}`}
+            onClick={() => navigate('/product-management')}
+          >
+            <Package size={15} />
+            Manage Products
+          </button>
+          <button
+            type="button"
+            className={`pm-tab ${isInventoryView ? 'pm-tab--active' : ''}`}
+            onClick={() => navigate('/manage-inventory')}
+          >
+            <Layers size={15} />
+            Manage Inventory
+          </button>
+        </nav>
+
+        <SupplierProductAdditionSteps
+          compact
+          variant={isInventoryView ? 'inventory' : 'add-product'}
+          hint={
+            isInventoryView
+              ? `Complete ${SUPPLIER_MRP_LABEL} and stock, then configure ProductCOV.`
+              : 'After catalog setup, continue to inventory and ProductCOV.'
+          }
+        />
       </div>
 
-      <SupplierProductAdditionSteps
-        variant={isInventoryView ? 'inventory' : 'add-product'}
-        hint={
-          isInventoryView
-            ? `You are on step 2. After ${SUPPLIER_MRP_LABEL} and ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} are set, open ProductCOV (step 3) to finish so this product can be priced correctly on orders.`
-            : 'You are on step 1. Add catalog details here, then use Manage Inventory for step 2, then ProductCOV for step 3.'
-        }
-      />
-
-      <div className="dashboard-content" style={{ gridTemplateColumns: '1fr', width: '100%' }}>
-        <div className="dashboard-section" style={{ width: '100%' }}>
-          <div className="section-header">
-            <h2>All Products</h2>
-            <div className="section-controls">
-              <div className="search-box">
-                <Search size={16} />
-                <input
-                  type="text"
-                  placeholder="Search products..."
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-              <select 
-                value={filterCategory} 
-                onChange={(e) => setFilterCategory(e.target.value)}
-              >
-                <option value="all">All Categories</option>
-                {categories.map((cat) => (
-                  <option key={cat.name} value={cat.name}>
-                    {cat.displayName || cat.name}
-                  </option>
-                ))}
-              </select>
-              <select 
-                value={filterStatus} 
-                onChange={(e) => setFilterStatus(e.target.value)}
-                style={{ marginLeft: '0.5rem' }}
-              >
-                <option value="all">All Status</option>
-                <option value="pending">Pending Approval</option>
-                <option value="approved">Approved</option>
-                <option value="rejected">Rejected</option>
-              </select>
-            </div>
+      <div className="pm-kpis">
+        <div className="pm-kpi">
+          <div className="pm-kpi__value">{pageStats.total}</div>
+          <div className="pm-kpi__label">Total variants</div>
+        </div>
+        <div className="pm-kpi">
+          <div className="pm-kpi__value">{pageStats.approved}</div>
+          <div className="pm-kpi__label">Active</div>
+        </div>
+        <div className="pm-kpi">
+          <div className="pm-kpi__value">{pageStats.pending}</div>
+          <div className="pm-kpi__label">Pending review</div>
+        </div>
+        <div className="pm-kpi">
+          <div className="pm-kpi__value">
+            {isInventoryView ? pageStats.lowStock : formatRupee(pageStats.inventoryValue)}
           </div>
-          
-          <div
-            className="products-list products-list--compact"
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              width: '100%',
-              gap: '0.4rem'
-            }}
-          >
-            {filteredProducts.length > 0 ? (
-              filteredProducts.map((product, productIndex) => {
-                const rowKey = String(
-                  product.supplier_product_id ||
-                    product.supplierProductId ||
-                    product.id ||
-                    product._id ||
-                    `row-${productIndex}`
-                );
-                const isRowExpanded = expandedProductRowKeys.has(rowKey);
-                const hasExpandableDetails =
-                  Boolean(product.asin || product.variantAsin || product.variant_asin || product.location);
-                const productStatus = product.status || 'pending';
-                const statusConfig = {
-                  pending: {
-                    label: 'Pending Approval',
-                    icon: Clock,
-                    color: '#d97706',
-                    bgColor: '#fef3c7',
-                    borderColor: '#fbbf24'
-                  },
-                  approved: {
-                    label: 'Approved',
-                    icon: CheckCircle,
-                    color: '#059669',
-                    bgColor: '#d1fae5',
-                    borderColor: '#10b981'
-                  },
-                  rejected: {
-                    label: 'Rejected',
-                    icon: Ban,
-                    color: '#dc2626',
-                    bgColor: '#fee2e2',
-                    borderColor: '#ef4444'
-                  }
-                };
-                const status = statusConfig[productStatus] || statusConfig.pending;
-                const StatusIcon = status.icon;
-                
-                return (
+          <div className="pm-kpi__label">{isInventoryView ? 'Low / zero stock' : 'Inventory value'}</div>
+        </div>
+      </div>
+
+      {isInventoryView && pageStats.lowStock > 0 ? (
+        <div className="pm-notice">
+          <AlertTriangle size={16} />
+          <span>
+            <strong>{pageStats.lowStock}</strong> variant{pageStats.lowStock > 1 ? 's need' : ' needs'} a stock update.
+          </span>
+        </div>
+      ) : null}
+
+      <section className="pm-panel">
+        <div className="pm-toolbar">
+          <div>
+            <h2 className="pm-toolbar__title">
+              {isInventoryView ? 'Your inventory' : 'Your catalog'}
+            </h2>
+            <p className="pm-toolbar__meta">
+              Showing {filteredProducts.length} of {products.length} variant{products.length !== 1 ? 's' : ''}
+              {searchTerm ? ` matching “${searchTerm}”` : ''}
+            </p>
+          </div>
+          <div className="pm-toolbar__controls">
+            <label className="pm-search">
+              <Search size={16} />
+              <input
+                type="search"
+                placeholder="Search by product name…"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                aria-label="Search products"
+              />
+            </label>
+            <select
+              className="pm-filter-select"
+              value={filterCategory}
+              onChange={(e) => setFilterCategory(e.target.value)}
+              aria-label="Filter by category"
+            >
+              <option value="all">All categories</option>
+              {categories.map((cat) => (
+                <option key={cat.name} value={cat.name}>
+                  {cat.displayName || cat.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="pm-filter-select"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              aria-label="Filter by status"
+            >
+              <option value="all">All statuses</option>
+              <option value="pending">Pending approval</option>
+              <option value="approved">Live</option>
+              <option value="rejected">Rejected</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="pm-table-head">
+          <span aria-hidden />
+          <span aria-hidden />
+          <span>Product</span>
+          <span>{SUPPLIER_MRP_LABEL}</span>
+          <span>{SUPPLIER_CURRENT_STOCK_LABEL}</span>
+          <span>Actions</span>
+        </div>
+
+        <div className="pm-list">
+          {filteredProducts.length > 0 ? (
+            filteredProducts.map((product, productIndex) => {
+              const rowKey = String(
+                product.supplier_product_id ||
+                  product.supplierProductId ||
+                  product.id ||
+                  product._id ||
+                  `row-${productIndex}`
+              );
+              const isRowExpanded = expandedProductRowKeys.has(rowKey);
+              const hasExpandableDetails = Boolean(
+                product.asin || product.variantAsin || product.variant_asin || product.location
+              );
+              const productStatus = product.status || 'pending';
+              const status = STATUS_CONFIG[productStatus] || STATUS_CONFIG.pending;
+              const stockHealth = getStockHealth(product.stock);
+              const displayBrand = String(product.brand || product.brandModel || '').trim();
+              const stockNote =
+                stockHealth === 'out'
+                  ? { text: 'Out of stock', className: 'pm-row__stock-note--danger' }
+                  : stockHealth === 'low'
+                    ? { text: 'Low stock', className: 'pm-row__stock-note--warn' }
+                    : null;
+
+              return (
                 <div
                   key={rowKey}
-                  className="product-card product-card--list-row"
-                  style={{
-                    border: productStatus === 'pending' ? `2px solid ${status.borderColor}` : '1px solid #e5e7eb',
-                    background: productStatus === 'pending' ? '#fffbeb' : 'white',
-                    borderRadius: '8px',
-                    padding: '0.45rem 0.55rem',
-                    cursor: 'pointer',
-                    maxWidth: '100%'
-                  }}
+                  className={`pm-row ${productStatus === 'pending' ? 'pm-row--pending' : ''}`}
                   onClick={() => setViewingItem(product)}
-                  title="Click to view product details"
+                  title="View details"
                 >
-                  <div
-                    className="product-info"
-                    style={{
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: '0.5rem',
-                      flexWrap: 'wrap'
-                    }}
+                  <button
+                    type="button"
+                    className="pm-row__chevron"
+                    aria-expanded={isRowExpanded}
+                    aria-label={isRowExpanded ? 'Collapse row' : 'Expand row'}
+                    disabled={!hasExpandableDetails}
+                    onClick={(e) => hasExpandableDetails && toggleProductRowExpanded(e, rowKey)}
                   >
-                    <button
-                      type="button"
-                      className="product-row-chevron"
-                      aria-expanded={isRowExpanded}
-                      aria-label={isRowExpanded ? 'Hide product details' : 'Show product details'}
-                      disabled={!hasExpandableDetails}
-                      onClick={(e) => hasExpandableDetails && toggleProductRowExpanded(e, rowKey)}
-                      style={{
-                        flexShrink: 0,
-                        width: '28px',
-                        height: '44px',
-                        padding: 0,
-                        border: 'none',
-                        background: 'transparent',
-                        cursor: hasExpandableDetails ? 'pointer' : 'default',
-                        color: hasExpandableDetails ? '#64748b' : '#cbd5e1',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        alignSelf: 'flex-start',
-                        borderRadius: '6px'
-                      }}
-                      title={
-                        hasExpandableDetails
-                          ? isRowExpanded
-                            ? 'Hide TSIN, location, and more'
-                            : 'Show TSIN, location, and more'
-                          : 'No extra details'
-                      }
-                    >
-                      <ChevronDown
-                        size={18}
-                        strokeWidth={2.25}
-                        style={{
-                          transition: 'transform 0.2s ease',
-                          transform: isRowExpanded ? 'rotate(0deg)' : 'rotate(-90deg)'
-                        }}
+                    <ChevronDown size={16} strokeWidth={2} />
+                  </button>
+
+                  {Array.isArray(product.images) && product.images[0] ? (
+                    <div className="pm-row__thumb">
+                      <ProductImageCarousel
+                        images={product.images}
+                        alt={product.name || 'Product'}
+                        height={52}
+                        rounded={6}
                       />
-                    </button>
-                    {Array.isArray(product.images) && product.images[0] ? (
-                      <div style={{ width: '44px', flexShrink: 0, alignSelf: 'flex-start' }}>
-                        <ProductImageCarousel
-                          images={product.images}
-                          alt={product.name || 'Product'}
-                          height={44}
-                          rounded={6}
-                        />
-                      </div>
-                    ) : (
-                      <div
-                        style={{
-                          width: '44px',
-                          height: '44px',
-                          flexShrink: 0,
-                          borderRadius: '6px',
-                          background: '#f1f5f9',
-                          border: '1px solid #e2e8f0'
-                        }}
-                        aria-hidden
-                      />
-                    )}
-
-                    <div style={{ flex: '1 1 auto', minWidth: 0 }}>
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.4rem',
-                          flexWrap: 'wrap',
-                          marginBottom: '0.12rem'
-                        }}
-                      >
-                        {user?.name ? (
-                          <div
-                            style={{
-                              fontSize: '0.65rem',
-                              color: '#64748b',
-                              textTransform: 'uppercase',
-                              fontWeight: '700',
-                              letterSpacing: '0.4px'
-                            }}
-                          >
-                            Supplier: <span style={{ color: '#0f172a' }}>{user.name}</span>
-                          </div>
-                        ) : null}
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.2rem',
-                            padding: '0.12rem 0.45rem',
-                            borderRadius: '999px',
-                            fontSize: '0.62rem',
-                            fontWeight: '700',
-                            background: status.bgColor,
-                            color: status.color,
-                            border: `1px solid ${status.borderColor}`
-                          }}
-                        >
-                          <StatusIcon size={11} />
-                          {status.label}
-                        </span>
-                      </div>
-
-                      <h4
-                        style={{
-                          fontSize: '0.88rem',
-                          fontWeight: '700',
-                          color: '#1e293b',
-                          margin: '0 0 0.08rem',
-                          lineHeight: '1.25',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap'
-                        }}
-                      >
-                        {product.name}
-                      </h4>
-                      <p
-                        className="product-category"
-                        style={{
-                          margin: '0 0 0.12rem',
-                          fontSize: '0.65rem',
-                          lineHeight: 1.2
-                        }}
-                      >
-                        {product.category}
-                      </p>
-
-                      {hasExpandableDetails && !isRowExpanded ? (
-                        <div style={{ fontSize: '0.6rem', color: '#94a3b8', marginTop: '0.05rem' }}>
-                          TSIN, location & more — tap arrow
-                        </div>
-                      ) : null}
                     </div>
+                  ) : (
+                    <div className="pm-row__thumb pm-row__thumb--empty" aria-hidden />
+                  )}
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'flex-end',
-                        flexShrink: 0,
-                        gap: '0.08rem',
-                        minWidth: '4.5rem'
-                      }}
-                    >
-                      <span style={{ fontSize: '0.6rem', color: '#64748b', fontWeight: 600 }}>{SUPPLIER_MRP_LABEL}</span>
-                      <span style={{ fontSize: '0.78rem', color: '#334155', fontWeight: 700, textAlign: 'right' }}>
-                        {formatRupeePerUnit(product.price, product.unit)}
-                      </span>
+                  <div className="pm-row__product">
+                    <div className="pm-row__meta">
+                      <span className={`pm-status ${status.statusClass}`}>{status.label}</span>
                     </div>
+                    <h3 className="pm-row__name">{product.name}</h3>
+                    <p className="pm-row__sub">
+                      <span>{product.category || 'Uncategorized'}</span>
+                      {displayBrand ? <span>{displayBrand}</span> : null}
+                    </p>
+                  </div>
 
-                    <div
-                      style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'flex-end',
-                        flexShrink: 0,
-                        gap: '0.08rem',
-                        minWidth: '5.75rem'
-                      }}
-                    >
-                      <span
-                        style={{
-                          fontSize: '0.55rem',
-                          color: '#64748b',
-                          fontWeight: 600,
-                          textAlign: 'right',
-                          lineHeight: 1.15,
-                          maxWidth: '5.75rem'
-                        }}
-                      >
-                        {SUPPLIER_CURRENT_STOCK_LABEL}
-                      </span>
-                      <span style={{ fontSize: '0.78rem', color: '#334155', fontWeight: 700, textAlign: 'right' }}>
+                  <div className="pm-row__cell">
+                    <span className="pm-row__cell-label">{SUPPLIER_MRP_LABEL}</span>
+                    <span className="pm-row__price">{formatRupeePerUnit(product.price, product.unit)}</span>
+                  </div>
+
+                  <div className="pm-row__cell">
+                    <span className="pm-row__cell-label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
+                    <div className="pm-row__stock">
+                      <span className="pm-row__stock-qty">
                         {product.stock} {product.unit}
                       </span>
+                      {stockNote ? (
+                        <span className={`pm-row__stock-note ${stockNote.className}`}>{stockNote.text}</span>
+                      ) : null}
                     </div>
+                  </div>
 
-                    {product.lsa ? (
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexDirection: 'column',
-                          alignItems: 'flex-end',
-                          flexShrink: 0,
-                          gap: '0.08rem',
-                          minWidth: '2.5rem'
+                  <div className="pm-row__actions">
+                    {product.variantKey ? (
+                      <button
+                        type="button"
+                        className="pm-icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const params = new URLSearchParams();
+                          params.set('variantKey', product.variantKey);
+                          if (product.variantAsin || product.variant_asin) {
+                            params.set('variantAsin', product.variantAsin || product.variant_asin);
+                          }
+                          if (product.name) params.set('variantName', product.name);
+                          if (product.brand) params.set('brand', product.brand);
+                          navigate(`/supplier-bcov?${params.toString()}`);
                         }}
+                        title="ProductCOV"
                       >
-                        <span style={{ fontSize: '0.6rem', color: '#64748b', fontWeight: 600 }}>LSA</span>
-                        <span style={{ fontSize: '0.78rem', color: '#334155', fontWeight: 700 }}>{product.lsa}</span>
-                      </div>
+                        <Wallet size={15} />
+                      </button>
                     ) : null}
-
-                    <div
-                      className="product-actions"
-                      style={{ display: 'flex', alignItems: 'center', gap: '0.15rem', flexShrink: 0 }}
-                    >
-                      {product.variantKey && (
+                    {isInventoryView ? (
+                      <>
                         <button
-                          className="btn-icon"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const params = new URLSearchParams();
-                            params.set('variantKey', product.variantKey);
-                            if (product.variantAsin || product.variant_asin) {
-                              params.set('variantAsin', product.variantAsin || product.variant_asin);
-                            }
-                            if (product.name) params.set('variantName', product.name);
-                            if (product.brand) params.set('brand', product.brand);
-                            navigate(`/supplier-bcov?${params.toString()}`);
-                          }}
-                          style={{
-                            padding: '0.3rem',
-                            borderRadius: '6px',
-                            transition: 'all 0.2s ease',
-                            color: '#8b5cf6'
-                          }}
-                          title="Set ProductCOV pricing levels for this variant"
-                        >
-                          <Wallet size={14} />
-                        </button>
-                      )}
-                      {isInventoryView && (
-                        <button
-                          className="btn-icon"
+                          type="button"
+                          className="pm-icon-btn"
                           onClick={(e) => {
                             e.stopPropagation();
                             setEditingItem(product);
                           }}
-                          style={{
-                            padding: '0.3rem',
-                            borderRadius: '6px',
-                            transition: 'all 0.2s ease',
-                            color: '#3b82f6'
-                          }}
-                          title={`Edit inventory (${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, ${SUPPLIER_MRP_LABEL}, location)`}
+                          title="Edit inventory"
                         >
-                          <Edit size={14} />
+                          <Edit size={15} />
                         </button>
-                      )}
-                      {isInventoryView && (
                         <button
-                          className="btn-icon"
+                          type="button"
+                          className="pm-icon-btn pm-icon-btn--danger"
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDeleteProduct(
                               getSupplierOfferRowId(product) || product.id || product._id
                             );
                           }}
-                          style={{
-                            padding: '0.3rem',
-                            borderRadius: '6px',
-                            transition: 'all 0.2s ease',
-                            color: '#ef4444'
-                          }}
-                          title="Delete product"
+                          title="Delete"
                         >
-                          <Trash2 size={14} />
+                          <Trash2 size={15} />
                         </button>
-                      )}
-                    </div>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="pm-icon-btn"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setViewingItem(product);
+                        }}
+                        title="View"
+                      >
+                        <Eye size={15} />
+                      </button>
+                    )}
                   </div>
 
                   {isRowExpanded && hasExpandableDetails ? (
-                    <div
-                      className="product-row-expanded"
-                      style={{
-                        marginTop: '0.45rem',
-                        paddingTop: '0.45rem',
-                        borderTop: '1px solid #f1f5f9',
-                        paddingLeft: '0.15rem'
-                      }}
-                    >
+                    <div className="pm-row__expand">
                       {(product.asin || product.variantAsin || product.variant_asin) && (
-                        <div
-                          style={{
-                            display: 'flex',
-                            flexWrap: 'wrap',
-                            gap: '0.35rem 0.65rem',
-                            fontSize: '0.68rem',
-                            lineHeight: 1.45,
-                            marginBottom: product.location ? '0.35rem' : 0
-                          }}
-                        >
-                          {product.asin && (
-                            <span style={{ color: '#475569' }}>
-                              <strong style={{ fontWeight: 700 }}>TSIN:</strong>{' '}
-                              <span
-                                style={{
-                                  color: '#0f172a',
-                                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace'
-                                }}
-                              >
-                                {product.asin}
-                              </span>
+                        <div style={{ marginBottom: product.location ? '0.35rem' : 0 }}>
+                          {product.asin ? (
+                            <span>
+                              TSIN <code>{product.asin}</code>
+                              {(product.variantAsin || product.variant_asin) ? ' · ' : ''}
                             </span>
-                          )}
-                          {(product.variantAsin || product.variant_asin) && (
-                            <span style={{ color: '#475569' }}>
-                              <strong style={{ fontWeight: 700 }}>Variant TSIN:</strong>{' '}
-                              <span
-                                style={{
-                                  color: '#0f172a',
-                                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace'
-                                }}
-                              >
-                                {product.variantAsin || product.variant_asin}
-                              </span>
+                          ) : null}
+                          {(product.variantAsin || product.variant_asin) ? (
+                            <span>
+                              Variant <code>{product.variantAsin || product.variant_asin}</code>
                             </span>
-                          )}
+                          ) : null}
                         </div>
                       )}
-
-                      {product.location && (
-                        <div
-                          style={{
-                            fontSize: '0.68rem',
-                            color: '#64748b',
-                            lineHeight: 1.45,
-                            wordBreak: 'break-word'
-                          }}
-                        >
-                          📍 {product.location}
+                      {product.location ? (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <MapPin size={13} />
+                          <span>{product.location}</span>
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   ) : null}
 
-                  {productStatus === 'pending' && (
-                    <div
-                      style={{
-                        padding: '0.35rem 0.5rem',
-                        marginTop: '0.35rem',
-                        borderRadius: '6px',
-                        background: '#fef3c7',
-                        border: '1px solid #fbbf24',
-                        fontSize: '0.68rem',
-                        color: '#92400e',
-                        lineHeight: 1.35
-                      }}
-                    >
-                      Awaiting Admin Approval: This product becomes visible to service providers after approval.
-                    </div>
-                  )}
+                  {productStatus === 'pending' ? (
+                    <div className="pm-row__notice">Pending admin approval before this variant is orderable.</div>
+                  ) : null}
 
-                  {productStatus === 'rejected' && product.rejectionReason && (
-                    <div
-                      style={{
-                        padding: '0.35rem 0.5rem',
-                        marginTop: '0.35rem',
-                        borderRadius: '6px',
-                        background: '#fee2e2',
-                        border: '1px solid #ef4444',
-                        fontSize: '0.68rem',
-                        color: '#991b1b',
-                        lineHeight: 1.35
-                      }}
-                    >
-                      <strong>Rejected:</strong> {product.rejectionReason}
+                  {productStatus === 'rejected' && product.rejectionReason ? (
+                    <div className="pm-row__notice">
+                      Rejected: {product.rejectionReason}
                     </div>
-                  )}
+                  ) : null}
                 </div>
-                );
-              })
-            ) : (
-              <div className="empty-state">
-                <Package size={48} />
-                <h3>No products found</h3>
-                <p>
-                  {isInventoryView 
-                    ? 'No products available to manage inventory. Add products first in Manage Products.'
-                    : 'Add products to your catalog to start receiving orders'}
-                </p>
-                {!isInventoryView && (
-                  <button 
-                    className="btn-primary"
-                    onClick={() => setShowAddModal(true)}
-                  >
-                    Add Product
-                  </button>
-                )}
+              );
+            })
+          ) : (
+            <div className="pm-empty">
+              <div className="pm-empty__icon">
+                {isInventoryView ? <Layers size={22} /> : <Package size={22} />}
               </div>
-            )}
-          </div>
+              <h3>{searchTerm || filterCategory !== 'all' || filterStatus !== 'all' ? 'No results' : 'No products'}</h3>
+              <p>
+                {searchTerm || filterCategory !== 'all' || filterStatus !== 'all'
+                  ? 'Adjust search or filters and try again.'
+                  : isInventoryView
+                    ? 'Add catalog items first, then set inventory here.'
+                    : 'Add a product to start building your catalog.'}
+              </p>
+              {!isInventoryView && !searchTerm && filterCategory === 'all' && filterStatus === 'all' ? (
+                <button type="button" className="pm-btn pm-btn--primary" onClick={() => setShowAddModal(true)}>
+                  <Plus size={16} />
+                  Add product
+                </button>
+              ) : null}
+              {isInventoryView && products.length === 0 ? (
+                <button type="button" className="pm-btn pm-btn--primary" onClick={() => navigate('/product-management')}>
+                  <Package size={16} />
+                  Manage Products
+                </button>
+              ) : null}
+            </div>
+          )}
         </div>
-      </div>
+      </section>
 
       {/* Add Product Modal - only from Manage Products.
           We collect product identity fields here (product name, brand/model,
@@ -1098,10 +922,10 @@ const ProductManagement = ({ user }) => {
       {viewingItem && (
         <ProductDetailsModal
           product={viewingItem}
-          supplierName={user?.name}
           canEditInventory={isInventoryView}
+          specificationsReadOnly={isInventoryView}
           onClose={() => setViewingItem(null)}
-          onSaveSpecifications={handleSaveSpecifications}
+          onSaveSpecifications={!isInventoryView ? handleSaveSpecifications : undefined}
           onEdit={
             isInventoryView
               ? (item) => {
@@ -1118,8 +942,8 @@ const ProductManagement = ({ user }) => {
 
 const ProductDetailsModal = ({
   product,
-  supplierName,
   canEditInventory = false,
+  specificationsReadOnly = false,
   onClose,
   onEdit,
   onSaveSpecifications
@@ -1291,12 +1115,11 @@ const ProductDetailsModal = ({
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
-        className="modal"
+        className="modal pm-details-modal"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: '780px', width: '92%', maxHeight: '86vh', overflowY: 'auto' }}
       >
         <div className="modal-header">
-          <h2>Product Details</h2>
+          <h2>{product.name || 'Product details'}</h2>
           <div className="modal-actions">
             {product?.variantKey && (
               <button
@@ -1335,45 +1158,82 @@ const ProductDetailsModal = ({
 
         <div className="modal-form">
           {Array.isArray(product.images) && product.images[0] ? (
-            <div style={{ marginBottom: '1rem' }}>
+            <div className="pm-details-hero">
               <ProductImageCarousel
                 images={product.images}
                 alt={product.name || 'Product'}
                 height={220}
-                rounded={10}
+                rounded={12}
               />
             </div>
           ) : null}
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.75rem' }}>
-            <div><strong>Name:</strong> {product.name || 'N/A'}</div>
-            <div><strong>Category:</strong> {product.category || 'N/A'}</div>
-            <div><strong>Supplier:</strong> {supplierName || 'N/A'}</div>
-            <div><strong>Status:</strong> {(product.status || 'pending').toUpperCase()}</div>
-            <div>
-              <strong>{SUPPLIER_MRP_LABEL}:</strong> {formatRupeePerUnit(product.price, product.unit)}
+          <div className="pm-details-grid">
+            <div className="pm-details-field">
+              <span className="pm-details-field__label">Category</span>
+              <span className="pm-details-field__value">{product.category || '—'}</span>
             </div>
-            <div>
-              <strong>{SUPPLIER_CURRENT_STOCK_LABEL}:</strong> {product.stock} {product.unit || 'unit'}
+            <div className="pm-details-field">
+              <span className="pm-details-field__label">Status</span>
+              <span className="pm-details-field__value">{(product.status || 'pending').replace('_', ' ')}</span>
             </div>
-            {gtinValue ? <div><strong>GTIN / UPC / EAN:</strong> {gtinValue}</div> : null}
-            {product.lsa ? <div><strong>LSA:</strong> {product.lsa}</div> : null}
-            {product.location ? <div><strong>Location:</strong> {product.location}</div> : null}
-            {product.asin ? <div><strong>TSIN:</strong> {product.asin}</div> : null}
+            <div className="pm-details-field">
+              <span className="pm-details-field__label">{SUPPLIER_MRP_LABEL}</span>
+              <span className="pm-details-field__value">{formatRupeePerUnit(product.price, product.unit)}</span>
+            </div>
+            <div className="pm-details-field">
+              <span className="pm-details-field__label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
+              <span className="pm-details-field__value">
+                {product.stock} {product.unit || 'unit'}
+              </span>
+            </div>
+            {gtinValue ? (
+              <div className="pm-details-field">
+                <span className="pm-details-field__label">GTIN / UPC / EAN</span>
+                <span className="pm-details-field__value">{gtinValue}</span>
+              </div>
+            ) : null}
+            {product.brand ? (
+              <div className="pm-details-field">
+                <span className="pm-details-field__label">Brand</span>
+                <span className="pm-details-field__value">{product.brand}</span>
+              </div>
+            ) : null}
+            {product.lsa ? (
+              <div className="pm-details-field">
+                <span className="pm-details-field__label">LSA</span>
+                <span className="pm-details-field__value">{product.lsa}</span>
+              </div>
+            ) : null}
+            {product.location ? (
+              <div className="pm-details-field">
+                <span className="pm-details-field__label">Location</span>
+                <span className="pm-details-field__value">{product.location}</span>
+              </div>
+            ) : null}
+            {product.asin ? (
+              <div className="pm-details-field">
+                <span className="pm-details-field__label">TSIN</span>
+                <span className="pm-details-field__value">{product.asin}</span>
+              </div>
+            ) : null}
             {(product.variantAsin || product.variant_asin) ? (
-              <div><strong>Variant TSIN:</strong> {product.variantAsin || product.variant_asin}</div>
+              <div className="pm-details-field">
+                <span className="pm-details-field__label">Variant TSIN</span>
+                <span className="pm-details-field__value">{product.variantAsin || product.variant_asin}</span>
+              </div>
             ) : null}
           </div>
 
           {product.description ? (
-            <div style={{ marginTop: '1rem' }}>
-              <h4 style={{ marginBottom: '0.35rem' }}>Description</h4>
-              <p style={{ margin: 0, color: '#475569' }}>{product.description}</p>
+            <div className="pm-details-section">
+              <h4>Description</h4>
+              <p style={{ margin: 0, color: '#475569', lineHeight: 1.55 }}>{product.description}</p>
             </div>
           ) : null}
 
           {specEntries.length > 0 ? (
-            <div style={{ marginTop: '1rem' }}>
+            <div className="pm-details-section">
               <div
                 style={{
                   display: 'flex',
@@ -1385,7 +1245,7 @@ const ProductDetailsModal = ({
                 }}
               >
                 <h4 style={{ margin: 0 }}>Specifications</h4>
-                {!isEditingSpecs && onSaveSpecifications ? (
+                {!isEditingSpecs && onSaveSpecifications && !specificationsReadOnly ? (
                   <button
                     type="button"
                     className="btn-secondary"
@@ -1419,6 +1279,12 @@ const ProductDetailsModal = ({
                   </div>
                 ) : null}
               </div>
+              {specificationsReadOnly ? (
+                <p className="pm-details-spec-readonly-hint">
+                  View only on this page. To change specifications, open the product under{' '}
+                  <strong>Manage Products</strong>.
+                </p>
+              ) : null}
               {isEditingSpecs ? (
                 <div
                   style={{
@@ -1467,12 +1333,10 @@ const ProductDetailsModal = ({
                   </div>
                 </div>
               ) : null}
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '0.5rem' }}>
+              <div className="pm-spec-grid">
                 {specEntries.map((entry) => (
-                  <div key={entry.key} style={{ padding: '0.55rem 0.65rem', border: '1px solid #e2e8f0', borderRadius: '8px', background: '#f8fafc' }}>
-                    <div style={{ fontSize: '0.78rem', color: '#64748b', textTransform: 'capitalize', marginBottom: '0.35rem' }}>
-                      {entry.label}
-                    </div>
+                  <div key={entry.key} className="pm-spec-card">
+                    <div className="pm-spec-card__label">{entry.label}</div>
                     {isEditingSpecs ? (
                       <input
                         type="text"
@@ -1493,12 +1357,7 @@ const ProductDetailsModal = ({
                       />
                     ) : (
                       <div
-                        style={{
-                          fontWeight: entry.hasValue ? 600 : 400,
-                          color: entry.hasValue ? '#0f172a' : '#9ca3af',
-                          fontSize: '0.9rem',
-                          fontStyle: entry.hasValue ? 'normal' : 'italic'
-                        }}
+                        className={`pm-spec-card__value ${entry.hasValue ? '' : 'pm-spec-card__value--empty'}`}
                       >
                         {entry.displayValue}
                       </div>
@@ -1579,6 +1438,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     return {}; // Start with empty object for new products
   });
   const [isEditingSpecValues, setIsEditingSpecValues] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   const MIN_AI_PRODUCT_IMAGES = 3;
   const MAX_AI_PRODUCT_IMAGES = 8;
@@ -1587,6 +1447,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [productAiImages, setProductAiImages] = useState([]);
   const [analyzingImage, setAnalyzingImage] = useState(false);
   const [uploadingProductImage, setUploadingProductImage] = useState(false);
+  const [aiDetectionReview, setAiDetectionReview] = useState(null);
+  const [aiSuggestionPopup, setAiSuggestionPopup] = useState({
+    open: false,
+    providerName: 'AI',
+    items: [],
+    selected: {}
+  });
   const productAiImagesRef = useRef([]);
 
   useEffect(() => {
@@ -1839,8 +1706,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.name, formData.category, formData.brand]);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    if (isSaving) return;
     setSuggestions([]);
     setShowSuggestions(false);
     
@@ -1868,6 +1736,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     // When adding a new product (Manage Products), include all fields including inventory
     // When editing in Manage Inventory, include inventory fields
+    // Inventory edit: stock, price, tax, location only — never specifications
+    if (showInventoryFields && product) {
+      delete productData.specifications;
+    }
+
     // When editing in Manage Products (specifications only), strip inventory fields
     if (!showInventoryFields && product) {
       // Editing existing product in Manage Products view - only update specifications
@@ -1880,8 +1753,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       delete productData.sgst_rate;
       delete productData.lsa;
     }
-    
-    onSave(productData);
+
+    setIsSaving(true);
+    try {
+      await Promise.resolve(onSave(productData));
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Fetch categories, units, and locations on mount
@@ -2292,6 +2170,137 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       reader.readAsDataURL(file);
     });
 
+  const AI_FIELD_META = [
+    { key: 'productName', label: 'Product Name' },
+    { key: 'unit', label: 'Unit' },
+    { key: 'brand', label: 'Brand' },
+    { key: 'gtin', label: 'GTIN / UPC / EAN' },
+    { key: 'category', label: 'Category' }
+  ];
+
+  const openAiSuggestionPopupFromReview = (review, providerName) => {
+    const suggestions = review?.suggestions || {};
+    const fieldStatus = review?.fieldStatus || {};
+    const confidence = review?.confidence || {};
+    const threshold = Number(review?.confidenceThreshold ?? 0.8);
+    const items = AI_FIELD_META
+      .map((field) => {
+        const value = String(suggestions[field.key] || '').trim();
+        if (!value) return null;
+        const status = fieldStatus?.[field.key] || {};
+        const score = Number(confidence?.[field.key]);
+        const confidenceValue = Number.isFinite(score) ? score : null;
+        if (confidenceValue !== null && confidenceValue >= threshold) {
+          return null;
+        }
+        return {
+          key: field.key,
+          label: field.label,
+          value,
+          reason: String(status?.reason || '').trim() || 'AI is not fully certain.',
+          confidence: confidenceValue,
+          threshold
+        };
+      })
+      .filter(Boolean);
+
+    if (items.length === 0) return;
+
+    const selected = items.reduce((acc, item) => {
+      acc[item.key] = true;
+      return acc;
+    }, {});
+
+    setAiSuggestionPopup({
+      open: true,
+      providerName: providerName || 'AI',
+      items,
+      selected
+    });
+  };
+
+  const applyAiSuggestionSelection = async () => {
+    const selectedKeys = Object.entries(aiSuggestionPopup.selected || {})
+      .filter(([, checked]) => checked)
+      .map(([key]) => key);
+
+    if (selectedKeys.length === 0) {
+      setAiSuggestionPopup((prev) => ({ ...prev, open: false }));
+      return;
+    }
+
+    const selectedItems = aiSuggestionPopup.items.filter((item) => selectedKeys.includes(item.key));
+    const selectedMap = selectedItems.reduce((acc, item) => {
+      acc[item.key] = item.value;
+      return acc;
+    }, {});
+
+    setFormData((prev) => ({
+      ...prev,
+      name: selectedMap.productName || prev.name,
+      unit: selectedMap.unit || prev.unit,
+      brand: selectedMap.brand || prev.brand,
+      gtin: selectedMap.gtin || prev.gtin,
+      category: selectedMap.category || prev.category
+    }));
+
+    if (selectedMap.category) {
+      setTimeout(async () => {
+        await loadCategorySpecifications(
+          selectedMap.category,
+          selectedMap.productName || formData.name || '',
+          { preserveExistingValues: true }
+        );
+      }, 100);
+    }
+
+    setAiSuggestionPopup((prev) => ({ ...prev, open: false }));
+  };
+
+  const getAiCandidateValueForField = (fieldKey) => {
+    const suggested = String(aiDetectionReview?.suggestions?.[fieldKey] || '').trim();
+    if (suggested) return suggested;
+    const raw = String(aiDetectionReview?.raw?.[fieldKey] || '').trim();
+    if (raw) return raw;
+    return null;
+  };
+
+  const applySingleAiField = async (fieldKey) => {
+    const candidate = getAiCandidateValueForField(fieldKey);
+    if (!candidate) return;
+
+    const mappedKey =
+      fieldKey === 'productName'
+        ? 'name'
+        : fieldKey;
+
+    setFormData((prev) => ({
+      ...prev,
+      [mappedKey]: candidate
+    }));
+
+    if (fieldKey === 'category') {
+      setTimeout(async () => {
+        await loadCategorySpecifications(
+          candidate,
+          formData.name || '',
+          { preserveExistingValues: true }
+        );
+      }, 100);
+    }
+
+    setAiDetectionReview((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        accepted: {
+          ...(prev.accepted || {}),
+          [fieldKey]: candidate
+        }
+      };
+    });
+  };
+
   const analyzeImagesFromFiles = async (files) => {
     if (!files || files.length < MIN_AI_PRODUCT_IMAGES) {
       alert(
@@ -2324,21 +2333,29 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       const data = await response.json();
 
       if (data.status === 'success') {
-        if (data.productName) {
-          setFormData((prev) => ({
-            ...prev,
-          name: data.productName
-          }));
-        }
+        setAiDetectionReview(data.review || null);
+        const nextProductName = String(data.productName || '').trim();
+        const nextCategory = String(data.category || '').trim();
+        const nextBrand = String(data.brand || '').trim();
+        const nextUnit = String(data.unit || '').trim();
+        const nextGtin = String(data.gtin || '').trim();
 
-        if (data.category) {
-          setFormData((prev) => ({
-            ...prev,
-            category: data.category
-          }));
+        setFormData((prev) => ({
+          ...prev,
+          name: nextProductName || prev.name,
+          category: nextCategory || prev.category,
+          brand: nextBrand || prev.brand,
+          unit: nextUnit || prev.unit,
+          gtin: nextGtin || prev.gtin
+        }));
 
+        if (nextCategory) {
           setTimeout(async () => {
-            await loadCategorySpecifications(data.category, data.productName || formData.name || '', { preserveExistingValues: true });
+            await loadCategorySpecifications(
+              nextCategory,
+              nextProductName || formData.name || '',
+              { preserveExistingValues: true }
+            );
           }, 100);
         }
 
@@ -2350,14 +2367,16 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               : data.provider === 'claude'
                 ? 'Claude'
                 : 'AI';
-        alert(
-          `✅ Images analyzed successfully using ${providerName}!\n\nProduct Name: ${data.productName || 'Not detected'}\nCategory: ${data.category || 'Not detected'}`
-        );
+        openAiSuggestionPopupFromReview(data.review || null, providerName);
       } else {
+        setAiDetectionReview(null);
+        setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
         alert(data.message || 'Failed to analyze images. Please try again.');
       }
     } catch (error) {
       console.error('Image analysis error:', error);
+      setAiDetectionReview(null);
+      setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
       alert(
         `Failed to analyze images: ${error.message}. Please check your API keys configuration and try again.`
       );
@@ -2382,26 +2401,44 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       alert('Image size should be less than 10MB');
       return;
     }
+    if (productAiImagesRef.current.length >= MAX_AI_PRODUCT_IMAGES) {
+      alert(`You can add at most ${MAX_AI_PRODUCT_IMAGES} images.`);
+      return;
+    }
 
     let filesToAnalyze = null;
-    setProductAiImages((prev) => {
-      if (prev.length >= MAX_AI_PRODUCT_IMAGES) {
-        queueMicrotask(() =>
-          alert(`You can add at most ${MAX_AI_PRODUCT_IMAGES} images.`)
-        );
-        return prev;
-      }
-      const previewUrl = URL.createObjectURL(file);
-      const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const next = [...prev, { id, file, previewUrl }];
-      if (next.length >= MIN_AI_PRODUCT_IMAGES) {
-        filesToAnalyze = next.map((x) => x.file);
-      }
-      return next;
-    });
+    setUploadingProductImage(true);
+    try {
+      const uploadedUrl = await uploadProductImageToStorage(file);
 
-    if (filesToAnalyze) {
-      await analyzeImagesFromFiles(filesToAnalyze);
+      setProductAiImages((prev) => {
+        if (prev.length >= MAX_AI_PRODUCT_IMAGES) {
+          queueMicrotask(() =>
+            alert(`You can add at most ${MAX_AI_PRODUCT_IMAGES} images.`)
+          );
+          return prev;
+        }
+        const previewUrl = URL.createObjectURL(file);
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const next = [...prev, { id, file, previewUrl, uploadedUrl }];
+        if (next.length >= MIN_AI_PRODUCT_IMAGES) {
+          filesToAnalyze = next.map((x) => x.file);
+        }
+        return next;
+      });
+
+      setFormData((prev) => ({
+        ...prev,
+        images: Array.from(new Set([...(Array.isArray(prev.images) ? prev.images : []), uploadedUrl]))
+      }));
+
+      if (filesToAnalyze) {
+        await analyzeImagesFromFiles(filesToAnalyze);
+      }
+    } catch (error) {
+      alert(error.message || 'Failed to upload image');
+    } finally {
+      setUploadingProductImage(false);
     }
   };
 
@@ -2461,10 +2498,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   };
 
   const handleRemoveAiImage = (id) => {
+    const target = productAiImagesRef.current.find((x) => x.id === id);
+    if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+    if (target?.uploadedUrl) {
+      setFormData((prevForm) => ({
+        ...prevForm,
+        images: (Array.isArray(prevForm.images) ? prevForm.images : []).filter((url) => url !== target.uploadedUrl)
+      }));
+    }
     setProductAiImages((prev) => {
-      const item = prev.find((x) => x.id === id);
-      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      return prev.filter((x) => x.id !== id);
+      const next = prev.filter((x) => x.id !== id);
+      if (next.length === 0) {
+        setAiDetectionReview(null);
+        setAiSuggestionPopup((popup) => ({ ...popup, open: false, items: [], selected: {} }));
+      }
+      return next;
     });
   };
 
@@ -2475,6 +2523,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       });
       return [];
     });
+    setAiDetectionReview(null);
+    setAiSuggestionPopup((popup) => ({ ...popup, open: false, items: [], selected: {} }));
+    setFormData((prev) => ({ ...prev, images: [] }));
   };
 
   const handleExtractSpecifications = async () => {
@@ -2562,6 +2613,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         
         <form onSubmit={handleSubmit} className="modal-form">
           <div className="form-grid">
+            {product && (
             <div className="form-group" style={{ gridColumn: '1 / -1', marginBottom: '1rem', order: !product ? 100 : 1 }}>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                 <ImageIcon size={16} />
@@ -2662,12 +2714,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                 </p>
               </div>
             </div>
+            )}
             {/* Image Upload Section */}
             {!product && (
               <div className="form-group" style={{ gridColumn: '1 / -1', marginBottom: '1rem', order: -10 }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                   <ImageIcon size={16} />
-                  Product photos for AI (minimum {MIN_AI_PRODUCT_IMAGES})
+                  Product photos for AI + customer display (minimum {MIN_AI_PRODUCT_IMAGES})
                 </label>
                 <div
                   style={{
@@ -2736,7 +2789,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                           type="file"
                           accept="image/*"
                           onChange={handleImageUpload}
-                          disabled={analyzingImage}
+                          disabled={analyzingImage || uploadingProductImage}
                           style={{ display: 'none' }}
                           id="product-image-upload"
                         />
@@ -2750,9 +2803,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                             height: '100px',
                             border: '2px dashed #93c5fd',
                             borderRadius: '8px',
-                            background: analyzingImage ? '#e5e7eb' : '#eff6ff',
-                            color: analyzingImage ? '#6b7280' : '#2563eb',
-                            cursor: analyzingImage ? 'not-allowed' : 'pointer',
+                            background: analyzingImage || uploadingProductImage ? '#e5e7eb' : '#eff6ff',
+                            color: analyzingImage || uploadingProductImage ? '#6b7280' : '#2563eb',
+                            cursor: analyzingImage || uploadingProductImage ? 'not-allowed' : 'pointer',
                             fontSize: '0.75rem',
                             fontWeight: 600,
                             textAlign: 'center',
@@ -2760,7 +2813,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                             boxSizing: 'border-box'
                           }}
                         >
-                          {analyzingImage ? (
+                          {analyzingImage || uploadingProductImage ? (
                             <Loader size={20} style={{ animation: 'spin 1s linear infinite' }} />
                           ) : (
                             <>
@@ -2783,8 +2836,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   >
                     <p style={{ margin: 0, fontSize: '0.75rem', color: '#6b7280', flex: '1 1 200px' }}>
                       Add <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong> of the same item (different angles,
-                      packaging, or label). AI runs automatically after the {MIN_AI_PRODUCT_IMAGES}rd photo, or use
-                      &quot;Re-run AI&quot;.
+                      packaging, or label).
                     </p>
                     <span
                       style={{
@@ -2798,11 +2850,102 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       {productAiImages.length} / {MIN_AI_PRODUCT_IMAGES}+
                     </span>
                   </div>
+                  {aiDetectionReview && (
+                    <div
+                      style={{
+                        marginTop: '0.75rem',
+                        border: '1px solid #d1fae5',
+                        background: '#ecfdf5',
+                        borderRadius: '8px',
+                        padding: '0.65rem 0.75rem'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.5rem' }}>
+                        <Sparkles size={14} color="#065f46" />
+                        <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#065f46' }}>
+                          AI review: confidence {'>='} 80% is auto-filled, below 80% needs your confirmation
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                        {[
+                          { key: 'productName', label: 'Product Name' },
+                          { key: 'unit', label: 'Unit' },
+                          { key: 'brand', label: 'Brand' },
+                          { key: 'gtin', label: 'GTIN / UPC / EAN' },
+                          { key: 'category', label: 'Category' }
+                        ].map((field) => {
+                          const accepted = aiDetectionReview?.accepted?.[field.key];
+                          const raw = aiDetectionReview?.raw?.[field.key];
+                          const status = aiDetectionReview?.fieldStatus?.[field.key] || {};
+                          const isAccepted = Boolean(accepted);
+                          const candidateValue = getAiCandidateValueForField(field.key);
+                          const canApply = !isAccepted && Boolean(candidateValue);
+                          const score = Number(aiDetectionReview?.confidence?.[field.key]);
+                          const confidenceValue = Number.isFinite(score) ? score : null;
+                          const reason = String(status.reason || '').trim();
+                          if (canApply) {
+                            return (
+                              <button
+                                key={field.key}
+                                type="button"
+                                onClick={() => applySingleAiField(field.key)}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.3rem',
+                                  padding: '0.35rem 0.5rem',
+                                  borderRadius: '999px',
+                                  border: '1px solid #f59e0b',
+                                  background: '#fef3c7',
+                                  color: '#92400e',
+                                  fontSize: '0.73rem',
+                                  fontWeight: 600,
+                                  cursor: 'pointer'
+                                }}
+                                title={`${reason || 'AI confidence is below 80%'} Click to apply this value.`}
+                              >
+                                <Ban size={12} />
+                                {`${field.label}: skipped (${candidateValue})${confidenceValue !== null ? ` ${Math.round(confidenceValue * 100)}%` : ''} - click to use`}
+                              </button>
+                            );
+                          }
+
+                          return (
+                            <span
+                              key={field.key}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.3rem',
+                                padding: '0.35rem 0.5rem',
+                                borderRadius: '999px',
+                                background: isAccepted ? '#dcfce7' : '#fef3c7',
+                                color: isAccepted ? '#166534' : '#92400e',
+                                fontSize: '0.73rem',
+                                fontWeight: 600
+                              }}
+                              title={
+                                reason ||
+                                (isAccepted
+                                  ? `Accepted (confidence ${confidenceValue !== null ? `${Math.round(confidenceValue * 100)}%` : 'n/a'})`
+                                  : 'Below confidence threshold')
+                              }
+                            >
+                              {isAccepted ? <CheckCircle size={12} /> : <Ban size={12} />}
+                              {isAccepted
+                                ? `${field.label}: ${accepted}${confidenceValue !== null ? ` (${Math.round(confidenceValue * 100)}%)` : ''}`
+                                : `${field.label}: skipped${raw ? ` (${raw})` : ''}${reason ? ` - ${reason}` : ''}`}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                   <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <button
                       type="button"
                       className="btn-secondary"
-                      disabled={analyzingImage || productAiImages.length < MIN_AI_PRODUCT_IMAGES}
+                      disabled={analyzingImage || uploadingProductImage || productAiImages.length < MIN_AI_PRODUCT_IMAGES}
                       onClick={() => analyzeImagesFromFiles(productAiImages.map((x) => x.file))}
                     >
                       Re-run AI with all photos
@@ -2811,7 +2954,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       <button
                         type="button"
                         className="btn-secondary"
-                        disabled={analyzingImage}
+                        disabled={analyzingImage || uploadingProductImage}
                         onClick={handleClearAiImages}
                       >
                         Clear all photos
@@ -3564,7 +3707,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   <label>IGST</label>
                   <select
                     value={formData.igst_rate}
-                    onChange={(e) => setFormData({ ...formData, igst_rate: e.target.value })}
+                    onChange={(e) =>
+                      setFormData((prev) => applyIgstToTaxFields(prev, e.target.value))
+                    }
                     required
                   >
                     <option value="">Select IGST rate</option>
@@ -3820,14 +3965,88 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               </>
             )}
           </div>
+
+          {aiSuggestionPopup.open && (
+            <div
+              style={{
+                border: '1px solid #fed7aa',
+                background: '#fff7ed',
+                borderRadius: '10px',
+                padding: '0.9rem',
+                marginTop: '0.8rem'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                <Sparkles size={16} color="#9a3412" />
+                <strong style={{ color: '#9a3412' }}>
+                  {aiSuggestionPopup.providerName} confidence is below 80%. Do you mean these values?
+                </strong>
+              </div>
+              <p style={{ margin: '0 0 0.55rem 0', fontSize: '0.82rem', color: '#7c2d12' }}>
+                Tick the suggestions that are correct, then apply them.
+              </p>
+              <div style={{ display: 'grid', gap: '0.45rem' }}>
+                {aiSuggestionPopup.items.map((item) => (
+                  <label
+                    key={item.key}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '0.5rem',
+                      padding: '0.45rem 0.5rem',
+                      border: '1px solid #fdba74',
+                      borderRadius: '8px',
+                      background: '#ffedd5',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!aiSuggestionPopup.selected[item.key]}
+                      onChange={(e) =>
+                        setAiSuggestionPopup((prev) => ({
+                          ...prev,
+                          selected: {
+                            ...(prev.selected || {}),
+                            [item.key]: e.target.checked
+                          }
+                        }))
+                      }
+                    />
+                    <span style={{ fontSize: '0.82rem', color: '#7c2d12' }}>
+                      <strong>{item.label}:</strong> {item.value}
+                      {typeof item.confidence === 'number' ? (
+                        <span style={{ display: 'block', marginTop: '0.15rem' }}>
+                          Confidence: {Math.round(item.confidence * 100)}% (threshold 80%)
+                        </span>
+                      ) : null}
+                      {item.reason ? <span style={{ display: 'block', marginTop: '0.15rem' }}>Reason: {item.reason}</span> : null}
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <div style={{ marginTop: '0.65rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button type="button" className="btn-primary" onClick={applyAiSuggestionSelection}>
+                  Apply selected suggestions
+                </button>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setAiSuggestionPopup((prev) => ({ ...prev, open: false }))}
+                >
+                  Skip suggestions
+                </button>
+              </div>
+            </div>
+          )}
           
           <div className="modal-actions">
-            <button type="button" className="btn-secondary" onClick={onClose}>
+            <button type="button" className="btn-secondary" onClick={onClose} disabled={isSaving}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary">
+            <button type="submit" className="btn-primary" disabled={isSaving}>
               <Save size={16} />
-              {product ? 'Update' : 'Add'} Product
+              {isSaving ? 'Saving…' : product ? 'Update Product' : 'Add Product'}
             </button>
           </div>
         </form>

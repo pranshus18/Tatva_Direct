@@ -1,6 +1,8 @@
 import { supabase } from '../config/supabase.js';
 import { v4 as uuidv4 } from 'uuid';
 import {
+  resolveBrandApprovalDocumentUrls,
+  setBrandApprovalDocumentUrls,
   resolveAuthorizationCertificateUrls,
   setAuthorizationCertificateUrls
 } from '../utils/authorizationCertificateUrls.js';
@@ -51,6 +53,7 @@ export function normalizeCompanyInfoEntries(rawEntries) {
       }
     }
     const certificateFields = setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(e));
+    const brandDocumentFields = setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(e));
     const brandList = parseEntryBrandList(e?.brands);
     const brandsForRows = brandList.length > 0 ? brandList : [''];
     const baseId = e?.id || uuidv4();
@@ -64,6 +67,8 @@ export function normalizeCompanyInfoEntries(rawEntries) {
         companyName: e?.companyName != null && e.companyName !== '' ? String(e.companyName).trim() : '',
         ownershipDetails:
           e?.ownershipDetails != null && e.ownershipDetails !== '' ? String(e.ownershipDetails).trim() : '',
+        brandApprovalDocumentUrls: brandDocumentFields.brandApprovalDocumentUrls,
+        brandApprovalDocumentUrl: brandDocumentFields.brandApprovalDocumentUrl,
         authorizationCertificateUrls: certificateFields.authorizationCertificateUrls,
         authorizationCertificateUrl: certificateFields.authorizationCertificateUrl,
         ...(minimumOrderValue != null ? { minimumOrderValue } : {})
@@ -93,6 +98,8 @@ export function baselineChainFromProfile(profile) {
       String(p.gstin || '').trim() ||
       String(p.companyName || '').trim() ||
       String(p.ownershipDetails || '').trim() ||
+      String(p.brandApprovalDocumentUrl || '').trim() ||
+      (Array.isArray(p.brandApprovalDocumentUrls) && p.brandApprovalDocumentUrls.length > 0) ||
       String(p.authorizationCertificateUrl || '').trim() ||
       (Array.isArray(p.authorizationCertificateUrls) && p.authorizationCertificateUrls.length > 0) ||
       (p.minimumOrderValue !== '' && p.minimumOrderValue !== null && p.minimumOrderValue !== undefined)
@@ -105,6 +112,10 @@ export function baselineChainFromProfile(profile) {
           gstin: String(p.gstin || '').trim(),
           companyName: String(p.companyName || '').trim(),
           ownershipDetails: String(p.ownershipDetails || '').trim(),
+          brandApprovalDocumentUrl: String(p.brandApprovalDocumentUrl || '').trim(),
+          brandApprovalDocumentUrls: Array.isArray(p.brandApprovalDocumentUrls)
+            ? p.brandApprovalDocumentUrls
+            : [],
           authorizationCertificateUrl: String(p.authorizationCertificateUrl || '').trim(),
           authorizationCertificateUrls: Array.isArray(p.authorizationCertificateUrls)
             ? p.authorizationCertificateUrls

@@ -1,6 +1,6 @@
 import { resolveAuthorizationCertificateUrls } from './authorizationCertificateUrls';
 
-/** @typedef {{ id?: string, role?: string, brands?: string, gstin?: string, companyName?: string, ownershipDetails?: string, authorizationCertificateUrl?: string, authorizationCertificateUrls?: string[], minimumOrderValue?: string|number|null }} ChainEntry */
+/** @typedef {{ id?: string, role?: string, brands?: string, gstin?: string, companyName?: string, ownershipDetails?: string, authorizationCertificateUrl?: string, authorizationCertificateUrls?: string[], brandApprovalDocumentUrl?: string, brandApprovalDocumentUrls?: string[], minimumOrderValue?: string|number|null }} ChainEntry */
 
 export function parseBrandsListForValidation(brands) {
   if (brands == null || brands === '') return [];
@@ -36,6 +36,7 @@ export function resolveCompanyInfoEntriesForValidation(profile) {
       gstin: profile.gstin || '',
       companyName: profile.companyName || '',
       ownershipDetails: profile.ownershipDetails || '',
+      brandApprovalDocumentUrl: profile.brandApprovalDocumentUrl || '',
       authorizationCertificateUrl: profile.authorizationCertificateUrl || '',
       minimumOrderValue: profile.minimumOrderValue ?? ''
     }
@@ -61,7 +62,7 @@ export function validateCompanyInfoEntriesList(entries) {
     const entryNum = i + 1;
     const role = String(entry.role || '').trim();
     const brandList = parseBrandsListForValidation(entry.brands);
-    const certificateUrls = resolveAuthorizationCertificateUrls(entry);
+    const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
 
     if (brandList.length === 0) {
       return {
@@ -79,10 +80,10 @@ export function validateCompanyInfoEntriesList(entries) {
         field: 'brands'
       };
     }
-    if (certificateUrls.length === 0) {
+    if (roleCertificateUrls.length === 0) {
       return {
         ok: false,
-        message: `Entry ${entryNum}: Upload at least one brand authorisation document.`,
+        message: `Entry ${entryNum}: Upload at least one supply-chain role document.`,
         entryIndex: i,
         field: 'authorizationCertificateUrls'
       };

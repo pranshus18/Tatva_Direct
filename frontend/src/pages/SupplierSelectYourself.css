@@ -1,0 +1,351 @@
+.supplier-select-yourself-page {
+  max-width: 1260px;
+}
+
+.supplier-select-yourself-page .profile-content {
+  gap: 1.2rem;
+}
+
+.supplier-select-yourself-page .profile-header {
+  margin-bottom: 1.5rem;
+  padding-bottom: 0.85rem;
+}
+
+.supplier-select-yourself-page .profile-title h1 {
+  font-size: 1.85rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.supplier-select-yourself-page .profile-section {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  border-radius: 14px;
+  padding: 1.4rem;
+}
+
+.supplier-select-yourself-page .profile-section h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 1rem;
+  font-size: 1.08rem;
+  font-weight: 650;
+  color: #0f172a;
+}
+
+.supplier-select-yourself-page .supplier-select-section__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.9rem;
+}
+
+.supplier-select-yourself-page .supplier-select-section__head h2 {
+  margin: 0;
+}
+
+.supplier-select-yourself-page .supplier-select-section__head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.supplier-select-yourself-page .supplier-select-section__toggle-btn {
+  min-height: 2.25rem;
+  height: 2.25rem;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.82rem;
+  border-radius: 10px;
+}
+
+.supplier-select-yourself-page .supplier-select-section__save-btn {
+  min-height: 2.25rem;
+  height: 2.25rem;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.84rem;
+  border-radius: 10px;
+}
+
+.supplier-select-flow-card {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+  padding: 0.7rem 0.9rem;
+}
+
+.supplier-select-flow-card__step {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #334155;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.supplier-select-flow-card__badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 24px;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #475569;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.supplier-select-flow-card__arrow {
+  color: #94a3b8;
+  font-weight: 700;
+}
+
+.supplier-select-alert {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.9rem 1rem;
+}
+
+.supplier-select-alert strong {
+  font-size: 0.94rem;
+}
+
+.supplier-select-alert p {
+  margin: 0.4rem 0 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.supplier-select-alert--pending {
+  background: #fffbeb;
+  border-color: #f6d68f;
+  color: #78350f;
+}
+
+.supplier-select-alert--draft {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1e3a8a;
+}
+
+.supplier-select-alert--rejected {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #7f1d1d;
+}
+
+.supplier-select-yourself-page .supplier-select-section--brand {
+  padding: 1.1rem 1.2rem;
+}
+
+.supplier-select-yourself-page .supplier-select-section__label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 50px;
+  height: 22px;
+  padding: 0 0.55rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+@media (max-width: 768px) {
+  .supplier-select-yourself-page .supplier-select-section__head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .supplier-select-yourself-page .supplier-select-section__head-actions {
+    width: 100%;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+
+  .supplier-select-yourself-page .supplier-select-section__save-btn {
+    width: 100%;
+  }
+
+  .supplier-select-yourself-page .supplier-select-section__toggle-btn {
+    width: 100%;
+  }
+}
+
+.supplier-select-yourself-page .profile-page-header-actions .btn-primary {
+  background: #1e293b;
+  border-color: #1e293b;
+  box-shadow: none;
+}
+
+.supplier-select-yourself-page .profile-page-header-actions .btn-primary:hover {
+  transform: none;
+  background: #0f172a;
+  border-color: #0f172a;
+  box-shadow: none;
+}
+
+.supplier-select-yourself-page .profile-page-header-actions .btn-secondary {
+  border-color: #d1d5db;
+  color: #334155;
+}
+
+.supplier-select-yourself-page .profile-page-header-actions .btn-secondary:hover {
+  border-color: #94a3b8;
+  color: #0f172a;
+  background: #f8fafc;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-selector {
+  border-color: #e2e8f0;
+  background: #f8fafc;
+  box-shadow: none;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-selector label {
+  margin-bottom: 0.35rem;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-card {
+  border-color: #e2e8f0;
+  box-shadow: none;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor--brand .chain-entry-card {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor--brand .chain-entry-body {
+  padding: 0;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor--form .chain-entry-card {
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor--form .chain-entry-body {
+  padding: 0;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-header {
+  background: #fcfcfd;
+  border-bottom-color: #eef2f7;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-approval-block,
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-form-block {
+  border-color: #e2e8f0;
+  box-shadow: none;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-form-block {
+  background: #fcfcfd;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor--form .chain-entry-form-block {
+  border: none;
+  background: transparent;
+  padding: 0;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-approval-block {
+  border-left: 1px solid #e2e8f0;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor--brand .chain-entry-approval-block {
+  border: none;
+  box-shadow: none;
+  padding: 0;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor--brand .chain-section__panel {
+  border: none;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-chip--role {
+  color: #3730a3;
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-chip--brand {
+  color: #065f46;
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-status-card {
+  background: #f8fafc;
+  border-color: #d9e2ec;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-status-card--success {
+  color: #065f46;
+  background: #f0fdf4;
+  border-color: #ccefd8;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-status-card--warning {
+  color: #92400e;
+  background: #fffaf0;
+  border-color: #f3ddad;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-status-card--danger {
+  color: #991b1b;
+  background: #fff5f5;
+  border-color: #f2c8c8;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-add-entry__btn {
+  background: #ffffff;
+  color: #334155;
+  border-color: #cbd5e1;
+}
+
+.supplier-select-yourself-page .supplier-select-yourself-editor .chain-add-entry__btn:hover {
+  background: #f8fafc;
+  border-color: #94a3b8;
+}
+
+.supplier-select-yourself-page .brand-auth-docs__thumb {
+  border-color: #dbe3ee;
+  box-shadow: none;
+}
+
+.supplier-select-yourself-page .brand-auth-docs__preview--file {
+  color: #334155;
+  background: #f8fafc;
+}
+
+.supplier-select-yourself-page .brand-auth-docs__add {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+  color: #334155;
+}
+
+.supplier-select-yourself-page .brand-auth-docs__add:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
+}

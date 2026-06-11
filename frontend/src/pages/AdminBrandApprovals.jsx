@@ -154,15 +154,7 @@ const AdminBrandApprovals = () => {
         </div>
       </div>
 
-      <div
-        className="admin-content"
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 420px',
-          gap: '1.5rem',
-          alignItems: 'start'
-        }}
-      >
+      <div className="admin-content" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         {filtered.length === 0 ? (
           <div className="empty-state">
             <Tag size={48} color="#94a3b8" />
@@ -248,16 +240,14 @@ const AdminBrandApprovals = () => {
           </div>
         )}
 
-        {/* Approved Brands reference (always visible) */}
+        {/* Approved Brands reference (always visible, full width below table) */}
         <div
           style={{
             background: 'rgba(255,255,255,0.92)',
             border: '1px solid rgba(226,232,240,0.9)',
             borderRadius: '16px',
             padding: '1.25rem',
-            boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
-            position: 'sticky',
-            top: '1rem'
+            boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem' }}>
@@ -325,27 +315,55 @@ const AdminBrandApprovals = () => {
                 No approved brands yet.
               </div>
             ) : (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
-                {approvedBrands.map((b) => (
-                  <span
-                    key={b.id}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '0.4rem',
-                      padding: '0.45rem 0.65rem',
-                      borderRadius: '999px',
-                      background: 'rgba(16,185,129,0.10)',
-                      color: '#065f46',
-                      border: '1px solid rgba(16,185,129,0.20)',
-                      fontWeight: 700,
-                      fontSize: '0.85rem'
-                    }}
-                  >
-                    <CheckCircle size={14} aria-hidden />
-                    {b.name}
-                  </span>
-                ))}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                {approvedBrands.map((b) => {
+                  const requester = b?.requester;
+                  const approver = b?.approver;
+                  return (
+                    <div
+                      key={b.id}
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'minmax(140px, 1.2fr) minmax(180px, 1.5fr) minmax(160px, 1fr) minmax(160px, 1fr)',
+                        gap: '0.75rem 1rem',
+                        alignItems: 'center',
+                        padding: '0.75rem 1rem',
+                        borderRadius: '10px',
+                        background: 'rgba(16,185,129,0.06)',
+                        border: '1px solid rgba(16,185,129,0.18)'
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0 }}>
+                        <CheckCircle size={16} color="#059669" aria-hidden style={{ flexShrink: 0 }} />
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            color: '#065f46',
+                            fontSize: '0.95rem',
+                            wordBreak: 'break-word'
+                          }}
+                        >
+                          {b.name}
+                        </span>
+                      </div>
+                      <div style={{ color: '#475569', fontSize: '0.875rem', minWidth: 0, wordBreak: 'break-word' }}>
+                        <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block' }}>Requested by</span>
+                        {requester
+                          ? `${requester.name || 'User'}${requester.email ? ` (${requester.email})` : ''}`
+                          : b.requested_by || '-'}
+                      </div>
+                      <div style={{ color: '#475569', fontSize: '0.875rem' }}>
+                        <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block' }}>Requested at</span>
+                        {b.requested_at ? new Date(b.requested_at).toLocaleString() : '-'}
+                      </div>
+                      <div style={{ color: '#475569', fontSize: '0.875rem', minWidth: 0, wordBreak: 'break-word' }}>
+                        <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block' }}>Approved</span>
+                        {b.approved_at ? new Date(b.approved_at).toLocaleString() : '-'}
+                        {approver?.name ? ` · ${approver.name}` : ''}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

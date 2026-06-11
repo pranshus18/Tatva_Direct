@@ -21,11 +21,13 @@ export const profileUpdateSchema = z.object({
   supplierRole: z.string().optional(),
   brands: z.any().optional(),
   companyInfoEntries: z.array(z.record(z.string(), z.any())).optional(),
-  saveAsDraft: z.boolean().optional()
+  saveAsDraft: z.boolean().optional(),
+  saveBrandApprovalOnly: z.boolean().optional()
 });
 
 export const profileUploadCertificateBodySchema = z.object({
   entryId: z.string().optional(),
-  url: z.string().optional()
+  url: z.string().optional(),
+  documentType: z.enum(['brand_approval', 'role_authorization']).optional()
 });
 

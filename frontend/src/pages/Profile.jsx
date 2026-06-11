@@ -138,7 +138,12 @@ const Profile = ({ user }) => {
       if (data.chainApprovalPending) {
         alert(data.message || 'Submitted for admin approval.');
       }
-      await fetchProfile();
+      if (data.profile) {
+        setProfile(data.profile);
+        cacheProfilePhotoUrl(data.profile?.profilePhotoUrl || '');
+      } else {
+        await fetchProfile();
+      }
       setEditing(false);
     } catch (error) {
       console.error('Failed to save profile:', error);

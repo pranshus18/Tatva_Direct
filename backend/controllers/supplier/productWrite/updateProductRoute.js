@@ -37,6 +37,22 @@ export function registerSupplierProductUpdateRoute(ctx) {
   router.put('/products/:id', authenticateToken, async (req, res) => {
     try {
       req.body = parseWithSchema(supplierProductUpdateSchema, req.body || {});
+      const inventoryFieldKeys = [
+        'stock',
+        'price',
+        'location',
+        'min_order_quantity',
+        'unit',
+        'igst_rate',
+        'cgst_rate',
+        'sgst_rate',
+        'hsnCode',
+        'hsn_code'
+      ];
+      const hasInventoryFields = inventoryFieldKeys.some((key) => req.body[key] !== undefined);
+      if (hasInventoryFields && req.body.specifications !== undefined) {
+        delete req.body.specifications;
+      }
       const id = req.params.id;
       console.log(`[Supplier Inventory] PUT /api/supplier/products/${id} by supplier ${req.userId}`, {
         bodyKeys: Object.keys(req.body || {}),
@@ -186,16 +202,16 @@ export function registerSupplierProductUpdateRoute(ctx) {
 
         const { data: baseProduct } = await supabase
           .from('products')
-          .select('*')
+          .select('id, name, description, category, unit, brand, gtin, mpn, specifications, images, asin, status')
           .eq('id', updatedSupplierProduct.product_id)
           .single();
 
-        await upsertModelSpecProfile({
+        void upsertModelSpecProfile({
           category: req.body.category || baseProduct?.category,
           modelRaw: req.body.mpn || updatedAttributes.brandModel || baseProduct?.mpn,
           specifications: nextSpecifications,
           actorUserId: req.userId
-        });
+        }).catch((err) => console.log('upsertModelSpecProfile failed:', err?.message || err));
 
         const ra = updatedSupplierProduct.attributes || {};
         const responseProduct = {
@@ -234,36 +250,38 @@ export function registerSupplierProductUpdateRoute(ctx) {
               : sanitizeImageUrls(baseProduct?.images)
         };
 
-        try {
-          const changes = [];
-          if (supplierProduct.price !== updatedSupplierProduct.price) {
-            changes.push(`Price: ₹${supplierProduct.price} -> ₹${updatedSupplierProduct.price}`);
-          }
-          if (supplierProduct.stock !== updatedSupplierProduct.stock) changes.push(`Stock: ${supplierProduct.stock} -> ${updatedSupplierProduct.stock}`);
-          if (supplierProduct.location !== updatedSupplierProduct.location) changes.push(`Location changed`);
-          if (supplierProduct.min_order_quantity !== updatedSupplierProduct.min_order_quantity) changes.push(`Min Order Qty changed`);
-          if (specificationsChanged) changes.push('Specifications changed (requires admin approval)');
-          if (changes.length > 0) {
+        void (async () => {
+          try {
+            const changes = [];
+            if (supplierProduct.price !== updatedSupplierProduct.price) {
+              changes.push(`Price: ₹${supplierProduct.price} -> ₹${updatedSupplierProduct.price}`);
+            }
+            if (supplierProduct.stock !== updatedSupplierProduct.stock) changes.push(`Stock: ${supplierProduct.stock} -> ${updatedSupplierProduct.stock}`);
+            if (supplierProduct.location !== updatedSupplierProduct.location) changes.push(`Location changed`);
+            if (supplierProduct.min_order_quantity !== updatedSupplierProduct.min_order_quantity) changes.push(`Min Order Qty changed`);
+            if (specificationsChanged) changes.push('Specifications changed (requires admin approval)');
+            if (changes.length === 0) return;
+
             const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
             const { data: admins } = await findAdmins(adminEmail, supabase);
             const { data: supplier } = await findUserBasicById(req.userId, supabase);
-            if (admins?.length) {
-              const notifications = admins.map((admin) => ({
-                user_id: admin.id,
-                type: 'supplier_edit',
-                title: `Supplier Updated Inventory: ${responseProduct.name}`,
-                message: `${supplier?.name || 'Supplier'} updated "${responseProduct.name}". Changes: ${changes.join(', ')}`,
-                related_product_id: updatedSupplierProduct.product_id,
-                related_supplier_id: req.userId,
-                metadata: { productId: updatedSupplierProduct.product_id, supplierId: req.userId, changes },
-                is_read: false
-              }));
-              await insertNotifications(notifications, supabase);
-            }
+            if (!admins?.length) return;
+
+            const notifications = admins.map((admin) => ({
+              user_id: admin.id,
+              type: 'supplier_edit',
+              title: `Supplier Updated Inventory: ${responseProduct.name}`,
+              message: `${supplier?.name || 'Supplier'} updated "${responseProduct.name}". Changes: ${changes.join(', ')}`,
+              related_product_id: updatedSupplierProduct.product_id,
+              related_supplier_id: req.userId,
+              metadata: { productId: updatedSupplierProduct.product_id, supplierId: req.userId, changes },
+              is_read: false
+            }));
+            await insertNotifications(notifications, supabase);
+          } catch (notifErr) {
+            console.log('Failed to notify admins about supplier inventory update:', notifErr?.message || notifErr);
           }
-        } catch (notifErr) {
-          console.log('Failed to notify admins about supplier inventory update:', notifErr?.message || notifErr);
-        }
+        })();
 
         return res.json({
           status: 'success',

@@ -325,66 +325,17 @@ export function buildSupplierProductCreateHandler(ctx) {
         });
       }
 
-      if (isCatalogGuardrailsEnabled()) {
-        try {
-          const familyKeySeed = `${identityBundle.catalog.brand || ''}|${identityBundle.catalog.category || categoryName || ''}|${identityBundle.catalog.name || productNameRaw || ''}`.toLowerCase().trim();
-          const familyKey = familyKeySeed ? crypto.createHash('sha256').update(familyKeySeed).digest('hex') : null;
-          let familyId = existingProduct?.family_id || null;
-          if (!familyId && familyKey) {
-            const { data: existingFamily } = await supabase
-              .from('product_families')
-              .select('id')
-              .eq('normalized_family_key', familyKey)
-              .maybeSingle();
-            if (existingFamily?.id) familyId = existingFamily.id;
-          }
-          const { template, fields } = await loadSpecTemplateForCategory(categoryName, familyId);
-          const specValidation = fields.length > 0
-            ? validateSpecValues(fields, otherData.specifications || requestSpecs || {})
-            : { allowed: (otherData.specifications || requestSpecs || {}), errors: [], unknownKeys: [] };
-          const confidenceScore = scoreOnboardingConfidence({
-            identityBundle,
-            validationErrors: specValidation.errors,
-            unknownKeys: specValidation.unknownKeys
-          });
-          const finalDecision = decideOnboardingAction(confidenceScore, onboardingAutoApproveThreshold);
-          if (finalDecision !== 'auto_linked') {
-            await supabase.from('product_requests').insert({
-              requested_by: req.userId,
-              supplier_id: req.userId,
-              source: 'supplier',
-              status: 'new',
-              category: categoryName || null,
-              normalized_input: { name: otherData.name || '', category: categoryName, identityBundle },
-              ai_prefill: { templateId: template?.id || null, values: specValidation.allowed },
-              confidence_score: confidenceScore,
-              resolved_product_id: productId
-            });
-          }
-        } catch (guardrailError) {
-          console.log('Guardrails metadata write failed:', guardrailError?.message || guardrailError);
-        }
-      }
-
-      await upsertModelSpecProfile({
-        category: categoryName || category,
-        modelRaw: mpnInput || brandModel,
-        specifications: normalizedSpecs,
-        actorUserId: req.userId
-      });
-
-      const { data: completeProduct } = await supabase
+      const { data: baseProduct } = await supabase
         .from('products')
-        .select(`*, supplier_products!inner(*)`)
+        .select(
+          'id, name, description, category, unit, brand, gtin, mpn, specifications, images, asin, status, requested_by_service_provider_id'
+        )
         .eq('id', productId)
-        .eq('supplier_products.supplier_id', req.userId)
-        .eq('supplier_products.location', currentLocation)
-        .eq('supplier_products.variant_key', variantIdentityBundle.variantKey)
         .single();
 
-      const createdOffer = completeProduct?.supplier_products?.[0] || newSupplierProduct;
+      const createdOffer = newSupplierProduct;
       const responseProduct = {
-        ...completeProduct,
+        ...(baseProduct || {}),
         price: createdOffer?.price,
         stock: createdOffer?.stock,
         location: createdOffer?.location,
@@ -394,44 +345,104 @@ export function buildSupplierProductCreateHandler(ctx) {
         supplier_id: req.userId,
         supplier_product_id: createdOffer?.id || newSupplierProduct?.id,
         variantKey: createdOffer?.variant_key || variantIdentityBundle.variantKey,
-        variantAsin: createdOffer?.variant_asin || variantAsin
+        variantAsin: createdOffer?.variant_asin || variantAsin,
+        images:
+          normalizedImageUrls.length > 0
+            ? normalizedImageUrls
+            : baseProduct?.images
       };
 
-      const { data: supplier } = await findUserBasicById(req.userId, supabase);
-      const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
-      const { data: admins } = await findAdmins(adminEmail, supabase);
-      if (admins?.length) {
-        const notifications = admins.map((admin) => ({
-          user_id: admin.id,
-          type: shouldBeApproved ? 'supplier_edit' : 'product_approval',
-          title: shouldBeApproved
-            ? `Supplier Updated Inventory: ${responseProduct.name}`
-            : `Product/Variant Pending Approval: ${responseProduct.name}`,
-          message: shouldBeApproved
-            ? `${supplier?.name || 'Supplier'} added inventory for "${responseProduct.name}".`
-            : `${supplier?.name} (${supplier?.company || supplier?.email}) added "${responseProduct.name}" with variant specifications that require your approval.`,
-          related_product_id: productId,
-          related_supplier_id: supplier?.id || req.userId,
-          metadata: { productId, supplierId: req.userId, variantKey: variantIdentityBundle.variantKey },
-          is_read: false
-        }));
-        await insertNotifications(notifications, supabase);
+      if (isCatalogGuardrailsEnabled()) {
+        void (async () => {
+          try {
+            const familyKeySeed = `${identityBundle.catalog.brand || ''}|${identityBundle.catalog.category || categoryName || ''}|${identityBundle.catalog.name || productNameRaw || ''}`.toLowerCase().trim();
+            const familyKey = familyKeySeed ? crypto.createHash('sha256').update(familyKeySeed).digest('hex') : null;
+            let familyId = existingProduct?.family_id || null;
+            if (!familyId && familyKey) {
+              const { data: existingFamily } = await supabase
+                .from('product_families')
+                .select('id')
+                .eq('normalized_family_key', familyKey)
+                .maybeSingle();
+              if (existingFamily?.id) familyId = existingFamily.id;
+            }
+            const { template, fields } = await loadSpecTemplateForCategory(categoryName, familyId);
+            const specValidation = fields.length > 0
+              ? validateSpecValues(fields, otherData.specifications || requestSpecs || {})
+              : { allowed: (otherData.specifications || requestSpecs || {}), errors: [], unknownKeys: [] };
+            const confidenceScore = scoreOnboardingConfidence({
+              identityBundle,
+              validationErrors: specValidation.errors,
+              unknownKeys: specValidation.unknownKeys
+            });
+            const finalDecision = decideOnboardingAction(confidenceScore, onboardingAutoApproveThreshold);
+            if (finalDecision !== 'auto_linked') {
+              await supabase.from('product_requests').insert({
+                requested_by: req.userId,
+                supplier_id: req.userId,
+                source: 'supplier',
+                status: 'new',
+                category: categoryName || null,
+                normalized_input: { name: otherData.name || '', category: categoryName, identityBundle },
+                ai_prefill: { templateId: template?.id || null, values: specValidation.allowed },
+                confidence_score: confidenceScore,
+                resolved_product_id: productId
+              });
+            }
+          } catch (guardrailError) {
+            console.log('Guardrails metadata write failed:', guardrailError?.message || guardrailError);
+          }
+        })();
       }
 
-      if (!isNewProduct && responseProduct?.requested_by_service_provider_id) {
-        await insertNotification(
-          {
-            user_id: responseProduct.requested_by_service_provider_id,
-            type: 'system',
-            title: `Supplier added your requested product: ${responseProduct.name}`,
-            message: `${supplier?.name || 'A supplier'} added "${responseProduct.name}".`,
-            related_product_id: productId,
-            related_supplier_id: req.userId,
-            metadata: { productId, source: 'service_provider_request_fulfilled' }
-          },
-          supabase
-        );
-      }
+      void upsertModelSpecProfile({
+        category: categoryName || category,
+        modelRaw: mpnInput || brandModel,
+        specifications: normalizedSpecs,
+        actorUserId: req.userId
+      }).catch((err) => console.log('upsertModelSpecProfile failed:', err?.message || err));
+
+      void (async () => {
+        try {
+          const { data: supplier } = await findUserBasicById(req.userId, supabase);
+          const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
+          const { data: admins } = await findAdmins(adminEmail, supabase);
+          if (admins?.length) {
+            const notifications = admins.map((admin) => ({
+              user_id: admin.id,
+              type: shouldBeApproved ? 'supplier_edit' : 'product_approval',
+              title: shouldBeApproved
+                ? `Supplier Updated Inventory: ${responseProduct.name}`
+                : `Product/Variant Pending Approval: ${responseProduct.name}`,
+              message: shouldBeApproved
+                ? `${supplier?.name || 'Supplier'} added inventory for "${responseProduct.name}".`
+                : `${supplier?.name} (${supplier?.company || supplier?.email}) added "${responseProduct.name}" with variant specifications that require your approval.`,
+              related_product_id: productId,
+              related_supplier_id: supplier?.id || req.userId,
+              metadata: { productId, supplierId: req.userId, variantKey: variantIdentityBundle.variantKey },
+              is_read: false
+            }));
+            await insertNotifications(notifications, supabase);
+          }
+
+          if (!isNewProduct && responseProduct?.requested_by_service_provider_id) {
+            await insertNotification(
+              {
+                user_id: responseProduct.requested_by_service_provider_id,
+                type: 'system',
+                title: `Supplier added your requested product: ${responseProduct.name}`,
+                message: `${supplier?.name || 'A supplier'} added "${responseProduct.name}".`,
+                related_product_id: productId,
+                related_supplier_id: req.userId,
+                metadata: { productId, source: 'service_provider_request_fulfilled' }
+              },
+              supabase
+            );
+          }
+        } catch (notifErr) {
+          console.log('Product create notifications failed:', notifErr?.message || notifErr);
+        }
+      })();
 
       return res.status(201).json({
         status: 'success',

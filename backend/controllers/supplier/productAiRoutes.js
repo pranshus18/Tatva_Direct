@@ -6,6 +6,8 @@ import {
   extractSpecificationPairsFromDescription,
   extractSpecificationValuesFromDescription,
   getContractErrorMessage,
+  isValidGtin,
+  normalizeGtin,
   onboardingAutoApproveThreshold,
   parseSpecificationsObject,
   parseWithSchema,
@@ -24,6 +26,159 @@ export function registerSupplierProductAiRoutes(ctx) {
     resolveAdminSpecificationTemplate,
     loadSpecTemplateForCategory
   } = ctx;
+
+const AI_CONFIDENCE_THRESHOLD = 0.8;
+
+function normalizeConfidenceValue(rawValue) {
+  if (rawValue === null || rawValue === undefined || rawValue === '') return null;
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) return null;
+  if (numeric >= 0 && numeric <= 1) return numeric;
+  if (numeric > 1 && numeric <= 100) return numeric / 100;
+  return null;
+}
+
+function normalizeDecisionConfidence(rawValue) {
+  const parsed = normalizeConfidenceValue(rawValue);
+  if (parsed === null) return 0;
+  if (parsed < 0) return 0;
+  if (parsed > 1) return 1;
+  return parsed;
+}
+
+function deriveConfidenceFallback({ directConfidence, isCertain, extractedValue, suggestedValue }) {
+  const normalizedDirect = normalizeConfidenceValue(directConfidence);
+  if (normalizedDirect !== null) return normalizeDecisionConfidence(normalizedDirect);
+
+  const hasExtractedValue = String(extractedValue || '').trim().length > 0;
+  const hasSuggestedValue = String(suggestedValue || '').trim().length > 0;
+
+  if (isCertain && hasExtractedValue) return 0.9;
+  if (hasExtractedValue) return 0.75;
+  if (hasSuggestedValue) return 0.55;
+  return 0;
+}
+
+function toBooleanOrNull(rawValue) {
+  if (rawValue === true || rawValue === false) return rawValue;
+  if (typeof rawValue === 'string') {
+    const normalized = rawValue.trim().toLowerCase();
+    if (normalized === 'true') return true;
+    if (normalized === 'false') return false;
+  }
+  return null;
+}
+
+function readFieldConfidence(result, fieldName) {
+  const confidenceRoot = result?.confidence || result?.confidences || {};
+  const value =
+    confidenceRoot?.[fieldName] ??
+    confidenceRoot?.[fieldName.toLowerCase()] ??
+    result?.[`${fieldName}Confidence`] ??
+    result?.[`${fieldName}_confidence`] ??
+    null;
+  return normalizeConfidenceValue(value);
+}
+
+function normalizeFieldStatus(result = {}) {
+  const statusRoot = result?.fieldStatus || result?.field_status || {};
+  const pick = (fieldName) => {
+    const fromRoot = statusRoot?.[fieldName] || statusRoot?.[fieldName.toLowerCase()] || {};
+    const fromFlat =
+      result?.[`${fieldName}Certain`] ??
+      result?.[`${fieldName}_certain`] ??
+      fromRoot?.isCertain ??
+      fromRoot?.is_certain ??
+      fromRoot?.certain;
+    const isCertain = toBooleanOrNull(fromFlat);
+    const reasonRaw = fromRoot?.reason ?? fromRoot?.note ?? result?.[`${fieldName}Reason`] ?? null;
+    const reason = String(reasonRaw || '').trim() || null;
+    const suggestedValueRaw =
+      fromRoot?.suggestedValue ??
+      fromRoot?.suggested_value ??
+      fromRoot?.candidate ??
+      fromRoot?.guess ??
+      result?.[`${fieldName}Suggestion`] ??
+      result?.[`${fieldName}_suggestion`] ??
+      null;
+    const suggestedValue = String(suggestedValueRaw || '').trim() || null;
+    return { isCertain: isCertain === true, reason, suggestedValue };
+  };
+
+  return {
+    productName: pick('productName'),
+    unit: pick('unit'),
+    brand: pick('brand'),
+    gtin: pick('gtin'),
+    category: pick('category')
+  };
+}
+
+function extractPartialModelResponse(text = '') {
+  const safeText = String(text || '');
+  const pickStringOrNull = (keys = []) => {
+    for (const key of keys) {
+      const m = safeText.match(new RegExp(`"(${key})"\\s*:\\s*(null|"([^"]*)")`, 'i'));
+      if (!m) continue;
+      if (m[2] === 'null') return null;
+      return m[3] != null ? String(m[3]).trim() : null;
+    }
+    return undefined;
+  };
+
+  const pickNumber = (scopeText, key) => {
+    const m = String(scopeText || '').match(new RegExp(`"(${key})"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)`, 'i'));
+    if (!m) return null;
+    const n = Number(m[2]);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const confidenceBlock = safeText.match(/"confidence"\s*:\s*\{([\s\S]*?)\}/i)?.[1] || '';
+  const statusBlock = safeText.match(/"fieldStatus"\s*:\s*\{([\s\S]*)$/i)?.[1] || '';
+  const pickFieldStatus = (fieldName) => {
+    const isCertainMatch = statusBlock.match(
+      new RegExp(`"${fieldName}"\\s*:\\s*\\{[\\s\\S]*?"isCertain"\\s*:\\s*(true|false)`, 'i')
+    );
+    const reasonMatch = statusBlock.match(
+      new RegExp(`"${fieldName}"\\s*:\\s*\\{[\\s\\S]*?"reason"\\s*:\\s*"([^"]*)"`, 'i')
+    );
+    const suggestedMatch = statusBlock.match(
+      new RegExp(`"${fieldName}"\\s*:\\s*\\{[\\s\\S]*?"suggestedValue"\\s*:\\s*"([^"]*)"`, 'i')
+    );
+
+    return {
+      isCertain: String(isCertainMatch?.[1] || '').toLowerCase() === 'true',
+      reason: reasonMatch?.[1] ? String(reasonMatch[1]).trim() : null,
+      suggestedValue: suggestedMatch?.[1] ? String(suggestedMatch[1]).trim() : null
+    };
+  };
+
+  const partial = {
+    productName: pickStringOrNull(['productName', 'product_name', 'name', 'product']),
+    unit: pickStringOrNull(['unit', 'uom', 'unitName', 'unit_name']),
+    brand: pickStringOrNull(['brand', 'brandName', 'manufacturer', 'make']),
+    gtin: pickStringOrNull(['gtin', 'barcode', 'upc', 'ean', 'gtin_upc_ean']),
+    category: pickStringOrNull(['category', 'categoryName', 'category_name', 'productCategory']),
+    confidence: {
+      productName: pickNumber(confidenceBlock, 'productName'),
+      unit: pickNumber(confidenceBlock, 'unit'),
+      brand: pickNumber(confidenceBlock, 'brand'),
+      gtin: pickNumber(confidenceBlock, 'gtin'),
+      category: pickNumber(confidenceBlock, 'category')
+    },
+    fieldStatus: {
+      productName: pickFieldStatus('productName'),
+      unit: pickFieldStatus('unit'),
+      brand: pickFieldStatus('brand'),
+      gtin: pickFieldStatus('gtin'),
+      category: pickFieldStatus('category')
+    }
+  };
+
+  const hasAnyTopLevel = ['productName', 'unit', 'brand', 'gtin', 'category']
+    .some((key) => partial[key] !== undefined);
+  return hasAnyTopLevel ? partial : null;
+}
 
 router.post('/products/ai-enhance', authenticateToken, async (req, res) => {
   try {
@@ -253,9 +408,9 @@ router.post('/products/analyze-image', authenticateToken, async (req, res) => {
     // Determine which provider to use
     let selectedProvider = provider;
     if (provider === 'auto') {
-      // Auto-select: prioritize Gemini > OpenAI > Claude
-      if (geminiApiKey) selectedProvider = 'gemini';
-      else if (openaiApiKey) selectedProvider = 'openai';
+      // Auto-select: prioritize OCR-strong OpenAI > Gemini > Claude
+      if (openaiApiKey) selectedProvider = 'openai';
+      else if (geminiApiKey) selectedProvider = 'gemini';
       else if (anthropicApiKey) selectedProvider = 'claude';
       else {
         return res.status(400).json({
@@ -310,19 +465,45 @@ router.post('/products/analyze-image', authenticateToken, async (req, res) => {
     // Build prompt for vision AI (multiple images of the same product).
     const prompt = `You are given ${visionImages.length} photos of the SAME construction / building material product (different angles or details). Analyze them together and identify:
 1. Product Name: A clear, concise product name (e.g., "Portland Cement OPC 53", "TMT Steel Bar 12mm", "Red Clay Brick")
-2. Category: A short category name describing this construction material (for example: ${categoryExamples || 'steel, cement, aggregates, masonry, electrical, plumbing, hardware'}).
+2. Unit: Selling unit if visible on pack/label (examples: kg, g, litre, ml, meter, piece, nos, bag, box, sheet, bundle)
+3. Brand: Brand/manufacturer name if visible
+4. GTIN / UPC / EAN: Barcode number if clearly visible
+5. Category: A short category name describing this construction material (for example: ${categoryExamples || 'steel, cement, aggregates, masonry, electrical, plumbing, hardware'}).
 
 IMPORTANT:
 - Use ALL images together — labels, texture, shape, and packaging may appear in different shots
-- The product name should be specific and professional (include brand/model if visible, dimensions if applicable)
-- The category should be concise and reusable for grouping similar products (1–3 words)
+- Extract text exactly as visible on the image label/packaging (verbatim, no normalization)
+- Do NOT guess or infer missing values
+- If a field is not clearly readable, return null for that field
+- GTIN / UPC / EAN must be returned only when all digits are clearly readable
+- For each field, include a confidence score between 0 and 1
+- Confidence is mandatory; do not omit confidence keys even when value is null
+- For uncertain fields, include your best possible candidate in fieldStatus.<field>.suggestedValue (if you can)
+- Keep fieldStatus reasons short (max 12 words each)
 - You MAY reuse one of the example categories or output a NEW category if it fits better
 - Return ONLY valid JSON with no additional text
 
 Return this JSON structure:
 {
-  "productName": "exact product name inferred from the images",
-  "category": "one of the categories from the list"
+  "productName": "exact product name text from packaging or null",
+  "unit": "exact unit text from image or null",
+  "brand": "brand name or null",
+  "gtin": "8/12/13/14 digit GTIN/UPC/EAN string or null",
+  "category": "one of the categories from the list",
+  "confidence": {
+    "productName": 0.0,
+    "unit": 0.0,
+    "brand": 0.0,
+    "gtin": 0.0,
+    "category": 0.0
+  },
+  "fieldStatus": {
+    "productName": { "isCertain": true, "reason": "why this value is certain/uncertain", "suggestedValue": "optional candidate when uncertain" },
+    "unit": { "isCertain": true, "reason": "why this value is certain/uncertain", "suggestedValue": "optional candidate when uncertain" },
+    "brand": { "isCertain": true, "reason": "why this value is certain/uncertain", "suggestedValue": "optional candidate when uncertain" },
+    "gtin": { "isCertain": true, "reason": "why this value is certain/uncertain", "suggestedValue": "optional candidate when uncertain" },
+    "category": { "isCertain": true, "reason": "why this value is certain/uncertain", "suggestedValue": "optional candidate when uncertain" }
+  }
 }`;
 
     let aiResponse;
@@ -339,6 +520,7 @@ Return this JSON structure:
       ];
 
       const openaiUrl = 'https://api.openai.com/v1/chat/completions';
+      const openaiVisionModel = String(process.env.OPENAI_VISION_MODEL || 'gpt-4o').trim() || 'gpt-4o';
       const response = await fetch(openaiUrl, {
         method: 'POST',
         headers: {
@@ -346,7 +528,7 @@ Return this JSON structure:
           'Authorization': `Bearer ${openaiApiKey}`
         },
         body: JSON.stringify({
-          model: 'gpt-4o',
+          model: openaiVisionModel,
           messages: [
             {
               role: 'system',
@@ -357,7 +539,7 @@ Return this JSON structure:
               content: userContent
             }
           ],
-          max_tokens: 300
+          max_tokens: 600
         })
       });
 
@@ -419,7 +601,7 @@ Return this JSON structure:
             }],
             generationConfig: {
               temperature: 0.2,
-              maxOutputTokens: 1024,
+              maxOutputTokens: 2048,
               responseMimeType: 'application/json'
             }
           })
@@ -544,8 +726,16 @@ Return this JSON structure:
           // 2) Try to extract the first JSON object from the text
           const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
           if (jsonMatch) {
-            result = JSON.parse(jsonMatch[0]);
+            try {
+              result = JSON.parse(jsonMatch[0]);
+            } catch {
+              result = extractPartialModelResponse(cleaned);
+            }
           } else {
+            result = extractPartialModelResponse(cleaned);
+          }
+
+          if (!result) {
             // 3) Fallback: parse free-form key/value outputs
             const matchValue = (patterns) => {
               for (const p of patterns) {
@@ -585,11 +775,27 @@ Return this JSON structure:
       if (!result?.productName && (result?.product_name || result?.name || result?.product)) {
         result.productName = result.product_name || result.name || result.product;
       }
+      if (!result?.unit && (result?.uom || result?.unitName || result?.unit_name)) {
+        result.unit = result.uom || result.unitName || result.unit_name;
+      }
+      if (!result?.brand && (result?.brandName || result?.manufacturer || result?.make)) {
+        result.brand = result.brandName || result.manufacturer || result.make;
+      }
+      if (!result?.gtin && (result?.barcode || result?.upc || result?.ean || result?.gtin_upc_ean)) {
+        result.gtin = result.barcode || result.upc || result.ean || result.gtin_upc_ean;
+      }
       if (!result?.category && (result?.category_name || result?.categoryName || result?.productCategory)) {
         result.category = result.category_name || result.categoryName || result.productCategory;
       }
 
       if (result?.productName != null) result.productName = String(result.productName).trim();
+      if (result?.unit != null) result.unit = String(result.unit).trim();
+      if (result?.brand != null) result.brand = String(result.brand).trim();
+      const rawParsedGtin = result?.gtin != null ? String(result.gtin).trim() : null;
+      const normalizedDetectedGtin = normalizeGtin(rawParsedGtin);
+      result.gtin = normalizedDetectedGtin && isValidGtin(normalizedDetectedGtin)
+        ? normalizedDetectedGtin
+        : null;
       if (result?.category != null) result.category = String(result.category).trim();
     } catch (parseError) {
       console.error('Failed to parse AI response:', aiResponse);
@@ -597,12 +803,131 @@ Return this JSON structure:
       throw new Error('Failed to parse AI response as JSON');
     }
 
+    const fieldStatus = normalizeFieldStatus(result);
+
+    const normalizedBrand = String(result?.brand || '').trim();
+    const normalizedProductName = String(result?.productName || '').trim();
+    const normalizedCategory = String(result?.category || '').trim();
+    const rawUnit = result?.unit ? String(result.unit).trim() : null;
+    const normalizedDetectedGtin = result?.gtin ? String(result.gtin).trim() : null;
+    const gtinSuggestionRaw = String(fieldStatus.gtin.suggestedValue || '').trim();
+    const normalizedGtinSuggestion = normalizeGtin(gtinSuggestionRaw);
+    const confidence = {
+      productName: deriveConfidenceFallback({
+        directConfidence: readFieldConfidence(result, 'productName'),
+        isCertain: fieldStatus.productName.isCertain,
+        extractedValue: normalizedProductName,
+        suggestedValue: fieldStatus.productName.suggestedValue
+      }),
+      unit: deriveConfidenceFallback({
+        directConfidence: readFieldConfidence(result, 'unit'),
+        isCertain: fieldStatus.unit.isCertain,
+        extractedValue: rawUnit,
+        suggestedValue: fieldStatus.unit.suggestedValue
+      }),
+      brand: deriveConfidenceFallback({
+        directConfidence: readFieldConfidence(result, 'brand'),
+        isCertain: fieldStatus.brand.isCertain,
+        extractedValue: normalizedBrand,
+        suggestedValue: fieldStatus.brand.suggestedValue
+      }),
+      gtin: deriveConfidenceFallback({
+        directConfidence: readFieldConfidence(result, 'gtin'),
+        isCertain: fieldStatus.gtin.isCertain,
+        extractedValue: normalizedDetectedGtin,
+        suggestedValue: normalizedGtinSuggestion || gtinSuggestionRaw
+      }),
+      category: deriveConfidenceFallback({
+        directConfidence: readFieldConfidence(result, 'category'),
+        isCertain: fieldStatus.category.isCertain,
+        extractedValue: normalizedCategory,
+        suggestedValue: fieldStatus.category.suggestedValue
+      })
+    };
+
+    const hasEnoughConfidence = (fieldName) =>
+      confidence[fieldName] >= AI_CONFIDENCE_THRESHOLD;
+
+    const accepted = {
+      productName:
+        normalizedProductName &&
+        hasEnoughConfidence('productName')
+          ? normalizedProductName
+          : null,
+      unit:
+        rawUnit &&
+        hasEnoughConfidence('unit')
+          ? rawUnit
+          : null,
+      brand:
+        normalizedBrand &&
+        hasEnoughConfidence('brand')
+          ? normalizedBrand
+          : null,
+      gtin:
+        normalizedDetectedGtin &&
+        isValidGtin(normalizedDetectedGtin) &&
+        hasEnoughConfidence('gtin')
+          ? normalizedDetectedGtin
+          : null,
+      category:
+        normalizedCategory &&
+        hasEnoughConfidence('category')
+          ? normalizedCategory
+          : null
+    };
+
+    const suggestions = {
+      productName:
+        !accepted.productName
+        && !hasEnoughConfidence('productName')
+          ? (fieldStatus.productName.suggestedValue || normalizedProductName || null)
+          : null,
+      unit:
+        !accepted.unit
+        && !hasEnoughConfidence('unit')
+          ? (fieldStatus.unit.suggestedValue || rawUnit || null)
+          : null,
+      brand:
+        !accepted.brand
+        && !hasEnoughConfidence('brand')
+          ? (fieldStatus.brand.suggestedValue || normalizedBrand || null)
+          : null,
+      gtin:
+        !accepted.gtin
+        && !hasEnoughConfidence('gtin')
+          ? (normalizedGtinSuggestion || gtinSuggestionRaw || null)
+          : null,
+      category:
+        !accepted.category
+        && !hasEnoughConfidence('category')
+          ? (fieldStatus.category.suggestedValue || normalizedCategory || null)
+          : null
+    };
+
     res.json({
       status: 'success',
-      productName: result.productName || null,
+      productName: accepted.productName,
+      unit: accepted.unit,
+      brand: accepted.brand,
+      gtin: accepted.gtin,
       // Do NOT force category to existing ones: allow new categories from AI.
       // The /products endpoint will auto-create the category if it doesn't exist.
-      category: (result.category || '').trim() || null,
+      category: accepted.category,
+      review: {
+        accepted,
+        raw: {
+          productName: normalizedProductName || null,
+          unit: rawUnit,
+          brand: normalizedBrand || null,
+          gtin: normalizedDetectedGtin || null,
+          category: normalizedCategory || null
+        },
+        confidence,
+        confidenceThreshold: AI_CONFIDENCE_THRESHOLD,
+        fieldStatus,
+        suggestions
+      },
       provider: selectedProvider,
       rawResponse: result
     });

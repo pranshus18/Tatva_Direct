@@ -17,10 +17,11 @@ export default function BrandAuthorizationDocuments({
   removingUrl,
   onUpload,
   onRemove,
+  resolveUrls = resolveAuthorizationCertificateUrls,
   maxBytes = 15 * 1024 * 1024
 }) {
   const inputId = useId();
-  const urls = resolveAuthorizationCertificateUrls(entry);
+  const urls = typeof resolveUrls === 'function' ? resolveUrls(entry) : resolveAuthorizationCertificateUrls(entry);
   const hasDocuments = urls.length > 0;
 
   const handleFileChange = (event) => {

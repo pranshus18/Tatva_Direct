@@ -9,6 +9,35 @@ export const collectProductImages = (product) => {
   return [...new Set([...fromArray, ...single].filter(Boolean))];
 };
 
+const renderSpecEntries = (specEntries, specLayout) => {
+  if (specLayout === 'grid') {
+    return (
+      <dl className="upstream-spec-grid">
+        {specEntries.map((entry) => (
+          <div key={`${entry.label}-${entry.value}`} className="upstream-spec-grid__item">
+            <dt>{entry.label}</dt>
+            <dd>{entry.value}</dd>
+          </div>
+        ))}
+      </dl>
+    );
+  }
+
+  return (
+    <div className="upstream-product-display-specs">
+      {specEntries.map((entry) => (
+        <span
+          key={`${entry.label}-${entry.value}`}
+          className="upstream-product-display-spec-pill"
+          title={`${entry.label}: ${entry.value}`}
+        >
+          <strong>{entry.label}:</strong> {entry.value}
+        </span>
+      ))}
+    </div>
+  );
+};
+
 const UpstreamProductDisplay = ({
   product,
   imageHeight = 88,
@@ -16,7 +45,9 @@ const UpstreamProductDisplay = ({
   showDescription = true,
   showSpecifications = true,
   showImage = true,
-  compact = false
+  compact = false,
+  specLayout = 'pills',
+  collapsibleSpecs = false
 }) => {
   if (!product) return null;
 
@@ -46,17 +77,16 @@ const UpstreamProductDisplay = ({
             <p className="upstream-product-display-description">{description}</p>
           ) : null}
           {showSpecifications && specEntries.length > 0 ? (
-            <div className="upstream-product-display-specs">
-              {specEntries.map((entry) => (
-                <span
-                  key={`${entry.label}-${entry.value}`}
-                  className="upstream-product-display-spec-pill"
-                  title={`${entry.label}: ${entry.value}`}
-                >
-                  <strong>{entry.label}:</strong> {entry.value}
-                </span>
-              ))}
-            </div>
+            collapsibleSpecs ? (
+              <details className="upstream-specs-details">
+                <summary>
+                  {specEntries.length} specification{specEntries.length !== 1 ? 's' : ''}
+                </summary>
+                {renderSpecEntries(specEntries, specLayout)}
+              </details>
+            ) : (
+              renderSpecEntries(specEntries, specLayout)
+            )
           ) : null}
         </div>
       ) : null}
