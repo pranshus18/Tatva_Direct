@@ -49,8 +49,7 @@ function parseGeminiText(data) {
   return '';
 }
 
-async function callGemini({ systemPrompt, userPrompt, geminiApiKey }) {
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+async function callGeminiOnce({ systemPrompt, userPrompt, geminiApiKey, model }) {
   const fetch = await getFetch();
   const response = await fetch(
     `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
@@ -76,6 +75,21 @@ async function callGemini({ systemPrompt, userPrompt, geminiApiKey }) {
   const text = parseGeminiText(data);
   if (!text) throw new Error('Gemini returned empty content');
   return text;
+}
+
+async function callGemini({ systemPrompt, userPrompt, geminiApiKey }) {
+  const preferred = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const models = [...new Set([preferred, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'])];
+  let lastError = null;
+  for (const model of models) {
+    try {
+      return await callGeminiOnce({ systemPrompt, userPrompt, geminiApiKey, model });
+    } catch (error) {
+      lastError = error;
+      logger.warn(`adminProductListingPolish Gemini model ${model} failed:`, error?.message || error);
+    }
+  }
+  throw lastError || new Error('All Gemini models failed');
 }
 
 async function callOpenAi({ systemPrompt, userPrompt, openaiApiKey }) {
@@ -167,7 +181,7 @@ export async function polishSupplierListingWithAi({
     return { status: 'error', message: 'Product name is required' };
   }
   if (!supplierText) {
-    return { status: 'error', message: 'Supplier description is required to polish the listing' };
+    return { status: 'error', message: 'Description text is required to polish the listing' };
   }
 
   const existingSpecs = parseSpecificationsObject(existingSpecifications) || {};
@@ -193,7 +207,7 @@ Rules:
   const userPrompt = `Product name: ${productName}
 Category: ${category || 'Not specified'}
 ${adminNotes ? `Admin notes: ${adminNotes}\n` : ''}
-Supplier submitted description (source — may be poorly written):
+Source description (may be supplier draft or admin draft — polish for buyers):
 ${supplierText}
 
 Existing specification draft:

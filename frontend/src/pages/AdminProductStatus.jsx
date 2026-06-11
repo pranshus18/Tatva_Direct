@@ -65,6 +65,15 @@ const getSupplierSubmittedDescription = (product) => {
   return '';
 };
 
+/** Text sent to Polish with AI: current edit box, then supplier draft, then saved description. */
+const getPolishSourceText = ({ product, editedProduct, isEditing }) => {
+  const typed = isEditing ? String(editedProduct?.description || '').trim() : '';
+  if (typed) return typed;
+  const supplierDraft = getSupplierSubmittedDescription(product);
+  if (supplierDraft) return supplierDraft;
+  return getDisplayDescription(product);
+};
+
 const AdminProductStatus = ({ user }) => {
   const [products, setProducts] = useState([]);
   const [filteredProducts, setFilteredProducts] = useState([]);
@@ -1090,14 +1099,22 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
 
   const performPolishListing = async () => {
     const productToUse = isEditing ? editedProduct : product;
-    const supplierText = getSupplierSubmittedDescription(productToUse);
+    const sourceText = getPolishSourceText({ product, editedProduct, isEditing });
     if (!productToUse?.name) {
       alert('Product name is required.');
       return;
     }
-    if (!supplierText) {
-      alert('No supplier-submitted description found for this product.');
+    if (!sourceText) {
+      alert('Enter a description in the box below first, then click Polish with AI.');
       return;
+    }
+
+    if (!isEditing) {
+      setEditedProduct((prev) => ({
+        ...prev,
+        description: sourceText
+      }));
+      setIsEditing(true);
     }
 
     setPolishing(true);
@@ -1105,7 +1122,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       const { response, data } = await polishSupplierListingWithAi({
         productName: productToUse.name,
         category: productToUse.category || '',
-        supplierDescription: supplierText,
+        supplierDescription: sourceText,
         existingSpecifications: productToUse.specifications || {},
         provider: aiProvider
       });
@@ -1143,9 +1160,9 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     }
   };
 
-  const supplierSubmittedDescription = getSupplierSubmittedDescription(
-    isEditing ? editedProduct : product
-  );
+  const supplierSubmittedDescription = getSupplierSubmittedDescription(product);
+  const polishSourceText = getPolishSourceText({ product, editedProduct, isEditing });
+  const canPolish = Boolean(polishSourceText) && Boolean(product?.name);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -1468,22 +1485,26 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               <button
                 type="button"
                 onClick={performPolishListing}
-                disabled={polishing || !supplierSubmittedDescription}
+                disabled={polishing || !canPolish}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: '0.5rem',
                   padding: '0.5rem 0.875rem',
-                  background: polishing ? '#9ca3af' : '#0f766e',
+                  background: polishing ? '#9ca3af' : canPolish ? '#0f766e' : '#9ca3af',
                   color: 'white',
                   border: 'none',
                   borderRadius: '6px',
                   fontSize: '0.875rem',
                   fontWeight: '600',
-                  cursor: polishing || !supplierSubmittedDescription ? 'not-allowed' : 'pointer',
-                  opacity: polishing || !supplierSubmittedDescription ? 0.6 : 1
+                  cursor: polishing || !canPolish ? 'not-allowed' : 'pointer',
+                  opacity: polishing || !canPolish ? 0.6 : 1
                 }}
-                title="Rewrite the supplier draft into professional buyer-facing copy and specifications"
+                title={
+                  canPolish
+                    ? 'Polish the text in the description box (or supplier draft) for buyers'
+                    : 'Click Edit and enter a description first, then polish'
+                }
               >
                 <Sparkles size={16} />
                 <span>{polishing ? 'Polishing…' : 'Polish with AI'}</span>
@@ -1526,7 +1547,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               </p>
             )}
             <p style={{ margin: '0.5rem 0 0', fontSize: '0.8rem', color: '#64748b' }}>
-              This is the only description shown to buyers. Polish with AI uses the supplier draft when available.
+              Click Edit, write or paste text, then Polish with AI. Save when you are happy with the result.
             </p>
           </div>
 
