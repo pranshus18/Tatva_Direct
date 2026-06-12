@@ -128,7 +128,7 @@ const Layout = ({ user, onLogout, children }) => {
       },
       {
         path: '/admin-finance',
-        label: 'Finance Ops',
+        label: 'Reconciliation',
         icon: Wallet
       },
       {

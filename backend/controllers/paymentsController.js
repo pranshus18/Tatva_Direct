@@ -7,7 +7,12 @@ import { createInvoiceForOrder } from '../services/invoiceService.js';
 import { generateAndUploadInvoicePdf, saveInvoicePdfUrlToInvoice } from '../services/invoicePdfService.js';
 import { writeAuditLog } from '../services/auditService.js';
 import { evaluatePaymentRisk } from '../services/riskService.js';
-import { runPaymentReconciliation } from '../services/reconciliationService.js';
+import {
+  buildReconciliationStatement,
+  listReconciliationRuns,
+  runPaymentReconciliation
+} from '../services/reconciliationService.js';
+import { buildReconciliationStatementDownload } from '../services/reconciliationStatementExportService.js';
 import {
   createRazorpayOrder,
   fetchRazorpayPayment,
@@ -21,6 +26,8 @@ import {
   creditLineApproveSchema,
   paymentConfirmSchema,
   paymentCreateSchema,
+  reconciliationDateRangeSchema,
+  reconciliationDownloadSchema,
   reconciliationIssueResolveSchema,
   reconciliationRunSchema,
   riskSignalReviewSchema
@@ -509,6 +516,69 @@ router.post('/orders/:id/bank-transfer/request', authenticateToken, async (req, 
   }
 });
 
+router.get('/reconciliation/statement', authenticateToken, requireFinanceRole, async (req, res) => {
+  try {
+    const payload = parseWithSchema(reconciliationDownloadSchema, req.query || {});
+    const { fromDate = null, toDate = null, filter = 'all' } = payload;
+    const statement = await buildReconciliationStatement({ fromDate, toDate, filter });
+    return res.json({ status: 'success', statement });
+  } catch (e) {
+    console.error('[Payments] reconciliation statement error:', e);
+    if (String(e?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+    }
+    return res.status(500).json({ status: 'error', message: e.message || 'Failed to build reconciliation statement' });
+  }
+});
+
+router.get('/reconciliation/statement/download', authenticateToken, requireFinanceRole, async (req, res) => {
+  try {
+    const payload = parseWithSchema(reconciliationDownloadSchema, req.query || {});
+    const { fromDate = null, toDate = null, filter = 'all', format = 'csv' } = payload;
+    const download = await buildReconciliationStatementDownload({
+      fromDate,
+      toDate,
+      filter: filter || 'all',
+      format: format || 'csv'
+    });
+
+    await writeAuditLog({
+      actorUserId: req.userId,
+      actorRole: req.user?.user_type,
+      action: 'reconciliation_statement_downloaded',
+      resourceType: 'reconciliation_statement',
+      resourceId: null,
+      ipAddress: req.ip,
+      requestId: req.requestId,
+      metadata: { fromDate, toDate, filter, format }
+    });
+
+    res.setHeader('Content-Type', download.contentType);
+    res.setHeader('Content-Disposition', `attachment; filename="${download.filename}"`);
+    return res.send(download.buffer);
+  } catch (e) {
+    console.error('[Payments] reconciliation statement download error:', e);
+    if (String(e?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+    }
+    return res.status(500).json({ status: 'error', message: e.message || 'Failed to download reconciliation statement' });
+  }
+});
+
+router.get('/reconciliation/runs', authenticateToken, requireFinanceRole, async (req, res) => {
+  try {
+    const payload = parseWithSchema(reconciliationDateRangeSchema, req.query || {});
+    const runs = await listReconciliationRuns({ limit: payload.limit || 20 });
+    return res.json({ status: 'success', runs });
+  } catch (e) {
+    console.error('[Payments] reconciliation runs error:', e);
+    if (String(e?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+    }
+    return res.status(500).json({ status: 'error', message: 'Failed to fetch reconciliation runs' });
+  }
+});
+
 router.post('/reconciliation/run', authenticateToken, requireFinanceRole, async (req, res) => {
   try {
     const payload = parseWithSchema(reconciliationRunSchema, req.body || {});
@@ -543,7 +613,7 @@ router.get('/reconciliation/issues', authenticateToken, requireFinanceRole, asyn
     const { status = 'open', limit = 200 } = req.query;
     let query = supabase
       .from('reconciliation_issues')
-      .select('*')
+      .select('*, orders(id, order_number, total_amount, payment_status, payment_method)')
       .order('created_at', { ascending: false })
       .limit(Number(limit) || 200);
     if (status && status !== 'all') query = query.eq('status', status);

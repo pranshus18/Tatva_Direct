@@ -31,6 +31,19 @@ export const reconciliationRunSchema = z.object({
   toDate: z.string().optional().nullable()
 });
 
+export const reconciliationDateRangeSchema = z.object({
+  fromDate: z.string().optional().nullable(),
+  toDate: z.string().optional().nullable(),
+  limit: z.union([z.number(), z.string()]).optional().nullable()
+});
+
+export const reconciliationDownloadSchema = z.object({
+  fromDate: z.string().optional().nullable(),
+  toDate: z.string().optional().nullable(),
+  filter: z.enum(['all', 'matched', 'mismatch']).optional().nullable(),
+  format: z.enum(['csv', 'pdf']).optional().nullable()
+});
+
 export const reconciliationIssueResolveSchema = z.object({
   status: z.string().optional(),
   notes: z.string().optional()
