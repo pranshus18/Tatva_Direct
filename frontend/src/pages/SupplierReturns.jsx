@@ -1,27 +1,23 @@
-import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { resolveApiPath } from '../config/api';
 import './SupplierReturns.css';
+import {
+  SUPPLIER_RETURN_ACTIONS as statusActions,
+  RETURN_STATUS_LABEL as STATUS_LABEL,
+  labelReturnStatus
+} from '../utils/orderReturnUi';
 
-const statusActions = {
-  requested: ['approved', 'rejected'],
-  approved: ['picked_up', 'received'],
-  picked_up: ['received'],
-  received: ['refunded', 'replaced'],
-  refunded: ['closed'],
-  replaced: ['closed']
-};
+const MAIN_TABS = [
+  { id: 'incoming', label: 'Process returns' },
+  { id: 'outgoing', label: 'My upstream returns' }
+];
 
-const STATUS_LABEL = {
-  requested: 'Requested',
-  approved: 'Approved',
-  rejected: 'Rejected',
-  picked_up: 'Picked up',
-  received: 'Received',
-  refunded: 'Refunded',
-  replaced: 'Replaced',
-  closed: 'Closed'
-};
+const INCOMING_SOURCES = [
+  { id: 'all', label: 'All sources' },
+  { id: 'customer', label: 'Customers' },
+  { id: 'chain', label: 'Chain partners' }
+];
 
 const statusPillClass = (status) => {
   switch (status) {
@@ -52,71 +48,124 @@ const normalizeSearchText = (value) =>
     .toLowerCase()
     .replace(/[^a-z0-9]/g, '');
 
+const mergeById = (lists) => {
+  const map = new Map();
+  for (const list of lists) {
+    for (const row of list || []) {
+      if (row?.id) map.set(row.id, row);
+    }
+  }
+  return [...map.values()];
+};
+
 const SupplierReturns = () => {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const mainTab = searchParams.get('tab') === 'outgoing' ? 'outgoing' : 'incoming';
+  const incomingSource = ['all', 'customer', 'chain'].includes(searchParams.get('source'))
+    ? searchParams.get('source')
+    : 'all';
+
   const [returns, setReturns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('newest');
-  const navigate = useNavigate();
 
-  const fetchReturns = async () => {
+  const setMainTab = (tab) => {
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', tab);
+    if (tab === 'incoming') next.delete('tab');
+    setSearchParams(next, { replace: true });
+  };
+
+  const setIncomingSource = (source) => {
+    const next = new URLSearchParams(searchParams);
+    if (source === 'all') next.delete('source');
+    else next.set('source', source);
+    setSearchParams(next, { replace: true });
+  };
+
+  const fetchIncoming = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    const headers = { Authorization: `Bearer ${token}` };
+    const scopes =
+      incomingSource === 'all' ? ['customer', 'chain'] : [incomingSource];
+
+    const responses = await Promise.all(
+      scopes.map((scope) =>
+        fetch(resolveApiPath(`/api/supplier/returns?scope=${scope}`), { headers }).then((r) => r.json())
+      )
+    );
+
+    const failed = responses.find((data) => data.status !== 'success');
+    if (failed) throw new Error(failed.message || 'Failed to fetch returns');
+
+    return mergeById(responses.map((data) => data.returns || [])).sort(
+      (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0)
+    );
+  }, [incomingSource]);
+
+  const fetchOutgoing = useCallback(async () => {
+    const token = localStorage.getItem('token');
+    const res = await fetch(resolveApiPath('/api/dashboard/service-provider/returns?scope=upstream'), {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await res.json();
+    if (!res.ok || data.status !== 'success') {
+      throw new Error(data.message || 'Failed to fetch upstream returns');
+    }
+    return data.returns || [];
+  }, []);
+
+  const fetchReturns = useCallback(async () => {
     try {
       setLoading(true);
-      const token = localStorage.getItem('token');
-      const res = await fetch(resolveApiPath('/api/supplier/returns'), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await res.json();
-      if (res.ok && data.status === 'success') {
-        setReturns(data.returns || []);
-      } else {
-        alert(data.message || 'Failed to fetch returns');
-      }
+      const rows = mainTab === 'outgoing' ? await fetchOutgoing() : await fetchIncoming();
+      setReturns(rows);
     } catch (e) {
       console.error('Fetch supplier returns failed:', e);
-      alert('Failed to fetch returns');
+      alert(e.message || 'Failed to fetch returns');
+      setReturns([]);
     } finally {
       setLoading(false);
     }
-  };
+  }, [mainTab, fetchIncoming, fetchOutgoing]);
 
   useEffect(() => {
     fetchReturns();
-  }, []);
+  }, [fetchReturns]);
 
-  const filteredReturns = (returns || [])
-    .filter((r) => {
-      if (statusFilter !== 'all' && r.status !== statusFilter) return false;
-      if (!searchTerm.trim()) return true;
-      const q = searchTerm.trim().toLowerCase();
-      const qNormalized = normalizeSearchText(q);
-      const rawFields = [
-        r.reason,
-        r.tracking_id,
-        r.trackingId,
-        r.id,
-        r.order_number,
-        r.orderNumber,
-        r.product_name,
-        r.productName,
-        r.metadata?.tracking_id,
-        r.metadata?.trackingId,
-        r.metadata?.orderNumber
-      ];
-      const haystack = rawFields.map((value) => String(value || '').toLowerCase());
-      const normalizedHaystack = haystack.map((value) => normalizeSearchText(value));
-      return (
-        haystack.some((value) => value.includes(q)) ||
-        (!!qNormalized && normalizedHaystack.some((value) => value.includes(qNormalized)))
-      );
-    })
-    .sort((a, b) => {
-      const ta = new Date(a.created_at || 0).getTime();
-      const tb = new Date(b.created_at || 0).getTime();
-      return sortBy === 'oldest' ? ta - tb : tb - ta;
-    });
+  const filteredReturns = useMemo(() => {
+    const q = searchTerm.trim().toLowerCase();
+    const qNormalized = normalizeSearchText(q);
+    return (returns || [])
+      .filter((r) => {
+        if (statusFilter !== 'all' && r.status !== statusFilter) return false;
+        if (!q) return true;
+        const rawFields = [
+          r.reason,
+          r.tracking_id,
+          r.id,
+          r.order_number,
+          r.order_id,
+          r.buyer_name,
+          r.metadata?.orderNumber
+        ];
+        const haystack = rawFields.map((value) => String(value || '').toLowerCase());
+        const normalizedHaystack = haystack.map((value) => normalizeSearchText(value));
+        return (
+          haystack.some((value) => value.includes(q)) ||
+          (!!qNormalized && normalizedHaystack.some((value) => value.includes(qNormalized)))
+        );
+      })
+      .sort((a, b) => {
+        const ta = new Date(a.created_at || 0).getTime();
+        const tb = new Date(b.created_at || 0).getTime();
+        return sortBy === 'oldest' ? ta - tb : tb - ta;
+      });
+  }, [returns, statusFilter, searchTerm, sortBy]);
 
   const updateStatus = async (id, status) => {
     const supplierNotes = window.prompt(`Notes for "${status}" (optional):`, '') || '';
@@ -129,7 +178,10 @@ const SupplierReturns = () => {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({ status, supplierNotes })
+        body: JSON.stringify({
+          status,
+          ...(supplierNotes ? { supplierNotes } : {})
+        })
       });
       const data = await res.json();
       if (res.ok && data.status === 'success') {
@@ -145,14 +197,54 @@ const SupplierReturns = () => {
     }
   };
 
+  const emptyCopy =
+    mainTab === 'outgoing'
+      ? {
+          title: 'No upstream return requests',
+          subtitle: 'Request a return from a delivered order under My Upstream Orders.'
+        }
+      : incomingSource === 'chain'
+        ? {
+            title: 'No chain return requests',
+            subtitle: 'When a downstream partner returns goods from a B2B order, it will show up here.'
+          }
+        : incomingSource === 'customer'
+          ? {
+              title: 'No customer return requests',
+              subtitle: 'When service providers request returns on retail orders, they will show up here.'
+            }
+          : {
+              title: 'No return requests to process',
+              subtitle: 'Incoming returns from customers and chain partners will show up here.'
+            };
+
   return (
     <div className="dashboard-container">
       <div className="dashboard-header">
         <div>
-          <h1>Return Requests</h1>
-          <p>Process incoming return requests from service providers</p>
+          <h1>Returns</h1>
+          <p>
+            Process returns sent to you, or track returns you raised on upstream purchase orders.
+          </p>
         </div>
-        <button className="btn-secondary" onClick={() => navigate('/supplier-dashboard')}>Back</button>
+        <button className="btn-secondary" onClick={() => navigate('/supplier-dashboard')}>
+          Back
+        </button>
+      </div>
+
+      <div className="sr-main-tabs" role="tablist" aria-label="Return views">
+        {MAIN_TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            role="tab"
+            aria-selected={mainTab === tab.id}
+            className={`sr-main-tab ${mainTab === tab.id ? 'sr-main-tab--active' : ''}`}
+            onClick={() => setMainTab(tab.id)}
+          >
+            {tab.label}
+          </button>
+        ))}
       </div>
 
       {loading ? (
@@ -164,28 +256,40 @@ const SupplierReturns = () => {
         <div className="dashboard-section">
           <div className="sr-toolbar">
             <div className="sr-toolbar__left">
-              <div className="sr-toolbar__title">Requests</div>
+              <div className="sr-toolbar__title">
+                {mainTab === 'outgoing' ? 'Your upstream return requests' : 'Incoming return requests'}
+              </div>
               <div className="sr-toolbar__subtitle">{filteredReturns.length} shown</div>
             </div>
             <div className="sr-toolbar__controls">
+              {mainTab === 'incoming' ? (
+                <select
+                  value={incomingSource}
+                  onChange={(e) => setIncomingSource(e.target.value)}
+                  aria-label="Filter by buyer type"
+                >
+                  {INCOMING_SOURCES.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
               <div className="search-box sr-search">
                 <input
                   type="text"
-                  placeholder="Search reason, tracking ID, return ID"
+                  placeholder="Search reason, buyer, order #, tracking ID"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
               <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                 <option value="all">All statuses</option>
-                <option value="requested">Requested</option>
-                <option value="approved">Approved</option>
-                <option value="rejected">Rejected</option>
-                <option value="picked_up">Picked up</option>
-                <option value="received">Received</option>
-                <option value="refunded">Refunded</option>
-                <option value="replaced">Replaced</option>
-                <option value="closed">Closed</option>
+                {Object.keys(STATUS_LABEL).map((key) => (
+                  <option key={key} value={key}>
+                    {STATUS_LABEL[key]}
+                  </option>
+                ))}
               </select>
               <select value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
                 <option value="newest">Newest first</option>
@@ -196,19 +300,40 @@ const SupplierReturns = () => {
 
           {filteredReturns.length === 0 ? (
             <div className="sr-empty">
-              <div className="sr-empty__title">No return requests</div>
-              <div className="sr-empty__subtitle">When service providers request returns, they’ll show up here.</div>
+              <div className="sr-empty__title">{emptyCopy.title}</div>
+              <div className="sr-empty__subtitle">{emptyCopy.subtitle}</div>
+              {mainTab === 'outgoing' ? (
+                <button
+                  type="button"
+                  className="btn-secondary sr-empty__action"
+                  onClick={() => navigate('/supplier-upstream-orders')}
+                >
+                  Go to upstream orders
+                </button>
+              ) : null}
             </div>
           ) : (
             <div className="sr-grid">
               {filteredReturns.map((r) => {
-                const actions = statusActions[r.status] || [];
+                const actions = mainTab === 'incoming' ? statusActions[r.status] || [] : [];
                 const created = r.created_at ? new Date(r.created_at) : null;
+                const closedUpstream =
+                  mainTab === 'outgoing' && r.status === 'closed' && r.metadata?.supplier_closed_at;
+                const sourceLabel =
+                  r.return_scope === 'chain'
+                    ? 'Chain partner'
+                    : r.return_scope === 'customer'
+                      ? 'Customer'
+                      : null;
+
                 return (
                   <div key={r.id} className="sr-card">
                     <div className="sr-card__top">
                       <div className="sr-card__topLeft">
                         <span className={statusPillClass(r.status)}>{labelForStatus(r.status)}</span>
+                        {sourceLabel && mainTab === 'incoming' ? (
+                          <span className="sr-source-pill">{sourceLabel}</span>
+                        ) : null}
                         <span className="sr-id">#{String(r.id || '').slice(0, 8)}</span>
                       </div>
                       <div className="sr-meta">
@@ -219,6 +344,18 @@ const SupplierReturns = () => {
                     </div>
 
                     <div className="sr-card__body">
+                      {r.order_number ? (
+                        <div className="sr-field">
+                          <div className="sr-field__label">Order</div>
+                          <div className="sr-field__value sr-mono">{r.order_number}</div>
+                        </div>
+                      ) : null}
+                      {r.buyer_name && mainTab === 'incoming' ? (
+                        <div className="sr-field">
+                          <div className="sr-field__label">Buyer</div>
+                          <div className="sr-field__value">{r.buyer_name}</div>
+                        </div>
+                      ) : null}
                       <div className="sr-field">
                         <div className="sr-field__label">Reason</div>
                         <div className="sr-field__value">{r.reason || '—'}</div>
@@ -231,24 +368,36 @@ const SupplierReturns = () => {
                         <div className="sr-field__label">Tracking ID</div>
                         <div className="sr-field__value sr-mono">{r.tracking_id || '—'}</div>
                       </div>
+                      {closedUpstream ? (
+                        <div className="sr-field sr-field--full">
+                          <div className="sr-field__label">Inventory</div>
+                          <div className="sr-field__value sr-ack-note">
+                            Your upstream partner closed this return on{' '}
+                            {new Date(r.metadata.supplier_closed_at).toLocaleString()}. Their stock was
+                            updated automatically.
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
-                    <div className="sr-card__actions">
-                      {actions.length === 0 ? (
-                        <div className="sr-actionsHint">No actions available for this status.</div>
-                      ) : (
-                        actions.map((next) => (
-                          <button
-                            key={next}
-                            className="btn-secondary sr-actionBtn"
-                            disabled={updatingId === r.id}
-                            onClick={() => updateStatus(r.id, next)}
-                          >
-                            {updatingId === r.id ? 'Updating…' : `Mark ${labelForStatus(next)}`}
-                          </button>
-                        ))
-                      )}
-                    </div>
+                    {mainTab === 'incoming' ? (
+                      <div className="sr-card__actions">
+                        {actions.length === 0 ? (
+                          <div className="sr-actionsHint">No actions available for this status.</div>
+                        ) : (
+                          actions.map((next) => (
+                            <button
+                              key={next}
+                              className="btn-secondary sr-actionBtn"
+                              disabled={updatingId === r.id}
+                              onClick={() => updateStatus(r.id, next)}
+                            >
+                              {updatingId === r.id ? 'Updating…' : `Mark ${labelReturnStatus(next)}`}
+                            </button>
+                          ))
+                        )}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}

@@ -57,12 +57,30 @@ function registerDeleteOrderRoute({
         });
       }
 
-      // If order is cancelled, restore supplier inventory before deleting.
+      // Unfulfilled orders: mark cancelled and restore seller inventory before delete.
+      const deleteStatus = String(order.status || '').toLowerCase();
+      if (!['delivered', 'cancelled'].includes(deleteStatus)) {
+        const nextHistory = Array.isArray(order.status_history) ? [...order.status_history] : [];
+        nextHistory.push({
+          status: 'cancelled',
+          timestamp: new Date().toISOString(),
+          updatedBy: req.userId,
+          notes: 'Cancelled automatically before order deletion'
+        });
+        await supabase
+          .from('orders')
+          .update({
+            status: 'cancelled',
+            lifecycle_state: 'cancelled',
+            status_history: nextHistory
+          })
+          .eq('id', order.id);
+      }
+
       try {
         await restockInventoryForCancelledOrder({ orderId: order.id, actorUserId: req.userId });
       } catch (e) {
         console.error(`[Delete Order] Cancel restock failed (${actorLabel} delete):`, e);
-        // Do not block delete; but log it.
       }
 
       // Delete the order

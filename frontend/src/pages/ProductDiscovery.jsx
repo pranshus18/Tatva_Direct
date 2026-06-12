@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { Check, ChevronLeft, ChevronRight, ImageOff, MapPin, Package, Search, ShoppingCart, Star, Tag, Users } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import { getProductImageList } from '../utils/productImages';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
@@ -207,10 +208,7 @@ const ProductDiscovery = () => {
     }
   };
 
-  const imageArray = (product) => {
-    if (Array.isArray(product?.images) && product.images.length > 0) return product.images;
-    return [];
-  };
+  const imageArray = (product) => getProductImageList(product);
 
   return (
     <SpPageLayout>

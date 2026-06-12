@@ -31,6 +31,7 @@ const routePrefetchers = {
   '/supplier-bcov': () => import('../pages/SupplierBCOV'),
   '/supplier-upstream': () => import('../pages/SupplierUpstream'),
   '/supplier-upstream-orders': () => import('../pages/SupplierUpstreamOrders'),
+  '/supplier-upstream-returns': () => import('../pages/SupplierReturns'),
   '/supplier-place-order': () => import('../pages/SupplierPlaceOrder'),
   '/supplier-cart': () => import('../pages/SupplierUpstreamCart'),
   '/supplier-pos': () => import('../pages/SupplierPOS'),

@@ -18,6 +18,10 @@ import {
   Search
 } from 'lucide-react';
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
+import {
+  SUPPLIER_RETURN_ACTIONS,
+  labelReturnStatus
+} from '../utils/orderReturnUi';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -438,7 +442,7 @@ const SupplierDashboard = ({ user }) => {
         },
         body: JSON.stringify({
           status: nextStatus,
-          supplierNotes: supplierNotes || null
+          ...(supplierNotes ? { supplierNotes } : {})
         })
       });
       const data = await response.json();
@@ -561,7 +565,7 @@ const SupplierDashboard = ({ user }) => {
           actions={
             <>
               <Button variant="outline" onClick={() => navigate('/supplier-returns')}>
-                View Returns
+                Returns
               </Button>
               <Button variant="outline" onClick={() => navigate('/product-management')}>
                 Manage Products
@@ -1268,29 +1272,20 @@ const SupplierDashboard = ({ user }) => {
                     <div className="supplier-dashboard-returns-grid">
                       {orderDetails.returns.map((ret) => (
                         <div key={ret.id} className="supplier-dashboard-return-card">
-                          <div><strong>Status:</strong> {ret.status}</div>
+                          <div><strong>Status:</strong> {labelReturnStatus(ret.status)}</div>
                           <div><strong>Qty:</strong> {ret.quantity}</div>
                           <div><strong>Reason:</strong> {ret.reason}</div>
                           {ret.tracking_id ? <div><strong>Tracking ID:</strong> {ret.tracking_id}</div> : null}
                           <div className="supplier-dashboard-return-actions">
-                            {ret.status === 'requested' && (
-                              <>
-                                <button className="btn-secondary" onClick={() => handleUpdateReturnStatus(ret.id, 'approved')}>Approve</button>
-                                <button className="btn-secondary" onClick={() => handleUpdateReturnStatus(ret.id, 'rejected')}>Reject</button>
-                              </>
-                            )}
-                            {['approved', 'picked_up'].includes(ret.status) && (
-                              <button className="btn-secondary" onClick={() => handleUpdateReturnStatus(ret.id, 'received')}>Mark Received</button>
-                            )}
-                            {ret.status === 'received' && (
-                              <>
-                                <button className="btn-secondary" onClick={() => handleUpdateReturnStatus(ret.id, 'refunded')}>Mark Refunded</button>
-                                <button className="btn-secondary" onClick={() => handleUpdateReturnStatus(ret.id, 'replaced')}>Mark Replaced</button>
-                              </>
-                            )}
-                            {['refunded', 'replaced'].includes(ret.status) && (
-                              <button className="btn-secondary" onClick={() => handleUpdateReturnStatus(ret.id, 'closed')}>Close</button>
-                            )}
+                            {(SUPPLIER_RETURN_ACTIONS[ret.status] || []).map((nextStatus) => (
+                              <button
+                                key={nextStatus}
+                                className="btn-secondary"
+                                onClick={() => handleUpdateReturnStatus(ret.id, nextStatus)}
+                              >
+                                Mark {labelReturnStatus(nextStatus)}
+                              </button>
+                            ))}
                           </div>
                         </div>
                       ))}

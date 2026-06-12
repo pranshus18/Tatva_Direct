@@ -11,6 +11,7 @@ import {
   buildTokenIlikePatterns
 } from './productDiscoveryFuzzyRank.js';
 import { normalizeSearchQueryAliases } from './voiceSearchAliases.js';
+import { enrichProductsWithOfferImages } from './productImageService.js';
 
 /**
  * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` treats commas as delimiters; commas/parens in the
@@ -245,7 +246,9 @@ export async function searchProductDiscoveryForUser(
     }
   }
 
-  const suggestions = (rawProducts || []).map((p) => {
+  const productsWithImages = await enrichProductsWithOfferImages(supabase, rawProducts || []);
+
+  const suggestions = productsWithImages.map((p) => {
     const supplierCount =
       Array.isArray(p?.supplier_products) && p.supplier_products[0] && Number.isFinite(p.supplier_products[0].count)
         ? p.supplier_products[0].count

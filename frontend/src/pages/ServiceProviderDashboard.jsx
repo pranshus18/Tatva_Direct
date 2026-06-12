@@ -20,6 +20,11 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { buildOrderUpiPayUri, qrServerImageUrl } from '../utils/upiPaymentQr';
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
+import {
+  canRequestReturnForOrder,
+  getReturnRequestBlockReason,
+  labelReturnStatus
+} from '../utils/orderReturnUi';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
@@ -492,6 +497,10 @@ const ServiceProviderDashboard = ({ user }) => {
       alert('No order items available for return.');
       return;
     }
+    if (!canRequestReturnForOrder(orderDetails)) {
+      alert(getReturnRequestBlockReason(orderDetails) || 'This order is not eligible for return.');
+      return;
+    }
 
     const itemOptions = orderDetails.items
       .map((it, idx) => `${idx + 1}. ${(it.product?.name || it.name || 'Item')} (qty: ${it.quantity})`)
@@ -520,8 +529,8 @@ const ServiceProviderDashboard = ({ user }) => {
     }
 
     const trackingId = window.prompt(
-      'Enter return tracking ID (optional). Leave blank to auto-generate RET-ORDERNUMBER:',
-      selectedItem.productTrackingId || ''
+      'Enter return tracking ID (optional). Leave blank to auto-generate a unique ID for this product line (RET-ORDER-ITEM).',
+      ''
     );
 
     try {
@@ -537,7 +546,7 @@ const ServiceProviderDashboard = ({ user }) => {
           orderItemId: selectedItem.id,
           quantity: qty,
           reason: reason.trim(),
-          trackingId: trackingId ? trackingId.trim() : null
+          ...(trackingId?.trim() ? { trackingId: trackingId.trim() } : {})
         })
       });
 
@@ -1303,7 +1312,7 @@ const ServiceProviderDashboard = ({ user }) => {
                     <div style={{ display: 'grid', gap: '0.5rem' }}>
                       {orderDetails.returns.map((ret) => (
                         <div key={ret.id} style={{ padding: '0.6rem', border: '1px solid #e5e7eb', borderRadius: 8 }}>
-                          <div><strong>Status:</strong> {ret.status}</div>
+                          <div><strong>Status:</strong> {labelReturnStatus(ret.status)}</div>
                           <div><strong>Qty:</strong> {ret.quantity}</div>
                           <div><strong>Reason:</strong> {ret.reason}</div>
                           {ret.tracking_id ? <div><strong>Tracking ID:</strong> {ret.tracking_id}</div> : null}
@@ -1313,14 +1322,20 @@ const ServiceProviderDashboard = ({ user }) => {
                   ) : (
                     <p style={{ color: '#64748b' }}>No return requests yet.</p>
                   )}
-                  <button
-                    className="btn-secondary"
-                    type="button"
-                    onClick={handleCreateReturnRequest}
-                    style={{ marginTop: '0.75rem' }}
-                  >
-                    Request Return
-                  </button>
+                  {canRequestReturnForOrder(orderDetails) ? (
+                    <button
+                      className="btn-secondary"
+                      type="button"
+                      onClick={handleCreateReturnRequest}
+                      style={{ marginTop: '0.75rem' }}
+                    >
+                      Request Return
+                    </button>
+                  ) : (
+                    <p style={{ color: '#64748b', marginTop: '0.75rem' }}>
+                      {getReturnRequestBlockReason(orderDetails)}
+                    </p>
+                  )}
                 </div>
 
                 {/* Supplier Rating & Feedback - only after delivery + payment */}

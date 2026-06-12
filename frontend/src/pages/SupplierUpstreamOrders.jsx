@@ -19,6 +19,11 @@ import {
 } from 'lucide-react';
 import { buildOrderUpiPayUri, qrServerImageUrl } from '../utils/upiPaymentQr';
 import { formatDateTimeIST } from '../utils/dateTime';
+import {
+  canRequestReturnForOrder,
+  getReturnRequestBlockReason,
+  labelReturnStatus
+} from '../utils/orderReturnUi';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
@@ -80,6 +85,7 @@ export default function SupplierUpstreamOrders() {
   const [orderDetails, setOrderDetails] = useState(null);
   const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState(false);
+  const [cancellingOrder, setCancellingOrder] = useState(false);
 
   const fetchOrders = useCallback(async () => {
     const res = await authFetch('/api/supplier/upstream/orders?all=true', { cache: 'no-cache' });
@@ -239,6 +245,119 @@ export default function SupplierUpstreamOrders() {
       alert('Failed to update payment status. Please check your connection and try again.');
     } finally {
       setUpdatingPayment(false);
+    }
+  };
+
+  const canCancelUpstreamOrder = (order) => {
+    const status = String(order?.status || '').toLowerCase();
+    const payment = String(order?.paymentStatus || order?.payment_status || '').toLowerCase();
+    return ['pending', 'confirmed'].includes(status) && payment !== 'paid';
+  };
+
+  const handleCancelOrder = async () => {
+    if (!orderModalId || cancellingOrder) return;
+    if (!canCancelUpstreamOrder(orderDetails)) {
+      alert('This order can only be cancelled before fulfillment or payment.');
+      return;
+    }
+    const reason = window.prompt('Cancellation reason (optional):', '') || '';
+    const confirmed = window.confirm(`Cancel upstream order ${orderDetails?.orderNumber}?`);
+    if (!confirmed) return;
+
+    setCancellingOrder(true);
+    try {
+      const token = localStorage.getItem('token');
+      const resp = await fetch(getApiUrl(`/api/po/${encodeURIComponent(orderModalId)}/cancel`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ reason: reason.trim() || null })
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to cancel order');
+      }
+      alert('Order cancelled. Upstream partner inventory has been restored.');
+      await Promise.all([fetchOrderDetails(orderModalId), fetchOrders()]);
+    } catch (e) {
+      alert(e.message || 'Failed to cancel order');
+    } finally {
+      setCancellingOrder(false);
+    }
+  };
+
+  const handleCreateReturnRequest = async () => {
+    if (!orderDetails || !Array.isArray(orderDetails.items) || orderDetails.items.length === 0) {
+      alert('No order items available for return.');
+      return;
+    }
+    if (!canRequestReturnForOrder(orderDetails)) {
+      alert(getReturnRequestBlockReason(orderDetails) || 'This order is not eligible for return.');
+      return;
+    }
+
+    const itemOptions = orderDetails.items
+      .map((it, idx) => `${idx + 1}. ${(it.product?.name || it.name || 'Item')} (qty: ${it.quantity})`)
+      .join('\n');
+    const itemNumberInput = window.prompt(`Select item number to return:\n${itemOptions}`);
+    if (!itemNumberInput) return;
+    const itemIndex = Number(itemNumberInput) - 1;
+    if (!Number.isInteger(itemIndex) || itemIndex < 0 || itemIndex >= orderDetails.items.length) {
+      alert('Invalid item selection.');
+      return;
+    }
+
+    const selectedItem = orderDetails.items[itemIndex];
+    const qtyInput = window.prompt(`Enter return quantity (max ${selectedItem.quantity}):`, '1');
+    if (!qtyInput) return;
+    const qty = Number(qtyInput);
+    if (!Number.isFinite(qty) || qty <= 0 || qty > Number(selectedItem.quantity || 0)) {
+      alert('Invalid return quantity.');
+      return;
+    }
+
+    const reason = window.prompt('Enter return reason:');
+    if (!reason || !reason.trim()) {
+      alert('Return reason is required.');
+      return;
+    }
+
+    const trackingId = window.prompt(
+      'Enter return tracking ID (optional). Leave blank to auto-generate a unique ID for this product line (RET-ORDER-ITEM).',
+      ''
+    );
+
+    try {
+      const token = localStorage.getItem('token');
+      const encodedOrderId = encodeURIComponent(orderDetails.orderNumber || orderModalId);
+      const response = await fetch(
+        getApiUrl(`/api/dashboard/service-provider/orders/${encodedOrderId}/returns`),
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            orderItemId: selectedItem.id,
+            quantity: qty,
+            reason: reason.trim(),
+            ...(trackingId?.trim() ? { trackingId: trackingId.trim() } : {})
+          })
+        }
+      );
+      const data = await response.json();
+      if (!response.ok || data.status !== 'success') {
+        alert(data.message || 'Failed to create return request.');
+        return;
+      }
+      alert('Return request sent to your upstream partner.');
+      await fetchOrderDetails(orderModalId);
+    } catch (error) {
+      console.error('Create upstream return failed:', error);
+      alert('Failed to create return request. Please try again.');
     }
   };
 
@@ -604,6 +723,68 @@ export default function SupplierUpstreamOrders() {
                     <p className="upstream-muted-meta">No items found in this order.</p>
                   )}
                 </div>
+
+                <div className="order-info-section">
+                  <h3>Returns to upstream partner</h3>
+                  {Array.isArray(orderDetails.returns) && orderDetails.returns.length > 0 ? (
+                    <div className="upstream-returns-list">
+                      {orderDetails.returns.map((ret) => (
+                        <div key={ret.id} className="upstream-return-card">
+                          <div>
+                            <strong>Status:</strong> {labelReturnStatus(ret.status)}
+                          </div>
+                          <div>
+                            <strong>Qty:</strong> {ret.quantity}
+                          </div>
+                          <div>
+                            <strong>Reason:</strong> {ret.reason}
+                          </div>
+                          {ret.tracking_id ? (
+                            <div>
+                              <strong>Tracking ID:</strong> {ret.tracking_id}
+                            </div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="upstream-muted-meta">No return requests yet.</p>
+                  )}
+                  {canRequestReturnForOrder(orderDetails) ? (
+                    <div className="upstream-return-actions">
+                      <button type="button" className="btn-secondary" onClick={handleCreateReturnRequest}>
+                        Request return
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => navigate('/supplier-returns?tab=outgoing')}
+                      >
+                        View all upstream returns
+                      </button>
+                    </div>
+                  ) : (
+                    <p className="upstream-muted-meta">{getReturnRequestBlockReason(orderDetails)}</p>
+                  )}
+                </div>
+
+                {canCancelUpstreamOrder(orderDetails) ? (
+                  <div className="order-info-section">
+                    <h3>Cancel order</h3>
+                    <p className="upstream-muted-meta">
+                      Cancel before your upstream partner ships or before you mark payment as paid. Seller
+                      inventory will be restored automatically.
+                    </p>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={handleCancelOrder}
+                      disabled={cancellingOrder}
+                    >
+                      {cancellingOrder ? 'Cancelling…' : 'Cancel upstream order'}
+                    </button>
+                  </div>
+                ) : null}
 
                 {orderDetails.status === 'delivered' && (
                   <div className="order-info-section upstream-delivered-card">

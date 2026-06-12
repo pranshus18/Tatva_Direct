@@ -21,6 +21,7 @@ export function registerPoOrderActionRoutes(ctx) {
     router,
     authenticateToken,
     isServiceProvider,
+    isServiceProviderOrSupplier,
     supabase
   } = ctx;
 
@@ -280,7 +281,7 @@ router.patch('/:id/self-serve', authenticateToken, isServiceProvider, async (req
   }
 });
 
-router.post('/:id/cancel', authenticateToken, isServiceProvider, async (req, res) => {
+router.post('/:id/cancel', authenticateToken, isServiceProviderOrSupplier, async (req, res) => {
   try {
     const decodedId = decodeURIComponent(req.params.id);
     const payload = parseWithSchema(poCancelSchema, req.body || {});
@@ -308,10 +309,12 @@ router.post('/:id/cancel', authenticateToken, isServiceProvider, async (req, res
         cancelReason: reason || null
       });
       if (atomicResult?.id) {
+        const lifecycleState = toLifecycleStateFromStatus('cancelled');
         const { data: refreshedOrder } = await supabase
           .from('orders')
-          .select('*')
+          .update({ lifecycle_state: lifecycleState })
           .eq('id', atomicResult.id)
+          .select('*')
           .single();
         updatedOrder = refreshedOrder || null;
       }

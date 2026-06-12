@@ -20,6 +20,11 @@ import {
   spStatusBadgeClass,
   spPaymentBadgeClass
 } from '../utils/orderStatusUi';
+import {
+  canRequestReturnForOrder,
+  getReturnRequestBlockReason,
+  labelReturnStatus
+} from '../utils/orderReturnUi';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpEmptyState from '../components/sp/SpEmptyState';
@@ -521,6 +526,75 @@ const YourOrders = () => {
       setPaymentNotice(e.message || 'Failed to update order');
     } finally {
       setSavingOrderEdit(false);
+    }
+  };
+
+  const handleCreateReturnRequest = async () => {
+    if (!orderDetails || !Array.isArray(orderDetails.items) || orderDetails.items.length === 0) {
+      setPaymentNotice('No order items available for return.');
+      return;
+    }
+    if (!canRequestReturnForOrder(orderDetails)) {
+      setPaymentNotice(getReturnRequestBlockReason(orderDetails) || 'This order is not eligible for return.');
+      return;
+    }
+
+    const itemOptions = orderDetails.items
+      .map((it, idx) => `${idx + 1}. ${(it.product?.name || it.name || 'Item')} (qty: ${it.quantity})`)
+      .join('\n');
+    const itemNumberInput = window.prompt(`Select item number to return:\n${itemOptions}`);
+    if (!itemNumberInput) return;
+    const itemIndex = Number(itemNumberInput) - 1;
+    if (!Number.isInteger(itemIndex) || itemIndex < 0 || itemIndex >= orderDetails.items.length) {
+      setPaymentNotice('Invalid item selection.');
+      return;
+    }
+
+    const selectedItem = orderDetails.items[itemIndex];
+    const qtyInput = window.prompt(`Enter return quantity (max ${selectedItem.quantity}):`, '1');
+    if (!qtyInput) return;
+    const qty = Number(qtyInput);
+    if (!Number.isFinite(qty) || qty <= 0 || qty > Number(selectedItem.quantity || 0)) {
+      setPaymentNotice('Invalid return quantity.');
+      return;
+    }
+
+    const reason = window.prompt('Enter return reason:');
+    if (!reason || !reason.trim()) {
+      setPaymentNotice('Return reason is required.');
+      return;
+    }
+
+    const trackingId = window.prompt(
+      'Enter return tracking ID (optional). Leave blank to auto-generate a unique ID for this product line (RET-ORDER-ITEM).',
+      ''
+    );
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('Please login again');
+      const encodedOrderId = encodeURIComponent(orderDetails.orderNumber || orderDetails.id);
+      const resp = await fetch(getApiUrl(`/api/dashboard/service-provider/orders/${encodedOrderId}/returns`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          orderItemId: selectedItem.id,
+          quantity: qty,
+          reason: reason.trim(),
+          ...(trackingId?.trim() ? { trackingId: trackingId.trim() } : {})
+        })
+      });
+      const data = await resp.json();
+      if (!resp.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to create return request.');
+      }
+      setPaymentNotice('Return request created. Track it under My Returns.');
+      await fetchOrderDetails(orderDetails.orderNumber || orderDetails.id);
+    } catch (e) {
+      setPaymentNotice(e.message || 'Failed to create return request.');
     }
   };
 
@@ -1295,6 +1369,39 @@ const YourOrders = () => {
                     </button>
                   </OrderDialogSection>
                 ) : null}
+
+                <OrderDialogSection title="Returns">
+                  {Array.isArray(orderDetails.returns) && orderDetails.returns.length > 0 ? (
+                    <div className="yo-returns-list">
+                      {orderDetails.returns.map((ret) => (
+                        <div key={ret.id} className="yo-return-card">
+                          <div><strong>Status:</strong> {labelReturnStatus(ret.status)}</div>
+                          <div><strong>Qty:</strong> {ret.quantity}</div>
+                          <div><strong>Reason:</strong> {ret.reason}</div>
+                          {ret.tracking_id ? (
+                            <div><strong>Tracking ID:</strong> {ret.tracking_id}</div>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No return requests yet.</p>
+                  )}
+                  {canRequestReturnForOrder(orderDetails) ? (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button type="button" className="btn-secondary" onClick={handleCreateReturnRequest}>
+                        Request return
+                      </button>
+                      <Button variant="outline" size="sm" onClick={() => navigate('/returns')}>
+                        View all returns
+                      </Button>
+                    </div>
+                  ) : (
+                    <p className="mt-2 text-sm text-muted-foreground">
+                      {getReturnRequestBlockReason(orderDetails)}
+                    </p>
+                  )}
+                </OrderDialogSection>
 
                 {canRateOrder ? (
                   <OrderDialogSection title="Rate this order">

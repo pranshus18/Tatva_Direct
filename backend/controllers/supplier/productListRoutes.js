@@ -11,6 +11,7 @@ import {
   sanitizeImageUrls,
   supplierOfferTsinFields
 } from './shared/productHelpers.js';
+import { mergeProductImageLists } from '../../services/productImageService.js';
 
 export function registerSupplierProductListRoutes(ctx) {
   const {
@@ -110,7 +111,7 @@ router.get('/products', authenticateToken, async (req, res) => {
           gtin: sp.attributes?.gtin || sp.product.gtin,
           mpn: sp.attributes?.mpn || sp.product.mpn,
           specifications: storedSpecs,
-          images: offerImages.length > 0 ? offerImages : baseImages,
+          images: mergeProductImageLists(offerImages, baseImages),
           price: sp.price,
           stock: parseSupplierStockQuantity(sp.stock) ?? 0,
           igst_rate: sp.igst_rate ?? sp.attributes?.igstRate ?? null,

@@ -26,6 +26,8 @@ import './Dashboard.css';
 import './ProductManagement.css';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import ProductThumbnail from '../components/ProductThumbnail';
+import { getProductImageList } from '../utils/productImages';
 import {
   mergeSpecificationObjects,
   parseSpecInputToValue,
@@ -710,18 +712,15 @@ const ProductManagement = ({ user }) => {
                     <ChevronDown size={16} strokeWidth={2} />
                   </button>
 
-                  {Array.isArray(product.images) && product.images[0] ? (
-                    <div className="pm-row__thumb">
-                      <ProductImageCarousel
-                        images={product.images}
-                        alt={product.name || 'Product'}
-                        height={52}
-                        rounded={6}
-                      />
-                    </div>
-                  ) : (
-                    <div className="pm-row__thumb pm-row__thumb--empty" aria-hidden />
-                  )}
+                  <div className="pm-row__thumb">
+                    <ProductThumbnail
+                      product={product}
+                      alt={product.name || 'Product'}
+                      size={52}
+                      rounded={6}
+                      fit="cover"
+                    />
+                  </div>
 
                   <div className="pm-row__product">
                     <div className="pm-row__meta">
@@ -1157,10 +1156,10 @@ const ProductDetailsModal = ({
         </div>
 
         <div className="modal-form">
-          {Array.isArray(product.images) && product.images[0] ? (
+          {getProductImageList(product).length > 0 ? (
             <div className="pm-details-hero">
               <ProductImageCarousel
-                images={product.images}
+                images={getProductImageList(product)}
                 alt={product.name || 'Product'}
                 height={220}
                 rounded={12}

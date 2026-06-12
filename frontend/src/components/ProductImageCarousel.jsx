@@ -12,9 +12,11 @@ const ProductImageCarousel = ({
     [images]
   );
   const [index, setIndex] = useState(0);
+  const [brokenUrls, setBrokenUrls] = useState(() => new Set());
 
-  if (imageList.length === 0) return null;
-  const safeIndex = Math.max(0, Math.min(index, imageList.length - 1));
+  const visibleImages = imageList.filter((url) => !brokenUrls.has(url));
+  if (visibleImages.length === 0) return null;
+  const safeIndex = Math.max(0, Math.min(index, visibleImages.length - 1));
 
   const eatEvent = (e) => {
     if (!stopPropagation) return;
@@ -25,25 +27,37 @@ const ProductImageCarousel = ({
   return (
     <div style={{ position: 'relative' }}>
       <img
-        src={imageList[safeIndex]}
+        src={visibleImages[safeIndex]}
         alt={alt}
+        loading="lazy"
+        decoding="async"
+        onError={() => {
+          const failed = visibleImages[safeIndex];
+          if (!failed) return;
+          setBrokenUrls((prev) => {
+            const next = new Set(prev);
+            next.add(failed);
+            return next;
+          });
+          setIndex(0);
+        }}
         style={{
           width: '100%',
           height: `${height}px`,
-          objectFit: 'contain',
+          objectFit: 'cover',
           borderRadius: `${rounded}px`,
           border: '1px solid #e5e7eb',
           background: '#f8fafc'
         }}
       />
-      {imageList.length > 1 && (
+      {visibleImages.length > 1 && (
         <>
           <button
             type="button"
             onMouseDown={eatEvent}
             onClick={(e) => {
               eatEvent(e);
-              setIndex((prev) => (prev - 1 + imageList.length) % imageList.length);
+              setIndex((prev) => (prev - 1 + visibleImages.length) % visibleImages.length);
             }}
             style={{
               position: 'absolute',
@@ -67,7 +81,7 @@ const ProductImageCarousel = ({
             onMouseDown={eatEvent}
             onClick={(e) => {
               eatEvent(e);
-              setIndex((prev) => (prev + 1) % imageList.length);
+              setIndex((prev) => (prev + 1) % visibleImages.length);
             }}
             style={{
               position: 'absolute',
@@ -99,7 +113,7 @@ const ProductImageCarousel = ({
               color: '#fff'
             }}
           >
-            {safeIndex + 1}/{imageList.length}
+            {safeIndex + 1}/{visibleImages.length}
           </div>
         </>
       )}

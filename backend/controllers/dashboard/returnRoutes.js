@@ -10,6 +10,13 @@ import {
   insertNotifications,
   parseWithSchema
 } from './dashboardImports.js';
+import {
+  canRequestReturnForOrder,
+  getRemainingReturnableQuantity,
+  getReturnRequestBlockReason,
+  isSupplierBuyerUser
+} from '../../utils/orderReturnRules.js';
+import { listBuyerOutgoingReturns } from '../../services/returnListService.js';
 export * from './shared/dashboardHelpers.js';
 
 export function registerDashboardReturnRoutes(ctx) {
@@ -52,6 +59,13 @@ router.post('/service-provider/orders/:id/returns', authenticateToken, async (re
       return res.status(404).json({ status: 'error', message: 'Order not found' });
     }
 
+    if (!canRequestReturnForOrder({ status: order.status })) {
+      return res.status(400).json({
+        status: 'error',
+        message: getReturnRequestBlockReason({ status: order.status })
+      });
+    }
+
     const { data: orderItem } = await supabase
       .from('order_items')
       .select('id, quantity')
@@ -64,10 +78,22 @@ router.post('/service-provider/orders/:id/returns', authenticateToken, async (re
     }
 
     const orderedQty = Number(orderItem.quantity || 0);
-    if (requestedQty > orderedQty) {
+    const { data: existingReturns } = await supabase
+      .from('order_returns')
+      .select('id, quantity, status')
+      .eq('order_item_id', orderItem.id);
+
+    const remainingQty = getRemainingReturnableQuantity(orderedQty, existingReturns || []);
+    if (remainingQty <= 0) {
       return res.status(400).json({
         status: 'error',
-        message: `Return quantity cannot exceed ordered quantity (${orderedQty})`
+        message: 'All units for this item have already been requested for return.'
+      });
+    }
+    if (requestedQty > remainingQty) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Return quantity cannot exceed remaining returnable quantity (${remainingQty})`
       });
     }
 
@@ -80,29 +106,65 @@ router.post('/service-provider/orders/:id/returns', authenticateToken, async (re
       }
     ];
 
-    const uniqueTrackingId = await ensureUniqueReturnTrackingId({
-      preferredTrackingId: trackingId,
-      orderNumber: order.order_number
-    });
+    const activeReturnCount = (existingReturns || []).filter(
+      (row) => String(row?.status || '').toLowerCase() !== 'rejected'
+    ).length;
 
-    const { data: created, error: createErr } = await supabase
-      .from('order_returns')
-      .insert({
-        order_id: order.id,
-        order_item_id: orderItem.id,
-        service_provider_id: req.userId,
-        supplier_id: order.supplier_id,
-        quantity: requestedQty,
-        reason: String(reason).trim(),
-        tracking_id: uniqueTrackingId,
-        status: 'requested',
-        status_history: statusHistory
-      })
-      .select('*')
-      .single();
+    let uniqueTrackingId;
+    try {
+      uniqueTrackingId = await ensureUniqueReturnTrackingId({
+        preferredTrackingId: trackingId,
+        orderNumber: order.order_number,
+        orderItemId: orderItem.id,
+        existingReturnCountOnItem: activeReturnCount
+      });
+    } catch (trackingErr) {
+      if (String(trackingErr?.name || '') === 'TrackingIdTakenError') {
+        return res.status(400).json({ status: 'error', message: trackingErr.message });
+      }
+      throw trackingErr;
+    }
+
+    const insertReturn = async (trackingValue) =>
+      supabase
+        .from('order_returns')
+        .insert({
+          order_id: order.id,
+          order_item_id: orderItem.id,
+          service_provider_id: req.userId,
+          supplier_id: order.supplier_id,
+          quantity: requestedQty,
+          reason: String(reason).trim(),
+          tracking_id: trackingValue,
+          status: 'requested',
+          status_history: statusHistory
+        })
+        .select('*')
+        .single();
+
+    let { data: created, error: createErr } = await insertReturn(uniqueTrackingId);
+
+    if (
+      createErr &&
+      String(createErr.code || '') === '23505' &&
+      /tracking_id/i.test(String(createErr.message || createErr.details || ''))
+    ) {
+      const retryTrackingId = await ensureUniqueReturnTrackingId({
+        orderNumber: order.order_number,
+        orderItemId: orderItem.id,
+        existingReturnCountOnItem: activeReturnCount + 1
+      });
+      ({ data: created, error: createErr } = await insertReturn(retryTrackingId));
+    }
 
     if (createErr) {
       console.error('[Returns] create error:', createErr);
+      if (String(createErr.code || '') === '23505') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'This tracking ID is already in use. Choose a different ID or leave blank to auto-generate one.'
+        });
+      }
       return res.status(500).json({ status: 'error', message: 'Failed to create return request' });
     }
 
@@ -162,24 +224,18 @@ router.post('/service-provider/orders/:id/returns', authenticateToken, async (re
   }
 });
 
-// List return requests for current service provider
+// List return requests initiated by current buyer (scope=retail|upstream)
 router.get('/service-provider/returns', authenticateToken, async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('order_returns')
-      .select('*')
-      .eq('service_provider_id', req.userId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('[Returns] service-provider list error:', error);
-      return res.status(500).json({ status: 'error', message: 'Failed to fetch return requests' });
-    }
-
-    return res.json({ status: 'success', returns: data || [] });
+    const { returns, scope } = await listBuyerOutgoingReturns(
+      supabase,
+      req.userId,
+      req.query.scope
+    );
+    return res.json({ status: 'success', scope, returns });
   } catch (error) {
     console.error('[Returns] service-provider list exception:', error);
-    return res.status(500).json({ status: 'error', message: 'Internal server error' });
+    return res.status(500).json({ status: 'error', message: 'Failed to fetch return requests' });
   }
 });
 
@@ -232,17 +288,26 @@ router.patch('/service-provider/returns/:id/acknowledge-closure', authenticateTo
       merged = updated;
     }
 
-    let restock = { ok: true, skipped: true };
-    try {
-      restock = await applyRestockForClosedReturn(merged, req.userId);
-    } catch (restockErr) {
+    const { data: buyerUser } = await supabase
+      .from('users')
+      .select('user_type')
+      .eq('id', merged.service_provider_id)
+      .maybeSingle();
+    const upstreamBuyer = isSupplierBuyerUser(buyerUser?.user_type);
+
+    let restock = { ok: true, skipped: true, reason: upstreamBuyer ? 'upstream_auto_restocked' : 'none' };
+    if (!upstreamBuyer) {
+      try {
+        restock = await applyRestockForClosedReturn(merged, req.userId);
+      } catch (restockErr) {
       console.error('[Returns] acknowledge-closure restock error:', restockErr);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Your confirmation was saved, but inventory could not be updated. Please try again or contact support.',
-        returnRequest: merged,
-        inventory: { ok: false, error: String(restockErr.message || restockErr) }
-      });
+        return res.status(500).json({
+          status: 'error',
+          message: 'Your confirmation was saved, but inventory could not be updated. Please try again or contact support.',
+          returnRequest: merged,
+          inventory: { ok: false, error: String(restockErr.message || restockErr) }
+        });
+      }
     }
 
     return res.json({

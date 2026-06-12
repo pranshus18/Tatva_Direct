@@ -18,6 +18,8 @@ import {
 import {
   normalizeUserAddress
 } from './shared/productHelpers.js';
+import { isValidSupplierReturnTransition } from '../../utils/orderReturnRules.js';
+import { listSupplierIncomingReturns } from '../../services/returnListService.js';
 
 export function registerSupplierOrderRoutes(ctx) {
   const {
@@ -327,24 +329,18 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
   }
 });
 
-// List return requests for current supplier
+// List return requests for current supplier (scope=customer|chain)
 router.get('/returns', authenticateToken, async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('order_returns')
-      .select('*')
-      .eq('supplier_id', req.userId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('[Supplier Returns] list error:', error);
-      return res.status(500).json({ status: 'error', message: 'Failed to fetch return requests' });
-    }
-
-    return res.json({ status: 'success', returns: data || [] });
+    const { returns, scope } = await listSupplierIncomingReturns(
+      supabase,
+      req.userId,
+      req.query.scope
+    );
+    return res.json({ status: 'success', scope, returns });
   } catch (error) {
     console.error('[Supplier Returns] list exception:', error);
-    return res.status(500).json({ status: 'error', message: 'Internal server error' });
+    return res.status(500).json({ status: 'error', message: 'Failed to fetch return requests' });
   }
 });
 
@@ -364,6 +360,17 @@ router.patch('/returns/:id/status', authenticateToken, async (req, res) => {
 
     if (!existing) {
       return res.status(404).json({ status: 'error', message: 'Return request not found' });
+    }
+
+    if (existing.status === status) {
+      return res.json({ status: 'success', returnRequest: existing });
+    }
+
+    if (!isValidSupplierReturnTransition(existing.status, status)) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Cannot move return from "${existing.status}" to "${status}".`
+      });
     }
 
     const history = Array.isArray(existing.status_history) ? existing.status_history : [];

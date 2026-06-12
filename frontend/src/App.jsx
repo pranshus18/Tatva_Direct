@@ -332,9 +332,17 @@ function App() {
         <Route path="/supplier-dashboard" element={supplierPortal(<SupplierDashboard user={user} />)} />
         <Route path="/supplier-pos" element={supplierPortal(<SupplierPOS />)} />
         <Route path="/supplier-returns" element={supplierPortal(<SupplierReturns />)} />
+        <Route
+          path="/supplier-chain-returns"
+          element={<Navigate to="/supplier-returns?source=chain" replace />}
+        />
         <Route path="/supplier-select-yourself" element={supplierPortal(<SupplierSelectYourself />)} />
         <Route path="/supplier-upstream" element={supplierPortal(<SupplierUpstream user={user} />)} />
         <Route path="/supplier-upstream-orders" element={supplierPortal(<SupplierUpstreamOrders />)} />
+        <Route
+          path="/supplier-upstream-returns"
+          element={<Navigate to="/supplier-returns?tab=outgoing" replace />}
+        />
         <Route path="/supplier-place-order" element={supplierPortal(<SupplierPlaceOrder user={user} />)} />
         <Route path="/supplier-transport-suggestion" element={supplierPortal(<TransportSuggestion />)} />
         <Route path="/supplier-cart" element={supplierPortal(<SupplierUpstreamCart />)} />

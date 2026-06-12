@@ -63,7 +63,7 @@ const ServiceProviderReturns = () => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
-      const res = await fetch(resolveApiPath('/api/dashboard/service-provider/returns'), {
+      const res = await fetch(resolveApiPath('/api/dashboard/service-provider/returns?scope=retail'), {
         headers: { Authorization: `Bearer ${token}` }
       });
       const data = await res.json();
@@ -159,8 +159,8 @@ const ServiceProviderReturns = () => {
   return (
     <SpPageLayout showStepper={false}>
       <SpPageHeader
-        title="My Returns"
-        description="Track return requests raised on your orders"
+        title="My returns"
+        description="Track return requests you raised on retail purchase orders (not upstream B2B stock orders)."
         icon={RotateCcw}
         actions={<Button variant="outline" onClick={() => navigate('/your-orders')}>View orders</Button>}
       />

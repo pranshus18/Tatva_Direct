@@ -24,6 +24,7 @@ import {
   fetchAndValidateSupplierProductForUpdate
 } from '../../../services/supplierProductWriteService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
+import { mergeProductImageLists, syncCatalogProductImages } from '../../../services/productImageService.js';
 
 export function registerSupplierProductUpdateRoute(ctx) {
   const {
@@ -200,6 +201,11 @@ export function registerSupplierProductUpdateRoute(ctx) {
           }
         }
 
+        const offerImages = sanitizeImageUrls(updatedSupplierProduct.attributes?.images);
+        if (offerImages.length > 0) {
+          await syncCatalogProductImages(supabase, updatedSupplierProduct.product_id, offerImages);
+        }
+
         const { data: baseProduct } = await supabase
           .from('products')
           .select('id, name, description, category, unit, brand, gtin, mpn, specifications, images, asin, status')
@@ -246,10 +252,10 @@ export function registerSupplierProductUpdateRoute(ctx) {
           supplier_product_id: updatedSupplierProduct.id,
           variantKey: updatedSupplierProduct.variant_key,
           variantAsin: updatedSupplierProduct.variant_asin,
-          images:
-            sanitizeImageUrls(updatedSupplierProduct.attributes?.images).length > 0
-              ? sanitizeImageUrls(updatedSupplierProduct.attributes?.images)
-              : sanitizeImageUrls(baseProduct?.images)
+          images: mergeProductImageLists(
+            updatedSupplierProduct.attributes?.images,
+            baseProduct?.images
+          )
         };
 
         void (async () => {

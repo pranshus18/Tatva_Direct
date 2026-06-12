@@ -21,6 +21,7 @@ import {
   validateSpecValues
 } from '../supplierImports.js';
 import { sanitizeImageUrls } from '../shared/productHelpers.js';
+import { mergeProductImageLists, syncCatalogProductImages } from '../../../services/productImageService.js';
 import {
   createBaseProductIfNeeded,
   ensureCategoryAndUnit,
@@ -326,6 +327,11 @@ export function buildSupplierProductCreateHandler(ctx) {
         });
       }
 
+      let syncedCatalogImages = [];
+      if (normalizedImageUrls.length > 0) {
+        syncedCatalogImages = await syncCatalogProductImages(supabase, productId, normalizedImageUrls);
+      }
+
       const { data: baseProduct } = await supabase
         .from('products')
         .select(
@@ -351,10 +357,11 @@ export function buildSupplierProductCreateHandler(ctx) {
         supplier_product_id: createdOffer?.id || newSupplierProduct?.id,
         variantKey: createdOffer?.variant_key || variantIdentityBundle.variantKey,
         variantAsin: createdOffer?.variant_asin || variantAsin,
-        images:
-          normalizedImageUrls.length > 0
-            ? normalizedImageUrls
-            : baseProduct?.images
+        images: mergeProductImageLists(
+          normalizedImageUrls,
+          syncedCatalogImages,
+          baseProduct?.images
+        )
       };
 
       if (isCatalogGuardrailsEnabled()) {

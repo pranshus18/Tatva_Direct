@@ -12,39 +12,79 @@ export function normalizeOrderNumberForTracking(orderNumber = '') {
   return normalized || 'ORDER';
 }
 
-export function buildReturnTrackingId(orderNumber = '', suffix = '') {
-  const orderPart = normalizeOrderNumberForTracking(orderNumber);
-  const base = `RET-${orderPart}`;
-  if (!suffix) return base;
-  return `${base}-${String(suffix).toUpperCase()}`;
+export function normalizeReturnTrackingId(value = '') {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Z0-9-]/g, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
 }
 
-export async function ensureUniqueReturnTrackingId({ preferredTrackingId = '', orderNumber = '' }) {
-  const preferred = String(preferredTrackingId || '').trim();
-  const baseGenerated = buildReturnTrackingId(orderNumber);
-  const candidates = preferred ? [preferred, baseGenerated] : [baseGenerated];
-  const maxSuffixAttempts = 1000;
+export function orderItemTrackingToken(orderItemId = '') {
+  const compact = String(orderItemId || '')
+    .replace(/-/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  return compact.slice(0, 8) || 'ITEM';
+}
 
-  for (const candidate of candidates) {
-    const { data: existing, error } = await supabase
-      .from('order_returns')
-      .select('id')
-      .eq('tracking_id', candidate)
-      .maybeSingle();
-    if (!error && !existing) return candidate;
+/**
+ * Default format: RET-{ORDER}-{LINE_ITEM_TOKEN} or RET-{ORDER}-{LINE_ITEM_TOKEN}-R{n}
+ * for additional return requests on the same product line.
+ */
+export function buildReturnTrackingId({ orderNumber = '', orderItemId = '', sequence = 1 } = {}) {
+  const orderPart = normalizeOrderNumberForTracking(orderNumber);
+  const itemPart = orderItemTrackingToken(orderItemId);
+  const base = `RET-${orderPart}-${itemPart}`;
+  const seq = Number(sequence) || 1;
+  if (seq <= 1) return base;
+  return `${base}-R${seq}`;
+}
+
+export async function isReturnTrackingIdTaken(trackingId) {
+  const normalized = normalizeReturnTrackingId(trackingId);
+  if (!normalized) return false;
+
+  const { data: existing, error } = await supabase
+    .from('order_returns')
+    .select('id')
+    .eq('tracking_id', normalized)
+    .maybeSingle();
+
+  if (error) throw error;
+  return Boolean(existing);
+}
+
+export async function ensureUniqueReturnTrackingId({
+  preferredTrackingId = '',
+  orderNumber = '',
+  orderItemId = '',
+  existingReturnCountOnItem = 0
+}) {
+  const preferred = normalizeReturnTrackingId(preferredTrackingId);
+  if (preferred) {
+    if (await isReturnTrackingIdTaken(preferred)) {
+      const err = new Error('This tracking ID is already in use. Choose a different ID or leave blank to auto-generate one.');
+      err.name = 'TrackingIdTakenError';
+      throw err;
+    }
+    return preferred;
   }
 
-  for (let i = 2; i <= maxSuffixAttempts; i += 1) {
-    const candidate = buildReturnTrackingId(orderNumber, `R${i}`);
-    const { data: existing, error } = await supabase
-      .from('order_returns')
-      .select('id')
-      .eq('tracking_id', candidate)
-      .maybeSingle();
-    if (!error && !existing) return candidate;
+  const startSequence = Math.max(1, Number(existingReturnCountOnItem) + 1);
+  const maxAttempts = 1000;
+
+  for (let seq = startSequence; seq < startSequence + maxAttempts; seq += 1) {
+    const candidate = buildReturnTrackingId({ orderNumber, orderItemId, sequence: seq });
+    if (!(await isReturnTrackingIdTaken(candidate))) {
+      return candidate;
+    }
   }
 
-  return buildReturnTrackingId(orderNumber, Date.now().toString(36));
+  const fallbackBase = buildReturnTrackingId({ orderNumber, orderItemId, sequence: 1 });
+  return `${fallbackBase}-R${Date.now().toString(36).toUpperCase()}`;
 }
 
 export function normalizeUserAddress(address = {}, profile = {}) {

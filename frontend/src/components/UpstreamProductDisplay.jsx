@@ -1,13 +1,9 @@
 import React from 'react';
 import ProductImageCarousel from './ProductImageCarousel';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
+import { getProductImageList } from '../utils/productImages';
 
-export const collectProductImages = (product) => {
-  if (!product) return [];
-  const fromArray = Array.isArray(product.images) ? product.images : [];
-  const single = product.image ? [product.image] : [];
-  return [...new Set([...fromArray, ...single].filter(Boolean))];
-};
+export const collectProductImages = (product) => getProductImageList(product);
 
 const renderSpecEntries = (specEntries, specLayout) => {
   if (specLayout === 'grid') {

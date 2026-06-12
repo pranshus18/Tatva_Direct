@@ -57,7 +57,7 @@ export const supplierInventoryAdjustSchema = z.object({
 
 export const supplierReturnStatusPatchSchema = z.object({
   status: z.enum(['approved', 'rejected', 'picked_up', 'received', 'refunded', 'replaced', 'closed']),
-  supplierNotes: z.string().optional()
+  supplierNotes: z.string().optional().nullable()
 });
 
 export const supplierOrderStatusPatchSchema = z.object({

@@ -472,3 +472,16 @@
     flex: 0 0 33.33%;
   }
 }
+
+.yo-returns-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.yo-return-card {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  color: #334155;
+}

@@ -28,20 +28,7 @@ registerDashboardOrderDeletionRoutes({
   router,
   authenticateToken,
   supabase,
-  restockInventoryForCancelledOrder,
-  userRolePath: 'service-provider',
-  userColumn: 'service_provider_id',
-  actorLabel: 'service provider'
-});
-
-registerDashboardOrderDeletionRoutes({
-  router,
-  authenticateToken,
-  supabase,
-  restockInventoryForCancelledOrder,
-  userRolePath: 'supplier',
-  userColumn: 'supplier_id',
-  actorLabel: 'supplier'
+  restockInventoryForCancelledOrder
 });
 
 export { router as dashboardRouter };
