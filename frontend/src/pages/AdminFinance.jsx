@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
-import { AlertTriangle, CheckCircle, Eye, FileText, RefreshCw, Shield, Wallet } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Eye, FileText, RefreshCw, Wallet } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
 import './AdminDashboard.css';
 
@@ -36,14 +36,9 @@ const AdminFinance = ({ user }) => {
   const [runningRecon, setRunningRecon] = useState(false);
   const [loadingStatement, setLoadingStatement] = useState(false);
   const [downloadingPdf, setDownloadingPdf] = useState(false);
-  const [metrics, setMetrics] = useState(null);
   const [reconciliation, setReconciliation] = useState(null);
   const [statement, setStatement] = useState(null);
-  const [runs, setRuns] = useState([]);
-  const [settlementReport, setSettlementReport] = useState(null);
   const [issues, setIssues] = useState([]);
-  const [riskSignals, setRiskSignals] = useState([]);
-  const [auditLogs, setAuditLogs] = useState([]);
   const [fromDate, setFromDate] = useState(initialRange.fromDate);
   const [toDate, setToDate] = useState(initialRange.toDate);
   const [statementFilter, setStatementFilter] = useState('all');
@@ -81,40 +76,26 @@ const AdminFinance = ({ user }) => {
     }
   }, [fromDate, toDate]);
 
+  const fetchIssues = useCallback(async () => {
+    try {
+      const resp = await fetch(getApiUrl('/api/payments/reconciliation/issues?status=open&limit=50'), {
+        headers: authHeaders()
+      });
+      const data = await resp.json();
+      if (data.status === 'success') setIssues(data.issues || []);
+    } catch (error) {
+      console.error('[AdminFinance] Failed to fetch issues:', error);
+    }
+  }, []);
+
   const fetchFinanceData = useCallback(async () => {
     setLoading(true);
     try {
-      const query = dateQuery();
-      const [metricsResp, issuesResp, riskResp, auditResp, runsResp, settlementResp] = await Promise.all([
-        fetch(getApiUrl('/api/payments/metrics'), { headers: authHeaders() }),
-        fetch(getApiUrl('/api/payments/reconciliation/issues?status=open&limit=50'), { headers: authHeaders() }),
-        fetch(getApiUrl('/api/payments/risk/signals?status=open&limit=30'), { headers: authHeaders() }),
-        fetch(getApiUrl('/api/payments/audit/logs?limit=30'), { headers: authHeaders() }),
-        fetch(getApiUrl('/api/payments/reconciliation/runs?limit=10'), { headers: authHeaders() }),
-        fetch(getApiUrl(`/api/payments/settlement/report?${query}`), { headers: authHeaders() })
-      ]);
-
-      const [metricsData, issuesData, riskData, auditData, runsData, settlementData] = await Promise.all([
-        metricsResp.json(),
-        issuesResp.json(),
-        riskResp.json(),
-        auditResp.json(),
-        runsResp.json(),
-        settlementResp.json()
-      ]);
-
-      if (metricsData.status === 'success') setMetrics(metricsData.metrics || null);
-      if (issuesData.status === 'success') setIssues(issuesData.issues || []);
-      if (riskData.status === 'success') setRiskSignals(riskData.signals || []);
-      if (auditData.status === 'success') setAuditLogs(auditData.logs || []);
-      if (runsData.status === 'success') setRuns(runsData.runs || []);
-      if (settlementData.status === 'success') setSettlementReport(settlementData.report || null);
-    } catch (error) {
-      console.error('[AdminFinance] Failed to fetch finance data:', error);
+      await fetchIssues();
     } finally {
       setLoading(false);
     }
-  }, [fromDate, toDate]);
+  }, [fetchIssues]);
 
   useEffect(() => {
     fetchFinanceData();
@@ -144,10 +125,14 @@ const AdminFinance = ({ user }) => {
             mismatches: data.reconciliation.mismatches,
             issueCount: data.reconciliation.issueCount,
             successRatePct: data.reconciliation.successRatePct,
+            totalOrderAmount: data.reconciliation.totalOrderAmount,
+            totalReceiptAmount: data.reconciliation.totalReceiptAmount,
+            totalTransactionAmount: data.reconciliation.totalTransactionAmount,
+            totalLedgerAmount: data.reconciliation.totalLedgerAmount,
             lines: data.reconciliation.lines
           });
         }
-        await fetchFinanceData();
+        await fetchIssues();
       } else {
         alert(data.message || 'Failed to run reconciliation');
       }
@@ -168,31 +153,13 @@ const AdminFinance = ({ user }) => {
       });
       const data = await resp.json();
       if (data.status === 'success') {
-        await fetchFinanceData();
+        await fetchIssues();
         await fetchStatement();
       } else {
         alert(data.message || 'Failed to update issue');
       }
     } catch (error) {
       console.error('[AdminFinance] Failed to update issue:', error);
-    }
-  };
-
-  const reviewRisk = async (id, status) => {
-    try {
-      const resp = await fetch(getApiUrl(`/api/payments/risk/signals/${id}/review`), {
-        method: 'PATCH',
-        headers: authHeaders(),
-        body: JSON.stringify({ status })
-      });
-      const data = await resp.json();
-      if (data.status === 'success') {
-        await fetchFinanceData();
-      } else {
-        alert(data.message || 'Failed to update risk signal');
-      }
-    } catch (error) {
-      console.error('[AdminFinance] Failed to review risk signal:', error);
     }
   };
 
@@ -245,11 +212,14 @@ const AdminFinance = ({ user }) => {
     }
   };
 
+  const successRate = statement?.successRatePct ?? reconciliation?.successRatePct ?? 100;
+  const openIssues = issues.length;
+
   if (loading && !statement) {
     return (
       <div className="admin-loading">
         <div className="spinner" />
-        <p>Loading finance controls...</p>
+        <p>Loading reconciliation...</p>
       </div>
     );
   }
@@ -258,8 +228,8 @@ const AdminFinance = ({ user }) => {
     <div className="admin-container">
       <div className="admin-header">
         <div>
-          <h1>Finance Ops</h1>
-          <p>Reconciliation statement, settlement report, risk alerts, and audit trail</p>
+          <h1>Reconciliation</h1>
+          <p>Check paid orders against receipts, transactions, and ledger — then download the statement.</p>
         </div>
         <div className="admin-actions">
           <AdminNotifications />
@@ -280,7 +250,7 @@ const AdminFinance = ({ user }) => {
 
       <div className="dashboard-section" style={{ marginBottom: '1rem' }}>
         <div className="section-header">
-          <h2>Reconciliation Period</h2>
+          <h2>Period</h2>
         </div>
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'end' }}>
           <label style={{ display: 'grid', gap: '0.35rem', fontSize: '0.875rem' }}>
@@ -297,23 +267,14 @@ const AdminFinance = ({ user }) => {
         </div>
       </div>
 
-      <div className="admin-stats-grid">
-        <div className="admin-stat-card">
-          <div className="stat-icon revenue">
-            <Wallet size={24} />
-          </div>
-          <div className="stat-content">
-            <h3>{metrics?.paymentSuccessRatePct ?? 0}%</h3>
-            <p>Payment Success Rate</p>
-          </div>
-        </div>
+      <div className="admin-stats-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
         <div className="admin-stat-card">
           <div className="stat-icon transactions">
             <CheckCircle size={24} />
           </div>
           <div className="stat-content">
-            <h3>{statement?.successRatePct ?? metrics?.reconciliationSuccessRatePct ?? 0}%</h3>
-            <p>Reconciliation Success</p>
+            <h3>{successRate}%</h3>
+            <p>Matched</p>
           </div>
         </div>
         <div className="admin-stat-card">
@@ -321,44 +282,71 @@ const AdminFinance = ({ user }) => {
             <AlertTriangle size={24} />
           </div>
           <div className="stat-content">
-            <h3>{metrics?.openHighSeverityIssues ?? 0}</h3>
-            <p>Open High Severity Issues</p>
+            <h3>{openIssues}</h3>
+            <p>Open issues</p>
           </div>
         </div>
         <div className="admin-stat-card">
-          <div className="stat-icon suppliers">
-            <Shield size={24} />
+          <div className="stat-icon revenue">
+            <Wallet size={24} />
           </div>
           <div className="stat-content">
-            <h3>{formatCurrency(settlementReport?.totalCaptured || 0)}</h3>
-            <p>Captured in Period</p>
+            <h3>{formatCurrency(statement?.totalOrderAmount ?? reconciliation?.totalOrderAmount ?? 0)}</h3>
+            <p>Paid orders total</p>
           </div>
         </div>
       </div>
 
       {(reconciliation || statement) && (
         <div className="dashboard-section" style={{ marginBottom: '1rem' }}>
-          <h2>Reconciliation Summary</h2>
-          <p>
-            Checked: {reconciliation?.checked ?? statement?.checked ?? 0} | Matched:{' '}
-            {reconciliation?.matched ?? statement?.matched ?? 0} | Mismatched orders:{' '}
-            {reconciliation?.mismatches ?? statement?.mismatches ?? 0} | Open issue rows:{' '}
-            {reconciliation?.issueCount ?? statement?.issueCount ?? 0}
-            {reconciliation?.autoResolved ? ` | Auto-resolved: ${reconciliation.autoResolved}` : ''}
-            {reconciliation?.newIssues != null ? ` | New issues logged: ${reconciliation.newIssues}` : ''}
+          <p style={{ margin: 0, color: '#64748b' }}>
+            {statement?.checked ?? reconciliation?.checked ?? 0} orders checked ·{' '}
+            {statement?.matched ?? reconciliation?.matched ?? 0} matched ·{' '}
+            {statement?.mismatches ?? reconciliation?.mismatches ?? 0} mismatched
+            {reconciliation?.autoResolved ? ` · ${reconciliation.autoResolved} auto-fixed` : ''}
           </p>
-          <p style={{ marginTop: '0.5rem', color: '#64748b' }}>
-            Totals — Orders: {formatCurrency(statement?.totalOrderAmount ?? reconciliation?.totalOrderAmount ?? 0)} |
-            Receipts: {formatCurrency(statement?.totalReceiptAmount ?? reconciliation?.totalReceiptAmount ?? 0)} |
-            Transactions: {formatCurrency(statement?.totalTransactionAmount ?? reconciliation?.totalTransactionAmount ?? 0)} |
-            Ledger: {formatCurrency(statement?.totalLedgerAmount ?? 0)}
-          </p>
+        </div>
+      )}
+
+      {openIssues > 0 && (
+        <div className="dashboard-section" style={{ marginBottom: '1rem' }}>
+          <div className="section-header">
+            <h2>Needs attention ({openIssues})</h2>
+            <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b' }}>
+              Run reconciliation to auto-fix most of these, or resolve manually.
+            </p>
+          </div>
+          <div className="items-list">
+            {issues.map((issue) => (
+              <div className="item-card" key={issue.id} style={{ alignItems: 'flex-start' }}>
+                <div className="item-info" style={{ flex: 1 }}>
+                  <p style={{ margin: '0 0 0.35rem', fontWeight: 600 }}>
+                    {issue.orderNumber || 'Unknown order'}
+                    {issue.orderAmount != null ? ` · ${formatCurrency(issue.orderAmount)}` : ''}
+                  </p>
+                  <p style={{ margin: 0, color: '#334155' }}>
+                    {issue.summary || formatIssueType(issue.issue_type)}
+                  </p>
+                </div>
+                <div className="item-status" style={{ display: 'flex', gap: '0.35rem' }}>
+                  <button className="btn-refresh" onClick={() => resolveIssue(issue.id, 'resolved')} title="Mark resolved">
+                    <CheckCircle size={14} />
+                    Resolve
+                  </button>
+                  <button className="btn-refresh" onClick={() => resolveIssue(issue.id, 'ignored')} title="Ignore issue">
+                    <Eye size={14} />
+                    Ignore
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
       <div className="dashboard-section" style={{ marginBottom: '1rem' }}>
         <div className="section-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h2>Reconciliation Statement</h2>
+          <h2>Statement</h2>
           <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <select value={statementFilter} onChange={(e) => setStatementFilter(e.target.value)}>
               <option value="all">All rows</option>
@@ -371,10 +359,6 @@ const AdminFinance = ({ user }) => {
             </button>
           </div>
         </div>
-        <p style={{ margin: '0 0 1rem', fontSize: '0.85rem', color: '#64748b' }}>
-          PDF includes summary totals, settlement breakdown, and per-order details: service provider, supplier,
-          payment method/reference, receipt, transaction, ledger, variance, status, and issues.
-        </p>
         <div className="transactions-table">
           <table>
             <thead>
@@ -385,18 +369,14 @@ const AdminFinance = ({ user }) => {
                 <th>Supplier</th>
                 <th>Order Total</th>
                 <th>Receipt</th>
-                <th>Reference</th>
                 <th>Transaction</th>
-                <th>Ledger</th>
-                <th>Variance</th>
                 <th>Status</th>
-                <th>Issues</th>
               </tr>
             </thead>
             <tbody>
               {filteredLines.length === 0 ? (
                 <tr>
-                  <td colSpan={12} style={{ textAlign: 'center', padding: '1.5rem' }}>
+                  <td colSpan={8} style={{ textAlign: 'center', padding: '1.5rem' }}>
                     {loadingStatement ? 'Loading statement...' : 'No paid orders found for this period.'}
                   </td>
                 </tr>
@@ -408,190 +388,18 @@ const AdminFinance = ({ user }) => {
                     <td>{line.serviceProvider || '—'}</td>
                     <td>{line.supplier || '—'}</td>
                     <td>{formatCurrency(line.orderTotal)}</td>
-                    <td>
-                      {line.receipt?.present
-                        ? `${line.receipt.number || 'Yes'} (${formatCurrency(line.receipt.amount)})`
-                        : 'Missing'}
-                    </td>
-                    <td>{line.receipt?.paymentReference || line.transaction?.providerPaymentId || '—'}</td>
-                    <td>
-                      {line.transaction?.present
-                        ? `${line.transaction.status || 'Yes'} (${formatCurrency(line.transaction.amount)})`
-                        : 'Missing'}
-                    </td>
-                    <td>{line.ledger?.present ? formatCurrency(line.ledger.amount) : 'Missing'}</td>
-                    <td>
-                      {line.varianceOrderReceipt == null ? '—' : formatCurrency(line.varianceOrderReceipt)}
-                    </td>
+                    <td>{line.receipt?.present ? formatCurrency(line.receipt.amount) : 'Missing'}</td>
+                    <td>{line.transaction?.present ? formatCurrency(line.transaction.amount) : 'Missing'}</td>
                     <td>
                       <span className={`status ${line.status === 'matched' ? 'confirmed' : 'pending'}`}>
                         {line.status}
                       </span>
                     </td>
-                    <td>{(line.issueTypes || []).map(formatIssueType).join(', ') || '—'}</td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
-        </div>
-      </div>
-
-      <div className="dashboard-content">
-        <div className="dashboard-section">
-          <div className="section-header">
-            <h2>Reconciliation Issues</h2>
-            <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b' }}>
-              Open mismatches between paid orders, receipts, transactions, and ledger entries.
-            </p>
-          </div>
-          <div className="items-list">
-            {issues.length === 0 ? (
-              <div className="empty-state"><p>No open reconciliation issues.</p></div>
-            ) : (
-              issues.map((issue) => (
-                <div className="item-card" key={issue.id} style={{ alignItems: 'flex-start' }}>
-                  <div className="item-info" style={{ flex: 1 }}>
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.35rem' }}>
-                      <h4 style={{ margin: 0 }}>{formatIssueType(issue.issue_type)}</h4>
-                      <span className={`status ${issue.severity === 'high' ? 'pending' : 'confirmed'}`}>
-                        {issue.severity || 'medium'} severity
-                      </span>
-                    </div>
-                    <p style={{ margin: '0 0 0.35rem', fontWeight: 600 }}>
-                      {issue.orderNumber || 'Unknown order'}
-                      {issue.orderAmount != null ? ` · ${formatCurrency(issue.orderAmount)}` : ''}
-                      {issue.paymentMethod ? ` · ${String(issue.paymentMethod).replace(/_/g, ' ')}` : ''}
-                    </p>
-                    <p style={{ margin: '0 0 0.35rem', color: '#334155' }}>
-                      {issue.summary || formatIssueType(issue.issue_type)}
-                    </p>
-                    {issue.detail ? (
-                      <p style={{ margin: '0 0 0.35rem', fontSize: '0.85rem', color: '#64748b' }}>{issue.detail}</p>
-                    ) : null}
-                    {issue.suggestedAction ? (
-                      <p style={{ margin: 0, fontSize: '0.82rem', color: '#475569' }}>
-                        <strong>Next step:</strong> {issue.suggestedAction}
-                      </p>
-                    ) : null}
-                    <p style={{ margin: '0.45rem 0 0', fontSize: '0.75rem', color: '#94a3b8' }}>
-                      Logged {issue.created_at ? new Date(issue.created_at).toLocaleString('en-IN') : 'recently'}
-                    </p>
-                  </div>
-                  <div className="item-status" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                    <button className="btn-refresh" onClick={() => resolveIssue(issue.id, 'resolved')} title="Mark resolved">
-                      <CheckCircle size={14} />
-                      Resolve
-                    </button>
-                    <button className="btn-refresh" onClick={() => resolveIssue(issue.id, 'ignored')} title="Ignore issue">
-                      <Eye size={14} />
-                      Ignore
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="dashboard-section">
-          <div className="section-header"><h2>Settlement Breakdown</h2></div>
-          <div className="items-list">
-            <div className="item-card">
-              <div className="item-info">
-                <h4>Captured payments</h4>
-                <p>{settlementReport?.transactionCount || 0} transactions in selected period</p>
-              </div>
-              <div className="item-status">
-                <span className="status confirmed">{formatCurrency(settlementReport?.totalCaptured || 0)}</span>
-              </div>
-            </div>
-            {settlementReport?.byMethod &&
-              Object.entries(settlementReport.byMethod).map(([method, amount]) => (
-                <div className="item-card" key={method}>
-                  <div className="item-info">
-                    <h4>{String(method).replace(/_/g, ' ').toUpperCase()}</h4>
-                    <p>Settlement method breakdown</p>
-                  </div>
-                  <div className="item-status">
-                    <span className="status delivered">{formatCurrency(amount)}</span>
-                  </div>
-                </div>
-              ))}
-          </div>
-        </div>
-
-        <div className="dashboard-section">
-          <div className="section-header"><h2>Recent Reconciliation Runs</h2></div>
-          <div className="items-list">
-            {runs.length === 0 ? (
-              <div className="empty-state"><p>No reconciliation runs yet.</p></div>
-            ) : (
-              runs.map((run) => (
-                <div className="item-card" key={run.id}>
-                  <div className="item-info">
-                    <h4>{run.run_type || 'payment_receipt'}</h4>
-                    <p>
-                      Checked {run.total_checked || 0} | Mismatched orders {run.mismatched_count || 0} | Status:{' '}
-                      {run.status}
-                    </p>
-                  </div>
-                  <div className="item-status">
-                    <span className="status confirmed">
-                      {run.summary?.successRatePct ?? 0}% | {new Date(run.created_at).toLocaleString('en-IN')}
-                    </span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="dashboard-section">
-          <div className="section-header"><h2>Risk Signals</h2></div>
-          <div className="items-list">
-            {riskSignals.length === 0 ? (
-              <div className="empty-state"><p>No open risk signals.</p></div>
-            ) : (
-              riskSignals.map((signal) => (
-                <div className="item-card" key={signal.id}>
-                  <div className="item-info">
-                    <h4>{signal.signal_type}</h4>
-                    <p>Risk score: {signal.risk_score}</p>
-                  </div>
-                  <div className="item-status">
-                    <button className="btn-icon" onClick={() => reviewRisk(signal.id, 'reviewed')} title="Reviewed">
-                      <CheckCircle size={16} />
-                    </button>
-                    <button className="btn-icon" onClick={() => reviewRisk(signal.id, 'blocked')} title="Blocked">
-                      <AlertTriangle size={16} />
-                    </button>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-
-      <div className="dashboard-section">
-        <div className="section-header"><h2>Recent Audit Trail</h2></div>
-        <div className="items-list">
-          {auditLogs.length === 0 ? (
-            <div className="empty-state"><p>No recent audit logs.</p></div>
-          ) : (
-            auditLogs.map((log) => (
-              <div className="item-card" key={log.id}>
-                <div className="item-info">
-                  <h4>{log.action}</h4>
-                  <p>{log.resource_type} {log.resource_id ? `#${log.resource_id}` : ''}</p>
-                </div>
-                <div className="item-status">
-                  <span className="status confirmed">{new Date(log.created_at).toLocaleString()}</span>
-                </div>
-              </div>
-            ))
-          )}
         </div>
       </div>
     </div>
