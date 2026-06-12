@@ -1,4 +1,7 @@
 import { supabase } from '../config/supabase.js';
+import { recordPaymentLedger } from './ledgerService.js';
+import { ensurePaymentTransactionForPaidOrder } from './paymentTransactionService.js';
+import { createReceiptIfMissing } from './paymentReceiptService.js';
 
 function toNumber(v) {
   const n = Number(v);
@@ -176,6 +179,118 @@ async function createRun({ runType, fromDate, toDate, actorUserId }) {
   return data;
 }
 
+async function backfillPaidOrderRecords(order) {
+  if (String(order.payment_status || '').toLowerCase() !== 'paid') {
+    return { receiptBackfilled: false, txnBackfilled: false, ledgerBackfilled: false };
+  }
+
+  let receiptBackfilled = false;
+  let txnBackfilled = false;
+  let ledgerBackfilled = false;
+
+  try {
+    const { receipt, created } = await createReceiptIfMissing({
+      order,
+      paymentMethod: order.payment_method,
+      paymentReference: order.payment_provider_payment_id,
+      paidAt: order.payment_verified_at
+    });
+    receiptBackfilled = Boolean(created && receipt);
+
+    const txnResult = await ensurePaymentTransactionForPaidOrder({
+      order,
+      method: order.payment_method,
+      paymentReference: order.payment_provider_payment_id,
+      paidAt: order.payment_verified_at,
+      provider: order.payment_provider || 'manual'
+    });
+    txnBackfilled = Boolean(txnResult?.created);
+
+    const activeReceipt = receipt || (await supabase.from('payment_receipts').select('*').eq('order_id', order.id).maybeSingle()).data;
+    if (activeReceipt) {
+      const { data: ledgerRows } = await supabase
+        .from('ledger_entries')
+        .select('id')
+        .eq('reference_type', 'payment_receipt')
+        .eq('reference_id', activeReceipt.id)
+        .limit(1);
+      if (!ledgerRows?.length) {
+        await recordPaymentLedger({ receipt: activeReceipt, order });
+        ledgerBackfilled = true;
+      }
+    }
+  } catch (error) {
+    console.error('[Reconciliation] backfill failed for order', order.id, error?.message || error);
+  }
+
+  return { receiptBackfilled, txnBackfilled, ledgerBackfilled };
+}
+
+function formatInr(amount) {
+  return `INR ${toNumber(amount).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+function describeReconciliationIssue(issue, order) {
+  const orderLabel = order?.order_number || 'Unknown order';
+  const orderAmount = order?.total_amount != null ? formatInr(order.total_amount) : 'N/A';
+  const expected = issue.expected_value || {};
+  const actual = issue.actual_value || {};
+
+  switch (issue.issue_type) {
+    case 'missing_payment_txn':
+      return {
+        summary: `${orderLabel} is marked paid but has no payment transaction record.`,
+        detail: `Order total: ${orderAmount}. Payment method: ${order?.payment_method || 'N/A'}.`,
+        suggestedAction: 'Run reconciliation to backfill the transaction, or confirm payment through the Razorpay / bank-transfer flow.'
+      };
+    case 'missing_receipt':
+      return {
+        summary: `${orderLabel} is marked paid but has no payment receipt.`,
+        detail: `Order total: ${orderAmount}.`,
+        suggestedAction: 'Run reconciliation to generate the missing receipt and ledger entry.'
+      };
+    case 'amount_mismatch':
+      return {
+        summary: `${orderLabel} receipt amount does not match the order total.`,
+        detail: `Expected ${formatInr(expected.orderTotal)} but receipt shows ${formatInr(actual.receiptAmount)}.`,
+        suggestedAction: 'Verify the paid amount and update the receipt or order total before resolving.'
+      };
+    case 'ledger_mismatch':
+      return {
+        summary: `${orderLabel} is missing the accounting ledger entry for its payment receipt.`,
+        detail: 'Receipt exists, but no ledger booking was found.',
+        suggestedAction: 'Run reconciliation to recreate the ledger entry automatically.'
+      };
+    case 'missing_invoice':
+      return {
+        summary: `${orderLabel} is missing its invoice record.`,
+        detail: `Order total: ${orderAmount}.`,
+        suggestedAction: 'Generate the invoice for this paid order, then resolve the issue.'
+      };
+    default:
+      return {
+        summary: `${orderLabel} has an open reconciliation issue (${issue.issue_type}).`,
+        detail: '',
+        suggestedAction: 'Review the order payment records and resolve when corrected.'
+      };
+  }
+}
+
+function enrichReconciliationIssue(issue, order) {
+  const description = describeReconciliationIssue(issue, order);
+  return {
+    ...issue,
+    orderNumber: order?.order_number || null,
+    orderAmount: order?.total_amount != null ? toNumber(order.total_amount) : null,
+    paymentMethod: order?.payment_method || null,
+    paymentStatus: order?.payment_status || null,
+    orderDate: order?.created_at || null,
+    summary: description.summary,
+    detail: description.detail,
+    suggestedAction: description.suggestedAction
+  };
+}
+
 async function fetchPaidOrders({ fromDate, toDate }) {
   let ordersQuery = supabase
     .from('orders')
@@ -240,8 +355,18 @@ async function loadReconciliationArtifacts(orderIds) {
   };
 }
 
-export async function buildReconciliationStatement({ fromDate = null, toDate = null, filter = 'all' }) {
+export async function buildReconciliationStatement({
+  fromDate = null,
+  toDate = null,
+  filter = 'all',
+  backfill = false
+}) {
   const paidOrders = await fetchPaidOrders({ fromDate, toDate });
+  if (backfill) {
+    for (const order of paidOrders) {
+      await backfillPaidOrderRecords(order);
+    }
+  }
   const orderIds = paidOrders.map((order) => order.id);
   const { receiptsByOrder, txnsByOrder, ledgerByOrder } = await loadReconciliationArtifacts(orderIds);
 
@@ -332,7 +457,7 @@ async function autoResolveFixedIssues({ orderIds, stillBrokenOrderIds, actorUser
 export async function runPaymentReconciliation({ fromDate = null, toDate = null, actorUserId = null }) {
   const run = await createRun({ runType: 'payment_receipt', fromDate, toDate, actorUserId });
   try {
-    const statement = await buildReconciliationStatement({ fromDate, toDate, filter: 'all' });
+    const statement = await buildReconciliationStatement({ fromDate, toDate, filter: 'all', backfill: true });
     const orderIds = statement.lines.map((line) => line.orderId);
     const stillBrokenOrderIds = [...new Set(statement.issues.map((i) => i.order_id))];
     const openIssueKeys = await loadOpenIssueKeys(orderIds);
@@ -400,6 +525,30 @@ export async function runPaymentReconciliation({ fromDate = null, toDate = null,
   }
 }
 
+export async function listReconciliationIssues({ status = 'open', limit = 200 } = {}) {
+  let query = supabase
+    .from('reconciliation_issues')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(Number(limit) || 200);
+  if (status && status !== 'all') query = query.eq('status', status);
+  const { data: issues, error } = await query;
+  if (error) throw error;
+
+  const orderIds = [...new Set((issues || []).map((issue) => issue.order_id).filter(Boolean))];
+  let orderMap = new Map();
+  if (orderIds.length) {
+    const { data: orders, error: ordersError } = await supabase
+      .from('orders')
+      .select('id, order_number, total_amount, payment_status, payment_method, created_at')
+      .in('id', orderIds);
+    if (ordersError) throw ordersError;
+    orderMap = new Map((orders || []).map((order) => [order.id, order]));
+  }
+
+  return (issues || []).map((issue) => enrichReconciliationIssue(issue, orderMap.get(issue.order_id) || null));
+}
+
 export async function listReconciliationRuns({ limit = 20 } = {}) {
   const { data, error } = await supabase
     .from('reconciliation_runs')
@@ -414,5 +563,6 @@ export default {
   runPaymentReconciliation,
   buildReconciliationStatement,
   buildSettlementSummary,
+  listReconciliationIssues,
   listReconciliationRuns
 };

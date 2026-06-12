@@ -2,6 +2,7 @@ import { supabase } from '../config/supabase.js';
 import { insertNotification } from '../repositories/notificationsRepository.js';
 import { buildOrderNetRevenueMap, fetchClosedReturnQuantityByOrderItem } from '../utils/netRevenue.js';
 import { recordLedgerEntry } from './ledgerService.js';
+import { ensurePaymentTransactionForPaidOrder } from './paymentTransactionService.js';
 import {
   buildCustomerIdentityKey,
   isCountableSalesOrder,
@@ -535,6 +536,16 @@ export async function settleCreditCycle({
   for (const order of unpaidOrders) {
     const amount = parseFloat(order.total_amount || 0) || 0;
     if (amount <= 0) continue;
+    try {
+      await ensurePaymentTransactionForPaidOrder({
+        order: { ...order, payment_status: 'paid', payment_method: order.payment_method || 'credit' },
+        method: 'credit',
+        provider: 'manual',
+        status: 'captured'
+      });
+    } catch (txnErr) {
+      console.error('[creditAccount] settlement payment transaction error (non-fatal):', txnErr);
+    }
     try {
       await recordLedgerEntry({
         debitAccount: 'Cash/Bank',

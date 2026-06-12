@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
-import { AlertTriangle, CheckCircle, Download, Eye, FileText, RefreshCw, Shield, Wallet } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Eye, FileText, RefreshCw, Shield, Wallet } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
 import './AdminDashboard.css';
 
@@ -35,7 +35,7 @@ const AdminFinance = ({ user }) => {
   const [loading, setLoading] = useState(true);
   const [runningRecon, setRunningRecon] = useState(false);
   const [loadingStatement, setLoadingStatement] = useState(false);
-  const [downloadingFormat, setDownloadingFormat] = useState('');
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
   const [metrics, setMetrics] = useState(null);
   const [reconciliation, setReconciliation] = useState(null);
   const [statement, setStatement] = useState(null);
@@ -203,21 +203,20 @@ const AdminFinance = ({ user }) => {
     return lines;
   }, [statement, statementFilter]);
 
-  const downloadStatement = async (format) => {
-    setDownloadingFormat(format);
+  const downloadStatementPdf = async () => {
+    setDownloadingPdf(true);
     try {
       const params = new URLSearchParams();
       if (fromDate) params.set('fromDate', `${fromDate}T00:00:00.000Z`);
       if (toDate) params.set('toDate', `${toDate}T23:59:59.999Z`);
       params.set('filter', statementFilter);
-      params.set('format', format);
 
       const resp = await fetch(getApiUrl(`/api/payments/reconciliation/statement/download?${params.toString()}`), {
         headers: authHeaders()
       });
 
       if (!resp.ok) {
-        let message = `Failed to download ${format.toUpperCase()} statement`;
+        let message = 'Failed to download PDF statement';
         try {
           const data = await resp.json();
           message = data.message || message;
@@ -231,7 +230,7 @@ const AdminFinance = ({ user }) => {
       const blob = await resp.blob();
       const disposition = resp.headers.get('Content-Disposition') || '';
       const match = disposition.match(/filename="([^"]+)"/i);
-      const filename = match?.[1] || `reconciliation-statement-${fromDate}-to-${toDate}.${format}`;
+      const filename = match?.[1] || `reconciliation-statement-${fromDate}-to-${toDate}.pdf`;
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -240,9 +239,9 @@ const AdminFinance = ({ user }) => {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error('[AdminFinance] Statement download failed:', error);
-      alert(`Failed to download ${format.toUpperCase()} statement`);
+      alert('Failed to download PDF statement');
     } finally {
-      setDownloadingFormat('');
+      setDownloadingPdf(false);
     }
   };
 
@@ -366,26 +365,14 @@ const AdminFinance = ({ user }) => {
               <option value="matched">Matched only</option>
               <option value="mismatch">Mismatches only</option>
             </select>
-            <button
-              className="btn-refresh"
-              onClick={() => downloadStatement('csv')}
-              disabled={Boolean(downloadingFormat)}
-            >
-              <Download size={16} />
-              {downloadingFormat === 'csv' ? 'Downloading...' : 'Download CSV'}
-            </button>
-            <button
-              className="btn-refresh"
-              onClick={() => downloadStatement('pdf')}
-              disabled={Boolean(downloadingFormat)}
-            >
+            <button className="btn-refresh" onClick={downloadStatementPdf} disabled={downloadingPdf}>
               <FileText size={16} />
-              {downloadingFormat === 'pdf' ? 'Downloading...' : 'Download PDF'}
+              {downloadingPdf ? 'Downloading...' : 'Download PDF'}
             </button>
           </div>
         </div>
         <p style={{ margin: '0 0 1rem', fontSize: '0.85rem', color: '#64748b' }}>
-          Download includes summary totals, settlement breakdown, and per-order details: service provider, supplier,
+          PDF includes summary totals, settlement breakdown, and per-order details: service provider, supplier,
           payment method/reference, receipt, transaction, ledger, variance, status, and issues.
         </p>
         <div className="transactions-table">
@@ -452,29 +439,53 @@ const AdminFinance = ({ user }) => {
 
       <div className="dashboard-content">
         <div className="dashboard-section">
-          <div className="section-header"><h2>Reconciliation Issues</h2></div>
+          <div className="section-header">
+            <h2>Reconciliation Issues</h2>
+            <p style={{ margin: 0, fontSize: '0.85rem', color: '#64748b' }}>
+              Open mismatches between paid orders, receipts, transactions, and ledger entries.
+            </p>
+          </div>
           <div className="items-list">
             {issues.length === 0 ? (
               <div className="empty-state"><p>No open reconciliation issues.</p></div>
             ) : (
               issues.map((issue) => (
-                <div className="item-card" key={issue.id}>
-                  <div className="item-info">
-                    <h4>{formatIssueType(issue.issue_type)}</h4>
-                    <p>
-                      Order: {issue.orders?.order_number || issue.order_id || 'N/A'} | Severity: {issue.severity}
+                <div className="item-card" key={issue.id} style={{ alignItems: 'flex-start' }}>
+                  <div className="item-info" style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.35rem' }}>
+                      <h4 style={{ margin: 0 }}>{formatIssueType(issue.issue_type)}</h4>
+                      <span className={`status ${issue.severity === 'high' ? 'pending' : 'confirmed'}`}>
+                        {issue.severity || 'medium'} severity
+                      </span>
+                    </div>
+                    <p style={{ margin: '0 0 0.35rem', fontWeight: 600 }}>
+                      {issue.orderNumber || 'Unknown order'}
+                      {issue.orderAmount != null ? ` · ${formatCurrency(issue.orderAmount)}` : ''}
+                      {issue.paymentMethod ? ` · ${String(issue.paymentMethod).replace(/_/g, ' ')}` : ''}
                     </p>
-                    <p style={{ fontSize: '0.8rem', color: '#64748b' }}>
-                      Expected: {JSON.stringify(issue.expected_value || {})} | Actual:{' '}
-                      {JSON.stringify(issue.actual_value || {})}
+                    <p style={{ margin: '0 0 0.35rem', color: '#334155' }}>
+                      {issue.summary || formatIssueType(issue.issue_type)}
+                    </p>
+                    {issue.detail ? (
+                      <p style={{ margin: '0 0 0.35rem', fontSize: '0.85rem', color: '#64748b' }}>{issue.detail}</p>
+                    ) : null}
+                    {issue.suggestedAction ? (
+                      <p style={{ margin: 0, fontSize: '0.82rem', color: '#475569' }}>
+                        <strong>Next step:</strong> {issue.suggestedAction}
+                      </p>
+                    ) : null}
+                    <p style={{ margin: '0.45rem 0 0', fontSize: '0.75rem', color: '#94a3b8' }}>
+                      Logged {issue.created_at ? new Date(issue.created_at).toLocaleString('en-IN') : 'recently'}
                     </p>
                   </div>
-                  <div className="item-status">
-                    <button className="btn-icon" onClick={() => resolveIssue(issue.id, 'resolved')} title="Resolve">
-                      <CheckCircle size={16} />
+                  <div className="item-status" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    <button className="btn-refresh" onClick={() => resolveIssue(issue.id, 'resolved')} title="Mark resolved">
+                      <CheckCircle size={14} />
+                      Resolve
                     </button>
-                    <button className="btn-icon" onClick={() => resolveIssue(issue.id, 'ignored')} title="Ignore">
-                      <Eye size={16} />
+                    <button className="btn-refresh" onClick={() => resolveIssue(issue.id, 'ignored')} title="Ignore issue">
+                      <Eye size={14} />
+                      Ignore
                     </button>
                   </div>
                 </div>

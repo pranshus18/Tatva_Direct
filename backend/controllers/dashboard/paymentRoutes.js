@@ -12,6 +12,7 @@ import {
   sendEmail,
   updateOrderPaymentSchema
 } from './dashboardImports.js';
+import { ensurePaymentTransactionForPaidOrder } from '../../services/paymentTransactionService.js';
 export * from './shared/dashboardHelpers.js';
 
 export function registerDashboardPaymentRoutes(ctx) {
@@ -126,6 +127,19 @@ router.patch('/service-provider/orders/:id/payment', authenticateToken, async (r
     let receiptDelivery = null;
     let invoiceDelivery = null;
     if (paymentStatus === 'paid') {
+      try {
+        await ensurePaymentTransactionForPaidOrder({
+          order: updatedOrder,
+          method: paymentMethod || updatedOrder.payment_method,
+          paymentReference,
+          paidAt,
+          actorUserId: req.userId,
+          provider: updatedOrder.payment_provider || 'manual'
+        });
+      } catch (txnErr) {
+        console.error('[Payment] Payment transaction backfill failed:', txnErr);
+      }
+
       try {
         receiptDelivery = await createReceiptAndDeliver({
           order: updatedOrder,

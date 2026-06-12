@@ -9,6 +9,7 @@ import { writeAuditLog } from '../services/auditService.js';
 import { evaluatePaymentRisk } from '../services/riskService.js';
 import {
   buildReconciliationStatement,
+  listReconciliationIssues,
   listReconciliationRuns,
   runPaymentReconciliation
 } from '../services/reconciliationService.js';
@@ -534,12 +535,11 @@ router.get('/reconciliation/statement', authenticateToken, requireFinanceRole, a
 router.get('/reconciliation/statement/download', authenticateToken, requireFinanceRole, async (req, res) => {
   try {
     const payload = parseWithSchema(reconciliationDownloadSchema, req.query || {});
-    const { fromDate = null, toDate = null, filter = 'all', format = 'csv' } = payload;
+    const { fromDate = null, toDate = null, filter = 'all' } = payload;
     const download = await buildReconciliationStatementDownload({
       fromDate,
       toDate,
-      filter: filter || 'all',
-      format: format || 'csv'
+      filter: filter || 'all'
     });
 
     await writeAuditLog({
@@ -550,7 +550,7 @@ router.get('/reconciliation/statement/download', authenticateToken, requireFinan
       resourceId: null,
       ipAddress: req.ip,
       requestId: req.requestId,
-      metadata: { fromDate, toDate, filter, format }
+      metadata: { fromDate, toDate, filter, format: 'pdf' }
     });
 
     res.setHeader('Content-Type', download.contentType);
@@ -611,15 +611,8 @@ router.post('/reconciliation/run', authenticateToken, requireFinanceRole, async 
 router.get('/reconciliation/issues', authenticateToken, requireFinanceRole, async (req, res) => {
   try {
     const { status = 'open', limit = 200 } = req.query;
-    let query = supabase
-      .from('reconciliation_issues')
-      .select('*, orders(id, order_number, total_amount, payment_status, payment_method)')
-      .order('created_at', { ascending: false })
-      .limit(Number(limit) || 200);
-    if (status && status !== 'all') query = query.eq('status', status);
-    const { data, error } = await query;
-    if (error) throw error;
-    return res.json({ status: 'success', issues: data || [] });
+    const issues = await listReconciliationIssues({ status, limit });
+    return res.json({ status: 'success', issues });
   } catch (e) {
     console.error('[Payments] fetch reconciliation issues error:', e);
     return res.status(500).json({ status: 'error', message: 'Failed to fetch reconciliation issues' });

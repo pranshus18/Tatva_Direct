@@ -40,8 +40,7 @@ export const reconciliationDateRangeSchema = z.object({
 export const reconciliationDownloadSchema = z.object({
   fromDate: z.string().optional().nullable(),
   toDate: z.string().optional().nullable(),
-  filter: z.enum(['all', 'matched', 'mismatch']).optional().nullable(),
-  format: z.enum(['csv', 'pdf']).optional().nullable()
+  filter: z.enum(['all', 'matched', 'mismatch']).optional().nullable()
 });
 
 export const reconciliationIssueResolveSchema = z.object({

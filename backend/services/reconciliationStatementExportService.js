@@ -49,98 +49,6 @@ function periodLabel(fromDate, toDate) {
   return `${from} to ${to}`;
 }
 
-function csvEscape(value) {
-  return `"${String(value ?? '').replace(/"/g, '""')}"`;
-}
-
-function csvRow(values) {
-  return values.map(csvEscape).join(',');
-}
-
-function lineToExportRow(line, index) {
-  return [
-    index + 1,
-    line.orderNumber || '',
-    formatDateTime(line.orderDate),
-    line.serviceProvider || '',
-    line.supplier || '',
-    line.paymentMethod || '',
-    line.paymentProvider || '',
-    line.orderTotal ?? '',
-    line.receipt?.present ? line.receipt.number || 'Yes' : 'Missing',
-    line.receipt?.present ? line.receipt.amount : '',
-    line.receipt?.present ? formatDateTime(line.receipt.paidAt) : '',
-    line.receipt?.paymentReference || line.transaction?.providerPaymentId || '',
-    line.transaction?.present ? line.transaction.status || '' : 'Missing',
-    line.transaction?.present ? line.transaction.method || '' : '',
-    line.transaction?.present ? line.transaction.amount : '',
-    line.ledger?.present ? 'Present' : 'Missing',
-    line.ledger?.present ? line.ledger.amount : '',
-    line.varianceOrderReceipt ?? '',
-    line.varianceOrderTransaction ?? '',
-    line.status,
-    (line.issueTypes || []).map(formatIssueType).join('; ')
-  ];
-}
-
-const DETAIL_HEADERS = [
-  'S.No',
-  'Order Number',
-  'Order Date',
-  'Service Provider',
-  'Supplier',
-  'Payment Method',
-  'Payment Provider',
-  'Order Amount (INR)',
-  'Receipt Number',
-  'Receipt Amount (INR)',
-  'Receipt Paid At',
-  'Payment Reference / UTR',
-  'Transaction Status',
-  'Transaction Method',
-  'Transaction Amount (INR)',
-  'Ledger Status',
-  'Ledger Amount (INR)',
-  'Variance Order-Receipt (INR)',
-  'Variance Order-Transaction (INR)',
-  'Reconciliation Status',
-  'Issues'
-];
-
-export function buildReconciliationStatementCsv({ statement, settlement }) {
-  const rows = [];
-  rows.push(csvRow(['Reconciliation Statement']));
-  rows.push(csvRow(['Generated At', formatDateTime(statement.generatedAt)]));
-  rows.push(csvRow(['Period', periodLabel(statement.fromDate, statement.toDate)]));
-  rows.push(csvRow(['Filter', statement.filter || 'all']));
-  rows.push('');
-  rows.push(csvRow(['Summary']));
-  rows.push(csvRow(['Orders Checked', statement.checked]));
-  rows.push(csvRow(['Matched Orders', statement.matched]));
-  rows.push(csvRow(['Mismatched Orders', statement.mismatches]));
-  rows.push(csvRow(['Open Issue Rows', statement.issueCount]));
-  rows.push(csvRow(['Success Rate (%)', statement.successRatePct]));
-  rows.push(csvRow(['Total Order Amount (INR)', statement.totalOrderAmount]));
-  rows.push(csvRow(['Total Receipt Amount (INR)', statement.totalReceiptAmount]));
-  rows.push(csvRow(['Total Transaction Amount (INR)', statement.totalTransactionAmount]));
-  rows.push(csvRow(['Total Ledger Amount (INR)', statement.totalLedgerAmount]));
-  rows.push('');
-  rows.push(csvRow(['Settlement Summary']));
-  rows.push(csvRow(['Captured Transactions', settlement?.transactionCount || 0]));
-  rows.push(csvRow(['Total Captured (INR)', settlement?.totalCaptured || 0]));
-  for (const [method, amount] of Object.entries(settlement?.byMethod || {})) {
-    rows.push(csvRow([`Captured via ${method}`, amount]));
-  }
-  rows.push('');
-  rows.push(csvRow(DETAIL_HEADERS));
-  for (const [index, line] of (statement.lines || []).entries()) {
-    rows.push(csvRow(lineToExportRow(line, index)));
-  }
-
-  const csvBody = `${rows.join('\n')}\n`;
-  return Buffer.from(`\uFEFF${csvBody}`, 'utf8');
-}
-
 function drawPdfTableRow(doc, columns, y, options = {}) {
   const { header = false, fontSize = 8 } = options;
   doc.font(header ? 'Helvetica-Bold' : 'Helvetica').fontSize(fontSize);
@@ -300,8 +208,7 @@ export async function buildReconciliationStatementPdf({ statement, settlement, l
 export async function buildReconciliationStatementDownload({
   fromDate = null,
   toDate = null,
-  filter = 'all',
-  format = 'csv'
+  filter = 'all'
 }) {
   const [statement, settlement] = await Promise.all([
     buildReconciliationStatement({ fromDate, toDate, filter }),
@@ -310,26 +217,16 @@ export async function buildReconciliationStatementDownload({
 
   const stamp = new Date().toISOString().slice(0, 10);
   const periodSlug = `${fromDate ? String(fromDate).slice(0, 10) : 'all'}-to-${toDate ? String(toDate).slice(0, 10) : 'all'}`;
+  const buffer = await buildReconciliationStatementPdf({ statement, settlement });
 
-  if (format === 'pdf') {
-    const buffer = await buildReconciliationStatementPdf({ statement, settlement });
-    return {
-      buffer,
-      contentType: 'application/pdf',
-      filename: `reconciliation-statement-${periodSlug}-${stamp}.pdf`
-    };
-  }
-
-  const buffer = buildReconciliationStatementCsv({ statement, settlement });
   return {
     buffer,
-    contentType: 'text/csv; charset=utf-8',
-    filename: `reconciliation-statement-${periodSlug}-${stamp}.csv`
+    contentType: 'application/pdf',
+    filename: `reconciliation-statement-${periodSlug}-${stamp}.pdf`
   };
 }
 
 export default {
-  buildReconciliationStatementCsv,
   buildReconciliationStatementPdf,
   buildReconciliationStatementDownload
 };
