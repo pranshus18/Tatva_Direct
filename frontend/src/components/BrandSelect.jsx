@@ -146,9 +146,15 @@ export default function BrandSelect({
         <p className="brand-select__hint brand-select__hint--error">{loadError}</p>
       ) : hint ? (
         <p className="brand-select__hint">{hint}</p>
+      ) : brandNames.length === 0 && !loading ? (
+        <p className="brand-select__hint">
+          No approved brands in your profile yet. Add your brand under <strong>Select yourself</strong> (Step 1),
+          click <strong>Save brand request</strong>, and wait for admin approval before adding products.
+        </p>
       ) : (
         <p className="brand-select__hint">
-          Choose an approved brand from the list. Only the brand name is filled — not full product details.
+          Choose an approved brand from your Select yourself profile. Only brands you declared and admin approved
+          appear here.
           {allowOther ? ' New brands may need admin approval before the product goes live.' : ''}
         </p>
       )}

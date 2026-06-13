@@ -88,6 +88,26 @@ export function buildChainPayloadFromProfileData(profileData) {
   };
 }
 
+/** Profile used for brand guards — merges pending chain submission over saved profile. */
+export function buildEffectiveSupplierChainProfile(profile, pendingPayload) {
+  const approvedChain = baselineChainFromProfile(profile);
+  if (!pendingPayload || typeof pendingPayload !== 'object') {
+    return { ...(profile || {}), ...approvedChain };
+  }
+
+  const pendingEntries = normalizeCompanyInfoEntries(pendingPayload.companyInfoEntries || []);
+  return {
+    ...(profile || {}),
+    supplierRole: String(pendingPayload.supplierRole || approvedChain.supplierRole || '').trim(),
+    brands:
+      typeof pendingPayload.brands === 'string' && pendingPayload.brands.trim()
+        ? pendingPayload.brands
+        : approvedChain.brands,
+    companyInfoEntries:
+      pendingEntries.length > 0 ? pendingEntries : approvedChain.companyInfoEntries
+  };
+}
+
 export function baselineChainFromProfile(profile) {
   const p = profile || {};
   let entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);

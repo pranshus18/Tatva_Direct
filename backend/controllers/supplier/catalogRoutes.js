@@ -1,5 +1,7 @@
 /** Supplier routes: catalog */
 import {
+  buildEffectiveSupplierChainProfile,
+  fetchPendingChainRequest,
   getContractErrorMessage,
   normalizeBrandKey,
   normalizeModelIdentifier,
@@ -674,8 +676,13 @@ router.get('/brands', authenticateToken, async (req, res) => {
       return res.status(403).json({ status: 'error', message: 'Only suppliers can list brands' });
     }
 
+    const pendingChainRequest = await fetchPendingChainRequest(req.userId);
+    const effectiveProfile = buildEffectiveSupplierChainProfile(
+      req.user?.profile || {},
+      pendingChainRequest?.payload || null
+    );
     const brands = await listSupplierSelectableBrands(supabase, {
-      profile: req.user?.profile || {}
+      profile: effectiveProfile
     });
 
     return res.json({

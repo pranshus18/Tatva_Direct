@@ -1,11 +1,13 @@
 import {
   brandIsAllowedForSupplier,
+  buildEffectiveSupplierChainProfile,
   buildIdentityBundle,
   buildSupplierVariantIdentity,
   buildVariantAsinLikeId,
   crypto,
   decideOnboardingAction,
   ensureBrandApprovedOrRequest,
+  fetchPendingChainRequest,
   findAdmins,
   findUserBasicById,
   getContractErrorMessage,
@@ -74,7 +76,12 @@ export function buildSupplierProductCreateHandler(ctx) {
           ? String(canonicalProductFromIdentifier.brand).trim()
           : brandInput;
 
-      const brandGuard = brandIsAllowedForSupplier(req.user?.profile, effectiveBrandInput);
+      const pendingChainRequest = await fetchPendingChainRequest(req.userId);
+      const effectiveProfile = buildEffectiveSupplierChainProfile(
+        req.user?.profile || {},
+        pendingChainRequest?.payload || null
+      );
+      const brandGuard = brandIsAllowedForSupplier(effectiveProfile, effectiveBrandInput);
       if (!brandGuard.allowed) {
         return res.status(403).json({
           status: 'error',

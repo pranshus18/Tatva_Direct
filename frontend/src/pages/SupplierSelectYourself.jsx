@@ -463,6 +463,7 @@ export default function SupplierSelectYourself() {
             setProfile={setProfile}
             editing
             sectionView="form"
+            selectionMode="dropdown"
             onSaveEntry={handleSaveEntry}
             savingEntryId={savingEntryId}
           />

@@ -297,6 +297,24 @@ const CompanyInfoEntryCard = ({
         {showFormDetailsSection ? (
         <div className="chain-entry-form-block">
           <h3 className="chain-entry-block-title">Form details</h3>
+          {hasBrandValue ? (
+            <div className="chain-form-brand-summary">
+              <div className={`chain-status-card chain-status-card--${statusTone}`}>
+                <strong>{statusLabel}</strong>
+                <span>{resolvedBrandName}</span>
+              </div>
+              {roleOptionsMessage ? (
+                <p className="chain-callout chain-callout--warning">{roleOptionsMessage}</p>
+              ) : adminChainStatusText ? (
+                <p className="chain-callout chain-callout--info">{adminChainStatusText}</p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="chain-callout chain-callout--warning">
+              Add and save your brand in Step 1 first. Supply-chain role options appear here after the brand is
+              admin-approved and the supply chain is defined.
+            </p>
+          )}
           <section className="chain-section">
             <h4 className="chain-section__title">Supply-chain role</h4>
             <div className="chain-section__panel">

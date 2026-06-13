@@ -56,6 +56,7 @@ export {
 export { getMinimumOrderValueInrForSellerRole } from '../../utils/supplierProfile.js';
 export {
   baselineChainFromProfile,
+  buildEffectiveSupplierChainProfile,
   fetchPendingChainRequest
 } from '../../services/supplierChainProfileService.js';
 export {
