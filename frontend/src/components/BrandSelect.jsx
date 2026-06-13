@@ -4,6 +4,21 @@ import './BrandSelect.css';
 
 const OTHER_VALUE = '__other__';
 
+function collapseRepeatedLetters(value) {
+  return String(value || '').replace(/(.)\1+/g, '$1');
+}
+
+function findClosestBrandName(typed, brandNames = []) {
+  const normalizedTyped = String(typed || '').trim().toLowerCase();
+  if (!normalizedTyped) return null;
+  const exact = brandNames.find((name) => name.toLowerCase() === normalizedTyped);
+  if (exact) return exact;
+  const collapsedTyped = collapseRepeatedLetters(normalizedTyped);
+  return (
+    brandNames.find((name) => collapseRepeatedLetters(name.toLowerCase()) === collapsedTyped) || null
+  );
+}
+
 /**
  * Brand picker: approved brands from the database. Selecting a brand only sets the brand name.
  */
@@ -76,8 +91,8 @@ export default function BrandSelect({
           onBlur={(e) => {
             const typed = String(e.target.value || '').trim();
             if (!typed) return;
-            const exact = brandNames.find((n) => n.toLowerCase() === typed.toLowerCase());
-            if (exact && exact !== typed) onChange?.(exact);
+            const matched = findClosestBrandName(typed, brandNames);
+            if (matched && matched !== typed) onChange?.(matched);
           }}
           disabled={disabled || loading}
           required={required}

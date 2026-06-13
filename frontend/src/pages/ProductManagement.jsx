@@ -3024,6 +3024,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     disabled={!!product}
                     required={!product}
                     searchable
+                    allowOther={false}
                   />
                 </div>
 

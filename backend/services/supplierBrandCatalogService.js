@@ -1,13 +1,13 @@
 import { normalizeBrandKey } from './supplyChainSharedService.js';
-import { brandIsAllowedForSupplier, getAllDeclaredBrandTokens } from './supplierBrandGuardService.js';
+import { brandIsAllowedForSupplier, getDeclaredBrandLabels } from './supplierBrandGuardService.js';
 
 /**
  * Approved brand names suppliers can pick when adding products.
  * Only brands declared on Select yourself (and admin-approved) are returned.
  */
 export async function listSupplierSelectableBrands(supabase, { profile } = {}) {
-  const declaredTokens = getAllDeclaredBrandTokens(profile);
-  if (declaredTokens.size === 0) {
+  const declaredLabels = getDeclaredBrandLabels(profile);
+  if (declaredLabels.length === 0) {
     return [];
   }
 
@@ -33,9 +33,24 @@ export async function listSupplierSelectableBrands(supabase, { profile } = {}) {
     if (!key || seen.has(key)) continue;
     seen.add(key);
     brands.push({
-      name,
+      name: guard.matchedBrand || name,
       normalizedName: key,
       status: row.status || 'approved',
+      source: 'profile',
+      fromProfile: true
+    });
+  }
+
+  for (const label of declaredLabels) {
+    const guard = brandIsAllowedForSupplier(profile, label);
+    if (!guard.allowed) continue;
+    const key = normalizeBrandKey(label);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    brands.push({
+      name: guard.matchedBrand || label,
+      normalizedName: key,
+      status: 'approved',
       source: 'profile',
       fromProfile: true
     });

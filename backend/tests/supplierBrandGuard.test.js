@@ -83,3 +83,15 @@ test('resolveSupplierProductBrandGuard: allows selected profile brand when catal
   assert.equal(result.allowed, true);
   assert.equal(result.brand, 'Phillips');
 });
+
+test('resolveSupplierProductBrandGuard: maps Philips input to declared Phillips profile brand', () => {
+  const profile = {
+    companyInfoEntries: [{ id: '1', role: 'dealer', brands: 'Phillips' }]
+  };
+  const result = resolveSupplierProductBrandGuard(profile, {
+    selectedBrand: 'Philips',
+    catalogBrand: ''
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.brand, 'Phillips');
+});
