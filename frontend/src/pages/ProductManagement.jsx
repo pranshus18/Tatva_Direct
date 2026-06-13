@@ -258,7 +258,10 @@ const ProductManagement = ({ user }) => {
         );
         navigate(`/manage-inventory?${params.toString()}`);
       } else {
-        alert(data.message || 'Failed to add product');
+        const allowed = Array.isArray(data.allowedBrands) && data.allowedBrands.length > 0
+          ? `\n\nAllowed brands in your profile: ${data.allowedBrands.join(', ')}`
+          : '';
+        alert((data.message || 'Failed to add product') + allowed);
       }
     } catch (error) {
       console.error('Failed to add product:', error);

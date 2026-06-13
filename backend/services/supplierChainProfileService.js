@@ -88,24 +88,77 @@ export function buildChainPayloadFromProfileData(profileData) {
   };
 }
 
-/** Profile used for brand guards — merges pending chain submission over saved profile. */
-export function buildEffectiveSupplierChainProfile(profile, pendingPayload) {
-  const approvedChain = baselineChainFromProfile(profile);
-  if (!pendingPayload || typeof pendingPayload !== 'object') {
-    return { ...(profile || {}), ...approvedChain };
+function mergeUniqueChainEntries(...entryLists) {
+  const merged = [];
+  const seen = new Set();
+
+  for (const raw of entryLists) {
+    for (const entry of normalizeCompanyInfoEntries(raw || [])) {
+      const brand = String(entry?.brands || '').trim().toLowerCase();
+      const key = brand || `id:${entry?.id || merged.length}`;
+      if (seen.has(key)) {
+        const idx = merged.findIndex((row) => {
+          const rowBrand = String(row?.brands || '').trim().toLowerCase();
+          return (rowBrand || `id:${row?.id || ''}`) === key;
+        });
+        if (idx >= 0) {
+          merged[idx] = { ...merged[idx], ...entry };
+        }
+        continue;
+      }
+      seen.add(key);
+      merged.push({ ...entry });
+    }
   }
 
-  const pendingEntries = normalizeCompanyInfoEntries(pendingPayload.companyInfoEntries || []);
+  return merged;
+}
+
+/**
+ * Profile used for brand guards and supplier brand pickers.
+ * Unions saved, draft, and pending Select yourself entries so declared brands stay usable.
+ */
+export function buildEffectiveSupplierChainProfile(profile, pendingPayload) {
+  const base = profile || {};
+  const approvedChain = baselineChainFromProfile(base);
+  const draft = base.chainProfileDraft || {};
+  const draftEntries = normalizeCompanyInfoEntries(draft.companyInfoEntries || []);
+  const pendingEntries =
+    pendingPayload && typeof pendingPayload === 'object'
+      ? normalizeCompanyInfoEntries(pendingPayload.companyInfoEntries || [])
+      : [];
+
+  const mergedEntries = mergeUniqueChainEntries(
+    approvedChain.companyInfoEntries,
+    draftEntries,
+    pendingEntries
+  );
+
+  const supplierRole =
+    String(pendingPayload?.supplierRole || '').trim() ||
+    String(draft?.supplierRole || '').trim() ||
+    approvedChain.supplierRole ||
+    '';
+
+  const brands =
+    (typeof pendingPayload?.brands === 'string' && pendingPayload.brands.trim() && pendingPayload.brands) ||
+    (typeof draft?.brands === 'string' && draft.brands.trim() && draft.brands) ||
+    approvedChain.brands ||
+    mergedEntries[0]?.brands ||
+    '';
+
   return {
-    ...(profile || {}),
-    supplierRole: String(pendingPayload.supplierRole || approvedChain.supplierRole || '').trim(),
-    brands:
-      typeof pendingPayload.brands === 'string' && pendingPayload.brands.trim()
-        ? pendingPayload.brands
-        : approvedChain.brands,
-    companyInfoEntries:
-      pendingEntries.length > 0 ? pendingEntries : approvedChain.companyInfoEntries
+    ...base,
+    supplierRole,
+    brands,
+    companyInfoEntries: mergedEntries.length > 0 ? mergedEntries : approvedChain.companyInfoEntries
   };
+}
+
+/** Load saved profile merged with any pending chain submission. */
+export async function loadEffectiveSupplierChainProfile(userId, profile) {
+  const pending = await fetchPendingChainRequest(userId);
+  return buildEffectiveSupplierChainProfile(profile, pending?.payload || null);
 }
 
 export function baselineChainFromProfile(profile) {

@@ -102,9 +102,37 @@ export function brandIsAllowedForSupplier(profile, brandInput) {
   if (!b) return { allowed: false, reason: 'brand_required' };
   for (const t of declared) {
     if (t === b) return { allowed: true, reason: 'exact' };
+    if (brandTokenKeysMatch(t, b)) return { allowed: true, reason: 'normalized' };
     if (t.length >= 2 && (b.includes(t) || t.includes(b))) return { allowed: true, reason: 'contains' };
   }
   return { allowed: false, reason: 'not_in_profile', declared: [...declared] };
+}
+
+/**
+ * Product create/update may receive both the supplier-selected brand and a catalog canonical brand.
+ * Allow when either matches the supplier's declared Select yourself brands.
+ */
+export function resolveSupplierProductBrandGuard(profile, { selectedBrand = '', catalogBrand = '' } = {}) {
+  const candidates = [...new Set(
+    [selectedBrand, catalogBrand]
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  )];
+
+  if (candidates.length === 0) {
+    const guard = brandIsAllowedForSupplier(profile, '');
+    return { allowed: guard.allowed, brand: '', guard };
+  }
+
+  for (const candidate of candidates) {
+    const guard = brandIsAllowedForSupplier(profile, candidate);
+    if (guard.allowed) {
+      return { allowed: true, brand: candidate, guard };
+    }
+  }
+
+  const guard = brandIsAllowedForSupplier(profile, candidates[0]);
+  return { allowed: false, brand: '', guard };
 }
 
 /**

@@ -9,6 +9,7 @@ import {
   getImmediateParentRolesUnion,
   getViewerBrandTokensUnionForAllRoles,
   haversineKm,
+  loadEffectiveSupplierChainProfile,
   parseWithSchema,
   recordInventoryMovement,
   sellerMatchesUpstreamRoles,
@@ -401,7 +402,8 @@ router.post('/inventory/adjust', authenticateToken, async (req, res) => {
       supplierProduct?.attributes?.brandModel ||
       supplierProduct?.product?.brand ||
       '';
-    const brandGuard = brandIsAllowedForSupplier(req.user?.profile, brandCandidate);
+    const effectiveProfile = await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {});
+    const brandGuard = brandIsAllowedForSupplier(effectiveProfile, brandCandidate);
     if (!brandGuard.allowed) {
       return res.status(403).json({
         status: 'error',

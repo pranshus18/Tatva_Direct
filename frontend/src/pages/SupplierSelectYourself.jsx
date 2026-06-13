@@ -91,6 +91,13 @@ export default function SupplierSelectYourself() {
     return chainFormSignature(profile) !== chainFormSignature(baseline);
   }, [profile, baseline]);
 
+  const configuredBrands = useMemo(() => {
+    const entries = resolveCompanyInfoEntriesForValidation(profile || {});
+    return entries
+      .map((entry) => String(entry?.brands || '').trim())
+      .filter(Boolean);
+  }, [profile]);
+
   const applyProfileFromResponse = (profileData) => {
     if (!profileData) return false;
     const snapshot = cloneProfileSnapshot(profileData);
@@ -221,7 +228,6 @@ export default function SupplierSelectYourself() {
   const handleSaveEntry = async (entryId, entryIndexHint = -1) => {
     if (!profile || saving || discarding) return;
     const entries = resolveCompanyInfoEntriesForValidation(profile);
-    const baselineEntries = resolveCompanyInfoEntriesForValidation(baseline || {});
     const entryIndexById = entryId ? entries.findIndex((e) => e?.id === entryId) : -1;
     const entryIndex =
       entryIndexById >= 0
@@ -243,7 +249,7 @@ export default function SupplierSelectYourself() {
       return;
     }
 
-    const entriesForEntrySave = baselineEntries.map((entry) => ({ ...(entry || {}) }));
+    const entriesForEntrySave = entries.map((entry) => ({ ...(entry || {}) }));
     const selectedId = String(selectedEntry?.id || '').trim();
     let replaced = false;
     if (selectedId) {
@@ -264,11 +270,7 @@ export default function SupplierSelectYourself() {
       entriesForEntrySave.push({ ...selectedEntry });
     }
 
-    const entriesForSave = entriesForEntrySave.filter((entry) => {
-      if (!entry) return false;
-      return validateCompanyInfoEntriesList([entry]).ok;
-    });
-    const entriesToPersist = entriesForSave.length > 0 ? entriesForSave : [{ ...selectedEntry }];
+    const entriesToPersist = entriesForEntrySave;
     const firstSavedEntry = entriesToPersist[0] || {};
     const profileForEntrySave = {
       ...profile,
@@ -383,6 +385,24 @@ export default function SupplierSelectYourself() {
           </div>
         </div>
 
+        {configuredBrands.length > 0 ? (
+          <div className="supplier-select-brands-summary" aria-label="Configured brands">
+            <strong>Your brands ({configuredBrands.length})</strong>
+            <div className="supplier-select-brands-summary__chips">
+              {configuredBrands.map((brand) => (
+                <span key={brand} className="supplier-select-brands-summary__chip">
+                  {brand}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="supplier-select-alert supplier-select-alert--draft">
+            <strong>No brands saved yet</strong>
+            <p>Add a brand in Step 1 below, then click <strong>Save brand request</strong>.</p>
+          </div>
+        )}
+
         {profile?.chainProfileApprovalStatus === 'pending' ? (
           <div className="supplier-select-alert supplier-select-alert--pending">
             <strong>Supply-chain profile pending admin approval</strong>
@@ -463,7 +483,6 @@ export default function SupplierSelectYourself() {
             setProfile={setProfile}
             editing
             sectionView="form"
-            selectionMode="dropdown"
             onSaveEntry={handleSaveEntry}
             savingEntryId={savingEntryId}
           />

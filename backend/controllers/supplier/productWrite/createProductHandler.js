@@ -1,13 +1,10 @@
 import {
-  brandIsAllowedForSupplier,
-  buildEffectiveSupplierChainProfile,
   buildIdentityBundle,
   buildSupplierVariantIdentity,
   buildVariantAsinLikeId,
   crypto,
   decideOnboardingAction,
   ensureBrandApprovedOrRequest,
-  fetchPendingChainRequest,
   findAdmins,
   findUserBasicById,
   getContractErrorMessage,
@@ -15,9 +12,11 @@ import {
   insertNotifications,
   isCatalogGuardrailsEnabled,
   isValidGtin,
+  loadEffectiveSupplierChainProfile,
   normalizeGtin,
   normalizeText,
   onboardingAutoApproveThreshold,
+  resolveSupplierProductBrandGuard,
   scoreOnboardingConfidence,
   shouldMoveToPendingForSpecChange,
   validateSpecValues
@@ -71,27 +70,29 @@ export function buildSupplierProductCreateHandler(ctx) {
         resolvedBarcodeForPos
       });
 
-      const effectiveBrandInput =
+      const catalogBrand =
         canonicalProductFromIdentifier?.brand && String(canonicalProductFromIdentifier.brand).trim()
           ? String(canonicalProductFromIdentifier.brand).trim()
-          : brandInput;
+          : '';
 
-      const pendingChainRequest = await fetchPendingChainRequest(req.userId);
-      const effectiveProfile = buildEffectiveSupplierChainProfile(
-        req.user?.profile || {},
-        pendingChainRequest?.payload || null
-      );
-      const brandGuard = brandIsAllowedForSupplier(effectiveProfile, effectiveBrandInput);
-      if (!brandGuard.allowed) {
+      const effectiveProfile = await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {});
+      const brandResolution = resolveSupplierProductBrandGuard(effectiveProfile, {
+        selectedBrand: brandInput,
+        catalogBrand
+      });
+      if (!brandResolution.allowed) {
+        const guard = brandResolution.guard || {};
         return res.status(403).json({
           status: 'error',
           message:
-            brandGuard.reason === 'brand_required'
+            guard.reason === 'brand_required'
               ? 'Brand is required because you have selected brands in your profile. Please enter a brand that matches your profile.'
-              : 'You can only add products for brands you selected in your profile.',
-          allowedBrands: brandGuard.declared || []
+              : 'You can only add products for brands you selected in Select yourself (Step 1). Open Select yourself, save your brand, complete supply-chain role if needed, then try again.',
+          allowedBrands: guard.declared || []
         });
       }
+
+      const effectiveBrandInput = brandResolution.brand || brandInput || catalogBrand;
 
       const brandApproval = await ensureBrandApprovedOrRequest({
         supabase,

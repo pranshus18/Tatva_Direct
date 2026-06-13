@@ -1,9 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  brandIsAllowedForSupplier,
   entryOverlapsViewerBrands,
-  getViewerBrandTokensForRole
+  getViewerBrandTokensForRole,
+  resolveSupplierProductBrandGuard
 } from '../services/supplierBrandGuardService.js';
+import { buildEffectiveSupplierChainProfile } from '../services/supplierChainProfileService.js';
 import { mapSupplyChainPartner } from '../services/supplierPartnerMapperService.js';
 
 test('entryOverlapsViewerBrands: partner with no brands still matches viewer brands', () => {
@@ -46,4 +49,37 @@ test('mapSupplyChainPartner: profile listing skips brand filter when filterByBra
   );
   assert.ok(partner);
   assert.equal(partner.supplierRole, 'dealer');
+});
+
+test('buildEffectiveSupplierChainProfile: unions draft and pending brands for product access', () => {
+  const profile = {
+    supplierRole: 'dealer',
+    brands: 'Phillips',
+    companyInfoEntries: [{ id: 'saved-1', role: 'dealer', brands: 'Phillips' }],
+    chainProfileDraft: {
+      companyInfoEntries: [{ id: 'draft-1', role: '', brands: 'Finolex' }]
+    }
+  };
+  const pendingPayload = {
+    companyInfoEntries: [{ id: 'pending-1', role: 'retailer', brands: 'acc' }]
+  };
+
+  const effective = buildEffectiveSupplierChainProfile(profile, pendingPayload);
+  const declared = [...effective.companyInfoEntries.map((e) => e.brands)].sort();
+
+  assert.deepEqual(declared.sort(), ['Phillips', 'acc', 'Finolex'].sort());
+  assert.equal(brandIsAllowedForSupplier(effective, 'acc').allowed, true);
+  assert.equal(brandIsAllowedForSupplier(effective, 'Finolex').allowed, true);
+});
+
+test('resolveSupplierProductBrandGuard: allows selected profile brand when catalog brand differs', () => {
+  const profile = {
+    companyInfoEntries: [{ id: '1', role: 'dealer', brands: 'Phillips' }]
+  };
+  const result = resolveSupplierProductBrandGuard(profile, {
+    selectedBrand: 'Phillips',
+    catalogBrand: 'Philips Lighting'
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.brand, 'Phillips');
 });

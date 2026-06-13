@@ -8,6 +8,7 @@ import {
   insertNotifications,
   isCatalogGuardrailsEnabled,
   isValidGtin,
+  loadEffectiveSupplierChainProfile,
   maybeNotifyInventoryBelowMov,
   normalizeGtin,
   parseWithSchema,
@@ -87,7 +88,8 @@ export function registerSupplierProductUpdateRoute(ctx) {
         } = payload;
 
         if (req.body.brandModel !== undefined) {
-          const brandGuard = brandIsAllowedForSupplier(req.user?.profile, updatedAttributes.brandModel);
+          const effectiveProfile = await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {});
+          const brandGuard = brandIsAllowedForSupplier(effectiveProfile, updatedAttributes.brandModel);
           if (!brandGuard.allowed) {
             return res.status(403).json({
               status: 'error',

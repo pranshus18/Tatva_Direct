@@ -476,19 +476,26 @@ export default function SupplierSupplyChainEntriesEditor({
 
   const displayEntries = getDisplayEntries();
   const indexedEntries = displayEntries.map((entry, index) => ({ entry, index }));
+  const entryIdsSignature = JSON.stringify(displayEntries.map((entry) => entry.id));
+  const defaultEntryId = displayEntries[0]?.id || '';
+  const resolvedSelectedEntryId =
+    selectionMode === 'dropdown'
+      ? displayEntries.some((entry) => entry.id === selectedEntryId)
+        ? selectedEntryId
+        : defaultEntryId
+      : '';
 
   useEffect(() => {
     if (selectionMode !== 'dropdown') return;
-    const firstId = displayEntries[0]?.id || '';
-    const exists = displayEntries.some((entry) => entry.id === selectedEntryId);
-    if (!exists) {
-      setSelectedEntryId(firstId);
+    if (!defaultEntryId) return;
+    if (!displayEntries.some((entry) => entry.id === selectedEntryId)) {
+      setSelectedEntryId(defaultEntryId);
     }
-  }, [selectionMode, displayEntries, selectedEntryId]);
+  }, [selectionMode, entryIdsSignature, defaultEntryId, selectedEntryId, displayEntries]);
 
   const entriesToRender =
     selectionMode === 'dropdown'
-      ? indexedEntries.filter((item) => item.entry.id === selectedEntryId)
+      ? indexedEntries.filter((item) => item.entry.id === resolvedSelectedEntryId)
       : indexedEntries;
   const compactSignature = JSON.stringify(
     displayEntries.map((entry) => ({
@@ -801,12 +808,12 @@ export default function SupplierSupplyChainEntriesEditor({
         {selectionMode === 'dropdown' && displayEntries.length > 0 ? (
           <div className="chain-entry-selector">
             <label className="chain-field__label" htmlFor={`entry-selector-${sectionView}`}>
-              Select brand
+              Select brand ({displayEntries.length} in your profile)
             </label>
             <select
               id={`entry-selector-${sectionView}`}
               className="chain-field__control"
-              value={selectedEntryId}
+              value={resolvedSelectedEntryId}
               onChange={(e) => setSelectedEntryId(e.target.value)}
               disabled={!editing}
             >
@@ -819,6 +826,27 @@ export default function SupplierSupplyChainEntriesEditor({
                 );
               })}
             </select>
+            {displayEntries.length > 1 ? (
+              <div className="chain-entry-brand-chips" role="list" aria-label="Your brands">
+                {displayEntries.map((entry, idx) => {
+                  const brandName = String(entry?.brands || '').trim() || `Entry ${idx + 1}`;
+                  const isActive = entry.id === resolvedSelectedEntryId;
+                  return (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      role="listitem"
+                      className={`chain-chip chain-chip--brand chain-entry-brand-chip${isActive ? ' chain-entry-brand-chip--active' : ''}`}
+                      onClick={() => setSelectedEntryId(entry.id)}
+                      disabled={!editing}
+                      aria-pressed={isActive}
+                    >
+                      {brandName}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
         ) : null}
 

@@ -57,8 +57,10 @@ export { getMinimumOrderValueInrForSellerRole } from '../../utils/supplierProfil
 export {
   baselineChainFromProfile,
   buildEffectiveSupplierChainProfile,
-  fetchPendingChainRequest
+  fetchPendingChainRequest,
+  loadEffectiveSupplierChainProfile
 } from '../../services/supplierChainProfileService.js';
+export { resolveSupplierProductBrandGuard } from '../../services/supplierBrandGuardService.js';
 export {
   fetchClosedReturnQuantityByOrderItem,
   getNetItemMetrics,

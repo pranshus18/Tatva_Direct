@@ -109,6 +109,39 @@
   font-weight: 700;
 }
 
+.supplier-select-brands-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border: 1px solid #d1fae5;
+  border-radius: 12px;
+  background: #f0fdf4;
+  padding: 0.85rem 1rem;
+  color: #065f46;
+}
+
+.supplier-select-brands-summary strong {
+  font-size: 0.92rem;
+}
+
+.supplier-select-brands-summary__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.supplier-select-brands-summary__chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.28rem 0.65rem;
+  border-radius: 999px;
+  border: 1px solid #a7f3d0;
+  background: #ffffff;
+  color: #047857;
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
 .supplier-select-alert {
   border: 1px solid #e2e8f0;
   border-radius: 12px;
