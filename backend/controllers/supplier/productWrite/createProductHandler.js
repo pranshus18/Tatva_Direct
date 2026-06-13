@@ -287,7 +287,7 @@ export function buildSupplierProductCreateHandler(ctx) {
       const supplierProductData = {
         product_id: productId,
         supplier_id: req.userId,
-        price: lockedVariantPrice ?? (isNaN(parsedPrice) ? 0 : parsedPrice),
+        price: isNaN(parsedPrice) ? 0 : parsedPrice,
         stock: parsedStock == null ? 0 : parsedStock,
         min_order_quantity: isNaN(parsedMinOrderQty) || parsedMinOrderQty < 1 ? 1 : parsedMinOrderQty,
         location: currentLocation,
