@@ -84,12 +84,20 @@ function RequiredMark() {
 
 function syncProfileFromEntries(currentProfile, entries) {
   const nextEntries = Array.isArray(entries) ? entries : [];
+  const base = {
+    ...currentProfile,
+    companyInfoEntries: nextEntries
+  };
+
+  if (nextEntries.length !== 1) {
+    return base;
+  }
+
   const first = nextEntries[0] || {};
   const roleCertificateFields = setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(first));
   const brandCertificateFields = setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(first));
   return {
-    ...currentProfile,
-    companyInfoEntries: nextEntries,
+    ...base,
     supplierRole: first.role ?? '',
     brands: first.brands ?? '',
     gstin: first.gstin ?? '',
@@ -636,31 +644,17 @@ export default function SupplierSupplyChainEntriesEditor({
   }, [editing, entryBrandSignature]);
 
   const addCompanyInfoEntry = () => {
+    const currentEntries = getDisplayEntries();
     let base = [...(profile?.companyInfoEntries || [])];
-    if (base.length === 0) {
-      const hasLegacy =
-        !!(
-          profile?.supplierRole ||
-          (profile?.brands && String(profile.brands).trim()) ||
-          (profile?.gstin && String(profile.gstin).trim()) ||
-          (profile?.companyName && String(profile.companyName).trim()) ||
-          (profile?.ownershipDetails && String(profile.ownershipDetails).trim())
-        );
-      if (hasLegacy) {
-        base = [
-          {
-            id: genEntryId(),
-            role: profile?.supplierRole || '',
-            brands: profile?.brands || '',
-            gstin: profile?.gstin || '',
-            companyName: profile?.companyName || '',
-            ownershipDetails: profile?.ownershipDetails || '',
-            brandApprovalDocumentUrl: profile?.brandApprovalDocumentUrl || '',
-            authorizationCertificateUrl: profile?.authorizationCertificateUrl || '',
-            minimumOrderValue: profile?.minimumOrderValue ?? ''
-          }
-        ];
-      }
+    if (base.length === 0 && currentEntries.length > 0) {
+      base = currentEntries.map((entry) =>
+        entry.id === 'legacy'
+          ? {
+              ...entry,
+              id: genEntryId()
+            }
+          : { ...entry }
+      );
     }
     const next = [
       ...base,
@@ -679,12 +673,16 @@ export default function SupplierSupplyChainEntriesEditor({
       }
     ];
     setProfile(syncProfileFromEntries(profile, next));
+    if (selectionMode === 'dropdown') {
+      setSelectedEntryId(next[next.length - 1]?.id || '');
+    }
   };
 
   const updateCompanyInfoEntry = (entryId, field, value) => {
     const nextValue = field === 'brands' ? normalizeSingleBrand(value) : value;
+    const currentEntries = getDisplayEntries();
     if (entryId === 'legacy') {
-      const legacy = {
+      const legacy = currentEntries[0] || {
         role: profile?.supplierRole || '',
         brands: profile?.brands || '',
         gstin: profile?.gstin || '',
@@ -701,12 +699,14 @@ export default function SupplierSupplyChainEntriesEditor({
         authorizationCertificateUrl:
           updated.authorizationCertificateUrl || profile?.authorizationCertificateUrl || ''
       };
-      setProfile(syncProfileFromEntries(profile, [legacyEntry]));
+      const nextEntries =
+        Array.isArray(profile?.companyInfoEntries) && profile.companyInfoEntries.length > 0
+          ? profile.companyInfoEntries.map((entry, index) => (index === 0 ? { ...entry, ...legacyEntry, id: entry.id } : entry))
+          : [legacyEntry];
+      setProfile(syncProfileFromEntries(profile, nextEntries));
       return;
     }
-    const entries = (profile?.companyInfoEntries || []).map((e) =>
-      e.id === entryId ? { ...e, [field]: nextValue } : e
-    );
+    const entries = currentEntries.map((e) => (e.id === entryId ? { ...e, [field]: nextValue } : e));
     setProfile(syncProfileFromEntries(profile, entries));
   };
 

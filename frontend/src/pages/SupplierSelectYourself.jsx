@@ -4,11 +4,14 @@ import { getApiUrl } from '../config/api';
 import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainEntriesEditor';
 import {
   filterSupplyChainFormEntries,
-  hasSupplyChainRegistrationData,
   resolveCompanyInfoEntriesForValidation,
-  validateCompanyInfoEntriesList,
-  validateSupplierChainProfile
+  validateCompanyInfoEntriesList
 } from '../utils/supplierChainEntryValidation';
+import {
+  buildSupplierChainSavePayload,
+  getCompanyInfoEntriesForSave,
+  mergeFormStepProfile
+} from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
 import './Dashboard.css';
 import './SupplierSelectYourself.css';
@@ -39,33 +42,6 @@ function genApprovedBrandEntryId(brandName) {
   return typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : `approved-${String(brandName || '').trim().toLowerCase()}-${Date.now()}`;
-}
-
-function mergeFormStepProfile(fullProfile, formProfile) {
-  const formEntries = Array.isArray(formProfile?.companyInfoEntries) ? formProfile.companyInfoEntries : [];
-  const formById = new Map(formEntries.map((entry) => [entry.id, entry]));
-  const merged = [];
-  const seen = new Set();
-
-  for (const entry of fullProfile?.companyInfoEntries || []) {
-    if (formById.has(entry.id)) {
-      merged.push({ ...formById.get(entry.id) });
-      seen.add(entry.id);
-      continue;
-    }
-    if (!hasSupplyChainRegistrationData(entry)) {
-      merged.push({ ...entry });
-      seen.add(entry.id);
-    }
-  }
-
-  for (const entry of formEntries) {
-    if (!seen.has(entry.id)) {
-      merged.push({ ...entry });
-    }
-  }
-
-  return { ...fullProfile, companyInfoEntries: merged };
 }
 
 function mergeDisplayAndApprovedEntries(profile) {
@@ -253,13 +229,19 @@ export default function SupplierSelectYourself() {
   }, []);
 
   const handleSave = async () => {
-    const validation = validateSupplierChainProfile(profile);
+    const registrationEntries = filterSupplyChainFormEntries(profile?.companyInfoEntries || []);
+    const validation =
+      registrationEntries.length > 0
+        ? validateCompanyInfoEntriesList(registrationEntries)
+        : { ok: false, message: 'Add at least one supply-chain registration form in Step 2.' };
     const saveAsDraft = !validation.ok;
 
     try {
       setSaving(true);
       const token = localStorage.getItem('token');
-      const payload = saveAsDraft ? { ...profile, saveAsDraft: true } : profile;
+      const payload = buildSupplierChainSavePayload(
+        saveAsDraft ? { ...profile, saveAsDraft: true } : profile
+      );
       const response = await fetch(getApiUrl('/api/profile'), {
         method: 'PUT',
         headers: {
@@ -294,7 +276,7 @@ export default function SupplierSelectYourself() {
   const handleSaveBrandApproval = async () => {
     if (!profile || saving || discarding || savingBrandApproval) return;
 
-    const entries = resolveCompanyInfoEntriesForValidation(profile);
+    const entries = getCompanyInfoEntriesForSave(profile);
     const hasBrand = entries.some((entry) => String(entry?.brands || '').trim());
     if (!hasBrand) {
       alert('Select an admin-approved brand from the dropdown, or choose Other brand and enter a new name.');
@@ -310,11 +292,13 @@ export default function SupplierSelectYourself() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({
-          ...profile,
-          userType: profile?.userType || 'supplier',
-          saveBrandApprovalOnly: true
-        })
+        body: JSON.stringify(
+          buildSupplierChainSavePayload({
+            ...profile,
+            userType: profile?.userType || 'supplier',
+            saveBrandApprovalOnly: true
+          })
+        )
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.status !== 'success') {
@@ -335,7 +319,7 @@ export default function SupplierSelectYourself() {
 
   const handleSaveEntry = async (entryId, entryIndexHint = -1) => {
     if (!profile || saving || discarding) return;
-    const entries = resolveCompanyInfoEntriesForValidation(profile);
+    const entries = getCompanyInfoEntriesForSave(profile);
     const entryIndexById = entryId ? entries.findIndex((e) => e?.id === entryId) : -1;
     const entryIndex =
       entryIndexById >= 0
@@ -378,17 +362,7 @@ export default function SupplierSelectYourself() {
       entriesForEntrySave.push({ ...selectedEntry });
     }
 
-    const entriesToPersist = entriesForEntrySave;
-    const firstSavedEntry = entriesToPersist[0] || {};
-    const profileForEntrySave = {
-      ...profile,
-      companyInfoEntries: entriesToPersist,
-      supplierRole: firstSavedEntry.role || '',
-      brands: firstSavedEntry.brands || '',
-      gstin: firstSavedEntry.gstin || '',
-      companyName: firstSavedEntry.companyName || '',
-      minimumOrderValue: firstSavedEntry.minimumOrderValue ?? ''
-    };
+    const profileForEntrySave = buildSupplierChainSavePayload(profile, entriesForEntrySave);
 
     try {
       setSavingEntryId(entryId);
@@ -426,7 +400,7 @@ export default function SupplierSelectYourself() {
     const name = String(brandName || '').trim();
     if (!name || !profile) return;
 
-    const entries = [...(profile.companyInfoEntries || [])];
+    const entries = getCompanyInfoEntriesForSave(profile);
     const existingIndex = entries.findIndex((entry) => brandNamesMatch(entry?.brands, name));
     if (existingIndex >= 0) {
       entries[existingIndex] = {
@@ -450,30 +424,29 @@ export default function SupplierSelectYourself() {
       });
     }
 
-    setProfile({ ...profile, companyInfoEntries: entries });
+    setProfile(buildSupplierChainSavePayload(profile, entries));
   };
 
   const handleRemoveRegistration = (entryId) => {
     if (!profile) return;
-    setProfile({
-      ...profile,
-      companyInfoEntries: (profile.companyInfoEntries || [])
-        .map((entry) => {
-          if (entry.id !== entryId) return entry;
-          return {
-            ...entry,
-            supplyChainRegistrationStarted: false,
-            role: '',
-            gstin: '',
-            companyName: '',
-            ownershipDetails: '',
-            authorizationCertificateUrls: [],
-            authorizationCertificateUrl: '',
-            minimumOrderValue: ''
-          };
-        })
-        .filter((entry) => String(entry?.brands || '').trim())
-    });
+    const entries = getCompanyInfoEntriesForSave(profile)
+      .map((entry) => {
+        if (entry.id !== entryId) return entry;
+        return {
+          ...entry,
+          supplyChainRegistrationStarted: false,
+          role: '',
+          gstin: '',
+          companyName: '',
+          ownershipDetails: '',
+          authorizationCertificateUrls: [],
+          authorizationCertificateUrl: '',
+          minimumOrderValue: ''
+        };
+      })
+      .filter((entry) => String(entry?.brands || '').trim());
+
+    setProfile(buildSupplierChainSavePayload(profile, entries));
   };
 
   const handleDiscard = async () => {
