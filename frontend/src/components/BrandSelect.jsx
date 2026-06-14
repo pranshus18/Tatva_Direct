@@ -32,9 +32,10 @@ export default function BrandSelect({
   className = '',
   allowOther = true,
   hint,
-  searchable = false
+  searchable = false,
+  source = 'profile'
 }) {
-  const { brandNames, loading, error: loadError } = useSupplierBrands();
+  const { brandNames, loading, error: loadError } = useSupplierBrands({ source });
 
   const normalizedValue = String(value || '').trim();
 
@@ -138,7 +139,7 @@ export default function BrandSelect({
             {brandName}
           </option>
         ))}
-        {allowOther ? <option value={OTHER_VALUE}>Other brand (not in list)</option> : null}
+        {allowOther ? <option value={OTHER_VALUE}>Other brand (request admin approval)</option> : null}
       </select>
 
       {showOtherInput ? (
@@ -163,14 +164,33 @@ export default function BrandSelect({
         <p className="brand-select__hint">{hint}</p>
       ) : brandNames.length === 0 && !loading ? (
         <p className="brand-select__hint">
-          No approved brands in your profile yet. Add your brand under <strong>Select yourself</strong> (Step 1),
-          click <strong>Save brand request</strong>, and wait for admin approval before adding products.
+          {source === 'catalog' ? (
+            <>
+              No admin-approved brands in the catalog yet. Select <strong>Other brand</strong> below to request a new
+              brand for admin approval.
+            </>
+          ) : (
+            <>
+              No approved brands in your profile yet. Add your brand under <strong>Select yourself</strong> (Step 1),
+              click <strong>Save brand request</strong>, and wait for admin approval before adding products.
+            </>
+          )}
         </p>
       ) : (
         <p className="brand-select__hint">
-          Choose an approved brand from your Select yourself profile. Only brands you declared and admin approved
-          appear here.
-          {allowOther ? ' New brands may need admin approval before the product goes live.' : ''}
+          {source === 'catalog' ? (
+            <>
+              Choose an admin-approved brand from the list. For a brand not listed, select{' '}
+              <strong>Other brand (request admin approval)</strong>, enter the name, then click{' '}
+              <strong>Save brand request</strong>.
+            </>
+          ) : (
+            <>
+              Choose an approved brand from your Select yourself profile. Only brands you declared and admin approved
+              appear here.
+              {allowOther ? ' New brands may need admin approval before the product goes live.' : ''}
+            </>
+          )}
         </p>
       )}
     </div>

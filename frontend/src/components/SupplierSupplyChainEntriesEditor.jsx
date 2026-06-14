@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
+import BrandSelect from './BrandSelect';
 import { validateCompanyInfoEntriesList } from '../utils/supplierChainEntryValidation';
 import {
   appendAuthorizationCertificateUrl,
@@ -171,8 +172,8 @@ const CompanyInfoEntryCard = ({
   const showEntryRemove = canRemove && editing && showFormDetailsSection && allowEntryRemove;
   const showHeader = !(sectionView === 'brand' && forceExpanded && !allowEntryManagement);
 
-  const handleBrandNameInput = (e) => {
-    onUpdate('brands', sanitizeCustomBrandInput(e.target.value));
+  const handleBrandNameInput = (nextBrand) => {
+    onUpdate('brands', sanitizeCustomBrandInput(nextBrand));
   };
 
   return (
@@ -254,17 +255,31 @@ const CompanyInfoEntryCard = ({
                     Brand name
                     <RequiredMark />
                   </label>
-                  <input
-                    id={`brand-name-${entry.id}`}
-                    type="text"
-                    className="chain-field__control"
-                    value={selectedBrand}
-                    onChange={handleBrandNameInput}
-                    disabled={!editing}
-                    placeholder="Enter one brand name"
-                    required={editing}
-                    aria-required="true"
-                  />
+                  {showBrandApprovalSection && sectionView === 'brand' ? (
+                    <BrandSelect
+                      id={`brand-name-${entry.id}`}
+                      name={`brand-name-${entry.id}`}
+                      value={selectedBrand}
+                      onChange={handleBrandNameInput}
+                      disabled={!editing}
+                      required={editing}
+                      allowOther
+                      source="catalog"
+                      className="chain-brand-select"
+                    />
+                  ) : (
+                    <input
+                      id={`brand-name-${entry.id}`}
+                      type="text"
+                      className="chain-field__control"
+                      value={selectedBrand}
+                      onChange={(e) => handleBrandNameInput(e.target.value)}
+                      disabled={!editing}
+                      placeholder="Enter one brand name"
+                      required={editing}
+                      aria-required="true"
+                    />
+                  )}
                 </div>
               </div>
               <div className="chain-brand-approval-grid">
@@ -914,14 +929,16 @@ export default function SupplierSupplyChainEntriesEditor({
         })}
       </div>
 
-      {editing && sectionView !== 'brand' && shouldShowAddEntry ? (
+      {editing && shouldShowAddEntry ? (
         <div className="chain-add-entry">
           <p className="chain-add-entry__hint">
-            Need another role or brand? Add a separate entry below.
+            {sectionView === 'brand'
+              ? 'Need to deal with another brand? Add a separate brand entry below.'
+              : 'Need another role or brand? Add a separate entry below.'}
           </p>
           <button type="button" className="chain-add-entry__btn" onClick={addCompanyInfoEntry}>
             <Plus size={16} />
-            Add another entry
+            {sectionView === 'brand' ? 'Add another brand' : 'Add another entry'}
           </button>
         </div>
       ) : null}

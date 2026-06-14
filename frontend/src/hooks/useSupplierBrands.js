@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { getApiUrl } from '../config/api';
 
-export function useSupplierBrands() {
+/**
+ * @param {{ source?: 'profile' | 'catalog' }} [options]
+ * - profile: brands declared + approved for this supplier (product forms)
+ * - catalog: all admin-approved brands (Select yourself Step 1)
+ */
+export function useSupplierBrands({ source = 'profile' } = {}) {
   const [brands, setBrands] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -13,7 +18,9 @@ export function useSupplierBrands() {
       setError('');
       try {
         const token = localStorage.getItem('token');
-        const res = await fetch(getApiUrl('/api/supplier/brands'), {
+        const endpoint =
+          source === 'catalog' ? '/api/supplier/brands/approved-catalog' : '/api/supplier/brands';
+        const res = await fetch(getApiUrl(endpoint), {
           headers: { Authorization: `Bearer ${token}` },
           cache: 'no-cache'
         });
@@ -36,7 +43,7 @@ export function useSupplierBrands() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [source]);
 
   const brandNames = brands.map((b) => b.name).filter(Boolean);
 

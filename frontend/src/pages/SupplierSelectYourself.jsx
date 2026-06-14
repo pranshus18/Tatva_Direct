@@ -137,22 +137,35 @@ export default function SupplierSelectYourself() {
     return chainFormSignature(profile) !== chainFormSignature(baseline);
   }, [profile, baseline]);
 
+  const adminApprovedBrandNames = useMemo(() => {
+    return (profile?.adminApprovedBrands || [])
+      .map((row) => String(row?.name || '').trim())
+      .filter(Boolean);
+  }, [profile]);
+
   const configuredBrands = useMemo(() => {
     const entries = resolveCompanyInfoEntriesForValidation(profile || {});
     const fromEntries = entries.map((entry) => String(entry?.brands || '').trim()).filter(Boolean);
-    const fromApproved = (profile?.adminApprovedBrands || [])
-      .map((row) => String(row?.name || '').trim())
-      .filter(Boolean);
     const seen = new Set();
     const merged = [];
-    for (const name of [...fromEntries, ...fromApproved]) {
+    for (const name of [...fromEntries, ...adminApprovedBrandNames]) {
       const key = collapseRepeatedLetters(name.toLowerCase());
       if (seen.has(key)) continue;
       seen.add(key);
       merged.push(name);
     }
     return merged;
-  }, [profile]);
+  }, [profile, adminApprovedBrandNames]);
+
+  const pendingDeclaredBrands = useMemo(() => {
+    const approvedKeys = new Set(
+      adminApprovedBrandNames.map((name) => collapseRepeatedLetters(name.toLowerCase()))
+    );
+    return configuredBrands.filter((name) => {
+      const key = collapseRepeatedLetters(name.toLowerCase());
+      return key && !approvedKeys.has(key);
+    });
+  }, [configuredBrands, adminApprovedBrandNames]);
 
   const supplyChainFormEntries = useMemo(
     () => filterSupplyChainFormEntries(profile?.companyInfoEntries || []),
@@ -165,11 +178,11 @@ export default function SupplierSelectYourself() {
         .map((entry) => collapseRepeatedLetters(String(entry?.brands || '').trim().toLowerCase()))
         .filter(Boolean)
     );
-    return configuredBrands.filter((brand) => {
+    return adminApprovedBrandNames.filter((brand) => {
       const key = collapseRepeatedLetters(brand.toLowerCase());
       return key && !registered.has(key);
     });
-  }, [configuredBrands, supplyChainFormEntries]);
+  }, [adminApprovedBrandNames, supplyChainFormEntries]);
 
   const formStepProfile = useMemo(() => {
     if (!profile) return null;
@@ -280,6 +293,14 @@ export default function SupplierSelectYourself() {
 
   const handleSaveBrandApproval = async () => {
     if (!profile || saving || discarding || savingBrandApproval) return;
+
+    const entries = resolveCompanyInfoEntriesForValidation(profile);
+    const hasBrand = entries.some((entry) => String(entry?.brands || '').trim());
+    if (!hasBrand) {
+      alert('Select an admin-approved brand from the dropdown, or choose Other brand and enter a new name.');
+      return;
+    }
+
     try {
       setSavingBrandApproval(true);
       const token = localStorage.getItem('token');
@@ -530,13 +551,25 @@ export default function SupplierSelectYourself() {
           <div className="supplier-select-brands-summary" aria-label="Configured brands">
             <strong>Your brands ({configuredBrands.length})</strong>
             <p className="supplier-select-brands-summary__hint">
-              Admin-approved brands appear here. Supply-chain registration forms in Step 2 are added only when you
-              choose to register a brand.
+              Admin-approved brands can be registered in Step 2. Brands awaiting approval stay visible here until admin
+              approves your request.
             </p>
             <div className="supplier-select-brands-summary__chips">
-              {configuredBrands.map((brand) => (
-                <span key={brand} className="supplier-select-brands-summary__chip">
+              {adminApprovedBrandNames.map((brand) => (
+                <span
+                  key={`approved-${brand}`}
+                  className="supplier-select-brands-summary__chip supplier-select-brands-summary__chip--approved"
+                >
                   {brand}
+                </span>
+              ))}
+              {pendingDeclaredBrands.map((brand) => (
+                <span
+                  key={`pending-${brand}`}
+                  className="supplier-select-brands-summary__chip supplier-select-brands-summary__chip--pending"
+                  title="Pending admin approval"
+                >
+                  {brand} (pending)
                 </span>
               ))}
             </div>
@@ -544,7 +577,8 @@ export default function SupplierSelectYourself() {
         ) : (
           <div className="supplier-select-alert supplier-select-alert--draft">
             <strong>No brands saved yet</strong>
-            <p>Add a brand in Step 1 below, then click <strong>Save brand request</strong>.</p>
+            <p>Add a brand in Step 1 below — pick from admin-approved brands or request a new one — then click{' '}
+            <strong>Save brand request</strong>.</p>
           </div>
         )}
 
@@ -613,6 +647,7 @@ export default function SupplierSelectYourself() {
               sectionView="brand"
               selectionMode="dropdown"
               allowEntryManagement={false}
+              showAddEntry
             />
           ) : null}
         </div>
@@ -623,9 +658,19 @@ export default function SupplierSelectYourself() {
             Supply-chain registration form details
           </h2>
           <p className="supplier-select-section__intro">
-            Registration forms are optional until you are ready. Add a form only for brands you want to register in the
-            supply chain.
+            After a brand is admin-approved, add a registration form here to declare your supply-chain role for that
+            brand.
           </p>
+
+          {adminApprovedBrandNames.length === 0 && configuredBrands.length > 0 ? (
+            <div className="supplier-select-alert supplier-select-alert--draft">
+              <strong>Waiting for brand approval</strong>
+              <p>
+                Your brand request is saved. Step 2 opens once admin approves the brand. You can continue using approved
+                brands from the catalog immediately after approval.
+              </p>
+            </div>
+          ) : null}
 
           {brandsPendingRegistration.length > 0 ? (
             <div className="supplier-select-add-registration">

@@ -11,7 +11,10 @@ import {
   supplierCategoryCreateSchema,
   supplierUnitCreateSchema
 } from './supplierImports.js';
-import { listSupplierSelectableBrands } from '../../services/supplierBrandCatalogService.js';
+import {
+  listApprovedCatalogBrands,
+  listSupplierSelectableBrands
+} from '../../services/supplierBrandCatalogService.js';
 export function registerSupplierCatalogRoutes(ctx) {
   const {
     router,
@@ -665,6 +668,27 @@ router.post('/units', authenticateToken, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Internal server error'
+    });
+  }
+});
+
+router.get('/brands/approved-catalog', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can list brands' });
+    }
+
+    const brands = await listApprovedCatalogBrands(supabase);
+
+    return res.json({
+      status: 'success',
+      brands
+    });
+  } catch (error) {
+    console.error('Supplier approved catalog brands error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to load approved brand catalog'
     });
   }
 });

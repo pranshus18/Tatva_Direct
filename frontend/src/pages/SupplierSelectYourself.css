@@ -149,6 +149,17 @@
   font-weight: 600;
 }
 
+.supplier-select-brands-summary__chip--approved {
+  border-color: #a7f3d0;
+  color: #047857;
+}
+
+.supplier-select-brands-summary__chip--pending {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
+}
+
 .supplier-select-section__intro {
   margin: -0.35rem 0 1rem;
   color: #64748b;

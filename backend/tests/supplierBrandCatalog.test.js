@@ -5,3 +5,36 @@ import { normalizeBrandKey } from '../services/supplyChainSharedService.js';
 test('normalizeBrandKey: case-insensitive brand keys', () => {
   assert.equal(normalizeBrandKey('ACC'), normalizeBrandKey('acc'));
 });
+
+test('listApprovedCatalogBrands returns deduplicated approved rows', async () => {
+  const { listApprovedCatalogBrands } = await import('../services/supplierBrandCatalogService.js');
+  const supabase = {
+    from() {
+      return {
+        select() {
+          return this;
+        },
+        eq() {
+          return this;
+        },
+        order() {
+          return Promise.resolve({
+            data: [
+              { name: 'ACC', normalized_name: 'acc', status: 'approved' },
+              { name: 'acc', normalized_name: 'acc', status: 'approved' },
+              { name: 'UltraTech', normalized_name: 'ultratech', status: 'approved' }
+            ],
+            error: null
+          });
+        }
+      };
+    }
+  };
+
+  const brands = await listApprovedCatalogBrands(supabase);
+  assert.equal(brands.length, 2);
+  assert.deepEqual(
+    brands.map((row) => row.name).sort(),
+    ['ACC', 'UltraTech']
+  );
+});
