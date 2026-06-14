@@ -292,43 +292,16 @@ export function mergeApprovedBrandsIntoChainEntries(chainProfile, approvedBrandR
   };
 }
 
-/** Persist admin-approved brands into saved supplier profile when new entries are needed. */
+/** No-op for saved profile: approved brands are exposed via adminApprovedBrands, not auto form rows. */
 export async function syncApprovedBrandsIntoUserProfile(userId, profile) {
-  const base = profile || {};
-  const approvedBrands = await fetchSupplierApprovedBrands(userId, base);
-  if (approvedBrands.length === 0) return base;
-
-  const savedChain = baselineChainFromProfile(base);
-  const syncedChain = mergeApprovedBrandsIntoChainEntries(savedChain, approvedBrands);
-  const entrySignature = (list) =>
-    JSON.stringify((list || []).map((entry) => ({ id: entry?.id || '', brands: entry?.brands || '' })));
-
-  if (entrySignature(savedChain.companyInfoEntries) === entrySignature(syncedChain.companyInfoEntries)) {
-    return base;
-  }
-
-  const updatedProfile = {
-    ...base,
-    companyInfoEntries: syncedChain.companyInfoEntries,
-    brands: syncedChain.brands || base.brands
-  };
-
-  try {
-    const { error } = await supabase.from('users').update({ profile: updatedProfile }).eq('id', userId);
-    if (error) throw error;
-  } catch (e) {
-    console.error('[supplierChainProfile] syncApprovedBrandsIntoUserProfile:', e?.message || e);
-  }
-
-  return updatedProfile;
+  return profile || {};
 }
 
 /** Load saved profile merged with any pending chain submission and approved brands. */
 export async function loadEffectiveSupplierChainProfile(userId, profile) {
-  const syncedProfile = await syncApprovedBrandsIntoUserProfile(userId, profile);
   const pending = await fetchPendingChainRequest(userId);
-  const effective = buildEffectiveSupplierChainProfile(syncedProfile, pending?.payload || null);
-  const approvedBrands = await fetchSupplierApprovedBrands(userId, syncedProfile);
+  const effective = buildEffectiveSupplierChainProfile(profile, pending?.payload || null);
+  const approvedBrands = await fetchSupplierApprovedBrands(userId, profile);
   return mergeApprovedBrandsIntoChainEntries(effective, approvedBrands);
 }
 

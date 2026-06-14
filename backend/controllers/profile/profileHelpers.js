@@ -4,7 +4,6 @@ import {
   fetchLatestChainRequest,
   fetchPendingChainRequest,
   fetchSupplierApprovedBrands,
-  mergeApprovedBrandsIntoChainEntries,
   normalizeCompanyInfoEntries,
   syncApprovedBrandsIntoUserProfile
 } from '../../services/supplierChainProfileService.js';
@@ -518,18 +517,15 @@ export async function createProfileResponse(user) {
       !!draftChain.supplierRole ||
       !!String(draftChain.brands || '').trim() ||
       draftChain.companyInfoEntries.length > 0;
-    const displayChain = mergeApprovedBrandsIntoChainEntries(
-      pending?.payload
-        ? {
-            supplierRole: String(pending.payload.supplierRole || '').trim(),
-            brands: typeof pending.payload.brands === 'string' ? pending.payload.brands : '',
-            companyInfoEntries: normalizeCompanyInfoEntries(pending.payload.companyInfoEntries || [])
-          }
-        : draftHasValues
-          ? draftChain
-          : approvedChain,
-      approvedBrands
-    );
+    const displayChain = pending?.payload
+      ? {
+          supplierRole: String(pending.payload.supplierRole || '').trim(),
+          brands: typeof pending.payload.brands === 'string' ? pending.payload.brands : '',
+          companyInfoEntries: normalizeCompanyInfoEntries(pending.payload.companyInfoEntries || [])
+        }
+      : draftHasValues
+        ? draftChain
+        : approvedChain;
 
     const entries = displayChain.companyInfoEntries || [];
     const firstEntry = entries[0];

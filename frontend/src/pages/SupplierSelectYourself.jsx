@@ -3,6 +3,8 @@ import { UserCheck, Save, RotateCcw } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainEntriesEditor';
 import {
+  filterSupplyChainFormEntries,
+  hasSupplyChainRegistrationData,
   resolveCompanyInfoEntriesForValidation,
   validateCompanyInfoEntriesList,
   validateSupplierChainProfile
@@ -39,36 +41,31 @@ function genApprovedBrandEntryId(brandName) {
     : `approved-${String(brandName || '').trim().toLowerCase()}-${Date.now()}`;
 }
 
-/** Ensure every admin-approved brand has a visible Select yourself entry (role can stay empty). */
-function ensureApprovedBrandEntries(profile) {
-  if (!profile) return profile;
-  const approvedList = Array.isArray(profile.adminApprovedBrands) ? profile.adminApprovedBrands : [];
-  if (approvedList.length === 0) return profile;
+function mergeFormStepProfile(fullProfile, formProfile) {
+  const formEntries = Array.isArray(formProfile?.companyInfoEntries) ? formProfile.companyInfoEntries : [];
+  const formById = new Map(formEntries.map((entry) => [entry.id, entry]));
+  const merged = [];
+  const seen = new Set();
 
-  const entries = Array.isArray(profile.companyInfoEntries)
-    ? profile.companyInfoEntries.map((entry) => ({ ...entry }))
-    : [];
-
-  for (const row of approvedList) {
-    const name = String(row?.name || '').trim();
-    if (!name) continue;
-    if (entries.some((entry) => brandNamesMatch(entry?.brands, name))) continue;
-    entries.push({
-      id: genApprovedBrandEntryId(name),
-      role: '',
-      brands: name,
-      gstin: '',
-      companyName: '',
-      ownershipDetails: '',
-      brandApprovalDocumentUrls: [],
-      brandApprovalDocumentUrl: '',
-      authorizationCertificateUrls: [],
-      authorizationCertificateUrl: '',
-      minimumOrderValue: ''
-    });
+  for (const entry of fullProfile?.companyInfoEntries || []) {
+    if (formById.has(entry.id)) {
+      merged.push({ ...formById.get(entry.id) });
+      seen.add(entry.id);
+      continue;
+    }
+    if (!hasSupplyChainRegistrationData(entry)) {
+      merged.push({ ...entry });
+      seen.add(entry.id);
+    }
   }
 
-  return { ...profile, companyInfoEntries: entries };
+  for (const entry of formEntries) {
+    if (!seen.has(entry.id)) {
+      merged.push({ ...entry });
+    }
+  }
+
+  return { ...fullProfile, companyInfoEntries: merged };
 }
 
 function mergeDisplayAndApprovedEntries(profile) {
@@ -133,6 +130,7 @@ export default function SupplierSelectYourself() {
   const [editorResetKey, setEditorResetKey] = useState(0);
   const [discountInsights, setDiscountInsights] = useState(null);
   const [brandSectionExpanded, setBrandSectionExpanded] = useState(true);
+  const [registrationBrandPick, setRegistrationBrandPick] = useState('');
 
   const hasUnsavedChanges = useMemo(() => {
     if (!profile || !baseline) return false;
@@ -156,12 +154,42 @@ export default function SupplierSelectYourself() {
     return merged;
   }, [profile]);
 
+  const supplyChainFormEntries = useMemo(
+    () => filterSupplyChainFormEntries(profile?.companyInfoEntries || []),
+    [profile]
+  );
+
+  const brandsPendingRegistration = useMemo(() => {
+    const registered = new Set(
+      supplyChainFormEntries
+        .map((entry) => collapseRepeatedLetters(String(entry?.brands || '').trim().toLowerCase()))
+        .filter(Boolean)
+    );
+    return configuredBrands.filter((brand) => {
+      const key = collapseRepeatedLetters(brand.toLowerCase());
+      return key && !registered.has(key);
+    });
+  }, [configuredBrands, supplyChainFormEntries]);
+
+  const formStepProfile = useMemo(() => {
+    if (!profile) return null;
+    return { ...profile, companyInfoEntries: supplyChainFormEntries };
+  }, [profile, supplyChainFormEntries]);
+
+  useEffect(() => {
+    if (!registrationBrandPick && brandsPendingRegistration.length > 0) {
+      setRegistrationBrandPick(brandsPendingRegistration[0]);
+    }
+    if (registrationBrandPick && !brandsPendingRegistration.includes(registrationBrandPick)) {
+      setRegistrationBrandPick(brandsPendingRegistration[0] || '');
+    }
+  }, [brandsPendingRegistration, registrationBrandPick]);
+
   const applyProfileFromResponse = (profileData) => {
     if (!profileData) return false;
     const snapshot = cloneProfileSnapshot(profileData);
     if (snapshot) {
       snapshot.companyInfoEntries = mergeDisplayAndApprovedEntries(snapshot);
-      Object.assign(snapshot, ensureApprovedBrandEntries(snapshot));
     }
     setProfile(snapshot);
     setBaseline(cloneProfileSnapshot(snapshot));
@@ -373,6 +401,60 @@ export default function SupplierSelectYourself() {
     }
   };
 
+  const handleAddRegistration = (brandName) => {
+    const name = String(brandName || '').trim();
+    if (!name || !profile) return;
+
+    const entries = [...(profile.companyInfoEntries || [])];
+    const existingIndex = entries.findIndex((entry) => brandNamesMatch(entry?.brands, name));
+    if (existingIndex >= 0) {
+      entries[existingIndex] = {
+        ...entries[existingIndex],
+        supplyChainRegistrationStarted: true
+      };
+    } else {
+      entries.push({
+        id: genApprovedBrandEntryId(name),
+        role: '',
+        brands: name,
+        gstin: '',
+        companyName: '',
+        ownershipDetails: '',
+        brandApprovalDocumentUrls: [],
+        brandApprovalDocumentUrl: '',
+        authorizationCertificateUrls: [],
+        authorizationCertificateUrl: '',
+        minimumOrderValue: '',
+        supplyChainRegistrationStarted: true
+      });
+    }
+
+    setProfile({ ...profile, companyInfoEntries: entries });
+  };
+
+  const handleRemoveRegistration = (entryId) => {
+    if (!profile) return;
+    setProfile({
+      ...profile,
+      companyInfoEntries: (profile.companyInfoEntries || [])
+        .map((entry) => {
+          if (entry.id !== entryId) return entry;
+          return {
+            ...entry,
+            supplyChainRegistrationStarted: false,
+            role: '',
+            gstin: '',
+            companyName: '',
+            ownershipDetails: '',
+            authorizationCertificateUrls: [],
+            authorizationCertificateUrl: '',
+            minimumOrderValue: ''
+          };
+        })
+        .filter((entry) => String(entry?.brands || '').trim())
+    });
+  };
+
   const handleDiscard = async () => {
     if (discarding || saving || !hasUnsavedChanges) return;
 
@@ -448,8 +530,8 @@ export default function SupplierSelectYourself() {
           <div className="supplier-select-brands-summary" aria-label="Configured brands">
             <strong>Your brands ({configuredBrands.length})</strong>
             <p className="supplier-select-brands-summary__hint">
-              Admin-approved brands appear here even when supply-chain setup is still pending. Complete Step 2 for each
-              brand once admin defines the chain.
+              Admin-approved brands appear here. Supply-chain registration forms in Step 2 are added only when you
+              choose to register a brand.
             </p>
             <div className="supplier-select-brands-summary__chips">
               {configuredBrands.map((brand) => (
@@ -540,15 +622,66 @@ export default function SupplierSelectYourself() {
             <span className="supplier-select-section__label">Step 2</span>
             Supply-chain registration form details
           </h2>
-          <SupplierSupplyChainEntriesEditor
-            key={`form-${editorResetKey}`}
-            profile={profile}
-            setProfile={setProfile}
-            editing
-            sectionView="form"
-            onSaveEntry={handleSaveEntry}
-            savingEntryId={savingEntryId}
-          />
+          <p className="supplier-select-section__intro">
+            Registration forms are optional until you are ready. Add a form only for brands you want to register in the
+            supply chain.
+          </p>
+
+          {brandsPendingRegistration.length > 0 ? (
+            <div className="supplier-select-add-registration">
+              <label className="supplier-select-add-registration__label" htmlFor="registration-brand-pick">
+                Add registration form for brand
+              </label>
+              <div className="supplier-select-add-registration__controls">
+                <select
+                  id="registration-brand-pick"
+                  className="supplier-select-add-registration__select"
+                  value={registrationBrandPick}
+                  onChange={(e) => setRegistrationBrandPick(e.target.value)}
+                  disabled={saving || !!savingEntryId || discarding}
+                >
+                  {brandsPendingRegistration.map((brand) => (
+                    <option key={brand} value={brand}>
+                      {brand}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="btn-primary supplier-select-add-registration__btn"
+                  onClick={() => handleAddRegistration(registrationBrandPick)}
+                  disabled={!registrationBrandPick || saving || !!savingEntryId || discarding}
+                >
+                  Add registration form
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {supplyChainFormEntries.length === 0 ? (
+            <div className="supplier-select-alert supplier-select-alert--draft">
+              <strong>No supply-chain registration forms yet</strong>
+              <p>
+                Your approved brands are listed above. Use <strong>Add registration form</strong> when you want to
+                register your supply-chain role for a brand.
+              </p>
+            </div>
+          ) : null}
+
+          {formStepProfile ? (
+            <SupplierSupplyChainEntriesEditor
+              key={`form-${editorResetKey}`}
+              profile={formStepProfile}
+              setProfile={(next) => setProfile(mergeFormStepProfile(profile, next))}
+              editing
+              sectionView="form"
+              allowEntryManagement={false}
+              showAddEntry={false}
+              onSaveEntry={handleSaveEntry}
+              onRemoveEntry={handleRemoveRegistration}
+              savingEntryId={savingEntryId}
+            />
+          ) : null}
         </div>
 
         <div className="profile-section">

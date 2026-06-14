@@ -129,7 +129,9 @@ const CompanyInfoEntryCard = ({
   expanded = true,
   onToggleExpand = null,
   onSaveEntry = null,
-  savingThisEntry = false
+  savingThisEntry = false,
+  allowEntrySave = false,
+  allowEntryRemove = false
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const roleLabel = SUPPLY_CHAIN_ROLE_OPTIONS.find((o) => o.value === entry.role)?.label || null;
@@ -165,8 +167,8 @@ const CompanyInfoEntryCard = ({
     editing && brandApprovalReadyForRole && !roleOptionsLoading && availableRoleOptions.length > 0;
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
-  const showEntrySave = editing && showFormDetailsSection && allowEntryManagement && !!onSaveEntry;
-  const showEntryRemove = canRemove && editing && showFormDetailsSection && allowEntryManagement;
+  const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave;
+  const showEntryRemove = canRemove && editing && showFormDetailsSection && allowEntryRemove;
   const showHeader = !(sectionView === 'brand' && forceExpanded && !allowEntryManagement);
 
   const handleBrandNameInput = (e) => {
@@ -408,7 +410,9 @@ export default function SupplierSupplyChainEntriesEditor({
   selectionMode = 'all',
   allowEntryManagement = true,
   onSaveEntry = null,
-  savingEntryId = null
+  onRemoveEntry = null,
+  savingEntryId = null,
+  showAddEntry = null
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -475,6 +479,7 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const displayEntries = getDisplayEntries();
+  const shouldShowAddEntry = showAddEntry ?? allowEntryManagement;
   const indexedEntries = displayEntries.map((entry, index) => ({ entry, index }));
   const entryIdsSignature = JSON.stringify(displayEntries.map((entry) => entry.id));
   const defaultEntryId = displayEntries[0]?.id || '';
@@ -860,7 +865,9 @@ export default function SupplierSupplyChainEntriesEditor({
             entryIndex={index + 1}
             totalEntries={displayEntries.length}
             onUpdate={(field, value) => updateCompanyInfoEntry(entry.id, field, value)}
-            onRemove={() => removeCompanyInfoEntry(entry.id)}
+            onRemove={() =>
+              onRemoveEntry ? onRemoveEntry(entry.id) : removeCompanyInfoEntry(entry.id)
+            }
             onBrandDocumentUpload={(targetEntryId, files) =>
               handleDocumentUploadForEntry(targetEntryId, files, 'brand_approval')
             }
@@ -895,6 +902,8 @@ export default function SupplierSupplyChainEntriesEditor({
             expanded={expanded}
             onSaveEntry={onSaveEntry}
             savingThisEntry={savingEntryId === entry.id}
+            allowEntrySave={allowEntryManagement || !!onSaveEntry}
+            allowEntryRemove={allowEntryManagement || !!onRemoveEntry}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]
@@ -905,7 +914,7 @@ export default function SupplierSupplyChainEntriesEditor({
         })}
       </div>
 
-      {editing && sectionView !== 'brand' && allowEntryManagement ? (
+      {editing && sectionView !== 'brand' && shouldShowAddEntry ? (
         <div className="chain-add-entry">
           <p className="chain-add-entry__hint">
             Need another role or brand? Add a separate entry below.

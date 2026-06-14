@@ -43,6 +43,30 @@ export function resolveCompanyInfoEntriesForValidation(profile) {
   ];
 }
 
+/** True when supplier has started (or explicitly opened) Step 2 supply-chain registration. */
+export function hasSupplyChainRegistrationData(entry = {}) {
+  if (entry?.supplyChainRegistrationStarted === true) return true;
+  const role = String(entry?.role || '').trim();
+  const gstin = String(entry?.gstin || '').trim();
+  const companyName = String(entry?.companyName || '').trim();
+  const ownershipDetails = String(entry?.ownershipDetails || '').trim();
+  const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
+  const mov = entry?.minimumOrderValue;
+  const hasMov = mov !== '' && mov !== null && mov !== undefined;
+  return !!(
+    role ||
+    gstin ||
+    companyName ||
+    ownershipDetails ||
+    roleCertificateUrls.length > 0 ||
+    hasMov
+  );
+}
+
+export function filterSupplyChainFormEntries(entries = []) {
+  return (Array.isArray(entries) ? entries : []).filter((entry) => hasSupplyChainRegistrationData(entry));
+}
+
 /**
  * @param {ChainEntry[]} entries
  * @returns {{ ok: true } | { ok: false, message: string, entryIndex?: number, field?: string }}
