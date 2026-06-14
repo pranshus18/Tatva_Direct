@@ -500,9 +500,20 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         .order('created_at', { ascending: false });
 
       // Filter pending products in JavaScript (products that are not approved or rejected)
-      const pendingProducts = (allProducts || []).filter(p => {
+      const { data: pendingOffers } = await supabase
+        .from('supplier_products')
+        .select('product_id')
+        .eq('status', 'pending');
+
+      const pendingOfferProductIds = new Set(
+        (pendingOffers || []).map((row) => row.product_id).filter(Boolean)
+      );
+
+      const pendingProducts = (allProducts || []).filter((p) => {
         const status = p.status;
-        return !status || status === 'pending' || status === '' || (status !== 'approved' && status !== 'rejected');
+        const isPendingStatus =
+          !status || status === 'pending' || status === '' || (status !== 'approved' && status !== 'rejected');
+        return isPendingStatus && pendingOfferProductIds.has(p.id);
       });
 
       console.log(`📦 Found ${pendingProducts.length} pending products`);

@@ -78,6 +78,8 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
       }
     }
 
+    let productIdsWithSupplierOffers = new Set();
+
     // Always reconcile price/stock from supplier_products.
     // Supplier portal updates inventory in `supplier_products`, but this admin page
     // previously relied on legacy `products.price/stock`, which can stay 0.
@@ -91,6 +93,9 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
           .in('product_id', productIds);
 
         if (!spRowsError && spRows) {
+          productIdsWithSupplierOffers = new Set(
+            spRows.map((row) => row.product_id).filter(Boolean)
+          );
           const bestRowByProductId = new Map();
 
           for (const row of spRows) {
@@ -125,10 +130,14 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
 
           allProducts = allProducts.map((p) => {
             const best = bestRowByProductId.get(p.id);
-            if (!best) return p;
+            const hasSupplierOffer = productIdsWithSupplierOffers.has(p.id);
+            if (!best) {
+              return { ...p, hasSupplierOffer };
+            }
 
             return {
               ...p,
+              hasSupplierOffer,
               // Admin cards show a single price/stock per product card,
               // so we show the best available supplier offer.
               price: best.price,
@@ -261,12 +270,15 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
     let products = allProducts || [];
     if (status && status !== 'all') {
       if (status === 'pending') {
-        // Pending: anything that's not approved or rejected
-        products = (allProducts || []).filter(p => {
+        // Pending: catalog row pending AND at least one supplier offer exists.
+        // Orphan catalog rows (failed creates) must not appear in admin approval queue.
+        products = (allProducts || []).filter((p) => {
           const s = p.status;
-          return !s || s === 'pending' || s === '' || (s !== 'approved' && s !== 'rejected');
+          const isPendingStatus =
+            !s || s === 'pending' || s === '' || (s !== 'approved' && s !== 'rejected');
+          return isPendingStatus && productIdsWithSupplierOffers.has(p.id);
         });
-        console.log(`Filtered to ${products.length} pending products`);
+        console.log(`Filtered to ${products.length} pending products with supplier offers`);
       } else if (status === 'approved') {
         products = (allProducts || []).filter(p => p.status === 'approved');
         console.log(`Filtered to ${products.length} approved products`);
