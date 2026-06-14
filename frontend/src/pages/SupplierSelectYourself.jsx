@@ -5,10 +5,13 @@ import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainE
 import { validateCompanyInfoEntriesList, validateUniqueBrandsAcrossEntries } from '../utils/supplierChainEntryValidation';
 import {
   buildSupplierChainSavePayload,
+  buildSupplyChainFormProfile,
   ensureAtLeastOneCompanyInfoEntry,
   getCompanyInfoEntriesForSave,
   getSupplyChainAssignmentRows,
-  mergeCompanyInfoEntriesById
+  mergeCompanyInfoEntriesById,
+  mergeFormStepProfile,
+  syncBrandEntriesForSupplyChainStep
 } from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
 import './Dashboard.css';
@@ -16,10 +19,6 @@ import './SupplierSelectYourself.css';
 
 function cloneProfileSnapshot(profile) {
   return profile ? JSON.parse(JSON.stringify(profile)) : null;
-}
-
-function collapseRepeatedLetters(value) {
-  return String(value || '').replace(/(.)\1+/g, '$1');
 }
 
 /** Compare supply-chain form fields only (what this page edits). */
@@ -65,8 +64,10 @@ export default function SupplierSelectYourself() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savingEntryId, setSavingEntryId] = useState(null);
+  const [savingBrandApproval, setSavingBrandApproval] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [editorResetKey, setEditorResetKey] = useState(0);
+  const [brandSectionExpanded, setBrandSectionExpanded] = useState(true);
   const [discountInsights, setDiscountInsights] = useState(null);
 
   const hasUnsavedChanges = useMemo(() => {
@@ -78,6 +79,13 @@ export default function SupplierSelectYourself() {
     () => getSupplyChainAssignmentRows(getCompanyInfoEntriesForSave(profile || {})),
     [profile]
   );
+
+  const supplyChainFormProfile = useMemo(() => buildSupplyChainFormProfile(profile), [profile]);
+
+  const applyBrandStepProfile = (next) => {
+    const entries = syncBrandEntriesForSupplyChainStep(ensureAtLeastOneCompanyInfoEntry(next));
+    setProfile(buildSupplierChainSavePayload({ ...next, companyInfoEntries: entries }));
+  };
 
   const applyProfileFromResponse = (profileData) => {
     const snapshot = normalizeProfileForEditor(profileData);
@@ -268,6 +276,54 @@ export default function SupplierSelectYourself() {
     }
   };
 
+  const handleSaveBrandApproval = async () => {
+    if (!profile || saving || discarding || savingBrandApproval) return;
+
+    const allEntries = getCompanyInfoEntriesForSave(profile);
+    const uniqueBrandsCheck = validateUniqueBrandsAcrossEntries(allEntries);
+    if (!uniqueBrandsCheck.ok) {
+      alert(uniqueBrandsCheck.message);
+      return;
+    }
+
+    const hasBrand = allEntries.some((entry) => String(entry?.brands || '').trim());
+    if (!hasBrand) {
+      alert('Select at least one brand before saving.');
+      return;
+    }
+
+    try {
+      setSavingBrandApproval(true);
+      const token = localStorage.getItem('token');
+      const response = await fetch(getApiUrl('/api/profile'), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          ...buildSupplierChainSavePayload(profile, syncBrandEntriesForSupplyChainStep(allEntries)),
+          userType: profile?.userType || 'supplier',
+          saveBrandApprovalOnly: true
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.status !== 'success') {
+        alert(data.message || 'Failed to save brand request. Please try again.');
+        return;
+      }
+      alert(data.message || 'Brand saved. Supply-chain role form is ready in Step 2 below.');
+      if (!applyProfileFromResponse(data.profile)) {
+        await fetchProfile();
+      }
+    } catch (e) {
+      console.error('Failed to save brand approval:', e);
+      alert('Failed to save brand request. Please try again.');
+    } finally {
+      setSavingBrandApproval(false);
+    }
+  };
+
   const handleRemoveEntry = (entryId) => {
     if (!profile) return;
     const entries = getCompanyInfoEntriesForSave(profile).filter((entry) => entry.id !== entryId);
@@ -340,9 +396,24 @@ export default function SupplierSelectYourself() {
 
       <div className="profile-content">
         <p className="supplier-select-page-intro">
-          For each brand you deal with: pick the brand from admin-approved list (or request a new one), then choose
-          your supply-chain role. Each brand can have only one role — add separate registrations for different brands.
+          Two separate steps: first pick your <strong>brand</strong>, then in the next section select your{' '}
+          <strong>supply-chain role</strong> for that brand. The brand you choose in Step 1 is filled automatically in
+          Step 2.
         </p>
+
+        <div className="supplier-select-flow-card" aria-label="Select yourself steps">
+          <div className="supplier-select-flow-card__step">
+            <span className="supplier-select-flow-card__badge">Step 1</span>
+            <span>Brand</span>
+          </div>
+          <div className="supplier-select-flow-card__arrow" aria-hidden>
+            →
+          </div>
+          <div className="supplier-select-flow-card__step">
+            <span className="supplier-select-flow-card__badge">Step 2</span>
+            <span>Supply-chain role</span>
+          </div>
+        </div>
 
         {supplyChainAssignments.length > 0 ? (
           <div className="supplier-select-assignments" aria-label="Your supply chain by brand">
@@ -425,33 +496,86 @@ export default function SupplierSelectYourself() {
           </div>
         ) : null}
 
-        <div className="profile-section supplier-select-section supplier-select-section--unified">
-          <h2>Brand &amp; supply-chain role registrations</h2>
+        <div className="profile-section supplier-select-section supplier-select-section--brand">
+          <div className="supplier-select-section__head">
+            <h2>
+              <span className="supplier-select-section__label">Step 1</span>
+              Brand you are dealing with
+            </h2>
+            <div className="supplier-select-section__head-actions">
+              <button
+                type="button"
+                className="btn-secondary supplier-select-section__toggle-btn"
+                onClick={() => setBrandSectionExpanded((prev) => !prev)}
+              >
+                {brandSectionExpanded ? 'Collapse' : 'Expand'}
+              </button>
+              <button
+                type="button"
+                className="btn-primary supplier-select-section__save-btn"
+                onClick={handleSaveBrandApproval}
+                disabled={saving || !!savingEntryId || discarding || savingBrandApproval}
+              >
+                {savingBrandApproval ? 'Saving…' : 'Save brand'}
+              </button>
+            </div>
+          </div>
+          {brandSectionExpanded ? (
+            <SupplierSupplyChainEntriesEditor
+              key={`brand-${editorResetKey}`}
+              profile={profile}
+              setProfile={applyBrandStepProfile}
+              editing
+              sectionView="brand"
+              selectionMode="dropdown"
+              allowEntryManagement
+              showAddEntry
+              onRemoveEntry={handleRemoveEntry}
+            />
+          ) : null}
+        </div>
+
+        <div className="profile-section supplier-select-section supplier-select-section--form">
+          <h2>
+            <span className="supplier-select-section__label">Step 2</span>
+            Supply-chain role for your brand
+          </h2>
           <p className="supplier-select-section__intro">
-            Pick a brand from the dropdown — it fills this form automatically. Then choose your supply-chain role,
-            upload documents, and save. Use <strong>Add another brand registration</strong> for more brands.
+            For each brand you picked in Step 1, select your role in the supply chain and upload documents. The brand
+            name is already filled — do not change it here.
           </p>
 
-          <SupplierSupplyChainEntriesEditor
-            key={`unified-${editorResetKey}`}
-            profile={profile}
-            setProfile={(next) =>
-              setProfile(
-                buildSupplierChainSavePayload({
-                  ...next,
-                  companyInfoEntries: ensureAtLeastOneCompanyInfoEntry(next)
-                })
-              )
-            }
-            editing
-            sectionView="all"
-            selectionMode="all"
-            allowEntryManagement
-            showAddEntry
-            onSaveEntry={handleSaveEntry}
-            onRemoveEntry={handleRemoveEntry}
-            savingEntryId={savingEntryId}
-          />
+          {!supplyChainFormProfile?.companyInfoEntries?.length ? (
+            <div className="supplier-select-alert supplier-select-alert--draft">
+              <strong>No supply-chain forms yet</strong>
+              <p>
+                Select a brand in <strong>Step 1</strong> above. A matching supply-chain role form will appear here
+                automatically with that brand filled in.
+              </p>
+            </div>
+          ) : null}
+
+          {supplyChainFormProfile ? (
+            <SupplierSupplyChainEntriesEditor
+              key={`form-${editorResetKey}`}
+              profile={supplyChainFormProfile}
+              setProfile={(next) =>
+                setProfile(
+                  mergeFormStepProfile(
+                    profile,
+                    buildSupplierChainSavePayload(next, next.companyInfoEntries || [])
+                  )
+                )
+              }
+              editing
+              sectionView="form"
+              selectionMode="all"
+              allowEntryManagement={false}
+              showAddEntry={false}
+              onSaveEntry={handleSaveEntry}
+              savingEntryId={savingEntryId}
+            />
+          ) : null}
         </div>
 
         <div className="profile-section">

@@ -29,6 +29,34 @@
   gap: 1.5rem;
 }
 
+.chain-entry-selector--brand-step {
+  margin-bottom: 1rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.chain-entry-selector__remove {
+  margin-top: 0.35rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #dc2626;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chain-entry-selector__remove:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.chain-entry-selector__remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .supplier-select-yourself-editor .chain-entry-selector {
   padding: 1rem 1.1rem;
   border: 1px solid #dbeafe;
@@ -320,6 +348,23 @@
 
 .supplier-select-yourself-editor .chain-entry-approval-block + .chain-entry-form-block--unified {
   margin-top: 0.5rem;
+}
+
+.supplier-select-yourself-editor .chain-selected-brand-pill--locked {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.supplier-select-yourself-editor .chain-entry-form-block--supply-chain-step {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
+.supplier-select-yourself-editor .chain-field__control--readonly {
+  background: #f1f5f9;
+  color: #334155;
+  cursor: not-allowed;
 }
 
 .supplier-select-yourself-editor .chain-field__control,

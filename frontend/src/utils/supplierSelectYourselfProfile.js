@@ -126,6 +126,30 @@ export function ensureAtLeastOneCompanyInfoEntry(profile) {
   ];
 }
 
+export function getEntriesWithBrands(entries = []) {
+  return (Array.isArray(entries) ? entries : []).filter((entry) =>
+    String(entry?.brands || '').trim()
+  );
+}
+
+/** When a brand is picked in Step 1, mark the entry ready for Step 2 supply-chain forms. */
+export function syncBrandEntriesForSupplyChainStep(entries = []) {
+  return entries.map((entry) => {
+    const brand = String(entry?.brands || '').trim();
+    if (!brand) return { ...entry };
+    return { ...entry, supplyChainRegistrationStarted: true };
+  });
+}
+
+export function buildSupplyChainFormProfile(profile) {
+  if (!profile) return null;
+  const brandedEntries = getEntriesWithBrands(getCompanyInfoEntriesForSave(profile));
+  return {
+    ...profile,
+    companyInfoEntries: brandedEntries
+  };
+}
+
 /**
  * Merge Step 2 form edits back into the full profile without dropping other brand entries.
  */

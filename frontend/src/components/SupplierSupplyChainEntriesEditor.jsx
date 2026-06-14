@@ -212,13 +212,18 @@ const CompanyInfoEntryCard = ({
   const roleSelectionEnabled =
     editing && brandApprovalReadyForRole && !roleOptionsLoading && availableRoleOptions.length > 0;
   const isUnifiedRegistration = sectionView === 'all';
+  const isBrandOnlyStep = sectionView === 'brand';
+  const isSupplyChainOnlyStep = sectionView === 'form';
   const showCustomBrandNameField =
     useBrandNameTextInput && editing && (!selectedBrand || !catalogBrandSelected);
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave;
-  const showEntryRemove = canRemove && editing && showFormDetailsSection && allowEntryRemove;
-  const showHeader = sectionView === 'brand' ? totalEntries > 0 : !(sectionView === 'brand' && forceExpanded && !allowEntryManagement);
+  const showEntryRemove = canRemove && editing && allowEntryRemove && isBrandOnlyStep;
+  const showHeader =
+    sectionView === 'brand'
+      ? totalEntries > 0
+      : !(sectionView === 'brand' && forceExpanded && !allowEntryManagement);
 
   const handleBrandNameInput = (nextBrand) => {
     onUpdate('brands', sanitizeCustomBrandInput(nextBrand));
@@ -229,21 +234,30 @@ const CompanyInfoEntryCard = ({
       {showHeader ? <header className="chain-entry-header">
         <div className="chain-entry-header__main">
           <span className="chain-entry-header__eyebrow">
-            Entry {entryIndex} of {totalEntries}
+            {isBrandOnlyStep
+              ? `Brand ${entryIndex} of ${totalEntries}`
+              : isSupplyChainOnlyStep
+                ? `Supply chain ${entryIndex} of ${totalEntries}`
+                : `Entry ${entryIndex} of ${totalEntries}`}
           </span>
           <div className="chain-entry-header__chips">
-            <span className={`chain-chip ${roleLabel ? 'chain-chip--role' : 'chain-chip--muted'}`}>
-              {roleLabel || 'Role pending'}
-            </span>
+            {!isBrandOnlyStep ? (
+              <span className={`chain-chip ${roleLabel ? 'chain-chip--role' : 'chain-chip--muted'}`}>
+                {roleLabel || 'Role pending'}
+              </span>
+            ) : null}
             <span className={`chain-chip ${selectedBrand ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
               {selectedBrand || 'Brand pending'}
             </span>
-            <span className={`chain-chip ${brandDocUrls.length > 0 ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
-              {brandDocUrls.length > 0 ? `Brand docs: ${brandDocUrls.length}` : 'Brand docs: optional'}
-            </span>
-            <span className={`chain-chip ${roleDocUrls.length > 0 ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
-              {roleDocUrls.length > 0 ? `Role docs: ${roleDocUrls.length}` : 'Role docs pending'}
-            </span>
+            {isBrandOnlyStep ? (
+              <span className={`chain-chip ${brandDocUrls.length > 0 ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
+                {brandDocUrls.length > 0 ? `Brand docs: ${brandDocUrls.length}` : 'Brand docs: optional'}
+              </span>
+            ) : (
+              <span className={`chain-chip ${roleDocUrls.length > 0 ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
+                {roleDocUrls.length > 0 ? `Role docs: ${roleDocUrls.length}` : 'Role docs pending'}
+              </span>
+            )}
           </div>
         </div>
         <div className="chain-entry-header__actions">
@@ -301,7 +315,7 @@ const CompanyInfoEntryCard = ({
                 {useBrandNameTextInput ? (
                   <div className="chain-field chain-field--full">
                     <label className="chain-field__label" htmlFor={`brand-select-${entry.id}`}>
-                      Select brand
+                      {isBrandOnlyStep ? 'Approved brand' : 'Select brand'}
                       <RequiredMark />
                     </label>
                     <BrandSelect
@@ -324,6 +338,12 @@ const CompanyInfoEntryCard = ({
                           : selectedBrand
                             ? `Brand "${selectedBrand}" will be used for this registration. Choose your supply-chain role below.`
                             : 'Pick a brand from the list — your role options appear in this same form.'}
+                      </p>
+                    ) : isBrandOnlyStep ? (
+                      <p className="chain-field__sublabel">
+                        {selectedBrand
+                          ? `"${selectedBrand}" will appear automatically in Step 2 for supply-chain role selection.`
+                          : 'Pick a brand here. Step 2 will show a supply-chain role form with this brand filled in.'}
                       </p>
                     ) : null}
                   </div>
@@ -369,7 +389,7 @@ const CompanyInfoEntryCard = ({
                   </p>
                 ) : null}
               </div>
-              {!isUnifiedRegistration ? (
+              {!isUnifiedRegistration && !isBrandOnlyStep ? (
               <div className="chain-brand-approval-grid">
                 <div className="chain-field">
                   <label className="chain-field__label">Status</label>
@@ -393,6 +413,28 @@ const CompanyInfoEntryCard = ({
                   />
                 </div>
               </div>
+              ) : isBrandOnlyStep ? (
+              <div className="chain-brand-approval-grid chain-brand-approval-grid--brand-step">
+                <div className="chain-field">
+                  <label className="chain-field__label">Brand status</label>
+                  <div className={`chain-status-card chain-status-card--${statusTone}`}>
+                    <strong>{statusLabel}</strong>
+                    {hasBrandValue ? <span>{resolvedBrandName}</span> : null}
+                  </div>
+                </div>
+                <div className="chain-field">
+                  <label className="chain-field__label">Brand documents (optional)</label>
+                  <BrandAuthorizationDocuments
+                    entry={entry}
+                    editing={editing}
+                    uploading={uploadingBrandDocsForThisEntry}
+                    removingUrl={removingBrandDocumentUrl}
+                    onUpload={(files) => onBrandDocumentUpload?.(entry.id, files)}
+                    onRemove={(url) => onBrandDocumentRemove?.(entry.id, url)}
+                    resolveUrls={resolveBrandApprovalDocumentUrls}
+                  />
+                </div>
+              </div>
               ) : null}
             </div>
           </section>
@@ -401,16 +443,39 @@ const CompanyInfoEntryCard = ({
         ) : null}
 
         {showFormDetailsSection ? (
-        <div className={`chain-entry-form-block${isUnifiedRegistration ? ' chain-entry-form-block--unified' : ''}`}>
-          {!isUnifiedRegistration ? (
-          <h3 className="chain-entry-block-title">Your supply-chain role</h3>
-          ) : null}
+        <div className={`chain-entry-form-block${isUnifiedRegistration ? ' chain-entry-form-block--unified' : ''}${isSupplyChainOnlyStep ? ' chain-entry-form-block--supply-chain-step' : ''}`}>
+          <h3 className="chain-entry-block-title">
+            {isSupplyChainOnlyStep
+              ? `Supply-chain role for ${resolvedBrandName || 'your brand'}`
+              : 'Your supply-chain role'}
+          </h3>
           {hasBrandValue ? (
             <div className="chain-form-brand-summary">
+              {isSupplyChainOnlyStep ? (
+                <div className="chain-field chain-field--full">
+                  <label className="chain-field__label" htmlFor={`brand-readonly-${entry.id}`}>
+                    Brand (filled from Step 1)
+                  </label>
+                  <input
+                    id={`brand-readonly-${entry.id}`}
+                    type="text"
+                    className="chain-field__control chain-field__control--readonly"
+                    value={resolvedBrandName}
+                    readOnly
+                    disabled
+                    aria-readonly="true"
+                  />
+                  <p className="chain-field__sublabel">
+                    This is the brand you selected above. Pick your position in the supply chain below.
+                  </p>
+                </div>
+              ) : null}
+              {!isSupplyChainOnlyStep ? (
               <div className={`chain-status-card chain-status-card--${statusTone}`}>
                 <strong>{statusLabel}</strong>
                 <span>{resolvedBrandName}</span>
               </div>
+              ) : null}
               {roleOptionsMessage ? (
                 <p className="chain-callout chain-callout--warning">{roleOptionsMessage}</p>
               ) : adminChainStatusText ? (
@@ -419,17 +484,21 @@ const CompanyInfoEntryCard = ({
             </div>
           ) : (
             <p className="chain-callout chain-callout--warning">
-              {isUnifiedRegistration
-                ? 'Select a brand in the dropdown above. Your supply-chain role options will appear here automatically.'
-                : 'Select a brand first. Supply-chain role options appear here once the brand is admin-approved and the supply chain is defined.'}
+              {isSupplyChainOnlyStep
+                ? 'Brand missing. Go back to Step 1 and select a brand first.'
+                : isUnifiedRegistration
+                  ? 'Select a brand in the dropdown above. Your supply-chain role options will appear here automatically.'
+                  : 'Select a brand first. Supply-chain role options appear here once the brand is admin-approved and the supply chain is defined.'}
             </p>
           )}
           <section className="chain-section">
-            <h4 className="chain-section__title">Supply-chain role</h4>
+            <h4 className="chain-section__title">
+              {isSupplyChainOnlyStep ? 'Your position in supply chain' : 'Supply-chain role'}
+            </h4>
             <div className="chain-section__panel">
               <div className="chain-field chain-field--full">
                 <label className="chain-field__label" htmlFor={`role-${entry.id}`}>
-                  Supply-chain role
+                  {isSupplyChainOnlyStep ? 'Select your position' : 'Supply-chain role'}
                   {adminChainReady ? <RequiredMark /> : null}
                 </label>
                 <select
@@ -615,32 +684,23 @@ export default function SupplierSupplyChainEntriesEditor({
     selectionMode === 'dropdown'
       ? indexedEntries.filter((item) => item.entry.id === resolvedSelectedEntryId)
       : indexedEntries;
-  const compactSignature = JSON.stringify(
-    displayEntries.map((entry) => ({
-      id: entry.id,
-      completed: isEntryCompletedForCompact(entry)
-    }))
-  );
 
   useEffect(() => {
     setExpandedEntryIds((prev) => {
-      if (sectionView === 'form' || sectionView === 'brand' || sectionView === 'all') {
-        return displayEntries.map((entry) => entry.id);
-      }
-      const prevSet = new Set(prev);
-      const nextExpanded = [];
+      const validIds = new Set(displayEntries.map((entry) => entry.id));
+      const kept = prev.filter((id) => validIds.has(id));
+      const keptSet = new Set(kept);
+      const nextExpanded = [...kept];
+
       for (const entry of displayEntries) {
-        if (prevSet.has(entry.id)) {
-          nextExpanded.push(entry.id);
-          continue;
-        }
-        if (!isEntryCompletedForCompact(entry)) {
+        if (!keptSet.has(entry.id)) {
           nextExpanded.push(entry.id);
         }
       }
+
       return nextExpanded;
     });
-  }, [compactSignature, sectionView, entryIdsSignature]);
+  }, [entryIdsSignature, sectionView]);
 
   const entryBrandSignature = JSON.stringify(
     displayEntries.map((entry) => ({
@@ -650,7 +710,7 @@ export default function SupplierSupplyChainEntriesEditor({
   );
 
   useEffect(() => {
-    if (!editing) return;
+    if (!editing || sectionView === 'brand') return;
     let isCancelled = false;
 
     const loadRoleOptions = async () => {
@@ -724,7 +784,7 @@ export default function SupplierSupplyChainEntriesEditor({
     return () => {
       isCancelled = true;
     };
-  }, [editing, entryBrandSignature]);
+  }, [editing, entryBrandSignature, sectionView]);
 
   const addCompanyInfoEntry = () => {
     const currentEntries = getDisplayEntries();
@@ -762,6 +822,8 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const updateCompanyInfoEntry = (entryId, field, value) => {
+    if (field === 'brands' && sectionView === 'form') return;
+
     const nextValue = field === 'brands' ? normalizeSingleBrand(value) : value;
     const currentEntries = getDisplayEntries();
 
@@ -944,46 +1006,43 @@ export default function SupplierSupplyChainEntriesEditor({
       className={`supplier-select-yourself-editor supplier-select-yourself-editor--${sectionView} supplier-select-yourself-editor--${selectionMode}`}
     >
       <div className="chain-entries">
-        {isBrandStepPicker && activeEntryForBrandPicker ? (
-          <div className="chain-entry-selector">
+        {isBrandStepPicker && displayEntries.length > 0 ? (
+          <div className="chain-entry-selector chain-entry-selector--brand-step">
             <label className="chain-field__label" htmlFor={`entry-selector-${sectionView}`}>
               Select brand
             </label>
-            <BrandSelect
+            <select
               id={`entry-selector-${sectionView}`}
-              name={`entry-selector-${sectionView}`}
-              value={activeEntryBrandValue}
-              onChange={(nextBrand) =>
-                updateCompanyInfoEntry(activeEntryForBrandPicker.id, 'brands', nextBrand)
-              }
+              className="chain-field__control"
+              value={resolvedSelectedEntryId}
+              onChange={(e) => setSelectedEntryId(e.target.value)}
               disabled={!editing}
-              required={editing}
-              allowOther
-              source="catalog"
-              dropdownOnly
-              excludeBrands={reservedBrandsForEntry(displayEntries, activeEntryForBrandPicker.id)}
-              className="chain-brand-select"
-            />
-            {displayEntries.length > 1 ? (
-              <div className="chain-entry-brand-chips" role="list" aria-label="Your brand entries">
-                {displayEntries.map((entry, idx) => {
-                  const brandName = String(entry?.brands || '').trim() || `Entry ${idx + 1}`;
-                  const isActive = entry.id === resolvedSelectedEntryId;
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      role="listitem"
-                      className={`chain-chip chain-chip--brand chain-entry-brand-chip${isActive ? ' chain-entry-brand-chip--active' : ''}`}
-                      onClick={() => setSelectedEntryId(entry.id)}
-                      disabled={!editing}
-                      aria-pressed={isActive}
-                    >
-                      {brandName}
-                    </button>
-                  );
-                })}
-              </div>
+            >
+              {displayEntries.map((entry, idx) => {
+                const brandName = String(entry?.brands || '').trim() || `New brand ${idx + 1}`;
+                return (
+                  <option key={entry.id} value={entry.id}>
+                    {brandName}
+                  </option>
+                );
+              })}
+            </select>
+            <p className="chain-field__sublabel">
+              Pick a brand to view its status and documents here. The same brand is filled automatically in Step 2.
+            </p>
+            {displayEntries.length > 1 && resolvedSelectedEntryId ? (
+              <button
+                type="button"
+                className="chain-entry-selector__remove"
+                onClick={() =>
+                  onRemoveEntry
+                    ? onRemoveEntry(resolvedSelectedEntryId)
+                    : removeCompanyInfoEntry(resolvedSelectedEntryId)
+                }
+                disabled={!editing}
+              >
+                Remove this brand
+              </button>
             ) : null}
           </div>
         ) : null}
@@ -1076,8 +1135,8 @@ export default function SupplierSupplyChainEntriesEditor({
             brandMeta={roleUiState.brandMeta || null}
             sectionView={sectionView}
             allowEntryManagement={allowEntryManagement}
-            forceExpanded={selectionMode === 'dropdown'}
-            expanded={sectionView === 'form' || sectionView === 'brand' || sectionView === 'all' ? true : expanded}
+            forceExpanded={false}
+            expanded={expanded}
             onSaveEntry={onSaveEntry}
             savingThisEntry={savingEntryId === entry.id}
             allowEntrySave={allowEntryManagement || !!onSaveEntry}
@@ -1100,12 +1159,12 @@ export default function SupplierSupplyChainEntriesEditor({
         <div className="chain-add-entry">
           <p className="chain-add-entry__hint">
             {sectionView === 'brand' || sectionView === 'all'
-              ? 'Dealing with another brand? Add a separate registration — each brand can have only one supply-chain role.'
+              ? 'Add another brand in Step 1'
               : 'Need another role or brand? Add a separate entry below.'}
           </p>
           <button type="button" className="chain-add-entry__btn" onClick={addCompanyInfoEntry}>
             <Plus size={16} />
-            {sectionView === 'brand' || sectionView === 'all' ? 'Add another brand registration' : 'Add another entry'}
+            {sectionView === 'brand' || sectionView === 'all' ? 'Add another brand' : 'Add another entry'}
           </button>
         </div>
       ) : null}
