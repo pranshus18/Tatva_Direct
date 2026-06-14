@@ -211,6 +211,9 @@ const CompanyInfoEntryCard = ({
   const brandApprovalReadyForRole = hasBrandValue && brandStatus === 'approved' && chainDefined;
   const roleSelectionEnabled =
     editing && brandApprovalReadyForRole && !roleOptionsLoading && availableRoleOptions.length > 0;
+  const isUnifiedRegistration = sectionView === 'all';
+  const showCustomBrandNameField =
+    useBrandNameTextInput && editing && (!selectedBrand || !catalogBrandSelected);
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave;
@@ -314,8 +317,18 @@ const CompanyInfoEntryCard = ({
                       excludeBrands={excludeBrands}
                       className="chain-brand-select"
                     />
+                    {isUnifiedRegistration ? (
+                      <p className="chain-field__sublabel">
+                        {catalogBrandSelected
+                          ? `Selected: ${selectedBrand}. Choose your supply-chain role below.`
+                          : selectedBrand
+                            ? `Brand "${selectedBrand}" will be used for this registration. Choose your supply-chain role below.`
+                            : 'Pick a brand from the list — your role options appear in this same form.'}
+                      </p>
+                    ) : null}
                   </div>
                 ) : null}
+                {showCustomBrandNameField ? (
                 <div className="chain-field chain-field--full">
                   <label className="chain-field__label" htmlFor={`brand-name-${entry.id}`}>
                     Brand name
@@ -328,13 +341,7 @@ const CompanyInfoEntryCard = ({
                     value={selectedBrand}
                     onChange={(e) => handleBrandNameInput(e.target.value)}
                     disabled={!brandNameEditable}
-                    placeholder={
-                      useBrandNameTextInput && !catalogBrandSelected
-                        ? 'Enter your brand name'
-                        : catalogBrandSelected
-                          ? 'Filled from selected brand above'
-                          : 'Select a brand above or choose Other to type here'
-                    }
+                    placeholder="Enter your brand name for admin approval"
                     required={editing}
                     aria-required="true"
                     aria-invalid={duplicateBrandMessage ? 'true' : undefined}
@@ -344,15 +351,25 @@ const CompanyInfoEntryCard = ({
                       {duplicateBrandMessage}
                     </p>
                   ) : null}
-                  {useBrandNameTextInput ? (
-                    <p className="chain-field__sublabel">
-                      {catalogBrandSelected
-                        ? 'This brand is from the admin-approved list. Choose Other brand above to enter a new name.'
-                        : 'Type the brand name here when requesting admin approval for a brand not in the list.'}
-                    </p>
-                  ) : null}
+                  <p className="chain-field__sublabel">
+                    Type the brand name when requesting admin approval for a brand not in the list.
+                  </p>
                 </div>
+                ) : catalogBrandSelected && isUnifiedRegistration ? (
+                  <div className="chain-field chain-field--full">
+                    <span className="chain-field__label">Brand for this registration</span>
+                    <div className="chain-selected-brand-pill" aria-live="polite">
+                      {selectedBrand}
+                    </div>
+                  </div>
+                ) : null}
+                {duplicateBrandMessage && !showCustomBrandNameField ? (
+                  <p className="chain-field__error chain-field__error--full" role="alert">
+                    {duplicateBrandMessage}
+                  </p>
+                ) : null}
               </div>
+              {!isUnifiedRegistration ? (
               <div className="chain-brand-approval-grid">
                 <div className="chain-field">
                   <label className="chain-field__label">Status</label>
@@ -376,6 +393,7 @@ const CompanyInfoEntryCard = ({
                   />
                 </div>
               </div>
+              ) : null}
             </div>
           </section>
 
@@ -383,8 +401,10 @@ const CompanyInfoEntryCard = ({
         ) : null}
 
         {showFormDetailsSection ? (
-        <div className="chain-entry-form-block">
+        <div className={`chain-entry-form-block${isUnifiedRegistration ? ' chain-entry-form-block--unified' : ''}`}>
+          {!isUnifiedRegistration ? (
           <h3 className="chain-entry-block-title">Your supply-chain role</h3>
+          ) : null}
           {hasBrandValue ? (
             <div className="chain-form-brand-summary">
               <div className={`chain-status-card chain-status-card--${statusTone}`}>
@@ -399,8 +419,9 @@ const CompanyInfoEntryCard = ({
             </div>
           ) : (
             <p className="chain-callout chain-callout--warning">
-              Add and save your brand in Step 1 first. Supply-chain role options appear here after the brand is
-              admin-approved and the supply chain is defined.
+              {isUnifiedRegistration
+                ? 'Select a brand in the dropdown above. Your supply-chain role options will appear here automatically.'
+                : 'Select a brand first. Supply-chain role options appear here once the brand is admin-approved and the supply chain is defined.'}
             </p>
           )}
           <section className="chain-section">
@@ -788,7 +809,17 @@ export default function SupplierSupplyChainEntriesEditor({
       setProfile(syncProfileFromEntries(profile, nextEntries));
       return;
     }
-    const entries = currentEntries.map((e) => (e.id === entryId ? { ...e, [field]: nextValue } : e));
+    const entries = currentEntries.map((e) => {
+      if (e.id !== entryId) return e;
+      const updated = { ...e, [field]: nextValue };
+      if (field === 'brands' && normalizeSingleBrand(nextValue)) {
+        updated.supplyChainRegistrationStarted = true;
+      }
+      if (field === 'role' && String(nextValue || '').trim()) {
+        updated.supplyChainRegistrationStarted = true;
+      }
+      return updated;
+    });
     setProfile(syncProfileFromEntries(profile, entries));
   };
 

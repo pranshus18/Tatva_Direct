@@ -296,6 +296,32 @@
   color: #dc2626;
 }
 
+.supplier-select-yourself-editor .chain-field__error--full {
+  grid-column: 1 / -1;
+}
+
+.supplier-select-yourself-editor .chain-selected-brand-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.55rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid #c7d2fe;
+  background: #eef2ff;
+  color: #312e81;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.supplier-select-yourself-editor .chain-entry-form-block--unified {
+  margin-top: 0.35rem;
+  padding-top: 0;
+  border-top: none;
+}
+
+.supplier-select-yourself-editor .chain-entry-approval-block + .chain-entry-form-block--unified {
+  margin-top: 0.5rem;
+}
+
 .supplier-select-yourself-editor .chain-field__control,
 .supplier-select-yourself-editor .chain-field select,
 .supplier-select-yourself-editor .chain-field input,

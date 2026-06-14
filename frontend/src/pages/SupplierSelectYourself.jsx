@@ -428,9 +428,8 @@ export default function SupplierSelectYourself() {
         <div className="profile-section supplier-select-section supplier-select-section--unified">
           <h2>Brand &amp; supply-chain role registrations</h2>
           <p className="supplier-select-section__intro">
-            Each card below is one brand. Select the brand from the admin-approved dropdown, choose your supply-chain
-            role, upload documents, then save that registration. Use <strong>Add another brand registration</strong> for
-            more brands — each brand can have only one supply-chain role.
+            Pick a brand from the dropdown — it fills this form automatically. Then choose your supply-chain role,
+            upload documents, and save. Use <strong>Add another brand registration</strong> for more brands.
           </p>
 
           <SupplierSupplyChainEntriesEditor
