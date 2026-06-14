@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
 import BrandSelect from './BrandSelect';
+import { useSupplierBrands } from '../hooks/useSupplierBrands';
 import { validateCompanyInfoEntriesList } from '../utils/supplierChainEntryValidation';
 import {
   appendAuthorizationCertificateUrl,
@@ -132,9 +133,15 @@ const CompanyInfoEntryCard = ({
   onSaveEntry = null,
   savingThisEntry = false,
   allowEntrySave = false,
-  allowEntryRemove = false
+  allowEntryRemove = false,
+  catalogBrandNames = [],
+  useBrandNameTextInput = false
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
+  const catalogBrandSelected =
+    !!selectedBrand &&
+    catalogBrandNames.some((name) => name.toLowerCase() === selectedBrand.toLowerCase());
+  const brandNameEditable = editing && (!useBrandNameTextInput || !catalogBrandSelected);
   const roleLabel = SUPPLY_CHAIN_ROLE_OPTIONS.find((o) => o.value === entry.role)?.label || null;
   const brandDocUrls = resolveBrandApprovalDocumentUrls(entry);
   const roleDocUrls = resolveAuthorizationCertificateUrls(entry);
@@ -255,31 +262,30 @@ const CompanyInfoEntryCard = ({
                     Brand name
                     <RequiredMark />
                   </label>
-                  {showBrandApprovalSection && sectionView === 'brand' ? (
-                    <BrandSelect
-                      id={`brand-name-${entry.id}`}
-                      name={`brand-name-${entry.id}`}
-                      value={selectedBrand}
-                      onChange={handleBrandNameInput}
-                      disabled={!editing}
-                      required={editing}
-                      allowOther
-                      source="catalog"
-                      className="chain-brand-select"
-                    />
-                  ) : (
-                    <input
-                      id={`brand-name-${entry.id}`}
-                      type="text"
-                      className="chain-field__control"
-                      value={selectedBrand}
-                      onChange={(e) => handleBrandNameInput(e.target.value)}
-                      disabled={!editing}
-                      placeholder="Enter one brand name"
-                      required={editing}
-                      aria-required="true"
-                    />
-                  )}
+                  <input
+                    id={`brand-name-${entry.id}`}
+                    type="text"
+                    className="chain-field__control"
+                    value={selectedBrand}
+                    onChange={(e) => handleBrandNameInput(e.target.value)}
+                    disabled={!brandNameEditable}
+                    placeholder={
+                      useBrandNameTextInput && !catalogBrandSelected
+                        ? 'Enter your brand name'
+                        : catalogBrandSelected
+                          ? 'Filled from selected brand above'
+                          : 'Select a brand above or choose Other to type here'
+                    }
+                    required={editing}
+                    aria-required="true"
+                  />
+                  {useBrandNameTextInput ? (
+                    <p className="chain-field__sublabel">
+                      {catalogBrandSelected
+                        ? 'This brand is from the admin-approved list. Choose Other brand above to enter a new name.'
+                        : 'Type the brand name here when requesting admin approval for a brand not in the list.'}
+                    </p>
+                  ) : null}
                 </div>
               </div>
               <div className="chain-brand-approval-grid">
@@ -436,6 +442,10 @@ export default function SupplierSupplyChainEntriesEditor({
   const [entryRoleOptions, setEntryRoleOptions] = useState({});
   const [expandedEntryIds, setExpandedEntryIds] = useState([]);
   const [selectedEntryId, setSelectedEntryId] = useState('');
+  const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
+  const { brandNames: catalogBrandNames } = useSupplierBrands({
+    source: isBrandStepPicker ? 'catalog' : 'profile'
+  });
 
   const getDisplayEntries = () => {
     const entries = profile?.companyInfoEntries;
@@ -820,12 +830,58 @@ export default function SupplierSupplyChainEntriesEditor({
     }
   };
 
+  const activeEntryForBrandPicker = displayEntries.find((entry) => entry.id === resolvedSelectedEntryId) || null;
+  const activeEntryBrandValue = normalizeSingleBrand(activeEntryForBrandPicker?.brands);
+
   return (
     <div
       className={`supplier-select-yourself-editor supplier-select-yourself-editor--${sectionView} supplier-select-yourself-editor--${selectionMode}`}
     >
       <div className="chain-entries">
-        {selectionMode === 'dropdown' && displayEntries.length > 0 ? (
+        {isBrandStepPicker && activeEntryForBrandPicker ? (
+          <div className="chain-entry-selector">
+            <label className="chain-field__label" htmlFor={`entry-selector-${sectionView}`}>
+              Select brand
+            </label>
+            <BrandSelect
+              id={`entry-selector-${sectionView}`}
+              name={`entry-selector-${sectionView}`}
+              value={activeEntryBrandValue}
+              onChange={(nextBrand) =>
+                updateCompanyInfoEntry(activeEntryForBrandPicker.id, 'brands', nextBrand)
+              }
+              disabled={!editing}
+              required={editing}
+              allowOther
+              source="catalog"
+              dropdownOnly
+              className="chain-brand-select"
+            />
+            {displayEntries.length > 1 ? (
+              <div className="chain-entry-brand-chips" role="list" aria-label="Your brand entries">
+                {displayEntries.map((entry, idx) => {
+                  const brandName = String(entry?.brands || '').trim() || `Entry ${idx + 1}`;
+                  const isActive = entry.id === resolvedSelectedEntryId;
+                  return (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      role="listitem"
+                      className={`chain-chip chain-chip--brand chain-entry-brand-chip${isActive ? ' chain-entry-brand-chip--active' : ''}`}
+                      onClick={() => setSelectedEntryId(entry.id)}
+                      disabled={!editing}
+                      aria-pressed={isActive}
+                    >
+                      {brandName}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {selectionMode === 'dropdown' && !isBrandStepPicker && displayEntries.length > 0 ? (
           <div className="chain-entry-selector">
             <label className="chain-field__label" htmlFor={`entry-selector-${sectionView}`}>
               Select brand ({displayEntries.length} in your profile)
@@ -919,6 +975,8 @@ export default function SupplierSupplyChainEntriesEditor({
             savingThisEntry={savingEntryId === entry.id}
             allowEntrySave={allowEntryManagement || !!onSaveEntry}
             allowEntryRemove={allowEntryManagement || !!onRemoveEntry}
+            catalogBrandNames={isBrandStepPicker ? catalogBrandNames : []}
+            useBrandNameTextInput={isBrandStepPicker}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]

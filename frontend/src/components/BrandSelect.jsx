@@ -2,7 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
 import './BrandSelect.css';
 
-const OTHER_VALUE = '__other__';
+export const BRAND_SELECT_OTHER_VALUE = '__other__';
+const OTHER_VALUE = BRAND_SELECT_OTHER_VALUE;
 
 function collapseRepeatedLetters(value) {
   return String(value || '').replace(/(.)\1+/g, '$1');
@@ -33,7 +34,9 @@ export default function BrandSelect({
   allowOther = true,
   hint,
   searchable = false,
-  source = 'profile'
+  source = 'profile',
+  dropdownOnly = false,
+  hideHint = false
 }) {
   const { brandNames, loading, error: loadError } = useSupplierBrands({ source });
 
@@ -47,31 +50,42 @@ export default function BrandSelect({
     if (!normalizedValue) return '';
     return valueInList ? normalizedValue : allowOther ? OTHER_VALUE : '';
   });
+  const [otherMode, setOtherMode] = useState(() => allowOther && !!normalizedValue && !valueInList);
 
   useEffect(() => {
     if (!normalizedValue) {
+      if (otherMode) {
+        setSelectValue(OTHER_VALUE);
+        return;
+      }
       setSelectValue('');
       return;
     }
     const inList = brandNames.some((n) => n.toLowerCase() === normalizedValue.toLowerCase());
     if (inList) {
+      setOtherMode(false);
       const exact = brandNames.find((n) => n.toLowerCase() === normalizedValue.toLowerCase());
       setSelectValue(exact || normalizedValue);
     } else if (allowOther) {
+      setOtherMode(true);
       setSelectValue(OTHER_VALUE);
     } else {
+      setOtherMode(false);
       setSelectValue('');
     }
-  }, [normalizedValue, brandNames, allowOther]);
+  }, [normalizedValue, brandNames, allowOther, otherMode]);
 
   const handleSelectChange = (e) => {
     const next = e.target.value;
     setSelectValue(next);
     if (next === '') {
+      setOtherMode(false);
       onChange?.('');
     } else if (next === OTHER_VALUE) {
+      setOtherMode(true);
       onChange?.(normalizedValue && !valueInList ? normalizedValue : '');
     } else {
+      setOtherMode(false);
       onChange?.(next);
     }
   };
@@ -142,7 +156,7 @@ export default function BrandSelect({
         {allowOther ? <option value={OTHER_VALUE}>Other brand (request admin approval)</option> : null}
       </select>
 
-      {showOtherInput ? (
+      {showOtherInput && !dropdownOnly ? (
         <input
           type="text"
           id={id}
@@ -162,7 +176,7 @@ export default function BrandSelect({
         <p className="brand-select__hint brand-select__hint--error">{loadError}</p>
       ) : hint ? (
         <p className="brand-select__hint">{hint}</p>
-      ) : brandNames.length === 0 && !loading ? (
+      ) : hideHint ? null : brandNames.length === 0 && !loading ? (
         <p className="brand-select__hint">
           {source === 'catalog' ? (
             <>
