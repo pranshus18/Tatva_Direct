@@ -1,5 +1,6 @@
 import { supabase } from '../config/supabase.js';
 import { v4 as uuidv4 } from 'uuid';
+import { normalizeBrandKey } from './supplyChainSharedService.js';
 import {
   resolveBrandApprovalDocumentUrls,
   setBrandApprovalDocumentUrls,
@@ -155,10 +156,180 @@ export function buildEffectiveSupplierChainProfile(profile, pendingPayload) {
   };
 }
 
-/** Load saved profile merged with any pending chain submission. */
+function collapseRepeatedLetters(value) {
+  return String(value || '').replace(/(.)\1+/g, '$1');
+}
+
+function brandKeysForEntryMatch(label) {
+  const key = normalizeBrandKey(String(label || '').trim());
+  if (!key) return [];
+  return [key, collapseRepeatedLetters(key)];
+}
+
+function chainEntryMatchesBrand(entry, brandName) {
+  const label = String(entry?.brands || '').trim();
+  if (!label) return false;
+  const wantedKeys = brandKeysForEntryMatch(brandName);
+  if (wantedKeys.length === 0) return false;
+
+  const checkLabel = (value) => {
+    const entryKeys = brandKeysForEntryMatch(value);
+    return wantedKeys.some((wanted) => entryKeys.includes(wanted));
+  };
+
+  if (checkLabel(label)) return true;
+  return parseEntryBrandList(label).some((part) => checkLabel(part));
+}
+
+function createStubBrandChainEntry(brandName) {
+  return {
+    id: uuidv4(),
+    role: '',
+    brands: brandName,
+    gstin: '',
+    companyName: '',
+    ownershipDetails: '',
+    brandApprovalDocumentUrls: [],
+    brandApprovalDocumentUrl: '',
+    authorizationCertificateUrls: [],
+    authorizationCertificateUrl: ''
+  };
+}
+
+/** Brand names declared anywhere in saved profile, draft, or pending submission. */
+export function collectDeclaredBrandNamesFromProfiles(...profiles) {
+  const names = new Set();
+  const addName = (value) => {
+    const trimmed = String(value || '').trim();
+    if (trimmed) names.add(trimmed);
+  };
+
+  for (const profile of profiles) {
+    if (!profile || typeof profile !== 'object') continue;
+    parseEntryBrandList(profile.brands).forEach(addName);
+    for (const entry of normalizeCompanyInfoEntries(profile.companyInfoEntries || [])) {
+      parseEntryBrandList(entry?.brands).forEach(addName);
+    }
+    const draft = profile.chainProfileDraft;
+    if (draft && typeof draft === 'object') {
+      parseEntryBrandList(draft.brands).forEach(addName);
+      for (const entry of normalizeCompanyInfoEntries(draft.companyInfoEntries || [])) {
+        parseEntryBrandList(entry?.brands).forEach(addName);
+      }
+    }
+  }
+
+  return [...names];
+}
+
+/**
+ * Admin-approved brands for this supplier.
+ * Includes brands they requested plus any declared brand name that is globally approved.
+ */
+export async function fetchSupplierApprovedBrands(userId, profileContext = null) {
+  if (!userId) return [];
+  const byKey = new Map();
+
+  const addRows = (rows = []) => {
+    for (const row of rows) {
+      const name = String(row?.name || '').trim();
+      const key = normalizeBrandKey(row?.normalized_name || name);
+      if (!name || !key || String(row?.status || '').toLowerCase() !== 'approved') continue;
+      if (!byKey.has(key)) byKey.set(key, { name, normalized_name: key, status: 'approved' });
+    }
+  };
+
+  try {
+    const { data: requestedRows, error: requestedError } = await supabase
+      .from('brands')
+      .select('name, normalized_name, status')
+      .eq('requested_by', userId)
+      .eq('status', 'approved');
+    if (requestedError) throw requestedError;
+    addRows(requestedRows);
+
+    const declaredNames = collectDeclaredBrandNamesFromProfiles(profileContext);
+    const declaredKeys = [...new Set(declaredNames.map((name) => normalizeBrandKey(name)).filter(Boolean))];
+    if (declaredKeys.length > 0) {
+      const { data: declaredRows, error: declaredError } = await supabase
+        .from('brands')
+        .select('name, normalized_name, status')
+        .eq('status', 'approved')
+        .in('normalized_name', declaredKeys);
+      if (declaredError) throw declaredError;
+      addRows(declaredRows);
+    }
+
+    return [...byKey.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  } catch (e) {
+    console.error('[supplierChainProfile] fetchSupplierApprovedBrands:', e?.message || e);
+    return [];
+  }
+}
+
+/**
+ * Add stub chain entries for admin-approved brands missing from companyInfoEntries.
+ * Does not remove or overwrite existing entries.
+ */
+export function mergeApprovedBrandsIntoChainEntries(chainProfile, approvedBrandRows = []) {
+  const base = chainProfile || {};
+  const entries = [...normalizeCompanyInfoEntries(base.companyInfoEntries || [])];
+  const addedNames = [];
+
+  for (const row of approvedBrandRows) {
+    const name = String(row?.name || '').trim();
+    if (!name || String(row?.status || 'approved').toLowerCase() !== 'approved') continue;
+    if (entries.some((entry) => chainEntryMatchesBrand(entry, name))) continue;
+    if (addedNames.some((added) => chainEntryMatchesBrand({ brands: added }, name))) continue;
+    entries.push(createStubBrandChainEntry(name));
+    addedNames.push(name);
+  }
+
+  return {
+    ...base,
+    companyInfoEntries: entries,
+    brands: base.brands || entries[0]?.brands || ''
+  };
+}
+
+/** Persist admin-approved brands into saved supplier profile when new entries are needed. */
+export async function syncApprovedBrandsIntoUserProfile(userId, profile) {
+  const base = profile || {};
+  const approvedBrands = await fetchSupplierApprovedBrands(userId, base);
+  if (approvedBrands.length === 0) return base;
+
+  const savedChain = baselineChainFromProfile(base);
+  const syncedChain = mergeApprovedBrandsIntoChainEntries(savedChain, approvedBrands);
+  const entrySignature = (list) =>
+    JSON.stringify((list || []).map((entry) => ({ id: entry?.id || '', brands: entry?.brands || '' })));
+
+  if (entrySignature(savedChain.companyInfoEntries) === entrySignature(syncedChain.companyInfoEntries)) {
+    return base;
+  }
+
+  const updatedProfile = {
+    ...base,
+    companyInfoEntries: syncedChain.companyInfoEntries,
+    brands: syncedChain.brands || base.brands
+  };
+
+  try {
+    const { error } = await supabase.from('users').update({ profile: updatedProfile }).eq('id', userId);
+    if (error) throw error;
+  } catch (e) {
+    console.error('[supplierChainProfile] syncApprovedBrandsIntoUserProfile:', e?.message || e);
+  }
+
+  return updatedProfile;
+}
+
+/** Load saved profile merged with any pending chain submission and approved brands. */
 export async function loadEffectiveSupplierChainProfile(userId, profile) {
+  const syncedProfile = await syncApprovedBrandsIntoUserProfile(userId, profile);
   const pending = await fetchPendingChainRequest(userId);
-  return buildEffectiveSupplierChainProfile(profile, pending?.payload || null);
+  const effective = buildEffectiveSupplierChainProfile(syncedProfile, pending?.payload || null);
+  const approvedBrands = await fetchSupplierApprovedBrands(userId, syncedProfile);
+  return mergeApprovedBrandsIntoChainEntries(effective, approvedBrands);
 }
 
 export function baselineChainFromProfile(profile) {

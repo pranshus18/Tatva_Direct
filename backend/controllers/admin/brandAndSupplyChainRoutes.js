@@ -1,4 +1,7 @@
-import { normalizeCompanyInfoEntries } from '../../services/supplierChainProfileService.js';
+import {
+  normalizeCompanyInfoEntries,
+  syncApprovedBrandsIntoUserProfile
+} from '../../services/supplierChainProfileService.js';
 import { normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 import { insertNotification } from '../../repositories/notificationsRepository.js';
 import {
@@ -86,6 +89,21 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       if (error || !brand) {
         return res.status(404).json({ status: 'error', message: 'Brand request not found' });
+      }
+
+      if (brand.requested_by) {
+        try {
+          const { data: requester, error: requesterError } = await supabase
+            .from('users')
+            .select('profile')
+            .eq('id', brand.requested_by)
+            .maybeSingle();
+          if (!requesterError && requester) {
+            await syncApprovedBrandsIntoUserProfile(brand.requested_by, requester.profile || {});
+          }
+        } catch (syncError) {
+          console.error('Sync approved brand into supplier profile:', syncError);
+        }
       }
 
       res.json({ status: 'success', message: 'Brand approved', brand });

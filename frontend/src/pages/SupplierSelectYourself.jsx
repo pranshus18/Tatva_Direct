@@ -23,6 +23,54 @@ function chainEntryIdentity(entry = {}) {
   return `${role}|${brand}|${gstin}|${company}`;
 }
 
+function collapseRepeatedLetters(value) {
+  return String(value || '').replace(/(.)\1+/g, '$1');
+}
+
+function brandNamesMatch(a, b) {
+  const keyA = collapseRepeatedLetters(String(a || '').trim().toLowerCase());
+  const keyB = collapseRepeatedLetters(String(b || '').trim().toLowerCase());
+  return !!(keyA && keyB && keyA === keyB);
+}
+
+function genApprovedBrandEntryId(brandName) {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `approved-${String(brandName || '').trim().toLowerCase()}-${Date.now()}`;
+}
+
+/** Ensure every admin-approved brand has a visible Select yourself entry (role can stay empty). */
+function ensureApprovedBrandEntries(profile) {
+  if (!profile) return profile;
+  const approvedList = Array.isArray(profile.adminApprovedBrands) ? profile.adminApprovedBrands : [];
+  if (approvedList.length === 0) return profile;
+
+  const entries = Array.isArray(profile.companyInfoEntries)
+    ? profile.companyInfoEntries.map((entry) => ({ ...entry }))
+    : [];
+
+  for (const row of approvedList) {
+    const name = String(row?.name || '').trim();
+    if (!name) continue;
+    if (entries.some((entry) => brandNamesMatch(entry?.brands, name))) continue;
+    entries.push({
+      id: genApprovedBrandEntryId(name),
+      role: '',
+      brands: name,
+      gstin: '',
+      companyName: '',
+      ownershipDetails: '',
+      brandApprovalDocumentUrls: [],
+      brandApprovalDocumentUrl: '',
+      authorizationCertificateUrls: [],
+      authorizationCertificateUrl: '',
+      minimumOrderValue: ''
+    });
+  }
+
+  return { ...profile, companyInfoEntries: entries };
+}
+
 function mergeDisplayAndApprovedEntries(profile) {
   const displayEntries = Array.isArray(profile?.companyInfoEntries) ? profile.companyInfoEntries : [];
   const approvedEntries = Array.isArray(profile?.approvedChainProfile?.companyInfoEntries)
@@ -93,9 +141,19 @@ export default function SupplierSelectYourself() {
 
   const configuredBrands = useMemo(() => {
     const entries = resolveCompanyInfoEntriesForValidation(profile || {});
-    return entries
-      .map((entry) => String(entry?.brands || '').trim())
+    const fromEntries = entries.map((entry) => String(entry?.brands || '').trim()).filter(Boolean);
+    const fromApproved = (profile?.adminApprovedBrands || [])
+      .map((row) => String(row?.name || '').trim())
       .filter(Boolean);
+    const seen = new Set();
+    const merged = [];
+    for (const name of [...fromEntries, ...fromApproved]) {
+      const key = collapseRepeatedLetters(name.toLowerCase());
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(name);
+    }
+    return merged;
   }, [profile]);
 
   const applyProfileFromResponse = (profileData) => {
@@ -103,6 +161,7 @@ export default function SupplierSelectYourself() {
     const snapshot = cloneProfileSnapshot(profileData);
     if (snapshot) {
       snapshot.companyInfoEntries = mergeDisplayAndApprovedEntries(snapshot);
+      Object.assign(snapshot, ensureApprovedBrandEntries(snapshot));
     }
     setProfile(snapshot);
     setBaseline(cloneProfileSnapshot(snapshot));
@@ -388,6 +447,10 @@ export default function SupplierSelectYourself() {
         {configuredBrands.length > 0 ? (
           <div className="supplier-select-brands-summary" aria-label="Configured brands">
             <strong>Your brands ({configuredBrands.length})</strong>
+            <p className="supplier-select-brands-summary__hint">
+              Admin-approved brands appear here even when supply-chain setup is still pending. Complete Step 2 for each
+              brand once admin defines the chain.
+            </p>
             <div className="supplier-select-brands-summary__chips">
               {configuredBrands.map((brand) => (
                 <span key={brand} className="supplier-select-brands-summary__chip">
@@ -407,9 +470,9 @@ export default function SupplierSelectYourself() {
           <div className="supplier-select-alert supplier-select-alert--pending">
             <strong>Supply-chain profile pending admin approval</strong>
             <p>
-              You submitted changes to your role and/or brands. Until an admin approves them on the{' '}
-              <strong>Profile brand assignment</strong> page, the platform continues to use your previously approved
-              assignment for upstream matching and orders.
+              You submitted supply-chain role details for admin review. Your admin-approved brands remain visible above.
+              Until an admin approves the role assignment on the <strong>Profile brand assignment</strong> page, the
+              platform continues to use your previously approved assignment for upstream matching and orders.
               {profile.chainProfilePendingSubmittedAt
                 ? ` Submitted: ${new Date(profile.chainProfilePendingSubmittedAt).toLocaleString()}.`
                 : ''}

@@ -3,7 +3,10 @@ import {
   baselineChainFromProfile,
   fetchLatestChainRequest,
   fetchPendingChainRequest,
-  normalizeCompanyInfoEntries
+  fetchSupplierApprovedBrands,
+  mergeApprovedBrandsIntoChainEntries,
+  normalizeCompanyInfoEntries,
+  syncApprovedBrandsIntoUserProfile
 } from '../../services/supplierChainProfileService.js';
 import {
   SUPPLY_CHAIN_ROLES_IN_ORDER,
@@ -491,9 +494,19 @@ export async function createProfileResponse(user) {
   }
 
   if (user.user_type === 'supplier') {
-    const base = user.profile || {};
+    const base = await syncApprovedBrandsIntoUserProfile(user.id, user.profile || {});
     const pending = await fetchPendingChainRequest(user.id);
     const latestReq = await fetchLatestChainRequest(user.id);
+    const profileContext = {
+      ...base,
+      chainProfileDraft: base.chainProfileDraft,
+      companyInfoEntries: [
+        ...(base.companyInfoEntries || []),
+        ...(pending?.payload?.companyInfoEntries || []),
+        ...(base.chainProfileDraft?.companyInfoEntries || [])
+      ]
+    };
+    const approvedBrands = await fetchSupplierApprovedBrands(user.id, profileContext);
 
     const approvedChain = baselineChainFromProfile(base);
     const draftChain = {
@@ -505,15 +518,18 @@ export async function createProfileResponse(user) {
       !!draftChain.supplierRole ||
       !!String(draftChain.brands || '').trim() ||
       draftChain.companyInfoEntries.length > 0;
-    const displayChain = pending?.payload
-      ? {
-          supplierRole: String(pending.payload.supplierRole || '').trim(),
-          brands: typeof pending.payload.brands === 'string' ? pending.payload.brands : '',
-          companyInfoEntries: normalizeCompanyInfoEntries(pending.payload.companyInfoEntries || [])
-        }
-      : draftHasValues
-        ? draftChain
-        : approvedChain;
+    const displayChain = mergeApprovedBrandsIntoChainEntries(
+      pending?.payload
+        ? {
+            supplierRole: String(pending.payload.supplierRole || '').trim(),
+            brands: typeof pending.payload.brands === 'string' ? pending.payload.brands : '',
+            companyInfoEntries: normalizeCompanyInfoEntries(pending.payload.companyInfoEntries || [])
+          }
+        : draftHasValues
+          ? draftChain
+          : approvedChain,
+      approvedBrands
+    );
 
     const entries = displayChain.companyInfoEntries || [];
     const firstEntry = entries[0];
@@ -584,7 +600,12 @@ export async function createProfileResponse(user) {
           }
         : null,
       chainProfileLastRejection,
-      supplierPortalTheme
+      supplierPortalTheme,
+      adminApprovedBrands: approvedBrands.map((row) => ({
+        name: row.name,
+        normalizedName: row.normalized_name || normalizeBrandKey(row.name),
+        status: 'approved'
+      }))
     };
   }
 

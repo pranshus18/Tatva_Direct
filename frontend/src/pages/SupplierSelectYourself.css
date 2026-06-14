@@ -124,6 +124,13 @@
   font-size: 0.92rem;
 }
 
+.supplier-select-brands-summary__hint {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #047857;
+  line-height: 1.45;
+}
+
 .supplier-select-brands-summary__chips {
   display: flex;
   flex-wrap: wrap;
