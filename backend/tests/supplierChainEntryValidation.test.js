@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  hasSupplyChainRegistrationData,
   resolveCompanyInfoEntriesForValidation,
   supplierProfileIncludesChainDraft,
   validateCompanyInfoEntriesList
@@ -50,6 +51,34 @@ test('resolveCompanyInfoEntriesForValidation uses legacy row when entries array 
 
 test('supplierProfileIncludesChainDraft is false for empty chain payload', () => {
   assert.equal(supplierProfileIncludesChainDraft({ companyInfoEntries: [] }), false);
+});
+
+test('supplierProfileIncludesChainDraft ignores general profile-only fields', () => {
+  assert.equal(
+    supplierProfileIncludesChainDraft({
+      companyInfoEntries: [],
+      gstin: '29JVJPS2072B1ZA',
+      companyName: 'Acme Traders',
+      ownershipDetails: 'Pvt Ltd'
+    }),
+    false
+  );
+});
+
+test('supplierProfileIncludesChainDraft detects legacy supply-chain fields', () => {
+  assert.equal(
+    supplierProfileIncludesChainDraft({
+      companyInfoEntries: [],
+      supplierRole: 'dealer',
+      brands: 'Cement'
+    }),
+    true
+  );
+});
+
+test('hasSupplyChainRegistrationData detects in-progress entry rows', () => {
+  assert.equal(hasSupplyChainRegistrationData({ gstin: '22AAAAA0000A1Z5' }), true);
+  assert.equal(hasSupplyChainRegistrationData({}), false);
 });
 
 test('validateCompanyInfoEntriesList rejects multiple brands in one entry', () => {

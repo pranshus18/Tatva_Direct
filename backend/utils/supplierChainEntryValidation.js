@@ -1,4 +1,7 @@
-import { resolveAuthorizationCertificateUrls } from './authorizationCertificateUrls.js';
+import {
+  resolveAuthorizationCertificateUrls,
+  resolveBrandApprovalDocumentUrls
+} from './authorizationCertificateUrls.js';
 
 function parseBrandsListForValidation(brands) {
   if (brands == null || brands === '') return [];
@@ -93,19 +96,53 @@ export function validateSupplierChainProfileData(profileData) {
   return validateCompanyInfoEntriesList(entries);
 }
 
-/** True when the PUT body includes supply-chain / Select yourself fields. */
+/** True when an entry has started supply-chain registration (Select yourself). */
+export function hasSupplyChainRegistrationData(entry = {}) {
+  if (entry?.supplyChainRegistrationStarted === true) return true;
+  const role = String(entry?.role || '').trim();
+  const gstin = String(entry?.gstin || '').trim();
+  const companyName = String(entry?.companyName || '').trim();
+  const ownershipDetails = String(entry?.ownershipDetails || '').trim();
+  const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
+  const brandDocumentUrls = resolveBrandApprovalDocumentUrls(entry);
+  const mov = entry?.minimumOrderValue;
+  const hasMov = mov !== '' && mov !== null && mov !== undefined;
+  const brands = parseBrandsListForValidation(entry?.brands);
+  return !!(
+    brands.length > 0 ||
+    role ||
+    gstin ||
+    companyName ||
+    ownershipDetails ||
+    roleCertificateUrls.length > 0 ||
+    brandDocumentUrls.length > 0 ||
+    hasMov
+  );
+}
+
+/**
+ * True when the PUT body includes supply-chain / Select yourself fields.
+ * General profile fields (gstin, companyName, ownershipDetails at top level) alone do not count —
+ * those are edited on the Company Profile page without touching supply-chain setup.
+ */
 export function supplierProfileIncludesChainDraft(profileData) {
   if (!profileData) return false;
-  if (Array.isArray(profileData.companyInfoEntries) && profileData.companyInfoEntries.length > 0) {
+  if (profileData.saveAsDraft === true || profileData.saveBrandApprovalOnly === true) {
     return true;
   }
+
+  if (Array.isArray(profileData.companyInfoEntries) && profileData.companyInfoEntries.length > 0) {
+    return profileData.companyInfoEntries.some((entry) => hasSupplyChainRegistrationData(entry));
+  }
+
+  const authCertUrls = resolveAuthorizationCertificateUrls(profileData);
+  const brandDocUrls = resolveBrandApprovalDocumentUrls(profileData);
+
   return !!(
     String(profileData.supplierRole || '').trim() ||
-    String(profileData.brands || '').trim() ||
-    String(profileData.gstin || '').trim() ||
-    String(profileData.companyName || '').trim() ||
-    String(profileData.ownershipDetails || '').trim() ||
-    String(profileData.authorizationCertificateUrl || '').trim() ||
+    parseBrandsListForValidation(profileData.brands).length > 0 ||
+    authCertUrls.length > 0 ||
+    brandDocUrls.length > 0 ||
     (profileData.minimumOrderValue !== '' &&
       profileData.minimumOrderValue !== null &&
       profileData.minimumOrderValue !== undefined)
