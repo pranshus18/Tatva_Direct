@@ -1,5 +1,41 @@
 import { resolveAuthorizationCertificateUrls, resolveBrandApprovalDocumentUrls } from './authorizationCertificateUrls';
 
+export const SUPPLY_CHAIN_ROLE_LABELS = {
+  manufacturer: 'Manufacturer (MGF)',
+  stockist: 'Stockist',
+  regional_distributor: 'Regional Distributor',
+  local_distributor: 'Local Distributor',
+  dealer: 'Dealer',
+  retailer: 'Retailer'
+};
+
+export function formatSupplyChainRoleLabel(role) {
+  const key = String(role || '').trim();
+  if (!key) return 'Not set';
+  return SUPPLY_CHAIN_ROLE_LABELS[key] || key;
+}
+
+/** @param {import('./supplierChainEntryValidation').ChainEntry[]} entries */
+export function getSupplyChainAssignmentRows(entries = []) {
+  return (Array.isArray(entries) ? entries : [])
+    .map((entry, index) => {
+      const brand = String(entry?.brands || '').trim();
+      if (!brand) return null;
+      const role = String(entry?.role || '').trim();
+      const roleDocs = resolveAuthorizationCertificateUrls(entry);
+      return {
+        id: entry?.id || `entry-${index}`,
+        brand,
+        role,
+        roleLabel: formatSupplyChainRoleLabel(role),
+        hasRole: !!role,
+        hasRoleDocuments: roleDocs.length > 0,
+        registrationStarted: entry?.supplyChainRegistrationStarted === true || !!role || roleDocs.length > 0
+      };
+    })
+    .filter(Boolean);
+}
+
 /** All persisted companyInfoEntries — never collapse to a single legacy row when multiples exist. */
 export function getCompanyInfoEntriesForSave(profile) {
   const entries = profile?.companyInfoEntries;

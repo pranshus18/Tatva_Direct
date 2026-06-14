@@ -185,7 +185,7 @@ const CompanyInfoEntryCard = ({
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave;
   const showEntryRemove = canRemove && editing && showFormDetailsSection && allowEntryRemove;
-  const showHeader = !(sectionView === 'brand' && forceExpanded && !allowEntryManagement);
+  const showHeader = sectionView === 'brand' ? totalEntries > 0 : !(sectionView === 'brand' && forceExpanded && !allowEntryManagement);
 
   const handleBrandNameInput = (nextBrand) => {
     onUpdate('brands', sanitizeCustomBrandInput(nextBrand));
@@ -265,6 +265,26 @@ const CompanyInfoEntryCard = ({
           <section className="chain-section">
             <div className="chain-section__panel">
               <div className="chain-brand-grid">
+                {useBrandNameTextInput ? (
+                  <div className="chain-field chain-field--full">
+                    <label className="chain-field__label" htmlFor={`brand-select-${entry.id}`}>
+                      Select brand
+                      <RequiredMark />
+                    </label>
+                    <BrandSelect
+                      id={`brand-select-${entry.id}`}
+                      name={`brand-select-${entry.id}`}
+                      value={selectedBrand}
+                      onChange={handleBrandNameInput}
+                      disabled={!editing}
+                      required={editing}
+                      allowOther
+                      source="catalog"
+                      dropdownOnly
+                      className="chain-brand-select"
+                    />
+                  </div>
+                ) : null}
                 <div className="chain-field chain-field--full">
                   <label className="chain-field__label" htmlFor={`brand-name-${entry.id}`}>
                     Brand name
@@ -451,8 +471,9 @@ export default function SupplierSupplyChainEntriesEditor({
   const [expandedEntryIds, setExpandedEntryIds] = useState([]);
   const [selectedEntryId, setSelectedEntryId] = useState('');
   const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
+  const usesBrandCatalogFields = sectionView === 'brand';
   const { brandNames: catalogBrandNames } = useSupplierBrands({
-    source: isBrandStepPicker ? 'catalog' : 'profile'
+    source: usesBrandCatalogFields ? 'catalog' : 'profile'
   });
 
   const getDisplayEntries = () => {
@@ -544,6 +565,9 @@ export default function SupplierSupplyChainEntriesEditor({
 
   useEffect(() => {
     setExpandedEntryIds((prev) => {
+      if (sectionView === 'form' || sectionView === 'brand') {
+        return displayEntries.map((entry) => entry.id);
+      }
       const prevSet = new Set(prev);
       const nextExpanded = [];
       for (const entry of displayEntries) {
@@ -557,7 +581,7 @@ export default function SupplierSupplyChainEntriesEditor({
       }
       return nextExpanded;
     });
-  }, [compactSignature]);
+  }, [compactSignature, sectionView, entryIdsSignature]);
 
   const entryBrandSignature = JSON.stringify(
     displayEntries.map((entry) => ({
@@ -970,13 +994,13 @@ export default function SupplierSupplyChainEntriesEditor({
             sectionView={sectionView}
             allowEntryManagement={allowEntryManagement}
             forceExpanded={selectionMode === 'dropdown'}
-            expanded={expanded}
+            expanded={sectionView === 'form' || sectionView === 'brand' ? true : expanded}
             onSaveEntry={onSaveEntry}
             savingThisEntry={savingEntryId === entry.id}
             allowEntrySave={allowEntryManagement || !!onSaveEntry}
             allowEntryRemove={allowEntryManagement || !!onRemoveEntry}
-            catalogBrandNames={isBrandStepPicker ? catalogBrandNames : []}
-            useBrandNameTextInput={isBrandStepPicker}
+            catalogBrandNames={usesBrandCatalogFields ? catalogBrandNames : []}
+            useBrandNameTextInput={usesBrandCatalogFields}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]

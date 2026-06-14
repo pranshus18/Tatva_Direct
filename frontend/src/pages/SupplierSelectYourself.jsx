@@ -10,6 +10,7 @@ import {
 import {
   buildSupplierChainSavePayload,
   getCompanyInfoEntriesForSave,
+  getSupplyChainAssignmentRows,
   mergeFormStepProfile
 } from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
@@ -112,6 +113,11 @@ export default function SupplierSelectYourself() {
     if (!profile || !baseline) return false;
     return chainFormSignature(profile) !== chainFormSignature(baseline);
   }, [profile, baseline]);
+
+  const supplyChainAssignments = useMemo(
+    () => getSupplyChainAssignmentRows(getCompanyInfoEntriesForSave(profile || {})),
+    [profile]
+  );
 
   const adminApprovedBrandNames = useMemo(() => {
     return (profile?.adminApprovedBrands || [])
@@ -520,6 +526,57 @@ export default function SupplierSelectYourself() {
           </div>
         </div>
 
+        {supplyChainAssignments.length > 0 ? (
+          <div className="supplier-select-assignments" aria-label="Your supply chain by brand">
+            <strong>Your supply chain by brand ({supplyChainAssignments.length})</strong>
+            <p className="supplier-select-assignments__hint">
+              Each brand is a separate entry. You can hold a different supply-chain role for every brand you deal with.
+            </p>
+            <div className="supplier-select-assignments__table-wrap">
+              <table className="supplier-select-assignments__table">
+                <thead>
+                  <tr>
+                    <th scope="col">Brand</th>
+                    <th scope="col">Your role</th>
+                    <th scope="col">Registration</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {supplyChainAssignments.map((row) => (
+                    <tr key={row.id}>
+                      <td>{row.brand}</td>
+                      <td>
+                        <span
+                          className={`supplier-select-assignments__role${
+                            row.hasRole ? '' : ' supplier-select-assignments__role--pending'
+                          }`}
+                        >
+                          {row.roleLabel}
+                        </span>
+                      </td>
+                      <td>
+                        {row.hasRole && row.hasRoleDocuments ? (
+                          <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
+                            Ready to save
+                          </span>
+                        ) : row.registrationStarted || row.hasRole ? (
+                          <span className="supplier-select-assignments__status supplier-select-assignments__status--draft">
+                            In progress
+                          </span>
+                        ) : (
+                          <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
+                            Add in Step 2
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+
         {configuredBrands.length > 0 ? (
           <div className="supplier-select-brands-summary" aria-label="Configured brands">
             <strong>Your brands ({configuredBrands.length})</strong>
@@ -618,7 +675,7 @@ export default function SupplierSelectYourself() {
               setProfile={setProfile}
               editing
               sectionView="brand"
-              selectionMode="dropdown"
+              selectionMode="all"
               allowEntryManagement={false}
               showAddEntry
             />
@@ -693,6 +750,7 @@ export default function SupplierSelectYourself() {
               setProfile={(next) => setProfile(mergeFormStepProfile(profile, next))}
               editing
               sectionView="form"
+              selectionMode="all"
               allowEntryManagement={false}
               showAddEntry={false}
               onSaveEntry={handleSaveEntry}
