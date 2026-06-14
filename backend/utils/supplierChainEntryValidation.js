@@ -18,6 +18,49 @@ function parseBrandsListForValidation(brands) {
   ];
 }
 
+function collapseRepeatedLetters(value) {
+  return String(value || '').replace(/(.)\1+/g, '$1');
+}
+
+function brandKeyForDuplicateCheck(raw) {
+  const token = String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return collapseRepeatedLetters(token);
+}
+
+export function validateUniqueBrandsAcrossEntries(entries) {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return { ok: true };
+  }
+
+  const brandToEntryIndex = new Map();
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const brandList = parseBrandsListForValidation(entries[i]?.brands);
+    if (brandList.length === 0) continue;
+
+    for (const brandName of brandList) {
+      const brandKey = brandKeyForDuplicateCheck(brandName);
+      if (!brandKey) continue;
+
+      if (brandToEntryIndex.has(brandKey)) {
+        const duplicateEntryIndex = brandToEntryIndex.get(brandKey);
+        return {
+          ok: false,
+          message: `Entry ${i + 1}: "${brandName}" is already registered in Entry ${duplicateEntryIndex + 1}. Each brand can have only one supply-chain role.`
+        };
+      }
+      brandToEntryIndex.set(brandKey, i);
+    }
+  }
+
+  return { ok: true };
+}
+
 /** Mirrors supplier Select yourself editor (always at least one row when profile exists). */
 export function resolveCompanyInfoEntriesForValidation(profileData) {
   if (!profileData) return [];
@@ -86,6 +129,11 @@ export function validateCompanyInfoEntriesList(entries) {
         };
       }
     }
+  }
+
+  const uniqueBrands = validateUniqueBrandsAcrossEntries(entries);
+  if (!uniqueBrands.ok) {
+    return uniqueBrands;
   }
 
   return { ok: true };

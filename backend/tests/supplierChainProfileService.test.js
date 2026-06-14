@@ -97,6 +97,20 @@ test('mergeApprovedBrandsIntoChainEntries skips Phillips when Philips already pr
   assert.equal(brandNames[0], 'Phillips');
 });
 
+test('mergeChainEntriesForDisplay keeps separate brands and merges by id', async () => {
+  const { mergeChainEntriesForDisplay } = await import('../services/supplierChainProfileService.js');
+  const merged = mergeChainEntriesForDisplay(
+    [
+      { id: 'e1', role: 'dealer', brands: 'ACC', authorizationCertificateUrl: 'https://a.com/1.pdf' },
+      { id: 'e2', role: 'dealer', brands: 'UltraTech', authorizationCertificateUrl: 'https://a.com/2.pdf' }
+    ],
+    [{ id: 'e2', role: 'dealer', brands: 'UltraTech', minimumOrderValue: 5000 }]
+  );
+  assert.equal(merged.length, 2);
+  assert.equal(merged.find((e) => e.id === 'e1')?.brands, 'ACC');
+  assert.equal(merged.find((e) => e.id === 'e2')?.minimumOrderValue, 5000);
+});
+
 test('collectDeclaredBrandNamesFromProfiles gathers brands from saved, draft, and pending shapes', () => {
   const names = collectDeclaredBrandNamesFromProfiles(
     {

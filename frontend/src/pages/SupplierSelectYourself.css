@@ -69,7 +69,18 @@
   border-radius: 10px;
 }
 
-.supplier-select-flow-card {
+.supplier-select-page-intro {
+  margin: 0 0 1rem;
+  color: #475569;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  max-width: 52rem;
+}
+
+.supplier-select-section--unified h2 {
+  margin-bottom: 0.35rem;
+}
+
   display: flex;
   align-items: center;
   gap: 0.7rem;

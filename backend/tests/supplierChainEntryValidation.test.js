@@ -97,3 +97,30 @@ test('validateCompanyInfoEntriesList rejects multiple brands in one entry', () =
   assert.equal(result.ok, false);
   assert.match(result.message, /only one brand/i);
 });
+
+test('validateCompanyInfoEntriesList rejects duplicate brands across entries', () => {
+  const result = validateCompanyInfoEntriesList([
+    {
+      id: 'e1',
+      role: 'dealer',
+      brands: 'ACC',
+      gstin: '22AAAAA0000A1Z5',
+      companyName: 'Acme',
+      ownershipDetails: 'Pvt Ltd',
+      authorizationCertificateUrl: 'https://example.com/cert1.pdf',
+      minimumOrderValue: 1000
+    },
+    {
+      id: 'e2',
+      role: 'retailer',
+      brands: 'acc',
+      gstin: '22AAAAA0000A1Z6',
+      companyName: 'Acme 2',
+      ownershipDetails: 'Pvt Ltd',
+      authorizationCertificateUrl: 'https://example.com/cert2.pdf'
+    }
+  ]);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /already registered/i);
+  assert.match(result.message, /only one supply-chain role/i);
+});

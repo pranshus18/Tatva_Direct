@@ -36,6 +36,40 @@ export function getSupplyChainAssignmentRows(entries = []) {
     .filter(Boolean);
 }
 
+/** Union entries by id so loading profile never drops earlier brand rows. */
+export function mergeCompanyInfoEntriesById(...entryLists) {
+  const merged = [];
+  const indexById = new Map();
+
+  const upsert = (rawEntry) => {
+    if (!rawEntry || typeof rawEntry !== 'object') return;
+    const entry = { ...rawEntry };
+    const id = String(entry.id || '').trim();
+    if (id && indexById.has(id)) {
+      const idx = indexById.get(id);
+      merged[idx] = { ...merged[idx], ...entry };
+      return;
+    }
+    const idx = merged.length;
+    if (!entry.id) {
+      entry.id =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `entry-${Date.now()}-${idx}`;
+    }
+    merged.push(entry);
+    indexById.set(entry.id, idx);
+  };
+
+  for (const list of entryLists) {
+    for (const entry of Array.isArray(list) ? list : []) {
+      upsert(entry);
+    }
+  }
+
+  return merged;
+}
+
 /** All persisted companyInfoEntries — never collapse to a single legacy row when multiples exist. */
 export function getCompanyInfoEntriesForSave(profile) {
   const entries = profile?.companyInfoEntries;
@@ -65,6 +99,29 @@ export function getCompanyInfoEntriesForSave(profile) {
       brandApprovalDocumentUrl: profile?.brandApprovalDocumentUrl || '',
       authorizationCertificateUrl: profile?.authorizationCertificateUrl || '',
       minimumOrderValue: profile?.minimumOrderValue ?? ''
+    }
+  ];
+}
+
+export function ensureAtLeastOneCompanyInfoEntry(profile) {
+  const entries = getCompanyInfoEntriesForSave(profile);
+  if (entries.length > 0) return entries;
+  return [
+    {
+      id:
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `entry-${Date.now()}`,
+      role: '',
+      brands: '',
+      gstin: '',
+      companyName: '',
+      ownershipDetails: '',
+      brandApprovalDocumentUrls: [],
+      brandApprovalDocumentUrl: '',
+      authorizationCertificateUrls: [],
+      authorizationCertificateUrl: '',
+      minimumOrderValue: ''
     }
   ];
 }

@@ -2,16 +2,13 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { UserCheck, Save, RotateCcw } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainEntriesEditor';
-import {
-  filterSupplyChainFormEntries,
-  resolveCompanyInfoEntriesForValidation,
-  validateCompanyInfoEntriesList
-} from '../utils/supplierChainEntryValidation';
+import { validateCompanyInfoEntriesList, validateUniqueBrandsAcrossEntries } from '../utils/supplierChainEntryValidation';
 import {
   buildSupplierChainSavePayload,
+  ensureAtLeastOneCompanyInfoEntry,
   getCompanyInfoEntriesForSave,
   getSupplyChainAssignmentRows,
-  mergeFormStepProfile
+  mergeCompanyInfoEntriesById
 } from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
 import './Dashboard.css';
@@ -21,47 +18,8 @@ function cloneProfileSnapshot(profile) {
   return profile ? JSON.parse(JSON.stringify(profile)) : null;
 }
 
-function chainEntryIdentity(entry = {}) {
-  const role = String(entry?.role || '').trim().toLowerCase();
-  const brand = String(entry?.brands || '').trim().toLowerCase();
-  const gstin = String(entry?.gstin || '').trim().toLowerCase();
-  const company = String(entry?.companyName || '').trim().toLowerCase();
-  return `${role}|${brand}|${gstin}|${company}`;
-}
-
 function collapseRepeatedLetters(value) {
   return String(value || '').replace(/(.)\1+/g, '$1');
-}
-
-function brandNamesMatch(a, b) {
-  const keyA = collapseRepeatedLetters(String(a || '').trim().toLowerCase());
-  const keyB = collapseRepeatedLetters(String(b || '').trim().toLowerCase());
-  return !!(keyA && keyB && keyA === keyB);
-}
-
-function genApprovedBrandEntryId(brandName) {
-  return typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : `approved-${String(brandName || '').trim().toLowerCase()}-${Date.now()}`;
-}
-
-function mergeDisplayAndApprovedEntries(profile) {
-  const displayEntries = Array.isArray(profile?.companyInfoEntries) ? profile.companyInfoEntries : [];
-  const approvedEntries = Array.isArray(profile?.approvedChainProfile?.companyInfoEntries)
-    ? profile.approvedChainProfile.companyInfoEntries
-    : [];
-  if (approvedEntries.length === 0) return displayEntries;
-
-  const merged = [];
-  const seen = new Set();
-  for (const entry of [...displayEntries, ...approvedEntries]) {
-    if (!entry || typeof entry !== 'object') continue;
-    const key = chainEntryIdentity(entry);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push({ ...entry });
-  }
-  return merged;
 }
 
 /** Compare supply-chain form fields only (what this page edits). */
@@ -69,15 +27,6 @@ function chainFormSignature(profile) {
   if (!profile) return '';
   const entries = Array.isArray(profile.companyInfoEntries) ? profile.companyInfoEntries : [];
   return JSON.stringify({
-    supplierRole: profile.supplierRole || '',
-    brands: profile.brands || '',
-    companyName: profile.companyName || '',
-    gstin: profile.gstin || '',
-    brandApprovalDocumentUrl: profile.brandApprovalDocumentUrl || '',
-    brandApprovalDocumentUrls: profile.brandApprovalDocumentUrls || [],
-    authorizationCertificateUrl: profile.authorizationCertificateUrl || '',
-    authorizationCertificateUrls: profile.authorizationCertificateUrls || [],
-    minimumOrderValue: profile.minimumOrderValue ?? '',
     companyInfoEntries: entries.map((e) => ({
       id: e.id || '',
       role: e.role || '',
@@ -93,6 +42,20 @@ function chainFormSignature(profile) {
   });
 }
 
+function normalizeProfileForEditor(profileData) {
+  if (!profileData) return null;
+  const snapshot = cloneProfileSnapshot(profileData);
+  const mergedEntries = mergeCompanyInfoEntriesById(
+    snapshot.companyInfoEntries || [],
+    snapshot.approvedChainProfile?.companyInfoEntries || []
+  );
+  snapshot.companyInfoEntries = ensureAtLeastOneCompanyInfoEntry({
+    ...snapshot,
+    companyInfoEntries: mergedEntries
+  });
+  return snapshot;
+}
+
 /**
  * Supply-chain role & brands setup for suppliers. Linked from the sidebar below Returns.
  */
@@ -101,13 +64,10 @@ export default function SupplierSelectYourself() {
   const [baseline, setBaseline] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [savingBrandApproval, setSavingBrandApproval] = useState(false);
   const [savingEntryId, setSavingEntryId] = useState(null);
   const [discarding, setDiscarding] = useState(false);
   const [editorResetKey, setEditorResetKey] = useState(0);
   const [discountInsights, setDiscountInsights] = useState(null);
-  const [brandSectionExpanded, setBrandSectionExpanded] = useState(true);
-  const [registrationBrandPick, setRegistrationBrandPick] = useState('');
 
   const hasUnsavedChanges = useMemo(() => {
     if (!profile || !baseline) return false;
@@ -119,73 +79,9 @@ export default function SupplierSelectYourself() {
     [profile]
   );
 
-  const adminApprovedBrandNames = useMemo(() => {
-    return (profile?.adminApprovedBrands || [])
-      .map((row) => String(row?.name || '').trim())
-      .filter(Boolean);
-  }, [profile]);
-
-  const configuredBrands = useMemo(() => {
-    const entries = resolveCompanyInfoEntriesForValidation(profile || {});
-    const fromEntries = entries.map((entry) => String(entry?.brands || '').trim()).filter(Boolean);
-    const seen = new Set();
-    const merged = [];
-    for (const name of [...fromEntries, ...adminApprovedBrandNames]) {
-      const key = collapseRepeatedLetters(name.toLowerCase());
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push(name);
-    }
-    return merged;
-  }, [profile, adminApprovedBrandNames]);
-
-  const pendingDeclaredBrands = useMemo(() => {
-    const approvedKeys = new Set(
-      adminApprovedBrandNames.map((name) => collapseRepeatedLetters(name.toLowerCase()))
-    );
-    return configuredBrands.filter((name) => {
-      const key = collapseRepeatedLetters(name.toLowerCase());
-      return key && !approvedKeys.has(key);
-    });
-  }, [configuredBrands, adminApprovedBrandNames]);
-
-  const supplyChainFormEntries = useMemo(
-    () => filterSupplyChainFormEntries(profile?.companyInfoEntries || []),
-    [profile]
-  );
-
-  const brandsPendingRegistration = useMemo(() => {
-    const registered = new Set(
-      supplyChainFormEntries
-        .map((entry) => collapseRepeatedLetters(String(entry?.brands || '').trim().toLowerCase()))
-        .filter(Boolean)
-    );
-    return adminApprovedBrandNames.filter((brand) => {
-      const key = collapseRepeatedLetters(brand.toLowerCase());
-      return key && !registered.has(key);
-    });
-  }, [adminApprovedBrandNames, supplyChainFormEntries]);
-
-  const formStepProfile = useMemo(() => {
-    if (!profile) return null;
-    return { ...profile, companyInfoEntries: supplyChainFormEntries };
-  }, [profile, supplyChainFormEntries]);
-
-  useEffect(() => {
-    if (!registrationBrandPick && brandsPendingRegistration.length > 0) {
-      setRegistrationBrandPick(brandsPendingRegistration[0]);
-    }
-    if (registrationBrandPick && !brandsPendingRegistration.includes(registrationBrandPick)) {
-      setRegistrationBrandPick(brandsPendingRegistration[0] || '');
-    }
-  }, [brandsPendingRegistration, registrationBrandPick]);
-
   const applyProfileFromResponse = (profileData) => {
-    if (!profileData) return false;
-    const snapshot = cloneProfileSnapshot(profileData);
-    if (snapshot) {
-      snapshot.companyInfoEntries = mergeDisplayAndApprovedEntries(snapshot);
-    }
+    const snapshot = normalizeProfileForEditor(profileData);
+    if (!snapshot) return false;
     setProfile(snapshot);
     setBaseline(cloneProfileSnapshot(snapshot));
     return true;
@@ -235,18 +131,26 @@ export default function SupplierSelectYourself() {
   }, []);
 
   const handleSave = async () => {
-    const registrationEntries = filterSupplyChainFormEntries(profile?.companyInfoEntries || []);
+    const allEntries = getCompanyInfoEntriesForSave(profile);
+    const uniqueBrandsCheck = validateUniqueBrandsAcrossEntries(allEntries);
+    if (!uniqueBrandsCheck.ok) {
+      alert(uniqueBrandsCheck.message);
+      return;
+    }
+
+    const entries = allEntries.filter((entry) => String(entry?.brands || '').trim());
     const validation =
-      registrationEntries.length > 0
-        ? validateCompanyInfoEntriesList(registrationEntries)
-        : { ok: false, message: 'Add at least one supply-chain registration form in Step 2.' };
+      entries.length > 0
+        ? validateCompanyInfoEntriesList(entries)
+        : { ok: false, message: 'Add at least one brand registration below.' };
     const saveAsDraft = !validation.ok;
 
     try {
       setSaving(true);
       const token = localStorage.getItem('token');
       const payload = buildSupplierChainSavePayload(
-        saveAsDraft ? { ...profile, saveAsDraft: true } : profile
+        saveAsDraft ? { ...profile, saveAsDraft: true } : profile,
+        getCompanyInfoEntriesForSave(profile)
       );
       const response = await fetch(getApiUrl('/api/profile'), {
         method: 'PUT',
@@ -279,53 +183,15 @@ export default function SupplierSelectYourself() {
     }
   };
 
-  const handleSaveBrandApproval = async () => {
-    if (!profile || saving || discarding || savingBrandApproval) return;
-
-    const entries = getCompanyInfoEntriesForSave(profile);
-    const hasBrand = entries.some((entry) => String(entry?.brands || '').trim());
-    if (!hasBrand) {
-      alert('Select an admin-approved brand from the dropdown, or choose Other brand and enter a new name.');
-      return;
-    }
-
-    try {
-      setSavingBrandApproval(true);
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/profile'), {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify(
-          buildSupplierChainSavePayload({
-            ...profile,
-            userType: profile?.userType || 'supplier',
-            saveBrandApprovalOnly: true
-          })
-        )
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.status !== 'success') {
-        alert(data.message || 'Failed to save brand request. Please try again.');
-        return;
-      }
-      alert(data.message || 'Brand request saved.');
-      if (!applyProfileFromResponse(data.profile)) {
-        await fetchProfile();
-      }
-    } catch (e) {
-      console.error('Failed to save brand approval:', e);
-      alert('Failed to save brand request. Please try again.');
-    } finally {
-      setSavingBrandApproval(false);
-    }
-  };
-
   const handleSaveEntry = async (entryId, entryIndexHint = -1) => {
     if (!profile || saving || discarding) return;
     const entries = getCompanyInfoEntriesForSave(profile);
+    const uniqueBrandsCheck = validateUniqueBrandsAcrossEntries(entries);
+    if (!uniqueBrandsCheck.ok) {
+      alert(uniqueBrandsCheck.message);
+      return;
+    }
+
     const entryIndexById = entryId ? entries.findIndex((e) => e?.id === entryId) : -1;
     const entryIndex =
       entryIndexById >= 0
@@ -389,7 +255,7 @@ export default function SupplierSelectYourself() {
       if (data.chainApprovalPending) {
         alert(data.message || 'Submitted for admin approval.');
       } else {
-        alert(`Entry ${entryIndex + 1} saved.`);
+        alert(`Brand registration ${entryIndex + 1} saved.`);
       }
       if (!applyProfileFromResponse(data.profile)) {
         await fetchProfile();
@@ -402,57 +268,15 @@ export default function SupplierSelectYourself() {
     }
   };
 
-  const handleAddRegistration = (brandName) => {
-    const name = String(brandName || '').trim();
-    if (!name || !profile) return;
-
-    const entries = getCompanyInfoEntriesForSave(profile);
-    const existingIndex = entries.findIndex((entry) => brandNamesMatch(entry?.brands, name));
-    if (existingIndex >= 0) {
-      entries[existingIndex] = {
-        ...entries[existingIndex],
-        supplyChainRegistrationStarted: true
-      };
-    } else {
-      entries.push({
-        id: genApprovedBrandEntryId(name),
-        role: '',
-        brands: name,
-        gstin: '',
-        companyName: '',
-        ownershipDetails: '',
-        brandApprovalDocumentUrls: [],
-        brandApprovalDocumentUrl: '',
-        authorizationCertificateUrls: [],
-        authorizationCertificateUrl: '',
-        minimumOrderValue: '',
-        supplyChainRegistrationStarted: true
-      });
-    }
-
-    setProfile(buildSupplierChainSavePayload(profile, entries));
-  };
-
-  const handleRemoveRegistration = (entryId) => {
+  const handleRemoveEntry = (entryId) => {
     if (!profile) return;
-    const entries = getCompanyInfoEntriesForSave(profile)
-      .map((entry) => {
-        if (entry.id !== entryId) return entry;
-        return {
-          ...entry,
-          supplyChainRegistrationStarted: false,
-          role: '',
-          gstin: '',
-          companyName: '',
-          ownershipDetails: '',
-          authorizationCertificateUrls: [],
-          authorizationCertificateUrl: '',
-          minimumOrderValue: ''
-        };
-      })
-      .filter((entry) => String(entry?.brands || '').trim());
-
-    setProfile(buildSupplierChainSavePayload(profile, entries));
+    const entries = getCompanyInfoEntriesForSave(profile).filter((entry) => entry.id !== entryId);
+    setProfile(
+      buildSupplierChainSavePayload(
+        profile,
+        entries.length > 0 ? entries : ensureAtLeastOneCompanyInfoEntry({ companyInfoEntries: [] })
+      )
+    );
   };
 
   const handleDiscard = async () => {
@@ -509,36 +333,30 @@ export default function SupplierSelectYourself() {
             disabled={saving || !!savingEntryId || discarding}
           >
             <Save size={18} strokeWidth={2} aria-hidden />
-            {saving ? 'Saving…' : 'Save'}
+            {saving ? 'Saving…' : 'Save all'}
           </button>
         </div>
       </div>
 
       <div className="profile-content">
-        <div className="supplier-select-flow-card">
-          <div className="supplier-select-flow-card__step">
-            <span className="supplier-select-flow-card__badge">Step 1</span>
-          </div>
-          <div className="supplier-select-flow-card__arrow">→</div>
-          <div className="supplier-select-flow-card__step">
-            <span className="supplier-select-flow-card__badge">Step 2</span>
-            <span>Supply-chain role details</span>
-          </div>
-        </div>
+        <p className="supplier-select-page-intro">
+          For each brand you deal with: pick the brand from admin-approved list (or request a new one), then choose
+          your supply-chain role. Each brand can have only one role — add separate registrations for different brands.
+        </p>
 
         {supplyChainAssignments.length > 0 ? (
           <div className="supplier-select-assignments" aria-label="Your supply chain by brand">
             <strong>Your supply chain by brand ({supplyChainAssignments.length})</strong>
             <p className="supplier-select-assignments__hint">
-              Each brand is a separate entry. You can hold a different supply-chain role for every brand you deal with.
+              Overview of every brand you registered and the role you selected in the supply chain.
             </p>
             <div className="supplier-select-assignments__table-wrap">
               <table className="supplier-select-assignments__table">
                 <thead>
                   <tr>
                     <th scope="col">Brand</th>
-                    <th scope="col">Your role</th>
-                    <th scope="col">Registration</th>
+                    <th scope="col">Your role in supply chain</th>
+                    <th scope="col">Status</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -557,15 +375,15 @@ export default function SupplierSelectYourself() {
                       <td>
                         {row.hasRole && row.hasRoleDocuments ? (
                           <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
-                            Ready to save
+                            Complete
                           </span>
-                        ) : row.registrationStarted || row.hasRole ? (
+                        ) : row.hasRole ? (
                           <span className="supplier-select-assignments__status supplier-select-assignments__status--draft">
-                            In progress
+                            Add documents
                           </span>
                         ) : (
                           <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
-                            Add in Step 2
+                            Select role
                           </span>
                         )}
                       </td>
@@ -577,48 +395,12 @@ export default function SupplierSelectYourself() {
           </div>
         ) : null}
 
-        {configuredBrands.length > 0 ? (
-          <div className="supplier-select-brands-summary" aria-label="Configured brands">
-            <strong>Your brands ({configuredBrands.length})</strong>
-            <p className="supplier-select-brands-summary__hint">
-              Admin-approved brands can be registered in Step 2. Brands awaiting approval stay visible here until admin
-              approves your request.
-            </p>
-            <div className="supplier-select-brands-summary__chips">
-              {adminApprovedBrandNames.map((brand) => (
-                <span
-                  key={`approved-${brand}`}
-                  className="supplier-select-brands-summary__chip supplier-select-brands-summary__chip--approved"
-                >
-                  {brand}
-                </span>
-              ))}
-              {pendingDeclaredBrands.map((brand) => (
-                <span
-                  key={`pending-${brand}`}
-                  className="supplier-select-brands-summary__chip supplier-select-brands-summary__chip--pending"
-                  title="Pending admin approval"
-                >
-                  {brand} (pending)
-                </span>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="supplier-select-alert supplier-select-alert--draft">
-            <strong>No brands saved yet</strong>
-            <p>Add a brand in Step 1 below — pick from admin-approved brands or request a new one — then click{' '}
-            <strong>Save brand request</strong>.</p>
-          </div>
-        )}
-
         {profile?.chainProfileApprovalStatus === 'pending' ? (
           <div className="supplier-select-alert supplier-select-alert--pending">
             <strong>Supply-chain profile pending admin approval</strong>
             <p>
-              You submitted supply-chain role details for admin review. Your admin-approved brands remain visible above.
-              Until an admin approves the role assignment on the <strong>Profile brand assignment</strong> page, the
-              platform continues to use your previously approved assignment for upstream matching and orders.
+              You submitted supply-chain role details for admin review. Until an admin approves them, the platform
+              continues to use your previously approved assignment.
               {profile.chainProfilePendingSubmittedAt
                 ? ` Submitted: ${new Date(profile.chainProfilePendingSubmittedAt).toLocaleString()}.`
                 : ''}
@@ -629,8 +411,7 @@ export default function SupplierSelectYourself() {
           <div className="supplier-select-alert supplier-select-alert--draft">
             <strong>Draft saved</strong>
             <p>
-              Your latest form values are saved as draft and shown here. Complete the remaining required fields and
-              click Save again to submit for admin approval.
+              Complete the remaining fields and click Save all to submit for admin approval.
               {profile.chainProfileDraftSavedAt
                 ? ` Last draft save: ${new Date(profile.chainProfileDraftSavedAt).toLocaleString()}.`
                 : ''}
@@ -644,120 +425,34 @@ export default function SupplierSelectYourself() {
           </div>
         ) : null}
 
-        <div className="profile-section supplier-select-section supplier-select-section--brand">
-          <div className="supplier-select-section__head">
-            <h2>
-              <span className="supplier-select-section__label">Step 1</span>
-              Brand you are dealing with
-            </h2>
-            <div className="supplier-select-section__head-actions">
-              <button
-                type="button"
-                className="btn-secondary supplier-select-section__toggle-btn"
-                onClick={() => setBrandSectionExpanded((prev) => !prev)}
-              >
-                {brandSectionExpanded ? 'Collapse' : 'Expand'}
-              </button>
-              <button
-                type="button"
-                className="btn-primary supplier-select-section__save-btn"
-                onClick={handleSaveBrandApproval}
-                disabled={saving || !!savingEntryId || discarding || savingBrandApproval}
-              >
-                {savingBrandApproval ? 'Saving…' : 'Save brand request'}
-              </button>
-            </div>
-          </div>
-          {brandSectionExpanded ? (
-            <SupplierSupplyChainEntriesEditor
-              key={`brand-${editorResetKey}`}
-              profile={profile}
-              setProfile={setProfile}
-              editing
-              sectionView="brand"
-              selectionMode="all"
-              allowEntryManagement={false}
-              showAddEntry
-            />
-          ) : null}
-        </div>
-
-        <div className="profile-section supplier-select-section supplier-select-section--form">
-          <h2>
-            <span className="supplier-select-section__label">Step 2</span>
-            Supply-chain registration form details
-          </h2>
+        <div className="profile-section supplier-select-section supplier-select-section--unified">
+          <h2>Brand &amp; supply-chain role registrations</h2>
           <p className="supplier-select-section__intro">
-            After a brand is admin-approved, add a registration form here to declare your supply-chain role for that
-            brand.
+            Each card below is one brand. Select the brand from the admin-approved dropdown, choose your supply-chain
+            role, upload documents, then save that registration. Use <strong>Add another brand registration</strong> for
+            more brands — each brand can have only one supply-chain role.
           </p>
 
-          {adminApprovedBrandNames.length === 0 && configuredBrands.length > 0 ? (
-            <div className="supplier-select-alert supplier-select-alert--draft">
-              <strong>Waiting for brand approval</strong>
-              <p>
-                Your brand request is saved. Step 2 opens once admin approves the brand. You can continue using approved
-                brands from the catalog immediately after approval.
-              </p>
-            </div>
-          ) : null}
-
-          {brandsPendingRegistration.length > 0 ? (
-            <div className="supplier-select-add-registration">
-              <label className="supplier-select-add-registration__label" htmlFor="registration-brand-pick">
-                Add registration form for brand
-              </label>
-              <div className="supplier-select-add-registration__controls">
-                <select
-                  id="registration-brand-pick"
-                  className="supplier-select-add-registration__select"
-                  value={registrationBrandPick}
-                  onChange={(e) => setRegistrationBrandPick(e.target.value)}
-                  disabled={saving || !!savingEntryId || discarding}
-                >
-                  {brandsPendingRegistration.map((brand) => (
-                    <option key={brand} value={brand}>
-                      {brand}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="btn-primary supplier-select-add-registration__btn"
-                  onClick={() => handleAddRegistration(registrationBrandPick)}
-                  disabled={!registrationBrandPick || saving || !!savingEntryId || discarding}
-                >
-                  Add registration form
-                </button>
-              </div>
-            </div>
-          ) : null}
-
-          {supplyChainFormEntries.length === 0 ? (
-            <div className="supplier-select-alert supplier-select-alert--draft">
-              <strong>No supply-chain registration forms yet</strong>
-              <p>
-                Your approved brands are listed above. Use <strong>Add registration form</strong> when you want to
-                register your supply-chain role for a brand.
-              </p>
-            </div>
-          ) : null}
-
-          {formStepProfile ? (
-            <SupplierSupplyChainEntriesEditor
-              key={`form-${editorResetKey}`}
-              profile={formStepProfile}
-              setProfile={(next) => setProfile(mergeFormStepProfile(profile, next))}
-              editing
-              sectionView="form"
-              selectionMode="all"
-              allowEntryManagement={false}
-              showAddEntry={false}
-              onSaveEntry={handleSaveEntry}
-              onRemoveEntry={handleRemoveRegistration}
-              savingEntryId={savingEntryId}
-            />
-          ) : null}
+          <SupplierSupplyChainEntriesEditor
+            key={`unified-${editorResetKey}`}
+            profile={profile}
+            setProfile={(next) =>
+              setProfile(
+                buildSupplierChainSavePayload({
+                  ...next,
+                  companyInfoEntries: ensureAtLeastOneCompanyInfoEntry(next)
+                })
+              )
+            }
+            editing
+            sectionView="all"
+            selectionMode="all"
+            allowEntryManagement
+            showAddEntry
+            onSaveEntry={handleSaveEntry}
+            onRemoveEntry={handleRemoveEntry}
+            savingEntryId={savingEntryId}
+          />
         </div>
 
         <div className="profile-section">

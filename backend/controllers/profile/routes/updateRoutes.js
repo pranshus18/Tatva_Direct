@@ -20,7 +20,8 @@ import { getContractErrorMessage, parseWithSchema } from '../../../utils/contrac
 import {
   resolveCompanyInfoEntriesForValidation,
   supplierProfileIncludesChainDraft,
-  validateCompanyInfoEntriesList
+  validateCompanyInfoEntriesList,
+  validateUniqueBrandsAcrossEntries
 } from '../../../utils/supplierChainEntryValidation.js';
 import {
   createProfileResponse,
@@ -194,6 +195,14 @@ export function registerProfileUpdateRoutes(router) {
         const incomingEntries = Array.isArray(incomingChain.companyInfoEntries)
           ? incomingChain.companyInfoEntries
           : [];
+        const uniqueBrandsCheck = validateUniqueBrandsAcrossEntries(incomingEntries);
+        if (!uniqueBrandsCheck.ok) {
+          return res.status(400).json({
+            status: 'error',
+            code: 'duplicate_brand_entry',
+            message: uniqueBrandsCheck.message
+          });
+        }
         const hasRole =
           incomingEntries.length > 0
             ? incomingEntries.some((e) => String(e?.role || '').trim())

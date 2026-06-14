@@ -4,7 +4,7 @@ import { getApiUrl } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
 import BrandSelect from './BrandSelect';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
-import { validateCompanyInfoEntriesList } from '../utils/supplierChainEntryValidation';
+import { validateCompanyInfoEntriesList, brandKeyForDuplicateCheck } from '../utils/supplierChainEntryValidation';
 import {
   appendAuthorizationCertificateUrl,
   appendBrandApprovalDocumentUrl,
@@ -51,6 +51,34 @@ function normalizeBrandToken(raw) {
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function buildDuplicateBrandMessages(entries = []) {
+  const messages = new Map();
+  const seen = new Map();
+
+  for (const entry of entries) {
+    const brand = normalizeSingleBrand(entry?.brands);
+    if (!brand) continue;
+    const key = brandKeyForDuplicateCheck(brand);
+    if (seen.has(key)) {
+      messages.set(
+        entry.id,
+        `"${brand}" is already registered in another entry. Each brand can have only one supply-chain role.`
+      );
+    } else {
+      seen.set(key, entry.id);
+    }
+  }
+
+  return messages;
+}
+
+function reservedBrandsForEntry(entries = [], entryId) {
+  return entries
+    .filter((entry) => entry.id !== entryId)
+    .map((entry) => normalizeSingleBrand(entry?.brands))
+    .filter(Boolean);
 }
 
 const SUPPLY_CHAIN_ROLE_OPTIONS = [
@@ -143,7 +171,9 @@ const CompanyInfoEntryCard = ({
   allowEntrySave = false,
   allowEntryRemove = false,
   catalogBrandNames = [],
-  useBrandNameTextInput = false
+  useBrandNameTextInput = false,
+  excludeBrands = [],
+  duplicateBrandMessage = ''
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const catalogBrandSelected =
@@ -281,6 +311,7 @@ const CompanyInfoEntryCard = ({
                       allowOther
                       source="catalog"
                       dropdownOnly
+                      excludeBrands={excludeBrands}
                       className="chain-brand-select"
                     />
                   </div>
@@ -306,7 +337,13 @@ const CompanyInfoEntryCard = ({
                     }
                     required={editing}
                     aria-required="true"
+                    aria-invalid={duplicateBrandMessage ? 'true' : undefined}
                   />
+                  {duplicateBrandMessage ? (
+                    <p className="chain-field__error" role="alert">
+                      {duplicateBrandMessage}
+                    </p>
+                  ) : null}
                   {useBrandNameTextInput ? (
                     <p className="chain-field__sublabel">
                       {catalogBrandSelected
@@ -347,7 +384,7 @@ const CompanyInfoEntryCard = ({
 
         {showFormDetailsSection ? (
         <div className="chain-entry-form-block">
-          <h3 className="chain-entry-block-title">Form details</h3>
+          <h3 className="chain-entry-block-title">Your supply-chain role</h3>
           {hasBrandValue ? (
             <div className="chain-form-brand-summary">
               <div className={`chain-status-card chain-status-card--${statusTone}`}>
@@ -471,7 +508,7 @@ export default function SupplierSupplyChainEntriesEditor({
   const [expandedEntryIds, setExpandedEntryIds] = useState([]);
   const [selectedEntryId, setSelectedEntryId] = useState('');
   const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
-  const usesBrandCatalogFields = sectionView === 'brand';
+  const usesBrandCatalogFields = sectionView === 'brand' || sectionView === 'all';
   const { brandNames: catalogBrandNames } = useSupplierBrands({
     source: usesBrandCatalogFields ? 'catalog' : 'profile'
   });
@@ -533,6 +570,7 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const displayEntries = getDisplayEntries();
+  const duplicateBrandMessages = buildDuplicateBrandMessages(displayEntries);
   const shouldShowAddEntry = showAddEntry ?? allowEntryManagement;
   const indexedEntries = displayEntries.map((entry, index) => ({ entry, index }));
   const entryIdsSignature = JSON.stringify(displayEntries.map((entry) => entry.id));
@@ -565,7 +603,7 @@ export default function SupplierSupplyChainEntriesEditor({
 
   useEffect(() => {
     setExpandedEntryIds((prev) => {
-      if (sectionView === 'form' || sectionView === 'brand') {
+      if (sectionView === 'form' || sectionView === 'brand' || sectionView === 'all') {
         return displayEntries.map((entry) => entry.id);
       }
       const prevSet = new Set(prev);
@@ -705,6 +743,26 @@ export default function SupplierSupplyChainEntriesEditor({
   const updateCompanyInfoEntry = (entryId, field, value) => {
     const nextValue = field === 'brands' ? normalizeSingleBrand(value) : value;
     const currentEntries = getDisplayEntries();
+
+    if (field === 'brands') {
+      const brand = normalizeSingleBrand(nextValue);
+      if (brand) {
+        const conflict = currentEntries.find((entry) => {
+          if (entry.id === entryId) return false;
+          return (
+            brandKeyForDuplicateCheck(normalizeSingleBrand(entry?.brands)) ===
+            brandKeyForDuplicateCheck(brand)
+          );
+        });
+        if (conflict) {
+          alert(
+            `"${brand}" is already registered in another entry. Each brand can have only one supply-chain role.`
+          );
+          return;
+        }
+      }
+    }
+
     if (entryId === 'legacy') {
       const legacy = currentEntries[0] || {
         role: profile?.supplierRole || '',
@@ -736,15 +794,8 @@ export default function SupplierSupplyChainEntriesEditor({
 
   const removeCompanyInfoEntry = (entryId) => {
     if (entryId === 'legacy') {
-      setProfile({
-        ...profile,
-        companyInfoEntries: [],
-        supplierRole: '',
-        brands: '',
-        gstin: '',
-        companyName: '',
-        ownershipDetails: ''
-      });
+      const remaining = (profile?.companyInfoEntries || []).filter((e) => e.id !== 'legacy');
+      setProfile(syncProfileFromEntries(profile, remaining));
       return;
     }
     const entries = (profile?.companyInfoEntries || []).filter((e) => e.id !== entryId);
@@ -879,6 +930,7 @@ export default function SupplierSupplyChainEntriesEditor({
               allowOther
               source="catalog"
               dropdownOnly
+              excludeBrands={reservedBrandsForEntry(displayEntries, activeEntryForBrandPicker.id)}
               className="chain-brand-select"
             />
             {displayEntries.length > 1 ? (
@@ -984,7 +1036,7 @@ export default function SupplierSupplyChainEntriesEditor({
               removingRoleDocument?.entryId === entry.id ? removingRoleDocument.url : null
             }
             editing={editing}
-            canRemove={displayEntries.length > 1}
+            canRemove={displayEntries.length > 1 && (sectionView === 'all' || allowEntryManagement)}
             availableRoleOptions={roleUiState.options || []}
             roleOptionsLoading={!!roleUiState.loading}
             roleOptionsMessage={roleUiState.message || ''}
@@ -994,13 +1046,15 @@ export default function SupplierSupplyChainEntriesEditor({
             sectionView={sectionView}
             allowEntryManagement={allowEntryManagement}
             forceExpanded={selectionMode === 'dropdown'}
-            expanded={sectionView === 'form' || sectionView === 'brand' ? true : expanded}
+            expanded={sectionView === 'form' || sectionView === 'brand' || sectionView === 'all' ? true : expanded}
             onSaveEntry={onSaveEntry}
             savingThisEntry={savingEntryId === entry.id}
             allowEntrySave={allowEntryManagement || !!onSaveEntry}
-            allowEntryRemove={allowEntryManagement || !!onRemoveEntry}
+            allowEntryRemove={sectionView === 'all' || allowEntryManagement || !!onRemoveEntry}
             catalogBrandNames={usesBrandCatalogFields ? catalogBrandNames : []}
             useBrandNameTextInput={usesBrandCatalogFields}
+            excludeBrands={reservedBrandsForEntry(displayEntries, entry.id)}
+            duplicateBrandMessage={duplicateBrandMessages.get(entry.id) || ''}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]
@@ -1014,13 +1068,13 @@ export default function SupplierSupplyChainEntriesEditor({
       {editing && shouldShowAddEntry ? (
         <div className="chain-add-entry">
           <p className="chain-add-entry__hint">
-            {sectionView === 'brand'
-              ? 'Need to deal with another brand? Add a separate brand entry below.'
+            {sectionView === 'brand' || sectionView === 'all'
+              ? 'Dealing with another brand? Add a separate registration — each brand can have only one supply-chain role.'
               : 'Need another role or brand? Add a separate entry below.'}
           </p>
           <button type="button" className="chain-add-entry__btn" onClick={addCompanyInfoEntry}>
             <Plus size={16} />
-            {sectionView === 'brand' ? 'Add another brand' : 'Add another entry'}
+            {sectionView === 'brand' || sectionView === 'all' ? 'Add another brand registration' : 'Add another entry'}
           </button>
         </div>
       ) : null}

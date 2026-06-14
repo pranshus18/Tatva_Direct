@@ -91,28 +91,44 @@ export function buildChainPayloadFromProfileData(profileData) {
 
 function mergeUniqueChainEntries(...entryLists) {
   const merged = [];
-  const seen = new Set();
+  const byId = new Map();
+  const byBrand = new Map();
+
+  const upsert = (entry) => {
+    const id = String(entry?.id || '').trim();
+    const brandKey = String(entry?.brands || '').trim().toLowerCase();
+
+    if (id && byId.has(id)) {
+      const idx = byId.get(id);
+      merged[idx] = { ...merged[idx], ...entry };
+      return;
+    }
+
+    if (brandKey && byBrand.has(brandKey)) {
+      const idx = byBrand.get(brandKey);
+      merged[idx] = { ...merged[idx], ...entry };
+      if (id) byId.set(id, idx);
+      return;
+    }
+
+    const idx = merged.length;
+    merged.push({ ...entry });
+    if (id) byId.set(id, idx);
+    if (brandKey) byBrand.set(brandKey, idx);
+  };
 
   for (const raw of entryLists) {
     for (const entry of normalizeCompanyInfoEntries(raw || [])) {
-      const brand = String(entry?.brands || '').trim().toLowerCase();
-      const key = brand || `id:${entry?.id || merged.length}`;
-      if (seen.has(key)) {
-        const idx = merged.findIndex((row) => {
-          const rowBrand = String(row?.brands || '').trim().toLowerCase();
-          return (rowBrand || `id:${row?.id || ''}`) === key;
-        });
-        if (idx >= 0) {
-          merged[idx] = { ...merged[idx], ...entry };
-        }
-        continue;
-      }
-      seen.add(key);
-      merged.push({ ...entry });
+      upsert(entry);
     }
   }
 
   return merged;
+}
+
+/** Union saved, pending, and draft entries for supplier profile display (by entry id). */
+export function mergeChainEntriesForDisplay(...entryLists) {
+  return mergeUniqueChainEntries(...entryLists);
 }
 
 /**

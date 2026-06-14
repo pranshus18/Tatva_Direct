@@ -289,6 +289,13 @@
   color: #64748b;
 }
 
+.supplier-select-yourself-editor .chain-field__error {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #dc2626;
+}
+
 .supplier-select-yourself-editor .chain-field__control,
 .supplier-select-yourself-editor .chain-field select,
 .supplier-select-yourself-editor .chain-field input,

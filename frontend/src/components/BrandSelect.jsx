@@ -36,14 +36,33 @@ export default function BrandSelect({
   searchable = false,
   source = 'profile',
   dropdownOnly = false,
-  hideHint = false
+  hideHint = false,
+  excludeBrands = []
 }) {
   const { brandNames, loading, error: loadError } = useSupplierBrands({ source });
 
   const normalizedValue = String(value || '').trim();
 
+  const excludedBrandKeys = useMemo(() => {
+    const keys = new Set();
+    for (const brand of excludeBrands) {
+      const key = collapseRepeatedLetters(String(brand || '').trim().toLowerCase());
+      if (key) keys.add(key);
+    }
+    return keys;
+  }, [excludeBrands]);
+
+  const visibleBrandNames = useMemo(() => {
+    const currentKey = collapseRepeatedLetters(normalizedValue.toLowerCase());
+    return brandNames.filter((name) => {
+      const key = collapseRepeatedLetters(name.toLowerCase());
+      if (currentKey && key === currentKey) return true;
+      return !excludedBrandKeys.has(key);
+    });
+  }, [brandNames, excludedBrandKeys, normalizedValue]);
+
   const valueInList = normalizedValue
-    ? brandNames.some((n) => n.toLowerCase() === normalizedValue.toLowerCase())
+    ? visibleBrandNames.some((n) => n.toLowerCase() === normalizedValue.toLowerCase())
     : false;
 
   const [selectValue, setSelectValue] = useState(() => {
@@ -61,10 +80,10 @@ export default function BrandSelect({
       setSelectValue('');
       return;
     }
-    const inList = brandNames.some((n) => n.toLowerCase() === normalizedValue.toLowerCase());
+    const inList = visibleBrandNames.some((n) => n.toLowerCase() === normalizedValue.toLowerCase());
     if (inList) {
       setOtherMode(false);
-      const exact = brandNames.find((n) => n.toLowerCase() === normalizedValue.toLowerCase());
+      const exact = visibleBrandNames.find((n) => n.toLowerCase() === normalizedValue.toLowerCase());
       setSelectValue(exact || normalizedValue);
     } else if (allowOther) {
       setOtherMode(true);
@@ -73,7 +92,7 @@ export default function BrandSelect({
       setOtherMode(false);
       setSelectValue('');
     }
-  }, [normalizedValue, brandNames, allowOther, otherMode]);
+  }, [normalizedValue, visibleBrandNames, allowOther, otherMode]);
 
   const handleSelectChange = (e) => {
     const next = e.target.value;
@@ -106,7 +125,7 @@ export default function BrandSelect({
           onBlur={(e) => {
             const typed = String(e.target.value || '').trim();
             if (!typed) return;
-            const matched = findClosestBrandName(typed, brandNames);
+            const matched = findClosestBrandName(typed, visibleBrandNames);
             if (matched && matched !== typed) onChange?.(matched);
           }}
           disabled={disabled || loading}
@@ -117,7 +136,7 @@ export default function BrandSelect({
           aria-label="Enter brand name"
         />
         <datalist id={dataListId}>
-          {brandNames.map((brandName) => (
+          {visibleBrandNames.map((brandName) => (
             <option key={brandName} value={brandName} />
           ))}
         </datalist>
@@ -148,7 +167,7 @@ export default function BrandSelect({
         aria-label="Select brand"
       >
         <option value="">{loading ? 'Loading brands…' : 'Select brand…'}</option>
-        {brandNames.map((brandName) => (
+        {visibleBrandNames.map((brandName) => (
           <option key={brandName} value={brandName}>
             {brandName}
           </option>

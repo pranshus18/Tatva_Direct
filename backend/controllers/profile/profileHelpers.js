@@ -4,6 +4,7 @@ import {
   fetchLatestChainRequest,
   fetchPendingChainRequest,
   fetchSupplierApprovedBrands,
+  mergeChainEntriesForDisplay,
   normalizeCompanyInfoEntries,
   syncApprovedBrandsIntoUserProfile
 } from '../../services/supplierChainProfileService.js';
@@ -517,15 +518,36 @@ export async function createProfileResponse(user) {
       !!draftChain.supplierRole ||
       !!String(draftChain.brands || '').trim() ||
       draftChain.companyInfoEntries.length > 0;
-    const displayChain = pending?.payload
+    const pendingChain = pending?.payload
       ? {
           supplierRole: String(pending.payload.supplierRole || '').trim(),
           brands: typeof pending.payload.brands === 'string' ? pending.payload.brands : '',
           companyInfoEntries: normalizeCompanyInfoEntries(pending.payload.companyInfoEntries || [])
         }
+      : null;
+
+    const mergedEntries = mergeChainEntriesForDisplay(
+      approvedChain.companyInfoEntries,
+      pendingChain?.companyInfoEntries,
+      draftHasValues ? draftChain.companyInfoEntries : []
+    );
+
+    const displayChain = pendingChain
+      ? {
+          supplierRole: pendingChain.supplierRole || approvedChain.supplierRole,
+          brands: pendingChain.brands || approvedChain.brands,
+          companyInfoEntries: mergedEntries
+        }
       : draftHasValues
-        ? draftChain
-        : approvedChain;
+        ? {
+            supplierRole: draftChain.supplierRole || approvedChain.supplierRole,
+            brands: draftChain.brands || approvedChain.brands,
+            companyInfoEntries: mergedEntries
+          }
+        : {
+            ...approvedChain,
+            companyInfoEntries: mergedEntries.length > 0 ? mergedEntries : approvedChain.companyInfoEntries
+          };
 
     const entries = displayChain.companyInfoEntries || [];
     const firstEntry = entries[0];
