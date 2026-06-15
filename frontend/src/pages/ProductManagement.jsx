@@ -2401,41 +2401,72 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   };
 
   const handleImageUpload = async (e) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      e.target.value = '';
-    }
-    if (!file) return;
+    const selectedFiles = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (selectedFiles.length === 0) return;
 
-    if (!file.type.startsWith('image/')) {
-      alert('Please upload a valid image file');
-      return;
-    }
-
-    if (file.size > 10 * 1024 * 1024) {
-      alert('Image size should be less than 10MB');
-      return;
-    }
-    if (productAiImagesRef.current.length >= MAX_AI_PRODUCT_IMAGES) {
+    const remainingSlots = MAX_AI_PRODUCT_IMAGES - productAiImagesRef.current.length;
+    if (remainingSlots <= 0) {
       alert(`You can add at most ${MAX_AI_PRODUCT_IMAGES} images.`);
       return;
     }
 
-    let filesToAnalyze = null;
+    const filesToAdd = selectedFiles.slice(0, remainingSlots);
+    if (selectedFiles.length > remainingSlots) {
+      alert(
+        `Only ${remainingSlots} more photo(s) allowed (max ${MAX_AI_PRODUCT_IMAGES}). Extra file(s) were skipped.`
+      );
+    }
+
+    const validFiles = [];
+    for (const file of filesToAdd) {
+      if (!file.type.startsWith('image/')) {
+        alert(`Skipped "${file.name}": not a valid image file.`);
+        continue;
+      }
+      if (file.size > 10 * 1024 * 1024) {
+        alert(`Skipped "${file.name}": must be less than 10MB.`);
+        continue;
+      }
+      validFiles.push(file);
+    }
+
+    if (validFiles.length === 0) return;
+
     setUploadingProductImage(true);
     try {
-      const uploadedUrl = await uploadProductImageToStorage(file);
+      const settled = await Promise.allSettled(
+        validFiles.map(async (file) => {
+          const uploadedUrl = await uploadProductImageToStorage(file);
+          return {
+            id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            file,
+            previewUrl: URL.createObjectURL(file),
+            uploadedUrl
+          };
+        })
+      );
 
+      const uploadResults = settled
+        .filter((result) => result.status === 'fulfilled')
+        .map((result) => result.value);
+      const failedCount = settled.length - uploadResults.length;
+
+      if (failedCount > 0) {
+        alert(
+          failedCount === settled.length
+            ? 'Failed to upload images. Please try again.'
+            : `${failedCount} image(s) failed to upload. The rest were added.`
+        );
+      }
+
+      if (uploadResults.length === 0) return;
+
+      let filesToAnalyze = null;
       setProductAiImages((prev) => {
-        if (prev.length >= MAX_AI_PRODUCT_IMAGES) {
-          queueMicrotask(() =>
-            alert(`You can add at most ${MAX_AI_PRODUCT_IMAGES} images.`)
-          );
-          return prev;
-        }
-        const previewUrl = URL.createObjectURL(file);
-        const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        const next = [...prev, { id, file, previewUrl, uploadedUrl }];
+        const room = MAX_AI_PRODUCT_IMAGES - prev.length;
+        const additions = uploadResults.slice(0, room);
+        const next = [...prev, ...additions];
         if (next.length >= MIN_AI_PRODUCT_IMAGES) {
           filesToAnalyze = next.map((x) => x.file);
         }
@@ -2444,14 +2475,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
       setFormData((prev) => ({
         ...prev,
-        images: Array.from(new Set([...(Array.isArray(prev.images) ? prev.images : []), uploadedUrl]))
+        images: Array.from(
+          new Set([
+            ...(Array.isArray(prev.images) ? prev.images : []),
+            ...uploadResults.map((result) => result.uploadedUrl)
+          ])
+        )
       }));
 
       if (filesToAnalyze) {
         await analyzeImagesFromFiles(filesToAnalyze);
       }
     } catch (error) {
-      alert(error.message || 'Failed to upload image');
+      alert(error.message || 'Failed to upload images');
     } finally {
       setUploadingProductImage(false);
     }
@@ -2803,6 +2839,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                         <input
                           type="file"
                           accept="image/*"
+                          multiple
                           onChange={handleImageUpload}
                           disabled={analyzingImage || uploadingProductImage}
                           style={{ display: 'none' }}
@@ -2833,7 +2870,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                           ) : (
                             <>
                               <Upload size={20} style={{ marginBottom: '0.25rem' }} />
-                              Add photo
+                              Add photos
                             </>
                           )}
                         </label>
@@ -2850,7 +2887,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     }}
                   >
                     <p style={{ margin: 0, fontSize: '0.75rem', color: '#6b7280', flex: '1 1 200px' }}>
-                      Add <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong> of the same item (different angles,
+                      Select <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong> at once (different angles,
                       packaging, or label).
                     </p>
                     <span
