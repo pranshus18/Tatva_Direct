@@ -16,6 +16,7 @@ import { registerSupplierUpstreamRoutes } from './supplier/upstreamRoutes.js';
 import { registerSupplierAnalyticsRoutes } from './supplier/analyticsRoutes.js';
 import { registerSupplierProductAiRoutes } from './supplier/productAiRoutes.js';
 import { registerSupplierCreditRoutes } from './supplier/creditRoutes.js';
+import { registerSupplierWalletRoutes } from './supplier/walletRoutes.js';
 
 const router = express.Router();
 
@@ -34,6 +35,7 @@ registerSupplierUpstreamRoutes(ctx);
 registerSupplierAnalyticsRoutes(ctx);
 registerSupplierProductAiRoutes(ctx);
 registerSupplierCreditRoutes(ctx);
+registerSupplierWalletRoutes(ctx);
 registerSupplierNotificationRoutes({ router, authenticateToken, supabase });
 
 export { router as supplierRouter };

@@ -65,6 +65,7 @@ const SupplierCreditAccounts = safeLazy(
   () => import('./pages/SupplierCreditAccounts'),
   'Supplier Credit Accounts page'
 );
+const SupplierWallet = safeLazy(() => import('./pages/SupplierWallet'), 'Supplier Wallet page');
 const SupplierTotalPurchasePlatformCov = safeLazy(
   () => import('./pages/SupplierTotalPurchasePlatformCov'),
   'Supplier Total Purchase Platform COV page'
@@ -103,6 +104,7 @@ const AdminProfileChainApprovals = safeLazy(
   'Admin Profile Chain Approvals page'
 );
 const AdminFinance = safeLazy(() => import('./pages/AdminFinance'), 'Admin Finance page');
+const AdminWallet = safeLazy(() => import('./pages/AdminWallet'), 'Admin Wallet page');
 const AdminSupplyChain = safeLazy(() => import('./pages/AdminSupplyChain'), 'Admin Supply Chain page');
 const BOQNormalize = safeLazy(() => import('./pages/BOQNormalize'), 'BOQ Normalize page');
 const VendorSelect = safeLazy(() => import('./pages/VendorSelect'), 'Vendor Select page');
@@ -110,6 +112,7 @@ const Substitution = safeLazy(() => import('./pages/Substitution'), 'Substitutio
 const CreatePO = safeLazy(() => import('./pages/CreatePO'), 'Create PO page');
 const TransportSuggestion = safeLazy(() => import('./pages/TransportSuggestion'), 'Transport Suggestion page');
 const YourOrders = safeLazy(() => import('./pages/YourOrders'), 'Your Orders page');
+const Wallet = safeLazy(() => import('./pages/Wallet'), 'Wallet page');
 const Cart = safeLazy(() => import('./pages/Cart'), 'Cart page');
 const SharedCart = safeLazy(() => import('./pages/SharedCart'), 'Shared Cart page');
 
@@ -349,6 +352,7 @@ function App() {
         <Route path="/supplier-discount-insights" element={supplierPortal(<SupplierDiscountInsights />)} />
         <Route path="/supplier-buyer-purchases" element={supplierPortal(<SupplierBuyerPurchases />)} />
         <Route path="/supplier-credit-accounts" element={supplierPortal(<SupplierCreditAccounts />)} />
+        <Route path="/supplier-wallet" element={supplierPortal(<SupplierWallet />)} />
         <Route
           path="/supplier-total-purchase-platform-cov"
           element={supplierPortal(<SupplierTotalPurchasePlatformCov />)}
@@ -422,6 +426,14 @@ function App() {
             element={
               <AdminRoute user={user} isAuthenticated={isAuthenticated}>
                 <AdminAnalytics user={user} />
+              </AdminRoute>
+            }
+          />
+          <Route
+            path="admin-wallet"
+            element={
+              <AdminRoute user={user} isAuthenticated={isAuthenticated}>
+                <AdminWallet user={user} />
               </AdminRoute>
             }
           />
@@ -627,6 +639,14 @@ function App() {
             element={
               <ServiceProviderRoute user={user}>
                 <YourOrders />
+              </ServiceProviderRoute>
+            }
+          />
+          <Route
+            path="wallet"
+            element={
+              <ServiceProviderRoute user={user}>
+                <Wallet />
               </ServiceProviderRoute>
             }
           />

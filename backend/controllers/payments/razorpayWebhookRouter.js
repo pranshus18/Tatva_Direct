@@ -6,8 +6,11 @@ import { generateAndUploadInvoicePdf, saveInvoicePdfUrlToInvoice } from '../../s
 import { upsertPaymentTransaction } from '../../services/paymentTransactionService.js';
 import { normalizePaymentMethodForOrder } from '../../utils/paymentNormalize.js';
 import { verifyRazorpayWebhookSignature } from '../../services/razorpayService.js';
+import { completeWalletTopup } from '../../services/walletService.js';
+import { parseBooleanEnv } from '../../utils/featureFlags.js';
 
 const paymentsWebhookRouter = express.Router();
+const directOrderPaymentDisabled = () => parseBooleanEnv('DIRECT_ORDER_PAYMENT_DISABLED', false);
 
 paymentsWebhookRouter.post('/razorpay', async (req, res) => {
   try {
@@ -43,6 +46,21 @@ paymentsWebhookRouter.post('/razorpay', async (req, res) => {
 
     const paymentEntity = payload?.payload?.payment?.entity || null;
     if (paymentEntity?.order_id && paymentEntity?.id) {
+      const { data: walletTopup } = await supabase
+        .from('wallet_topups')
+        .select('*')
+        .eq('razorpay_order_id', paymentEntity.order_id)
+        .maybeSingle();
+      if (walletTopup) {
+        if (paymentEntity.status === 'captured') {
+          await completeWalletTopup({
+            razorpayOrderId: paymentEntity.order_id,
+            razorpayPaymentId: paymentEntity.id,
+            razorpaySignature: signature || null,
+            actorUserId: null
+          });
+        }
+      } else if (!directOrderPaymentDisabled()) {
       const { data: order } = await supabase
         .from('orders')
         .select('*')
@@ -95,6 +113,7 @@ paymentsWebhookRouter.post('/razorpay', async (req, res) => {
             }
           }
         }
+      }
       }
     }
 

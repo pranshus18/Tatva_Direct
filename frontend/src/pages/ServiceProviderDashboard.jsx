@@ -13,12 +13,10 @@ import {
   Eye,
   X,
   Trash2,
-  QrCode,
   RefreshCw,
   Bell
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { buildOrderUpiPayUri, qrServerImageUrl } from '../utils/upiPaymentQr';
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import {
   canRequestReturnForOrder,
@@ -585,49 +583,39 @@ const ServiceProviderDashboard = ({ user }) => {
     null;
 
   const handleMarkAsPaid = async () => {
-    if (!selectedOrder) return;
-    
+    if (!orderDetails?.id) return;
+
     const confirmed = window.confirm(
-      `Mark payment as paid for Order ${orderDetails?.orderNumber}?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
+      `Pay for Order ${orderDetails?.orderNumber} from your wallet?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
     );
-    
     if (!confirmed) return;
-    
+
     setUpdatingPayment(true);
     try {
       const token = localStorage.getItem('token');
-      const encodedOrderId = encodeURIComponent(selectedOrder);
-      const response = await fetch(getApiUrl(`/api/dashboard/service-provider/orders/${encodedOrderId}/payment`), {
-        method: 'PATCH',
+      const response = await fetch(getApiUrl(`/api/wallet/orders/${orderDetails.id}/pay`), {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
-          paymentStatus: 'paid',
-          paymentMethod: 'online'
+          idempotencyKey: `sp-dashboard-wallet-pay-${orderDetails.id}-${Date.now()}`
         })
       });
-      
-      const data = await response.json();
-      console.log('Update payment response:', data);
-      
-      if (data.status === 'success') {
-        alert('Payment status updated to paid successfully');
-        await fetchOrderDetails(selectedOrder);
-        if (data.invoice?.pdfUrl) {
-          setOrderDetails((prev) =>
-            prev ? { ...prev, invoicePdfUrl: data.invoice.pdfUrl, paymentStatus: 'paid' } : prev
-          );
-        }
-        fetchDashboardData();
-      } else {
-        console.error('Update payment error:', data);
-        alert(data.message || 'Failed to update payment status. Please try again.');
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.status !== 'success') {
+        alert(data.message || 'Failed to complete wallet payment.');
+        return;
       }
+
+      alert('Payment successful via wallet.');
+      await fetchOrderDetails(selectedOrder, true);
+      fetchDashboardData();
     } catch (error) {
-      console.error('Failed to update payment status:', error);
-      alert('Failed to update payment status. Please check your connection and try again.');
+      console.error('Failed to pay order from wallet:', error);
+      alert('Failed to pay order from wallet. Please try again.');
     } finally {
       setUpdatingPayment(false);
     }
@@ -1197,8 +1185,8 @@ const ServiceProviderDashboard = ({ user }) => {
                   )}
                 </div>
 
-                {/* Payment QR Code - Show only when order is delivered */}
-                {orderDetails.status === 'delivered' && (
+                {/* Wallet payment card */}
+                {orderDetails.paymentStatus !== 'paid' && (
                   <div className="order-info-section" style={{
                     textAlign: 'center',
                     padding: '2rem',
@@ -1207,42 +1195,11 @@ const ServiceProviderDashboard = ({ user }) => {
                     border: '2px solid #e2e8f0'
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                      <QrCode size={20} color="#4f46e5" />
-                      <h3 style={{ margin: 0, color: '#1e293b' }}>Payment QR Code</h3>
+                      <h3 style={{ margin: 0, color: '#1e293b' }}>Wallet Payment</h3>
                     </div>
                     <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                      Scan this QR code to pay ₹{orderDetails.totalAmount?.toLocaleString()}
+                      Complete this payment from your wallet. The platform will hold funds in escrow and release supplier payout after delivery.
                     </p>
-                    <div style={{ 
-                      display: 'flex', 
-                      justifyContent: 'center', 
-                      padding: '1.5rem',
-                      backgroundColor: 'white',
-                      borderRadius: '8px',
-                      marginBottom: '1rem',
-                      boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-                    }}>
-                      {(() => {
-                        const upiUri = buildOrderUpiPayUri({
-                          amountRupees: orderDetails.totalAmount,
-                          orderNumber: orderDetails.orderNumber,
-                          payeeName: orderDetails.supplier?.company || orderDetails.supplier?.name,
-                          payeeVpa: orderDetails.supplier?.upiVpa
-                        });
-                        return (
-                          <img
-                            src={qrServerImageUrl(upiUri, 200)}
-                            alt="Payment QR Code"
-                            style={{
-                              width: '200px',
-                              height: '200px',
-                              border: '1px solid #e5e7eb',
-                              borderRadius: '4px'
-                            }}
-                          />
-                        );
-                      })()}
-                    </div>
                     <div style={{ 
                       fontSize: '0.85rem', 
                       color: '#64748b',
@@ -1253,39 +1210,20 @@ const ServiceProviderDashboard = ({ user }) => {
                       <p style={{ margin: '0.25rem 0' }}><strong>Amount:</strong> ₹{orderDetails.totalAmount?.toLocaleString()}</p>
                       <p style={{ margin: '0.25rem 0' }}><strong>Supplier:</strong> {orderDetails.supplier?.name || orderDetails.supplier?.company || 'N/A'}</p>
                     </div>
-                    {orderDetails.paymentStatus !== 'paid' && (
-                      <button
-                        className="btn-primary"
-                        onClick={handleMarkAsPaid}
-                        disabled={updatingPayment}
-                        style={{
-                          width: '100%',
-                          marginTop: '1rem',
-                          padding: '0.75rem 1.5rem',
-                          fontSize: '1rem',
-                          fontWeight: '600'
-                        }}
-                      >
-                        {updatingPayment ? (
-                          <>Processing...</>
-                        ) : (
-                          <>✓ Mark Payment as Paid</>
-                        )}
-                      </button>
-                    )}
-                    {orderDetails.paymentStatus === 'paid' && (
-                      <div style={{
-                        padding: '0.75rem',
-                        backgroundColor: '#d1fae5',
-                        borderRadius: '8px',
-                        color: '#065f46',
-                        fontWeight: '600',
-                        textAlign: 'center',
-                        marginTop: '1rem'
-                      }}>
-                        ✓ Payment Completed
-                      </div>
-                    )}
+                    <button
+                      className="btn-primary"
+                      onClick={handleMarkAsPaid}
+                      disabled={updatingPayment}
+                      style={{
+                        width: '100%',
+                        marginTop: '1rem',
+                        padding: '0.75rem 1.5rem',
+                        fontSize: '1rem',
+                        fontWeight: '600'
+                      }}
+                    >
+                      {updatingPayment ? 'Processing...' : 'Pay from Wallet'}
+                    </button>
                   </div>
                 )}
 

@@ -11,7 +11,8 @@ import {
   TrendingUp,
   Users,
   CreditCard,
-  Paintbrush
+  Paintbrush,
+  Wallet
 } from 'lucide-react';
 
 export const SUPPLIER_NAV_GROUPS = [
@@ -45,6 +46,7 @@ export const SUPPLIER_NAV_GROUPS = [
     id: 'insights',
     label: 'Insights',
     items: [
+      { path: '/supplier-wallet', label: 'Wallet', icon: Wallet },
       { path: '/supplier-discount-insights', label: 'Brand Level COV', icon: TrendingUp },
       { path: '/supplier-buyer-purchases', label: 'Sales', icon: Users },
       { path: '/supplier-credit-accounts', label: 'Credit on Account', icon: CreditCard },
@@ -75,6 +77,7 @@ const ROUTE_META = {
   '/supplier-returns': { group: 'Operations', title: 'Returns' },
   '/supplier-select-yourself': { group: 'Operations', title: 'Select Yourself' },
   '/supplier-discount-insights': { group: 'Insights', title: 'Brand Level COV' },
+  '/supplier-wallet': { group: 'Insights', title: 'Wallet' },
   '/supplier-buyer-purchases': { group: 'Insights', title: 'Sales' },
   '/supplier-credit-accounts': { group: 'Insights', title: 'Credit on Account' },
   '/supplier-total-purchase-platform-cov': { group: 'Insights', title: 'Total Purchase Platform COV' },

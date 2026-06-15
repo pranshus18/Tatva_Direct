@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { getApiUrl } from '../config/api';
 import {
   Network,
@@ -13,7 +13,8 @@ import {
   GitBranch,
   AlertCircle,
   CheckCircle2,
-  Package
+  Package,
+  Percent
 } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
 import './AdminDashboard.css';
@@ -54,6 +55,15 @@ function normalizeStagesForSave(rawStages) {
     .map((r) => byRole.get(r));
 }
 
+function normalizeBrandKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const AdminSupplyChain = ({ user }) => {
   const [brands, setBrands] = useState([]);
   const [brandInput, setBrandInput] = useState('');
@@ -67,6 +77,13 @@ const AdminSupplyChain = ({ user }) => {
   const [suggesting, setSuggesting] = useState(false);
   const [pendingAiMark, setPendingAiMark] = useState(false);
   const [message, setMessage] = useState(null);
+  const [feeRules, setFeeRules] = useState([]);
+  const [feeLoading, setFeeLoading] = useState(false);
+  const [feeSaving, setFeeSaving] = useState(false);
+  const [feeScope, setFeeScope] = useState('global');
+  const [feeDraft, setFeeDraft] = useState([]);
+  const [previewAmount, setPreviewAmount] = useState('10000');
+  const [previewRole, setPreviewRole] = useState('dealer');
   /** DB spelling for the loaded row — same brand, one saved chain only */
   const [canonicalBrandName, setCanonicalBrandName] = useState('');
   const loadDefinitionSeq = useRef(0);
@@ -92,6 +109,23 @@ const AdminSupplyChain = ({ user }) => {
       }
     } catch (e) {
       console.error(e);
+    }
+  }, []);
+
+  const loadFeeRules = useCallback(async () => {
+    try {
+      setFeeLoading(true);
+      const res = await fetch(getApiUrl('/api/admin/supply-chain/platform-fees'), {
+        headers: authHeaders()
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.status === 'success') {
+        setFeeRules(Array.isArray(data.rules) ? data.rules : []);
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setFeeLoading(false);
     }
   }, []);
 
@@ -145,9 +179,86 @@ const AdminSupplyChain = ({ user }) => {
     (async () => {
       setLoading(true);
       await loadCategories();
+      await loadFeeRules();
       setLoading(false);
     })();
-  }, [loadCategories]);
+  }, [loadCategories, loadFeeRules]);
+
+  const selectedFeeBrand = useMemo(() => {
+    if (feeScope !== 'brand') return '';
+    return String(canonicalBrandName || brandInput || '').trim();
+  }, [brandInput, canonicalBrandName, feeScope]);
+
+  useEffect(() => {
+    const normalizedSelectedBrand = normalizeBrandKey(selectedFeeBrand);
+    const next = ROLE_OPTIONS.map((opt) => {
+      const match = (feeRules || []).find((row) => {
+        if (!row || row.supply_chain_role !== opt.value || row.is_active === false) return false;
+        const rowBrand = normalizeBrandKey(row.normalized_brand || row.brand_name || '');
+        if (feeScope === 'brand') return rowBrand && rowBrand === normalizedSelectedBrand;
+        return !rowBrand;
+      });
+      return {
+        role: opt.value,
+        roleLabel: opt.label,
+        id: match?.id || null,
+        feeType: match?.fee_type || 'percentage',
+        feeValue: Number(match?.fee_value || 0),
+        isActive: match ? match.is_active !== false : true
+      };
+    });
+    setFeeDraft(next);
+  }, [feeRules, feeScope, selectedFeeBrand]);
+
+  const feePreview = useMemo(() => {
+    const amount = Number(previewAmount);
+    if (!Number.isFinite(amount) || amount < 0) {
+      return {
+        amount: 0,
+        feeAmount: 0,
+        supplierNet: 0,
+        feeType: 'percentage',
+        feeValue: 0,
+        source: 'invalid_amount'
+      };
+    }
+
+    const role = previewRole || 'dealer';
+    const wantedBrandKey = normalizeBrandKey(selectedFeeBrand);
+    const activeRules = (feeRules || []).filter((row) => row && row.is_active !== false);
+    const roleRules = activeRules.filter((row) => row.supply_chain_role === role);
+
+    const brandRule =
+      wantedBrandKey &&
+      roleRules.find(
+        (row) =>
+          normalizeBrandKey(row.normalized_brand || row.brand_name || '') === wantedBrandKey
+      );
+    const globalRule = roleRules.find(
+      (row) => !normalizeBrandKey(row.normalized_brand || row.brand_name || '')
+    );
+    const fallbackDraft = (feeDraft || []).find((row) => row.role === role);
+    const rule = brandRule || globalRule || fallbackDraft || null;
+
+    const feeType = rule?.fee_type || rule?.feeType || 'percentage';
+    const feeValueRaw = Number(rule?.fee_value ?? rule?.feeValue ?? 0);
+    const feeValue = Number.isFinite(feeValueRaw) ? feeValueRaw : 0;
+    const feeAmount =
+      feeType === 'fixed'
+        ? Math.max(0, feeValue)
+        : Math.max(0, Number(((amount * feeValue) / 100).toFixed(2)));
+    const boundedFeeAmount = Math.min(amount, feeAmount);
+    const supplierNet = Number((amount - boundedFeeAmount).toFixed(2));
+
+    return {
+      amount,
+      feeAmount: boundedFeeAmount,
+      supplierNet,
+      feeType,
+      feeValue,
+      source: brandRule ? 'brand_role' : globalRule ? 'global_role' : fallbackDraft ? 'draft' : 'none'
+    };
+  }, [feeDraft, feeRules, previewAmount, previewRole, selectedFeeBrand]);
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -282,6 +393,56 @@ const AdminSupplyChain = ({ user }) => {
       loadCategories();
     } catch (e) {
       setMessage({ type: 'error', text: e.message || 'Delete failed' });
+    }
+  };
+
+  const updateFeeDraft = (role, patch) => {
+    setFeeDraft((prev) =>
+      prev.map((row) => (row.role === role ? { ...row, ...patch } : row))
+    );
+  };
+
+  const handleSaveFeeMatrix = async () => {
+    if (feeScope === 'brand' && !selectedFeeBrand) {
+      setMessage({ type: 'error', text: 'Select a brand before saving brand-specific fee matrix.' });
+      return;
+    }
+    const payloadRules = (feeDraft || []).map((row) => ({
+      ...(row.id ? { id: row.id } : {}),
+      brandName: feeScope === 'brand' ? selectedFeeBrand : null,
+      supplyChainRole: row.role,
+      feeType: row.feeType,
+      feeValue: Number(row.feeValue || 0),
+      isActive: Boolean(row.isActive),
+      notes:
+        feeScope === 'brand'
+          ? `Brand-specific fee for ${selectedFeeBrand}`
+          : 'Global role default fee'
+    }));
+    try {
+      setFeeSaving(true);
+      const res = await fetch(getApiUrl('/api/admin/supply-chain/platform-fees'), {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ rules: payloadRules })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.status !== 'success') {
+        setMessage({ type: 'error', text: data.message || 'Failed to save fee matrix' });
+        return;
+      }
+      setMessage({
+        type: 'success',
+        text:
+          feeScope === 'brand'
+            ? `Saved platform fee matrix for ${selectedFeeBrand}.`
+            : 'Saved global role-wise platform fee defaults.'
+      });
+      await loadFeeRules();
+    } catch (e) {
+      setMessage({ type: 'error', text: e.message || 'Failed to save fee matrix' });
+    } finally {
+      setFeeSaving(false);
     }
   };
 
@@ -656,6 +817,181 @@ const AdminSupplyChain = ({ user }) => {
               <button type="button" className="btn-secondary" onClick={handleDelete} disabled={!definitionId}>
                 <Trash2 size={18} />
                 Delete saved
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="sc-card sc-fee-card" aria-labelledby="sc-fee-heading">
+          <div className="sc-card__head">
+            <h2 id="sc-fee-heading">
+              <Percent size={18} />
+              Platform fee matrix (dynamic)
+            </h2>
+            <p>
+              Configure platform commission by supply chain level. You can set global defaults per role and
+              brand-specific overrides.
+            </p>
+          </div>
+          <div className="sc-card__body">
+            <div className="sc-fee-topbar">
+              <div className="sc-fee-scope">
+                <label className="sc-section-label">Scope</label>
+                <div className="sc-fee-scope__buttons">
+                  <button
+                    type="button"
+                    className={`sc-scope-btn ${feeScope === 'global' ? 'sc-scope-btn--active' : ''}`}
+                    onClick={() => setFeeScope('global')}
+                  >
+                    Global defaults
+                  </button>
+                  <button
+                    type="button"
+                    className={`sc-scope-btn ${feeScope === 'brand' ? 'sc-scope-btn--active' : ''}`}
+                    onClick={() => setFeeScope('brand')}
+                  >
+                    Current brand override
+                  </button>
+                </div>
+              </div>
+              <div className="sc-fee-meta">
+                {feeScope === 'brand' ? (
+                  <span>
+                    Brand: <strong>{selectedFeeBrand || 'Select a brand above'}</strong>
+                  </span>
+                ) : (
+                  <span>Applies to all brands unless overridden.</span>
+                )}
+              </div>
+            </div>
+
+            <div className="sc-fee-grid">
+              <div className="sc-fee-grid__head">Supply chain role</div>
+              <div className="sc-fee-grid__head">Fee type</div>
+              <div className="sc-fee-grid__head">Fee value</div>
+              <div className="sc-fee-grid__head">Active</div>
+
+              {feeDraft.map((row) => (
+                <Fragment key={row.role}>
+                  <div className="sc-fee-grid__cell sc-fee-grid__role" key={`${row.role}-role`}>
+                    {row.roleLabel}
+                  </div>
+                  <div className="sc-fee-grid__cell" key={`${row.role}-type`}>
+                    <select
+                      className="sc-select"
+                      value={row.feeType}
+                      onChange={(e) => updateFeeDraft(row.role, { feeType: e.target.value })}
+                    >
+                      <option value="percentage">Percentage (%)</option>
+                      <option value="fixed">Fixed (INR)</option>
+                    </select>
+                  </div>
+                  <div className="sc-fee-grid__cell" key={`${row.role}-value`}>
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      className="sc-input"
+                      value={row.feeValue}
+                      onChange={(e) => updateFeeDraft(row.role, { feeValue: e.target.value })}
+                    />
+                  </div>
+                  <div className="sc-fee-grid__cell" key={`${row.role}-active`}>
+                    <label className="sc-fee-toggle">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(row.isActive)}
+                        onChange={(e) => updateFeeDraft(row.role, { isActive: e.target.checked })}
+                      />
+                      <span>{row.isActive ? 'Yes' : 'No'}</span>
+                    </label>
+                  </div>
+                </Fragment>
+              ))}
+            </div>
+
+            <div className="sc-fee-preview">
+              <div className="sc-fee-preview__head">
+                <h3>Fee preview calculator</h3>
+                <p>Quickly test how much the platform keeps and supplier receives.</p>
+              </div>
+              <div className="sc-fee-preview__controls">
+                <div className="sc-field">
+                  <label className="sc-section-label">Order amount (INR)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="sc-input"
+                    value={previewAmount}
+                    onChange={(e) => setPreviewAmount(e.target.value)}
+                  />
+                </div>
+                <div className="sc-field">
+                  <label className="sc-section-label">Supply chain role</label>
+                  <select
+                    className="sc-select"
+                    value={previewRole}
+                    onChange={(e) => setPreviewRole(e.target.value)}
+                  >
+                    {ROLE_OPTIONS.map((opt) => (
+                      <option key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <div className="sc-fee-preview__result">
+                <div className="sc-fee-preview__pill">
+                  <span>Rule source</span>
+                  <strong>
+                    {feePreview.source === 'brand_role'
+                      ? `Brand + role (${selectedFeeBrand || 'current brand'})`
+                      : feePreview.source === 'global_role'
+                        ? 'Global role default'
+                        : feePreview.source === 'draft'
+                          ? 'Current unsaved draft'
+                          : 'No rule'}
+                  </strong>
+                </div>
+                <div className="sc-fee-preview__pill">
+                  <span>Applied fee rule</span>
+                  <strong>
+                    {feePreview.feeType === 'fixed'
+                      ? `INR ${feePreview.feeValue.toLocaleString('en-IN')}`
+                      : `${feePreview.feeValue.toLocaleString('en-IN')}%`}
+                  </strong>
+                </div>
+                <div className="sc-fee-preview__pill sc-fee-preview__pill--platform">
+                  <span>Platform fee amount</span>
+                  <strong>₹{feePreview.feeAmount.toLocaleString('en-IN')}</strong>
+                </div>
+                <div className="sc-fee-preview__pill sc-fee-preview__pill--supplier">
+                  <span>Supplier net payout</span>
+                  <strong>₹{feePreview.supplierNet.toLocaleString('en-IN')}</strong>
+                </div>
+              </div>
+            </div>
+
+            <div className="sc-footer-actions">
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={handleSaveFeeMatrix}
+                disabled={feeSaving || feeLoading || (feeScope === 'brand' && !selectedFeeBrand)}
+              >
+                <Save size={18} />
+                {feeSaving ? 'Saving fee matrix…' : 'Save fee matrix'}
+              </button>
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={loadFeeRules}
+                disabled={feeSaving || feeLoading}
+              >
+                <RefreshCw size={18} />
+                Reload fees
               </button>
             </div>
           </div>

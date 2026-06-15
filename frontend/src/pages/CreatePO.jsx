@@ -148,8 +148,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [error, setError] = useState(null);
   const [requiredDate, setRequiredDate] = useState('');
   const [creatingOrders, setCreatingOrders] = useState(false);
-  /** How the buyer will pay for these POs (stored on each order; drives post-checkout flow). */
-  const [poPaymentMethod, setPoPaymentMethod] = useState('online');
+  /** Wallet-only checkout model: all orders are paid via customer wallet. */
+  const [poPaymentMethod, setPoPaymentMethod] = useState('wallet');
   /** Payment details collected based on selected method (card number, UTR, etc.) */
   const [paymentDetails, setPaymentDetails] = useState({});
   /** Online flow: show platform test QR before calling create API. */
@@ -486,11 +486,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   }, [creditCheckFailed, payLaterEligibility, poGroups]);
 
   useEffect(() => {
-    if (poPaymentMethod === 'credit' && !payLaterOptionAvailable) {
-      setPoPaymentMethod('online');
+    if (poPaymentMethod !== 'wallet') {
+      setPoPaymentMethod('wallet');
       setPaymentDetails({});
     }
-  }, [poPaymentMethod, payLaterOptionAvailable]);
+  }, [poPaymentMethod]);
 
   const creditAllAllowed = useMemo(() => {
     if (poPaymentMethod !== 'credit') return true;
@@ -746,30 +746,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       }
     }
 
-    if (poPaymentMethod === 'credit') {
-      if (!payLaterOptionAvailable) {
-        alert(PAY_LATER_UNAVAILABLE_MESSAGE);
-        return;
-      }
-      if (!paymentDetails.creditPeriod) {
-        alert('Select a credit period for pay-later orders.');
-        return;
-      }
-      if (!creditAllAllowed) {
-        const blocked = creditChecks.filter((r) => !r.allowed);
-        alert(
-          blocked.map((r) => r.message).join('\n') ||
-            'Credit limit not available for one or more suppliers. Ask them to set your limit on Sales.'
-        );
-        return;
-      }
-    }
-
-    if (poPaymentMethod === 'online') {
-      setShowOnlineQrModal(true);
-      return;
-    }
-
     await completeOrderFlow();
   };
 
@@ -983,10 +959,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           </label>
           <select
             value={poPaymentMethod}
-            onChange={(e) => {
-              setPoPaymentMethod(e.target.value);
-              setPaymentDetails({});
-            }}
+            onChange={() => {}}
+            disabled
             style={{
               maxWidth: '320px',
               width: '100%',
@@ -994,28 +968,15 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
               borderRadius: '6px',
               border: '1px solid #d1d5db',
               fontSize: '0.9rem',
-              background: '#fff'
+              background: '#f8fafc',
+              color: '#334155'
             }}
           >
-            <option value="online">Pay online (UPI / card via Razorpay)</option>
-            <option value="cod">Cash on delivery</option>
-            <option value="bank_transfer">Bank transfer (NEFT / RTGS / IMPS)</option>
-            <option value="card">Credit / Debit Card</option>
-            {payLaterOptionAvailable ? (
-              <option value="credit">Credit / pay later (on account)</option>
-            ) : null}
+            <option value="wallet">Wallet only (platform escrow model)</option>
           </select>
-          {creditCheckFailed && poGroups?.length > 0 && !creditCheckLoading ? (
-            <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#b45309', maxWidth: '520px' }}>
-              We could not verify pay-later eligibility right now. You can still choose credit and continue; final
-              eligibility will be validated while placing the order.
-            </p>
-          ) : null}
-          {!creditCheckFailed && !payLaterOptionAvailable && poGroups?.length > 0 && !creditCheckLoading ? (
-            <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#b45309', maxWidth: '520px' }}>
-              {PAY_LATER_UNAVAILABLE_MESSAGE}
-            </p>
-          ) : null}
+          <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
+            Orders are created with wallet payment mode. Customer funds wallet first, then platform escrow settles supplier payout.
+          </p>
 
           {poPaymentMethod === 'card' && (
             <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>

@@ -40,6 +40,7 @@ const routePrefetchers = {
   '/supplier-discount-insights': () => import('../pages/SupplierDiscountInsights'),
   '/supplier-buyer-purchases': () => import('../pages/SupplierBuyerPurchases'),
   '/supplier-credit-accounts': () => import('../pages/SupplierCreditAccounts'),
+  '/supplier-wallet': () => import('../pages/SupplierWallet'),
   '/supplier-total-purchase-platform-cov': () => import('../pages/SupplierTotalPurchasePlatformCov'),
   '/supplier-purchase-total': () => import('../pages/SupplierPurchaseTotal'),
   '/portal-theme': () => import('../pages/ServiceProviderThemeSettings'),
@@ -52,8 +53,10 @@ const routePrefetchers = {
   '/admin-brand-approvals': () => import('../pages/AdminBrandApprovals'),
   '/admin-profile-chain-approvals': () => import('../pages/AdminProfileChainApprovals'),
   '/admin-analytics': () => import('../pages/AdminAnalytics'),
+  '/admin-wallet': () => import('../pages/AdminWallet'),
   '/admin-finance': () => import('../pages/AdminFinance'),
   '/admin-supply-chain': () => import('../pages/AdminSupplyChain'),
+  '/wallet': () => import('../pages/Wallet'),
   '/profile': () => import('../pages/Profile')
 };
 
@@ -125,6 +128,11 @@ const Layout = ({ user, onLogout, children }) => {
         path: '/admin-analytics',
         label: 'Analytics',
         icon: TrendingUp
+      },
+      {
+        path: '/admin-wallet',
+        label: 'Wallet',
+        icon: Wallet
       },
       {
         path: '/admin-finance',

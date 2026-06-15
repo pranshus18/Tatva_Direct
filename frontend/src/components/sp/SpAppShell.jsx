@@ -23,6 +23,7 @@ const routePrefetchers = {
   '/cart': () => import('@/pages/Cart'),
   '/create-po': () => import('@/pages/CreatePO'),
   '/your-orders': () => import('@/pages/YourOrders'),
+  '/wallet': () => import('@/pages/Wallet'),
   '/returns': () => import('@/pages/ServiceProviderReturns'),
   '/transport-suggestion': () => import('@/pages/TransportSuggestion'),
   '/portal-theme': () => import('@/pages/ServiceProviderThemeSettings'),

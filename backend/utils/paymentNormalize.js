@@ -1,7 +1,7 @@
 export function normalizePaymentMethodForOrder(method) {
   const normalized = String(method || '').toLowerCase();
   if (!normalized) return 'online';
-  if (['upi', 'card', 'netbanking', 'bank_transfer', 'cash', 'credit', 'online'].includes(normalized)) {
+  if (['upi', 'card', 'netbanking', 'bank_transfer', 'cash', 'credit', 'online', 'wallet'].includes(normalized)) {
     return normalized === 'netbanking' ? 'online' : normalized;
   }
   return 'online';

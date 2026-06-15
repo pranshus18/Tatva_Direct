@@ -25,6 +25,7 @@ const routePrefetchers = {
   '/supplier-returns': () => import('@/pages/SupplierReturns'),
   '/supplier-select-yourself': () => import('@/pages/SupplierSelectYourself'),
   '/supplier-discount-insights': () => import('@/pages/SupplierDiscountInsights'),
+  '/supplier-wallet': () => import('@/pages/SupplierWallet'),
   '/supplier-buyer-purchases': () => import('@/pages/SupplierBuyerPurchases'),
   '/supplier-credit-accounts': () => import('@/pages/SupplierCreditAccounts'),
   '/supplier-total-purchase-platform-cov': () => import('@/pages/SupplierTotalPurchasePlatformCov'),

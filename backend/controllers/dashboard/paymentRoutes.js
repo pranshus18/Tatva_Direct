@@ -53,6 +53,14 @@ router.patch('/service-provider/orders/:id/payment', authenticateToken, async (r
         orderError = null;
       }
     }
+
+    if (String(paymentStatus || '').toLowerCase() === 'paid') {
+      return res.status(403).json({
+        status: 'error',
+        code: 'DIRECT_PAYMENT_DISABLED',
+        message: 'Direct payment status updates are disabled. Please use wallet payment flow.'
+      });
+    }
     
     if (orderError || !order) {
       console.log(`Order not found for payment update: ${decodedId} for user ${req.userId}`);

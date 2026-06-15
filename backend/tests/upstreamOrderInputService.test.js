@@ -29,27 +29,13 @@ test('normalizeRequiredDateForUpstream handles empty required date', () => {
   assert.equal(out.error, null);
 });
 
-test('resolveUpstreamPaymentSelection maps UI payment methods to DB values', () => {
-  assert.deepEqual(resolveUpstreamPaymentSelection('cod'), {
-    payment_method: 'cash',
-    payment_status: 'pending'
-  });
-  assert.deepEqual(resolveUpstreamPaymentSelection('bank_transfer'), {
-    payment_method: 'bank_transfer',
-    payment_status: 'pending'
-  });
-  assert.deepEqual(resolveUpstreamPaymentSelection('credit'), {
-    payment_method: 'credit',
-    payment_status: 'pending'
-  });
-  assert.deepEqual(resolveUpstreamPaymentSelection('card'), {
-    payment_method: 'card',
-    payment_status: 'pending'
-  });
-  assert.deepEqual(resolveUpstreamPaymentSelection('online'), {
-    payment_method: 'online',
-    payment_status: 'pending'
-  });
+test('resolveUpstreamPaymentSelection enforces wallet-only payment mapping', () => {
+  for (const method of ['cod', 'bank_transfer', 'credit', 'card', 'online', 'wallet', undefined, null]) {
+    assert.deepEqual(resolveUpstreamPaymentSelection(method), {
+      payment_method: 'wallet',
+      payment_status: 'pending'
+    });
+  }
 });
 
 test('isSupplierBranchAddressComplete validates branch location fields', () => {

@@ -36,11 +36,20 @@ import {
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
 import { upsertPaymentTransaction } from '../services/paymentTransactionService.js';
 import { normalizePaymentMethodForOrder, httpStatusForUpstreamError } from '../utils/paymentNormalize.js';
+import { parseBooleanEnv } from '../utils/featureFlags.js';
 
 const router = express.Router();
+const directOrderPaymentDisabled = () => parseBooleanEnv('DIRECT_ORDER_PAYMENT_DISABLED', false);
 
 router.post('/orders/:id/razorpay/create', authenticateToken, async (req, res) => {
   try {
+    if (directOrderPaymentDisabled()) {
+      return res.status(410).json({
+        status: 'error',
+        code: 'DIRECT_PAYMENT_DISABLED',
+        message: 'Direct order payment is disabled. Use wallet top-up and wallet checkout.'
+      });
+    }
     if (!isRazorpayConfigured()) {
       return res.status(503).json({
         status: 'error',
@@ -153,6 +162,13 @@ router.post('/orders/:id/razorpay/create', authenticateToken, async (req, res) =
 
 router.post('/orders/:id/razorpay/confirm', authenticateToken, async (req, res) => {
   try {
+    if (directOrderPaymentDisabled()) {
+      return res.status(410).json({
+        status: 'error',
+        code: 'DIRECT_PAYMENT_DISABLED',
+        message: 'Direct order payment is disabled. Use wallet top-up and wallet checkout.'
+      });
+    }
     if (!isRazorpayConfigured()) {
       return res.status(503).json({
         status: 'error',

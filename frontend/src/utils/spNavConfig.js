@@ -8,7 +8,8 @@ import {
   ShoppingCart,
   Truck,
   Paintbrush,
-  Package
+  Package,
+  Wallet
 } from 'lucide-react';
 
 export const SP_NAV_GROUPS = [
@@ -36,6 +37,7 @@ export const SP_NAV_GROUPS = [
     label: 'Orders',
     items: [
       { path: '/your-orders', label: 'Your Orders', icon: ShoppingCart },
+      { path: '/wallet', label: 'Wallet', icon: Wallet },
       { path: '/returns', label: 'Returns', icon: RefreshCw }
     ]
   },
@@ -57,6 +59,7 @@ const ROUTE_META = {
   '/create-po': { group: 'Procure', title: 'Create PO' },
   '/transport-suggestion': { group: 'Procure', title: 'Transport' },
   '/your-orders': { group: 'Orders', title: 'Your Orders' },
+  '/wallet': { group: 'Orders', title: 'Wallet' },
   '/returns': { group: 'Orders', title: 'Returns' },
   '/portal-theme': { group: 'Account', title: 'Portal Theme' },
   '/profile': { group: 'Account', title: 'Profile' }

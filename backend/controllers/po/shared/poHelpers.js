@@ -7,34 +7,18 @@ export const ORDER_INSERT_MAX_RETRIES = 3;
 export const ADDRESS_REQUIRED_FIELDS = ['line1', 'city', 'state', 'pincode', 'country'];
 export const MAX_CART_ITEM_QUANTITY = 1000000000;
 export const PAYMENT_METHODS_ALLOWED = new Set([
-  'cash',
-  'bank_transfer',
-  'online',
-  'credit',
-  'upi',
-  'card'
+  'wallet'
 ]);
 
 /** Map service-provider PO checkout choice to DB columns (aligns with POS / invoices). */
 export function resolveB2bPaymentFromBody(body) {
-  const raw = String(body?.paymentMethod || body?.payment_method || 'online')
+  const raw = String(body?.paymentMethod || body?.payment_method || 'wallet')
     .toLowerCase()
     .trim();
-  const allowed = new Set(['cod', 'online', 'bank_transfer', 'credit', 'card']);
-  const choice = allowed.has(raw) ? raw : 'online';
-  if (choice === 'cod') {
-    return { payment_method: 'cash', payment_status: 'pending' };
+  if (raw !== 'wallet') {
+    return { payment_method: 'wallet', payment_status: 'pending' };
   }
-  if (choice === 'bank_transfer') {
-    return { payment_method: 'bank_transfer', payment_status: 'pending' };
-  }
-  if (choice === 'credit') {
-    return { payment_method: 'credit', payment_status: 'pending' };
-  }
-  if (choice === 'card') {
-    return { payment_method: 'card', payment_status: 'pending' };
-  }
-  return { payment_method: 'online', payment_status: 'pending' };
+  return { payment_method: 'wallet', payment_status: 'pending' };
 }
 
 export function normalizeAddress(address = {}) {

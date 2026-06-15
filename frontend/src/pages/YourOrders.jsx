@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getApiUrl, resolveApiPath, authFetch } from '../config/api';
+import { getApiUrl, authFetch } from '../config/api';
 import {
   Eye,
   ShoppingCart,
@@ -72,6 +72,7 @@ const formatAddress = (address) =>
 
 const paymentMethodLabel = (order) => {
   const pm = String(order?.paymentMethod || order?.payment_method || '').toLowerCase();
+  if (pm === 'wallet') return 'Wallet (platform escrow)';
   if (pm === 'cash') return 'Cash on delivery';
   if (pm === 'online') return 'Pay online';
   if (pm === 'upi') return 'UPI';
@@ -254,41 +255,14 @@ const YourOrders = () => {
     }
   };
 
-  const loadRazorpayScript = () =>
-    new Promise((resolve) => {
-      if (window.Razorpay) return resolve(true);
-      const script = document.createElement('script');
-      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
-      script.async = true;
-      script.onload = () => resolve(true);
-      script.onerror = () => resolve(false);
-      document.body.appendChild(script);
-    });
-
-  const handlePayWithRazorpay = async () => {
+  const handlePayFromWallet = async () => {
     if (!orderDetails?.id || processingPayment) return;
     setProcessingPayment(true);
     setPaymentNotice('');
     try {
       const token = localStorage.getItem('token');
       if (!token) throw new Error('Please login again');
-
-      const configResp = await fetch(resolveApiPath('/api/payments/razorpay/config'), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const configData = await configResp.json().catch(() => ({}));
-      const backendKeyId = configData?.razorpay?.keyId || '';
-      const keyId = backendKeyId || import.meta.env.VITE_RAZORPAY_KEY_ID || '';
-      if (!keyId || configData?.razorpay?.isConfigured === false) {
-        throw new Error(
-          'Online payment is not configured yet. Add Razorpay keys in backend .env and frontend .env, or use bank transfer.'
-        );
-      }
-
-      const scriptLoaded = await loadRazorpayScript();
-      if (!scriptLoaded) throw new Error('Razorpay SDK failed to load');
-
-      const createResp = await fetch(resolveApiPath(`/api/payments/orders/${orderDetails.id}/razorpay/create`), {
+      const payResp = await fetch(getApiUrl(`/api/wallet/orders/${orderDetails.id}/pay`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -296,100 +270,20 @@ const YourOrders = () => {
         },
         body: JSON.stringify({ idempotencyKey: `ui-${orderDetails.id}-${Date.now()}` })
       });
-      const createData = await createResp.json();
-      if (!createResp.ok || createData.status !== 'success') {
-        if (createData.code === 'RAZORPAY_NOT_CONFIGURED') {
-          throw new Error('Razorpay is not configured on server yet. Please add keys or use bank transfer.');
+      const payData = await payResp.json().catch(() => ({}));
+      if (!payResp.ok || payData.status !== 'success') {
+        if (payData?.code === 'INSUFFICIENT_WALLET_BALANCE') {
+          throw new Error('Insufficient wallet balance. Please top up wallet and try again.');
         }
-        throw new Error(createData.message || 'Failed to create payment intent');
+        throw new Error(payData?.message || 'Failed to pay order from wallet');
       }
-
-      const options = {
-        key: keyId,
-        order_id: createData.paymentIntent.orderId,
-        name: 'Tatva Direct',
-        description: `Payment for ${orderDetails.orderNumber || orderDetails.id}`,
-        amount: createData.paymentIntent.amount,
-        currency: createData.paymentIntent.currency || 'INR',
-        handler: async (response) => {
-          try {
-            const confirmResp = await fetch(resolveApiPath(`/api/payments/orders/${orderDetails.id}/razorpay/confirm`), {
-              method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${token}`
-              },
-              body: JSON.stringify({
-                razorpayOrderId: response.razorpay_order_id,
-                razorpayPaymentId: response.razorpay_payment_id,
-                razorpaySignature: response.razorpay_signature,
-                method: 'upi'
-              })
-            });
-            const confirmData = await confirmResp.json();
-            if (!confirmResp.ok || confirmData.status !== 'success') {
-              throw new Error(confirmData.message || 'Payment verification failed');
-            }
-            setPaymentNotice(
-              confirmData.invoice?.invoicePdfUrl
-                ? 'Payment successful. Your invoice PDF is ready — use the link below.'
-                : 'Payment successful and verified.'
-            );
-            await Promise.allSettled([
-              fetchDashboard(),
-              fetchOrderDetails(orderDetails.orderNumber || orderDetails.id)
-            ]);
-            if (confirmData.invoice?.invoicePdfUrl) {
-              setOrderDetails((prev) =>
-                prev ? { ...prev, invoicePdfUrl: confirmData.invoice.invoicePdfUrl } : prev
-              );
-            }
-          } catch (err) {
-            setPaymentNotice(err.message || 'Payment completed but verification failed');
-          } finally {
-            setProcessingPayment(false);
-          }
-        },
-        modal: {
-          ondismiss: () => {
-            setProcessingPayment(false);
-          }
-        },
-        prefill: {},
-        theme: { color: '#4f46e5' }
-      };
-
-      const rzp = new window.Razorpay(options);
-      rzp.open();
+      setPaymentNotice('Payment successful via wallet.');
+      await Promise.allSettled([
+        fetchDashboard(),
+        fetchOrderDetails(orderDetails.orderNumber || orderDetails.id)
+      ]);
     } catch (err) {
-      setPaymentNotice(err.message || 'Unable to start payment');
-      setProcessingPayment(false);
-    }
-  };
-
-  const handleBankTransferFallback = async () => {
-    if (!orderDetails?.id || processingPayment) return;
-    setProcessingPayment(true);
-    setPaymentNotice('');
-    try {
-      const token = localStorage.getItem('token');
-      if (!token) throw new Error('Please login again');
-      const resp = await fetch(resolveApiPath(`/api/payments/orders/${orderDetails.id}/bank-transfer/request`), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ note: 'Requested via service provider portal fallback' })
-      });
-      const data = await resp.json();
-      if (!resp.ok || data.status !== 'success') {
-        throw new Error(data.message || 'Failed to request bank transfer');
-      }
-      setPaymentNotice('Bank transfer request submitted. Finance will verify and mark payment.');
-      await fetchOrderDetails(orderDetails.orderNumber || orderDetails.id);
-    } catch (err) {
-      setPaymentNotice(err.message || 'Failed to request bank transfer');
+      setPaymentNotice(err.message || 'Failed to complete wallet payment');
     } finally {
       setProcessingPayment(false);
     }
@@ -680,12 +574,8 @@ const YourOrders = () => {
   const selfServeLockReason = orderDetails ? getSelfServeLockReason(orderDetails) : '';
   const canRateOrder = orderStatus === 'delivered' && String(orderDetails?.paymentStatus || '').toLowerCase() === 'paid';
   const orderPm = String(orderDetails?.paymentMethod || orderDetails?.payment_method || '').toLowerCase();
-  const showRazorpayForOrder = orderPaymentPending && (orderPm === 'online' || !orderPm);
-  const showBankTransferForOrder =
-    orderPaymentPending && (orderPm === 'bank_transfer' || orderPm === 'online' || !orderPm);
-  const codChosen = orderPaymentPending && orderPm === 'cash';
-  const creditChosen = orderPaymentPending && orderPm === 'credit';
-  const bankOnlyChosen = orderPaymentPending && orderPm === 'bank_transfer';
+  const showWalletPayForOrder = orderPaymentPending;
+  const nonWalletPending = orderPaymentPending && orderPm && orderPm !== 'wallet';
 
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
@@ -1012,40 +902,29 @@ const YourOrders = () => {
                       {paymentMethodLabel(orderDetails)}
                     </p>
                     <div className="space-y-3">
-                      {codChosen ? (
-                        <p className="yo-payment-hint yo-payment-hint--cod">
-                          You chose cash on delivery. Pay the supplier in cash when the order is
-                          delivered; they will mark payment as received.
-                        </p>
-                      ) : null}
-                      {creditChosen ? (
+                      {nonWalletPending ? (
                         <p className="yo-payment-hint yo-payment-hint--credit">
-                          This order is on credit terms. Complete payment per your agreement with
-                          the supplier.
+                          This order uses legacy payment mode `{orderPm}`. You can still complete it via wallet payment.
                         </p>
                       ) : null}
-                      {(showRazorpayForOrder || showBankTransferForOrder) && (
+                      {showWalletPayForOrder && (
                         <div className="yo-dialog-actions">
-                          {showRazorpayForOrder ? (
-                            <button
-                              type="button"
-                              className="btn-primary"
-                              onClick={handlePayWithRazorpay}
-                              disabled={processingPayment}
-                            >
-                              {processingPayment ? 'Processing…' : 'Pay now (Razorpay)'}
-                            </button>
-                          ) : null}
-                          {showBankTransferForOrder ? (
-                            <button
-                              type="button"
-                              className={bankOnlyChosen ? 'btn-primary' : 'btn-secondary'}
-                              onClick={handleBankTransferFallback}
-                              disabled={processingPayment}
-                            >
-                              Request bank transfer
-                            </button>
-                          ) : null}
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            onClick={handlePayFromWallet}
+                            disabled={processingPayment}
+                          >
+                            {processingPayment ? 'Processing…' : 'Pay from wallet'}
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={() => navigate('/wallet')}
+                            disabled={processingPayment}
+                          >
+                            Top up wallet
+                          </button>
                         </div>
                       )}
                     </div>
@@ -1267,10 +1146,7 @@ const YourOrders = () => {
                           }
                       >
                         <option value="">Select payment method</option>
-                        <option value="online">Online</option>
-                        <option value="bank_transfer">Bank transfer</option>
-                        <option value="cash">Cash</option>
-                        <option value="credit">Credit</option>
+                        <option value="wallet">Wallet</option>
                       </select>
                       </div>
                       <div className="space-y-2 sm:col-span-2">

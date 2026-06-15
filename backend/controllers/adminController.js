@@ -14,6 +14,7 @@ import { registerAdminUserManagementRoutes } from './admin/userManagementRoutes.
 import { registerAdminProductModerationRoutes } from './admin/productModerationRoutes.js';
 import { registerAdminProductCatalogRoutes } from './admin/productCatalogRoutes.js';
 import { generateAdminData } from './admin/adminDataService.js';
+import { registerAdminWalletRoutes } from './admin/walletRoutes.js';
 
 const router = express.Router();
 const console = {
@@ -63,6 +64,7 @@ registerAdminUserManagementRoutes({
 });
 
 registerAdminProductCatalogRoutes(adminDeps);
+registerAdminWalletRoutes(adminDeps);
 
 registerAdminProductModerationRoutes(adminDeps);
 registerAdminNotificationRoutes(adminDeps);
