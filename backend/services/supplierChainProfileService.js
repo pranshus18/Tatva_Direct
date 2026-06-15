@@ -80,6 +80,27 @@ export function normalizeCompanyInfoEntries(rawEntries) {
   return normalized;
 }
 
+function mergeChainEntryDocuments(existing = {}, incoming = {}) {
+  const roleUrls = [
+    ...new Set([
+      ...resolveAuthorizationCertificateUrls(existing),
+      ...resolveAuthorizationCertificateUrls(incoming)
+    ])
+  ];
+  const brandUrls = [
+    ...new Set([
+      ...resolveBrandApprovalDocumentUrls(existing),
+      ...resolveBrandApprovalDocumentUrls(incoming)
+    ])
+  ];
+  return {
+    ...existing,
+    ...incoming,
+    ...setAuthorizationCertificateUrls({}, roleUrls),
+    ...setBrandApprovalDocumentUrls({}, brandUrls)
+  };
+}
+
 export function buildChainPayloadFromProfileData(profileData) {
   const entries = normalizeCompanyInfoEntries(profileData.companyInfoEntries || []);
   return {
@@ -100,13 +121,13 @@ function mergeUniqueChainEntries(...entryLists) {
 
     if (id && byId.has(id)) {
       const idx = byId.get(id);
-      merged[idx] = { ...merged[idx], ...entry };
+      merged[idx] = mergeChainEntryDocuments(merged[idx], entry);
       return;
     }
 
     if (brandKey && byBrand.has(brandKey)) {
       const idx = byBrand.get(brandKey);
-      merged[idx] = { ...merged[idx], ...entry };
+      merged[idx] = mergeChainEntryDocuments(merged[idx], entry);
       if (id) byId.set(id, idx);
       return;
     }
@@ -368,6 +389,7 @@ export function baselineChainFromProfile(profile) {
 export function chainPayloadSignature(payload) {
   const p = payload || {};
   const entries = (p.companyInfoEntries || []).map((e) => ({
+    id: String(e?.id || '').trim(),
     role: String(e?.role || '').trim(),
     brands: String(e?.brands || '').trim(),
     gstin: String(e?.gstin || '').trim(),
@@ -380,6 +402,48 @@ export function chainPayloadSignature(payload) {
     brands: String(p.brands || '').trim(),
     entries
   });
+}
+
+function matchBaselineChainEntry(baselineEntries, entry) {
+  const id = String(entry?.id || '').trim();
+  if (id) {
+    const byId = (baselineEntries || []).find((row) => String(row?.id || '').trim() === id);
+    if (byId) return byId;
+  }
+  const brandKey = normalizeBrandKey(entry?.brands);
+  if (!brandKey) return null;
+  return (baselineEntries || []).find((row) => normalizeBrandKey(row?.brands) === brandKey) || null;
+}
+
+/** Role changes on brands that already had an approved role. */
+export function detectSupplyChainRoleChanges(baseline, incoming) {
+  const baselineEntries = baseline?.companyInfoEntries || [];
+  const incomingEntries = incoming?.companyInfoEntries || [];
+  const changes = [];
+
+  for (const entry of incomingEntries) {
+    const nextRole = String(entry?.role || '').trim();
+    if (!nextRole) continue;
+    const baselineEntry = matchBaselineChainEntry(baselineEntries, entry);
+    const previousRole = String(baselineEntry?.role || '').trim();
+    if (previousRole && previousRole !== nextRole) {
+      changes.push({
+        entryId: entry?.id || null,
+        brand: String(entry?.brands || '').trim(),
+        fromRole: previousRole,
+        toRole: nextRole
+      });
+    }
+  }
+
+  return changes;
+}
+
+export function chainRequiresAdminApproval(baseline, incoming) {
+  if (chainPayloadSignature(baseline) !== chainPayloadSignature(incoming)) {
+    return true;
+  }
+  return detectSupplyChainRoleChanges(baseline, incoming).length > 0;
 }
 
 export function hasAnySupplyChainRole(payload) {

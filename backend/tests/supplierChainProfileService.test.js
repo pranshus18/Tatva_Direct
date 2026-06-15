@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   collectDeclaredBrandNamesFromProfiles,
+  detectSupplyChainRoleChanges,
+  chainRequiresAdminApproval,
   mergeApprovedBrandsIntoChainEntries,
   normalizeCompanyInfoEntries
 } from '../services/supplierChainProfileService.js';
@@ -121,4 +123,42 @@ test('collectDeclaredBrandNamesFromProfiles gathers brands from saved, draft, an
     { companyInfoEntries: [{ brands: 'apple' }] }
   );
   assert.deepEqual(names.sort(), ['Finolex', 'acc', 'apple', 'hp']);
+});
+
+test('detectSupplyChainRoleChanges finds role changes on existing brand entries', () => {
+  const baseline = {
+    companyInfoEntries: [{ id: 'e1', role: 'dealer', brands: 'Philips' }]
+  };
+  const incoming = {
+    companyInfoEntries: [{ id: 'e1', role: 'retailer', brands: 'Philips' }]
+  };
+  const changes = detectSupplyChainRoleChanges(baseline, incoming);
+  assert.equal(changes.length, 1);
+  assert.equal(changes[0].fromRole, 'dealer');
+  assert.equal(changes[0].toRole, 'retailer');
+  assert.equal(changes[0].brand, 'Philips');
+});
+
+test('detectSupplyChainRoleChanges ignores first-time role assignment', () => {
+  const baseline = {
+    companyInfoEntries: [{ id: 'e1', role: '', brands: 'Philips' }]
+  };
+  const incoming = {
+    companyInfoEntries: [{ id: 'e1', role: 'dealer', brands: 'Philips' }]
+  };
+  assert.equal(detectSupplyChainRoleChanges(baseline, incoming).length, 0);
+});
+
+test('chainRequiresAdminApproval is true when supply-chain role changes on saved brand', () => {
+  const baseline = {
+    supplierRole: 'dealer',
+    brands: 'Philips',
+    companyInfoEntries: [{ id: 'e1', role: 'dealer', brands: 'Philips' }]
+  };
+  const incoming = {
+    supplierRole: 'retailer',
+    brands: 'Philips',
+    companyInfoEntries: [{ id: 'e1', role: 'retailer', brands: 'Philips' }]
+  };
+  assert.equal(chainRequiresAdminApproval(baseline, incoming), true);
 });

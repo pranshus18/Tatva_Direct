@@ -5,14 +5,18 @@ import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainE
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
 import { validateCompanyInfoEntriesList, validateUniqueBrandsAcrossEntries } from '../utils/supplierChainEntryValidation';
 import {
+  buildApprovedBaselineSnapshot,
   buildSupplierChainSavePayload,
   buildSupplyChainFormProfile,
   buildSupplyChainSummaryRows,
   deduplicateCompanyInfoEntriesByBrand,
+  detectEntryRoleChanges,
   ensureAtLeastOneCompanyInfoEntry,
+  getApprovedBaselineEntries,
   getCompanyInfoEntriesForSave,
   mergeCompanyInfoEntriesById,
   mergeFormStepProfile,
+  normalizeProfileForEditor,
   syncBrandEntriesForSupplyChainStep
 } from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
@@ -41,22 +45,6 @@ function chainFormSignature(profile) {
       minimumOrderValue: e.minimumOrderValue ?? ''
     }))
   });
-}
-
-function normalizeProfileForEditor(profileData) {
-  if (!profileData) return null;
-  const snapshot = cloneProfileSnapshot(profileData);
-  const mergedEntries = deduplicateCompanyInfoEntriesByBrand(
-    mergeCompanyInfoEntriesById(
-      snapshot.companyInfoEntries || [],
-      snapshot.approvedChainProfile?.companyInfoEntries || []
-    )
-  );
-  snapshot.companyInfoEntries = ensureAtLeastOneCompanyInfoEntry({
-    ...snapshot,
-    companyInfoEntries: mergedEntries
-  });
-  return snapshot;
 }
 
 /**
@@ -109,12 +97,17 @@ export default function SupplierSelectYourself() {
     setProfile(buildSupplierChainSavePayload({ ...next, companyInfoEntries: entries }));
   };
 
-  const applyProfileFromResponse = (profileData) => {
+  const applyProfileSnapshot = (profileData) => {
     const snapshot = normalizeProfileForEditor(profileData);
     if (!snapshot) return false;
     setProfile(snapshot);
-    setBaseline(cloneProfileSnapshot(snapshot));
+    setBaseline(cloneProfileSnapshot(buildApprovedBaselineSnapshot(profileData)));
     return true;
+  };
+
+  const applyProfileFromResponse = (profileData) => {
+    if (!profileData) return false;
+    return applyProfileSnapshot(profileData);
   };
 
   const fetchProfile = async () => {
@@ -160,6 +153,11 @@ export default function SupplierSelectYourself() {
     fetchDiscountInsights();
   }, []);
 
+  const approvedBaselineEntries = useMemo(
+    () => getApprovedBaselineEntries(baseline || profile || {}),
+    [baseline, profile]
+  );
+
   const handleSave = async () => {
     const allEntries = getCompanyInfoEntriesForSave(profile);
     const uniqueBrandsCheck = validateUniqueBrandsAcrossEntries(allEntries);
@@ -173,7 +171,27 @@ export default function SupplierSelectYourself() {
       entries.length > 0
         ? validateCompanyInfoEntriesList(entries)
         : { ok: false, message: 'Add at least one brand registration below.' };
+    const roleChanges = detectEntryRoleChanges(baseline, profile);
+    if (roleChanges.length > 0 && !validation.ok) {
+      alert(
+        `You changed the supply-chain role for ${roleChanges[0].brand || 'a brand'}. Complete all required fields for that brand, then save to submit the role change for admin approval.`
+      );
+      return;
+    }
     const saveAsDraft = !validation.ok;
+
+    if (roleChanges.length > 0 && !saveAsDraft) {
+      const summary = roleChanges
+        .map((change) => `${change.brand}: ${change.fromRoleLabel} -> ${change.toRoleLabel}`)
+        .join('\n');
+      if (
+        !window.confirm(
+          `Changing your supply-chain role requires admin approval.\n\n${summary}\n\nSubmit for admin approval now?`
+        )
+      ) {
+        return;
+      }
+    }
 
     try {
       setSaving(true);
@@ -216,6 +234,7 @@ export default function SupplierSelectYourself() {
   const handleSaveEntry = async (entryId, entryIndexHint = -1) => {
     if (!profile || saving || discarding) return;
     const entries = getCompanyInfoEntriesForSave(profile);
+    const formEntries = getCompanyInfoEntriesForSave(supplyChainFormProfile || profile);
     const uniqueBrandsCheck = validateUniqueBrandsAcrossEntries(entries);
     if (!uniqueBrandsCheck.ok) {
       alert(uniqueBrandsCheck.message);
@@ -230,17 +249,40 @@ export default function SupplierSelectYourself() {
           ? entryIndexHint
           : -1;
     if (entryIndex < 0) return;
-    const selectedEntry = entries[entryIndex] || null;
+    const formEntry =
+      formEntries.find((entry) => String(entry?.id || '') === String(entryId || '')) || null;
+    const selectedEntry = formEntry || entries[entryIndex] || null;
     if (!selectedEntry) return;
 
-    const entryValidation = validateCompanyInfoEntriesList([entries[entryIndex]]);
+    const roleChanges = detectEntryRoleChanges(baseline, profile).filter(
+      (change) => String(change.entryId || '') === String(selectedEntry.id || '')
+    );
+
+    const entryValidation = validateCompanyInfoEntriesList([selectedEntry]);
     if (!entryValidation.ok) {
+      if (roleChanges.length > 0) {
+        alert(
+          `You changed the supply-chain role for ${selectedEntry.brands || 'this brand'}. Upload role documents and complete required fields, then save to submit for admin approval.`
+        );
+        return;
+      }
       const message = String(entryValidation.message || 'Entry is incomplete.').replace(
         /^Entry 1:/,
         `Entry ${entryIndex + 1}:`
       );
       alert(message);
       return;
+    }
+
+    if (roleChanges.length > 0) {
+      const change = roleChanges[0];
+      if (
+        !window.confirm(
+          `Change supply-chain role for ${change.brand} from ${change.fromRoleLabel} to ${change.toRoleLabel}?\n\nThis requires admin approval. Your current approved role stays active until admin approves.`
+        )
+      ) {
+        return;
+      }
     }
 
     const entriesForEntrySave = entries.map((entry) => ({ ...(entry || {}) }));
@@ -275,7 +317,10 @@ export default function SupplierSelectYourself() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify(profileForEntrySave)
+        body: JSON.stringify({
+          ...profileForEntrySave,
+          saveSupplyChainEntryId: selectedEntry?.id || entryId
+        })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.status !== 'success') {
@@ -587,14 +632,8 @@ export default function SupplierSelectYourself() {
             <SupplierSupplyChainEntriesEditor
               key={`form-${editorResetKey}`}
               profile={supplyChainFormProfile}
-              setProfile={(next) =>
-                setProfile(
-                  mergeFormStepProfile(
-                    profile,
-                    buildSupplierChainSavePayload(next, next.companyInfoEntries || [])
-                  )
-                )
-              }
+              approvedBaselineEntries={approvedBaselineEntries}
+              setProfile={(next) => setProfile(mergeFormStepProfile(profile, next))}
               editing
               sectionView="form"
               selectionMode="all"

@@ -22,7 +22,8 @@ export const profileUpdateSchema = z.object({
   brands: z.any().optional(),
   companyInfoEntries: z.array(z.record(z.string(), z.any())).optional(),
   saveAsDraft: z.boolean().optional(),
-  saveBrandApprovalOnly: z.boolean().optional()
+  saveBrandApprovalOnly: z.boolean().optional(),
+  saveSupplyChainEntryId: z.string().optional()
 });
 
 export const profileUploadCertificateBodySchema = z.object({

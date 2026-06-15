@@ -6,6 +6,11 @@ import BrandSelect from './BrandSelect';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
 import { validateCompanyInfoEntriesList, brandKeyForDuplicateCheck } from '../utils/supplierChainEntryValidation';
 import {
+  formatSupplyChainRoleLabel,
+  getApprovedRoleForEntry,
+  matchCompanyInfoEntry
+} from '../utils/supplierSelectYourselfProfile';
+import {
   appendAuthorizationCertificateUrl,
   appendBrandApprovalDocumentUrl,
   removeBrandApprovalDocumentUrl,
@@ -174,7 +179,8 @@ const CompanyInfoEntryCard = ({
   useBrandNameTextInput = false,
   excludeBrands = [],
   duplicateBrandMessage = '',
-  brandPickerAtTop = false
+  brandPickerAtTop = false,
+  approvedRole = ''
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const catalogBrandSelected =
@@ -212,6 +218,9 @@ const CompanyInfoEntryCard = ({
   const brandApprovalReadyForRole = hasBrandValue && brandStatus === 'approved' && chainDefined;
   const roleSelectionEnabled =
     editing && brandApprovalReadyForRole && !roleOptionsLoading && availableRoleOptions.length > 0;
+  const approvedRoleLabel = approvedRole ? formatSupplyChainRoleLabel(approvedRole) : '';
+  const pendingRoleChange =
+    !!approvedRole && !!entry.role && String(entry.role).trim() !== String(approvedRole).trim();
   const isUnifiedRegistration = sectionView === 'all';
   const isBrandOnlyStep = sectionView === 'brand';
   const isSupplyChainOnlyStep = sectionView === 'form';
@@ -525,6 +534,21 @@ const CompanyInfoEntryCard = ({
                     </option>
                   ))}
                 </select>
+                {approvedRoleLabel ? (
+                  <p className="chain-field__sublabel">
+                    Approved role: <strong>{approvedRoleLabel}</strong>
+                    {pendingRoleChange
+                      ? '. Changing role requires admin approval after you save.'
+                      : ''}
+                  </p>
+                ) : null}
+                {pendingRoleChange ? (
+                  <p className="chain-callout chain-callout--warning">
+                    You selected {formatSupplyChainRoleLabel(entry.role)} instead of your approved role (
+                    {approvedRoleLabel}). Save this entry to submit the change for admin approval. Your current approved
+                    role stays active until admin approves.
+                  </p>
+                ) : null}
               </div>
             </div>
           </section>
@@ -596,7 +620,8 @@ export default function SupplierSupplyChainEntriesEditor({
   onSaveEntry = null,
   onRemoveEntry = null,
   savingEntryId = null,
-  showAddEntry = null
+  showAddEntry = null,
+  approvedBaselineEntries = []
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -660,8 +685,19 @@ export default function SupplierSupplyChainEntriesEditor({
       return;
     }
 
-    const entries = (profile?.companyInfoEntries || []).map((entry) => {
-      if (entry.id !== entryId) return entry;
+    const displayEntries = getDisplayEntries();
+    const targetEntry = displayEntries.find((entry) => entry.id === entryId) || null;
+    const targetBrand = normalizeSingleBrand(targetEntry?.brands);
+    const baseEntries =
+      Array.isArray(profile?.companyInfoEntries) && profile.companyInfoEntries.length > 0
+        ? profile.companyInfoEntries.map((entry) => ({ ...entry }))
+        : displayEntries.map((entry) => ({ ...entry }));
+
+    let updatedOne = false;
+    const entries = baseEntries.map((entry) => {
+      if (updatedOne) return entry;
+      if (!matchCompanyInfoEntry(entry, { entryId, brand: targetBrand })) return entry;
+      updatedOne = true;
       return mode === 'remove' ? removeDocument(entry, url) : appendDocument(entry, url);
     });
     setProfile(syncProfileFromEntries(profile, entries));
@@ -869,8 +905,18 @@ export default function SupplierSupplyChainEntriesEditor({
       setProfile(syncProfileFromEntries(profile, nextEntries));
       return;
     }
-    const entries = currentEntries.map((e) => {
-      if (e.id !== entryId) return e;
+    const targetEntry = currentEntries.find((entry) => entry.id === entryId) || null;
+    const targetBrand = normalizeSingleBrand(targetEntry?.brands);
+    const baseEntries =
+      Array.isArray(profile?.companyInfoEntries) && profile.companyInfoEntries.length > 0
+        ? profile.companyInfoEntries.map((entry) => ({ ...entry }))
+        : currentEntries.map((entry) => ({ ...entry }));
+
+    let updatedOne = false;
+    const entries = baseEntries.map((e) => {
+      if (updatedOne) return e;
+      if (!matchCompanyInfoEntry(e, { entryId, brand: targetBrand })) return e;
+      updatedOne = true;
       const updated = { ...e, [field]: nextValue };
       if (field === 'brands' && normalizeSingleBrand(nextValue)) {
         updated.supplyChainRegistrationStarted = true;
@@ -880,6 +926,7 @@ export default function SupplierSupplyChainEntriesEditor({
       }
       return updated;
     });
+    if (!updatedOne) return;
     setProfile(syncProfileFromEntries(profile, entries));
   };
 
@@ -1179,6 +1226,7 @@ export default function SupplierSupplyChainEntriesEditor({
             excludeBrands={reservedBrandsForEntry(displayEntries, entry.id)}
             duplicateBrandMessage={duplicateBrandMessages.get(entry.id) || ''}
             brandPickerAtTop={isBrandStepPicker}
+            approvedRole={getApprovedRoleForEntry(approvedBaselineEntries, entry)}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]

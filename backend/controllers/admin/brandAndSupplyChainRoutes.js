@@ -1,4 +1,9 @@
 import {
+  approveBrandReviewItem,
+  buildBrandReviewItems,
+  rejectBrandReviewItem
+} from '../../services/supplierChainAdminService.js';
+import {
   normalizeCompanyInfoEntries,
   syncApprovedBrandsIntoUserProfile
 } from '../../services/supplierChainProfileService.js';
@@ -280,7 +285,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
       if (userIds.length > 0) {
         const { data: users } = await supabase
           .from('users')
-          .select('id, name, email, company, user_type')
+          .select('id, name, email, company, user_type, profile')
           .in('id', userIds);
         (users || []).forEach((u) => {
           userMap[u.id] = u;
@@ -292,7 +297,9 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         user: userMap[r.user_id] || null
       }));
 
-      res.json({ status: 'success', requests });
+      const brandItems = buildBrandReviewItems(requests, userMap);
+
+      res.json({ status: 'success', requests, brandItems });
     } catch (error) {
       console.error('List supplier-chain-requests error:', error);
       res.status(500).json({ status: 'error', message: error.message || 'Internal server error' });
@@ -303,7 +310,55 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
     const requestId = req.params.id;
     const nowIso = new Date().toISOString();
     try {
-      parseWithSchema(adminSupplierChainApproveSchema, req.body || {});
+      const body = parseWithSchema(adminSupplierChainApproveSchema, req.body || {});
+      const entryId = String(body.entryId || '').trim();
+      const brand = String(body.brand || '').trim();
+
+      if (entryId || brand) {
+        const result = await approveBrandReviewItem({
+          requestId,
+          entryId,
+          brand,
+          adminUserId: req.userId
+        });
+        if (!result.ok) {
+          return res.status(result.code === 'not_found' ? 404 : 400).json({
+            status: 'error',
+            code: result.code,
+            message: result.message
+          });
+        }
+
+        try {
+          const { data: reqRow } = await supabase
+            .from('supplier_chain_profile_requests')
+            .select('user_id')
+            .eq('id', requestId)
+            .maybeSingle();
+          if (reqRow?.user_id) {
+            await insertNotification({
+              user_id: reqRow.user_id,
+              type: 'supplier_chain_profile_approved',
+              title: `Supply-chain role approved: ${result.brand}`,
+              message: `An admin approved your ${result.role || 'supply-chain'} role for brand "${result.brand}".`,
+              related_supplier_id: reqRow.user_id,
+              is_read: false,
+              metadata: { requestId, brand: result.brand, entryId }
+            }, supabase);
+          }
+        } catch (notifErr) {
+          console.error('[Admin] chain per-brand approve notification:', notifErr);
+        }
+
+        return res.json({
+          status: 'success',
+          message: `Approved ${result.role || 'role'} for brand "${result.brand}"`,
+          brand: result.brand,
+          remainingCount: result.remainingCount,
+          requestClosed: result.requestClosed
+        });
+      }
+
       const { data: reqRow, error: rErr } = await supabase
         .from('supplier_chain_profile_requests')
         .select('*')
@@ -423,6 +478,55 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
     try {
       const payload = parseWithSchema(adminSupplierChainRejectSchema, req.body || {});
       const reason = String(payload.reason || '').trim() || 'Rejected by admin';
+      const entryId = String(payload.entryId || '').trim();
+      const brand = String(payload.brand || '').trim();
+
+      if (entryId || brand) {
+        const result = await rejectBrandReviewItem({
+          requestId,
+          entryId,
+          brand,
+          reason,
+          adminUserId: req.userId
+        });
+        if (!result.ok) {
+          return res.status(result.code === 'not_found' ? 404 : 400).json({
+            status: 'error',
+            code: result.code,
+            message: result.message
+          });
+        }
+
+        try {
+          const { data: reqRow } = await supabase
+            .from('supplier_chain_profile_requests')
+            .select('user_id')
+            .eq('id', requestId)
+            .maybeSingle();
+          if (reqRow?.user_id) {
+            await insertNotification({
+              user_id: reqRow.user_id,
+              type: 'supplier_chain_profile_rejected',
+              title: `Supply-chain change rejected: ${result.brand}`,
+              message: `An admin rejected your supply-chain change for brand "${result.brand}". Reason: ${reason}`,
+              related_supplier_id: reqRow.user_id,
+              is_read: false,
+              metadata: { requestId, brand: result.brand, entryId, reason }
+            }, supabase);
+          }
+        } catch (notifErr) {
+          console.error('[Admin] chain per-brand reject notification:', notifErr);
+        }
+
+        return res.json({
+          status: 'success',
+          message: `Rejected supply-chain change for brand "${result.brand}"`,
+          brand: result.brand,
+          remainingCount: result.remainingCount,
+          requestClosed: result.requestClosed
+        });
+      }
+
       const { data: reqRow, error: rErr } = await supabase
         .from('supplier_chain_profile_requests')
         .select('id, user_id')

@@ -11,6 +11,7 @@ import {
 } from '../../services/supplierChainProfileService.js';
 import {
   SUPPLY_CHAIN_ROLES_IN_ORDER,
+  catalogBrandDedupKey,
   findCategorySupplyChainRowForBrandKey,
   normalizeBrandKey,
   normalizeChainRolesFromStages
@@ -99,26 +100,33 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
 
   const normalizedBrands = brands.map((b) => ({
     original: b,
-    normalized: normalizeBrandKey(b)
+    normalized: normalizeBrandKey(b),
+    dedupKey: catalogBrandDedupKey(b)
   }));
 
-  const brandKeys = normalizedBrands.map((b) => b.normalized).filter(Boolean);
   const { data: brandRows, error: brandError } = await supabase
     .from('brands')
-    .select('name, normalized_name, status')
-    .in('normalized_name', brandKeys);
+    .select('name, normalized_name, status');
   if (brandError) throw brandError;
+
+  const brandByDedupKey = new Map();
+  for (const row of brandRows || []) {
+    const key = catalogBrandDedupKey(row?.normalized_name || row?.name);
+    if (!key) continue;
+    const existing = brandByDedupKey.get(key);
+    const rowStatus = String(row?.status || '').toLowerCase();
+    const existingStatus = String(existing?.status || '').toLowerCase();
+    const rank = { approved: 0, pending: 1, rejected: 2 };
+    if (!existing || (rank[rowStatus] ?? 9) < (rank[existingStatus] ?? 9)) {
+      brandByDedupKey.set(key, row);
+    }
+  }
 
   const { data: chainRows, error: chainError } = await supabase
     .from('category_supply_chains')
     .select('category_name, stages, updated_at');
   if (chainError) throw chainError;
 
-  const brandByKey = new Map();
-  for (const row of brandRows || []) {
-    const key = normalizeBrandKey(row?.normalized_name || row?.name);
-    if (key && !brandByKey.has(key)) brandByKey.set(key, row);
-  }
   const perBrand = [];
   const roleLists = [];
   const rolesByBrand = {};
@@ -126,12 +134,12 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
   const notApprovedBrands = [];
   const missingChainBrands = [];
   for (const b of normalizedBrands) {
-    const brandRow = brandByKey.get(b.normalized) || null;
+    const brandRow = brandByDedupKey.get(b.dedupKey) || null;
     const brandStatus = String(brandRow?.status || 'missing');
 
     const chainRow = findCategorySupplyChainRowForBrandKey(chainRows, b.normalized);
     const roles = normalizeChainRolesFromStages(chainRow?.stages);
-    if (brandStatus !== 'approved' && roles.length === 0) {
+    if (brandStatus !== 'approved') {
       blockedReason = 'brand_not_approved';
       notApprovedBrands.push(brandRow?.name || b.original);
     }

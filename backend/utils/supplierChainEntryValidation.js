@@ -1,6 +1,8 @@
 import {
   resolveAuthorizationCertificateUrls,
-  resolveBrandApprovalDocumentUrls
+  resolveBrandApprovalDocumentUrls,
+  setAuthorizationCertificateUrls,
+  setBrandApprovalDocumentUrls
 } from './authorizationCertificateUrls.js';
 
 function parseBrandsListForValidation(brands) {
@@ -75,11 +77,19 @@ export function resolveCompanyInfoEntriesForValidation(profileData) {
       gstin: profileData.gstin || '',
       companyName: profileData.companyName || '',
       ownershipDetails: profileData.ownershipDetails || '',
-      brandApprovalDocumentUrl: profileData.brandApprovalDocumentUrl || '',
-      authorizationCertificateUrl: profileData.authorizationCertificateUrl || '',
+      ...setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(profileData || {})),
+      ...setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(profileData || {})),
       minimumOrderValue: profileData.minimumOrderValue ?? ''
     }
   ];
+}
+
+export function entryRequiresSupplyChainCompletion(entry = {}) {
+  const role = String(entry?.role || '').trim();
+  const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
+  const mov = entry?.minimumOrderValue;
+  const hasMov = mov !== '' && mov !== null && mov !== undefined;
+  return !!(role || roleCertificateUrls.length > 0 || hasMov);
 }
 
 export function validateCompanyInfoEntriesList(entries) {
@@ -105,6 +115,9 @@ export function validateCompanyInfoEntriesList(entries) {
         ok: false,
         message: `Entry ${entryNum}: Only one brand is allowed per entry. Add another block for a second brand.`
       };
+    }
+    if (!entryRequiresSupplyChainCompletion(entry)) {
+      continue;
     }
     if (roleCertificateUrls.length === 0) {
       return {

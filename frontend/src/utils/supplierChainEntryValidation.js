@@ -1,4 +1,9 @@
-import { resolveAuthorizationCertificateUrls } from './authorizationCertificateUrls';
+import {
+  resolveAuthorizationCertificateUrls,
+  resolveBrandApprovalDocumentUrls,
+  setAuthorizationCertificateUrls,
+  setBrandApprovalDocumentUrls
+} from './authorizationCertificateUrls';
 
 /** @typedef {{ id?: string, role?: string, brands?: string, gstin?: string, companyName?: string, ownershipDetails?: string, authorizationCertificateUrl?: string, authorizationCertificateUrls?: string[], brandApprovalDocumentUrl?: string, brandApprovalDocumentUrls?: string[], minimumOrderValue?: string|number|null }} ChainEntry */
 
@@ -136,8 +141,8 @@ export function resolveCompanyInfoEntriesForValidation(profile) {
       gstin: profile.gstin || '',
       companyName: profile.companyName || '',
       ownershipDetails: profile.ownershipDetails || '',
-      brandApprovalDocumentUrl: profile.brandApprovalDocumentUrl || '',
-      authorizationCertificateUrl: profile.authorizationCertificateUrl || '',
+      ...setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(profile || {})),
+      ...setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(profile || {})),
       minimumOrderValue: profile.minimumOrderValue ?? ''
     }
   ];
@@ -165,6 +170,15 @@ export function hasSupplyChainRegistrationData(entry = {}) {
 
 export function filterSupplyChainFormEntries(entries = []) {
   return (Array.isArray(entries) ? entries : []).filter((entry) => hasSupplyChainRegistrationData(entry));
+}
+
+/** True when Step 2 supply-chain fields were started for this entry (not brand-only Step 1). */
+export function entryRequiresSupplyChainCompletion(entry = {}) {
+  const role = String(entry?.role || '').trim();
+  const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
+  const mov = entry?.minimumOrderValue;
+  const hasMov = mov !== '' && mov !== null && mov !== undefined;
+  return !!(role || roleCertificateUrls.length > 0 || hasMov);
 }
 
 /**
@@ -203,6 +217,9 @@ export function validateCompanyInfoEntriesList(entries) {
         entryIndex: i,
         field: 'brands'
       };
+    }
+    if (!entryRequiresSupplyChainCompletion(entry)) {
+      continue;
     }
     if (roleCertificateUrls.length === 0) {
       return {

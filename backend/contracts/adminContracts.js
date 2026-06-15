@@ -40,7 +40,9 @@ export const adminBrandRequestSchema = z.object({
 });
 
 export const adminSupplierChainRejectSchema = z.object({
-  reason: z.string().optional()
+  reason: z.string().optional(),
+  entryId: z.string().trim().min(1).optional(),
+  brand: z.string().trim().min(1).optional()
 });
 
 export const adminUserStatusUpdateSchema = z.object({
@@ -91,7 +93,10 @@ export const adminAiPolishListingSchema = z.object({
 export const adminProductApproveSchema = z.object({});
 export const adminProductDeleteSchema = z.object({});
 export const adminBrandApproveSchema = z.object({});
-export const adminSupplierChainApproveSchema = z.object({});
+export const adminSupplierChainApproveSchema = z.object({
+  entryId: z.string().trim().min(1).optional(),
+  brand: z.string().trim().min(1).optional()
+});
 
 export const adminSupplyChainDefinitionUpsertSchema = z.object({
   brandName: z.string().optional(),

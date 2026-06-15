@@ -169,6 +169,112 @@
   min-width: 1100px;
 }
 
+/* Per-brand review cards (one box per brand) */
+.admin-chain-filter-select {
+  padding: 0.75rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  background: white;
+}
+
+.admin-chain-cards-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.admin-chain-cards-header {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) minmax(180px, 1.3fr) minmax(160px, 1.1fr) minmax(90px, 0.65fr) minmax(
+      110px,
+      0.75fr
+    ) minmax(100px, 0.65fr);
+  gap: 0.75rem;
+  padding: 0 1.1rem 0.35rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #64748b;
+}
+
+.admin-chain-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.admin-chain-brand-card {
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  overflow: hidden;
+}
+
+.admin-chain-brand-card--no-role {
+  opacity: 0.88;
+  background: #fafbfc;
+}
+
+.admin-chain-brand-card__grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) minmax(180px, 1.3fr) minmax(160px, 1.1fr) minmax(90px, 0.65fr) minmax(
+      110px,
+      0.75fr
+    ) minmax(100px, 0.65fr);
+  gap: 0.75rem;
+  align-items: start;
+  padding: 1rem 1.1rem;
+}
+
+.admin-chain-brand-card__cell {
+  min-width: 0;
+}
+
+.admin-chain-brand-card__cell--actions {
+  display: flex;
+  align-items: flex-start;
+}
+
+.admin-chain-assignment-item--solo {
+  margin-top: 0;
+}
+
+.admin-chain-role-change-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.5rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  background: #fff7ed;
+  border: 1px solid #fed7aa;
+  font-size: 0.82rem;
+  color: #9a3412;
+}
+
+.admin-chain-role-change-banner__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.35px;
+}
+
+.admin-chain-no-role-note {
+  margin: 0.45rem 0 0;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.admin-chain-card-status {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
 .admin-chain-approvals-table td {
   vertical-align: top;
 }
@@ -359,6 +465,36 @@
 }
 
 @media (max-width: 992px) {
+  .admin-chain-cards-header {
+    display: none;
+  }
+
+  .admin-chain-brand-card__grid {
+    grid-template-columns: 1fr;
+    gap: 0.85rem;
+  }
+
+  .admin-chain-brand-card__cell {
+    padding-bottom: 0.85rem;
+    border-bottom: 1px solid #f1f5f9;
+  }
+
+  .admin-chain-brand-card__cell:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
+  }
+
+  .admin-chain-brand-card__cell::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.35px;
+    color: #64748b;
+  }
+
   .admin-chain-approvals-table {
     min-width: 0;
     border-collapse: separate;

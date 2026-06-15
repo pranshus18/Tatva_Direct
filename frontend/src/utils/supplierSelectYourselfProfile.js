@@ -1,4 +1,9 @@
-import { resolveAuthorizationCertificateUrls, resolveBrandApprovalDocumentUrls } from './authorizationCertificateUrls';
+import {
+  resolveAuthorizationCertificateUrls,
+  resolveBrandApprovalDocumentUrls,
+  setAuthorizationCertificateUrls,
+  setBrandApprovalDocumentUrls
+} from './authorizationCertificateUrls';
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
 
 export const SUPPLY_CHAIN_ROLE_LABELS = {
@@ -14,6 +19,132 @@ export function formatSupplyChainRoleLabel(role) {
   const key = String(role || '').trim();
   if (!key) return 'Not set';
   return SUPPLY_CHAIN_ROLE_LABELS[key] || key;
+}
+
+function matchBaselineEntry(baselineEntries, entry) {
+  const id = String(entry?.id || '').trim();
+  if (id) {
+    const byId = (baselineEntries || []).find((row) => String(row?.id || '').trim() === id);
+    if (byId) return byId;
+  }
+  const brandKey = brandKeyForDuplicateCheck(entry?.brands);
+  if (!brandKey) return null;
+  return (
+    (baselineEntries || []).find(
+      (row) => brandKeyForDuplicateCheck(row?.brands) === brandKey
+    ) || null
+  );
+}
+
+/** Last admin-approved supply-chain rows (not pending edits). */
+export function getApprovedBaselineEntries(profile) {
+  const approved = profile?.approvedChainProfile?.companyInfoEntries;
+  if (Array.isArray(approved) && approved.length > 0) {
+    return approved.map((entry) => ({ ...(entry || {}) }));
+  }
+  if (profile?.chainProfileApprovalStatus === 'pending') {
+    return [];
+  }
+  return getCompanyInfoEntriesForSave(profile);
+}
+
+export function getApprovedRoleForEntry(baselineEntries, entry) {
+  const baselineEntry = matchBaselineEntry(baselineEntries, entry);
+  return String(baselineEntry?.role || '').trim();
+}
+
+export function detectEntryRoleChanges(baselineProfile, nextProfile) {
+  const baselineEntries = getApprovedBaselineEntries(baselineProfile || {});
+  const nextEntries = getCompanyInfoEntriesForSave(nextProfile || {});
+  const changes = [];
+
+  for (const entry of nextEntries) {
+    const nextRole = String(entry?.role || '').trim();
+    if (!nextRole) continue;
+    const baselineEntry = matchBaselineEntry(baselineEntries, entry);
+    const previousRole = String(baselineEntry?.role || '').trim();
+    if (previousRole && previousRole !== nextRole) {
+      changes.push({
+        entryId: entry?.id || null,
+        brand: String(entry?.brands || '').trim(),
+        fromRole: previousRole,
+        toRole: nextRole,
+        fromRoleLabel: formatSupplyChainRoleLabel(previousRole),
+        toRoleLabel: formatSupplyChainRoleLabel(nextRole)
+      });
+    }
+  }
+
+  return changes;
+}
+
+/** Guarantee every supply-chain row has a stable unique id (duplicate ids break per-entry edits). */
+export function ensureCompanyInfoEntryIds(entries = []) {
+  const seenIds = new Set();
+  return (Array.isArray(entries) ? entries : []).map((rawEntry, index) => {
+    const entry = { ...(rawEntry || {}) };
+    let id = String(entry.id || '').trim();
+    if (!id || seenIds.has(id)) {
+      id =
+        typeof crypto !== 'undefined' && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `entry-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+    }
+    seenIds.add(id);
+    return { ...entry, id };
+  });
+}
+
+export function matchCompanyInfoEntry(entry, { entryId, brand } = {}) {
+  const id = String(entryId || '').trim();
+  const brandKey = brandKeyForDuplicateCheck(brand);
+  const entryBrandKey = brandKeyForDuplicateCheck(entry?.brands);
+  if (id && String(entry?.id || '').trim() === id) {
+    if (!brandKey || !entryBrandKey || brandKey === entryBrandKey) return true;
+    return false;
+  }
+  if (brandKey && entryBrandKey && brandKey === entryBrandKey) return true;
+  return false;
+}
+
+export function normalizeProfileForEditor(profileData) {
+  return normalizeProfileForEditorSnapshot(profileData);
+}
+
+export function buildApprovedBaselineSnapshot(profileData) {
+  if (!profileData) return null;
+  const snapshot = normalizeProfileForEditorSnapshot(profileData);
+  const approvedEntries = profileData?.approvedChainProfile?.companyInfoEntries;
+  if (!Array.isArray(approvedEntries) || approvedEntries.length === 0) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    supplierRole: profileData.approvedChainProfile.supplierRole || snapshot.supplierRole,
+    brands: profileData.approvedChainProfile.brands || snapshot.brands,
+    companyInfoEntries: deduplicateCompanyInfoEntriesByBrand(
+      mergeCompanyInfoEntriesById(approvedEntries)
+    ),
+    approvedChainProfile: profileData.approvedChainProfile
+  };
+}
+
+function normalizeProfileForEditorSnapshot(profileData) {
+  if (!profileData) return null;
+  const snapshot = JSON.parse(JSON.stringify(profileData));
+  const mergedEntries = deduplicateCompanyInfoEntriesByBrand(
+    mergeCompanyInfoEntriesById(
+      snapshot.companyInfoEntries || [],
+      snapshot.approvedChainProfile?.companyInfoEntries || []
+    )
+  );
+  snapshot.companyInfoEntries = ensureCompanyInfoEntryIds(
+    ensureAtLeastOneCompanyInfoEntry({
+      ...snapshot,
+      companyInfoEntries: mergedEntries
+    })
+  );
+  return snapshot;
 }
 
 /**
@@ -151,6 +282,7 @@ export function deduplicateCompanyInfoEntriesByBrand(entries = []) {
         ...rawEntry,
         id: existing.id || rawEntry.id,
         brands: pickBrandLabel(existing.brands, rawEntry.brands),
+        role: String(rawEntry?.role || '').trim() || String(existing?.role || '').trim(),
         brandApprovalDocumentUrls: [
           ...new Set([
             ...(Array.isArray(existing.brandApprovalDocumentUrls) ? existing.brandApprovalDocumentUrls : []),
@@ -201,8 +333,8 @@ export function getCompanyInfoEntriesForSave(profile) {
       gstin: profile?.gstin || '',
       companyName: profile?.companyName || '',
       ownershipDetails: profile?.ownershipDetails || '',
-      brandApprovalDocumentUrl: profile?.brandApprovalDocumentUrl || '',
-      authorizationCertificateUrl: profile?.authorizationCertificateUrl || '',
+      ...setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(profile || {})),
+      ...setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(profile || {})),
       minimumOrderValue: profile?.minimumOrderValue ?? ''
     }
   ];
@@ -259,27 +391,53 @@ export function buildSupplyChainFormProfile(profile) {
  * Merge Step 2 form edits back into the full profile without dropping other brand entries.
  */
 export function mergeFormStepProfile(fullProfile, formProfile) {
-  const formEntries = Array.isArray(formProfile?.companyInfoEntries) ? formProfile.companyInfoEntries : [];
-  const formById = new Map(formEntries.map((entry) => [entry.id, entry]));
+  const formEntries = ensureCompanyInfoEntryIds(
+    Array.isArray(formProfile?.companyInfoEntries) ? formProfile.companyInfoEntries : []
+  );
+  const formById = new Map();
+  const formByBrandKey = new Map();
+  for (const entry of formEntries) {
+    const id = String(entry?.id || '').trim();
+    if (id) formById.set(id, entry);
+    const brandKey = brandKeyForDuplicateCheck(entry?.brands);
+    if (brandKey) formByBrandKey.set(brandKey, entry);
+  }
+
   const merged = [];
+  const matchedFormIds = new Set();
+  const matchedBrandKeys = new Set();
 
   for (const entry of fullProfile?.companyInfoEntries || []) {
-    if (formById.has(entry.id)) {
-      merged.push({ ...formById.get(entry.id) });
-    } else {
+    const id = String(entry?.id || '').trim();
+    const brandKey = brandKeyForDuplicateCheck(entry?.brands);
+    let formEntry = (id && formById.get(id)) || (brandKey && formByBrandKey.get(brandKey)) || null;
+    if (!formEntry) {
       merged.push({ ...(entry || {}) });
+      continue;
     }
+    const formId = String(formEntry?.id || '').trim();
+    if (formId) matchedFormIds.add(formId);
+    if (brandKey) matchedBrandKeys.add(brandKey);
+    merged.push({
+      ...(entry || {}),
+      ...formEntry,
+      id: id || formId
+    });
   }
 
   for (const entry of formEntries) {
-    if (!merged.some((row) => row.id === entry.id)) {
+    const id = String(entry?.id || '').trim();
+    const brandKey = brandKeyForDuplicateCheck(entry?.brands);
+    const alreadyMerged =
+      (id && matchedFormIds.has(id)) || (brandKey && matchedBrandKeys.has(brandKey));
+    if (!alreadyMerged) {
       merged.push({ ...(entry || {}) });
     }
   }
 
   return {
     ...fullProfile,
-    companyInfoEntries: merged
+    companyInfoEntries: ensureCompanyInfoEntryIds(merged)
   };
 }
 

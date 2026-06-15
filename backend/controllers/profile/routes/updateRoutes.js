@@ -5,10 +5,13 @@ import {
   baselineChainFromProfile,
   buildChainPayloadFromProfileData,
   chainPayloadSignature,
+  chainRequiresAdminApproval,
   clearPendingChainRequest,
+  detectSupplyChainRoleChanges,
   hasAnySupplyChainRole,
   replacePendingChainRequest
 } from '../../../services/supplierChainProfileService.js';
+import { buildAdminReviewChainPayload } from '../../../services/supplierChainAdminService.js';
 import { insertNotifications } from '../../../repositories/notificationsRepository.js';
 import { findAdmins } from '../../../repositories/usersRepository.js';
 import { profileUpdateSchema } from '../../../contracts/profileContracts.js';
@@ -189,6 +192,7 @@ export function registerProfileUpdateRoutes(router) {
 
         const incomingChain = buildChainPayloadFromProfileData(profileData);
         const baselineChain = baselineChainFromProfile(currentProfile);
+        const roleChanges = detectSupplyChainRoleChanges(baselineChain, incomingChain);
         const wantsDraftSave = profileData.saveAsDraft === true;
         const wantsBrandApprovalSave = profileData.saveBrandApprovalOnly === true;
         let isIncompleteChainDraft = false;
@@ -207,11 +211,36 @@ export function registerProfileUpdateRoutes(router) {
           incomingEntries.length > 0
             ? incomingEntries.some((e) => String(e?.role || '').trim())
             : hasAnySupplyChainRole(incomingChain);
+        const saveSupplyChainEntryId = String(profileData.saveSupplyChainEntryId || '').trim();
 
         if (supplierProfileIncludesChainDraft(profileData) && !wantsBrandApprovalSave) {
           const chainEntriesForValidation = resolveCompanyInfoEntriesForValidation(profileData);
-          const completeness = validateCompanyInfoEntriesList(chainEntriesForValidation);
+          const entriesToValidate = saveSupplyChainEntryId
+            ? chainEntriesForValidation.filter(
+                (entry) => String(entry?.id || '').trim() === saveSupplyChainEntryId
+              )
+            : chainEntriesForValidation;
+
+          if (saveSupplyChainEntryId && entriesToValidate.length === 0) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'supply_chain_entry_not_found',
+              message: 'Could not find the supply-chain entry to save.'
+            });
+          }
+
+          const completeness = validateCompanyInfoEntriesList(entriesToValidate);
           if (!completeness.ok) {
+            if (roleChanges.length > 0) {
+              return res.status(400).json({
+                status: 'error',
+                code: 'role_change_requires_complete_entry',
+                message:
+                  completeness.message ||
+                  'Complete all required fields for this brand before submitting a supply-chain role change for admin approval.',
+                roleChanges
+              });
+            }
             if (!wantsDraftSave) {
               return res.status(400).json({
                 status: 'error',
@@ -235,10 +264,43 @@ export function registerProfileUpdateRoutes(router) {
           return brandStrings;
         };
 
+        const collectBrandStringsForSupplyChainGate = (chain, options = {}) => {
+          const forceAll = options?.force === true;
+          if (forceAll) return collectBrandStringsFromChain(chain);
+
+          const saveEntryId = String(options?.saveSupplyChainEntryId || '').trim();
+          const brandStrings = [];
+          const entries = Array.isArray(chain.companyInfoEntries) ? chain.companyInfoEntries : [];
+
+          if (entries.length > 0) {
+            for (const e of entries) {
+              const entryId = String(e?.id || '').trim();
+              if (saveEntryId && entryId !== saveEntryId) continue;
+
+              const brandsStr = String(e?.brands || '').trim();
+              if (!brandsStr) continue;
+
+              const role = String(e?.role || '').trim();
+              if (saveEntryId || role) {
+                brandStrings.push(brandsStr);
+              }
+            }
+            return brandStrings;
+          }
+
+          if (typeof chain.brands === 'string' && chain.brands.trim()) {
+            brandStrings.push(chain.brands);
+          }
+          return brandStrings;
+        };
+
         const runGlobalBrandGate = async (chain, options = {}) => {
           const force = options?.force === true;
           if (!force && !hasAnySupplyChainRole(chain)) return null;
-          const brandStrings = collectBrandStringsFromChain(chain);
+          const brandStrings = collectBrandStringsForSupplyChainGate(chain, {
+            force,
+            saveSupplyChainEntryId: options?.saveSupplyChainEntryId || saveSupplyChainEntryId
+          });
           const uniqueBrands = [
             ...new Set(
               brandStrings
@@ -346,10 +408,37 @@ export function registerProfileUpdateRoutes(router) {
 
           const roleBrandSelections = [];
           const brandSelectionsWithoutRole = [];
-          const entriesForValidation = Array.isArray(incomingChain.companyInfoEntries)
+          const allIncomingEntries = Array.isArray(incomingChain.companyInfoEntries)
             ? incomingChain.companyInfoEntries
             : [];
-          for (const e of entriesForValidation) {
+          const entriesForRoleValidation = saveSupplyChainEntryId
+            ? allIncomingEntries.filter(
+                (entry) => String(entry?.id || '').trim() === saveSupplyChainEntryId
+              )
+            : allIncomingEntries.filter((entry) => {
+                const brandsStr = String(entry?.brands || '').trim();
+                if (!brandsStr) return false;
+                const role = String(entry?.role || '').trim();
+                if (role) return true;
+                return (
+                  entry?.supplyChainRegistrationStarted === true ||
+                  String(entry?.gstin || '').trim() ||
+                  String(entry?.companyName || '').trim() ||
+                  (Array.isArray(entry?.authorizationCertificateUrls) &&
+                    entry.authorizationCertificateUrls.length > 0) ||
+                  String(entry?.authorizationCertificateUrl || '').trim()
+                );
+              });
+
+          if (saveSupplyChainEntryId && entriesForRoleValidation.length === 0) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'supply_chain_entry_not_found',
+              message: 'Could not find the supply-chain entry to save.'
+            });
+          }
+
+          for (const e of entriesForRoleValidation) {
             const role = String(e?.role || '').trim();
             const brandsStr = String(e?.brands || '').trim();
             const parsedBrands = parseBrandTokens(brandsStr);
@@ -361,7 +450,8 @@ export function registerProfileUpdateRoutes(router) {
             roleBrandSelections.push({ role, brands: parsedBrands });
           }
           if (
-            entriesForValidation.length === 0 &&
+            entriesForRoleValidation.length === 0 &&
+            allIncomingEntries.length === 0 &&
             roleBrandSelections.length === 0 &&
             incomingChain.supplierRole
           ) {
@@ -373,6 +463,8 @@ export function registerProfileUpdateRoutes(router) {
           if (
             brandSelectionsWithoutRole.length === 0 &&
             roleBrandSelections.length === 0 &&
+            entriesForRoleValidation.length === 0 &&
+            allIncomingEntries.length === 0 &&
             parseBrandTokens(incomingChain.brands || '').length > 0
           ) {
             brandSelectionsWithoutRole.push({
@@ -442,18 +534,20 @@ export function registerProfileUpdateRoutes(router) {
             }
           }
 
-          if (chainPayloadSignature(incomingChain) === chainPayloadSignature(baselineChain)) {
-            try {
-              await clearPendingChainRequest(req.userId);
-            } catch (e) {
-              console.warn('[Profile] clearPendingChainRequest:', e?.message || e);
+          if (chainRequiresAdminApproval(baselineChain, incomingChain)) {
+            const reviewPayload = buildAdminReviewChainPayload(baselineChain, incomingChain);
+            const reviewEntryCount = Array.isArray(reviewPayload.companyInfoEntries)
+              ? reviewPayload.companyInfoEntries.length
+              : 0;
+            if (reviewEntryCount === 0) {
+              return res.status(400).json({
+                status: 'error',
+                code: 'no_chain_changes_to_review',
+                message: 'No supply-chain changes were detected for admin review.'
+              });
             }
-            profileUpdate.supplierRole = incomingChain.supplierRole;
-            profileUpdate.brands = incomingChain.brands;
-            profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
-          } else {
             try {
-              await replacePendingChainRequest(req.userId, incomingChain);
+              await replacePendingChainRequest(req.userId, reviewPayload);
             } catch (e) {
               console.error('[Profile] replacePendingChainRequest:', e);
               return res.status(503).json({
@@ -477,20 +571,28 @@ export function registerProfileUpdateRoutes(router) {
 
                 const supplierName = currentUser.name || 'Supplier';
                 const supplierEmail = currentUser.email || '';
-                const preview = incomingChain.companyInfoEntries?.length
-                  ? incomingChain.companyInfoEntries
+                const preview = reviewPayload.companyInfoEntries?.length
+                  ? reviewPayload.companyInfoEntries
                       .map((e) => `${e.role}: ${String(e.brands || '').slice(0, 60)}`)
                       .join('; ')
-                  : `${incomingChain.supplierRole || '—'} — brands: ${String(
-                      incomingChain.brands || ''
-                    ).slice(0, 80)}`;
+                  : `${reviewPayload.supplierRole || '—'} — brands: ${String(reviewPayload.brands || '').slice(0, 80)}`;
+                const roleChangePreview =
+                  roleChanges.length > 0
+                    ? ` Role changes: ${roleChanges
+                        .map((change) => `${change.brand || 'Brand'} ${change.fromRole} -> ${change.toRole}`)
+                        .join('; ')}.`
+                    : '';
                 const notifications = adminIds.map((adminId) => ({
                   user_id: adminId,
                   type: 'supplier_chain_profile_pending',
                   title: `Supplier chain profile pending: ${supplierName}`,
-                  message: `${supplierName} (${supplierEmail}) submitted supply-chain role/brand changes for admin approval. ${preview}`,
+                  message: `${supplierName} (${supplierEmail}) submitted supply-chain role/brand changes for admin approval. ${preview}${roleChangePreview}`,
                   related_supplier_id: req.userId,
-                  metadata: { source: 'supplier_chain_profile_pending', supplierId: req.userId },
+                  metadata: {
+                    source: 'supplier_chain_profile_pending',
+                    supplierId: req.userId,
+                    roleChanges
+                  },
                   is_read: false
                 }));
                 await insertNotifications(notifications, supabase);
@@ -498,6 +600,15 @@ export function registerProfileUpdateRoutes(router) {
                 console.error('[Profile] Failed to notify admins (chain pending):', notifErr);
               }
             })();
+          } else {
+            try {
+              await clearPendingChainRequest(req.userId);
+            } catch (e) {
+              console.warn('[Profile] clearPendingChainRequest:', e?.message || e);
+            }
+            profileUpdate.supplierRole = incomingChain.supplierRole;
+            profileUpdate.brands = incomingChain.brands;
+            profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
           }
         }
       }

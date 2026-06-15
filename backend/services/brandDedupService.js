@@ -35,14 +35,15 @@ export async function findBrandByCatalogDedupKey(brandName, dbClient, { excludeI
   const { data: rows, error } = await listAllBrands(dbClient);
   if (error) return { data: null, error };
 
-  const match =
-    (rows || []).find((row) => {
-      if (excludeId && String(row.id) === String(excludeId)) return false;
-      const rowKey = catalogBrandDedupKey(row?.name || row?.normalized_name);
-      return rowKey === targetKey;
-    }) || null;
+  const matches = (rows || []).filter((row) => {
+    if (excludeId && String(row.id) === String(excludeId)) return false;
+    const rowKey = catalogBrandDedupKey(row?.name || row?.normalized_name);
+    return rowKey === targetKey;
+  });
 
-  return { data: match, error: null };
+  if (matches.length === 0) return { data: null, error: null };
+  const [best] = sortBrandRowsForCanonicalPick(matches);
+  return { data: best || null, error: null };
 }
 
 function sortBrandRowsForCanonicalPick(rows = []) {

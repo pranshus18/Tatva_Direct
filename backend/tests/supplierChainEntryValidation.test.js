@@ -7,22 +7,17 @@ import {
   validateCompanyInfoEntriesList
 } from '../utils/supplierChainEntryValidation.js';
 
-test('validateCompanyInfoEntriesList requires all fields per entry', () => {
-  const incomplete = [
+test('validateCompanyInfoEntriesList requires role documents when Step 2 started', () => {
+  const result = validateCompanyInfoEntriesList([
     {
       id: 'e1',
       role: 'dealer',
       brands: 'Oil',
-      gstin: '',
-      companyName: 'Acme',
-      ownershipDetails: 'Pvt Ltd',
-      authorizationCertificateUrl: 'https://example.com/cert.pdf',
       minimumOrderValue: 1000
     }
-  ];
-  const result = validateCompanyInfoEntriesList(incomplete);
+  ]);
   assert.equal(result.ok, false);
-  assert.match(result.message, /GSTIN/i);
+  assert.match(result.message, /supply-chain role document/i);
 });
 
 test('retailer entry does not require minimum order value', () => {
@@ -96,6 +91,23 @@ test('validateCompanyInfoEntriesList rejects multiple brands in one entry', () =
   ]);
   assert.equal(result.ok, false);
   assert.match(result.message, /only one brand/i);
+});
+
+test('validateCompanyInfoEntriesList skips brand-only entries without Step 2 data', () => {
+  const result = validateCompanyInfoEntriesList([
+    { id: 'e1', brands: 'Philips' },
+    {
+      id: 'e2',
+      role: 'dealer',
+      brands: 'ACC',
+      gstin: '22AAAAA0000A1Z5',
+      companyName: 'Acme',
+      ownershipDetails: 'Pvt Ltd',
+      authorizationCertificateUrl: 'https://example.com/cert.pdf',
+      minimumOrderValue: 1000
+    }
+  ]);
+  assert.equal(result.ok, true);
 });
 
 test('validateCompanyInfoEntriesList rejects duplicate brands across entries', () => {
