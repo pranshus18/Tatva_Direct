@@ -20,6 +20,11 @@ import {
   normalizeBrandKey,
   prepareSupplyChainStagesForSave
 } from '../services/supplyChainSharedService.js';
+import {
+  findBrandByCatalogDedupKey,
+  getCanonicalBrandNormalizedName,
+  pickCanonicalBrandDisplayName
+} from '../services/brandDedupService.js';
 
 const router = express.Router();
 
@@ -215,30 +220,37 @@ router.put('/definitions', authenticateToken, requireAdminPrivileges, async (req
     // Keep brands table in sync by ensuring this brand is approved.
     try {
       const nowIso = new Date().toISOString();
-      const normalizedBrand = normalizeBrandKey(brand);
+      const normalizedBrand = getCanonicalBrandNormalizedName(brand);
       if (normalizedBrand) {
-        const { data: existingBrand } = await supabase
-          .from('brands')
-          .select('id, status')
-          .eq('normalized_name', normalizedBrand)
-          .maybeSingle();
+        const { data: existingBrand } = await findBrandByCatalogDedupKey(brand, supabase);
+        const resolvedBrand =
+          existingBrand ||
+          (
+            await supabase
+              .from('brands')
+              .select('id, status')
+              .eq('normalized_name', normalizedBrand)
+              .maybeSingle()
+          ).data;
 
-        if (existingBrand?.id) {
-          if (String(existingBrand.status || '').toLowerCase() !== 'approved') {
+        if (resolvedBrand?.id) {
+          if (String(resolvedBrand.status || '').toLowerCase() !== 'approved') {
             await supabase
               .from('brands')
               .update({
+                name: pickCanonicalBrandDisplayName(brand, resolvedBrand.name),
+                normalized_name: normalizedBrand,
                 status: 'approved',
                 approved_by: req.userId,
                 approved_at: nowIso,
                 rejection_reason: null,
                 updated_at: nowIso
               })
-              .eq('id', existingBrand.id);
+              .eq('id', resolvedBrand.id);
           }
         } else {
           await supabase.from('brands').insert({
-            name: brand,
+            name: pickCanonicalBrandDisplayName(brand),
             normalized_name: normalizedBrand,
             status: 'approved',
             requested_by: req.userId,

@@ -2,7 +2,12 @@ import {
   normalizeCompanyInfoEntries,
   syncApprovedBrandsIntoUserProfile
 } from '../../services/supplierChainProfileService.js';
-import { normalizeBrandKey } from '../../services/supplyChainSharedService.js';
+import {
+  consolidateDuplicateBrands,
+  findBrandByCatalogDedupKey,
+  getCanonicalBrandNormalizedName,
+  pickCanonicalBrandDisplayName
+} from '../../services/brandDedupService.js';
 import { insertNotification } from '../../repositories/notificationsRepository.js';
 import {
   adminBrandApproveSchema,
@@ -21,6 +26,12 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
   router.get('/brands/all', authenticateToken, isAdmin, async (req, res) => {
     try {
       const status = String(req.query?.status || '').trim().toLowerCase();
+
+      try {
+        await consolidateDuplicateBrands(supabase);
+      } catch (consolidateError) {
+        console.error('Consolidate duplicate brands error:', consolidateError);
+      }
 
       let query = supabase
         .from('brands')
@@ -73,10 +84,55 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
   router.post('/brands/:id/approve', authenticateToken, isAdmin, async (req, res) => {
     try {
       parseWithSchema(adminBrandApproveSchema, req.body || {});
+
+      const { data: existingRow, error: existingError } = await supabase
+        .from('brands')
+        .select('*')
+        .eq('id', req.params.id)
+        .maybeSingle();
+
+      if (existingError || !existingRow) {
+        return res.status(404).json({ status: 'error', message: 'Brand request not found' });
+      }
+
+      const { data: duplicateApproved } = await findBrandByCatalogDedupKey(existingRow.name, supabase, {
+        excludeId: existingRow.id
+      });
+      if (duplicateApproved && String(duplicateApproved.status || '').toLowerCase() === 'approved') {
+        const canonicalName = pickCanonicalBrandDisplayName(existingRow.name, duplicateApproved.name);
+        const nowIso = new Date().toISOString();
+        const { data: rejectedDuplicate, error: rejectError } = await supabase
+          .from('brands')
+          .update({
+            status: 'rejected',
+            rejection_reason: `Duplicate of approved brand "${duplicateApproved.name}".`,
+            approved_by: null,
+            approved_at: null,
+            updated_at: nowIso
+          })
+          .eq('id', existingRow.id)
+          .select('*')
+          .single();
+
+        if (rejectError) throw rejectError;
+
+        return res.json({
+          status: 'success',
+          message: `Brand already exists as "${canonicalName}". Duplicate request was rejected.`,
+          brand: duplicateApproved,
+          mergedDuplicate: true,
+          rejectedBrand: rejectedDuplicate
+        });
+      }
+
       const nowIso = new Date().toISOString();
+      const canonicalName = pickCanonicalBrandDisplayName(existingRow.name);
+      const canonicalNormalized = getCanonicalBrandNormalizedName(canonicalName);
       const { data: brand, error } = await supabase
         .from('brands')
         .update({
+          name: canonicalName,
+          normalized_name: canonicalNormalized,
           status: 'approved',
           approved_by: req.userId,
           approved_at: nowIso,
@@ -155,18 +211,22 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
     try {
       const payload = parseWithSchema(adminBrandRequestSchema, req.body || {});
       const name = String(payload.name || '').trim();
-      const normalized = normalizeBrandKey(name);
+      const normalized = getCanonicalBrandNormalizedName(name);
       if (!name || !normalized) {
         return res.status(400).json({ status: 'error', message: 'Brand name is required' });
       }
 
-      const { data: existing } = await supabase
-        .from('brands')
-        .select('*')
-        .eq('normalized_name', normalized)
-        .maybeSingle();
-
-      if (existing) {
+      const { data: existing } = await findBrandByCatalogDedupKey(name, supabase);
+      if (!existing) {
+        const fallback = await supabase
+          .from('brands')
+          .select('*')
+          .eq('normalized_name', normalized)
+          .maybeSingle();
+        if (fallback.data) {
+          return res.json({ status: 'success', message: 'Brand already exists', brand: fallback.data });
+        }
+      } else {
         return res.json({ status: 'success', message: 'Brand already exists', brand: existing });
       }
 
@@ -174,7 +234,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
       const { data: created, error } = await supabase
         .from('brands')
         .insert({
-          name,
+          name: pickCanonicalBrandDisplayName(name),
           normalized_name: normalized,
           status: 'pending',
           requested_by: req.userId,

@@ -8,6 +8,10 @@ export async function findBrandByNormalizedName(normalizedName, dbClient = supab
     .maybeSingle();
 }
 
+export async function listAllBrands(dbClient = supabase) {
+  return dbClient.from('brands').select('*').order('created_at', { ascending: true });
+}
+
 export async function createBrand(payload, dbClient = supabase) {
   return dbClient
     .from('brands')

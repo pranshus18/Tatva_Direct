@@ -1,4 +1,9 @@
-import { normalizeBrandKey } from './supplyChainSharedService.js';
+import { catalogBrandDedupKey, normalizeBrandKey } from './supplyChainSharedService.js';
+import {
+  findBrandByCatalogDedupKey,
+  getCanonicalBrandNormalizedName,
+  pickCanonicalBrandDisplayName
+} from './brandDedupService.js';
 import {
   createBrand,
   findBrandByNormalizedName,
@@ -7,7 +12,7 @@ import {
 
 export async function ensureBrandApprovedOrRequest({ supabase, brandName, requesterUserId }) {
   const name = String(brandName || '').trim();
-  const normalized = normalizeBrandKey(name);
+  const normalized = getCanonicalBrandNormalizedName(name);
 
   if (!name || !normalized) {
     return { ok: false, code: 'brand_required', message: 'Brand is required before adding a product.' };
@@ -15,9 +20,14 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
 
   let brandRow = null;
   try {
-    const { data, error } = await findBrandByNormalizedName(normalized, supabase);
+    const { data, error } = await findBrandByCatalogDedupKey(name, supabase);
     if (error) throw error;
     brandRow = data;
+    if (!brandRow) {
+      const fallback = await findBrandByNormalizedName(normalized, supabase);
+      if (fallback.error) throw fallback.error;
+      brandRow = fallback.data;
+    }
   } catch (e) {
     return {
       ok: false,
@@ -28,8 +38,9 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
 
   if (!brandRow) {
     const nowIso = new Date().toISOString();
+    const displayName = pickCanonicalBrandDisplayName(name);
     const { data: created, error: insertError } = await createBrand({
-      name,
+      name: displayName,
       normalized_name: normalized,
       status: 'pending',
       requested_by: requesterUserId,
@@ -39,8 +50,12 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     }, supabase);
 
     if (insertError) {
-      const { data: reread } = await findBrandByNormalizedName(normalized, supabase);
-      brandRow = reread || null;
+      const reread = await findBrandByCatalogDedupKey(name, supabase);
+      brandRow = reread.data || null;
+      if (!brandRow) {
+        const fallback = await findBrandByNormalizedName(normalized, supabase);
+        brandRow = fallback.data || null;
+      }
     } else {
       brandRow = created;
     }
@@ -99,7 +114,7 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
         row?.product?.specifications?.brand ||
         row?.product?.specifications?.brandModel ||
         '';
-      return normalizeBrandKey(approvedBrand) === normalized;
+      return normalizeBrandKey(approvedBrand) === normalized || catalogBrandDedupKey(approvedBrand) === normalized;
     });
 
     if (hasApprovedEvidence) {
@@ -116,7 +131,7 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
         }
       } else {
         const { data: createdApproved, error: createApprovedErr } = await createBrand({
-          name,
+          name: pickCanonicalBrandDisplayName(name),
           normalized_name: normalized,
           status: 'approved',
           requested_by: requesterUserId,
