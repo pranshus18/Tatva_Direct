@@ -1,5 +1,36 @@
-import { normalizeBrandKey } from './supplyChainSharedService.js';
+import { catalogBrandDedupKey, normalizeBrandKey } from './supplyChainSharedService.js';
 import { brandIsAllowedForSupplier, getDeclaredBrandLabels } from './supplierBrandGuardService.js';
+
+function upsertCatalogBrand(brands, name, extra = {}) {
+  const trimmed = String(name || '').trim();
+  if (!trimmed) return;
+  const dedupKey = catalogBrandDedupKey(trimmed);
+  if (!dedupKey) return;
+
+  const existingIdx = brands.findIndex((row) => catalogBrandDedupKey(row.name) === dedupKey);
+  if (existingIdx >= 0) {
+    const existing = brands[existingIdx];
+    const nextName =
+      trimmed.length < String(existing.name || '').length ? trimmed : String(existing.name || '').trim();
+    brands[existingIdx] = {
+      ...existing,
+      name: nextName,
+      normalizedName: normalizeBrandKey(nextName),
+      status: 'approved',
+      source: extra.source || existing.source || 'catalog',
+      fromProfile: extra.fromProfile === true || existing.fromProfile === true
+    };
+    return;
+  }
+
+  brands.push({
+    name: trimmed,
+    normalizedName: normalizeBrandKey(trimmed),
+    status: 'approved',
+    source: extra.source || 'catalog',
+    ...(extra.fromProfile ? { fromProfile: true } : {})
+  });
+}
 
 /**
  * All admin-approved brands in the platform catalog.
@@ -17,23 +48,12 @@ export async function listApprovedCatalogBrands(supabase) {
   }
 
   const brands = [];
-  const seen = new Set();
 
   for (const row of approvedRows || []) {
-    const name = String(row?.name || '').trim();
-    if (!name) continue;
-    const key = normalizeBrandKey(row?.normalized_name || name);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    brands.push({
-      name,
-      normalizedName: key,
-      status: 'approved',
-      source: 'catalog'
-    });
+    upsertCatalogBrand(brands, row?.name);
   }
 
-  return brands;
+  return brands.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
 }
 
 /**
@@ -57,38 +77,19 @@ export async function listSupplierSelectableBrands(supabase, { profile } = {}) {
   }
 
   const brands = [];
-  const seen = new Set();
 
   for (const row of approvedRows || []) {
     const name = String(row?.name || '').trim();
     if (!name) continue;
     const guard = brandIsAllowedForSupplier(profile, name);
     if (!guard.allowed) continue;
-    const key = normalizeBrandKey(row?.normalized_name || name);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    brands.push({
-      name: guard.matchedBrand || name,
-      normalizedName: key,
-      status: row.status || 'approved',
-      source: 'profile',
-      fromProfile: true
-    });
+    upsertCatalogBrand(brands, guard.matchedBrand || name, { source: 'profile', fromProfile: true });
   }
 
   for (const label of declaredLabels) {
     const guard = brandIsAllowedForSupplier(profile, label);
     if (!guard.allowed) continue;
-    const key = normalizeBrandKey(label);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    brands.push({
-      name: guard.matchedBrand || label,
-      normalizedName: key,
-      status: 'approved',
-      source: 'profile',
-      fromProfile: true
-    });
+    upsertCatalogBrand(brands, guard.matchedBrand || label, { source: 'profile', fromProfile: true });
   }
 
   return brands.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));

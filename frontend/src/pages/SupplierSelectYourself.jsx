@@ -6,6 +6,7 @@ import { validateCompanyInfoEntriesList, validateUniqueBrandsAcrossEntries } fro
 import {
   buildSupplierChainSavePayload,
   buildSupplyChainFormProfile,
+  deduplicateCompanyInfoEntriesByBrand,
   ensureAtLeastOneCompanyInfoEntry,
   getCompanyInfoEntriesForSave,
   getSupplyChainAssignmentRows,
@@ -44,9 +45,11 @@ function chainFormSignature(profile) {
 function normalizeProfileForEditor(profileData) {
   if (!profileData) return null;
   const snapshot = cloneProfileSnapshot(profileData);
-  const mergedEntries = mergeCompanyInfoEntriesById(
-    snapshot.companyInfoEntries || [],
-    snapshot.approvedChainProfile?.companyInfoEntries || []
+  const mergedEntries = deduplicateCompanyInfoEntriesByBrand(
+    mergeCompanyInfoEntriesById(
+      snapshot.companyInfoEntries || [],
+      snapshot.approvedChainProfile?.companyInfoEntries || []
+    )
   );
   snapshot.companyInfoEntries = ensureAtLeastOneCompanyInfoEntry({
     ...snapshot,

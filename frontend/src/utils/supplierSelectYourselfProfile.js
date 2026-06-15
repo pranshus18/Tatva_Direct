@@ -1,4 +1,5 @@
 import { resolveAuthorizationCertificateUrls, resolveBrandApprovalDocumentUrls } from './authorizationCertificateUrls';
+import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
 
 export const SUPPLY_CHAIN_ROLE_LABELS = {
   manufacturer: 'Manufacturer (MGF)',
@@ -65,6 +66,60 @@ export function mergeCompanyInfoEntriesById(...entryLists) {
     for (const entry of Array.isArray(list) ? list : []) {
       upsert(entry);
     }
+  }
+
+  return merged;
+}
+
+/** Merge profile rows that refer to the same brand (e.g. Philips vs Phillips). */
+export function deduplicateCompanyInfoEntriesByBrand(entries = []) {
+  const merged = [];
+  const indexByBrandKey = new Map();
+
+  const pickBrandLabel = (left, right) => {
+    const a = String(left || '').trim();
+    const b = String(right || '').trim();
+    if (!a) return b;
+    if (!b) return a;
+    return a.length <= b.length ? a : b;
+  };
+
+  for (const rawEntry of Array.isArray(entries) ? entries : []) {
+    if (!rawEntry || typeof rawEntry !== 'object') continue;
+    const brand = String(rawEntry?.brands || '').trim();
+    if (!brand) {
+      merged.push({ ...rawEntry });
+      continue;
+    }
+
+    const brandKey = brandKeyForDuplicateCheck(brand);
+    if (indexByBrandKey.has(brandKey)) {
+      const idx = indexByBrandKey.get(brandKey);
+      const existing = merged[idx] || {};
+      merged[idx] = {
+        ...existing,
+        ...rawEntry,
+        id: existing.id || rawEntry.id,
+        brands: pickBrandLabel(existing.brands, rawEntry.brands),
+        brandApprovalDocumentUrls: [
+          ...new Set([
+            ...(Array.isArray(existing.brandApprovalDocumentUrls) ? existing.brandApprovalDocumentUrls : []),
+            ...(Array.isArray(rawEntry.brandApprovalDocumentUrls) ? rawEntry.brandApprovalDocumentUrls : [])
+          ])
+        ],
+        authorizationCertificateUrls: [
+          ...new Set([
+            ...(Array.isArray(existing.authorizationCertificateUrls) ? existing.authorizationCertificateUrls : []),
+            ...(Array.isArray(rawEntry.authorizationCertificateUrls) ? rawEntry.authorizationCertificateUrls : [])
+          ])
+        ]
+      };
+      continue;
+    }
+
+    const idx = merged.length;
+    merged.push({ ...rawEntry });
+    indexByBrandKey.set(brandKey, idx);
   }
 
   return merged;
@@ -180,7 +235,7 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
 
 /** Build PUT payload that keeps every brand entry while syncing legacy top-level fields. */
 export function buildSupplierChainSavePayload(profile, entries = null) {
-  const nextEntries = entries || getCompanyInfoEntriesForSave(profile);
+  const nextEntries = deduplicateCompanyInfoEntriesByBrand(entries || getCompanyInfoEntriesForSave(profile));
   const first = nextEntries[0] || {};
   return {
     ...profile,

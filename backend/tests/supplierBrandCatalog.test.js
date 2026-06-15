@@ -6,7 +6,7 @@ test('normalizeBrandKey: case-insensitive brand keys', () => {
   assert.equal(normalizeBrandKey('ACC'), normalizeBrandKey('acc'));
 });
 
-test('listApprovedCatalogBrands returns deduplicated approved rows', async () => {
+test('listApprovedCatalogBrands merges Philips and Phillips spellings', async () => {
   const { listApprovedCatalogBrands } = await import('../services/supplierBrandCatalogService.js');
   const supabase = {
     from() {
@@ -20,9 +20,9 @@ test('listApprovedCatalogBrands returns deduplicated approved rows', async () =>
         order() {
           return Promise.resolve({
             data: [
-              { name: 'ACC', normalized_name: 'acc', status: 'approved' },
-              { name: 'acc', normalized_name: 'acc', status: 'approved' },
-              { name: 'UltraTech', normalized_name: 'ultratech', status: 'approved' }
+              { name: 'Phillips', normalized_name: 'phillips', status: 'approved' },
+              { name: 'Philips', normalized_name: 'philips', status: 'approved' },
+              { name: 'ACC', normalized_name: 'acc', status: 'approved' }
             ],
             error: null
           });
@@ -35,6 +35,6 @@ test('listApprovedCatalogBrands returns deduplicated approved rows', async () =>
   assert.equal(brands.length, 2);
   assert.deepEqual(
     brands.map((row) => row.name).sort(),
-    ['ACC', 'UltraTech']
+    ['ACC', 'Philips']
   );
 });

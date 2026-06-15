@@ -33,6 +33,17 @@ export const normalizeBrandKey = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+export function collapseRepeatedLetters(value) {
+  return String(value || '').replace(/(.)\1+/g, '$1');
+}
+
+/** Dedup key for catalog lists — treats Philips and Phillips as the same brand. */
+export function catalogBrandDedupKey(value) {
+  const key = normalizeBrandKey(value);
+  if (!key) return '';
+  return collapseRepeatedLetters(key);
+}
+
 export function brandKeysMatchForChainLookup(wantedKey, categoryKey) {
   if (!wantedKey || !categoryKey) return false;
   if (wantedKey === categoryKey) return true;
