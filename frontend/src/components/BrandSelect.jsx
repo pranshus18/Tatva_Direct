@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
-import { brandKeyForDuplicateCheck } from '../utils/supplierChainEntryValidation';
+import { brandKeyForDuplicateCheck, dedupeBrandNames } from '../utils/supplierChainEntryValidation';
 import './BrandSelect.css';
 
 export const BRAND_SELECT_OTHER_VALUE = '__other__';
@@ -42,17 +42,7 @@ export default function BrandSelect({
 }) {
   const { brands, brandNames: rawBrandNames, loading, error: loadError } = useSupplierBrands({ source });
 
-  const brandNames = useMemo(() => {
-    const deduped = [];
-    const seen = new Set();
-    for (const name of rawBrandNames) {
-      const key = brandKeyForDuplicateCheck(name);
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      deduped.push(name);
-    }
-    return deduped;
-  }, [rawBrandNames]);
+  const brandNames = useMemo(() => dedupeBrandNames(rawBrandNames), [rawBrandNames]);
 
   const normalizedValue = String(value || '').trim();
 

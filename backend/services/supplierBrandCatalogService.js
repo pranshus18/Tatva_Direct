@@ -32,14 +32,45 @@ function upsertCatalogBrand(brands, name, extra = {}) {
   });
 }
 
+function upsertApprovedCatalogRow(brands, row) {
+  const name = String(row?.name || '').trim();
+  if (!name) return;
+  const dedupKey = catalogBrandDedupKey(name);
+  if (!dedupKey) return;
+
+  const existingIdx = brands.findIndex((item) => catalogBrandDedupKey(item.name) === dedupKey);
+  if (existingIdx >= 0) {
+    const existing = brands[existingIdx];
+    const nextName =
+      name.length < String(existing.name || '').length ? name : String(existing.name || '').trim();
+    brands[existingIdx] = {
+      ...existing,
+      name: nextName,
+      normalizedName: normalizeBrandKey(nextName),
+      status: 'approved',
+      source: 'catalog'
+    };
+    return;
+  }
+
+  brands.push({
+    id: row.id,
+    name,
+    normalizedName: String(row?.normalized_name || '').trim() || normalizeBrandKey(name),
+    status: 'approved',
+    source: 'catalog'
+  });
+}
+
 /**
  * All admin-approved brands in the platform catalog.
  * Used on Select yourself (Step 1) so suppliers can pick an existing approved brand.
+ * Spelling variants (e.g. Philips / Phillips) are merged into one catalog entry.
  */
 export async function listApprovedCatalogBrands(supabase) {
   const { data: approvedRows, error } = await supabase
     .from('brands')
-    .select('name, normalized_name, status')
+    .select('id, name, normalized_name, status')
     .eq('status', 'approved')
     .order('name', { ascending: true });
 
@@ -48,9 +79,8 @@ export async function listApprovedCatalogBrands(supabase) {
   }
 
   const brands = [];
-
   for (const row of approvedRows || []) {
-    upsertCatalogBrand(brands, row?.name);
+    upsertApprovedCatalogRow(brands, row);
   }
 
   return brands.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));

@@ -1,5 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
+import { dedupeBrandCatalogRows, dedupeBrandNames } from '../utils/supplierChainEntryValidation';
 
 /**
  * @param {{ source?: 'profile' | 'catalog' }} [options]
@@ -45,7 +46,15 @@ export function useSupplierBrands({ source = 'profile' } = {}) {
     };
   }, [source]);
 
-  const brandNames = brands.map((b) => b.name).filter(Boolean);
+  const normalizedBrands = useMemo(
+    () => (source === 'catalog' ? dedupeBrandCatalogRows(brands) : brands),
+    [brands, source]
+  );
 
-  return { brands, brandNames, loading, error };
+  const brandNames = useMemo(
+    () => dedupeBrandNames(brands.map((b) => b.name).filter(Boolean)),
+    [brands]
+  );
+
+  return { brands: normalizedBrands, brandNames, loading, error };
 }

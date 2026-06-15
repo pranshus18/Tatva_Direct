@@ -16,6 +16,56 @@ export function formatSupplyChainRoleLabel(role) {
   return SUPPLY_CHAIN_ROLE_LABELS[key] || key;
 }
 
+/**
+ * Summary rows for "Your supply chain by brand": all admin-approved catalog brands,
+ * merged with this supplier's saved role/documents where they exist.
+ * @param {Array<string | { name?: string, normalizedName?: string }>} catalogBrands
+ */
+export function buildSupplyChainSummaryRows(catalogBrands = [], entries = []) {
+  const assignments = getSupplyChainAssignmentRows(entries);
+  const assignmentByKey = new Map();
+  for (const row of assignments) {
+    assignmentByKey.set(brandKeyForDuplicateCheck(row.brand), row);
+  }
+
+  const rows = [];
+  const seenCatalogKeys = new Set();
+
+  for (const item of Array.isArray(catalogBrands) ? catalogBrands : []) {
+    const brand = String(typeof item === 'string' ? item : item?.name || '').trim();
+    if (!brand) continue;
+    const catalogKey = brandKeyForDuplicateCheck(brand);
+    if (!catalogKey || seenCatalogKeys.has(catalogKey)) continue;
+    seenCatalogKeys.add(catalogKey);
+
+    const assignment = assignmentByKey.get(brandKeyForDuplicateCheck(brand));
+    if (assignment) {
+      rows.push(assignment);
+      continue;
+    }
+
+    rows.push({
+      id: `catalog-${catalogKey}`,
+      brand,
+      role: '',
+      roleLabel: 'Not set',
+      hasRole: false,
+      hasRoleDocuments: false,
+      registrationStarted: false
+    });
+  }
+
+  const seenSummaryKeys = new Set(rows.map((row) => brandKeyForDuplicateCheck(row.brand)));
+  for (const assignment of assignments) {
+    const key = brandKeyForDuplicateCheck(assignment.brand);
+    if (!key || seenSummaryKeys.has(key)) continue;
+    seenSummaryKeys.add(key);
+    rows.push(assignment);
+  }
+
+  return rows.sort((a, b) => a.brand.localeCompare(b.brand, 'en', { sensitivity: 'base' }));
+}
+
 /** @param {import('./supplierChainEntryValidation').ChainEntry[]} entries */
 export function getSupplyChainAssignmentRows(entries = []) {
   return (Array.isArray(entries) ? entries : [])

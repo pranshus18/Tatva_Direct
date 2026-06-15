@@ -2,14 +2,15 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { UserCheck, Save, RotateCcw } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainEntriesEditor';
+import { useSupplierBrands } from '../hooks/useSupplierBrands';
 import { validateCompanyInfoEntriesList, validateUniqueBrandsAcrossEntries } from '../utils/supplierChainEntryValidation';
 import {
   buildSupplierChainSavePayload,
   buildSupplyChainFormProfile,
+  buildSupplyChainSummaryRows,
   deduplicateCompanyInfoEntriesByBrand,
   ensureAtLeastOneCompanyInfoEntry,
   getCompanyInfoEntriesForSave,
-  getSupplyChainAssignmentRows,
   mergeCompanyInfoEntriesById,
   mergeFormStepProfile,
   syncBrandEntriesForSupplyChainStep
@@ -71,6 +72,7 @@ export default function SupplierSelectYourself() {
   const [discarding, setDiscarding] = useState(false);
   const [editorResetKey, setEditorResetKey] = useState(0);
   const [brandSectionExpanded, setBrandSectionExpanded] = useState(false);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
   const [discountInsights, setDiscountInsights] = useState(null);
 
   const hasUnsavedChanges = useMemo(() => {
@@ -78,12 +80,29 @@ export default function SupplierSelectYourself() {
     return chainFormSignature(profile) !== chainFormSignature(baseline);
   }, [profile, baseline]);
 
-  const supplyChainAssignments = useMemo(
-    () => getSupplyChainAssignmentRows(getCompanyInfoEntriesForSave(profile || {})),
-    [profile]
+  const { brands: catalogBrands } = useSupplierBrands({ source: 'catalog' });
+
+  const supplyChainSummaryRows = useMemo(
+    () => buildSupplyChainSummaryRows(catalogBrands, getCompanyInfoEntriesForSave(profile || {})),
+    [catalogBrands, profile]
   );
 
   const supplyChainFormProfile = useMemo(() => buildSupplyChainFormProfile(profile), [profile]);
+
+  const selectedAssignment = useMemo(
+    () => supplyChainSummaryRows.find((row) => row.id === selectedAssignmentId) || null,
+    [supplyChainSummaryRows, selectedAssignmentId]
+  );
+
+  useEffect(() => {
+    if (supplyChainSummaryRows.length === 0) {
+      setSelectedAssignmentId('');
+      return;
+    }
+    if (!supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId)) {
+      setSelectedAssignmentId(supplyChainSummaryRows[0].id);
+    }
+  }, [supplyChainSummaryRows, selectedAssignmentId]);
 
   const applyBrandStepProfile = (next) => {
     const entries = syncBrandEntriesForSupplyChainStep(ensureAtLeastOneCompanyInfoEntry(next));
@@ -418,54 +437,60 @@ export default function SupplierSelectYourself() {
           </div>
         </div>
 
-        {supplyChainAssignments.length > 0 ? (
+        {supplyChainSummaryRows.length > 0 ? (
           <div className="supplier-select-assignments" aria-label="Your supply chain by brand">
-            <strong>Your supply chain by brand ({supplyChainAssignments.length})</strong>
-            <p className="supplier-select-assignments__hint">
-              Overview of every brand you registered and the role you selected in the supply chain.
-            </p>
-            <div className="supplier-select-assignments__table-wrap">
-              <table className="supplier-select-assignments__table">
-                <thead>
-                  <tr>
-                    <th scope="col">Brand</th>
-                    <th scope="col">Your role in supply chain</th>
-                    <th scope="col">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {supplyChainAssignments.map((row) => (
-                    <tr key={row.id}>
-                      <td>{row.brand}</td>
-                      <td>
-                        <span
-                          className={`supplier-select-assignments__role${
-                            row.hasRole ? '' : ' supplier-select-assignments__role--pending'
-                          }`}
-                        >
-                          {row.roleLabel}
-                        </span>
-                      </td>
-                      <td>
-                        {row.hasRole && row.hasRoleDocuments ? (
-                          <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
-                            Complete
-                          </span>
-                        ) : row.hasRole ? (
-                          <span className="supplier-select-assignments__status supplier-select-assignments__status--draft">
-                            Add documents
-                          </span>
-                        ) : (
-                          <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
-                            Select role
-                          </span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <strong>Your supply chain by brand ({supplyChainSummaryRows.length})</strong>
+            <div className="supplier-select-assignments__picker">
+              <label className="supplier-select-assignments__picker-label" htmlFor="assignment-brand-select">
+                Select brand
+              </label>
+              <select
+                id="assignment-brand-select"
+                className="supplier-select-assignments__picker-select"
+                value={selectedAssignmentId}
+                onChange={(e) => setSelectedAssignmentId(e.target.value)}
+              >
+                {supplyChainSummaryRows.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.brand}
+                  </option>
+                ))}
+              </select>
             </div>
+            {selectedAssignment ? (
+              <div className="supplier-select-assignments__detail">
+                <div className="supplier-select-assignments__detail-row">
+                  <span className="supplier-select-assignments__detail-label">Brand</span>
+                  <span className="supplier-select-assignments__detail-value">{selectedAssignment.brand}</span>
+                </div>
+                <div className="supplier-select-assignments__detail-row">
+                  <span className="supplier-select-assignments__detail-label">Your role in supply chain</span>
+                  <span
+                    className={`supplier-select-assignments__role${
+                      selectedAssignment.hasRole ? '' : ' supplier-select-assignments__role--pending'
+                    }`}
+                  >
+                    {selectedAssignment.roleLabel}
+                  </span>
+                </div>
+                <div className="supplier-select-assignments__detail-row">
+                  <span className="supplier-select-assignments__detail-label">Status</span>
+                  {selectedAssignment.hasRole && selectedAssignment.hasRoleDocuments ? (
+                    <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
+                      Complete
+                    </span>
+                  ) : selectedAssignment.hasRole ? (
+                    <span className="supplier-select-assignments__status supplier-select-assignments__status--draft">
+                      Add documents
+                    </span>
+                  ) : (
+                    <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
+                      Select role
+                    </span>
+                  )}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : null}
 

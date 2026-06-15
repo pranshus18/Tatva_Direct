@@ -1077,24 +1077,6 @@ export default function SupplierSupplyChainEntriesEditor({
               hideHint
               className="chain-brand-select"
             />
-            <p className="chain-field__sublabel">
-              All admin-approved brands appear here. Pick one to view details below — it is filled automatically in
-              Step 2.
-            </p>
-            {activeEntryForBrandPicker && normalizeSingleBrand(activeEntryForBrandPicker.brands) ? (
-              <button
-                type="button"
-                className="chain-entry-selector__remove"
-                onClick={() =>
-                  onRemoveEntry
-                    ? onRemoveEntry(activeEntryForBrandPicker.id)
-                    : removeCompanyInfoEntry(activeEntryForBrandPicker.id)
-                }
-                disabled={!editing}
-              >
-                Remove this brand from your profile
-              </button>
-            ) : null}
           </div>
         ) : null}
 

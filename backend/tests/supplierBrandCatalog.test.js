@@ -20,9 +20,9 @@ test('listApprovedCatalogBrands merges Philips and Phillips spellings', async ()
         order() {
           return Promise.resolve({
             data: [
-              { name: 'Phillips', normalized_name: 'phillips', status: 'approved' },
-              { name: 'Philips', normalized_name: 'philips', status: 'approved' },
-              { name: 'ACC', normalized_name: 'acc', status: 'approved' }
+              { id: '1', name: 'Phillips', normalized_name: 'phillips', status: 'approved' },
+              { id: '2', name: 'Philips', normalized_name: 'philips', status: 'approved' },
+              { id: '3', name: 'ACC', normalized_name: 'acc', status: 'approved' }
             ],
             error: null
           });

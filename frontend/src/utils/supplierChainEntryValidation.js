@@ -32,6 +32,55 @@ export function brandKeyForDuplicateCheck(raw) {
   return collapseRepeatedLetters(token);
 }
 
+/** Merge spelling variants (e.g. Philips / Phillips) into one display name. */
+export function dedupeBrandNames(names = []) {
+  const deduped = [];
+  const indexByKey = new Map();
+  for (const name of names) {
+    const key = brandKeyForDuplicateCheck(name);
+    if (!key) continue;
+    const existingIdx = indexByKey.get(key);
+    if (existingIdx === undefined) {
+      indexByKey.set(key, deduped.length);
+      deduped.push(name);
+      continue;
+    }
+    const existing = deduped[existingIdx];
+    if (String(name || '').trim().length < String(existing || '').trim().length) {
+      deduped[existingIdx] = name;
+    }
+  }
+  return deduped;
+}
+
+/** Dedupe brand catalog rows by spelling variant; keeps shortest display name. */
+export function dedupeBrandCatalogRows(brands = []) {
+  const deduped = [];
+  const indexByKey = new Map();
+  for (const brand of brands) {
+    const name = String(brand?.name || '').trim();
+    if (!name) continue;
+    const key = brandKeyForDuplicateCheck(name);
+    if (!key) continue;
+    const existingIdx = indexByKey.get(key);
+    if (existingIdx === undefined) {
+      indexByKey.set(key, deduped.length);
+      deduped.push({ ...brand, name });
+      continue;
+    }
+    const existing = deduped[existingIdx];
+    const nextName =
+      name.length < String(existing.name || '').length ? name : String(existing.name || '').trim();
+    deduped[existingIdx] = {
+      ...existing,
+      ...brand,
+      name: nextName,
+      normalizedName: String(brand?.normalizedName || existing?.normalizedName || nextName).trim()
+    };
+  }
+  return deduped;
+}
+
 /**
  * @param {ChainEntry[]} entries
  * @returns {{ ok: true } | { ok: false, message: string, entryIndex: number, field: 'brands', duplicateEntryIndex: number }}
