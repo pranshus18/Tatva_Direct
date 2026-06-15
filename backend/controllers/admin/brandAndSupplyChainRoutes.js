@@ -1,7 +1,8 @@
 import {
   approveBrandReviewItem,
   buildBrandReviewItems,
-  rejectBrandReviewItem
+  rejectBrandReviewItem,
+  syncPendingRequestPayloads
 } from '../../services/supplierChainAdminService.js';
 import {
   normalizeCompanyInfoEntries,
@@ -296,6 +297,8 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         ...r,
         user: userMap[r.user_id] || null
       }));
+
+      await syncPendingRequestPayloads(requests, userMap);
 
       const brandItems = buildBrandReviewItems(requests, userMap);
 

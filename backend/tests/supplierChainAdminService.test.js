@@ -2,21 +2,38 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildAdminReviewChainPayload,
-  buildBrandReviewItems
+  buildBrandReviewItems,
+  entryNeedsAdminReview
 } from '../services/supplierChainAdminService.js';
+
+test('entryNeedsAdminReview is false when role already matches approved profile', () => {
+  assert.equal(
+    entryNeedsAdminReview({ role: 'dealer', brands: 'hp' }, { role: 'dealer', brands: 'hp' }),
+    false
+  );
+});
+
+test('entryNeedsAdminReview is true for role changes and new brand assignments', () => {
+  assert.equal(
+    entryNeedsAdminReview({ role: 'retailer', brands: 'acc' }, { role: 'dealer', brands: 'acc' }),
+    true
+  );
+  assert.equal(entryNeedsAdminReview(null, { role: 'dealer', brands: 'newbrand' }), true);
+});
 
 test('buildAdminReviewChainPayload keeps only changed brand entries', () => {
   const baseline = {
     companyInfoEntries: [
       { id: 'e1', role: 'retailer', brands: 'acc', authorizationCertificateUrls: ['https://a.com/1.pdf'] },
-      { id: 'e2', role: 'dealer', brands: 'hp', authorizationCertificateUrls: ['https://a.com/2.pdf'] }
+      { id: 'e2', role: 'dealer', brands: 'hp', authorizationCertificateUrls: ['https://a.com/2.pdf'] },
+      { id: 'e3', role: 'dealer', brands: 'Finolex', authorizationCertificateUrls: ['https://a.com/3.pdf'] }
     ]
   };
   const incoming = {
     companyInfoEntries: [
-      { id: 'e1', role: 'dealer', brands: 'acc', authorizationCertificateUrls: ['https://a.com/3.pdf'] },
+      { id: 'e1', role: 'dealer', brands: 'acc', authorizationCertificateUrls: ['https://a.com/9.pdf'] },
       { id: 'e2', role: 'dealer', brands: 'hp', authorizationCertificateUrls: ['https://a.com/2.pdf'] },
-      { id: 'e3', role: '', brands: 'apple', authorizationCertificateUrls: [] }
+      { id: 'e3', role: 'dealer', brands: 'Finolex', authorizationCertificateUrls: ['https://a.com/3.pdf'] }
     ]
   };
 
@@ -36,8 +53,7 @@ test('buildBrandReviewItems returns one item per reviewable brand', () => {
       payload: {
         companyInfoEntries: [
           { id: 'e1', role: 'dealer', brands: 'acc', authorizationCertificateUrls: ['https://a.com/1.pdf'] },
-          { id: 'e2', role: 'dealer', brands: 'hp', authorizationCertificateUrls: ['https://a.com/2.pdf'] },
-          { id: 'e3', role: '', brands: 'apple', authorizationCertificateUrls: [] }
+          { id: 'e2', role: 'dealer', brands: 'hp', authorizationCertificateUrls: ['https://a.com/2.pdf'] }
         ]
       }
     }
@@ -58,8 +74,7 @@ test('buildBrandReviewItems returns one item per reviewable brand', () => {
   };
 
   const items = buildBrandReviewItems(rows, userMap);
-  assert.equal(items.length, 2);
+  assert.equal(items.length, 1);
   assert.equal(items[0].brand, 'acc');
-  assert.equal(items[1].brand, 'hp');
   assert.ok(items.every((item) => item.user?.name === 'Karthik'));
 });

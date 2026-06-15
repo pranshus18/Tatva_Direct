@@ -22,18 +22,6 @@ function formatRoleLabel(role) {
   return ROLE_LABELS[key] || key;
 }
 
-function chainEntryReviewSignature(entry) {
-  const e = entry || {};
-  return JSON.stringify({
-    role: String(e?.role || '').trim(),
-    brands: String(e?.brands || '').trim(),
-    gstin: String(e?.gstin || '').trim(),
-    companyName: String(e?.companyName || '').trim(),
-    authorizationCertificateUrls: resolveAuthorizationCertificateUrls(e),
-    minimumOrderValue: e?.minimumOrderValue ?? null
-  });
-}
-
 function matchBaselineChainEntry(baselineEntries, entry) {
   const id = String(entry?.id || '').trim();
   if (id) {
@@ -45,19 +33,26 @@ function matchBaselineChainEntry(baselineEntries, entry) {
   return (baselineEntries || []).find((row) => catalogBrandDedupKey(row?.brands) === brandKey) || null;
 }
 
-/** Only entries that actually changed vs approved baseline go to admin review. */
+/** True when this brand needs admin review (new role assignment or role change only). */
+export function entryNeedsAdminReview(baselineEntry, pendingEntry) {
+  const pendingRole = String(pendingEntry?.role || '').trim();
+  const brand = String(pendingEntry?.brands || '').trim();
+  if (!pendingRole || !brand) return false;
+
+  const baselineRole = String(baselineEntry?.role || '').trim();
+  if (!baselineRole) return true;
+  return pendingRole !== baselineRole;
+}
+
+/** Only entries that need review vs the supplier's currently approved profile. */
 export function buildAdminReviewChainPayload(baseline, incoming) {
   const baselineEntries = baseline?.companyInfoEntries || [];
-  const incomingEntries = incoming?.companyInfoEntries || [];
+  const incomingEntries = normalizeCompanyInfoEntries(incoming?.companyInfoEntries || []);
   const reviewEntries = [];
 
   for (const entry of incomingEntries) {
-    const role = String(entry?.role || '').trim();
-    const brand = String(entry?.brands || '').trim();
-    if (!role || !brand) continue;
-
     const baselineEntry = matchBaselineChainEntry(baselineEntries, entry);
-    if (chainEntryReviewSignature(entry) !== chainEntryReviewSignature(baselineEntry || {})) {
+    if (entryNeedsAdminReview(baselineEntry, entry)) {
       reviewEntries.push(entry);
     }
   }
@@ -68,6 +63,56 @@ export function buildAdminReviewChainPayload(baseline, incoming) {
     brands: String(first?.brands || '').trim(),
     companyInfoEntries: reviewEntries
   };
+}
+
+export function resolveReviewPayloadForRequest(userProfile, storedPayload) {
+  const baseline = baselineChainFromProfile(userProfile || {});
+  return buildAdminReviewChainPayload(baseline, storedPayload || {});
+}
+
+function reviewableEntries(payload) {
+  return normalizeCompanyInfoEntries(payload?.companyInfoEntries || []).filter(
+    (entry) => String(entry?.role || '').trim() && String(entry?.brands || '').trim()
+  );
+}
+
+export async function syncPendingRequestPayloads(requestRows = [], userMap = {}) {
+  const updates = [];
+
+  for (const row of requestRows) {
+    if (String(row?.status || '') !== 'pending') continue;
+    const user = userMap[row.user_id] || null;
+    if (!user) continue;
+
+    const pruned = resolveReviewPayloadForRequest(user.profile || {}, row.payload || {});
+    const storedEntries = reviewableEntries(row.payload || {});
+    const prunedEntries = reviewableEntries(pruned);
+    const storedKeys = new Set(
+      storedEntries.map((entry) => catalogBrandDedupKey(entry?.brands)).filter(Boolean)
+    );
+    const prunedKeys = new Set(
+      prunedEntries.map((entry) => catalogBrandDedupKey(entry?.brands)).filter(Boolean)
+    );
+    const keysMatch =
+      storedKeys.size === prunedKeys.size && [...storedKeys].every((key) => prunedKeys.has(key));
+    if (keysMatch) continue;
+
+    const { error } = await supabase
+      .from('supplier_chain_profile_requests')
+      .update({
+        payload: pruned,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', row.id)
+      .eq('status', 'pending');
+
+    if (!error) {
+      row.payload = pruned;
+      updates.push(row.id);
+    }
+  }
+
+  return updates;
 }
 
 export function documentsFromChainEntry(entry) {
@@ -145,23 +190,20 @@ function mergeEntryIntoProfile(profile, approvedEntry) {
   };
 }
 
-function reviewableEntries(payload) {
-  return normalizeCompanyInfoEntries(payload?.companyInfoEntries || []).filter(
-    (entry) => String(entry?.role || '').trim() && String(entry?.brands || '').trim()
-  );
-}
-
 export function buildBrandReviewItems(requestRows = [], userMap = {}) {
   const items = [];
 
   for (const row of requestRows) {
     const user = userMap[row.user_id] || null;
-    const payload = row?.payload || {};
+    const reviewPayload = resolveReviewPayloadForRequest(user?.profile || {}, row?.payload || {});
     const baseline = baselineChainFromProfile(user?.profile || {});
-    const roleChanges = detectSupplyChainRoleChanges(baseline, payload);
-    const entries = reviewableEntries(payload);
+    const roleChanges = detectSupplyChainRoleChanges(baseline, reviewPayload);
+    const entries = reviewableEntries(reviewPayload);
 
     for (const entry of entries) {
+      const baselineEntry = matchBaselineChainEntry(baseline.companyInfoEntries || [], entry);
+      if (!entryNeedsAdminReview(baselineEntry, entry)) continue;
+
       const brand = String(entry?.brands || '').trim();
       const role = String(entry?.role || '').trim();
       const entryId = String(entry?.id || '').trim();
@@ -218,11 +260,6 @@ export async function approveBrandReviewItem({ requestId, entryId, brand, adminU
     return { ok: false, code: 'not_found', message: 'Pending request not found' };
   }
 
-  const targetEntry = findPayloadEntry(reqRow.payload || {}, { entryId, brand });
-  if (!targetEntry || !String(targetEntry?.role || '').trim()) {
-    return { ok: false, code: 'entry_not_found', message: 'Brand entry not found in this request' };
-  }
-
   const { data: userRow, error: uErr } = await supabase
     .from('users')
     .select('id, profile')
@@ -233,6 +270,26 @@ export async function approveBrandReviewItem({ requestId, entryId, brand, adminU
     return { ok: false, code: 'supplier_not_found', message: 'Supplier not found' };
   }
 
+  const reviewPayload = resolveReviewPayloadForRequest(userRow.profile || {}, reqRow.payload || {});
+  const targetEntry = findPayloadEntry(reviewPayload, { entryId, brand });
+  if (!targetEntry || !String(targetEntry?.role || '').trim()) {
+    return {
+      ok: false,
+      code: 'entry_not_found',
+      message: 'This brand is not awaiting approval or is already approved.'
+    };
+  }
+
+  const baseline = baselineChainFromProfile(userRow.profile || {});
+  const baselineEntry = matchBaselineChainEntry(baseline.companyInfoEntries || [], targetEntry);
+  if (!entryNeedsAdminReview(baselineEntry, targetEntry)) {
+    return {
+      ok: false,
+      code: 'already_approved',
+      message: 'This brand supply-chain role is already approved.'
+    };
+  }
+
   const mergedProfile = mergeEntryIntoProfile(userRow.profile || {}, targetEntry);
   const { error: upUserErr } = await supabase
     .from('users')
@@ -241,7 +298,10 @@ export async function approveBrandReviewItem({ requestId, entryId, brand, adminU
 
   if (upUserErr) throw upUserErr;
 
-  const nextPayload = removePayloadEntry(reqRow.payload || {}, targetEntry);
+  const nextPayload = resolveReviewPayloadForRequest(
+    mergedProfile,
+    removePayloadEntry(reqRow.payload || {}, targetEntry)
+  );
   const remaining = reviewableEntries(nextPayload);
   const nowIso = new Date().toISOString();
 
@@ -293,12 +353,30 @@ export async function rejectBrandReviewItem({ requestId, entryId, brand, reason,
     return { ok: false, code: 'not_found', message: 'Pending request not found' };
   }
 
-  const targetEntry = findPayloadEntry(reqRow.payload || {}, { entryId, brand });
-  if (!targetEntry) {
-    return { ok: false, code: 'entry_not_found', message: 'Brand entry not found in this request' };
+  const { data: userRow, error: uErr } = await supabase
+    .from('users')
+    .select('id, profile')
+    .eq('id', reqRow.user_id)
+    .single();
+
+  if (uErr || !userRow) {
+    return { ok: false, code: 'supplier_not_found', message: 'Supplier not found' };
   }
 
-  const nextPayload = removePayloadEntry(reqRow.payload || {}, targetEntry);
+  const reviewPayload = resolveReviewPayloadForRequest(userRow.profile || {}, reqRow.payload || {});
+  const targetEntry = findPayloadEntry(reviewPayload, { entryId, brand });
+  if (!targetEntry) {
+    return {
+      ok: false,
+      code: 'entry_not_found',
+      message: 'This brand is not awaiting approval or is already approved.'
+    };
+  }
+
+  const nextPayload = resolveReviewPayloadForRequest(
+    userRow.profile || {},
+    removePayloadEntry(reqRow.payload || {}, targetEntry)
+  );
   const remaining = reviewableEntries(nextPayload);
   const nowIso = new Date().toISOString();
   const rejectionReason = String(reason || '').trim() || 'Rejected by admin';

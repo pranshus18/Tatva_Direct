@@ -6,13 +6,27 @@
   background: white;
 }
 
-.admin-chain-review-page .admin-chain-cards-header {
+.admin-chain-review-page .admin-chain-cards-layout {
+  overflow-x: auto;
+  padding-bottom: 0.5rem;
+}
+
+.admin-chain-review-page .admin-chain-cards-header,
+.admin-chain-review-page .admin-chain-brand-card__grid {
   display: grid;
-  grid-template-columns: minmax(150px, 1.1fr) minmax(170px, 1.25fr) minmax(150px, 1.1fr) minmax(90px, 0.7fr) minmax(
-      110px,
-      0.8fr
-    ) minmax(110px, 0.75fr);
-  gap: 1rem;
+  grid-template-columns:
+    minmax(170px, 1.15fr)
+    minmax(200px, 1.35fr)
+    minmax(170px, 1.15fr)
+    minmax(100px, 0.75fr)
+    minmax(130px, 0.9fr)
+    minmax(130px, 0.9fr);
+  gap: 1.25rem;
+  align-items: start;
+}
+
+.admin-chain-review-page .admin-chain-cards-header {
+  min-width: 980px;
   padding: 0 1.25rem 0.5rem;
   font-size: 0.72rem;
   font-weight: 700;
@@ -25,6 +39,7 @@
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  min-width: 980px;
 }
 
 .admin-chain-review-page .admin-chain-brand-card {
@@ -35,26 +50,33 @@
 }
 
 .admin-chain-review-page .admin-chain-brand-card__grid {
-  display: grid;
-  grid-template-columns: minmax(150px, 1.1fr) minmax(170px, 1.25fr) minmax(150px, 1.1fr) minmax(90px, 0.7fr) minmax(
-      110px,
-      0.8fr
-    ) minmax(110px, 0.75fr);
-  gap: 1rem;
-  align-items: start;
-  padding: 1.1rem 1.25rem;
+  padding: 1.15rem 1.25rem;
 }
 
 .admin-chain-review-page .admin-chain-brand-card__cell {
   min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-.admin-chain-review-page .admin-chain-brand-card__cell--actions .admin-chain-actions-wrap {
-  width: 100%;
+.admin-chain-review-page .admin-chain-supplier-name,
+.admin-chain-review-page .admin-chain-supplier-email,
+.admin-chain-review-page .admin-chain-supplier-company {
+  line-height: 1.45;
 }
 
 .admin-chain-review-page .admin-chain-assignment-item--solo {
   margin-top: 0;
+}
+
+.admin-chain-review-page .admin-chain-assignment-role {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+
+.admin-chain-review-page .admin-chain-assignment-brand {
+  display: block;
+  line-height: 1.45;
 }
 
 .admin-chain-review-page .admin-chain-role-change-banner {
@@ -68,6 +90,7 @@
   border: 1px solid #fed7aa;
   font-size: 0.82rem;
   color: #9a3412;
+  line-height: 1.4;
 }
 
 .admin-chain-review-page .admin-chain-role-change-banner__label {
@@ -77,14 +100,60 @@
   letter-spacing: 0.35px;
 }
 
+.admin-chain-review-page .admin-chain-docs-list {
+  margin: 0;
+  padding: 0;
+}
+
+.admin-chain-review-page .admin-chain-doc-link {
+  align-items: center;
+  max-width: 100%;
+}
+
+.admin-chain-review-page .admin-chain-doc-link-label {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: unset;
+  max-width: none;
+  line-height: 1.35;
+}
+
+.admin-chain-review-page .admin-chain-submitted-cell {
+  display: block;
+  white-space: normal;
+  line-height: 1.45;
+  font-size: 0.84rem;
+}
+
+.admin-chain-review-page .admin-chain-brand-card__cell--actions {
+  display: flex;
+  align-items: flex-start;
+}
+
+.admin-chain-review-page .admin-chain-brand-card__cell--actions .admin-chain-actions-wrap {
+  width: 100%;
+  min-width: 118px;
+}
+
+.admin-chain-review-page .admin-chain-actions-wrap .btn-primary,
+.admin-chain-review-page .admin-chain-actions-wrap .btn-secondary {
+  width: 100%;
+  white-space: nowrap;
+}
+
 @media (max-width: 992px) {
   .admin-chain-review-page .admin-chain-cards-header {
     display: none;
   }
 
+  .admin-chain-review-page .admin-chain-card-list {
+    min-width: 0;
+  }
+
   .admin-chain-review-page .admin-chain-brand-card__grid {
     grid-template-columns: 1fr;
     gap: 0.85rem;
+    min-width: 0;
   }
 
   .admin-chain-review-page .admin-chain-brand-card__cell {
