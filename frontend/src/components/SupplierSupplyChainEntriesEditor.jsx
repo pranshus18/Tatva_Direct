@@ -173,7 +173,8 @@ const CompanyInfoEntryCard = ({
   catalogBrandNames = [],
   useBrandNameTextInput = false,
   excludeBrands = [],
-  duplicateBrandMessage = ''
+  duplicateBrandMessage = '',
+  brandPickerAtTop = false
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const catalogBrandSelected =
@@ -215,7 +216,7 @@ const CompanyInfoEntryCard = ({
   const isBrandOnlyStep = sectionView === 'brand';
   const isSupplyChainOnlyStep = sectionView === 'form';
   const showCustomBrandNameField =
-    useBrandNameTextInput && editing && (!selectedBrand || !catalogBrandSelected);
+    useBrandNameTextInput && editing && (!selectedBrand || !catalogBrandSelected) && !brandPickerAtTop;
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave;
@@ -312,7 +313,7 @@ const CompanyInfoEntryCard = ({
           <section className="chain-section">
             <div className="chain-section__panel">
               <div className="chain-brand-grid">
-                {useBrandNameTextInput ? (
+                {useBrandNameTextInput && !brandPickerAtTop ? (
                   <div className="chain-field chain-field--full">
                     <label className="chain-field__label" htmlFor={`brand-select-${entry.id}`}>
                       {isBrandOnlyStep ? 'Approved brand' : 'Select brand'}
@@ -375,6 +376,13 @@ const CompanyInfoEntryCard = ({
                     Type the brand name when requesting admin approval for a brand not in the list.
                   </p>
                 </div>
+                ) : brandPickerAtTop && selectedBrand ? (
+                  <div className="chain-field chain-field--full">
+                    <span className="chain-field__label">Selected brand</span>
+                    <div className="chain-selected-brand-pill" aria-live="polite">
+                      {selectedBrand}
+                    </div>
+                  </div>
                 ) : catalogBrandSelected && isUnifiedRegistration ? (
                   <div className="chain-field chain-field--full">
                     <span className="chain-field__label">Brand for this registration</span>
@@ -688,17 +696,7 @@ export default function SupplierSupplyChainEntriesEditor({
   useEffect(() => {
     setExpandedEntryIds((prev) => {
       const validIds = new Set(displayEntries.map((entry) => entry.id));
-      const kept = prev.filter((id) => validIds.has(id));
-      const keptSet = new Set(kept);
-      const nextExpanded = [...kept];
-
-      for (const entry of displayEntries) {
-        if (!keptSet.has(entry.id)) {
-          nextExpanded.push(entry.id);
-        }
-      }
-
-      return nextExpanded;
+      return prev.filter((id) => validIds.has(id));
     });
   }, [entryIdsSignature, sectionView]);
 
@@ -998,6 +996,61 @@ export default function SupplierSupplyChainEntriesEditor({
     }
   };
 
+  const handleBrandStepCatalogPick = (nextBrand) => {
+    const brand = sanitizeCustomBrandInput(nextBrand);
+    if (!brand) return;
+
+    const currentEntries = getDisplayEntries();
+    const matchKey = brandKeyForDuplicateCheck(brand);
+    const existing = currentEntries.find(
+      (entry) => brandKeyForDuplicateCheck(normalizeSingleBrand(entry?.brands)) === matchKey
+    );
+
+    if (existing) {
+      setSelectedEntryId(existing.id);
+      return;
+    }
+
+    const activeEntry = currentEntries.find((entry) => entry.id === resolvedSelectedEntryId);
+    const activeBrandEmpty = !normalizeSingleBrand(activeEntry?.brands);
+
+    if (activeEntry && activeBrandEmpty) {
+      updateCompanyInfoEntry(activeEntry.id, 'brands', brand);
+      return;
+    }
+
+    let base = [...(profile?.companyInfoEntries || [])];
+    if (base.length === 0 && currentEntries.length > 0) {
+      base = currentEntries.map((entry) =>
+        entry.id === 'legacy'
+          ? {
+              ...entry,
+              id: genEntryId()
+            }
+          : { ...entry }
+      );
+    }
+
+    const newEntry = {
+      id: genEntryId(),
+      role: '',
+      brands: brand,
+      gstin: '',
+      companyName: '',
+      ownershipDetails: '',
+      brandApprovalDocumentUrls: [],
+      brandApprovalDocumentUrl: '',
+      authorizationCertificateUrls: [],
+      authorizationCertificateUrl: '',
+      minimumOrderValue: '',
+      supplyChainRegistrationStarted: true
+    };
+
+    const next = [...base, newEntry];
+    setProfile(syncProfileFromEntries(profile, next));
+    setSelectedEntryId(newEntry.id);
+  };
+
   const activeEntryForBrandPicker = displayEntries.find((entry) => entry.id === resolvedSelectedEntryId) || null;
   const activeEntryBrandValue = normalizeSingleBrand(activeEntryForBrandPicker?.brands);
 
@@ -1006,42 +1059,40 @@ export default function SupplierSupplyChainEntriesEditor({
       className={`supplier-select-yourself-editor supplier-select-yourself-editor--${sectionView} supplier-select-yourself-editor--${selectionMode}`}
     >
       <div className="chain-entries">
-        {isBrandStepPicker && displayEntries.length > 0 ? (
+        {isBrandStepPicker ? (
           <div className="chain-entry-selector chain-entry-selector--brand-step">
             <label className="chain-field__label" htmlFor={`entry-selector-${sectionView}`}>
               Select brand
             </label>
-            <select
+            <BrandSelect
               id={`entry-selector-${sectionView}`}
-              className="chain-field__control"
-              value={resolvedSelectedEntryId}
-              onChange={(e) => setSelectedEntryId(e.target.value)}
+              name={`entry-selector-${sectionView}`}
+              value={activeEntryBrandValue}
+              onChange={handleBrandStepCatalogPick}
               disabled={!editing}
-            >
-              {displayEntries.map((entry, idx) => {
-                const brandName = String(entry?.brands || '').trim() || `New brand ${idx + 1}`;
-                return (
-                  <option key={entry.id} value={entry.id}>
-                    {brandName}
-                  </option>
-                );
-              })}
-            </select>
+              required={false}
+              allowOther
+              source="catalog"
+              dropdownOnly
+              hideHint
+              className="chain-brand-select"
+            />
             <p className="chain-field__sublabel">
-              Pick a brand to view its status and documents here. The same brand is filled automatically in Step 2.
+              All admin-approved brands appear here. Pick one to view details below — it is filled automatically in
+              Step 2.
             </p>
-            {displayEntries.length > 1 && resolvedSelectedEntryId ? (
+            {activeEntryForBrandPicker && normalizeSingleBrand(activeEntryForBrandPicker.brands) ? (
               <button
                 type="button"
                 className="chain-entry-selector__remove"
                 onClick={() =>
                   onRemoveEntry
-                    ? onRemoveEntry(resolvedSelectedEntryId)
-                    : removeCompanyInfoEntry(resolvedSelectedEntryId)
+                    ? onRemoveEntry(activeEntryForBrandPicker.id)
+                    : removeCompanyInfoEntry(activeEntryForBrandPicker.id)
                 }
                 disabled={!editing}
               >
-                Remove this brand
+                Remove this brand from your profile
               </button>
             ) : null}
           </div>
@@ -1145,6 +1196,7 @@ export default function SupplierSupplyChainEntriesEditor({
             useBrandNameTextInput={usesBrandCatalogFields}
             excludeBrands={reservedBrandsForEntry(displayEntries, entry.id)}
             duplicateBrandMessage={duplicateBrandMessages.get(entry.id) || ''}
+            brandPickerAtTop={isBrandStepPicker}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]

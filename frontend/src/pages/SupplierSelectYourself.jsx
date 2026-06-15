@@ -67,7 +67,7 @@ export default function SupplierSelectYourself() {
   const [savingBrandApproval, setSavingBrandApproval] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [editorResetKey, setEditorResetKey] = useState(0);
-  const [brandSectionExpanded, setBrandSectionExpanded] = useState(true);
+  const [brandSectionExpanded, setBrandSectionExpanded] = useState(false);
   const [discountInsights, setDiscountInsights] = useState(null);
 
   const hasUnsavedChanges = useMemo(() => {
