@@ -1,18 +1,34 @@
 import {
+  createWalletTopupRecord,
   createWalletBankAccount,
   createWalletWithdrawalRequest,
+  completeWalletTopup,
+  getWalletBalance,
   getOrCreateWallet,
   listWalletBankAccounts,
   listWalletWithdrawalRequests,
-  listWalletTransactions
+  listWalletTransactions,
+  payOrderFromWallet,
+  summarizeWalletLedger
 } from '../../services/walletService.js';
 import { enrichWalletTransactions } from '../../services/walletHistoryService.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 import {
   walletBankAccountSchema,
+  walletPayOrderSchema,
+  walletTopupConfirmSchema,
+  walletTopupCreateSchema,
   walletWithdrawalListSchema,
   walletWithdrawSchema
 } from '../../contracts/walletContracts.js';
+import {
+  createRazorpayOrder,
+  fetchRazorpayPayment,
+  getRazorpayPublicConfig,
+  isRazorpayConfigured,
+  verifyRazorpayPaymentSignature
+} from '../../services/razorpayService.js';
+import { httpStatusForUpstreamError } from '../../utils/paymentNormalize.js';
 
 function normalizeLimit(raw, fallback = 20) {
   const parsed = Number.parseInt(String(raw || fallback), 10);
@@ -22,6 +38,10 @@ function normalizeLimit(raw, fallback = 20) {
 
 function isSupplierUser(req) {
   return String(req.user?.user_type || '').toLowerCase() === 'supplier';
+}
+
+function topupMinAmount() {
+  return Number.parseFloat(process.env.WALLET_MIN_TOPUP_INR || '100') || 100;
 }
 
 export function registerSupplierWalletRoutes(ctx) {
@@ -63,6 +83,222 @@ export function registerSupplierWalletRoutes(ctx) {
     } catch (e) {
       console.error('[SupplierWallet] tx error:', e);
       return res.status(500).json({ status: 'error', message: 'Failed to load supplier wallet transactions' });
+    }
+  });
+
+  router.get('/wallet/ledger-summary', authenticateToken, async (req, res) => {
+    try {
+      if (!isSupplierUser(req)) {
+        return res.status(403).json({ status: 'error', message: 'Supplier access required' });
+      }
+      const wallet = await getOrCreateWallet({ userId: req.userId, walletType: 'supplier' });
+      const summary = await summarizeWalletLedger({ walletId: wallet.id });
+      return res.json({ status: 'success', summary });
+    } catch (e) {
+      console.error('[SupplierWallet] ledger summary error:', e);
+      return res.status(500).json({ status: 'error', message: 'Failed to load supplier wallet ledger summary' });
+    }
+  });
+
+  router.get('/wallet/config', authenticateToken, async (req, res) => {
+    if (!isSupplierUser(req)) {
+      return res.status(403).json({ status: 'error', message: 'Supplier access required' });
+    }
+    return res.json({
+      status: 'success',
+      config: {
+        razorpay: getRazorpayPublicConfig(),
+        minTopupInr: topupMinAmount()
+      }
+    });
+  });
+
+  router.post('/wallet/topup/create', authenticateToken, async (req, res) => {
+    try {
+      if (!isSupplierUser(req)) {
+        return res.status(403).json({ status: 'error', message: 'Supplier access required' });
+      }
+      const payload = parseWithSchema(walletTopupCreateSchema, req.body || {});
+      const amount = Number.parseFloat(String(payload.amount || '0'));
+      const minTopup = topupMinAmount();
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ status: 'error', message: 'Amount must be greater than zero' });
+      }
+      if (amount < minTopup) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Minimum wallet credit amount is INR ${minTopup}`
+        });
+      }
+
+      const supplierWallet = await getOrCreateWallet({
+        userId: req.userId,
+        walletType: 'supplier'
+      });
+
+      if (!isRazorpayConfigured()) {
+        return res.status(503).json({
+          status: 'error',
+          code: 'RAZORPAY_NOT_CONFIGURED',
+          message: 'Online payment gateway is not configured. Wallet credit cannot be completed.'
+        });
+      }
+
+      const rpOrder = await createRazorpayOrder({
+        amountInRupees: amount,
+        receipt: `SUP-WTOP-${Date.now()}`,
+        notes: {
+          purpose: 'wallet_topup',
+          userId: req.userId,
+          walletId: supplierWallet.id,
+          walletType: 'supplier'
+        }
+      });
+
+      const topup = await createWalletTopupRecord({
+        walletId: supplierWallet.id,
+        userId: req.userId,
+        amount,
+        idempotencyKey: payload.idempotencyKey || null,
+        razorpayOrderId: rpOrder.id,
+        metadata: {
+          createdByRoute: 'POST /api/supplier/wallet/topup/create',
+          walletType: 'supplier'
+        }
+      });
+
+      return res.json({
+        status: 'success',
+        walletTopup: {
+          id: topup.id,
+          amount: topup.amount,
+          status: topup.status
+        },
+        paymentIntent: {
+          provider: 'razorpay',
+          orderId: rpOrder.id,
+          amount: rpOrder.amount,
+          currency: rpOrder.currency,
+          keyId: getRazorpayPublicConfig().keyId
+        }
+      });
+    } catch (e) {
+      console.error('[SupplierWallet] topup create error:', e);
+      if (String(e?.name || '') === 'ZodError') {
+        return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+      }
+      const status = httpStatusForUpstreamError(e);
+      return res.status(status).json({
+        status: 'error',
+        message: e.message || 'Failed to create supplier wallet credit'
+      });
+    }
+  });
+
+  router.post('/wallet/topup/confirm', authenticateToken, async (req, res) => {
+    try {
+      if (!isSupplierUser(req)) {
+        return res.status(403).json({ status: 'error', message: 'Supplier access required' });
+      }
+      if (!isRazorpayConfigured()) {
+        return res.status(503).json({
+          status: 'error',
+          code: 'RAZORPAY_NOT_CONFIGURED',
+          message: 'Wallet credit verification is unavailable.'
+        });
+      }
+      const payload = parseWithSchema(walletTopupConfirmSchema, req.body || {});
+      const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = payload;
+      const isValid = verifyRazorpayPaymentSignature({
+        orderId: razorpayOrderId,
+        paymentId: razorpayPaymentId,
+        signature: razorpaySignature
+      });
+      if (!isValid) {
+        return res.status(400).json({ status: 'error', message: 'Invalid payment signature' });
+      }
+
+      const payment = await fetchRazorpayPayment(razorpayPaymentId);
+      if (!payment || payment.order_id !== razorpayOrderId) {
+        return res.status(400).json({ status: 'error', message: 'Payment does not match wallet credit order' });
+      }
+      if (payment.status !== 'captured') {
+        return res.status(400).json({ status: 'error', message: 'Wallet credit payment is not captured yet' });
+      }
+
+      const topup = await completeWalletTopup({
+        razorpayOrderId,
+        razorpayPaymentId,
+        razorpaySignature,
+        actorUserId: req.userId,
+        expectedUserId: req.userId
+      });
+      const balance = await getWalletBalance({ userId: req.userId, walletType: 'supplier' });
+      return res.json({
+        status: 'success',
+        walletTopup: topup,
+        wallet: balance.wallet,
+        balance: balance.balance
+      });
+    } catch (e) {
+      console.error('[SupplierWallet] topup confirm error:', e);
+      if (String(e?.name || '') === 'ZodError') {
+        return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+      }
+      if (e?.code === 'WALLET_TOPUP_NOT_FOUND') {
+        return res.status(404).json({ status: 'error', message: e.message });
+      }
+      if (e?.code === 'WALLET_TOPUP_FORBIDDEN') {
+        return res.status(403).json({ status: 'error', message: e.message });
+      }
+      return res.status(500).json({ status: 'error', message: e.message || 'Failed to confirm supplier wallet credit' });
+    }
+  });
+
+  router.post('/wallet/orders/:id/pay', authenticateToken, async (req, res) => {
+    try {
+      if (!isSupplierUser(req)) {
+        return res.status(403).json({ status: 'error', message: 'Supplier access required' });
+      }
+      const payload = parseWithSchema(walletPayOrderSchema, req.body || {});
+      const result = await payOrderFromWallet({
+        orderId: req.params.id,
+        actorUserId: req.userId,
+        actorRole: req.user?.user_type || null,
+        requestId: req.requestId || null,
+        ipAddress: req.ip || null,
+        idempotencyKey: payload.idempotencyKey || null
+      });
+      return res.json({
+        status: 'success',
+        order: result.order,
+        platformFeeAmount: result.platformFeeAmount,
+        supplierPayoutAmount: result.supplierPayoutAmount,
+        feeBreakdown: result.feeBreakdown,
+        receiptDelivery: result.receiptDelivery || null,
+        invoiceSummary: result.invoiceSummary || null
+      });
+    } catch (e) {
+      console.error('[SupplierWallet] order pay error:', e);
+      if (String(e?.name || '') === 'ZodError') {
+        return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+      }
+      if (e?.code === 'ORDER_NOT_FOUND') {
+        return res.status(404).json({ status: 'error', message: e.message });
+      }
+      if (e?.code === 'ORDER_FORBIDDEN') {
+        return res.status(403).json({ status: 'error', message: e.message });
+      }
+      if (e?.code === 'ORDER_ALREADY_PAID') {
+        return res.status(400).json({ status: 'error', message: e.message });
+      }
+      if (e?.code === 'INSUFFICIENT_WALLET_BALANCE') {
+        return res.status(400).json({ status: 'error', code: e.code, message: e.message });
+      }
+      if (e?.code === 'WALLET_BALANCE_CONFLICT') {
+        return res.status(409).json({ status: 'error', code: e.code, message: e.message });
+      }
+      return res.status(500).json({ status: 'error', message: e.message || 'Failed to pay order from wallet' });
     }
   });
 

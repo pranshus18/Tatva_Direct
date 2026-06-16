@@ -17,7 +17,7 @@ Use this as the product spec, technical design, and phased implementation checkl
 
 **There are no direct payment methods.** Customers never pay suppliers directly, and Razorpay never settles an order in one hop. Every rupee follows:
 
-**Customer → Platform (wallet / top-up) → Platform escrow → Supplier wallet (net) + Platform fee**
+**Customer → Platform (wallet credit) → Platform escrow → Supplier wallet (net) + Platform fee**
 
 Cash, UPI, card, bank transfer, and pay-later are only **ways to fund the customer wallet** (or platform-recorded equivalents). Order checkout is **wallet-only**.
 
@@ -68,7 +68,7 @@ Cash, UPI, card, bank transfer, and pay-later are only **ways to fund the custom
 
 | Role | Wallet? | Action |
 |------|---------|--------|
-| Service provider (buyer) | Yes — customer wallet | Top up, pay for orders |
+| Service provider (buyer) | Yes — customer wallet | Credit wallet, pay for orders |
 | Supplier | Yes — supplier wallet | Receive net payout, withdraw |
 | Platform (admin) | Escrow + revenue wallets | Hold funds, collect fee, approve withdrawals |
 | POS walk-in customer | Optional (Phase 2+) | Wallet funded at counter; order still debits wallet |
@@ -105,10 +105,10 @@ This is the **non-negotiable** payment architecture. The platform always sits be
 
 Every order payment is **two steps**, never one:
 
-1. **Fund** — Customer wallet receives money (Razorpay top-up, admin-recorded cash, approved credit limit, etc.).
+1. **Fund** — Customer wallet receives money (Razorpay wallet credit, admin-recorded cash, approved credit limit, etc.).
 2. **Spend** — Checkout debits customer wallet and credits platform escrow.
 
-Razorpay (and any external gateway) is a **top-up rail only**, not an order checkout rail.
+Razorpay (and any external gateway) is a **wallet credit rail only**, not an order checkout rail.
 
 ### How “payment methods” map in the new world
 
@@ -116,13 +116,13 @@ Old UI labels become **wallet funding channels**, not checkout methods:
 
 | Old checkout method | New behavior |
 |---------------------|--------------|
-| Online (Razorpay) | Top up wallet → pay order from wallet |
-| UPI / card | Top up wallet → pay order from wallet |
+| Online (Razorpay) | Credit wallet → pay order from wallet |
+| UPI / card | Credit wallet → pay order from wallet |
 | Bank transfer | Customer transfers to **platform bank account** → admin verifies → wallet credited |
-| Cash (POS) | Staff collects cash → platform records top-up → wallet credited → order paid from wallet |
+| Cash (POS) | Staff collects cash → platform records wallet credit → wallet credited → order paid from wallet |
 | Credit / pay later | Platform extends **wallet credit limit** → order debits wallet (negative balance or reserved limit) → settlement pays down limit later |
 
-Checkout screen shows **one option only: “Pay from wallet”** (with balance and top-up if needed).
+Checkout screen shows **one option only: “Pay from wallet”** (with balance and additional credit if needed).
 
 ### Supplier never sees customer payment details
 
@@ -140,7 +140,7 @@ flowchart TB
   end
 
   subgraph required [Required — all money through platform]
-    C2[Customer] -->|top-up| P1[Platform customer wallet]
+    C2[Customer] -->|wallet credit| P1[Platform customer wallet]
     P1 -->|order pay| P2[Platform escrow]
     P2 -->|fee| P3[Platform revenue]
     P2 -->|net| P4[Supplier wallet]
@@ -180,7 +180,7 @@ flowchart TB
 
 | Event | Old flow | New flow (platform middleman) |
 |-------|----------|-------------------------------|
-| Customer pays | Razorpay → order `paid` directly | Top-up → wallet debit → escrow → order `paid` |
+| Customer pays | Razorpay → order `paid` directly | Wallet credit → wallet debit → escrow → order `paid` |
 | Supplier notified | Full order amount | Net amount only; fee shown separately |
 | Money movement | Direct (logical) | Always: escrow → supplier wallet on delivery |
 | Platform revenue | Not tracked per order | `platform_fee_amount` on every order |
@@ -191,13 +191,13 @@ flowchart TB
 
 | Current | Action |
 |---------|--------|
-| `POST /api/payments/orders/:id/razorpay/create` | **Remove or return 410** — replace with wallet top-up + wallet pay |
+| `POST /api/payments/orders/:id/razorpay/create` | **Remove or return 410** — replace with wallet credit + wallet pay |
 | `POST /api/payments/orders/:id/razorpay/confirm` | **Remove or return 410** |
 | `PATCH .../orders/:id/payment` (mark paid without wallet) | **Admin-only** with audit, or remove for non-admin |
-| `POST /api/payments/orders/:id/bank-transfer/mark` | Move to **wallet top-up verification**, not order paid |
+| `POST /api/payments/orders/:id/bank-transfer/mark` | Move to **wallet credit verification**, not order paid |
 | `POST /api/payments/orders/:id/credit-line/approve` | Refactor to **platform wallet credit limit**, then wallet pay |
-| Checkout: online / COD / bank / credit options | **Remove** — show wallet balance + top-up only |
-| POS: cash/UPI → order `paid` | **Change** to cash/UPI → wallet top-up → wallet pay |
+| Checkout: online / COD / bank / credit options | **Remove** — show wallet balance + credit action only |
+| POS: cash/UPI → order `paid` | **Change** to cash/UPI → wallet credit → wallet pay |
 
 ---
 
@@ -209,7 +209,7 @@ Answer these **before writing code**. Document decisions in this section or a li
 
 - [ ] Who gets a customer wallet? (Service providers only? POS customers too?)
 - [ ] One wallet per user, or separate wallets per supplier relationship?
-- [ ] Minimum top-up amount? (e.g. ₹100)
+- [ ] Minimum wallet credit amount? (e.g. ₹100)
 - [ ] Maximum wallet balance? (optional cap)
 
 ### When money moves
@@ -252,7 +252,7 @@ Fee is **snapshotted on the order** at payment time (immutable if admin changes 
 ### Payment methods (platform middleman — decided)
 
 - [x] **Checkout is wallet-only** — no direct order payment rails.
-- [ ] Insufficient balance: block checkout and force top-up first, **or** inline top-up then auto-debit in one UX flow (still two ledger steps).
+- [ ] Insufficient balance: block checkout and force wallet credit first, **or** inline wallet credit then auto-debit in one UX flow (still two ledger steps).
 - [ ] Bank transfer: customer pays **platform** account → admin credits wallet (not mark order paid).
 - [ ] POS cash/UPI: credit wallet then debit for order (same session, two backend steps).
 - [ ] Pay later: platform-owned credit limit on wallet, not supplier-owned ledger (migrate from `creditAccountService.js`).
@@ -277,7 +277,7 @@ Start with **virtual wallets** (balances in the database). Real bank transfers c
 
 | Wallet type | `wallet_type` value | Owner | Purpose |
 |-------------|---------------------|-------|---------|
-| Customer wallet | `customer` | Service provider / buyer user | Top-up and pay for orders |
+| Customer wallet | `customer` | Service provider / buyer user | Credit and pay for orders |
 | Platform escrow | `platform_escrow` | System (no `user_id`) | Holds funds until order complete |
 | Supplier wallet | `supplier` | Supplier user | Receives net payouts |
 | Platform revenue | `platform_revenue` | System | Accumulates commission (optional separate wallet) |
@@ -287,7 +287,7 @@ Start with **virtual wallets** (balances in the database). Real bank transfers c
 - Balances are **never negative** (reject debit if insufficient funds).
 - Every balance change **must** have a matching `wallet_transactions` row.
 - Use **database transactions** so debit + credit pairs succeed or fail together.
-- Use **idempotency keys** on top-up and order payment (same pattern as Razorpay in `paymentsController.js`).
+- Use **idempotency keys** on wallet credit and order payment (same pattern as Razorpay in `paymentsController.js`).
 
 ---
 
@@ -297,14 +297,14 @@ Start with **virtual wallets** (balances in the database). Real bank transfers c
 
 ```mermaid
 flowchart LR
-  A[Customer / Service Provider] -->|1. Top up| B[Customer Wallet]
+  A[Customer / Service Provider] -->|1. Credit wallet| B[Customer Wallet]
   B -->|2. Pay for order| C[Platform Escrow Wallet]
   C -->|3a. Platform fee| E[Platform Revenue]
   C -->|3b. Net amount| D[Supplier Wallet]
   D -->|4. Withdraw| F[Supplier Bank Account]
 ```
 
-### Top-up flow
+### Wallet credit flow
 
 ```mermaid
 sequenceDiagram
@@ -610,8 +610,8 @@ function calculateLineFee(lineAmount, feeRule) {
 |--------|------|-------------|
 | `GET` | `/api/wallet/balance` | Current balance + currency |
 | `GET` | `/api/wallet/transactions` | Paginated history |
-| `POST` | `/api/wallet/topup/create` | Create Razorpay order for top-up |
-| `POST` | `/api/wallet/topup/confirm` | Confirm top-up after Razorpay |
+| `POST` | `/api/wallet/topup/create` | Create Razorpay order for wallet credit |
+| `POST` | `/api/wallet/topup/confirm` | Confirm wallet credit after Razorpay |
 | `POST` | `/api/wallet/orders/:id/pay` | Pay order from wallet |
 
 ### Supplier
@@ -646,8 +646,8 @@ function calculateLineFee(lineAmount, feeRule) {
 | Method | Path | Replacement |
 |--------|------|-------------|
 | `POST` | `/api/payments/orders/:id/razorpay/create` | `/api/wallet/topup/create` then `/api/wallet/orders/:id/pay` |
-| `POST` | `/api/payments/orders/:id/razorpay/confirm` | Wallet top-up confirm + wallet pay |
-| `POST` | `/api/payments/orders/:id/bank-transfer/mark` | `/api/wallet/topup/bank-transfer/submit` + admin verify |
+| `POST` | `/api/payments/orders/:id/razorpay/confirm` | Wallet credit confirm + wallet pay |
+| `POST` | `/api/payments/orders/:id/bank-transfer/mark` | `/api/wallet/topup/bank-transfer/submit` + admin verify as wallet credit |
 | `PATCH` | `/api/.../orders/:id/payment` (mark paid) | `/api/wallet/orders/:id/pay` or admin escrow override |
 
 Register routes in `backend/routes/api.js` and `backend/app/createApp.js` following existing payment route patterns.
@@ -724,11 +724,11 @@ Register routes in `backend/routes/api.js` and `backend/app/createApp.js` follow
    - Update order: `payment_status = refunded`, `wallet_payment_status = refunded`
 2. Notify customer and supplier.
 
-### Step 2b — Inline top-up at checkout (still platform middleman)
+### Step 2b — Inline wallet credit at checkout (still platform middleman)
 
-If balance is too low, checkout may open top-up UI, but the backend still runs two steps:
+If balance is too low, checkout may open wallet credit UI, but the backend still runs two steps:
 
-1. Complete wallet top-up (Razorpay / bank / cash recorded by platform).
+1. Complete wallet credit (Razorpay / bank / cash recorded by platform).
 2. `POST /api/wallet/orders/:id/pay` debits wallet and credits escrow.
 
 Never call order-level Razorpay create from checkout.
@@ -741,10 +741,10 @@ Never call order-level Razorpay create from checkout.
 
 | Screen | File suggestion | Features |
 |--------|-----------------|----------|
-| Wallet dashboard | `frontend/src/pages/Wallet.jsx` | Balance, recent transactions, Top up CTA |
-| Top-up modal | Same or component | Amount input → Razorpay checkout |
-| Checkout | `CreatePO.jsx`, `YourOrders.jsx` | **Wallet only** — remove online/COD/bank/credit; top-up modal if low balance |
-| POS | `SupplierPOS.jsx` | Cash/UPI → wallet top-up → wallet pay (not direct `paid`) |
+| Wallet dashboard | `frontend/src/pages/Wallet.jsx` | Balance, recent transactions, Credit CTA |
+| Wallet credit modal | Same or component | Amount input → Razorpay checkout |
+| Checkout | `CreatePO.jsx`, `YourOrders.jsx` | **Wallet only** — remove online/COD/bank/credit; wallet credit modal if low balance |
+| POS | `SupplierPOS.jsx` | Cash/UPI → wallet credit → wallet pay (not direct `paid`) |
 
 ### Supplier
 
@@ -763,7 +763,7 @@ Never call order-level Razorpay create from checkout.
 
 ### UI copy examples
 
-- Insufficient balance: *"Wallet balance ₹{balance}. Order total ₹{total}. Top up ₹{shortfall} to continue."*
+- Insufficient balance: *"Wallet balance ₹{balance}. Order total ₹{total}. Credit ₹{shortfall} to continue."*
 - Payment success: *"₹{total} paid from wallet. Receipt sent to your email."*
 - Supplier pending: *"₹{net} pending release on delivery."*
 
@@ -773,16 +773,16 @@ Never call order-level Razorpay create from checkout.
 
 | Existing module | Change needed |
 |-----------------|---------------|
-| `paymentsController.js` | **Deprecate** order Razorpay routes; wallet top-up + wallet pay only |
-| `razorpayWebhookRouter.js` | **Only** credit wallets on top-up; do not mark orders `paid` from gateway |
+| `paymentsController.js` | **Deprecate** order Razorpay routes; wallet credit + wallet pay only |
+| `razorpayWebhookRouter.js` | **Only** credit wallets on wallet credit events; do not mark orders `paid` from gateway |
 | `paymentRoutes.js` | Remove supplier “mark paid”; notifications use `supplier_payout_amount` only |
 | `dashboard/paymentRoutes.js` | Block `payment_status = paid` without wallet/escrow transaction |
 | `creditAccountService.js` | Migrate to **platform** wallet credit limit (not supplier-side settlement) |
 | `posController.js` / `SupplierPOS.jsx` | Cash/UPI funds wallet, then wallet pays order |
 | `ledgerService.js` | Wallet liability, escrow, supplier payable, platform revenue |
-| `paymentTransactionService.js` | All order txns `method: wallet`; top-ups separate txn type |
+| `paymentTransactionService.js` | All order txns `method: wallet`; wallet credits tracked as separate txn type |
 | `reconciliationService.js` | No order paid without matching wallet debit + escrow credit |
-| `poHelpers.js` | **`wallet` only** in checkout; funding channel stored on top-up, not order |
+| `poHelpers.js` | **`wallet` only** in checkout; funding channel stored on wallet credit record, not order |
 | `CreatePO.jsx` / `YourOrders.jsx` | Remove direct payment methods from UI |
 | Order status handlers | `releaseSupplierPayout` on `delivered` |
 
@@ -790,7 +790,7 @@ Never call order-level Razorpay create from checkout.
 
 | Event | Debit | Credit |
 |-------|-------|--------|
-| Wallet top-up (Razorpay) | Cash/Bank | Customer Wallet Liability |
+| Wallet credit (Razorpay) | Cash/Bank | Customer Wallet Liability |
 | Order paid from wallet | Customer Wallet Liability | Platform Escrow |
 | Release to supplier | Platform Escrow | Supplier Payable (then Supplier Wallet) |
 | Platform fee | Platform Escrow | Platform Revenue |
@@ -807,7 +807,7 @@ Extend `POST /api/payments/reconciliation/run` or add wallet-specific run:
 
 | Check | Expected |
 |-------|----------|
-| Razorpay top-ups | Sum of completed `wallet_topups` = sum of `topup` credits |
+| Razorpay wallet credits | Sum of completed `wallet_topups` = sum of `topup` credits |
 | Order payments | Every `paid` order has customer debit = escrow credit (no exceptions) |
 | No direct paid orders | Zero orders with `payment_status = paid` and no wallet/escrow rows |
 | Escrow balance | Escrow wallet = sum of `held` orders − released payouts |
@@ -830,7 +830,7 @@ Extend `GET /api/payments/settlement/report` to include:
 
 | Scenario | Handling |
 |----------|----------|
-| Insufficient wallet balance | Return 400 with `shortfall` amount; offer top-up link |
+| Insufficient wallet balance | Return 400 with `shortfall` amount; offer wallet credit link |
 | Duplicate Razorpay webhook | Idempotency on `wallet_topups` / `wallet_transactions` |
 | Double order payment | Reject if `payment_status === paid` |
 | Order cancelled before delivery | Refund gross from escrow to customer wallet |
@@ -839,7 +839,7 @@ Extend `GET /api/payments/settlement/report` to include:
 | Delivery never happens | Admin tool to release or refund after timeout |
 | COD | Not allowed supplier-side; cash funds **platform** wallet then wallet pays |
 | Credit / pay later | Platform wallet credit limit; settlement tops up wallet or clears limit |
-| Bank transfer on order | Rejected; bank transfer only for **wallet top-up** after admin verify |
+| Bank transfer on order | Rejected; bank transfer only for **wallet credit** after admin verify |
 | Legacy “mark as paid” API | Return 403/410 unless admin escrow override with audit log |
 | Concurrent debits | Row-level lock on wallet balance |
 | Fee rule changes | Always use fee snapshot on order at payment time |
@@ -856,12 +856,12 @@ Extend `GET /api/payments/settlement/report` to include:
 - [ ] `GET /api/wallet/transactions`
 - [ ] Unit tests for fee calculation and insufficient balance
 
-### Phase 2 — Top-up (Week 2)
+### Phase 2 — Wallet credit (Week 2)
 
 - [ ] `POST /api/wallet/topup/create` + confirm + webhook
 - [ ] `wallet_topups` table and idempotency
-- [ ] Frontend: Wallet page + Razorpay top-up
-- [ ] Reconcile top-ups vs Razorpay
+- [ ] Frontend: Wallet page + Razorpay wallet credit
+- [ ] Reconcile wallet credits vs Razorpay
 
 ### Phase 3 — Order payment + retire direct rails (Week 3)
 
@@ -918,7 +918,7 @@ Add to backend `.env` (names are suggestions):
 |----------|---------|---------|
 | `WALLET_ENABLED` | Feature flag | `true` |
 | `DIRECT_ORDER_PAYMENT_DISABLED` | Block legacy Razorpay-on-order APIs | `true` |
-| `WALLET_MIN_TOPUP_INR` | Minimum top-up | `100` |
+| `WALLET_MIN_TOPUP_INR` | Minimum wallet credit | `100` |
 | `WALLET_MAX_BALANCE_INR` | Optional cap | `500000` |
 | `PLATFORM_FEE_PERCENT_DEFAULT` | Fallback only when no supply-chain rule matches | `5` |
 | `SUPPLIER_MIN_WITHDRAWAL_INR` | Min withdrawal | `500` |
@@ -934,9 +934,9 @@ Existing Razorpay vars (see `PHASE3_PAYMENTS_ROLLOUT.md`):
 
 ## 18. UAT checklist
 
-### Top-up
+### Wallet credit
 
-- [ ] Top-up ₹100 (minimum) succeeds; balance updates
+- [ ] Wallet credit ₹100 (minimum) succeeds; balance updates
 - [ ] Duplicate webhook does not double-credit
 - [ ] Failed payment does not credit wallet
 
@@ -974,9 +974,9 @@ Existing Razorpay vars (see `PHASE3_PAYMENTS_ROLLOUT.md`):
 
 - [ ] Order Razorpay create/confirm returns disabled when `DIRECT_ORDER_PAYMENT_DISABLED=true`
 - [ ] Cannot mark order `paid` via dashboard without wallet debit + escrow credit
-- [ ] POS cash sale creates top-up + wallet pay (two ledger entries), not direct paid
+- [ ] POS cash sale creates wallet credit + wallet pay (two ledger entries), not direct paid
 - [ ] Supplier API cannot set `payment_status = paid`
-- [ ] Every paid order has `payment_method = wallet` (funding channel on top-up record only)
+- [ ] Every paid order has `payment_method = wallet` (funding channel on wallet credit record only)
 
 ---
 

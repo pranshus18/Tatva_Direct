@@ -10,6 +10,7 @@ import {
   extractUserState,
   getAllowedSellerRoleForBrand,
   getContractErrorMessage,
+  getWalletBalance,
   insertNotification,
   isAddressComplete,
   isOrderNumberConflictError,
@@ -55,8 +56,16 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       ])
       .filter(Boolean);
     const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, itemBrandCandidates);
-    const { payment_method: poPaymentMethod, payment_status: poPaymentStatus } =
+    const requestedPaymentMethod = String(payload?.paymentMethod || payload?.payment_method || 'wallet')
+      .toLowerCase()
+      .trim();
+    const payLaterRequested =
+      requestedPaymentMethod === 'credit' ||
+      requestedPaymentMethod === 'pay_later' ||
+      requestedPaymentMethod === 'pay-later';
+    const { payment_method: resolvedPaymentMethod, payment_status: poPaymentStatus } =
       resolveB2bPaymentFromBody(payload);
+    const poPaymentMethod = payLaterRequested ? 'credit' : resolvedPaymentMethod;
     const paymentDetails = payload.paymentDetails && typeof payload.paymentDetails === 'object'
       ? payload.paymentDetails
       : null;
@@ -161,8 +170,36 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     }
 
     const createdOrders = [];
+    const toMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+    let walletRemainingBalance = null;
+    if (poPaymentMethod === 'wallet') {
+      const groupedTotal = toMoney(
+        (Array.isArray(poGroups) ? poGroups : []).reduce((sum, group) => sum + (Number(group?.total) || 0), 0)
+      );
+      const walletBalanceResult = await getWalletBalance({
+        userId: req.userId,
+        walletType: 'customer'
+      });
+      const currentWalletBalance = toMoney(walletBalanceResult?.balance || 0);
+      walletRemainingBalance = currentWalletBalance;
+      if (groupedTotal > currentWalletBalance) {
+        const shortage = toMoney(groupedTotal - currentWalletBalance);
+        return res.status(400).json({
+          status: 'error',
+          code: 'INSUFFICIENT_WALLET_BALANCE',
+          message: `Insufficient wallet balance. Available ₹${currentWalletBalance.toLocaleString(
+            'en-IN'
+          )}, required ₹${groupedTotal.toLocaleString('en-IN')}. Please credit wallet before placing this order.`,
+          wallet: {
+            balance: currentWalletBalance,
+            required: groupedTotal,
+            shortage
+          }
+        });
+      }
+    }
     const resolveBcov = buildBcovResolver(supabase);
-    const GROUP_CREATE_CONCURRENCY = 3;
+    const GROUP_CREATE_CONCURRENCY = poPaymentMethod === 'wallet' ? 1 : 3;
     const createHttpError = (statusCode, message) => {
       const err = new Error(message);
       err.statusCode = statusCode;
@@ -376,9 +413,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       const lineTaxBreakdown = lineBuilt.map((b) => b.lineGst);
       const gstSummary = sumGstLines(lineTaxBreakdown);
       const totalAmount = gstSummary.totalAmount;
+      const roundedOrderAmount = toMoney(totalAmount);
 
+      let creditCheck = null;
       if (poPaymentMethod === 'credit') {
-        const creditCheck = await validateCreditForOrder({
+        creditCheck = await validateCreditForOrder({
           supplierId: supplier.id,
           buyerUserId: req.userId,
           orderAmount: totalAmount
@@ -390,6 +429,20 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           );
         }
       }
+      const selectedCreditPeriodDays = Math.max(
+        1,
+        Math.floor(
+          Number(
+            paymentDetails?.creditPeriod ||
+              creditCheck?.creditPeriodDays ||
+              30
+          ) || 30
+        )
+      );
+      const settlementDueAt =
+        poPaymentMethod === 'credit'
+          ? new Date(Date.now() + selectedCreditPeriodDays * 86400000).toISOString()
+          : null;
 
       const groupItemDetails = (Array.isArray(group.items) ? group.items : []).map((line) => ({
         name: line.name || 'Item',
@@ -449,6 +502,20 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           };
         }
       }
+      if (poPaymentMethod === 'wallet' && walletRemainingBalance !== null) {
+        if (roundedOrderAmount > walletRemainingBalance) {
+          const shortage = toMoney(roundedOrderAmount - walletRemainingBalance);
+          throw createHttpError(
+            400,
+            `Insufficient wallet balance for "${group.vendorName || 'selected supplier'}". Available ₹${walletRemainingBalance.toLocaleString(
+              'en-IN'
+            )}, required ₹${roundedOrderAmount.toLocaleString('en-IN')}, shortage ₹${shortage.toLocaleString(
+              'en-IN'
+            )}.`
+          );
+        }
+        walletRemainingBalance = toMoney(walletRemainingBalance - roundedOrderAmount);
+      }
 
       // Create order using DB-side order_number generation (trigger/sequence).
       // Retry on unique order_number collisions in case of transient sequence conflicts.
@@ -485,6 +552,16 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
                 sgstAmount: gstSummary.sgstAmount,
                 totalAmount: gstSummary.totalAmount
               },
+              ...(poPaymentMethod === 'credit'
+                ? {
+                    payLater: {
+                      settlementPeriodDays: selectedCreditPeriodDays,
+                      settlementDueAt,
+                      outstandingAtOrderTime: Number(creditCheck?.outstanding || 0),
+                      availableCreditAtOrderTime: Number(creditCheck?.available || 0)
+                    }
+                  }
+                : {}),
               ...(paymentDetails ? { paymentDetails } : {})
             },
             channel: 'b2b_po',

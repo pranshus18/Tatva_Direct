@@ -4,9 +4,11 @@ import {
   buildPoCartDraftFromSavePayload,
   getContractErrorMessage,
   appendDiscoveryItemAsNewProject,
+  loadAdminBrandTerminalRoleMap,
   normalizePoCartDraft,
   parseWithSchema,
-  poCartSaveSchema
+  poCartSaveSchema,
+  supplierMatchesBrandTerminalRole
 } from './poImports.js';
 
 export function registerPoCartRoutes(ctx) {
@@ -95,21 +97,36 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
     if (!product || String(product.status || '').toLowerCase() !== 'approved') {
       return res.status(404).json({ status: 'error', message: 'Product not found' });
     }
-    // Keep cart add behavior aligned with Product Discovery:
-    // allow only products that are actively listed by at least one approved supplier listing.
-    const { data: activeListing, error: listingError } = await supabase
+    // Keep cart add behavior aligned with Product Discovery and PO grouping rules:
+    // product must have at least one active approved offer from a supplier eligible
+    // for the terminal role configured for this brand's supply chain.
+    const { data: activeListings, error: listingError } = await supabase
       .from('supplier_products')
-      .select('id')
+      .select('id, supplier:users!supplier_products_supplier_id_fkey(profile)')
       .eq('product_id', productId)
       .eq('status', 'approved')
       .eq('is_active', true)
-      .limit(1)
-      .maybeSingle();
+      .limit(200);
     if (listingError) throw listingError;
-    if (!activeListing) {
+    const brandLabel =
+      String(product?.brand || '').trim() ||
+      String(product?.specifications?.brand || '').trim() ||
+      String(product?.specifications?.brandModel || '').trim();
+    const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(
+      supabase,
+      brandLabel ? [brandLabel] : []
+    );
+    const hasTerminalEligibleListing = (activeListings || []).some((row) =>
+      supplierMatchesBrandTerminalRole(
+        row?.supplier?.profile || {},
+        brandLabel,
+        terminalRoleByBrandMap
+      )
+    );
+    if (!hasTerminalEligibleListing) {
       return res.status(400).json({
         status: 'error',
-        message: 'This product is not currently listed on the platform.'
+        message: "This product is not currently listed by the terminal role supplier for this brand's supply chain."
       });
     }
 

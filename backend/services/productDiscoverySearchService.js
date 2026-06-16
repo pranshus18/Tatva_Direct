@@ -1,8 +1,4 @@
 import {
-  LISTED_SUPPLIER_PRODUCTS_OR,
-  listedSupplierProductsFilterOptions
-} from '../utils/platformListedSupplierProductsFilter.js';
-import {
   rankProductsByQuery,
   filterByFuzzyScore,
   shouldRunFuzzyFallback,
@@ -12,6 +8,10 @@ import {
 } from './productDiscoveryFuzzyRank.js';
 import { normalizeSearchQueryAliases } from './voiceSearchAliases.js';
 import { enrichProductsWithOfferImages } from './productImageService.js';
+import {
+  loadAdminBrandTerminalRoleMap,
+  supplierMatchesBrandTerminalRole
+} from '../utils/adminBrandSupplyChain.js';
 
 /**
  * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` treats commas as delimiters; commas/parens in the
@@ -75,12 +75,12 @@ function buildListedProductsQuery(supabase, categoryOpts) {
           status,
           is_active,
           updated_at,
-          supplier_products!inner(count)
+          supplier_products(count)
         `,
       { count: 'exact' }
     )
     .eq('status', 'approved')
-    .or(LISTED_SUPPLIER_PRODUCTS_OR, listedSupplierProductsFilterOptions);
+    .or('is_active.eq.true,is_active.is.null');
 
   return applyCategoryFilter(productsQuery, categoryOpts);
 }
@@ -247,12 +247,54 @@ export async function searchProductDiscoveryForUser(
   }
 
   const productsWithImages = await enrichProductsWithOfferImages(supabase, rawProducts || []);
+  const detectDiscoveryBrand = (product = {}) => {
+    const specs =
+      product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
+        ? product.specifications
+        : {};
+    return (
+      product?.brand ||
+      specs?.brand ||
+      specs?.brandModel ||
+      specs?.modelBrand ||
+      ''
+    );
+  };
+  const discoveryBrandCandidates = productsWithImages.map((p) => detectDiscoveryBrand(p)).filter(Boolean);
+  const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, discoveryBrandCandidates);
+  const productIds = productsWithImages.map((p) => p?.id).filter(Boolean);
+  const productById = new Map(productsWithImages.map((p) => [p?.id, p]));
+  const eligibleSupplierCountByProduct = new Map();
+  if (productIds.length > 0) {
+    const { data: offerRows } = await supabase
+      .from('supplier_products')
+      .select('product_id, status, is_active, supplier:users!supplier_products_supplier_id_fkey(profile)')
+      .in('product_id', productIds)
+      .neq('status', 'rejected');
 
-  const suggestions = productsWithImages.map((p) => {
-    const supplierCount =
-      Array.isArray(p?.supplier_products) && p.supplier_products[0] && Number.isFinite(p.supplier_products[0].count)
-        ? p.supplier_products[0].count
-        : null;
+    for (const row of offerRows || []) {
+      const productId = row?.product_id;
+      if (!productId) continue;
+      const normalizedStatus = String(row?.status || '').trim().toLowerCase();
+      const listedByStatus =
+        (normalizedStatus === 'approved' && row?.is_active === true) ||
+        normalizedStatus === 'pending' ||
+        !normalizedStatus;
+      if (!listedByStatus) continue;
+      const product = productById.get(productId);
+      const brandLabel = detectDiscoveryBrand(product);
+      const supplierProfile = row?.supplier?.profile || {};
+      if (!supplierMatchesBrandTerminalRole(supplierProfile, brandLabel, terminalRoleByBrandMap)) continue;
+      eligibleSupplierCountByProduct.set(
+        productId,
+        (eligibleSupplierCountByProduct.get(productId) || 0) + 1
+      );
+    }
+  }
+
+  const suggestions = productsWithImages
+    .map((p) => {
+      const supplierCount = Number(eligibleSupplierCountByProduct.get(p?.id) || 0);
     const categoryKey = String(p?.category || '').trim().toLowerCase();
     const affinityScore = categoryAffinity.get(categoryKey) || 0;
     const recommendationScore = Number(affinityScore.toFixed(3));
@@ -261,7 +303,8 @@ export async function searchProductDiscoveryForUser(
       supplierCount,
       recommendationScore
     };
-  });
+    })
+    .filter((p) => Number(p?.supplierCount || 0) > 0);
 
   suggestions.sort((a, b) => {
     if (query) {
@@ -291,7 +334,7 @@ export async function searchProductDiscoveryForUser(
 
   return {
     suggestions: paginatedSuggestions,
-    total: Number.isFinite(count) ? count : suggestions.length,
+    total: suggestions.length,
     limit: safeLimit,
     offset,
     recommendationMode: 'personalized-order-affinity'

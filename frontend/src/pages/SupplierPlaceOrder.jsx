@@ -124,9 +124,11 @@ const SupplierPlaceOrder = () => {
 
   const [draft, setDraft] = useState(null);
   const [requiredDate, setRequiredDate] = useState('');
-  const [paymentMethod, setPaymentMethod] = useState('online');
+  const [paymentMethod] = useState('wallet');
   const [placing, setPlacing] = useState(false);
   const [loadingDraft, setLoadingDraft] = useState(true);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
 
   const [shippingAddress, setShippingAddress] = useState({
     line1: '',
@@ -162,7 +164,6 @@ const SupplierPlaceOrder = () => {
 
       setDraft(parsed);
       setRequiredDate(typeof parsed.requiredDate === 'string' ? parsed.requiredDate : '');
-      setPaymentMethod(typeof parsed.paymentMethod === 'string' ? parsed.paymentMethod : 'online');
       if (parsed.transportSelection && typeof parsed.transportSelection === 'object') {
         setSelectedTransport(parsed.transportSelection);
       }
@@ -311,7 +312,7 @@ const SupplierPlaceOrder = () => {
             JSON.stringify({
               ...draft,
               requiredDate: st.requiredDate || requiredDate || '',
-              paymentMethod: st.paymentMethod || paymentMethod,
+              paymentMethod,
               transportSelection: st.transportSelection
             })
           );
@@ -335,7 +336,6 @@ const SupplierPlaceOrder = () => {
     }
 
     if (typeof st.requiredDate === 'string') setRequiredDate(st.requiredDate || '');
-    if (typeof st.paymentMethod === 'string') setPaymentMethod(st.paymentMethod || 'online');
   }, [location.state, draft, requiredDate, paymentMethod]);
 
   useEffect(() => {
@@ -412,6 +412,32 @@ const SupplierPlaceOrder = () => {
     if (!poGroups.length) return 0;
     return poGroups.reduce((s, g) => s + (Number(g.total) || 0), 0);
   }, [poGroups]);
+  const walletShortage = Math.max(0, Number(grandTotalAllPos || 0) - Number(walletBalance || 0));
+  const hasSufficientWalletBalance = walletShortage <= 0;
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadWalletBalance = async () => {
+      setLoadingWalletBalance(true);
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        const resp = await fetch(getApiUrl('/api/supplier/wallet/balance'), {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-cache'
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (cancelled || !resp.ok || data.status !== 'success') return;
+        setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
+      } finally {
+        if (!cancelled) setLoadingWalletBalance(false);
+      }
+    };
+    void loadWalletBalance();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleTransportSuggestion = () => {
     if (!requiredDate) {
@@ -451,6 +477,17 @@ const SupplierPlaceOrder = () => {
   const handlePlaceOrder = async () => {
     if (!draft?.lines || !Array.isArray(draft.lines) || draft.lines.length === 0) {
       alert('No draft order found. Please select products again.');
+      return;
+    }
+
+    if (loadingWalletBalance) {
+      alert('Checking your wallet balance. Please wait a moment.');
+      return;
+    }
+    if (!hasSufficientWalletBalance) {
+      alert(
+        `Insufficient wallet balance. Please add ${formatRupee(walletShortage)} to your supplier wallet and try again.`
+      );
       return;
     }
 
@@ -635,26 +672,29 @@ const SupplierPlaceOrder = () => {
               </div>
               <div className="spo-field">
                 <label htmlFor="spo-payment-method">Payment method</label>
-                <select
-                  id="spo-payment-method"
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value)}
-                >
-                  <option value="online">Pay online (UPI / card)</option>
-                  <option value="cod">Cash on delivery</option>
-                  <option value="bank_transfer">Bank transfer</option>
-                  <option value="card">Credit / Debit Card</option>
-                  <option value="credit">Credit / pay later (on account)</option>
-                </select>
-                {paymentMethod === 'credit' ? (
-                  <div className="spo-alert spo-alert--credit">
-                    <strong>Credit selected.</strong> Works only if upstream suppliers have you within their credit
-                    limits.
-                  </div>
-                ) : (
-                  <p className="spo-hint">Credit depends on each supplier&apos;s configured credit account.</p>
-                )}
+                <input id="spo-payment-method" value="Wallet only" readOnly />
+                <p className="spo-hint">
+                  Upstream purchases are wallet-only. Credit supplier wallet first, then place/pay orders.
+                </p>
               </div>
+            </div>
+            <div className="spo-alert" style={{ marginTop: '0.75rem' }}>
+              <strong>Wallet readiness:</strong> Order total {formatRupee(grandTotalAllPos)} | Wallet balance{' '}
+              {loadingWalletBalance ? 'Loading…' : formatRupee(walletBalance)}.
+              {!loadingWalletBalance && !hasSufficientWalletBalance ? (
+                <>
+                  {' '}
+                  Need {formatRupee(walletShortage)} more.
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    style={{ marginLeft: '0.6rem' }}
+                    onClick={() => navigate('/supplier-wallet')}
+                  >
+                    Credit wallet
+                  </button>
+                </>
+              ) : null}
             </div>
           </section>
 
@@ -883,8 +923,19 @@ const SupplierPlaceOrder = () => {
             >
               {isTransportSelectionReady(selectedTransport, poGroups) ? 'Change transport' : 'Get transport quotes'}
             </button>
-            <button type="button" className="btn-primary btn-large" onClick={handlePlaceOrder} disabled={placing}>
-              {placing ? 'Placing…' : 'Place order'}
+            <button
+              type="button"
+              className="btn-primary btn-large"
+              onClick={handlePlaceOrder}
+              disabled={placing || loadingWalletBalance || !hasSufficientWalletBalance}
+            >
+              {placing
+                ? 'Placing…'
+                : loadingWalletBalance
+                  ? 'Checking wallet…'
+                  : hasSufficientWalletBalance
+                    ? 'Place order'
+                    : 'Insufficient wallet balance'}
             </button>
           </footer>
         </div>

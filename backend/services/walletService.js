@@ -117,6 +117,43 @@ export async function listWalletTransactions({
   };
 }
 
+export async function summarizeWalletLedger({ walletId, maxRows = 50000 }) {
+  if (!walletId) throw new Error('walletId is required');
+  const pageSize = 1000;
+  const cap = Math.max(pageSize, Number(maxRows) || 50000);
+  let offset = 0;
+  let totalCredit = 0;
+  let totalDebit = 0;
+  let transactionCount = 0;
+
+  while (offset < cap) {
+    const { data, error } = await supabase
+      .from('wallet_transactions')
+      .select('direction,amount')
+      .eq('wallet_id', walletId)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + pageSize - 1);
+    if (error) throw error;
+    const batch = data || [];
+    if (!batch.length) break;
+    for (const row of batch) {
+      const amount = Number(row.amount || 0);
+      if (String(row.direction || '').toLowerCase() === 'credit') totalCredit += amount;
+      else totalDebit += amount;
+    }
+    transactionCount += batch.length;
+    if (batch.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return {
+    totalCredit: roundMoney(totalCredit),
+    totalDebit: roundMoney(totalDebit),
+    netFlow: roundMoney(totalCredit - totalDebit),
+    transactionCount
+  };
+}
+
 async function ensureIdempotency(idempotencyKey) {
   if (!idempotencyKey) return null;
   const { data, error } = await supabase
@@ -708,6 +745,20 @@ async function loadOrderItemsForFee(orderId) {
   return rows || [];
 }
 
+async function resolveOrderBuyerWalletType(order) {
+  const channel = String(order?.channel || '').toLowerCase();
+  if (channel === 'b2b_po') return 'supplier';
+  const buyerId = order?.service_provider_id;
+  if (!buyerId) return 'customer';
+  const { data: buyer, error } = await supabase
+    .from('users')
+    .select('user_type')
+    .eq('id', buyerId)
+    .maybeSingle();
+  if (error) throw error;
+  return String(buyer?.user_type || '').toLowerCase() === 'supplier' ? 'supplier' : 'customer';
+}
+
 export async function payOrderFromWallet({
   orderId,
   actorUserId,
@@ -738,7 +789,11 @@ export async function payOrderFromWallet({
   const platformFeeAmount = Math.min(grossAmount, roundMoney(feeResult.feeAmount));
   const supplierPayoutAmount = roundMoney(grossAmount - platformFeeAmount);
 
-  const customerWallet = await getOrCreateWallet({ userId: order.service_provider_id, walletType: 'customer' });
+  const buyerWalletType = await resolveOrderBuyerWalletType(order);
+  const customerWallet = await getOrCreateWallet({
+    userId: order.service_provider_id,
+    walletType: buyerWalletType
+  });
   const escrowWallet = await getOrCreateWallet({ userId: null, walletType: PLATFORM_ESCROW_WALLET });
 
   await transferBetweenWallets({

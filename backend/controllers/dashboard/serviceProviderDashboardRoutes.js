@@ -1,5 +1,107 @@
 /** Dashboard routes: serviceProviderDashboard */
 import { formatDate } from './dashboardImports.js';
+import { buildCreditStatus } from '../../services/creditAccountService.js';
+import { insertNotification } from '../../repositories/notificationsRepository.js';
+
+function diffCalendarDays(fromDate, toDate) {
+  const start = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate()).getTime();
+  const end = new Date(toDate.getFullYear(), toDate.getMonth(), toDate.getDate()).getTime();
+  return Math.round((end - start) / 86400000);
+}
+
+async function maybeCreatePayLaterSettlementAlerts({ supabase, userId, orders }) {
+  const list = Array.isArray(orders) ? orders : [];
+  const activeCreditOrders = list.filter((order) => {
+    const method = String(order?.payment_method || '').toLowerCase();
+    const paymentStatus = String(order?.payment_status || '').toLowerCase();
+    const lifecycleStatus = String(order?.status || '').toLowerCase();
+    if (method !== 'credit') return false;
+    if (!['pending', 'partial'].includes(paymentStatus)) return false;
+    if (['cancelled', 'refunded'].includes(lifecycleStatus)) return false;
+    return true;
+  });
+  if (!activeCreditOrders.length) return;
+
+  const supplierIds = [...new Set(activeCreditOrders.map((order) => order.supplier_id).filter(Boolean))];
+  if (!supplierIds.length) return;
+
+  const dayStartIso = new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+  const { data: existingRows } = await supabase
+    .from('notifications')
+    .select('metadata')
+    .eq('user_id', userId)
+    .eq('type', 'order_status')
+    .gte('created_at', dayStartIso)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  const existingKeys = new Set(
+    (existingRows || [])
+      .map((row) => row?.metadata?.payLaterAlertKey)
+      .filter(Boolean)
+  );
+
+  const { data: supplierRows } = await supabase
+    .from('users')
+    .select('id, name, company')
+    .in('id', supplierIds);
+  const supplierLabelById = new Map(
+    (supplierRows || []).map((row) => [row.id, String(row.name || row.company || 'supplier').trim()])
+  );
+
+  const now = new Date();
+  for (const supplierId of supplierIds) {
+    const creditStatus = await buildCreditStatus({
+      supplierId,
+      buyerUserId: userId,
+      orderAmount: 0
+    });
+    if (!creditStatus?.cycleDueAt || Number(creditStatus?.outstanding || 0) <= 0) continue;
+
+    const dueDate = new Date(creditStatus.cycleDueAt);
+    if (Number.isNaN(dueDate.getTime())) continue;
+
+    const dayDelta = diffCalendarDays(now, dueDate);
+    let alertKind = null;
+    let title = '';
+    let message = '';
+    if (dayDelta === 0) {
+      alertKind = 'due_today';
+      title = 'Pay later settlement due today';
+      message = `Your pay-later settlement for ${supplierLabelById.get(supplierId) || 'supplier'} is due today. Please clear ₹${Number(
+        creditStatus.outstanding || 0
+      ).toLocaleString('en-IN')} to avoid overdue status.`;
+    } else if (dayDelta < 0) {
+      alertKind = 'overdue';
+      const overdueBy = Math.abs(dayDelta);
+      message = `Your pay-later settlement for ${supplierLabelById.get(supplierId) || 'supplier'} is overdue by ${overdueBy} day${
+        overdueBy === 1 ? '' : 's'
+      }. Pending amount: ₹${Number(creditStatus.outstanding || 0).toLocaleString('en-IN')}.`;
+      title = 'Pay later settlement overdue';
+    }
+    if (!alertKind) continue;
+
+    const cycleDate = dueDate.toISOString().slice(0, 10);
+    const alertKey = `pay_later:${alertKind}:${supplierId}:${cycleDate}`;
+    if (existingKeys.has(alertKey)) continue;
+
+    await insertNotification({
+      user_id: userId,
+      type: 'order_status',
+      title,
+      message,
+      related_supplier_id: supplierId,
+      is_read: false,
+      metadata: {
+        payLaterAlertKey: alertKey,
+        alertKind,
+        supplierId,
+        cycleDueAt: creditStatus.cycleDueAt,
+        outstanding: Number(creditStatus.outstanding || 0)
+      }
+    });
+    existingKeys.add(alertKey);
+  }
+}
 
 export function registerDashboardServiceProviderDashboardRoutes(ctx) {
   const {
@@ -112,6 +214,15 @@ router.get('/service-provider', authenticateToken, async (req, res) => {
 
     const boqsList = boqs || [];
     const ordersList = orders || [];
+    try {
+      await maybeCreatePayLaterSettlementAlerts({
+        supabase,
+        userId: req.userId,
+        orders: ordersList
+      });
+    } catch (alertError) {
+      console.error('[Dashboard] pay-later reminder notification error (non-fatal):', alertError);
+    }
 
     // Calculate stats
     const stats = {

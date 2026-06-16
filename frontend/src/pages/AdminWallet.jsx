@@ -264,7 +264,7 @@ export default function AdminWallet() {
             Admin Wallet Tracking
           </h1>
           <p className="text-sm text-slate-500">
-            Monitor escrow, platform revenue, top-ups, and supplier payout pipeline in one place.
+            Monitor escrow, platform revenue, wallet credits, and supplier payout pipeline in one place.
           </p>
         </div>
         <Button variant="outline" onClick={() => loadData(walletType)} disabled={loading}>
@@ -279,12 +279,12 @@ export default function AdminWallet() {
         <MetricCard label="Escrow balance" value={formatInr(overview?.platformEscrowBalance)} />
         <MetricCard label="Platform revenue balance" value={formatInr(overview?.platformRevenueBalance)} />
         <MetricCard label="Pending supplier payout" value={formatInr(overview?.payoutAmountPending)} />
-        <MetricCard label="Total completed top-ups" value={formatInr(overview?.topupAmountCompleted)} />
+        <MetricCard label="Total completed credits" value={formatInr(overview?.topupAmountCompleted)} />
       </div>
 
       <div className="mb-4 grid gap-3 md:grid-cols-3">
         <MetricCard label="Pending payout count" value={overview?.payoutCountPending ?? 0} />
-        <MetricCard label="Completed top-up count" value={overview?.topupCountCompleted ?? 0} />
+        <MetricCard label="Completed credit count" value={overview?.topupCountCompleted ?? 0} />
         <MetricCard label="Lifetime platform fee booked" value={formatInr(overview?.lifetimePlatformFeeBooked)} />
       </div>
 

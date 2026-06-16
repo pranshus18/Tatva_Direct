@@ -13,13 +13,49 @@ const directionLabel = (direction) => (String(direction || '').toLowerCase() ===
 const signedAmount = (row) =>
   `${String(row?.direction || '').toLowerCase() === 'credit' ? '+' : '-'}${formatInr(row?.amount || 0)}`;
 
+const INDIAN_BANK_OPTIONS = [
+  'State Bank of India',
+  'HDFC Bank',
+  'ICICI Bank',
+  'Axis Bank',
+  'Punjab National Bank',
+  'Bank of Baroda',
+  'Kotak Mahindra Bank',
+  'Canara Bank',
+  'Union Bank of India',
+  'IDFC FIRST Bank',
+  'IndusInd Bank',
+  'Other'
+];
+
+const formatBankAccountLabel = (account) => {
+  if (!account) return '';
+  const bank = String(account.bank_name || '').trim();
+  const holder = String(account.account_holder_name || '').trim();
+  const number = String(account.account_number || '').trim();
+  const masked = number ? `****${number.slice(-4)}` : '';
+  const upi = String(account.upi_id || '').trim();
+  if (bank && masked) return `${bank} (${masked})${holder ? ` - ${holder}` : ''}`;
+  if (upi) return `UPI ${upi}${holder ? ` - ${holder}` : ''}`;
+  return holder || account.id;
+};
+
+
 export default function SupplierWallet() {
   const [loading, setLoading] = useState(true);
+  const [processingTopup, setProcessingTopup] = useState(false);
   const [balance, setBalance] = useState(0);
+  const [ledgerSummary, setLedgerSummary] = useState({
+    totalCredit: 0,
+    totalDebit: 0,
+    netFlow: 0,
+    transactionCount: 0
+  });
   const [transactions, setTransactions] = useState([]);
   const [payouts, setPayouts] = useState([]);
   const [withdrawals, setWithdrawals] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [selectedBankAccountId, setSelectedBankAccountId] = useState('');
   const [txPageInfo, setTxPageInfo] = useState({ hasMore: false, nextCursor: null });
   const [payoutPageInfo, setPayoutPageInfo] = useState({ hasMore: false, nextCursor: null });
   const [txCursor, setTxCursor] = useState(null);
@@ -33,6 +69,8 @@ export default function SupplierWallet() {
     releasedNet: 0
   });
   const [notice, setNotice] = useState('');
+  const [topupAmount, setTopupAmount] = useState('1000');
+  const [walletConfig, setWalletConfig] = useState({ minTopupInr: 100, razorpay: { enabled: false } });
   const [withdrawing, setWithdrawing] = useState(false);
   const [withdrawAmount, setWithdrawAmount] = useState('');
   const [withdrawNote, setWithdrawNote] = useState('');
@@ -73,18 +111,22 @@ export default function SupplierWallet() {
       const token = localStorage.getItem('token');
       if (!token) throw new Error('Please login again');
       const headers = { Authorization: `Bearer ${token}` };
-      const [balanceResp, txResp, payoutResp, bankResp, withdrawalResp] = await Promise.all([
+      const [balanceResp, txResp, payoutResp, bankResp, withdrawalResp, summaryResp, configResp] = await Promise.all([
         fetch(getApiUrl('/api/supplier/wallet/balance'), { headers }),
         fetch(getApiUrl(`/api/supplier/wallet/transactions?${buildQueryString(nextFilters, nextTxCursor, 50)}`), { headers }),
         fetch(getApiUrl(`/api/supplier/wallet/payouts?${buildQueryString(nextFilters, nextPayoutCursor, 50)}`), { headers }),
         fetch(getApiUrl('/api/supplier/wallet/withdraw/bank-accounts'), { headers }),
-        fetch(getApiUrl('/api/supplier/wallet/withdrawals?limit=20'), { headers })
+        fetch(getApiUrl('/api/supplier/wallet/withdrawals?limit=20'), { headers }),
+        fetch(getApiUrl('/api/supplier/wallet/ledger-summary'), { headers }),
+        fetch(getApiUrl('/api/supplier/wallet/config'), { headers })
       ]);
       const balanceData = await balanceResp.json().catch(() => ({}));
       const txData = await txResp.json().catch(() => ({}));
       const payoutData = await payoutResp.json().catch(() => ({}));
       const bankData = await bankResp.json().catch(() => ({}));
       const withdrawalData = await withdrawalResp.json().catch(() => ({}));
+      const summaryData = await summaryResp.json().catch(() => ({}));
+      const configData = await configResp.json().catch(() => ({}));
       if (!balanceResp.ok || balanceData.status !== 'success') {
         throw new Error(balanceData.message || 'Failed to load supplier wallet balance');
       }
@@ -100,11 +142,31 @@ export default function SupplierWallet() {
       if (!withdrawalResp.ok || withdrawalData.status !== 'success') {
         throw new Error(withdrawalData.message || 'Failed to load withdrawal requests');
       }
+      if (!summaryResp.ok || summaryData.status !== 'success') {
+        throw new Error(summaryData.message || 'Failed to load wallet statement summary');
+      }
+      if (!configResp.ok || configData.status !== 'success') {
+        throw new Error(configData.message || 'Failed to load wallet credit configuration');
+      }
       setBalance(Number(balanceData.balance || 0));
+      setLedgerSummary(
+        summaryData.summary || {
+          totalCredit: 0,
+          totalDebit: 0,
+          netFlow: 0,
+          transactionCount: 0
+        }
+      );
+      setWalletConfig(configData.config || { minTopupInr: 100, razorpay: { enabled: false } });
       setTransactions(txData.transactions || []);
       setTxPageInfo(txData.pageInfo || { hasMore: false, nextCursor: null });
       setPayouts(payoutData.payouts || []);
-      setBankAccounts(bankData.bankAccounts || []);
+      const bankAccountRows = bankData.bankAccounts || [];
+      setBankAccounts(bankAccountRows);
+      setSelectedBankAccountId((prev) => {
+        if (prev && bankAccountRows.some((row) => row.id === prev)) return prev;
+        return bankAccountRows.find((row) => row.is_default)?.id || bankAccountRows[0]?.id || '';
+      });
       setWithdrawals(withdrawalData.withdrawals || []);
       setPayoutPageInfo(payoutData.pageInfo || { hasMore: false, nextCursor: null });
       setSummary(
@@ -168,6 +230,7 @@ export default function SupplierWallet() {
       'Debit/Credit',
       'Payment Method',
       'Project ID',
+      'Balance After',
       'Transaction ID'
     ];
     const lines = sortedTransactions.map((row) => [
@@ -177,6 +240,7 @@ export default function SupplierWallet() {
       directionLabel(row.direction),
       'Wallet',
       row.orderNumber || row.orderId || '-',
+      Number(row.balance_after || 0).toFixed(2),
       row.id || ''
     ]);
     const blob = new Blob([toCsv([header, ...lines])], { type: 'text/csv;charset=utf-8;' });
@@ -237,6 +301,7 @@ export default function SupplierWallet() {
         'Debit/Credit',
         'Payment Method',
         'Project ID',
+        'Balance After',
         'Transaction ID'
       ];
       const lines = allRows.map((row) => [
@@ -246,6 +311,7 @@ export default function SupplierWallet() {
         directionLabel(row.direction),
         'Wallet',
         row.orderNumber || row.orderId || '-',
+        Number(row.balance_after || 0).toFixed(2),
         row.id || ''
       ]);
       const blob = new Blob([toCsv([header, ...lines])], { type: 'text/csv;charset=utf-8;' });
@@ -315,6 +381,10 @@ export default function SupplierWallet() {
       setNotice('Enter a valid withdrawal amount');
       return;
     }
+    if (!selectedBankAccountId) {
+      setNotice('Please add and select a bank account before withdrawing.');
+      return;
+    }
     setWithdrawing(true);
     setNotice('');
     try {
@@ -329,7 +399,7 @@ export default function SupplierWallet() {
         body: JSON.stringify({
           amount,
           note: withdrawNote.trim() || null,
-          bankAccountId: bankAccounts[0]?.id || null,
+          bankAccountId: selectedBankAccountId,
           idempotencyKey: `supplier-wallet-withdraw-ui-${Date.now()}`
         })
       });
@@ -346,8 +416,112 @@ export default function SupplierWallet() {
     }
   };
 
+  const loadRazorpayScript = () =>
+    new Promise((resolve) => {
+      if (window.Razorpay) return resolve(true);
+      const script = document.createElement('script');
+      script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+      script.async = true;
+      script.onload = () => resolve(true);
+      script.onerror = () => resolve(false);
+      document.body.appendChild(script);
+    });
+
+  const handleTopup = async () => {
+    if (processingTopup) return;
+    const amount = Number(topupAmount);
+    const minTopup = Number(walletConfig?.minTopupInr || 100);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setNotice('Enter a valid credit amount');
+      return;
+    }
+    if (amount < minTopup) {
+      setNotice(`Minimum credit amount is INR ${minTopup}`);
+      return;
+    }
+    if (!walletConfig?.razorpay?.isConfigured) {
+      setNotice('Razorpay credentials are not configured. Please configure gateway keys to continue.');
+      return;
+    }
+    setProcessingTopup(true);
+    setNotice('');
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) throw new Error('Please login again');
+      const createResp = await fetch(getApiUrl('/api/supplier/wallet/topup/create'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          amount,
+          idempotencyKey: `supplier-wallet-topup-ui-${Date.now()}`
+        })
+      });
+      const createData = await createResp.json().catch(() => ({}));
+      if (!createResp.ok || createData.status !== 'success') {
+        throw new Error(createData.message || 'Failed to create wallet credit request');
+      }
+
+      const paymentIntent = createData.paymentIntent || {};
+
+      const scriptLoaded = await loadRazorpayScript();
+      if (!scriptLoaded) throw new Error('Unable to load Razorpay checkout');
+      const options = {
+        key: paymentIntent.keyId,
+        order_id: paymentIntent.orderId,
+        name: 'Tatva Direct',
+        description: 'Supplier wallet credit',
+        amount: paymentIntent.amount,
+        currency: paymentIntent.currency || 'INR',
+        handler: async (response) => {
+          try {
+            const confirmResp = await fetch(getApiUrl('/api/supplier/wallet/topup/confirm'), {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                razorpayOrderId: response.razorpay_order_id,
+                razorpayPaymentId: response.razorpay_payment_id,
+                razorpaySignature: response.razorpay_signature
+              })
+            });
+            const confirmData = await confirmResp.json().catch(() => ({}));
+            if (!confirmResp.ok || confirmData.status !== 'success') {
+              throw new Error(confirmData.message || 'Wallet credit confirmation failed');
+            }
+            setNotice('Supplier wallet credited successfully.');
+            await loadData({ nextTxCursor: txCursor, nextPayoutCursor: payoutCursor, nextFilters: filters });
+          } catch (e) {
+            setNotice(e.message || 'Wallet credit completed but confirmation failed');
+          } finally {
+            setProcessingTopup(false);
+          }
+        },
+        modal: {
+          ondismiss: () => setProcessingTopup(false)
+        },
+        theme: { color: '#4f46e5' }
+      };
+      const rzp = new window.Razorpay(options);
+      rzp.open();
+    } catch (e) {
+      setNotice(e.message || 'Failed to start wallet credit');
+      setProcessingTopup(false);
+    }
+  };
+
   const handleSaveBankDetails = async () => {
     try {
+      const hasUpi = Boolean(String(bankDetails.upiId || '').trim());
+      const hasAccount = Boolean(String(bankDetails.accountNumber || '').trim());
+      const hasIfsc = Boolean(String(bankDetails.ifscCode || '').trim());
+      if (!hasUpi && !(hasAccount && hasIfsc)) {
+        throw new Error('Enter UPI ID, or account number + IFSC code to save bank details.');
+      }
       const token = localStorage.getItem('token');
       if (!token) throw new Error('Please login again');
       const resp = await fetch(getApiUrl('/api/supplier/wallet/withdraw/bank-accounts'), {
@@ -360,8 +534,9 @@ export default function SupplierWallet() {
       });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok || data.status !== 'success') throw new Error(data.message || 'Failed to save bank details');
-      setNotice('Withdrawal bank details saved.');
+      if (data.bankAccount?.id) setSelectedBankAccountId(data.bankAccount.id);
       await loadData({ nextTxCursor: txCursor, nextPayoutCursor: payoutCursor, nextFilters: filters });
+      setNotice('Withdrawal bank details saved. You can now select this account for withdrawal.');
     } catch (e) {
       setNotice(e.message || 'Failed to save bank details');
     }
@@ -387,9 +562,50 @@ export default function SupplierWallet() {
 
       <div className="mb-4 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
         <MetricCard label="Wallet balance" value={formatInr(balance)} />
+        <MetricCard label="Total Credit" value={formatInr(ledgerSummary.totalCredit)} />
+        <MetricCard label="Total Debit" value={formatInr(ledgerSummary.totalDebit)} />
         <MetricCard label="Pending payout" value={formatInr(summary.pendingNet)} />
         <MetricCard label="Released payout" value={formatInr(summary.releasedNet)} />
         <MetricCard label="Platform fee tracked" value={formatInr(summary.totalFee)} />
+      </div>
+      <div className="mb-4 rounded-lg border bg-white p-4">
+        <div className="mb-2 text-sm font-medium text-slate-700">Credit supplier wallet</div>
+        <div className="mb-2 flex flex-wrap gap-2">
+          {[walletConfig?.minTopupInr || 100, 500, 1000, 2000, 5000].map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => setTopupAmount(String(preset))}
+              className="rounded-md border px-3 py-1 text-xs text-slate-700 hover:bg-slate-50"
+            >
+              +{formatInr(preset)}
+            </button>
+          ))}
+        </div>
+        <div className="mb-2 text-xs text-slate-600">
+          <strong>Payment Gateway:</strong> Razorpay
+        </div>
+        <div className="flex gap-2">
+          <input
+            type="number"
+            min={Number(walletConfig?.minTopupInr || 100)}
+            step={1}
+            value={topupAmount}
+            onChange={(e) => setTopupAmount(e.target.value)}
+            className="h-10 rounded-md border px-3 text-sm"
+            placeholder="Amount in INR"
+          />
+          <Button onClick={handleTopup} disabled={processingTopup}>
+            {processingTopup ? 'Processing...' : 'Credit wallet'}
+          </Button>
+        </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Credit funds here before placing/paying upstream orders. Minimum credit: INR{' '}
+          {Number(walletConfig?.minTopupInr || 100)}.
+        </p>
+        <p className="mt-1 text-xs text-slate-500">
+          On Razorpay checkout, user can choose UPI, card, net banking, or other available methods.
+        </p>
       </div>
       <div className="mb-4 rounded-lg border bg-white p-4">
         <div className="mb-2 text-sm font-medium text-slate-700">Withdrawal bank details</div>
@@ -401,13 +617,18 @@ export default function SupplierWallet() {
             placeholder="Account holder name"
             className="h-10 rounded-md border px-3 text-sm"
           />
-          <input
-            type="text"
+          <select
             value={bankDetails.bankName}
             onChange={(e) => setBankDetails((prev) => ({ ...prev, bankName: e.target.value }))}
-            placeholder="Bank name"
             className="h-10 rounded-md border px-3 text-sm"
-          />
+          >
+            <option value="">Select bank name</option>
+            {INDIAN_BANK_OPTIONS.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
           <input
             type="text"
             value={bankDetails.accountNumber}
@@ -429,6 +650,26 @@ export default function SupplierWallet() {
             placeholder="UPI ID (optional)"
             className="h-10 rounded-md border px-3 text-sm"
           />
+        </div>
+        <div className="mt-2">
+          <label className="mb-1 block text-xs font-medium text-slate-600">Selected withdrawal account</label>
+          <select
+            value={selectedBankAccountId}
+            onChange={(e) => setSelectedBankAccountId(e.target.value)}
+            className="h-10 w-full rounded-md border px-3 text-sm"
+          >
+            <option value="">Select bank account</option>
+            {bankAccounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {formatBankAccountLabel(account)}
+              </option>
+            ))}
+          </select>
+          {!bankAccounts.length ? (
+            <p className="mt-1 text-xs text-slate-500">
+              No saved bank accounts yet. Fill details above and click "Save bank details".
+            </p>
+          ) : null}
         </div>
         <div className="mt-2 flex items-center gap-2">
           <Button variant="outline" onClick={handleSaveBankDetails}>
@@ -610,6 +851,7 @@ export default function SupplierWallet() {
                     <th className="px-2 py-2">Debit / Credit</th>
                     <th className="px-2 py-2">Payment Method</th>
                     <th className="px-2 py-2">Project ID</th>
+                    <th className="px-2 py-2 text-right">Balance After</th>
                     <th className="px-2 py-2">Transaction ID</th>
                   </tr>
                 </thead>
@@ -630,6 +872,9 @@ export default function SupplierWallet() {
                       <td className="px-2 py-2 text-slate-700">{directionLabel(row.direction)}</td>
                       <td className="px-2 py-2 text-slate-700">Wallet</td>
                       <td className="px-2 py-2 text-slate-600">{row.orderNumber || row.orderId || '-'}</td>
+                      <td className="px-2 py-2 text-right font-medium text-slate-900">
+                        {formatInr(row.balance_after)}
+                      </td>
                       <td className="px-2 py-2 text-xs text-slate-600">{row.id || '-'}</td>
                     </tr>
                   ))}

@@ -51,6 +51,8 @@ const ServiceProviderDashboard = ({ user }) => {
   const [orderDetails, setOrderDetails] = useState(null);
   const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
   const [deletingOrder, setDeletingOrder] = useState(false);
   const orderPollIntervalRef = useRef(null);
   const [notifications, setNotifications] = useState([]);
@@ -357,6 +359,7 @@ const ServiceProviderDashboard = ({ user }) => {
     
     setSelectedOrder(orderId);
     fetchOrderDetails(orderId);
+    fetchWalletBalance();
     
   };
 
@@ -582,8 +585,38 @@ const ServiceProviderDashboard = ({ user }) => {
     order?.deliveryAddress?.gstSummary ||
     null;
 
+  const fetchWalletBalance = async () => {
+    try {
+      setLoadingWalletBalance(true);
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      const response = await fetch(getApiUrl('/api/wallet/balance'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.status === 'success') {
+        setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
+      }
+    } catch (_e) {
+      // Non-blocking in modal.
+    } finally {
+      setLoadingWalletBalance(false);
+    }
+  };
+
   const handleMarkAsPaid = async () => {
     if (!orderDetails?.id) return;
+    const orderAmount = Number(orderDetails?.totalAmount || 0);
+    if (orderAmount > Number(walletBalance || 0)) {
+      const shortage = Math.max(0, orderAmount - Number(walletBalance || 0));
+      alert(
+        `Insufficient wallet balance. Please add ₹${shortage.toLocaleString('en-IN', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })} in wallet first.`
+      );
+      return;
+    }
 
     const confirmed = window.confirm(
       `Pay for Order ${orderDetails?.orderNumber} from your wallet?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
@@ -1200,6 +1233,25 @@ const ServiceProviderDashboard = ({ user }) => {
                     <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
                       Complete this payment from your wallet. The platform will hold funds in escrow and release supplier payout after delivery.
                     </p>
+                    <div style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: '#334155' }}>
+                      <p style={{ margin: '0.25rem 0' }}>
+                        <strong>Wallet balance:</strong>{' '}
+                        {loadingWalletBalance
+                          ? 'Checking...'
+                          : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
+                      </p>
+                      {!loadingWalletBalance &&
+                      Number(orderDetails.totalAmount || 0) > Number(walletBalance || 0) ? (
+                        <p style={{ margin: '0.25rem 0', color: '#b91c1c' }}>
+                          <strong>Additional credit needed:</strong>{' '}
+                          ₹
+                          {Math.max(
+                            0,
+                            Number(orderDetails.totalAmount || 0) - Number(walletBalance || 0)
+                          ).toLocaleString('en-IN')}
+                        </p>
+                      ) : null}
+                    </div>
                     <div style={{ 
                       fontSize: '0.85rem', 
                       color: '#64748b',
@@ -1213,7 +1265,11 @@ const ServiceProviderDashboard = ({ user }) => {
                     <button
                       className="btn-primary"
                       onClick={handleMarkAsPaid}
-                      disabled={updatingPayment}
+                      disabled={
+                        updatingPayment ||
+                        loadingWalletBalance ||
+                        Number(orderDetails.totalAmount || 0) > Number(walletBalance || 0)
+                      }
                       style={{
                         width: '100%',
                         marginTop: '1rem',
@@ -1223,6 +1279,14 @@ const ServiceProviderDashboard = ({ user }) => {
                       }}
                     >
                       {updatingPayment ? 'Processing...' : 'Pay from Wallet'}
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      type="button"
+                      onClick={() => navigate('/wallet')}
+                      style={{ width: '100%', marginTop: '0.5rem' }}
+                    >
+                      Add money to wallet
                     </button>
                   </div>
                 )}

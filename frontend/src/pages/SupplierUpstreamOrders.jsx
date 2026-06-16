@@ -86,6 +86,8 @@ export default function SupplierUpstreamOrders() {
   const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState(false);
   const [cancellingOrder, setCancellingOrder] = useState(false);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
 
   const fetchOrders = useCallback(async () => {
     const res = await authFetch('/api/supplier/upstream/orders?all=true', { cache: 'no-cache' });
@@ -206,47 +208,67 @@ export default function SupplierUpstreamOrders() {
 
   const handleMarkAsPaid = async () => {
     if (!orderModalId) return;
-    if (String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit') {
-      alert('Credit / pay-later orders are settled on account. Mark as paid is disabled for credit mode.');
-      return;
-    }
-
     const confirmed = window.confirm(
-      `Mark payment as paid for Order ${orderDetails?.orderNumber}?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
+      `Pay this order from wallet?\nOrder: ${orderDetails?.orderNumber}\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
     );
     if (!confirmed) return;
 
     setUpdatingPayment(true);
     try {
       const token = localStorage.getItem('token');
-      const encodedOrderId = encodeURIComponent(orderModalId);
-      const response = await fetch(getApiUrl(`/api/dashboard/service-provider/orders/${encodedOrderId}/payment`), {
-        method: 'PATCH',
+      const encodedOrderId = encodeURIComponent(orderDetails?.id || orderModalId);
+      const response = await fetch(getApiUrl(`/api/supplier/wallet/orders/${encodedOrderId}/pay`), {
+        method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
-          paymentStatus: 'paid',
-          paymentMethod: orderDetails?.paymentMethod || 'online'
+          idempotencyKey: `supplier-wallet-order-pay-${encodedOrderId}-${Date.now()}`
         })
       });
 
       const data = await response.json();
       if (data.status === 'success') {
-        alert('Payment status updated to paid successfully');
+        alert('Order payment completed from wallet successfully.');
         await fetchOrderDetails(orderModalId);
         await fetchOrders();
       } else {
-        alert(data.message || 'Failed to update payment status. Please try again.');
+        alert(data.message || 'Failed to pay from wallet. Please try again.');
       }
     } catch (error) {
-      console.error('Failed to update payment status:', error);
-      alert('Failed to update payment status. Please check your connection and try again.');
+      console.error('Failed to pay from wallet:', error);
+      alert('Failed to pay from wallet. Please check your connection and try again.');
     } finally {
       setUpdatingPayment(false);
     }
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!orderDetails || String(orderDetails.paymentStatus || '').toLowerCase() === 'paid') return undefined;
+    const loadWalletBalance = async () => {
+      setLoadingWalletBalance(true);
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        const resp = await fetch(getApiUrl('/api/supplier/wallet/balance'), {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-cache'
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!cancelled && resp.ok && data.status === 'success') {
+          setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
+        }
+      } finally {
+        if (!cancelled) setLoadingWalletBalance(false);
+      }
+    };
+    void loadWalletBalance();
+    return () => {
+      cancelled = true;
+    };
+  }, [orderDetails?.id, orderDetails?.paymentStatus]);
 
   const canCancelUpstreamOrder = (order) => {
     const status = String(order?.status || '').toLowerCase();
@@ -597,6 +619,39 @@ export default function SupplierUpstreamOrders() {
                     </p>
                   ) : null}
                 </div>
+                {orderDetails.paymentStatus !== 'paid' ? (
+                  <div className="order-info-section">
+                    <h3>Wallet payment readiness</h3>
+                    <p>
+                      <strong>Order amount:</strong> ₹
+                      {Number(orderDetails?.totalAmount || 0).toLocaleString('en-IN')}
+                    </p>
+                    <p>
+                      <strong>Wallet balance:</strong>{' '}
+                      {loadingWalletBalance
+                        ? 'Loading...'
+                        : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
+                    </p>
+                    {Number(walletBalance || 0) < Number(orderDetails?.totalAmount || 0) ? (
+                      <p className="upstream-muted-meta" style={{ color: '#b91c1c' }}>
+                        Insufficient balance. Add ₹
+                        {Number((orderDetails?.totalAmount || 0) - (walletBalance || 0)).toLocaleString('en-IN')} to
+                        continue.
+                      </p>
+                    ) : (
+                      <p className="upstream-muted-meta" style={{ color: '#166534' }}>
+                        Wallet balance is sufficient for this payment.
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => navigate('/supplier-wallet')}
+                    >
+                      Credit wallet
+                    </button>
+                  </div>
+                ) : null}
 
                 {orderDetails?.receiptPdfUrl && (
                   <div className="order-info-section">
@@ -839,15 +894,9 @@ export default function SupplierUpstreamOrders() {
                         type="button"
                         className="btn-primary upstream-pay-btn"
                         onClick={handleMarkAsPaid}
-                        disabled={
-                          updatingPayment || String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit'
-                        }
+                        disabled={updatingPayment || loadingWalletBalance || Number(walletBalance || 0) < Number(orderDetails?.totalAmount || 0)}
                       >
-                        {String(orderDetails?.paymentMethod || '').toLowerCase() === 'credit'
-                          ? 'Credit order (auto settle on account)'
-                          : updatingPayment
-                            ? 'Processing…'
-                            : '✓ Mark payment as paid'}
+                        {updatingPayment ? 'Processing…' : 'Pay from wallet'}
                       </button>
                     )}
                     {orderDetails.paymentStatus === 'paid' && (

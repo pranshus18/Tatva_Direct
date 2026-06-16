@@ -59,6 +59,15 @@ const formatDateShort = (dateString) => {
   return formatDateIST(dateString, '—');
 };
 
+const formatDateOnly = (dateString) => {
+  if (!dateString) return '—';
+  try {
+    return new Date(dateString).toLocaleDateString('en-IN');
+  } catch {
+    return '—';
+  }
+};
+
 const formatAddress = (address) =>
   [
     address?.street || address?.line1,
@@ -113,6 +122,8 @@ const YourOrders = () => {
   const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
   const [processingPayment, setProcessingPayment] = useState(false);
   const [paymentNotice, setPaymentNotice] = useState('');
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
   const [savingOrderEdit, setSavingOrderEdit] = useState(false);
@@ -257,6 +268,17 @@ const YourOrders = () => {
 
   const handlePayFromWallet = async () => {
     if (!orderDetails?.id || processingPayment) return;
+    const orderAmount = Number(orderDetails?.totalAmount || 0);
+    if (orderAmount > Number(walletBalance || 0)) {
+      const shortage = Math.max(0, orderAmount - Number(walletBalance || 0));
+      setPaymentNotice(
+        `Insufficient wallet balance. Add ${shortage.toLocaleString('en-IN', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2
+        })} INR to continue payment.`
+      );
+      return;
+    }
     setProcessingPayment(true);
     setPaymentNotice('');
     try {
@@ -273,7 +295,7 @@ const YourOrders = () => {
       const payData = await payResp.json().catch(() => ({}));
       if (!payResp.ok || payData.status !== 'success') {
         if (payData?.code === 'INSUFFICIENT_WALLET_BALANCE') {
-          throw new Error('Insufficient wallet balance. Please top up wallet and try again.');
+          throw new Error('Insufficient wallet balance. Please credit wallet and try again.');
         }
         throw new Error(payData?.message || 'Failed to pay order from wallet');
       }
@@ -286,6 +308,25 @@ const YourOrders = () => {
       setPaymentNotice(err.message || 'Failed to complete wallet payment');
     } finally {
       setProcessingPayment(false);
+    }
+  };
+
+  const fetchWalletBalance = async () => {
+    setLoadingWalletBalance(true);
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      const resp = await fetch(getApiUrl('/api/wallet/balance'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (resp.ok && data.status === 'success') {
+        setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
+      }
+    } catch (_e) {
+      // Non-blocking for order view.
+    } finally {
+      setLoadingWalletBalance(false);
     }
   };
 
@@ -576,6 +617,22 @@ const YourOrders = () => {
   const orderPm = String(orderDetails?.paymentMethod || orderDetails?.payment_method || '').toLowerCase();
   const showWalletPayForOrder = orderPaymentPending;
   const nonWalletPending = orderPaymentPending && orderPm && orderPm !== 'wallet';
+  const orderAmount = Number(orderDetails?.totalAmount || 0);
+  const walletShortage = Math.max(0, orderAmount - Number(walletBalance || 0));
+  const hasEnoughWalletBalance = walletShortage <= 0;
+  const payLaterMeta =
+    orderDetails?.deliveryAddress && typeof orderDetails.deliveryAddress === 'object'
+      ? orderDetails.deliveryAddress.payLater
+      : null;
+  const payLaterDueAt = payLaterMeta?.settlementDueAt || null;
+
+  useEffect(() => {
+    if (!selectedOrderId) return;
+    if (orderPaymentPending) {
+      fetchWalletBalance();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrderId, orderPaymentPending]);
 
   const filteredOrders = useMemo(() => {
     const q = orderSearch.trim().toLowerCase();
@@ -901,6 +958,36 @@ const YourOrders = () => {
                       <strong className="text-[#0f172a]">Payment method:</strong>{' '}
                       {paymentMethodLabel(orderDetails)}
                     </p>
+                    {orderPm === 'credit' && (
+                      <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                        <div className="font-semibold">Pay later settlement timeline</div>
+                        <div className="mt-1">
+                          Due date: <strong>{formatDateOnly(payLaterDueAt)}</strong>
+                        </div>
+                        <div className="mt-1">
+                          Settle from customer wallet before due date to complete supplier payout.
+                        </div>
+                      </div>
+                    )}
+                    <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                      <div className="font-medium text-slate-800">Wallet payment readiness</div>
+                      <div className="mt-1 text-slate-700">
+                        Order amount: <strong>₹{orderAmount.toLocaleString('en-IN')}</strong>
+                      </div>
+                      <div className="text-slate-700">
+                        Wallet balance:{' '}
+                        <strong>
+                          {loadingWalletBalance
+                            ? 'Checking...'
+                            : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
+                        </strong>
+                      </div>
+                      {!loadingWalletBalance && !hasEnoughWalletBalance ? (
+                        <div className="mt-1 text-rose-700">
+                          Additional credit needed: <strong>₹{walletShortage.toLocaleString('en-IN')}</strong>
+                        </div>
+                      ) : null}
+                    </div>
                     <div className="space-y-3">
                       {nonWalletPending ? (
                         <p className="yo-payment-hint yo-payment-hint--credit">
@@ -913,7 +1000,7 @@ const YourOrders = () => {
                             type="button"
                             className="btn-primary"
                             onClick={handlePayFromWallet}
-                            disabled={processingPayment}
+                            disabled={processingPayment || loadingWalletBalance || !hasEnoughWalletBalance}
                           >
                             {processingPayment ? 'Processing…' : 'Pay from wallet'}
                           </button>
@@ -923,7 +1010,7 @@ const YourOrders = () => {
                             onClick={() => navigate('/wallet')}
                             disabled={processingPayment}
                           >
-                            Top up wallet
+                            Credit wallet
                           </button>
                         </div>
                       )}

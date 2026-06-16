@@ -50,5 +50,6 @@ export {
 export { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 export { bookCourierCheckout } from '../../services/logisticsBookCourierService.js';
 export { bookTrucking } from '../../services/logisticsBookTruckingService.js';
+export { getWalletBalance } from '../../services/walletService.js';
 export { computeGroupWeightKg } from '../logisticsController.js';
 export * from './shared/poHelpers.js';

@@ -1,7 +1,6 @@
 import express from 'express';
 import { boqRouter } from './boq.js';
 import { vendorRouter } from './vendors.js';
-import { substitutionRouter } from './substitutions.js';
 import { poRouter } from './po.js';
 import { authRouter } from './auth.js';
 import { profileRouter } from './profile.js';
@@ -36,7 +35,6 @@ apiRouter.use('/admin/supply-chain', adminSupplyChainRouter);
 apiRouter.use('/admin/supply-chain/platform-fees', adminPlatformFeesRouter);
 apiRouter.use('/boq', boqRouter);
 apiRouter.use('/vendors', vendorRequestLogger, vendorRouter);
-apiRouter.use('/substitutions', substitutionRouter);
 apiRouter.use('/po', poRouter);
 apiRouter.use('/logistics', logisticsRouter);
 apiRouter.use('/pos', posRouter);

@@ -17,7 +17,7 @@ This document is the **execution plan** for building the platform-middleman wall
 3. [High-level timeline](#3-high-level-timeline)
 4. [Phase 0 — Decisions and setup](#4-phase-0--decisions-and-setup)
 5. [Phase 1 — Data layer and wallet core](#5-phase-1--data-layer-and-wallet-core)
-6. [Phase 2 — Wallet top-up (money in)](#6-phase-2--wallet-top-up-money-in)
+6. [Phase 2 — Wallet credit (money in)](#6-phase-2--wallet-credit-money-in)
 7. [Phase 3 — Wallet checkout (money held)](#7-phase-3--wallet-checkout-money-held)
 8. [Phase 4 — Supplier release (money out to supplier wallet)](#8-phase-4--supplier-release-money-out-to-supplier-wallet)
 9. [Phase 5 — Withdrawals, refunds, admin](#9-phase-5--withdrawals-refunds-admin)
@@ -65,23 +65,23 @@ Do **not** start Phase 1 code until these are checked off.
 - [ ] Per-brand fee overrides needed? (e.g. Philips dealer 3.5%, generic dealer 4%)
 - [ ] Multi-brand order rule: fee per line item, summed (recommended)
 - [ ] Release trigger agreed: `delivered` status vs admin approval vs T+N days
-- [ ] Refund policy: always back to customer wallet vs bank for top-ups
-- [ ] Minimum top-up and minimum withdrawal amounts
+- [ ] Refund policy: always back to customer wallet vs bank for wallet credits
+- [ ] Minimum wallet credit and minimum withdrawal amounts
 - [ ] Pay-later: migrate to platform credit limit **or** disable at launch
-- [ ] POS in scope for launch? If yes, cash/UPI → wallet top-up flow approved
+- [ ] POS in scope for launch? If yes, cash/UPI → wallet credit flow approved
 - [ ] Wallet T&C draft (platform store credit, not a bank account)
 
 ### Technical (engineering lead)
 
 - [ ] SQL migration path agreed (`backend/sql/migration_wallet_system.sql`)
 - [ ] Feature flag strategy agreed (`WALLET_ENABLED`, `DIRECT_ORDER_PAYMENT_DISABLED`)
-- [ ] Staging Razorpay keys available for top-up testing
+- [ ] Staging Razorpay keys available for wallet credit testing
 - [ ] Rollback plan: can turn off wallet and re-enable direct pay in emergency (document steps)
 - [ ] Existing `payment_transactions` / reconciliation impact reviewed
 
 ### Operations / finance
 
-- [ ] Platform bank account for manual bank-transfer top-ups
+- [ ] Platform bank account for manual bank-transfer wallet credits
 - [ ] Process for admin to verify bank transfers and credit wallets
 - [ ] Process for supplier withdrawal approval and NEFT reference logging
 - [ ] GST treatment on platform fee clarified with CA
@@ -100,7 +100,7 @@ gantt
   Phase 0 Decisions           :p0, 2026-06-16, 3d
   Phase 1 DB + walletService  :p1, after p0, 5d
   section Money in
-  Phase 2 Top-up + UI         :p2, after p1, 5d
+  Phase 2 Wallet credit + UI  :p2, after p1, 5d
   section Money held
   Phase 3 Checkout + cutover  :p3, after p2, 7d
   section Money out
@@ -114,7 +114,7 @@ gantt
 |-------|----------|---------|
 | 0 | 2–3 days | Decisions locked, env ready |
 | 1 | 1 week | Wallets exist; credit/debit works in tests |
-| 2 | 1 week | Users can top up via Razorpay; balance visible |
+| 2 | 1 week | Users can credit wallet via Razorpay; balance visible |
 | 3 | 1–1.5 weeks | Orders paid only via wallet; direct APIs gated |
 | 4 | 1 week | Delivery triggers supplier wallet credit |
 | 5 | 1–1.5 weeks | Withdrawals, refunds, admin dashboards |
@@ -244,7 +244,7 @@ Document choice in `walletService.js` header comment.
 
 ---
 
-## 6. Phase 2 — Wallet top-up (money in)
+## 6. Phase 2 — Wallet credit (money in)
 
 **Objective:** Customer can add money via Razorpay; money never touches an order directly.
 
@@ -271,7 +271,7 @@ Document choice in `walletService.js` header comment.
 | # | Task | Files |
 |---|------|-------|
 | 2.6 | Wallet page: balance + transaction list | `frontend/src/pages/Wallet.jsx` |
-| 2.7 | Top-up modal with Razorpay checkout | component + API hooks |
+| 2.7 | Wallet credit modal with Razorpay checkout | component + API hooks |
 | 2.8 | Nav link for service providers | dashboard layout |
 
 ### 6.3 Admin (optional in Phase 2)
@@ -282,7 +282,7 @@ Document choice in `walletService.js` header comment.
 
 ### Exit criteria
 
-- [ ] Top-up ₹500 on staging → balance +₹500
+- [ ] Wallet credit ₹500 on staging → balance +₹500
 - [ ] Duplicate webhook does not double-credit
 - [ ] `wallet_topups` reconciles with Razorpay dashboard
 - [ ] User can view transaction history
@@ -328,8 +328,8 @@ Flow for `POST /api/wallet/orders/:id/pay`:
 |---|------|------|
 | 3.5 | Remove online/COD/bank/credit from checkout | `CreatePO.jsx` |
 | 3.6 | Replace Razorpay order pay with wallet pay | `YourOrders.jsx` |
-| 3.7 | Show balance, shortfall, inline top-up CTA | checkout components |
-| 3.8 | Inline top-up then auto-call pay (two API calls, one UX) | |
+| 3.7 | Show balance, shortfall, inline credit CTA | checkout components |
+| 3.8 | Inline wallet credit then auto-call pay (two API calls, one UX) | |
 | 3.9 | **Admin fee matrix UI** — brand × supply chain role | extend `AdminSupplyChain.jsx` or `AdminPlatformFees.jsx` |
 | 3.10 | `PUT /api/admin/supply-chain/platform-fees` | `adminSupplyChainController.js` or new controller |
 
@@ -453,13 +453,13 @@ Extend `reconciliationService.js`:
 | 6.1 | Create customer wallet for every active service provider | Script: `backend/scripts/seedCustomerWallets.js` |
 | 6.2 | Create supplier wallet for every active supplier | Same script |
 | 6.3 | **Do not** backfill historical orders into escrow | Optional reporting-only |
-| 6.4 | Communicate to users: new wallet flow, top-up before order | Email / in-app banner |
+| 6.4 | Communicate to users: new wallet flow, credit wallet before order | Email / in-app banner |
 
 ### 10.2 POS and credit (if in scope)
 
 | Area | Action |
 |------|--------|
-| `posController.js` | Cash/UPI → `walletTopup` → `walletOrderPay` |
+| `posController.js` | Cash/UPI → wallet credit → `walletOrderPay` |
 | `SupplierPOS.jsx` | Two-step UX or single “Complete sale” calling both APIs |
 | `creditAccountService.js` | Disable at launch **or** wrap as platform wallet credit limit (Phase 7) |
 
@@ -476,7 +476,7 @@ flowchart LR
 
 1. Deploy with `WALLET_ENABLED=false` (no user impact)
 2. Enable on staging; run UAT checklist
-3. Production: `WALLET_ENABLED=true` — wallet visible, top-up works, **direct pay still works** (soft launch)
+3. Production: `WALLET_ENABLED=true` — wallet visible, wallet credit works, **direct pay still works** (soft launch)
 4. After validation: `DIRECT_ORDER_PAYMENT_DISABLED=true` — hard cutover
 5. Monitor reconciliation and support tickets 48 hours
 
@@ -555,7 +555,7 @@ if (process.env.DIRECT_ORDER_PAYMENT_DISABLED === 'true') {
 |------|-------|--------|
 | `backend/routes/api.js` | 0 | `apiRouter.use('/wallet', walletRouter)` |
 | `backend/controllers/paymentsController.js` | 3 | Gate direct Razorpay-on-order |
-| `backend/controllers/payments/razorpayWebhookRouter.js` | 2–3 | Top-up only |
+| `backend/controllers/payments/razorpayWebhookRouter.js` | 2–3 | Wallet credit only |
 | `backend/controllers/dashboard/paymentRoutes.js` | 3 | Block mark-paid bypass |
 | `backend/controllers/posController.js` | 6 | Wallet two-step |
 | `backend/services/ledgerService.js` | 2–5 | Wallet account names |
@@ -565,7 +565,7 @@ if (process.env.DIRECT_ORDER_PAYMENT_DISABLED === 'true') {
 | `frontend/src/pages/YourOrders.jsx` | 3 | Wallet pay |
 | `backend/controllers/adminSupplyChainController.js` | 3 | Platform fee matrix APIs |
 | `frontend/src/pages/AdminSupplyChain.jsx` | 3 | Fee % per role / per brand+role |
-| `frontend/src/pages/SupplierPOS.jsx` | 6 | Top-up + pay |
+| `frontend/src/pages/SupplierPOS.jsx` | 6 | Wallet credit + pay |
 
 ---
 
@@ -580,7 +580,7 @@ if (process.env.DIRECT_ORDER_PAYMENT_DISABLED === 'true') {
 
 ### Integration tests
 
-- Top-up create → webhook → balance increased
+- Wallet credit create → webhook → balance increased
 - Pay order → escrow increased → payout pending
 - Deliver → supplier wallet increased
 - Cancel → customer refunded
@@ -589,7 +589,7 @@ if (process.env.DIRECT_ORDER_PAYMENT_DISABLED === 'true') {
 
 Use [WALLET_SYSTEM_GUIDE.md §18](./WALLET_SYSTEM_GUIDE.md#18-uat-checklist) plus:
 
-- [ ] Full journey: register → top-up → place order → pay → deliver → supplier sees balance
+- [ ] Full journey: register → wallet credit → place order → pay → deliver → supplier sees balance
 - [ ] Attempt every old direct-payment path → all blocked
 
 ### Regression
@@ -605,7 +605,7 @@ Use [WALLET_SYSTEM_GUIDE.md §18](./WALLET_SYSTEM_GUIDE.md#18-uat-checklist) plu
 |------|--------|------------|
 | Double credit on webhook retry | High | Idempotency keys on `wallet_topups` and `wallet_transactions` |
 | Race on concurrent wallet debits | High | DB row lock or RPC |
-| Users blocked at checkout (no balance) | Medium | Clear UX + inline top-up; comms before cutover |
+| Users blocked at checkout (no balance) | Medium | Clear UX + inline wallet credit; comms before cutover |
 | Supplier upset about fee / delayed payout | Medium | Show fee upfront; release SLA in T&C |
 | Legacy POS bypasses wallet | High | Phase 6 POS refactor before cutover |
 | Regulatory (holding funds) | Medium | Virtual ledger MVP; legal review; manual payouts |
@@ -618,7 +618,7 @@ Use [WALLET_SYSTEM_GUIDE.md §18](./WALLET_SYSTEM_GUIDE.md#18-uat-checklist) plu
 
 MVP is complete when **all** are true:
 
-1. Customer can top up wallet and pay orders **only** from wallet.
+1. Customer can credit wallet and pay orders **only** from wallet.
 2. Direct order payment APIs return disabled in production.
 3. Every paid order has escrow hold and `supplier_payouts` row.
 4. Delivery releases net to supplier wallet; platform fee recorded.
@@ -657,7 +657,7 @@ If you are ready to code, do **only** this next:
 
 1. **Phase 0** — Draft fee matrix per supply chain role (and which brands need overrides).
 2. **Phase 1** — Write `migration_wallet_system.sql` + `walletService.js` + `platformFeeService.js` + unit tests.
-3. **Do not** touch checkout UI until Phase 2 top-up works on staging.
+3. **Do not** touch checkout UI until Phase 2 wallet credit works on staging.
 
 This keeps risk low: you validate money movement in the backend before changing user-facing payment flows.
 
@@ -669,7 +669,7 @@ This keeps risk low: you validate money movement in the backend before changing 
 |----------|---------|
 | [WALLET_SYSTEM_GUIDE.md](./WALLET_SYSTEM_GUIDE.md) | What to build (spec, schema, APIs, flows) |
 | **WALLET_IMPLEMENTATION_PLAN.md** (this file) | How to build it (phases, tasks, rollout) |
-| `backend/sql/PHASE3_PAYMENTS_ROLLOUT.md` | Existing Razorpay setup (reuse for top-up only) |
+| `backend/sql/PHASE3_PAYMENTS_ROLLOUT.md` | Existing Razorpay setup (reuse for wallet credit only) |
 
 ---
 

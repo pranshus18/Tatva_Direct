@@ -1,5 +1,4 @@
 import express from 'express';
-import { supabase } from '../config/supabase.js';
 import {
   requireAuthentication as authenticateToken,
   requireServiceProvider
@@ -17,12 +16,12 @@ import {
 import {
   createWalletBankAccount,
   createWalletWithdrawalRequest,
-  creditWallet,
   completeWalletTopup,
   createWalletTopupRecord,
   getOrCreateWallet,
   listWalletBankAccounts,
   listWalletWithdrawalRequests,
+  summarizeWalletLedger,
   getWalletBalance,
   listWalletTransactions,
   payOrderFromWallet
@@ -103,6 +102,17 @@ walletRouter.get('/transactions', authenticateToken, requireServiceProvider, asy
   }
 });
 
+walletRouter.get('/ledger-summary', authenticateToken, requireServiceProvider, async (req, res) => {
+  try {
+    const wallet = await getOrCreateWallet({ userId: req.userId, walletType: 'customer' });
+    const summary = await summarizeWalletLedger({ walletId: wallet.id });
+    return res.json({ status: 'success', summary });
+  } catch (e) {
+    console.error('[Wallet] ledger summary error:', e);
+    return res.status(500).json({ status: 'error', message: 'Failed to load wallet ledger summary' });
+  }
+});
+
 walletRouter.post('/topup/create', authenticateToken, requireServiceProvider, async (req, res) => {
   try {
     const payload = parseWithSchema(walletTopupCreateSchema, req.body || {});
@@ -114,7 +124,7 @@ walletRouter.post('/topup/create', authenticateToken, requireServiceProvider, as
     if (amount < minTopup) {
       return res.status(400).json({
         status: 'error',
-        message: `Minimum top-up amount is INR ${minTopup}`
+        message: `Minimum wallet credit amount is INR ${minTopup}`
       });
     }
 
@@ -124,68 +134,10 @@ walletRouter.post('/topup/create', authenticateToken, requireServiceProvider, as
     });
 
     if (!isRazorpayConfigured()) {
-      if (process.env.NODE_ENV !== 'production') {
-        const topup = await createWalletTopupRecord({
-          walletId: customerWallet.id,
-          userId: req.userId,
-          amount,
-          idempotencyKey: payload.idempotencyKey || null,
-          razorpayOrderId: `DEV-TOPUP-${Date.now()}`,
-          metadata: {
-            createdByRoute: 'POST /api/wallet/topup/create',
-            devBypass: true
-          }
-        });
-
-        await creditWallet({
-          walletId: customerWallet.id,
-          amount,
-          transactionType: 'topup',
-          referenceType: 'wallet_topup',
-          referenceId: topup.id,
-          description: 'Wallet top-up (development bypass without Razorpay)',
-          metadata: { provider: 'dev_bypass' },
-          idempotencyKey: `wallet-topup-dev-credit:${topup.id}`,
-          createdBy: req.userId
-        });
-
-        const completedAt = new Date().toISOString();
-        await supabase
-          .from('wallet_topups')
-          .update({
-            status: 'completed',
-            completed_at: completedAt,
-            updated_at: completedAt,
-            metadata: {
-              ...((topup && typeof topup.metadata === 'object' && topup.metadata) || {}),
-              devBypass: true
-            }
-          })
-          .eq('id', topup.id);
-        await getOrCreateWallet({ userId: req.userId, walletType: 'customer' });
-        const balance = await getWalletBalance({ userId: req.userId, walletType: 'customer' });
-
-        return res.json({
-          status: 'success',
-          walletTopup: {
-            id: topup.id,
-            amount: topup.amount,
-            status: 'completed',
-            devBypass: true
-          },
-          paymentIntent: {
-            provider: 'dev_bypass',
-            requiresCheckout: false
-          },
-          wallet: balance.wallet,
-          balance: balance.balance,
-          completedAt
-        });
-      }
       return res.status(503).json({
         status: 'error',
         code: 'RAZORPAY_NOT_CONFIGURED',
-        message: 'Wallet top-up is temporarily unavailable.'
+        message: 'Online payment gateway is not configured. Wallet credit cannot be completed.'
       });
     }
 
@@ -233,7 +185,7 @@ walletRouter.post('/topup/create', authenticateToken, requireServiceProvider, as
     const status = httpStatusForUpstreamError(e);
     return res.status(status).json({
       status: 'error',
-      message: e.message || 'Failed to create wallet top-up'
+      message: e.message || 'Failed to create wallet credit'
     });
   }
 });
@@ -244,7 +196,7 @@ walletRouter.post('/topup/confirm', authenticateToken, requireServiceProvider, a
       return res.status(503).json({
         status: 'error',
         code: 'RAZORPAY_NOT_CONFIGURED',
-        message: 'Wallet top-up verification is unavailable.'
+        message: 'Wallet credit verification is unavailable.'
       });
     }
 
@@ -261,10 +213,10 @@ walletRouter.post('/topup/confirm', authenticateToken, requireServiceProvider, a
 
     const payment = await fetchRazorpayPayment(razorpayPaymentId);
     if (!payment || payment.order_id !== razorpayOrderId) {
-      return res.status(400).json({ status: 'error', message: 'Payment does not match top-up order' });
+      return res.status(400).json({ status: 'error', message: 'Payment does not match wallet credit order' });
     }
     if (payment.status !== 'captured') {
-      return res.status(400).json({ status: 'error', message: 'Top-up payment is not captured yet' });
+      return res.status(400).json({ status: 'error', message: 'Wallet credit payment is not captured yet' });
     }
 
     const topup = await completeWalletTopup({
@@ -293,7 +245,7 @@ walletRouter.post('/topup/confirm', authenticateToken, requireServiceProvider, a
     if (e?.code === 'WALLET_TOPUP_FORBIDDEN') {
       return res.status(403).json({ status: 'error', message: e.message });
     }
-    return res.status(500).json({ status: 'error', message: e.message || 'Failed to confirm top-up' });
+    return res.status(500).json({ status: 'error', message: e.message || 'Failed to confirm wallet credit' });
   }
 });
 

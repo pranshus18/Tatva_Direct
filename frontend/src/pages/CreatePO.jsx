@@ -13,6 +13,8 @@ import './CreatePO.css';
 /** Shown when pay-later is blocked (limit, cycle, or minimum). */
 const PAY_LATER_UNAVAILABLE_MESSAGE =
   'Pay later is unavailable. You can place the order with a different mode of payment.';
+const PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE =
+  'Unable to verify pay-later limit right now. Please retry in a few seconds.';
 
 /** UPI intent for platform collection QR. Requires `VITE_PLATFORM_UPI_VPA` in production builds. */
 function buildTestPlatformPaymentPayload(grandTotal) {
@@ -168,11 +170,18 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [creditCheckLoading, setCreditCheckLoading] = useState(false);
   const [creditCheckFailed, setCreditCheckFailed] = useState(false);
   const [payLaterEligibility, setPayLaterEligibility] = useState([]);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
 
   const grandTotalAllPos = useMemo(
     () => poGroups.reduce((sum, g) => sum + (Number(g.total) || 0), 0),
     [poGroups]
   );
+  const walletShortage = useMemo(
+    () => Math.max(0, Number(grandTotalAllPos || 0) - Number(walletBalance || 0)),
+    [grandTotalAllPos, walletBalance]
+  );
+  const hasSufficientWalletBalance = walletShortage <= 0;
 
   const workflowItems = voiceCart?.items?.length ? voiceCart.items : items;
   const workflowVendors =
@@ -474,9 +483,35 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     };
   }, [poGroups]);
 
+  useEffect(() => {
+    if (poPaymentMethod !== 'wallet') return;
+    const token = localStorage.getItem('token');
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoadingWalletBalance(true);
+        const resp = await fetch(getApiUrl('/api/wallet/balance'), {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!cancelled && resp.ok && data.status === 'success') {
+          setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
+        }
+      } catch {
+        if (!cancelled) setWalletBalance(0);
+      } finally {
+        if (!cancelled) setLoadingWalletBalance(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [poPaymentMethod, poGroups]);
+
   const payLaterOptionAvailable = useMemo(() => {
     if (!poGroups?.length) return false;
-    if (creditCheckFailed) return true;
+    if (creditCheckFailed) return false;
     if (!payLaterEligibility.length) return false;
     const bySupplier = new Map(payLaterEligibility.map((r) => [String(r.supplierId), r]));
     return poGroups.every((g) => {
@@ -485,18 +520,12 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     });
   }, [creditCheckFailed, payLaterEligibility, poGroups]);
 
-  useEffect(() => {
-    if (poPaymentMethod !== 'wallet') {
-      setPoPaymentMethod('wallet');
-      setPaymentDetails({});
-    }
-  }, [poPaymentMethod]);
-
   const creditAllAllowed = useMemo(() => {
     if (poPaymentMethod !== 'credit') return true;
+    if (creditCheckFailed) return false;
     if (!creditChecks.length) return false;
     return creditChecks.every((r) => r.allowed);
-  }, [poPaymentMethod, creditChecks]);
+  }, [poPaymentMethod, creditChecks, creditCheckFailed]);
 
   const createPurchaseOrders = async () => {
     const token = localStorage.getItem('token');
@@ -746,6 +775,36 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       }
     }
 
+    if (poPaymentMethod === 'credit') {
+      if (creditCheckLoading || creditCheckFailed) {
+        alert(PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE);
+        return;
+      }
+      if (!payLaterOptionAvailable || !creditAllAllowed) {
+        alert(PAY_LATER_UNAVAILABLE_MESSAGE);
+        return;
+      }
+      const selectedPeriodDays = Number(paymentDetails?.creditPeriod || 0);
+      if (!Number.isFinite(selectedPeriodDays) || selectedPeriodDays < 1) {
+        alert('Please select a valid settlement period for pay later.');
+        return;
+      }
+    }
+    if (poPaymentMethod === 'wallet') {
+      if (loadingWalletBalance) {
+        alert('Checking wallet balance. Please wait and try again.');
+        return;
+      }
+      if (!hasSufficientWalletBalance) {
+        alert(
+          `Insufficient wallet balance. You need ₹${walletShortage.toLocaleString(
+            'en-IN'
+          )} more. Please credit wallet first.`
+        );
+        return;
+      }
+    }
+
     await completeOrderFlow();
   };
 
@@ -959,8 +1018,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           </label>
           <select
             value={poPaymentMethod}
-            onChange={() => {}}
-            disabled
+            onChange={(e) => {
+              setPoPaymentMethod(e.target.value);
+              setPaymentDetails((prev) => {
+                if (e.target.value === 'credit') return prev;
+                return {};
+              });
+            }}
             style={{
               maxWidth: '320px',
               width: '100%',
@@ -968,15 +1032,92 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
               borderRadius: '6px',
               border: '1px solid #d1d5db',
               fontSize: '0.9rem',
-              background: '#f8fafc',
+              background: '#fff',
               color: '#334155'
             }}
           >
             <option value="wallet">Wallet only (platform escrow model)</option>
+            <option value="credit" disabled={creditCheckLoading || !payLaterOptionAvailable}>
+              Pay later (credit account)
+            </option>
           </select>
-          <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
-            Orders are created with wallet payment mode. Customer funds wallet first, then platform escrow settles supplier payout.
-          </p>
+          {poPaymentMethod === 'wallet' ? (
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
+              Orders are created with wallet payment mode. Customer funds wallet first, then platform escrow settles supplier payout.
+            </p>
+          ) : (
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
+              Pay later creates PO on credit account. Settlement stays pending until due-date payment is completed.
+            </p>
+          )}
+          <div
+            style={{
+              marginTop: '0.65rem',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              flexWrap: 'wrap'
+            }}
+          >
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => navigate('/wallet')}
+              style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem' }}
+            >
+              Credit wallet
+            </button>
+            <span style={{ fontSize: '0.76rem', color: '#64748b' }}>
+              {poPaymentMethod === 'wallet'
+                ? 'Tip: Add enough wallet balance before paying these orders in `Your orders`.'
+                : 'Tip: Configure credit limit with supplier to use pay later without failures.'}
+            </span>
+          </div>
+
+          {poPaymentMethod === 'wallet' && (
+            <div
+              style={{
+                marginTop: '0.75rem',
+                padding: '0.75rem',
+                background: hasSufficientWalletBalance ? '#f0fdf4' : '#fef2f2',
+                border: `1px solid ${hasSufficientWalletBalance ? '#86efac' : '#fecaca'}`,
+                borderRadius: '8px',
+                maxWidth: '520px'
+              }}
+            >
+              <p style={{ margin: '0 0 0.4rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>
+                Wallet balance check
+              </p>
+              <p style={{ margin: 0, fontSize: '0.8rem', color: '#475569' }}>
+                Order total: <strong>₹{Number(grandTotalAllPos || 0).toLocaleString('en-IN')}</strong>
+              </p>
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
+                Wallet balance:{' '}
+                <strong>
+                  {loadingWalletBalance
+                    ? 'Checking...'
+                    : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
+                </strong>
+              </p>
+              {!loadingWalletBalance && !hasSufficientWalletBalance ? (
+                <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#b91c1c' }}>
+                  Additional credit required: <strong>₹{walletShortage.toLocaleString('en-IN')}</strong>
+                </p>
+              ) : null}
+            </div>
+          )}
+
+          {poPaymentMethod === 'credit' && creditCheckFailed && (
+            <p style={{ margin: '0.5rem 0 0', fontSize: '0.78rem', color: '#dc2626', maxWidth: '640px' }}>
+              {PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE}
+            </p>
+          )}
+
+          {poPaymentMethod === 'credit' && !creditCheckFailed && !payLaterOptionAvailable && (
+            <p style={{ margin: '0.5rem 0 0', fontSize: '0.78rem', color: '#dc2626', maxWidth: '640px' }}>
+              {PAY_LATER_UNAVAILABLE_MESSAGE}
+            </p>
+          )}
 
           {poPaymentMethod === 'card' && (
             <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
@@ -1560,7 +1701,12 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             <button
               className="btn-primary btn-large"
               onClick={handleConfirm}
-              disabled={poGroups.length === 0 || creatingOrders || !isTransportSelectionReady(selectedTransport, poGroups)}
+              disabled={
+                poGroups.length === 0 ||
+                creatingOrders ||
+                !isTransportSelectionReady(selectedTransport, poGroups) ||
+                (poPaymentMethod === 'wallet' && (loadingWalletBalance || !hasSufficientWalletBalance))
+              }
             >
               {creatingOrders ? 'Finalizing...' : 'Confirm & Create All POs'}
             </button>

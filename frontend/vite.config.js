@@ -17,13 +17,13 @@ export default defineConfig({
     proxy: {
       // Voice WebSocket only — do not set ws:true on all /api (breaks Vite HMR → ECONNRESET).
       '/api/voice': {
-        target: 'http://localhost:8081',
+        target: 'http://127.0.0.1:8081',
         changeOrigin: true,
         secure: false,
         ws: true
       },
       '/api': {
-        target: 'http://localhost:8081',
+        target: 'http://127.0.0.1:8081',
         changeOrigin: true,
         secure: false,
         timeout: 150000,
