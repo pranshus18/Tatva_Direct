@@ -5,6 +5,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
+import { formatDateIST } from '../utils/dateTime';
 import './AdminDashboard.css';
 
 const AdminServiceProviders = ({ user }) => {
@@ -196,7 +197,7 @@ const AdminServiceProviders = ({ user }) => {
                                         {boq.createdAt && (
                                           <>
                                             <span>•</span>
-                                            <span>Created: {new Date(boq.createdAt).toLocaleDateString()}</span>
+                                            <span>Created: {formatDateIST(boq.createdAt, '—')}</span>
                                           </>
                                         )}
                                       </div>
@@ -238,7 +239,7 @@ const AdminServiceProviders = ({ user }) => {
                                       </div>
                                       {order.createdAt && (
                                         <div className="order-date">
-                                          <strong>Date:</strong> {new Date(order.createdAt).toLocaleDateString()}
+                                          <strong>Date:</strong> {formatDateIST(order.createdAt, '—')}
                                         </div>
                                       )}
                                     </div>

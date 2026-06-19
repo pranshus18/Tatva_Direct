@@ -60,12 +60,7 @@ const formatDateShort = (dateString) => {
 };
 
 const formatDateOnly = (dateString) => {
-  if (!dateString) return '—';
-  try {
-    return new Date(dateString).toLocaleDateString('en-IN');
-  } catch {
-    return '—';
-  }
+  return formatDateIST(dateString, '—');
 };
 
 const formatAddress = (address) =>

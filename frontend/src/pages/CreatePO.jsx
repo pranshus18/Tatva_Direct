@@ -7,7 +7,20 @@ import { API_BASE_URL, getApiUrl, resolveApiPath } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
-import { fetchVoiceCartDraft, isVoiceGuidedActive } from '../voice/voiceCartBridge';
+import { fetchVoiceCartDraft, isVoiceGuidedActive, resolveDiscoveryShippingFromCartDraft } from '../voice/voiceCartBridge';
+import {
+  formatQuoteMoney,
+  getVendorTransportDetail,
+  isTransportSelectionReady,
+  isTransportSelectionReadyForVendor,
+  mergeTransportSelections
+} from '../utils/poTransportSelection';
+import {
+  clearCartTransportSelection,
+  loadCartTransportSelection,
+  saveCartTransportSelection
+} from '../utils/poCartTransportApi';
+import { formatShippingAddressLabel, normalizeShippingAddressBookEntry } from '../utils/shippingAddressLabel';
 import './CreatePO.css';
 
 /** Shown when pay-later is blocked (limit, cycle, or minimum). */
@@ -50,26 +63,6 @@ const normalizeAddress = (address = {}) => ({
   ).trim(),
   country: String(address?.country || '').trim()
 });
-
-/** Legacy: single shippingProvider. New: byVendorId map (supplier UUID → courier name). */
-function isTransportSelectionReady(transport, groups) {
-  if (!transport || typeof transport !== 'object') return false;
-  if (String(transport.shippingProvider || '').trim()) return true;
-  const by = transport.byVendorId;
-  if (!by || typeof by !== 'object') return false;
-  const ids = (Array.isArray(groups) ? groups : []).map((g) => String(g.vendorId || '')).filter(Boolean);
-  if (ids.length === 0) return Object.keys(by).some((k) => String(by[k] || '').trim());
-  return ids.every((id) => String(by[id] || '').trim());
-}
-
-function formatQuoteMoney(rate) {
-  if (rate == null || rate === '') return null;
-  const n = Number(String(rate).replace(/,/g, ''));
-  if (Number.isFinite(n)) {
-    return `₹${n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  }
-  return String(rate);
-}
 
 const addressPreview = (address = {}) =>
   [address.line1, address.city, address.state, address.pincode, address.country]
@@ -127,7 +120,7 @@ async function mergeWorkflowItemsWithSavedCart(workflowItems) {
   }
 }
 
-const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
+const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) => {
   const navigate = useNavigate();
   const location = useLocation();
   const voiceGuided = isVoiceGuidedActive();
@@ -148,7 +141,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [confirmed, setConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [requiredDate, setRequiredDate] = useState('');
+  const initialRequiredDateFromContext = useMemo(() => {
+    const fromProject = String(boqProject?.requiredDate || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fromProject)) return fromProject;
+    const fromVoice = String(navVoiceCart?.requiredDate || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fromVoice)) return fromVoice;
+    return '';
+  }, [boqProject?.requiredDate, navVoiceCart?.requiredDate]);
+  const [requiredDate, setRequiredDate] = useState(initialRequiredDateFromContext);
   const [creatingOrders, setCreatingOrders] = useState(false);
   /** Wallet-only checkout model: all orders are paid via customer wallet. */
   const [poPaymentMethod, setPoPaymentMethod] = useState('wallet');
@@ -160,8 +160,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   const [serviceProviderGstin, setServiceProviderGstin] = useState('');
   const [shippingAddress, setShippingAddress] = useState(blankAddress);
   const [billingAddress, setBillingAddress] = useState(blankAddress);
-  const [billingAddressBook, setBillingAddressBook] = useState([]);
-  const [selectedBillingAddressId, setSelectedBillingAddressId] = useState('');
+  const [shippingAddressBook, setShippingAddressBook] = useState([]);
+  const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
+  const [discoveryShippingProjectName, setDiscoveryShippingProjectName] = useState('');
   const [deliveryDestination, setDeliveryDestination] = useState('shipping');
   const [createdTransportOrders, setCreatedTransportOrders] = useState([]);
   const [selectedTransport, setSelectedTransport] = useState(null);
@@ -244,50 +245,82 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
   }, [cartContextReady, workflowVendors, workflowSubs, workflowItems]);
 
   useEffect(() => {
+    if (requiredDate) return;
+    const fromProject = String(boqProject?.requiredDate || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fromProject)) {
+      setRequiredDate(fromProject);
+      return;
+    }
+    const fromVoice = String(voiceCart?.requiredDate || '').trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fromVoice)) {
+      setRequiredDate(fromVoice);
+    }
+  }, [boqProject?.requiredDate, voiceCart?.requiredDate, requiredDate]);
+
+  useEffect(() => {
+    if (!cartContextReady) return undefined;
+
     const token = localStorage.getItem('token');
-    if (!token) return;
+    if (!token) return undefined;
 
     let cancelled = false;
-    const loadProfile = async () => {
+    const loadCheckoutAddresses = async () => {
       try {
-        const response = await fetch(getApiUrl('/api/profile'), {
-          headers: {
-            Authorization: `Bearer ${token}`
+        const [profileResponse, cartSnapshot] = await Promise.all([
+          fetch(getApiUrl('/api/profile'), {
+            headers: { Authorization: `Bearer ${token}` }
+          }),
+          fetchVoiceCartDraft()
+        ]);
+        if (cancelled) return;
+
+        let profileData = null;
+        let shippingAddresses = [];
+        if (profileResponse.ok) {
+          profileData = await profileResponse.json();
+          if (profileData?.profile) {
+            const profileAddress = normalizeAddress(profileData.profile.address || {});
+            shippingAddresses = Array.isArray(profileData.profile.shippingAddresses)
+              ? profileData.profile.shippingAddresses
+                  .map((entry) => normalizeShippingAddressBookEntry(entry))
+                  .filter((entry) => entry.id)
+              : [];
+            const gstin = String(profileData.profile.gstin || profileData.profile.mainGstin || '').trim();
+            setServiceProviderGstin(gstin);
+            setBillingAddress(profileAddress);
+            setShippingAddressBook(shippingAddresses);
+            setDeliveryDestination(gstin ? 'shipping' : 'shipping');
           }
-        });
-        if (!response.ok) return;
-        const data = await response.json();
-        if (!data?.profile || cancelled) return;
-        const profileAddress = normalizeAddress(data.profile.address || {});
-        const billingAddresses = Array.isArray(data.profile.billingAddresses)
-          ? data.profile.billingAddresses
-              .map((entry) => ({
-                id: String(entry?.id || ''),
-                label: String(entry?.label || '').trim(),
-                address: normalizeAddress(entry || {})
-              }))
-              .filter((entry) => entry.id)
-          : [];
-        const gstin = String(data.profile.gstin || data.profile.mainGstin || '').trim();
-        setServiceProviderGstin(gstin);
-        setShippingAddress(profileAddress);
-        if (billingAddresses.length > 0) {
-          setBillingAddressBook(billingAddresses);
-          setSelectedBillingAddressId(billingAddresses[0].id);
-          setBillingAddress(billingAddresses[0].address);
-        } else {
-          setBillingAddress(profileAddress);
         }
-        setDeliveryDestination(gstin ? 'shipping' : 'shipping');
+
+        const discoveryShipping = resolveDiscoveryShippingFromCartDraft(cartSnapshot?.draft);
+        if (discoveryShipping?.address) {
+          setShippingAddress(discoveryShipping.address);
+          setDiscoveryShippingProjectName(discoveryShipping.projectName || '');
+          const matchedId = shippingAddresses.find(
+            (entry) => String(entry.id) === String(discoveryShipping.shippingAddressId || '')
+          )?.id;
+          setSelectedShippingAddressId(matchedId || '');
+          return;
+        }
+
+        setDiscoveryShippingProjectName('');
+        if (shippingAddresses.length > 0) {
+          setSelectedShippingAddressId(shippingAddresses[0].id);
+          setShippingAddress(shippingAddresses[0].address);
+        } else if (profileData?.profile) {
+          setShippingAddress(normalizeAddress(profileData.profile.address || {}));
+        }
       } catch (profileError) {
-        console.warn('Failed to preload service provider profile for PO addresses:', profileError);
+        console.warn('Failed to preload checkout addresses for Create PO:', profileError);
       }
     };
-    loadProfile();
+
+    void loadCheckoutAddresses();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [cartContextReady]);
 
   const hasGstin = Boolean(serviceProviderGstin);
   const toggleItemSpecs = (groupVendorId, item, idx) => {
@@ -315,19 +348,43 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
       setCreatedTransportOrders(incomingOrders);
     }
     if (incomingTransport) {
-      setSelectedTransport(incomingTransport);
+      setSelectedTransport((prev) => {
+        const merged = mergeTransportSelections(prev, incomingTransport);
+        void saveCartTransportSelection(
+          merged,
+          Array.isArray(routeState.transportVendorIds)
+            ? routeState.transportVendorIds
+            : Object.keys(incomingTransport.byVendorId || {})
+        );
+        return merged;
+      });
     }
     if (incomingOrders.length > 0 || incomingTransport) {
       navigate(location.pathname, { replace: true, state: null });
     }
   }, [location.pathname, location.state, navigate]);
 
-  const handleSelectBillingAddress = (id) => {
-    setSelectedBillingAddressId(id);
+  useEffect(() => {
+    if (!cartContextReady) return undefined;
+    let cancelled = false;
+    (async () => {
+      const saved = await loadCartTransportSelection();
+      if (!cancelled && saved && typeof saved === 'object') {
+        setSelectedTransport((prev) => mergeTransportSelections(prev, saved));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [cartContextReady]);
+
+  const handleSelectShippingAddress = (id) => {
+    setSelectedShippingAddressId(id);
+    setDiscoveryShippingProjectName('');
     if (!id) return;
-    const selected = billingAddressBook.find((entry) => entry.id === id);
+    const selected = shippingAddressBook.find((entry) => entry.id === id);
     if (selected) {
-      setBillingAddress(selected.address);
+      setShippingAddress(selected.address);
     }
   };
 
@@ -730,6 +787,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         setCreatedTransportOrders(activeOrders);
       }
       await finalizeTransportDetails(activeOrders);
+      await clearCartTransportSelection();
+      setSelectedTransport(null);
       setConfirmed(true);
     } catch (err) {
       console.error('Failed to finalize transport flow:', err);
@@ -784,11 +843,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
         alert(PAY_LATER_UNAVAILABLE_MESSAGE);
         return;
       }
-      const selectedPeriodDays = Number(paymentDetails?.creditPeriod || 0);
-      if (!Number.isFinite(selectedPeriodDays) || selectedPeriodDays < 1) {
-        alert('Please select a valid settlement period for pay later.');
-        return;
-      }
     }
     if (poPaymentMethod === 'wallet') {
       if (loadingWalletBalance) {
@@ -813,18 +867,23 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
     await completeOrderFlow();
   };
 
-  const handleTransportSuggestion = async () => {
+  const handleTransportSuggestion = async (group) => {
     if (creatingOrders) return;
     if (!poGroups || poGroups.length === 0) {
       alert('No purchase order groups available. Please ensure all items have selected suppliers.');
       return;
     }
+    const scopedGroups = group ? [group] : poGroups;
+    const focusVendorId = group ? String(group.vendorId || '') : '';
+
+    const savedTransport = await loadCartTransportSelection();
+    const baseTransport = mergeTransportSelections(savedTransport, selectedTransport);
 
     const missingShipping = ['line1', 'city', 'state', 'pincode', 'country'].find(
       (key) => !String(shippingAddress?.[key] || '').trim()
     );
     if (missingShipping) {
-      alert('Please complete the shipping address (including pincode) before transport suggestions.');
+      alert('Please complete the shipping address before transport suggestions.');
       return;
     }
     if (hasGstin) {
@@ -848,7 +907,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             ...(token ? { Authorization: `Bearer ${token}` } : {})
           },
           body: JSON.stringify({
-            poGroups,
+            poGroups: scopedGroups,
             shippingAddress,
             billingAddress,
             deliveryDestination,
@@ -879,8 +938,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
 
     navigate('/transport-suggestion', {
       state: {
-        poGroups,
-        grandTotalAllPos,
+        poGroups: scopedGroups,
+        allPoGroups: poGroups,
+        focusVendorId,
+        existingTransportSelection: baseTransport,
+        grandTotalAllPos: group ? Number(group.total) || 0 : grandTotalAllPos,
         requiredDate,
         hasGstin,
         deliveryDestination,
@@ -1045,11 +1107,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
               Orders are created with wallet payment mode. Customer funds wallet first, then platform escrow settles supplier payout.
             </p>
-          ) : (
+          ) : poPaymentMethod === 'credit' ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
-              Pay later creates PO on credit account. Settlement stays pending until due-date payment is completed.
+              Pay later uses the credit limit and settlement period configured by each supplier. You cannot change credit terms here.
             </p>
-          )}
+          ) : null}
           <div
             style={{
               marginTop: '0.65rem',
@@ -1238,49 +1300,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                       <strong>{vendor?.vendorName || 'Supplier'}:</strong>{' '}
                       {row.allowed
                         ? min > 0
-                          ? `Pay later OK — limit ₹${Number(row.creditLimit || 0).toLocaleString('en-IN')}, ₹${Number(row.outstanding || 0).toLocaleString('en-IN')} outstanding, up to ₹${Number(row.available ?? row.remainingCredit ?? 0).toLocaleString('en-IN')} for this order.`
-                          : `Pay later OK — limit ₹${Number(row.creditLimit || 0).toLocaleString('en-IN')}, up to ₹${Number(row.available ?? row.remainingCredit ?? 0).toLocaleString('en-IN')} for this order.`
+                          ? `Pay later OK — limit ₹${Number(row.creditLimit || 0).toLocaleString('en-IN')}, ₹${Number(row.outstanding || 0).toLocaleString('en-IN')} outstanding, up to ₹${Number(row.available ?? row.remainingCredit ?? 0).toLocaleString('en-IN')} for this order. Settlement period: ${Number(row.creditPeriodDays || 30)} days (set by supplier).`
+                          : `Pay later OK — limit ₹${Number(row.creditLimit || 0).toLocaleString('en-IN')}, up to ₹${Number(row.available ?? row.remainingCredit ?? 0).toLocaleString('en-IN')} for this order. Settlement period: ${Number(row.creditPeriodDays || 30)} days (set by supplier).`
                         : row.message}
                     </li>
                   );
                 })}
               </ul>
-            </div>
-          )}
-
-          {poPaymentMethod === 'credit' && (
-            <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', maxWidth: '420px' }}>
-              <p style={{ margin: '0 0 0.5rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>Credit Terms</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-                <select
-                  value={paymentDetails.creditPeriod || ''}
-                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, creditPeriod: e.target.value }))}
-                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem', background: '#fff' }}
-                >
-                  <option value="">Select credit period *</option>
-                  <option value="7">7 days</option>
-                  <option value="15">15 days</option>
-                  <option value="30">30 days</option>
-                  <option value="45">45 days</option>
-                  <option value="60">60 days</option>
-                  <option value="90">90 days</option>
-                </select>
-                <input
-                  type="text"
-                  placeholder="PO / Reference number"
-                  value={paymentDetails.poReference || ''}
-                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, poReference: e.target.value }))}
-                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
-                />
-                <input
-                  type="text"
-                  placeholder="Remarks / special terms"
-                  value={paymentDetails.remarks || ''}
-                  onChange={(e) => setPaymentDetails(prev => ({ ...prev, remarks: e.target.value }))}
-                  style={{ padding: '0.45rem 0.65rem', borderRadius: '6px', border: '1px solid #d1d5db', fontSize: '0.85rem' }}
-                />
-              </div>
-              <p style={{ margin: '0.4rem 0 0', fontSize: '0.72rem', color: '#6b7280' }}>* Payment due within the selected credit period from delivery date.</p>
             </div>
           )}
 
@@ -1290,6 +1316,27 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
             <h3>Shipping Address</h3>
             <p>Where your suppliers should deliver the material.</p>
           </div>
+          {discoveryShippingProjectName ? (
+            <p className="checkout-address-note" style={{ marginBottom: '0.75rem' }}>
+              From Product Discovery project: <strong>{discoveryShippingProjectName}</strong>
+            </p>
+          ) : null}
+          {shippingAddressBook.length > 0 ? (
+            <div className="checkout-address-field checkout-address-field--wide" style={{ marginBottom: '0.75rem' }}>
+              <label>Choose saved shipping address</label>
+              <select
+                className="checkout-address-input"
+                value={selectedShippingAddressId}
+                onChange={(e) => handleSelectShippingAddress(e.target.value)}
+              >
+                {shippingAddressBook.map((entry, index) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.displayName || entry.label || formatShippingAddressLabel(entry, index)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
           <div className="checkout-address-grid">
             <div className="checkout-address-field checkout-address-field--wide">
               <label>Street Address</label>
@@ -1349,71 +1396,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           ) : (
             <>
               <p className="checkout-address-note">
-                GSTIN: <strong>{serviceProviderGstin}</strong>. Billing address is treated as the GST registered address (used for GST tax). You can choose where material should be delivered.
+                GSTIN: <strong>{serviceProviderGstin}</strong>. Billing uses your registered company address from profile (used for GST tax). You can choose where material should be delivered.
               </p>
-              {billingAddressBook.length > 0 ? (
-                <div className="checkout-address-field checkout-address-field--wide" style={{ marginBottom: '0.75rem' }}>
-                  <label>Choose saved billing address</label>
-                  <select
-                    className="checkout-address-input"
-                    value={selectedBillingAddressId}
-                    onChange={(e) => handleSelectBillingAddress(e.target.value)}
-                  >
-                    {billingAddressBook.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.label || addressPreview(entry.address) || 'Saved billing address'}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              ) : null}
-              <div className="checkout-address-grid checkout-address-grid--billing">
-                <div className="checkout-address-field checkout-address-field--wide">
-                  <label>Billing Street Address</label>
-                  <input
-                    className="checkout-address-input"
-                    value={billingAddress.line1}
-                    onChange={(e) => setBillingAddress((prev) => ({ ...prev, line1: e.target.value }))}
-                    placeholder="GST billing address line"
-                  />
-                </div>
-                <div className="checkout-address-field">
-                  <label>Billing City</label>
-                  <input
-                    className="checkout-address-input"
-                    value={billingAddress.city}
-                    onChange={(e) => setBillingAddress((prev) => ({ ...prev, city: e.target.value }))}
-                    placeholder="Billing city"
-                  />
-                </div>
-                <div className="checkout-address-field">
-                  <label>Billing State</label>
-                  <input
-                    className="checkout-address-input"
-                    value={billingAddress.state}
-                    onChange={(e) => setBillingAddress((prev) => ({ ...prev, state: e.target.value }))}
-                    placeholder="Billing state"
-                  />
-                </div>
-                <div className="checkout-address-field">
-                  <label>Billing PIN Code</label>
-                  <input
-                    className="checkout-address-input"
-                    value={billingAddress.pincode}
-                    onChange={(e) => setBillingAddress((prev) => ({ ...prev, pincode: e.target.value }))}
-                    placeholder="Billing PIN code"
-                  />
-                </div>
-                <div className="checkout-address-field">
-                  <label>Billing Country</label>
-                  <input
-                    className="checkout-address-input"
-                    value={billingAddress.country}
-                    onChange={(e) => setBillingAddress((prev) => ({ ...prev, country: e.target.value }))}
-                    placeholder="Billing country"
-                  />
-                </div>
-              </div>
+              <p className="checkout-address-preview" style={{ marginBottom: '0.75rem' }}>
+                Registered billing address: {addressPreview(billingAddress) || 'Not set in profile — update your profile billing address.'}
+              </p>
               <div className="checkout-delivery-choice">
                 <label>
                   <input
@@ -1563,26 +1550,57 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                     ))}
                   </tbody>
                 </table>
+                <div className="po-transport-actions">
+                  {isTransportSelectionReadyForVendor(selectedTransport, group.vendorId) ? (
+                    <div className="po-transport-status">
+                      <span className="po-transport-status__label">Transport selected</span>
+                      {(() => {
+                        const d = getVendorTransportDetail(selectedTransport, group.vendorId);
+                        const priceLabel = formatQuoteMoney(d?.rate);
+                        const modeLabel =
+                          d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
+                            ? 'Self ship'
+                            : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
+                              ? 'Trucking'
+                              : 'Courier';
+                        const carrierName = d?.name || selectedTransport?.byVendorId?.[group.vendorId];
+                        return (
+                          <span className="po-transport-status__detail">
+                            <span className="po-transport-status__mode">{modeLabel}:</span>
+                            <span className="po-transport-status__name">{carrierName}</span>
+                            {priceLabel ? (
+                              <span className="po-transport-status__price">{priceLabel}</span>
+                            ) : null}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  ) : (
+                    <p className="po-transport-status po-transport-status--pending">
+                      No transport selected for this supplier yet.
+                    </p>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => handleTransportSuggestion(group)}
+                    disabled={creatingOrders}
+                  >
+                    {creatingOrders ? 'Saving POs...' : 'Transport suggestion'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
 
           {isTransportSelectionReady(selectedTransport, poGroups) ? (
-            <div
-              style={{
-                marginBottom: '1rem',
-                border: '1px solid #c7d2fe',
-                borderRadius: 12,
-                padding: '1rem 1.1rem',
-                background: 'linear-gradient(180deg, #eef2ff 0%, #e0e7ff 100%)'
-              }}
-            >
-              <div style={{ fontWeight: 700, color: '#1e1b4b', marginBottom: '0.65rem', fontSize: '1rem' }}>
+            <div className="po-transport-summary">
+              <div className="po-transport-summary__title">
                 Selected transport (review rates, then confirm below)
               </div>
               {selectedTransport?.byVendorId && Object.keys(selectedTransport.byVendorId).length > 0 ? (
                 <>
-                  <div style={{ display: 'grid', gap: '0.65rem' }}>
+                  <div className="po-transport-summary__grid">
                     {Object.entries(selectedTransport.byVendorId)
                       .filter(([, name]) => String(name || '').trim())
                       .map(([vid, name]) => {
@@ -1594,52 +1612,40 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                             ? selectedTransport.byVendorCourierDetail[vid]
                             : null;
                         const priceLabel = formatQuoteMoney(d?.rate);
+                        const modeLabel =
+                          d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
+                            ? 'Self ship'
+                            : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
+                              ? 'Trucking'
+                              : 'Courier';
                         return (
-                          <div
-                            key={vid}
-                            style={{
-                              background: '#fff',
-                              border: '1px solid #c7d2fe',
-                              borderRadius: 10,
-                              padding: '0.65rem 0.85rem',
-                              fontSize: '0.88rem',
-                              color: '#334155'
-                            }}
-                          >
-                            <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '0.25rem' }}>{label}</div>
-                            <div>
-                              <strong>
-                                {d?.transport_mode === 'self_ship'
-                                  ? 'Self ship'
-                                  : d?.transport_mode === 'trucking'
-                                    ? 'Trucking'
-                                    : 'Courier'}
-                                :
-                              </strong>{' '}
-                              {name}
+                          <div key={vid} className="po-transport-summary-item">
+                            <div className="po-transport-summary-item__vendor">{label}</div>
+                            <div className="po-transport-summary-item__detail">
+                              <span className="po-transport-status__mode">{modeLabel}:</span>
+                              <span className="po-transport-status__name">{name}</span>
+                              {priceLabel ? (
+                                <span className="po-transport-status__price">{priceLabel}</span>
+                              ) : null}
                             </div>
-                            {priceLabel ? (
-                              <div style={{ marginTop: '0.2rem', fontWeight: 700, color: '#4f46e5' }}>
-                                Quote rate: {priceLabel}
+                            {d?.etd || d?.source || d?.rating != null || d?.cod != null || d?.weightKg != null ? (
+                              <div className="po-transport-summary-item__meta">
+                                {d?.etd ? (
+                                  <span>
+                                    ETD: {d.etd}
+                                    {d?.source ? ' · ' : ''}
+                                  </span>
+                                ) : null}
+                                {d?.source ? <span>Source: {d.source}</span> : null}
+                                {d?.rating != null && d?.rating !== '' ? (
+                                  <span> · Rating: {d.rating}</span>
+                                ) : null}
+                                {d?.cod != null ? <span> · COD: {String(d.cod)}</span> : null}
+                                {d?.weightKg != null ? (
+                                  <span> · Billable weight: {d.weightKg} kg</span>
+                                ) : null}
                               </div>
                             ) : null}
-                            <div style={{ marginTop: '0.25rem', fontSize: '0.82rem', color: '#64748b' }}>
-                              {d?.etd ? (
-                                <span>
-                                  ETD: {d.etd}
-                                  {d?.source ? ' · ' : ''}
-                                </span>
-                              ) : null}
-                              {d?.source ? <span>Source: {d.source}</span> : null}
-                              {d?.rating != null && d?.rating !== '' ? (
-                                <span>
-                                  {' '}
-                                  · Rating: {d.rating}
-                                </span>
-                              ) : null}
-                              {d?.cod != null ? <span> · COD: {String(d.cod)}</span> : null}
-                              {d?.weightKg != null ? <span> · Billable weight: {d.weightKg} kg</span> : null}
-                            </div>
                           </div>
                         );
                       })}
@@ -1659,19 +1665,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                     }
                     if (!any) return null;
                     return (
-                      <div
-                        style={{
-                          marginTop: '0.75rem',
-                          paddingTop: '0.65rem',
-                          borderTop: '1px solid #a5b4fc',
-                          fontWeight: 700,
-                          color: '#312e81',
-                          fontSize: '0.95rem'
-                        }}
-                      >
+                      <div className="po-transport-summary__total">
                         Combined quoted courier charges:{' '}
-                        {formatQuoteMoney(sum)}
-                        <span style={{ fontWeight: 500, color: '#64748b', fontSize: '0.8rem', marginLeft: '0.35rem' }}>
+                        <span className="po-transport-summary__total-amount">{formatQuoteMoney(sum)}</span>
+                        <span className="po-transport-summary__total-note">
                           (sum of per-shipment quotes; final billing per carrier)
                         </span>
                       </div>
@@ -1679,10 +1676,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
                   })()}
                 </>
               ) : (
-                <div style={{ fontSize: '0.9rem', color: '#334155' }}>
-                  <strong>Courier:</strong> {selectedTransport.shippingProvider}
+                <div className="po-transport-summary-item__detail">
+                  <span className="po-transport-status__mode">Courier:</span>
+                  <span className="po-transport-status__name">{selectedTransport.shippingProvider}</span>
                   {selectedTransport.trackingNumber ? (
-                    <span style={{ marginLeft: '0.5rem' }}>| Tracking: {selectedTransport.trackingNumber}</span>
+                    <span className="po-transport-summary-item__meta">
+                      Tracking: {selectedTransport.trackingNumber}
+                    </span>
                   ) : null}
                 </div>
               )}
@@ -1690,14 +1690,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, items }) => {
           ) : null}
 
           <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button
-              type="button"
-              className="btn-secondary btn-large"
-              onClick={handleTransportSuggestion}
-              disabled={poGroups.length === 0 || creatingOrders}
-            >
-              {creatingOrders ? 'Saving POs...' : 'Transport suggestion'}
-            </button>
             <button
               className="btn-primary btn-large"
               onClick={handleConfirm}

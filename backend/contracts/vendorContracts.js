@@ -18,6 +18,8 @@ const rankingItemSchema = z.object({
 export const vendorRankSchema = z.object({
   items: z.array(rankingItemSchema).min(1),
   boqId: z.string().uuid().optional().nullable(),
+  /** Cart / Product Discovery project (shipping address, required date, site geo). */
+  project: z.record(z.string(), z.any()).optional().nullable(),
   _timestamp: z.any().optional(),
   _random: z.any().optional()
 });

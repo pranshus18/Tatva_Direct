@@ -94,6 +94,10 @@ const SUPPLY_CHAIN_ROLE_OPTIONS = [
   { value: 'dealer', label: 'Dealer' },
   { value: 'retailer', label: 'Retailer' }
 ];
+const SUPPLY_CHAIN_ROLE_LABEL_BY_VALUE = SUPPLY_CHAIN_ROLE_OPTIONS.reduce((acc, item) => {
+  acc[item.value] = item.label;
+  return acc;
+}, {});
 
 function genEntryId() {
   return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `entry-${Date.now()}`;
@@ -165,6 +169,7 @@ const CompanyInfoEntryCard = ({
   roleOptionsMessage = '',
   adminChainReady = false,
   adminChainStatusText = '',
+  adminChainPathText = '',
   brandMeta = null,
   sectionView = 'all',
   allowEntryManagement = true,
@@ -495,6 +500,8 @@ const CompanyInfoEntryCard = ({
               ) : null}
               {roleOptionsMessage ? (
                 <p className="chain-callout chain-callout--warning">{roleOptionsMessage}</p>
+              ) : adminChainPathText ? (
+                <p className="chain-callout chain-callout--info">{adminChainPathText}</p>
               ) : adminChainStatusText ? (
                 <p className="chain-callout chain-callout--info">{adminChainStatusText}</p>
               ) : null}
@@ -789,12 +796,24 @@ export default function SupplierSupplyChainEntriesEditor({
                 })
                 .join(' | ')
             : '';
+          const selectedBrandRoles = Array.isArray(selectedBrandState?.roles)
+            ? selectedBrandState.roles
+            : [];
+          const selectedBrandChainPath =
+            selectedBrandRoles.length > 0
+              ? selectedBrandRoles
+                  .map((role) => SUPPLY_CHAIN_ROLE_LABEL_BY_VALUE[role] || role)
+                  .join(' -> ')
+              : '';
           nextState[entry.id] = {
             loading: false,
             options,
             brandMeta: selectedBrandState || null,
             adminChainReady: !!data?.eligible && options.length > 0,
             adminChainStatusText: brandStatusText,
+            adminChainPathText: selectedBrandChainPath
+              ? `Admin-defined chain for this brand: ${selectedBrandChainPath}`
+              : '',
             message:
               options.length > 0
                 ? ''
@@ -1212,6 +1231,7 @@ export default function SupplierSupplyChainEntriesEditor({
             roleOptionsMessage={roleUiState.message || ''}
             adminChainReady={!!roleUiState.adminChainReady}
             adminChainStatusText={roleUiState.adminChainStatusText || ''}
+            adminChainPathText={roleUiState.adminChainPathText || ''}
             brandMeta={roleUiState.brandMeta || null}
             sectionView={sectionView}
             allowEntryManagement={allowEntryManagement}

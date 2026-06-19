@@ -20,6 +20,7 @@ export default function SpNotificationsBell() {
   const [dashboardPanelOpen, setDashboardPanelOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [markingAllRead, setMarkingAllRead] = useState(false);
 
   const panelOpen = isDashboard ? dashboardPanelOpen : showDropdown;
 
@@ -118,6 +119,26 @@ export default function SpNotificationsBell() {
     }
   };
 
+  const markAllNotificationsAsRead = async () => {
+    if (unreadCount < 1 || markingAllRead) return;
+    setMarkingAllRead(true);
+    try {
+      await fetch(getApiUrl('/api/supplier/notifications/read-all'), {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+      await fetchNotifications();
+    } catch (e) {
+      console.error('[SP Notifications] Failed to mark all as read:', e);
+    } finally {
+      setMarkingAllRead(false);
+    }
+  };
+
   const getOrderRef = (notification) =>
     notification?.related_order?.order_number ||
     notification?.relatedOrder?.orderNumber ||
@@ -173,11 +194,23 @@ export default function SpNotificationsBell() {
         >
           <div className="flex items-center justify-between border-b px-4 py-3">
             <h3 className="text-sm font-semibold">Notifications</h3>
-            {unreadCount > 0 ? (
-              <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
-                {unreadCount} new
-              </span>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {unreadCount > 0 ? (
+                <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
+                  {unreadCount} new
+                </span>
+              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={unreadCount < 1 || markingAllRead}
+                onClick={markAllNotificationsAsRead}
+              >
+                {markingAllRead ? 'Marking…' : 'Mark all read'}
+              </Button>
+            </div>
           </div>
           <ScrollArea className="max-h-[min(70vh,400px)]">
             {notifications.length === 0 ? (

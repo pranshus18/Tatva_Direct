@@ -6,6 +6,7 @@ import {
   buildReconciliationStatement,
   buildSettlementSummary
 } from './reconciliationService.js';
+import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -35,12 +36,12 @@ function formatInr(amount) {
 
 function formatDateTime(value) {
   if (!value) return '';
-  return new Date(value).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+  return formatPlatformDateTime(value, '');
 }
 
 function formatDateOnly(value) {
   if (!value) return '';
-  return new Date(value).toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+  return formatPlatformDate(value, '');
 }
 
 function periodLabel(fromDate, toDate) {

@@ -29,6 +29,7 @@ import { buildFallbackVendorFromReferenceProduct } from '../services/vendorRefer
 import { loadBuyerCovMetrics } from '../services/vendorBuyerMetricsService.js';
 import {
   loadBoqContextForRanking,
+  loadDiscoveryProjectContextForRanking,
   loadServiceProviderLocationContext
 } from '../services/vendorRequestContextService.js';
 import { loadReferenceProductForItem } from '../services/vendorReferenceProductService.js';
@@ -76,12 +77,19 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       .filter(Boolean);
     const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, itemBrandCandidates);
 
-    const { siteGeoFromBoq, boqProjectCity, boqProjectState, requiredDateFromBoq } =
+    const { siteGeoFromBoq: boqSiteGeo, boqProjectCity: boqCity, boqProjectState: boqState, requiredDateFromBoq: boqRequiredDate } =
       await loadBoqContextForRanking({
         supabase,
         boqId,
         userId: req.userId
       });
+
+    const discoveryContext = await loadDiscoveryProjectContextForRanking(payload.project);
+
+    const siteGeoFromBoq = boqSiteGeo || discoveryContext.siteGeoFromBoq;
+    const boqProjectCity = boqCity || discoveryContext.boqProjectCity;
+    const boqProjectState = boqState || discoveryContext.boqProjectState;
+    const requiredDateFromBoq = boqRequiredDate || discoveryContext.requiredDateFromBoq;
     
     rankLog(`\n[Vendor Ranking] ==========================================`);
     rankLog(`[Vendor Ranking] Vendor ranking request received at ${new Date().toISOString()}`);

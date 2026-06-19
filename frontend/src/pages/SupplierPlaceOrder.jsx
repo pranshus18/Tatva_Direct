@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { MapPin } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import { collectProductImages } from '../components/UpstreamProductDisplay';
@@ -8,6 +9,10 @@ import {
   specificationsObjectForLogistics
 } from '../utils/specifications';
 import { formatRupee } from '../utils/formatRupee';
+import {
+  getGeolocationErrorMessage,
+  resolveAddressFromCurrentLocation
+} from '../utils/currentLocationAddress';
 import './Dashboard.css';
 import './CreatePO.css';
 import './SupplierPlaceOrder.css';
@@ -27,26 +32,13 @@ const branchToShippingAddress = (branch) => ({
   country: String(branch?.country || 'India').trim() || 'India'
 });
 
-function isTransportSelectionReady(transport, groups) {
-  if (!transport || typeof transport !== 'object') return false;
-  if (String(transport.shippingProvider || '').trim()) return true;
-  const by = transport.byVendorId;
-  if (!by || typeof by !== 'object') return false;
-  const ids = (Array.isArray(groups) ? groups : []).map((g) => String(g.vendorId || '')).filter(Boolean);
-  if (ids.length === 0) return Object.keys(by).some((k) => String(by[k] || '').trim());
-  return ids.every((id) => String(by[id] || '').trim());
-}
-
-function formatQuoteMoney(rate) {
-  if (rate == null || rate === '') return null;
-  const n = Number(String(rate).replace(/,/g, ''));
-  if (Number.isFinite(n)) {
-    return formatRupee(n, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  }
-  return String(rate);
-}
-
-function AddressFields({ prefix, address, onChange, disabled = false }) {
+import {
+  formatQuoteMoney,
+  getVendorTransportDetail,
+  isTransportSelectionReady,
+  isTransportSelectionReadyForVendor,
+  mergeTransportSelections
+} from '../utils/poTransportSelection';
   const set = (field, value) => onChange({ ...address, [field]: value });
   return (
     <div className="checkout-address-grid">
@@ -148,6 +140,7 @@ const SupplierPlaceOrder = () => {
   const [hasGstin, setHasGstin] = useState(false);
   const [shippingBranches, setShippingBranches] = useState([]);
   const [selectedShippingBranchId, setSelectedShippingBranchId] = useState('');
+  const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
 
   const [selectedTransport, setSelectedTransport] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
@@ -269,21 +262,15 @@ const SupplierPlaceOrder = () => {
           setShippingAddress(branchToShippingAddress(primaryBranch));
         }
 
-        const billingCandidate =
-          Array.isArray(profile?.billingAddresses) && profile.billingAddresses.length > 0
-            ? profile.billingAddresses[0]
-            : null;
-        setBillingAddress((prev) => {
-          const b = billingCandidate || (primaryBranch ? branchToShippingAddress(primaryBranch) : {});
-          return {
-            ...prev,
-            line1: b?.line1 || b?.street || prev.line1,
-            city: b?.city || prev.city,
-            state: b?.state || prev.state,
-            pincode: b?.pincode || b?.zipCode || prev.pincode,
-            country: b?.country || prev.country
-          };
-        });
+        const billingFromProfile = profile?.address || {};
+        setBillingAddress((prev) => ({
+          ...prev,
+          line1: billingFromProfile?.line1 || billingFromProfile?.street || prev.line1,
+          city: billingFromProfile?.city || prev.city,
+          state: billingFromProfile?.state || prev.state,
+          pincode: billingFromProfile?.pincode || billingFromProfile?.zipCode || prev.pincode,
+          country: billingFromProfile?.country || prev.country
+        }));
       } catch (e) {
         // Non-fatal; user can still fill manually.
         console.error('Supplier profile load error:', e);
@@ -298,45 +285,39 @@ const SupplierPlaceOrder = () => {
     };
   }, []);
 
-  // When returning from Transport suggestion, reuse the shipping/billing values we passed.
+  // When returning from Transport suggestion, merge per-supplier picks and restore checkout fields.
   useEffect(() => {
-    const st = location.state || {};
-    if (!st) return;
+    const routeState = location.state || {};
+    const incomingTransport =
+      routeState.transportSelection && typeof routeState.transportSelection === 'object'
+        ? routeState.transportSelection
+        : null;
 
-    if (st.transportSelection && typeof st.transportSelection === 'object') {
-      setSelectedTransport(st.transportSelection);
-      if (draft) {
-        try {
-          localStorage.setItem(
-            SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY,
-            JSON.stringify({
-              ...draft,
-              requiredDate: st.requiredDate || requiredDate || '',
-              paymentMethod,
-              transportSelection: st.transportSelection
-            })
-          );
-        } catch (_) {
-          // Non-fatal.
-        }
+    if (incomingTransport) {
+      setSelectedTransport((prev) => mergeTransportSelections(prev, incomingTransport));
+    }
+
+    if (typeof routeState.deliveryDestination === 'string') {
+      if (routeState.deliveryDestination === 'shipping' || routeState.deliveryDestination === 'billing') {
+        setDeliveryDestination(routeState.deliveryDestination);
       }
     }
 
-    if (typeof st.deliveryDestination === 'string' && (st.deliveryDestination === 'shipping' || st.deliveryDestination === 'billing')) {
-      setDeliveryDestination(st.deliveryDestination);
+    if (routeState.hasGstin != null) setHasGstin(Boolean(routeState.hasGstin));
+
+    if (routeState.shippingAddress && typeof routeState.shippingAddress === 'object') {
+      setShippingAddress((prev) => ({ ...prev, ...routeState.shippingAddress }));
+    }
+    if (routeState.billingAddress && typeof routeState.billingAddress === 'object') {
+      setBillingAddress((prev) => ({ ...prev, ...routeState.billingAddress }));
     }
 
-    if (st.hasGstin != null) setHasGstin(Boolean(st.hasGstin));
+    if (typeof routeState.requiredDate === 'string') setRequiredDate(routeState.requiredDate || '');
 
-    if (st.shippingAddress && typeof st.shippingAddress === 'object') {
-      setShippingAddress((prev) => ({ ...prev, ...st.shippingAddress }));
+    if (incomingTransport) {
+      navigate(location.pathname, { replace: true, state: null });
     }
-    if (st.billingAddress && typeof st.billingAddress === 'object') {
-      setBillingAddress((prev) => ({ ...prev, ...st.billingAddress }));
-    }
-
-    if (typeof st.requiredDate === 'string') setRequiredDate(st.requiredDate || '');
-  }, [location.state, draft, requiredDate, paymentMethod]);
+  }, [location.pathname, location.state, navigate]);
 
   useEffect(() => {
     // Backend also forces delivery to shipping when GSTIN is not available.
@@ -348,6 +329,25 @@ const SupplierPlaceOrder = () => {
     const branch = shippingBranches.find((b) => String(b.id) === String(selectedShippingBranchId));
     if (branch) setShippingAddress(branchToShippingAddress(branch));
   }, [selectedShippingBranchId, shippingBranches]);
+
+  const fillShippingFromCurrentLocation = async () => {
+    setLocatingShippingAddress(true);
+    try {
+      const resolved = await resolveAddressFromCurrentLocation();
+      setSelectedShippingBranchId('');
+      setShippingAddress({
+        line1: resolved.line1 || '',
+        city: resolved.city || '',
+        state: resolved.state || '',
+        pincode: resolved.pincode || '',
+        country: resolved.country || 'India'
+      });
+    } catch (error) {
+      alert(getGeolocationErrorMessage(error));
+    } finally {
+      setLocatingShippingAddress(false);
+    }
+  };
 
   const itemCount = useMemo(() => {
     if (!draft?.lines || !Array.isArray(draft.lines)) return 0;
@@ -439,7 +439,9 @@ const SupplierPlaceOrder = () => {
     };
   }, []);
 
-  const handleTransportSuggestion = () => {
+  const handleTransportSuggestion = (group) => {
+    if (placing) return;
+
     if (!requiredDate) {
       window.alert('Please select a "Required By Date" before getting transport suggestions.');
       return;
@@ -458,18 +460,41 @@ const SupplierPlaceOrder = () => {
       return;
     }
 
+    const scopedGroups = group ? [group] : poGroups;
+    const focusVendorId = group ? String(group.vendorId || '') : '';
+    const baseTransport = selectedTransport;
+
+    const missingShipping = ['line1', 'city', 'state', 'pincode', 'country'].find(
+      (key) => !String(shippingAddress?.[key] || '').trim()
+    );
+    if (missingShipping) {
+      window.alert('Please complete the shipping address before transport suggestions.');
+      return;
+    }
+    if (hasGstin) {
+      const missingBilling = ['line1', 'city', 'state', 'pincode', 'country'].find(
+        (key) => !String(billingAddress?.[key] || '').trim()
+      );
+      if (missingBilling) {
+        window.alert('Please complete the billing address before transport suggestions.');
+        return;
+      }
+    }
+
     navigate('/supplier-transport-suggestion', {
       state: {
         returnPath: '/supplier-place-order',
-        poGroups,
-        grandTotalAllPos,
+        poGroups: scopedGroups,
+        allPoGroups: poGroups,
+        focusVendorId,
+        existingTransportSelection: baseTransport,
+        grandTotalAllPos: group ? Number(group.total) || 0 : grandTotalAllPos,
         requiredDate,
         hasGstin,
         deliveryDestination,
         shippingAddress,
         billingAddress,
-        createdOrders: [],
-        transportSelection: selectedTransport || null
+        createdOrders: []
       }
     });
   };
@@ -496,6 +521,11 @@ const SupplierPlaceOrder = () => {
         'You have not specified a "Required By" date.\n\nDo you want to continue without a required date?'
       );
       if (!proceed) return;
+    }
+
+    if (!isTransportSelectionReady(selectedTransport, poGroups)) {
+      alert('Please select transport for each upstream supplier before placing the order.');
+      return;
     }
 
     setPlacing(true);
@@ -760,6 +790,17 @@ const SupplierPlaceOrder = () => {
                     Edit profile
                   </button>
                 </p>
+                <div className="checkout-address-location-row">
+                  <button
+                    type="button"
+                    className="checkout-location-btn"
+                    onClick={fillShippingFromCurrentLocation}
+                    disabled={locatingShippingAddress}
+                  >
+                    <MapPin size={15} aria-hidden />
+                    {locatingShippingAddress ? 'Detecting location…' : 'Use my current location'}
+                  </button>
+                </div>
                 <AddressFields
                   prefix="ship"
                   address={shippingAddress}
@@ -773,7 +814,7 @@ const SupplierPlaceOrder = () => {
                   <p>Material will be delivered to this billing address (GSTIN on file).</p>
                 </div>
                 <p className="checkout-address-note">
-                  From Company Profile → billing addresses.{' '}
+                  From Company Profile → registered billing address.{' '}
                   <button
                     type="button"
                     className="btn-secondary"
@@ -787,128 +828,167 @@ const SupplierPlaceOrder = () => {
                   prefix="bill"
                   address={billingAddress}
                   onChange={setBillingAddress}
+                  disabled
                 />
               </div>
             )}
           </section>
 
-          {isTransportSelectionReady(selectedTransport, poGroups) ? (
-            <section className="spo-section">
-              <h2 className="spo-section-title">Selected transport</h2>
-              <div className="spo-transport-panel">
-                <div className="spo-transport-grid">
-                  {Object.entries(selectedTransport.byVendorId || {})
-                    .filter(([, name]) => String(name || '').trim())
-                    .map(([vid, name]) => {
-                      const g = poGroups.find((x) => String(x.vendorId) === String(vid));
-                      const label = g?.vendorName || vid;
-                      const d =
-                        selectedTransport.byVendorCourierDetail &&
-                        typeof selectedTransport.byVendorCourierDetail === 'object'
-                          ? selectedTransport.byVendorCourierDetail[vid]
-                          : null;
-                      const priceLabel = formatQuoteMoney(d?.rate ?? d?.fareValue);
-                      const mode =
-                        d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
-                          ? 'Self ship'
-                          : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
-                          ? 'Trucking'
-                          : 'Courier';
-                      return (
-                        <div key={vid} className="spo-transport-item">
-                          <div>
-                            <strong>{label}</strong> — {mode}: {name}
+          {poGroups.length > 0 ? (
+            <>
+              <section className="spo-section">
+                <h2 className="spo-section-title">Upstream suppliers</h2>
+                <p className="spo-section-desc">
+                  Items are grouped by upstream supplier. Choose transport for each supplier before placing the
+                  order.
+                </p>
+                <div className="po-list">
+                  {poGroups.map((group) => (
+                    <div key={group.vendorId} className="po-card">
+                      <div className="po-header">
+                        <h3>{group.vendorName}</h3>
+                        <div className="po-total">{formatRupee(group.total || 0)}</div>
+                      </div>
+                      <table className="po-table">
+                        <thead>
+                          <tr>
+                            <th>Item</th>
+                            <th>Quantity</th>
+                            <th>Unit price</th>
+                            <th>Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {group.items?.map((item, idx) => {
+                            const specEntries = parseSpecificationsForDisplay(item?.specifications, {
+                              maxEntries: 8
+                            });
+                            const images = Array.isArray(item?.images) ? item.images.filter(Boolean) : [];
+                            return (
+                              <tr key={`${group.vendorId}-${idx}`}>
+                                <td>
+                                  {images.length > 0 ? (
+                                    <div style={{ marginBottom: '0.35rem' }}>
+                                      <ProductImageCarousel
+                                        images={images}
+                                        alt={item.name || 'Product'}
+                                        height={72}
+                                        rounded={8}
+                                      />
+                                    </div>
+                                  ) : null}
+                                  <div>{item.name}</div>
+                                  {specEntries.length > 0 ? (
+                                    <div className="spo-line-specs" style={{ marginTop: '0.4rem' }}>
+                                      {specEntries.map((entry) => (
+                                        <span
+                                          key={`${entry.label}-${entry.value}`}
+                                          className="spo-line-spec-pill"
+                                          title={`${entry.label}: ${entry.value}`}
+                                        >
+                                          <strong>{entry.label}:</strong> {entry.value}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  ) : null}
+                                </td>
+                                <td>
+                                  {item.quantity} {item.unit || ''}
+                                </td>
+                                <td>{formatRupee(item.price || 0)}</td>
+                                <td>{formatRupee((item.quantity || 0) * (item.price || 0))}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                      <div className="po-transport-actions">
+                        {isTransportSelectionReadyForVendor(selectedTransport, group.vendorId) ? (
+                          <div className="po-transport-status">
+                            <span className="po-transport-status__label">Transport selected</span>
+                            {(() => {
+                              const d = getVendorTransportDetail(selectedTransport, group.vendorId);
+                              const priceLabel = formatQuoteMoney(d?.rate ?? d?.fareValue);
+                              const modeLabel =
+                                d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
+                                  ? 'Self ship'
+                                  : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
+                                    ? 'Trucking'
+                                    : 'Courier';
+                              const carrierName =
+                                d?.name || selectedTransport?.byVendorId?.[group.vendorId];
+                              return (
+                                <span className="po-transport-status__detail">
+                                  <span className="po-transport-status__mode">{modeLabel}:</span>
+                                  <span className="po-transport-status__name">{carrierName}</span>
+                                  {priceLabel ? (
+                                    <span className="po-transport-status__price">{priceLabel}</span>
+                                  ) : null}
+                                </span>
+                              );
+                            })()}
                           </div>
-                          {priceLabel ? <div style={{ marginTop: '0.2rem', color: '#4f46e5' }}>{priceLabel}</div> : null}
-                        </div>
-                      );
-                    })}
+                        ) : (
+                          <p className="po-transport-status po-transport-status--pending">
+                            No transport selected for this supplier yet.
+                          </p>
+                        )}
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={() => handleTransportSuggestion(group)}
+                          disabled={placing || profileLoading}
+                        >
+                          Transport suggestion
+                        </button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              </div>
-            </section>
-          ) : null}
+              </section>
 
-          {reviewLines.length > 0 ? (
-            <section className="spo-section">
-              <h2 className="spo-section-title">Order lines</h2>
-              <p className="spo-section-desc">
-                Specifications are used for transport quotes (weight and dimensions). Add weight in product
-                management if courier options look wrong.
-              </p>
-              <div className="spo-table-wrap">
-                <table className="po-table spo-order-lines-table">
-                  <thead>
-                    <tr>
-                      <th>Product</th>
-                      <th>Supplier</th>
-                      <th style={{ textAlign: 'right' }}>Qty</th>
-                      <th style={{ textAlign: 'right' }}>Unit price</th>
-                      <th style={{ textAlign: 'right' }}>Subtotal</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {reviewLines.map((line, idx) => {
-                      const specEntries = parseSpecificationsForDisplay(line?.specifications, {
-                        maxEntries: 14
-                      });
-                      const images = Array.isArray(line?.images) ? line.images.filter(Boolean) : [];
-                      return (
-                        <tr key={`${line.mineSupplierProductId}-${line.upstreamSupplierProductId}-${idx}`}>
-                          <td className="spo-line-product-cell">
-                            <div className="spo-line-product-row">
-                              {images.length > 0 ? (
-                                <div className="spo-line-product-thumb">
-                                  <ProductImageCarousel
-                                    images={images}
-                                    alt={line.productName || 'Product'}
-                                    height={72}
-                                    rounded={8}
-                                  />
-                                </div>
-                              ) : null}
-                              <div className="spo-line-product-text">
-                                <div className="spo-line-product-name">{line.productName || 'Product'}</div>
-                                {line.brandModel ? (
-                                  <div className="spo-line-product-meta">Brand: {line.brandModel}</div>
+              {isTransportSelectionReady(selectedTransport, poGroups) ? (
+                <section className="spo-section">
+                  <div className="po-transport-summary">
+                    <div className="po-transport-summary__title">
+                      Selected transport (review rates, then place order below)
+                    </div>
+                    <div className="po-transport-summary__grid">
+                      {Object.entries(selectedTransport.byVendorId || {})
+                        .filter(([, name]) => String(name || '').trim())
+                        .map(([vid, name]) => {
+                          const g = poGroups.find((x) => String(x.vendorId) === String(vid));
+                          const label = g?.vendorName || vid;
+                          const d =
+                            selectedTransport.byVendorCourierDetail &&
+                            typeof selectedTransport.byVendorCourierDetail === 'object'
+                              ? selectedTransport.byVendorCourierDetail[vid]
+                              : null;
+                          const priceLabel = formatQuoteMoney(d?.rate ?? d?.fareValue);
+                          const modeLabel =
+                            d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
+                              ? 'Self ship'
+                              : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
+                                ? 'Trucking'
+                                : 'Courier';
+                          return (
+                            <div key={vid} className="po-transport-summary-item">
+                              <div className="po-transport-summary-item__vendor">{label}</div>
+                              <div className="po-transport-summary-item__detail">
+                                <span className="po-transport-status__mode">{modeLabel}:</span>
+                                <span className="po-transport-status__name">{name}</span>
+                                {priceLabel ? (
+                                  <span className="po-transport-status__price">{priceLabel}</span>
                                 ) : null}
-                                {line.description ? (
-                                  <div className="spo-line-product-desc">{line.description}</div>
-                                ) : null}
-                                {specEntries.length > 0 ? (
-                                  <div className="spo-line-specs">
-                                    {specEntries.map((entry) => (
-                                      <span
-                                        key={`${entry.label}-${entry.value}`}
-                                        className="spo-line-spec-pill"
-                                        title={`${entry.label}: ${entry.value}`}
-                                      >
-                                        <strong>{entry.label}:</strong> {entry.value}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <div className="spo-line-specs-empty">No specifications on file for this product.</div>
-                                )}
                               </div>
                             </div>
-                          </td>
-                          <td>{line.supplierName || 'Supplier'}</td>
-                          <td style={{ textAlign: 'right' }}>
-                            {Number(line.quantity || 0)} {line.unit || 'units'}
-                          </td>
-                          <td style={{ textAlign: 'right' }}>
-                            {formatRupee(line.unitPrice || 0)}
-                          </td>
-                          <td style={{ textAlign: 'right', fontWeight: 600 }}>
-                            {formatRupee(line.lineTotal || 0)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </section>
+                          );
+                        })}
+                    </div>
+                  </div>
+                </section>
+              ) : null}
+            </>
           ) : null}
 
           <footer className="spo-actions">
@@ -917,25 +997,25 @@ const SupplierPlaceOrder = () => {
             </button>
             <button
               type="button"
-              className="btn-secondary"
-              onClick={handleTransportSuggestion}
-              disabled={placing || profileLoading}
-            >
-              {isTransportSelectionReady(selectedTransport, poGroups) ? 'Change transport' : 'Get transport quotes'}
-            </button>
-            <button
-              type="button"
               className="btn-primary btn-large"
               onClick={handlePlaceOrder}
-              disabled={placing || loadingWalletBalance || !hasSufficientWalletBalance}
+              disabled={
+                placing ||
+                loadingWalletBalance ||
+                !hasSufficientWalletBalance ||
+                poGroups.length === 0 ||
+                !isTransportSelectionReady(selectedTransport, poGroups)
+              }
             >
               {placing
                 ? 'Placing…'
                 : loadingWalletBalance
                   ? 'Checking wallet…'
-                  : hasSufficientWalletBalance
-                    ? 'Place order'
-                    : 'Insufficient wallet balance'}
+                  : !isTransportSelectionReady(selectedTransport, poGroups)
+                    ? 'Select transport for all suppliers'
+                    : !hasSufficientWalletBalance
+                      ? 'Insufficient wallet balance'
+                      : 'Place order'}
             </button>
           </footer>
         </div>

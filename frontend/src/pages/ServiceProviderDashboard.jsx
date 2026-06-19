@@ -61,6 +61,7 @@ const ServiceProviderDashboard = ({ user }) => {
   const [feedback, setFeedback] = useState('');
   const [submittingRating, setSubmittingRating] = useState(false);
   const [notificationsPanelVisible, setNotificationsPanelVisible] = useState(false);
+  const [markingAllNotificationsRead, setMarkingAllNotificationsRead] = useState(false);
   const [dashboardError, setDashboardError] = useState('');
   const navigate = useNavigate();
 
@@ -236,6 +237,28 @@ const ServiceProviderDashboard = ({ user }) => {
       fetchNotifications();
     } catch (error) {
       console.error('[SP Notifications] Failed to mark notification as read:', error);
+    }
+  };
+
+  const markAllNotificationsAsRead = async () => {
+    if (unreadCount < 1 || markingAllNotificationsRead) return;
+    try {
+      setMarkingAllNotificationsRead(true);
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      await fetch(getApiUrl('/api/supplier/notifications/read-all'), {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+      fetchNotifications();
+    } catch (error) {
+      console.error('[SP Notifications] Failed to mark all as read:', error);
+    } finally {
+      setMarkingAllNotificationsRead(false);
     }
   };
 
@@ -880,11 +903,23 @@ const ServiceProviderDashboard = ({ user }) => {
         >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-base font-semibold">Notifications</CardTitle>
-            {unreadCount > 0 ? (
-              <span className="rounded-full bg-destructive px-2 py-0.5 text-xs font-bold text-destructive-foreground">
-                {unreadCount}
-              </span>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {unreadCount > 0 ? (
+                <span className="rounded-full bg-destructive px-2 py-0.5 text-xs font-bold text-destructive-foreground">
+                  {unreadCount}
+                </span>
+              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs"
+                disabled={unreadCount < 1 || markingAllNotificationsRead}
+                onClick={markAllNotificationsAsRead}
+              >
+                {markingAllNotificationsRead ? 'Marking…' : 'Mark all read'}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="p-0">
             <ScrollArea className="h-[min(420px,calc(100vh-12rem))]">
@@ -1198,18 +1233,7 @@ const ServiceProviderDashboard = ({ user }) => {
                       Download Payment Receipt
                     </button>
                   </div>
-                  {orderDetails.createdAt && (
-                    <p><strong>Order Date:</strong> {(() => {
-                      const date = new Date(orderDetails.createdAt);
-                      const day = String(date.getDate()).padStart(2, '0');
-                      const month = String(date.getMonth() + 1).padStart(2, '0');
-                      const year = date.getFullYear();
-                      const hours = String(date.getHours()).padStart(2, '0');
-                      const minutes = String(date.getMinutes()).padStart(2, '0');
-                      const seconds = String(date.getSeconds()).padStart(2, '0');
-                      return `${day}/${month}/${year}, ${hours}:${minutes}:${seconds}`;
-                    })()}</p>
-                  )}
+                    <p><strong>Order Date:</strong> {formatDate(orderDetails.createdAt)}</p>
                   {orderDetails.expectedDeliveryDate && (
                     <p><strong>Expected Delivery:</strong> {formatDateIST(orderDetails.expectedDeliveryDate)}</p>
                   )}

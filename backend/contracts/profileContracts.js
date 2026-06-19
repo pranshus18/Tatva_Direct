@@ -7,7 +7,7 @@ export const profileUpdateSchema = z.object({
   description: z.string().optional(),
   userType: z.enum(['service_provider', 'supplier', 'admin']).optional(),
   address: z.record(z.string(), z.any()).optional(),
-  billingAddresses: z.array(z.record(z.string(), z.any())).optional(),
+  shippingAddresses: z.array(z.record(z.string(), z.any())).optional(),
   projects: z.array(z.record(z.string(), z.any())).optional(),
   businessType: z.string().optional(),
   categories: z.array(z.string()).optional(),
@@ -25,6 +25,26 @@ export const profileUpdateSchema = z.object({
   saveBrandApprovalOnly: z.boolean().optional(),
   saveSupplyChainEntryId: z.string().optional()
 });
+
+const profileShippingAddressFieldsSchema = z.object({
+  label: z.string().max(120).optional().nullable(),
+  line1: z.string().min(1),
+  city: z.string().min(1),
+  state: z.string().min(1),
+  pincode: z.string().min(1),
+  country: z.string().min(1),
+  latitude: z.number().optional().nullable(),
+  longitude: z.number().optional().nullable(),
+  geoLocation: z
+    .object({
+      lat: z.number(),
+      lng: z.number()
+    })
+    .optional()
+    .nullable()
+});
+
+export const profileShippingAddressCreateSchema = profileShippingAddressFieldsSchema;
 
 export const profileUploadCertificateBodySchema = z.object({
   entryId: z.string().optional(),

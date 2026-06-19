@@ -9,6 +9,7 @@ import {
   isSameIndianState,
   sumGstLines
 } from './gstService.js';
+import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
 
 const PDFDocument = PDFKit?.default || PDFKit;
 const BRAND_BLUE = '#5b4fe5';
@@ -165,7 +166,7 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       doc.fontSize(10.2).font('Helvetica').fillColor(BODY);
       doc.text(`Receipt: ${safeString(receipt?.receipt_number)}`);
       doc.text(`Order: ${safeString(order?.order_number)}`);
-      doc.text(`Paid At: ${receipt?.paid_at ? new Date(receipt.paid_at).toLocaleString('en-IN') : new Date().toLocaleString('en-IN')}`);
+      doc.text(`Paid At: ${receipt?.paid_at ? formatPlatformDateTime(receipt.paid_at) : formatPlatformDateTime(new Date())}`);
       doc.fillColor('#000000');
 
       section('Supplier Information');
@@ -329,14 +330,14 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       doc.text(`Status: ${safeString(order?.status || '-')}`);
       doc.text(`Payment Status: ${safeString(order?.payment_status || '-')}`);
       doc.text(`Payment Method: ${safeString(order?.payment_method || '-')}`);
-      doc.text(`Order Date: ${order?.created_at ? new Date(order.created_at).toLocaleString('en-IN') : '-'}`);
+      doc.text(`Order Date: ${order?.created_at ? formatPlatformDateTime(order.created_at, '-') : '-'}`);
       doc.text(
         `Expected Delivery: ${
-          order?.expected_delivery_date ? new Date(order.expected_delivery_date).toLocaleDateString('en-IN') : '-'
+          order?.expected_delivery_date ? formatPlatformDate(order.expected_delivery_date, '-') : '-'
         }`
       );
       doc.text(
-        `Actual Delivery: ${order?.actual_delivery_date ? new Date(order.actual_delivery_date).toLocaleDateString('en-IN') : '-'}`
+        `Actual Delivery: ${order?.actual_delivery_date ? formatPlatformDate(order.actual_delivery_date, '-') : '-'}`
       );
 
       doc.moveDown(1.2);

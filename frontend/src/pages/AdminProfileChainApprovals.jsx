@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
 import { CheckCircle, Clock, ExternalLink, FileText, RefreshCw, User, XCircle } from 'lucide-react';
 import { certificateLabelFromUrl } from '../utils/authorizationCertificateUrls';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './AdminDashboard.css';
 import './AdminProfileChainApprovals.css';
 
@@ -244,7 +245,7 @@ const AdminProfileChainApprovals = () => {
 
                       <section className="admin-chain-brand-card__cell" data-label="Submitted">
                         <span className="admin-chain-submitted-cell">
-                          {item.submittedAt ? new Date(item.submittedAt).toLocaleString() : '—'}
+                          {item.submittedAt ? formatDateTimeIST(item.submittedAt, '—') : '—'}
                         </span>
                       </section>
 

@@ -5,6 +5,7 @@ import { generateAndAttachReceiptPdf } from './receiptPdfService.js';
 import { insertNotification as insertNotificationRecord } from '../repositories/notificationsRepository.js';
 import { findReceiptByOrderId, insertPaymentReceipt } from '../repositories/paymentReceiptsRepository.js';
 import { findUserBasicById } from '../repositories/usersRepository.js';
+import { formatPlatformDateTime } from '../utils/dateTime.js';
 
 function formatINR(amount) {
   const n = Number(amount || 0);
@@ -23,7 +24,7 @@ function buildReceiptEmail({ receipt, order, supplier, serviceProvider }) {
     `Amount: ${amountStr} ${receipt.currency || 'INR'}`,
     `Payment Method: ${receipt.payment_method || 'N/A'}`,
     `Payment Reference: ${receipt.payment_reference || 'N/A'}`,
-    `Paid At: ${new Date(receipt.paid_at).toLocaleString('en-IN')}`,
+    `Paid At: ${formatPlatformDateTime(receipt.paid_at)}`,
     ``,
     `Service Provider: ${serviceProvider?.name || serviceProvider?.company || 'N/A'} (${serviceProvider?.email || 'N/A'})`,
     `Supplier: ${supplier?.name || supplier?.company || 'N/A'} (${supplier?.email || 'N/A'})`,
@@ -40,7 +41,7 @@ function buildReceiptEmail({ receipt, order, supplier, serviceProvider }) {
         <tr><td><strong>Amount</strong></td><td>${amountStr} ${receipt.currency || 'INR'}</td></tr>
         <tr><td><strong>Payment Method</strong></td><td>${receipt.payment_method || 'N/A'}</td></tr>
         <tr><td><strong>Payment Reference</strong></td><td>${receipt.payment_reference || 'N/A'}</td></tr>
-        <tr><td><strong>Paid At</strong></td><td>${new Date(receipt.paid_at).toLocaleString('en-IN')}</td></tr>
+        <tr><td><strong>Paid At</strong></td><td>${formatPlatformDateTime(receipt.paid_at)}</td></tr>
       </table>
       <hr style="margin:16px 0;"/>
       <p style="margin:0;"><strong>Service Provider:</strong> ${serviceProvider?.name || serviceProvider?.company || 'N/A'} (${serviceProvider?.email || 'N/A'})</p>

@@ -41,6 +41,7 @@ export { default as logger } from '../../utils/logger.js';
 export {
   poCancelSchema,
   poCartSaveSchema,
+  poCartTransportPatchSchema,
   poCreateRequestSchema,
   poGroupRequestSchema,
   poRatingSchema,

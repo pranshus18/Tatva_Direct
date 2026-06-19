@@ -758,6 +758,16 @@
   margin-bottom: 1rem;
 }
 
+.sc-fee-brand-select {
+  min-width: 240px;
+  max-width: 320px;
+}
+
+.sc-fee-brand-select .sc-field,
+.sc-fee-brand-select .sc-section-label {
+  margin-bottom: 0.4rem;
+}
+
 .sc-fee-scope__buttons {
   display: inline-flex;
   background: #f8fafc;
@@ -786,6 +796,37 @@
   align-items: flex-end;
   font-size: 0.82rem;
   color: #64748b;
+}
+
+.sc-fee-brand-hint {
+  margin-bottom: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.sc-fee-brand-hint strong {
+  font-weight: 800;
+}
+
+.sc-fee-brand-hint--info {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+}
+
+.sc-fee-brand-hint--success {
+  background: #f0fdf4;
+  border-color: #86efac;
+  color: #166534;
+}
+
+.sc-fee-brand-hint--warning {
+  background: #fffbeb;
+  border-color: #fcd34d;
+  color: #92400e;
 }
 
 .sc-fee-grid {

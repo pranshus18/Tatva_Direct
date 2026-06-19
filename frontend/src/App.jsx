@@ -613,6 +613,7 @@ function App() {
                   selectedVendors={selectedVendors}
                   substitutions={substitutions}
                   boqId={boqId}
+                  boqProject={boqProject}
                   items={normalizedItems}
                 />
               </ServiceProviderRoute>

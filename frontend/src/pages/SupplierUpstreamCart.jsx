@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
 import './Dashboard.css';
 import './SupplierUpstreamCart.css';
-import { Check, Clipboard, Mail, MessageCircle, Pencil, Share2 } from 'lucide-react';
+import { Check, Clipboard, Mail, MessageCircle, Pencil, Share2, Trash2 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpStatCard from '../components/sp/SpStatCard';
@@ -41,6 +41,7 @@ const SupplierUpstreamCart = () => {
   const [products, setProducts] = useState([]);
   const [editingProjectId, setEditingProjectId] = useState('');
   const [projectNameDraft, setProjectNameDraft] = useState('');
+  const [projectDateDraft, setProjectDateDraft] = useState('');
   const [savingProjectName, setSavingProjectName] = useState(false);
   const [sharingCart, setSharingCart] = useState(false);
   const [shareLink, setShareLink] = useState('');
@@ -141,6 +142,7 @@ const SupplierUpstreamCart = () => {
         body: JSON.stringify({
           projectId: project.projectId,
           cartName: String(project.cartName || '').trim(),
+          requiredDate: String(project.requiredDate || '').trim(),
           selectedMine: project.selectedMine || {},
           selectedUpstreamOffer: project.selectedUpstreamOffer || {},
           suggestions: Array.isArray(project.suggestions) ? project.suggestions : [],
@@ -244,6 +246,7 @@ const SupplierUpstreamCart = () => {
 
   const saveProjectName = async (projectId) => {
     const cartName = String(projectNameDraft || '').trim();
+    const requiredDate = String(projectDateDraft || '').trim();
     if (!cartName) {
       setError('Project name cannot be empty.');
       return;
@@ -258,7 +261,7 @@ const SupplierUpstreamCart = () => {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ projectId, cartName })
+        body: JSON.stringify({ projectId, cartName, requiredDate })
       });
       const data = await res.json();
       if (!res.ok || data.status !== 'success') {
@@ -266,10 +269,11 @@ const SupplierUpstreamCart = () => {
       }
       const current = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
       if (current) {
-        replaceProjectInState(projectId, { ...current, cartName });
+        replaceProjectInState(projectId, { ...current, cartName, requiredDate });
       }
       setEditingProjectId('');
       setProjectNameDraft('');
+      setProjectDateDraft('');
       emitSupplierCartUpdated();
     } catch (e) {
       setError(e.message || 'Failed to update project name');
@@ -449,6 +453,12 @@ const SupplierUpstreamCart = () => {
                               onChange={(e) => setProjectNameDraft(e.target.value)}
                               className="supplier-project-name-input"
                             />
+                            <input
+                              type="date"
+                              value={projectDateDraft}
+                              onChange={(e) => setProjectDateDraft(e.target.value)}
+                              className="supplier-project-name-input"
+                            />
                             <button className="btn-primary" disabled={savingProjectName} onClick={() => saveProjectName(projectId)}>
                               {savingProjectName ? 'Saving...' : 'Save'}
                             </button>
@@ -465,6 +475,7 @@ const SupplierUpstreamCart = () => {
                               onClick={() => {
                                 setEditingProjectId(projectId);
                                 setProjectNameDraft(String(project?.cartName || ''));
+                                setProjectDateDraft(String(project?.requiredDate || '').slice(0, 10));
                               }}
                               aria-label="Edit project name"
                             >
@@ -473,6 +484,11 @@ const SupplierUpstreamCart = () => {
                           </h3>
                         )}
                         <p className="supplier-project-id">Project ID: {projectId}</p>
+                        {String(project?.requiredDate || '').trim() ? (
+                          <p className="supplier-project-id">
+                            <strong>Expected delivery: {String(project.requiredDate).slice(0, 10)}</strong>
+                          </p>
+                        ) : null}
                       </div>
                       <button className="btn-primary" disabled={rows.length === 0} onClick={() => continueToUpstream(project)}>
                         Continue this project
@@ -490,7 +506,6 @@ const SupplierUpstreamCart = () => {
                             <th>Min Order</th>
                             <th>Quantity</th>
                             <th>Total Price</th>
-                            <th>Action</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -501,6 +516,7 @@ const SupplierUpstreamCart = () => {
                             const offerPrice = Number(project?.selectedUpstreamOffer?.[mineId]?.price || 0) || 0;
                             const productPrice = Number(p?.price || p?.unitPrice || p?.sellingPrice || 0) || 0;
                             const unitPrice = offerPrice || productPrice;
+                            const quantity = Number(row.quantity || 0);
                             return (
                               <tr key={`${projectId}-${mineId}`}>
                                 <td className="supplier-cart-product-cell">
@@ -518,29 +534,38 @@ const SupplierUpstreamCart = () => {
                                 <td>{p?.stock ?? 0}</td>
                                 <td>{minQty}</td>
                                 <td>
-                                  <input
-                                    type="number"
-                                    min={minQty}
-                                    step={1}
-                                    inputMode="numeric"
-                                    value={row.quantity}
-                                    onChange={(e) => updateQuantity(projectId, mineId, e.target.value)}
-                                    className="supplier-cart-qty-input"
-                                  />
+                                  <div className="supplier-cart-qty-control">
+                                    <button
+                                      type="button"
+                                      className="btn-secondary supplier-cart-qty-btn"
+                                      onClick={() =>
+                                        quantity <= 1
+                                          ? removeLine(projectId, mineId)
+                                          : updateQuantity(projectId, mineId, quantity - 1)
+                                      }
+                                      aria-label={quantity <= 1 ? 'Remove item' : 'Decrease quantity'}
+                                    >
+                                      {quantity <= 1 ? <Trash2 size={14} /> : '−'}
+                                    </button>
+                                    <span className="supplier-cart-qty-value">{quantity}</span>
+                                    <button
+                                      type="button"
+                                      className="btn-secondary supplier-cart-qty-btn"
+                                      onClick={() => updateQuantity(projectId, mineId, quantity + 1)}
+                                      aria-label="Increase quantity"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
                                 </td>
                                 <td className="supplier-cart-number-cell">{formatRupee(unitPrice * Number(row.quantity || 0))}</td>
-                                <td>
-                                  <button className="btn-secondary" onClick={() => removeLine(projectId, mineId)}>
-                                    Remove
-                                  </button>
-                                </td>
                               </tr>
                             );
                           })}
                         </tbody>
                         <tfoot>
                           <tr>
-                            <td colSpan={5} className="supplier-cart-summary-label">
+                            <td colSpan={4} className="supplier-cart-summary-label">
                               Project totals
                             </td>
                             <td className="supplier-cart-summary-value">{totalQuantity}</td>

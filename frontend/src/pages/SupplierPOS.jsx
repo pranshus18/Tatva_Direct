@@ -33,6 +33,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
+import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import {
   cacheBarcodeLookup,
   clearSyncedPosOrders,
@@ -614,7 +615,7 @@ const SupplierPOS = () => {
         <h2>${title}</h2>
         <div class="muted">
           ${numberLine}<br/>
-          Date: ${new Date(receiptData.createdAt || Date.now()).toLocaleString()}<br/>
+          Date: ${formatDateTimeIST(receiptData.createdAt || Date.now())}<br/>
           Customer: ${(receiptData.customerName || 'Walk-in')} ${receiptData.customerPhone ? `(${receiptData.customerPhone})` : ''}<br/>
           Payment: ${(receiptData.payment?.method || 'cash')}
         </div>
@@ -668,13 +669,7 @@ const SupplierPOS = () => {
   const customerLabel = trimmedCustomerName || '—';
   const canCheckout =
     cartItems.length > 0 && selectedLocationId && !checkingOut && trimmedCustomerName.length > 0;
-  const receiptTime = registerClock.toLocaleString('en-IN', {
-    day: '2-digit',
-    month: 'short',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  });
+  const receiptTime = formatDateTimeIST(registerClock);
 
   return (
     <div className="supplier-pos-page">
@@ -980,7 +975,7 @@ const SupplierPOS = () => {
                       <div>
                         <div className="pos-recent-sale__id">{o.order_number || o.id}</div>
                         <div className="pos-recent-sale__time">
-                          {o.created_at && new Date(o.created_at).toLocaleString('en-IN')}
+                          {o.created_at && formatDateTimeIST(o.created_at, '—')}
                         </div>
                         {o.invoicePdfUrl ? (
                           <a
@@ -1093,7 +1088,7 @@ const SupplierPOS = () => {
                       {creditInfo.cycleDueAt ? (
                         <>
                           {' '}
-                          · Due {new Date(creditInfo.cycleDueAt).toLocaleDateString('en-IN')}
+                          · Due {formatDateIST(creditInfo.cycleDueAt, '—')}
                           {creditInfo.cycleIsOverdue ? ' (overdue — settle full amount)' : ''}
                         </>
                       ) : null}

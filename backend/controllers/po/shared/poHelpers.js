@@ -109,9 +109,11 @@ export function isDiscoveryBoqGroup(group) {
  * Quantity is exactly what the user asked on this add — not merged into prior lines.
  * @returns {{ boqGroups: object[], groupId: string }}
  */
-export function appendDiscoveryItemAsNewProject(boqGroups, item, productName) {
+export function appendDiscoveryItemAsNewProject(boqGroups, item, productName, options = {}) {
   const groups = Array.isArray(boqGroups) ? [...boqGroups] : [];
-  const label = String(productName || item?.name || 'Product').trim() || 'Product';
+  const preferredProjectName = String(options?.projectName || '').trim();
+  const label = preferredProjectName || String(productName || item?.name || 'Product').trim() || 'Product';
+  const expectedDeliveryDate = String(options?.expectedDeliveryDate || '').trim() || null;
   const qty = Math.min(
     MAX_CART_ITEM_QUANTITY,
     Math.max(1, Math.floor(Number(item?.quantity) || 1))
@@ -121,8 +123,17 @@ export function appendDiscoveryItemAsNewProject(boqGroups, item, productName) {
     groupId: resultGroupId,
     createdAt: new Date().toISOString(),
     boqId: null,
-    boqName: `Discovery - ${label}`,
-    boqProject: { source: 'product_discovery' },
+    boqName: label,
+    boqProject: {
+      source: 'product_discovery',
+      ...(expectedDeliveryDate ? { requiredDate: expectedDeliveryDate } : {}),
+      ...(options.shippingAddressId ? { shippingAddressId: String(options.shippingAddressId) } : {}),
+      ...(options.shippingAddress && typeof options.shippingAddress === 'object'
+        ? { shippingAddress: options.shippingAddress }
+        : {}),
+      ...(options.location ? { location: String(options.location) } : {}),
+      ...(options.siteGeo && typeof options.siteGeo === 'object' ? { siteGeo: options.siteGeo } : {})
+    },
     selectedVendors: {},
     substitutions: [],
     items: [{ ...item, quantity: qty }]
@@ -150,7 +161,8 @@ export function normalizePoCartDraft(raw) {
       billingAddress: null,
       gstin: null,
       poGroups: [],
-      grandTotalAllPos: null
+      grandTotalAllPos: null,
+      transportSelection: null
     };
   }
   const hasGroups = Array.isArray(raw.boqGroups) && raw.boqGroups.length > 0;
@@ -232,8 +244,55 @@ export function buildPoCartDraftFromSavePayload(payload) {
     billingAddress: payload.billingAddress ?? null,
     gstin: payload.gstin ?? null,
     poGroups: Array.isArray(payload.poGroups) ? payload.poGroups : [],
-    grandTotalAllPos: payload.grandTotalAllPos ?? null
+    grandTotalAllPos: payload.grandTotalAllPos ?? null,
+    transportSelection:
+      payload.transportSelection && typeof payload.transportSelection === 'object'
+        ? payload.transportSelection
+        : null
   };
+}
+
+function normalizeVendorKeyRecord(record) {
+  if (!record || typeof record !== 'object') return {};
+  return Object.fromEntries(Object.entries(record).map(([key, value]) => [String(key), value]));
+}
+
+/** Keep prior supplier transport picks when saving one supplier at a time. */
+export function mergeTransportSelection(existing, incoming, vendorIds = null) {
+  const existingBy = normalizeVendorKeyRecord(existing?.byVendorId);
+  const existingDet = normalizeVendorKeyRecord(existing?.byVendorCourierDetail);
+  const incBy = normalizeVendorKeyRecord(incoming?.byVendorId);
+  const incDet = normalizeVendorKeyRecord(incoming?.byVendorCourierDetail);
+
+  const explicitIds = Array.isArray(vendorIds)
+    ? vendorIds.map((id) => String(id || '').trim()).filter(Boolean)
+    : [];
+  const ids =
+    explicitIds.length > 0
+      ? explicitIds
+      : [...new Set([...Object.keys(existingBy), ...Object.keys(incBy)])];
+
+  const next = {
+    ...(existing && typeof existing === 'object' ? existing : {}),
+    ...(incoming && typeof incoming === 'object' ? incoming : {}),
+    byVendorId: { ...existingBy },
+    byVendorCourierDetail: { ...existingDet }
+  };
+
+  for (const id of ids) {
+    if (incBy[id] != null && String(incBy[id]).trim()) {
+      next.byVendorId[id] = incBy[id];
+    }
+    if (incDet[id]) {
+      next.byVendorCourierDetail[id] = incDet[id];
+    }
+  }
+
+  if (incoming?.transportNotes) next.transportNotes = incoming.transportNotes;
+  if (incoming?.trackingNumber) next.trackingNumber = incoming.trackingNumber;
+  if (incoming?.trackingUrl) next.trackingUrl = incoming.trackingUrl;
+
+  return next;
 }
 
 export function isOrderNumberConflictError(error) {

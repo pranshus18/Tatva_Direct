@@ -268,8 +268,8 @@ export function createVoiceToolContext(token, memory) {
       if (!result.ok) return voiceText(memory, 'tools.profileLoadFailed', { error: result.error });
       const user = result.data?.user || result.data;
       return JSON.stringify({
-        address: user.address,
-        billingAddresses: user.profile?.billingAddresses
+        address: user.address || result.data?.profile?.address,
+        shippingAddresses: result.data?.profile?.shippingAddresses || []
       });
     },
 

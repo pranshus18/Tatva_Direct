@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Wallet, Users, Smartphone } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import { formatDateIST } from '../utils/dateTime';
 import './Profile.css';
 
 const WARN_UTILIZATION = 0.8;
@@ -494,7 +495,7 @@ export default function SupplierCreditAccounts() {
                         <td style={td}>
                           {acc?.cycleDueAt ? (
                             <span style={{ color: acc.cycleIsOverdue ? '#b91c1c' : '#334155' }}>
-                              {new Date(acc.cycleDueAt).toLocaleDateString('en-IN')}
+                              {formatDateIST(acc.cycleDueAt, '—')}
                               {acc.cycleIsOverdue ? ' (overdue)' : ` (${acc.cycleDaysRemaining ?? 0}d left)`}
                             </span>
                           ) : (
@@ -606,7 +607,7 @@ function CreditTable({ rows, drafts, savingKey, onDraft, onSave, onSettle, idKey
               <td style={td}>
                 {row.cycleDueAt ? (
                   <span style={{ fontSize: '0.85rem', color: row.cycleIsOverdue ? '#b91c1c' : '#334155' }}>
-                    {new Date(row.cycleDueAt).toLocaleDateString('en-IN')}
+                    {formatDateIST(row.cycleDueAt, '—')}
                     {row.cycleIsOverdue ? ' (overdue)' : ''}
                   </span>
                 ) : (

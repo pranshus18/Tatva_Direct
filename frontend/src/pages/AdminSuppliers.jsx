@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
 import ProductDetailModal from '../components/ProductDetailModal';
+import { formatDateIST } from '../utils/dateTime';
 import './AdminDashboard.css';
 
 const AdminSuppliers = ({ user }) => {
@@ -348,7 +349,7 @@ const AdminSuppliers = ({ user }) => {
                                       </div>
                                       {order.createdAt && (
                                         <div className="order-date">
-                                          <strong>Date:</strong> {new Date(order.createdAt).toLocaleDateString()}
+                                          <strong>Date:</strong> {formatDateIST(order.createdAt, '—')}
                                         </div>
                                       )}
                                     </div>
@@ -401,7 +402,7 @@ const AdminSuppliers = ({ user }) => {
                                       )}
                                       <div className="order-date">
                                         <strong>Rated On:</strong>{' '}
-                                        {r.createdAt ? new Date(r.createdAt).toLocaleDateString() : 'N/A'}
+                                        {r.createdAt ? formatDateIST(r.createdAt, 'N/A') : 'N/A'}
                                       </div>
                                       {r.feedback && (
                                         <div style={{ marginTop: '0.5rem', color: '#4b5563', fontSize: '0.9rem' }}>

@@ -143,11 +143,17 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       ''
     ).trim();
     const hasGstin = Boolean(profileGstin);
+    const storedShippingAddresses = Array.isArray(serviceProvider?.profile?.shippingAddresses)
+      ? serviceProvider.profile.shippingAddresses
+      : [];
+    const profileShippingFallback = storedShippingAddresses
+      .map((entry) => normalizeAddress(entry || {}))
+      .find((entry) => isAddressComplete(entry));
     const shippingAddress = isAddressComplete(requestedShippingAddress)
       ? requestedShippingAddress
-      : profileAddress;
+      : profileShippingFallback || profileAddress;
     const billingAddress = hasGstin
-      ? (isAddressComplete(requestedBillingAddress) ? requestedBillingAddress : shippingAddress)
+      ? (isAddressComplete(requestedBillingAddress) ? requestedBillingAddress : profileAddress)
       : shippingAddress;
     const deliveryDestination = hasGstin && rawDeliveryDestination === 'billing'
       ? 'billing'
@@ -431,13 +437,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       }
       const selectedCreditPeriodDays = Math.max(
         1,
-        Math.floor(
-          Number(
-            paymentDetails?.creditPeriod ||
-              creditCheck?.creditPeriodDays ||
-              30
-          ) || 30
-        )
+        Math.floor(Number(creditCheck?.creditPeriodDays || 30) || 30)
       );
       const settlementDueAt =
         poPaymentMethod === 'credit'
@@ -561,8 +561,9 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
                       availableCreditAtOrderTime: Number(creditCheck?.available || 0)
                     }
                   }
-                : {}),
-              ...(paymentDetails ? { paymentDetails } : {})
+                : paymentDetails
+                  ? { paymentDetails }
+                  : {}),
             },
             channel: 'b2b_po',
             outlet_id: null,

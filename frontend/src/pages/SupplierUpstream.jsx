@@ -20,9 +20,19 @@ import SupplierProductDetailsModal from '../components/SupplierProductDetailsMod
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { formatRupee } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
+import { formatDateIST } from '../utils/dateTime';
 import { normalizeSupplierProductsFromApi } from '../utils/supplierProductRow';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
@@ -114,6 +124,12 @@ const SupplierUpstream = ({ user }) => {
   const [creating, setCreating] = useState(false);
   const [savingCart, setSavingCart] = useState(false);
   const [addingCartByMineId, setAddingCartByMineId] = useState({});
+  const [cartProjects, setCartProjects] = useState([]);
+  const [addCartDialogOpen, setAddCartDialogOpen] = useState(false);
+  const [pendingCartProduct, setPendingCartProduct] = useState(null);
+  const [targetCartProjectId, setTargetCartProjectId] = useState('__new__');
+  const [newCartProjectName, setNewCartProjectName] = useState('');
+  const [newCartRequiredDate, setNewCartRequiredDate] = useState('');
 
   const [supplierDetailsOpen, setSupplierDetailsOpen] = useState(false);
   const [supplierDetails, setSupplierDetails] = useState(null);
@@ -459,12 +475,59 @@ const SupplierUpstream = ({ user }) => {
     }
   };
 
-  const handleAddSingleProductToCart = async (product) => {
+  const loadSupplierCartProjects = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return [];
+      const res = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
+        return [];
+      }
+      const projects = Array.isArray(data?.cart?.draft?.projects) ? data.cart.draft.projects : [];
+      const normalized = projects
+        .filter((project) => String(project?.projectId || '').trim())
+        .map((project) => ({
+          projectId: String(project.projectId),
+          cartName: String(project?.cartName || '').trim() || 'Supplier Project',
+          requiredDate: String(project?.requiredDate || '').trim().slice(0, 10)
+        }));
+      setCartProjects(normalized);
+      return normalized;
+    } catch {
+      return [];
+    }
+  };
+
+  const openAddToCartDialog = async (product) => {
+    const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
+    if (!mineId) return;
+    const projects = await loadSupplierCartProjects();
+    setPendingCartProduct(product);
+    setTargetCartProjectId(projects[0]?.projectId || '__new__');
+    setNewCartProjectName(String(product?.name || '').trim() || 'Supplier Project');
+    setNewCartRequiredDate('');
+    setAddCartDialogOpen(true);
+  };
+
+  const handleAddSingleProductToCart = async () => {
+    const product = pendingCartProduct;
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
     const parsedQty = parseSupplierStockQuantity(selectedMine?.[mineId]);
     const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
+    const isNewProject = targetCartProjectId === '__new__';
+    if (isNewProject && !newCartProjectName.trim()) {
+      alert('Please enter project name for new supplier project.');
+      return;
+    }
+    if (isNewProject && !newCartRequiredDate) {
+      alert('Please select expected delivery date for new supplier project.');
+      return;
+    }
 
     setAddingCartByMineId((prev) => ({ ...prev, [mineId]: true }));
     let ok = false;
@@ -476,7 +539,10 @@ const SupplierUpstream = ({ user }) => {
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
           mineSupplierProductId: mineId,
-          quantity: nextQty
+          quantity: nextQty,
+          ...(isNewProject
+            ? { cartName: newCartProjectName.trim(), requiredDate: newCartRequiredDate }
+            : { projectId: targetCartProjectId })
         })
       });
       const data = await res.json();
@@ -498,6 +564,8 @@ const SupplierUpstream = ({ user }) => {
       return;
     }
 
+    setAddCartDialogOpen(false);
+    setPendingCartProduct(null);
     emitSupplierCartUpdated();
     alert(responseMessage || 'Product added to cart.');
   };
@@ -749,7 +817,7 @@ const SupplierUpstream = ({ user }) => {
                         <button
                           type="button"
                           className="btn-secondary us-product-row__cart-btn"
-                          onClick={() => handleAddSingleProductToCart(p)}
+                          onClick={() => openAddToCartDialog(p)}
                           disabled={isAddingToCart}
                         >
                           {isAddingToCart ? 'Adding…' : 'Add to cart'}
@@ -1067,6 +1135,74 @@ const SupplierUpstream = ({ user }) => {
       {viewingProduct ? (
         <SupplierProductDetailsModal product={viewingProduct} onClose={() => setViewingProduct(null)} />
       ) : null}
+      <Dialog open={addCartDialogOpen} onOpenChange={setAddCartDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Select supplier project</DialogTitle>
+            <DialogDescription>
+              Choose an existing project or create a new one for this cart item.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Project</label>
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={targetCartProjectId}
+                onChange={(event) => {
+                  const nextProjectId = event.target.value;
+                  setTargetCartProjectId(nextProjectId);
+                  if (nextProjectId !== '__new__') {
+                    setNewCartRequiredDate('');
+                  }
+                }}
+              >
+                {cartProjects.map((project) => (
+                  <option key={project.projectId} value={project.projectId}>
+                    {project.cartName}
+                  </option>
+                ))}
+                <option value="__new__">+ Create new project</option>
+              </select>
+            </div>
+            {targetCartProjectId === '__new__' ? (
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Project name</label>
+                  <Input
+                    maxLength={120}
+                    value={newCartProjectName}
+                    onChange={(event) => setNewCartProjectName(event.target.value)}
+                    placeholder="e.g. July restock"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Expected delivery date</label>
+                  <Input
+                    type="date"
+                    value={newCartRequiredDate}
+                    onChange={(event) => setNewCartRequiredDate(event.target.value)}
+                  />
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Expected delivery date for this project:{' '}
+                {(() => {
+                  const requiredDate = cartProjects.find((project) => project.projectId === targetCartProjectId)?.requiredDate;
+                  return requiredDate ? formatDateIST(requiredDate, '—') : 'Not set';
+                })()}
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddCartDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={handleAddSingleProductToCart}>Add to cart</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       </div>
     </SpPageLayout>
   );

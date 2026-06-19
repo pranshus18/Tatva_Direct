@@ -14,10 +14,9 @@ import {
 import { buildAdminReviewChainPayload } from '../../../services/supplierChainAdminService.js';
 import { insertNotifications } from '../../../repositories/notificationsRepository.js';
 import { findAdmins } from '../../../repositories/usersRepository.js';
-import { profileUpdateSchema } from '../../../contracts/profileContracts.js';
+import { profileUpdateSchema, profileShippingAddressCreateSchema } from '../../../contracts/profileContracts.js';
 import {
-  isSupplierBranchAddressComplete,
-  primaryBranchToUsersAddress
+  isSupplierBranchAddressComplete
 } from '../../../services/upstreamOrderInputService.js';
 import { getContractErrorMessage, parseWithSchema } from '../../../utils/contractValidation.js';
 import {
@@ -28,10 +27,15 @@ import {
 } from '../../../utils/supplierChainEntryValidation.js';
 import {
   createProfileResponse,
+  deriveShippingAddressesFromProfile,
   ensureBrandApprovedOrRequest,
+  formatShippingAddressDisplayName,
+  normalizeShippingAddressEntry,
   parseBrandTokens,
-  resolveChainRoleOptionsForBrands
+  resolveChainRoleOptionsForBrands,
+  validateShippingAddressEntries
 } from '../profileHelpers.js';
+import { isAddressComplete, normalizeAddress } from '../../po/shared/poHelpers.js';
 
 export function registerProfileUpdateRoutes(router) {
   router.put('/', authenticateToken, async (req, res) => {
@@ -56,8 +60,8 @@ export function registerProfileUpdateRoutes(router) {
         phone: profileData.phone
       };
 
-      // Suppliers sync users.address from profile.branches (see supplier block below).
-      if (profileData.address && profileData.userType !== 'supplier') {
+      // Service providers persist billing in users.address; suppliers in supplier block below.
+      if (profileData.address && profileData.userType === 'service_provider') {
         updateData.address = {
           ...(currentUser.address || {}),
           ...profileData.address
@@ -95,27 +99,26 @@ export function registerProfileUpdateRoutes(router) {
         }
 
         updateData.address = mergedAddress;
-        const billingAddresses = Array.isArray(profileData.billingAddresses)
-          ? profileData.billingAddresses.map((entry) => ({
-              ...entry,
-              id: entry.id || uuidv4()
-            }))
+        const shippingAddresses = Array.isArray(profileData.shippingAddresses)
+          ? profileData.shippingAddresses.map((entry) =>
+              normalizeShippingAddressEntry({
+                ...entry,
+                id: entry.id || uuidv4()
+              })
+            )
           : [];
-        const requiredBillingFields = ['line1', 'city', 'state', 'pincode', 'country'];
-        for (let i = 0; i < billingAddresses.length; i += 1) {
-          const entry = billingAddresses[i] || {};
-          const missingBillingField = requiredBillingFields.find(
-            (field) => !String(entry?.[field] || '').trim()
-          );
-          if (missingBillingField) {
-            return res.status(400).json({
-              status: 'error',
-              code: 'service_provider_billing_address_incomplete',
-              message: `Billing address ${i + 1} is missing required field "${missingBillingField}".`
-            });
-          }
+        const shippingValidation = validateShippingAddressEntries(shippingAddresses, {
+          userType: 'service_provider'
+        });
+        if (!shippingValidation.ok) {
+          return res.status(400).json({
+            status: 'error',
+            code: shippingValidation.code,
+            message: shippingValidation.message
+          });
         }
-        profileUpdate.billingAddresses = billingAddresses;
+        profileUpdate.shippingAddresses = shippingAddresses;
+        delete profileUpdate.billingAddresses;
         delete profileUpdate.gstin;
         delete profileUpdate.panNumber;
         const projects = (profileData.projects || []).map((project) => ({
@@ -153,29 +156,24 @@ export function registerProfileUpdateRoutes(router) {
           }
         }
         profileUpdate.branches = branches;
-        updateData.address = primaryBranchToUsersAddress(branches);
 
-        const billingAddresses = Array.isArray(profileData.billingAddresses)
-          ? profileData.billingAddresses.map((entry) => ({
-              ...entry,
-              id: entry.id || uuidv4()
-            }))
-          : [];
+        const mergedBillingAddress = {
+          ...(currentUser.address || {}),
+          ...(profileData.address || {})
+        };
         const requiredBillingFields = ['line1', 'city', 'state', 'pincode', 'country'];
-        for (let i = 0; i < billingAddresses.length; i += 1) {
-          const entry = billingAddresses[i] || {};
-          const missingBillingField = requiredBillingFields.find(
-            (field) => !String(entry?.[field] || '').trim()
-          );
-          if (missingBillingField) {
-            return res.status(400).json({
-              status: 'error',
-              code: 'supplier_billing_address_incomplete',
-              message: `Billing address ${i + 1} is missing required field "${missingBillingField}".`
-            });
-          }
+        const missingBillingField = requiredBillingFields.find(
+          (field) => !String(mergedBillingAddress?.[field] || '').trim()
+        );
+        if (missingBillingField) {
+          return res.status(400).json({
+            status: 'error',
+            code: 'supplier_billing_address_required',
+            message: `Registered billing address field "${missingBillingField}" is required.`
+          });
         }
-        profileUpdate.billingAddresses = billingAddresses;
+        updateData.address = mergedBillingAddress;
+        delete profileUpdate.billingAddresses;
 
         profileUpdate.businessType = profileData.businessType;
         profileUpdate.categories = profileData.categories || [];
@@ -768,6 +766,90 @@ export function registerProfileUpdateRoutes(router) {
         status: 'error',
         message: 'Internal server error'
       });
+    }
+  });
+
+  router.post('/shipping-addresses', authenticateToken, async (req, res) => {
+    try {
+      const payload = parseWithSchema(profileShippingAddressCreateSchema, req.body || {});
+
+      const { data: currentUser, error: fetchError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', req.userId)
+        .single();
+
+      if (fetchError || !currentUser) {
+        return res.status(404).json({ status: 'error', message: 'User not found' });
+      }
+
+      const userType = currentUser.user_type || currentUser.profile?.userType;
+      if (userType !== 'service_provider') {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Only service providers can save shipping addresses to profile.'
+        });
+      }
+
+      const normalized = normalizeAddress(payload);
+      if (!isAddressComplete(normalized)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Complete shipping address (street, city, state, PIN, country) is required.'
+        });
+      }
+
+      const currentProfile = currentUser.profile || {};
+      const existing = Array.isArray(currentProfile.shippingAddresses)
+        ? currentProfile.shippingAddresses
+        : [];
+
+      const newEntry = normalizeShippingAddressEntry({
+        id: uuidv4(),
+        label: String(payload.label || '').trim() || normalized.city || 'Shipping address',
+        ...normalized,
+        ...(payload.latitude != null ? { latitude: payload.latitude } : {}),
+        ...(payload.longitude != null ? { longitude: payload.longitude } : {}),
+        ...(payload.geoLocation ? { geoLocation: payload.geoLocation } : {})
+      });
+      newEntry.displayName = formatShippingAddressDisplayName(newEntry, existing.length);
+
+      const nextShippingAddresses = [...existing, newEntry];
+      const shippingValidation = validateShippingAddressEntries(nextShippingAddresses, {
+        userType: 'service_provider'
+      });
+      if (!shippingValidation.ok) {
+        return res.status(400).json({
+          status: 'error',
+          code: shippingValidation.code,
+          message: shippingValidation.message
+        });
+      }
+
+      const { error: updateError } = await supabase
+        .from('users')
+        .update({
+          profile: {
+            ...currentProfile,
+            shippingAddresses: nextShippingAddresses
+          }
+        })
+        .eq('id', req.userId);
+
+      if (updateError) throw updateError;
+
+      return res.json({
+        status: 'success',
+        message: 'Shipping address saved to profile',
+        shippingAddress: newEntry,
+        shippingAddresses: nextShippingAddresses
+      });
+    } catch (error) {
+      if (String(error?.name || '') === 'ZodError') {
+        return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+      }
+      console.error('Create profile shipping address error:', error);
+      return res.status(500).json({ status: 'error', message: 'Failed to save shipping address' });
     }
   });
 }

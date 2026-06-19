@@ -3,7 +3,7 @@
 const CACHE = new Map();
 const TTL_MS = 5 * 60 * 1000;
 
-export function buildVendorRankCacheKey(items, boqId) {
+export function buildVendorRankCacheKey(items, boqId, project = null) {
   const lines = (Array.isArray(items) ? items : [])
     .map((it) => {
       const id = String(it?.id ?? it?.productId ?? '').trim();
@@ -12,7 +12,13 @@ export function buildVendorRankCacheKey(items, boqId) {
     })
     .filter((line) => line && !line.startsWith(':'))
     .sort();
-  return `${String(boqId || '').trim()}::${lines.join('|')}`;
+  const ship = project?.shippingAddress;
+  const siteKey = ship
+    ? [ship.line1, ship.city, ship.pincode, project?.siteGeo?.lat, project?.siteGeo?.lng]
+        .map((part) => String(part ?? '').trim())
+        .join('|')
+    : String(project?.location || '').trim();
+  return `${String(boqId || '').trim()}::${siteKey}::${lines.join('|')}`;
 }
 
 export function getVendorRankCache(key) {

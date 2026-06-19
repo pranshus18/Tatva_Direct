@@ -1,6 +1,7 @@
 import PDFKit from 'pdfkit';
 import { supabase } from '../config/supabase.js';
 import { ORDER_ATTACHMENTS_BUCKET, uploadFile } from './storage.js';
+import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
 
 // pdfkit is CommonJS; in ESM builds the default import might be the module namespace.
 const PDFDocument = PDFKit?.default || PDFKit;
@@ -218,7 +219,7 @@ function createInvoicePdfBuffer({ order, invoice, items, receiptNumber = null })
       doc.text(`Sales channel: ${channelLabel(order?.channel)}`);
       doc.text(
         `Issued date: ${
-          invoice?.issued_at ? new Date(invoice.issued_at).toLocaleDateString('en-IN') : new Date().toLocaleDateString('en-IN')
+          invoice?.issued_at ? formatPlatformDate(invoice.issued_at) : formatPlatformDate(new Date())
         }`
       );
       doc.fillColor('#000000');
@@ -377,14 +378,14 @@ function createInvoicePdfBuffer({ order, invoice, items, receiptNumber = null })
       doc.text(`Status: ${safeString(order?.status || '-')}`);
       doc.text(`Payment Status: ${safeString(order?.payment_status || '-')}`);
       doc.text(`Payment Method: ${safeString(order?.payment_method || '-')}`);
-      doc.text(`Order Date: ${order?.created_at ? new Date(order.created_at).toLocaleString('en-IN') : '-'}`);
+      doc.text(`Order Date: ${order?.created_at ? formatPlatformDateTime(order.created_at, '-') : '-'}`);
       doc.text(
         `Expected Delivery: ${
-          order?.expected_delivery_date ? new Date(order.expected_delivery_date).toLocaleDateString('en-IN') : '-'
+          order?.expected_delivery_date ? formatPlatformDate(order.expected_delivery_date, '-') : '-'
         }`
       );
       doc.text(
-        `Actual Delivery: ${order?.actual_delivery_date ? new Date(order.actual_delivery_date).toLocaleDateString('en-IN') : '-'}`
+        `Actual Delivery: ${order?.actual_delivery_date ? formatPlatformDate(order.actual_delivery_date, '-') : '-'}`
       );
 
       doc.end();

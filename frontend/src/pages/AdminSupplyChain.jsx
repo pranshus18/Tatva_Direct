@@ -80,7 +80,10 @@ const AdminSupplyChain = ({ user }) => {
   const [feeRules, setFeeRules] = useState([]);
   const [feeLoading, setFeeLoading] = useState(false);
   const [feeSaving, setFeeSaving] = useState(false);
-  const [feeScope, setFeeScope] = useState('global');
+  const feeScope = 'brand';
+  const [feeBrandSelection, setFeeBrandSelection] = useState('');
+  const [feeBrandRoles, setFeeBrandRoles] = useState([]);
+  const [feeBrandRolesLoading, setFeeBrandRolesLoading] = useState(false);
   const [feeDraft, setFeeDraft] = useState([]);
   const [previewAmount, setPreviewAmount] = useState('10000');
   const [previewRole, setPreviewRole] = useState('dealer');
@@ -186,12 +189,107 @@ const AdminSupplyChain = ({ user }) => {
 
   const selectedFeeBrand = useMemo(() => {
     if (feeScope !== 'brand') return '';
-    return String(canonicalBrandName || brandInput || '').trim();
-  }, [brandInput, canonicalBrandName, feeScope]);
+    return String(feeBrandSelection || canonicalBrandName || brandInput || '').trim();
+  }, [brandInput, canonicalBrandName, feeBrandSelection, feeScope]);
+
+  const feeBrandOptions = useMemo(() => {
+    const byKey = new Map();
+    for (const entry of brands || []) {
+      const name = String(entry?.name || '').trim();
+      const key = normalizeBrandKey(name);
+      if (!key) continue;
+      if (!byKey.has(key)) byKey.set(key, name);
+    }
+    for (const row of feeRules || []) {
+      const name = String(row?.brand_name || '').trim();
+      const key = normalizeBrandKey(name);
+      if (!key) continue;
+      if (!byKey.has(key)) byKey.set(key, name);
+    }
+    return Array.from(byKey.values()).sort((a, b) => a.localeCompare(b));
+  }, [brands, feeRules]);
+
+  useEffect(() => {
+    if (feeScope !== 'brand') return;
+    if (String(feeBrandSelection || '').trim()) return;
+    const fallback = String(canonicalBrandName || brandInput || '').trim();
+    if (fallback) setFeeBrandSelection(fallback);
+  }, [brandInput, canonicalBrandName, feeBrandSelection, feeScope]);
+
+  useEffect(() => {
+    if (feeScope !== 'brand') {
+      setFeeBrandRoles([]);
+      setFeeBrandRolesLoading(false);
+      return;
+    }
+    const brand = String(selectedFeeBrand || '').trim();
+    if (!brand) {
+      setFeeBrandRoles([]);
+      setFeeBrandRolesLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        setFeeBrandRolesLoading(true);
+        const enc = encodeURIComponent(brand);
+        const res = await fetch(getApiUrl(`/api/admin/supply-chain/definitions/by-name/${enc}`), {
+          headers: { Authorization: `Bearer ${localStorage.getItem('token')}` }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok || data.status !== 'success' || !data.definition) {
+          setFeeBrandRoles([]);
+          return;
+        }
+        const normalizedStages = normalizeStagesForSave(
+          Array.isArray(data.definition.stages) ? data.definition.stages : []
+        );
+        setFeeBrandRoles(normalizedStages.map((s) => s.role).filter(Boolean));
+      } catch (e) {
+        if (!cancelled) {
+          console.error(e);
+          setFeeBrandRoles([]);
+        }
+      } finally {
+        if (!cancelled) setFeeBrandRolesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [feeScope, selectedFeeBrand]);
+
+  const feeRolesForMatrix = useMemo(() => {
+    if (feeScope !== 'brand') return [];
+    if (feeBrandRoles.length === 0) return [];
+    const allowed = new Set(feeBrandRoles);
+    return ROLE_OPTIONS.filter((opt) => allowed.has(opt.value));
+  }, [feeBrandRoles, feeScope]);
+
+  const feeBrandHint = useMemo(() => {
+    if (feeScope !== 'brand' || !selectedFeeBrand) return null;
+    if (feeBrandRolesLoading) {
+      return {
+        tone: 'info',
+        text: `Loading saved supply-chain roles for ${selectedFeeBrand}...`
+      };
+    }
+    if (feeBrandRoles.length > 0) {
+      return {
+        tone: 'success',
+        text: `Using saved supply chain for ${selectedFeeBrand}. Only these roles are shown.`
+      };
+    }
+    return {
+      tone: 'warning',
+      text: `No saved supply chain found for ${selectedFeeBrand}. Define and save supply chain first.`
+    };
+  }, [feeBrandRoles, feeBrandRolesLoading, feeScope, selectedFeeBrand]);
 
   useEffect(() => {
     const normalizedSelectedBrand = normalizeBrandKey(selectedFeeBrand);
-    const next = ROLE_OPTIONS.map((opt) => {
+    const next = feeRolesForMatrix.map((opt) => {
       const match = (feeRules || []).find((row) => {
         if (!row || row.supply_chain_role !== opt.value || row.is_active === false) return false;
         const rowBrand = normalizeBrandKey(row.normalized_brand || row.brand_name || '');
@@ -208,7 +306,17 @@ const AdminSupplyChain = ({ user }) => {
       };
     });
     setFeeDraft(next);
-  }, [feeRules, feeScope, selectedFeeBrand]);
+  }, [feeRolesForMatrix, feeRules, feeScope, selectedFeeBrand]);
+
+  useEffect(() => {
+    if (!feeDraft.length) {
+      setPreviewRole('');
+      return;
+    }
+    if (!feeDraft.some((row) => row.role === previewRole)) {
+      setPreviewRole(feeDraft[0].role);
+    }
+  }, [feeDraft, previewRole]);
 
   const feePreview = useMemo(() => {
     const amount = Number(previewAmount);
@@ -223,7 +331,17 @@ const AdminSupplyChain = ({ user }) => {
       };
     }
 
-    const role = previewRole || 'dealer';
+    const role = previewRole || feeDraft[0]?.role || '';
+    if (!role) {
+      return {
+        amount,
+        feeAmount: 0,
+        supplierNet: amount,
+        feeType: 'percentage',
+        feeValue: 0,
+        source: 'none'
+      };
+    }
     const wantedBrandKey = normalizeBrandKey(selectedFeeBrand);
     const activeRules = (feeRules || []).filter((row) => row && row.is_active !== false);
     const roleRules = activeRules.filter((row) => row.supply_chain_role === role);
@@ -234,11 +352,8 @@ const AdminSupplyChain = ({ user }) => {
         (row) =>
           normalizeBrandKey(row.normalized_brand || row.brand_name || '') === wantedBrandKey
       );
-    const globalRule = roleRules.find(
-      (row) => !normalizeBrandKey(row.normalized_brand || row.brand_name || '')
-    );
     const fallbackDraft = (feeDraft || []).find((row) => row.role === role);
-    const rule = brandRule || globalRule || fallbackDraft || null;
+    const rule = brandRule || fallbackDraft || null;
 
     const feeType = rule?.fee_type || rule?.feeType || 'percentage';
     const feeValueRaw = Number(rule?.fee_value ?? rule?.feeValue ?? 0);
@@ -256,7 +371,7 @@ const AdminSupplyChain = ({ user }) => {
       supplierNet,
       feeType,
       feeValue,
-      source: brandRule ? 'brand_role' : globalRule ? 'global_role' : fallbackDraft ? 'draft' : 'none'
+      source: brandRule ? 'brand_role' : fallbackDraft ? 'draft' : 'none'
     };
   }, [feeDraft, feeRules, previewAmount, previewRole, selectedFeeBrand]);
 
@@ -407,6 +522,13 @@ const AdminSupplyChain = ({ user }) => {
       setMessage({ type: 'error', text: 'Select a brand before saving brand-specific fee matrix.' });
       return;
     }
+    if ((feeDraft || []).length === 0) {
+      setMessage({
+        type: 'error',
+        text: `No supply-chain roles available for ${selectedFeeBrand || 'this brand'}. Save the brand supply chain first.`
+      });
+      return;
+    }
     const payloadRules = (feeDraft || []).map((row) => ({
       ...(row.id ? { id: row.id } : {}),
       brandName: feeScope === 'brand' ? selectedFeeBrand : null,
@@ -417,7 +539,7 @@ const AdminSupplyChain = ({ user }) => {
       notes:
         feeScope === 'brand'
           ? `Brand-specific fee for ${selectedFeeBrand}`
-          : 'Global role default fee'
+          : ''
     }));
     try {
       setFeeSaving(true);
@@ -829,41 +951,44 @@ const AdminSupplyChain = ({ user }) => {
               Platform fee matrix (dynamic)
             </h2>
             <p>
-              Configure platform commission by supply chain level. You can set global defaults per role and
-              brand-specific overrides.
+              Configure platform commission by supply chain level for each brand.
             </p>
           </div>
           <div className="sc-card__body">
             <div className="sc-fee-topbar">
-              <div className="sc-fee-scope">
-                <label className="sc-section-label">Scope</label>
-                <div className="sc-fee-scope__buttons">
-                  <button
-                    type="button"
-                    className={`sc-scope-btn ${feeScope === 'global' ? 'sc-scope-btn--active' : ''}`}
-                    onClick={() => setFeeScope('global')}
-                  >
-                    Global defaults
-                  </button>
-                  <button
-                    type="button"
-                    className={`sc-scope-btn ${feeScope === 'brand' ? 'sc-scope-btn--active' : ''}`}
-                    onClick={() => setFeeScope('brand')}
-                  >
-                    Current brand override
-                  </button>
-                </div>
+              <div className="sc-fee-brand-select">
+                <label className="sc-section-label" htmlFor="sc-fee-brand-select">
+                  Brand
+                </label>
+                <select
+                  id="sc-fee-brand-select"
+                  className="sc-select"
+                  value={selectedFeeBrand}
+                  onChange={(e) => setFeeBrandSelection(e.target.value)}
+                >
+                  <option value="">Select a brand</option>
+                  {selectedFeeBrand && !feeBrandOptions.includes(selectedFeeBrand) && (
+                    <option value={selectedFeeBrand}>{selectedFeeBrand}</option>
+                  )}
+                  {feeBrandOptions.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="sc-fee-meta">
-                {feeScope === 'brand' ? (
-                  <span>
-                    Brand: <strong>{selectedFeeBrand || 'Select a brand above'}</strong>
-                  </span>
-                ) : (
-                  <span>Applies to all brands unless overridden.</span>
-                )}
+                <span>
+                  Brand: <strong>{selectedFeeBrand || 'Select a brand above'}</strong>
+                </span>
               </div>
             </div>
+
+            {feeBrandHint && (
+              <div className={`sc-fee-brand-hint sc-fee-brand-hint--${feeBrandHint.tone}`} role="status">
+                <strong>{feeBrandHint.text}</strong>
+              </div>
+            )}
 
             <div className="sc-fee-grid">
               <div className="sc-fee-grid__head">Supply chain role</div>
@@ -933,12 +1058,17 @@ const AdminSupplyChain = ({ user }) => {
                     className="sc-select"
                     value={previewRole}
                     onChange={(e) => setPreviewRole(e.target.value)}
+                    disabled={feeDraft.length === 0}
                   >
-                    {ROLE_OPTIONS.map((opt) => (
-                      <option key={opt.value} value={opt.value}>
-                        {opt.label}
-                      </option>
-                    ))}
+                    {feeDraft.length === 0 ? (
+                      <option value="">No roles available</option>
+                    ) : (
+                      feeRolesForMatrix.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
               </div>
@@ -948,9 +1078,7 @@ const AdminSupplyChain = ({ user }) => {
                   <strong>
                     {feePreview.source === 'brand_role'
                       ? `Brand + role (${selectedFeeBrand || 'current brand'})`
-                      : feePreview.source === 'global_role'
-                        ? 'Global role default'
-                        : feePreview.source === 'draft'
+                      : feePreview.source === 'draft'
                           ? 'Current unsaved draft'
                           : 'No rule'}
                   </strong>
@@ -979,7 +1107,7 @@ const AdminSupplyChain = ({ user }) => {
                 type="button"
                 className="btn-primary"
                 onClick={handleSaveFeeMatrix}
-                disabled={feeSaving || feeLoading || (feeScope === 'brand' && !selectedFeeBrand)}
+                disabled={feeSaving || feeLoading || (feeScope === 'brand' && !selectedFeeBrand) || feeDraft.length === 0}
               >
                 <Save size={18} />
                 {feeSaving ? 'Saving fee matrix…' : 'Save fee matrix'}

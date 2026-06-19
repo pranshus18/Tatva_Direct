@@ -214,7 +214,8 @@ export const poCartSaveSchema = z
     gstin: z.string().optional().nullable(),
     /** Voice / Create PO — persisted so Transport suggestion page can load quotes. */
     poGroups: z.array(z.record(z.string(), z.any())).optional().default([]),
-    grandTotalAllPos: z.union([z.number(), z.string()]).optional().nullable()
+    grandTotalAllPos: z.union([z.number(), z.string()]).optional().nullable(),
+    transportSelection: z.record(z.string(), z.any()).optional().nullable()
   })
   .superRefine((val, ctx) => {
     const n = Array.isArray(val.items) ? val.items.length : 0;
@@ -226,6 +227,12 @@ export const poCartSaveSchema = z
       });
     }
   });
+
+export const poCartTransportPatchSchema = z.object({
+  transportSelection: z.record(z.string(), z.any()).nullable().optional(),
+  transportVendorIds: z.array(z.string()).optional(),
+  clear: z.boolean().optional()
+});
 
 export const poSelfServePatchSchema = z.object({
   expectedDeliveryDate: z.string().optional().nullable(),

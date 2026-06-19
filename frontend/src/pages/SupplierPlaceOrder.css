@@ -214,31 +214,6 @@
   margin-top: 0.35rem;
 }
 
-.spo-transport-panel {
-  border: 1px solid #c7d2fe;
-  border-radius: 10px;
-  padding: 1rem;
-  background: linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
-}
-
-.spo-transport-grid {
-  display: grid;
-  gap: 0.65rem;
-}
-
-.spo-transport-item {
-  background: #fff;
-  border: 1px solid #c7d2fe;
-  border-radius: 8px;
-  padding: 0.7rem 0.85rem;
-  font-size: 0.88rem;
-  color: #334155;
-}
-
-.spo-transport-item strong {
-  color: #0f172a;
-}
-
 .spo-table-wrap {
   overflow-x: auto;
   border: 1px solid #e2e8f0;

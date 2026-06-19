@@ -7,6 +7,7 @@ import { upsertPaymentTransaction } from '../../services/paymentTransactionServi
 import { normalizePaymentMethodForOrder } from '../../utils/paymentNormalize.js';
 import { verifyRazorpayWebhookSignature } from '../../services/razorpayService.js';
 import { completeWalletTopup } from '../../services/walletService.js';
+import { applyPlatformFeeToPaidOrder } from '../../services/platformFeeService.js';
 import { parseBooleanEnv } from '../../utils/featureFlags.js';
 
 const paymentsWebhookRouter = express.Router();
@@ -95,18 +96,20 @@ paymentsWebhookRouter.post('/razorpay', async (req, res) => {
             .eq('id', order.id)
             .select('*')
             .single();
+          const feeApplied = await applyPlatformFeeToPaidOrder({ order: updatedOrder });
+          const paidOrder = feeApplied.order;
           if (!wasAlreadyPaid && updatedOrder) {
             await createReceiptAndDeliver({
-              order: updatedOrder,
+              order: paidOrder,
               paymentMethod: normalizePaymentMethodForOrder(paymentEntity.method || 'online'),
               paymentReference: paymentEntity.id,
               actorUserId: null
             });
             try {
-              const { invoice } = await createInvoiceForOrder(updatedOrder);
-              const { pdfUrl, pdfPath } = await generateAndUploadInvoicePdf({ order: updatedOrder, invoice });
+              const { invoice } = await createInvoiceForOrder(paidOrder);
+              const { pdfUrl, pdfPath } = await generateAndUploadInvoicePdf({ order: paidOrder, invoice });
               if (pdfUrl) {
-                await saveInvoicePdfUrlToInvoice({ orderId: updatedOrder.id, pdfUrl, pdfPath });
+                await saveInvoicePdfUrlToInvoice({ orderId: paidOrder.id, pdfUrl, pdfPath });
               }
             } catch (invoicePdfErr) {
               console.error('[Payments] Invoice PDF after Razorpay webhook:', invoicePdfErr);

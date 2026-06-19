@@ -197,6 +197,33 @@
   border-radius: var(--supplier-radius-control);
 }
 
+.supplier-cart-qty-control {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: var(--supplier-radius-control);
+  overflow: hidden;
+  background: #fff;
+}
+
+.supplier-cart-qty-btn {
+  min-width: 34px;
+  height: 34px;
+  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.supplier-cart-qty-value {
+  min-width: 2.4rem;
+  text-align: center;
+  font-weight: 600;
+  color: #0f172a;
+  font-size: 0.9rem;
+}
+
 .supplier-cart-number-cell {
   text-align: right;
   white-space: nowrap;

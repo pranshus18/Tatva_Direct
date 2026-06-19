@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
 import { AlertTriangle, CheckCircle, Eye, FileText, RefreshCw, Wallet } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
+import { formatDateIST } from '../utils/dateTime';
 import './AdminDashboard.css';
 
 const ISSUE_LABELS = {
@@ -384,7 +385,7 @@ const AdminFinance = ({ user }) => {
                 filteredLines.map((line) => (
                   <tr key={line.orderId}>
                     <td>{line.orderNumber || line.orderId}</td>
-                    <td>{line.orderDate ? new Date(line.orderDate).toLocaleDateString('en-IN') : '—'}</td>
+                    <td>{line.orderDate ? formatDateIST(line.orderDate, '—') : '—'}</td>
                     <td>{line.serviceProvider || '—'}</td>
                     <td>{line.supplier || '—'}</td>
                     <td>{formatCurrency(line.orderTotal)}</td>

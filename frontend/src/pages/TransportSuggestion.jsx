@@ -6,6 +6,8 @@ import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { Truck } from 'lucide-react';
 import { useVoiceSessionContext } from '../voice/VoiceSessionContext';
 import { isVoiceGuidedActive } from '../voice/voiceCartBridge';
+import { mergeTransportSelections, getVendorTransportDetail } from '../utils/poTransportSelection';
+import { saveCartTransportSelection } from '../utils/poCartTransportApi';
 
 const SELF_SHIP_PROVIDER_NAME = 'Self ship';
 
@@ -175,6 +177,16 @@ const TransportSuggestion = () => {
       ? location.state.voiceCart.draft.poGroups
       : [];
   const poGroups = statePo.length ? statePo : draftPo;
+  const allPoGroups = Array.isArray(location.state?.allPoGroups) ? location.state.allPoGroups : poGroups;
+  const focusVendorId = String(location.state?.focusVendorId || '').trim();
+  const focusGroup = focusVendorId
+    ? poGroups.find((g) => String(g.vendorId) === focusVendorId) || null
+    : null;
+  const existingTransportSelection =
+    location.state?.existingTransportSelection &&
+    typeof location.state.existingTransportSelection === 'object'
+      ? location.state.existingTransportSelection
+      : null;
   const grandTotalAllPos =
     Number(location.state?.grandTotalAllPos) ||
     Number(location.state?.voiceCart?.grandTotalAllPos) ||
@@ -253,7 +265,7 @@ const TransportSuggestion = () => {
     const needBilling = hasGstin && deliveryDestination === 'billing';
     if (!shipOk || (needBilling && !billOk)) {
       setLogisticsError(
-        'Shipping (and billing, if applicable) addresses are required for courier quotes. Go back to Create PO and open Transport suggestion again.'
+        `Shipping (and billing, if applicable) addresses are required for courier quotes. Go back to ${returnNoun} and open Transport suggestion again.`
       );
       return;
     }
@@ -381,6 +393,54 @@ const TransportSuggestion = () => {
     return g?.vendorName || vendorId;
   };
 
+  const otherConfiguredSuppliers = React.useMemo(() => {
+    if (!existingTransportSelection?.byVendorId) return [];
+    const activeIds = new Set(poGroups.map((g) => String(g.vendorId || '')).filter(Boolean));
+    return Object.entries(existingTransportSelection.byVendorId)
+      .filter(([vendorId, label]) => !activeIds.has(String(vendorId)) && String(label || '').trim())
+      .map(([vendorId, label]) => {
+        const fromAll = allPoGroups.find((g) => String(g.vendorId) === String(vendorId));
+        return {
+          vendorId,
+          vendorName: fromAll?.vendorName || label,
+          label,
+          detail: getVendorTransportDetail(existingTransportSelection, vendorId)
+        };
+      });
+  }, [existingTransportSelection, poGroups, allPoGroups]);
+
+  const vendorIdsToMerge = () =>
+    poGroups.map((g) => String(g.vendorId || '')).filter(Boolean);
+
+  const finishTransportNavigation = async (transportSelection) => {
+    const ids = vendorIdsToMerge();
+    const mergedSelection = mergeTransportSelections(existingTransportSelection, transportSelection, ids);
+    const persisted = isSupplierFlow
+      ? mergedSelection
+      : await saveCartTransportSelection(mergedSelection, ids);
+    if (isVoiceGuidedActive() && typeof notifyTransportSelected === 'function') {
+      notifyTransportSelected(persisted);
+    }
+    navigate(returnPath, {
+      replace: returnPath === '/supplier-place-order',
+      state: {
+        transportSelection: persisted,
+        transportVendorIds: ids,
+        createdOrders,
+        poGroups: allPoGroups,
+        grandTotalAllPos:
+          Number(location.state?.grandTotalAllPos) ||
+          allPoGroups.reduce((s, g) => s + (Number(g.total) || 0), 0),
+        requiredDate,
+        hasGstin,
+        deliveryDestination,
+        shippingAddress,
+        billingAddress,
+        voiceGuided: isVoiceGuidedActive()
+      }
+    });
+  };
+
   const handleUseTransport = () => {
     if (transportModeChoice === 'self_ship') {
       const byVendorId = {};
@@ -410,24 +470,7 @@ const TransportSuggestion = () => {
         trackingUrl: '',
         transportNotes: 'Self ship by supplier'
       };
-      if (isVoiceGuidedActive() && typeof notifyTransportSelected === 'function') {
-        notifyTransportSelected(transportSelection);
-      }
-      navigate(returnPath, {
-        replace: returnPath === '/supplier-place-order',
-        state: {
-          transportSelection,
-          createdOrders,
-          poGroups,
-          grandTotalAllPos,
-          requiredDate,
-          hasGstin,
-          deliveryDestination,
-          shippingAddress,
-          billingAddress,
-          voiceGuided: isVoiceGuidedActive()
-        }
-      });
+      finishTransportNavigation(transportSelection);
       return;
     }
 
@@ -504,31 +547,17 @@ const TransportSuggestion = () => {
       transportNotes: ''
     };
 
-    if (isVoiceGuidedActive() && typeof notifyTransportSelected === 'function') {
-      notifyTransportSelected(transportSelection);
-    }
-
-    navigate(returnPath, {
-      replace: returnPath === '/supplier-place-order',
-      state: {
-        transportSelection,
-        createdOrders,
-        poGroups,
-        grandTotalAllPos,
-        requiredDate,
-        hasGstin,
-        deliveryDestination,
-        shippingAddress,
-        billingAddress,
-        voiceGuided: isVoiceGuidedActive()
-      }
-    });
+    finishTransportNavigation(transportSelection);
   };
 
   return (
     <SpWorkflowPage
-      title="Transport suggestion"
-      description="Review courier (Shiprocket), trucking (Borzo), or Self ship — pick one option per supplier shipment."
+      title={focusGroup ? `Transport — ${focusGroup.vendorName}` : 'Transport suggestion'}
+      description={
+        focusGroup
+          ? `Choose courier, trucking, or self ship for ${focusGroup.vendorName}. Items from the same supplier are shipped together.`
+          : 'Review courier (Shiprocket), trucking (Borzo), or Self ship — pick one option per supplier shipment.'
+      }
       icon={Truck}
     >
     <div className="page !p-0">
@@ -559,8 +588,16 @@ const TransportSuggestion = () => {
             }}
           >
             <div style={{ fontWeight: 700, color: '#0f172a', marginBottom: '0.25rem' }}>
-              Total vendors: {poGroups.length}
+              {focusGroup
+                ? `Supplier: ${focusGroup.vendorName}`
+                : `Total vendors: ${poGroups.length}`}
             </div>
+            {focusGroup ? (
+              <div style={{ fontSize: '0.88rem', color: '#475569', marginBottom: '0.35rem' }}>
+                {Array.isArray(focusGroup.items) ? focusGroup.items.length : 0} line item(s) clubbed for this
+                supplier · Subtotal {formatCurrency(focusGroup.total)}
+              </div>
+            ) : null}
             <div style={{ fontWeight: 700, color: '#4f46e5', marginBottom: '0.25rem' }}>
               Grand total: {formatCurrency(grandTotalAllPos)}
             </div>
@@ -580,6 +617,29 @@ const TransportSuggestion = () => {
               Created orders: {createdOrders.length}
             </div>
           </div>
+
+          {otherConfiguredSuppliers.length > 0 ? (
+            <div
+              style={{
+                marginBottom: '1rem',
+                padding: '0.75rem 0.85rem',
+                border: '1px solid #bbf7d0',
+                borderRadius: 10,
+                background: '#f0fdf4'
+              }}
+            >
+              <div style={{ fontWeight: 700, color: '#14532d', marginBottom: '0.35rem', fontSize: '0.9rem' }}>
+                Transport already saved for other suppliers
+              </div>
+              <ul style={{ margin: 0, paddingLeft: '1.1rem', fontSize: '0.86rem', color: '#166534' }}>
+                {otherConfiguredSuppliers.map((row) => (
+                  <li key={row.vendorId}>
+                    <strong>{row.vendorName}:</strong> {row.label}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
 
           <div style={{ marginBottom: '1rem' }}>
             <h3 style={{ margin: '0 0 0.5rem', color: '#0f172a' }}>Transport options</h3>

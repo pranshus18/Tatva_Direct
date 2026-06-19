@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './Profile.css';
 
 export default function SupplierPurchaseTotal() {
@@ -169,7 +170,7 @@ export default function SupplierPurchaseTotal() {
                       <td style={td}>₹{Number(supplier.totalPurchaseValue || 0).toLocaleString()}</td>
                       <td style={td}>₹{Number(supplier.paidPurchaseValue || 0).toLocaleString()}</td>
                       <td style={td}>
-                        {supplier.lastOrderAt ? new Date(supplier.lastOrderAt).toLocaleString() : '—'}
+                        {supplier.lastOrderAt ? formatDateTimeIST(supplier.lastOrderAt, '—') : '—'}
                       </td>
                     </tr>
                   ))}

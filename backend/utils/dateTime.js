@@ -5,7 +5,7 @@ const SQL_LIKE_DATETIME_PATTERN = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d+)?$
 const ISO_NO_TZ_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/;
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-export const parseServerDate = (value) => {
+export function parseServerDate(value) {
   if (!value) return null;
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
   const raw = String(value).trim();
@@ -27,7 +27,7 @@ export const parseServerDate = (value) => {
 
   const parsed = new Date(normalized);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
-};
+}
 
 function formatPartsInIST(date, includeTime = false) {
   const options = {
@@ -53,26 +53,18 @@ function formatPartsInIST(date, includeTime = false) {
 }
 
 /** Platform standard: DD/Monthname/YY (e.g. 18/June/26) */
-export const formatPlatformDate = (value, fallback = 'N/A') => {
+export function formatPlatformDate(value, fallback = 'N/A') {
   const date = parseServerDate(value);
   if (!date) return fallback;
   return formatPartsInIST(date, false);
-};
+}
 
 /** Platform standard date + 24h time in IST (e.g. 18/June/26, 14:30:00) */
-export const formatPlatformDateTime = (value, fallback = 'N/A') => {
+export function formatPlatformDateTime(value, fallback = 'N/A') {
   const date = parseServerDate(value);
   if (!date) return fallback;
   return formatPartsInIST(date, true);
-};
+}
 
 export const formatDateIST = formatPlatformDate;
 export const formatDateTimeIST = formatPlatformDateTime;
-
-export default {
-  parseServerDate,
-  formatPlatformDate,
-  formatPlatformDateTime,
-  formatDateTimeIST,
-  formatDateIST
-};

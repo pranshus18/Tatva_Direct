@@ -4,6 +4,7 @@ import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import { Wallet as WalletIcon, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 
 const formatInr = (value) =>
   `₹${Number(value || 0).toLocaleString('en-IN', {
@@ -666,7 +667,7 @@ const Wallet = () => {
                 <tbody>
                   {withdrawals.map((row) => (
                     <tr key={row.id} className="border-b last:border-b-0">
-                      <td className="px-2 py-2 text-slate-600">{new Date(row.created_at).toLocaleString()}</td>
+                      <td className="px-2 py-2 text-slate-600">{formatDateTimeIST(row.created_at, '—')}</td>
                       <td className="px-2 py-2 font-medium text-slate-900">{formatInr(row.amount)}</td>
                       <td className="px-2 py-2 capitalize text-slate-700">{row.status || '-'}</td>
                       <td className="px-2 py-2 text-slate-600">{row.note || '-'}</td>
@@ -794,7 +795,7 @@ const Wallet = () => {
                       className="cursor-pointer border-b last:border-b-0 hover:bg-slate-50"
                       onClick={() => setSelectedTransaction(row)}
                     >
-                      <td className="px-2 py-2 text-slate-600">{new Date(row.created_at).toLocaleDateString()}</td>
+                      <td className="px-2 py-2 text-slate-600">{formatDateIST(row.created_at, '—')}</td>
                       <td className="px-2 py-2 font-medium text-slate-900">{row.description || row.transaction_type || '-'}</td>
                       <td
                         className={`px-2 py-2 text-right font-semibold ${row.direction === 'credit' ? 'text-green-600' : 'text-red-600'}`}
@@ -836,7 +837,7 @@ function TransactionDetailModal({ row, onClose }) {
           </Button>
         </div>
         <div className="space-y-2 text-sm">
-          <Detail label="When" value={new Date(row.created_at).toLocaleString()} />
+          <Detail label="When" value={formatDateTimeIST(row.created_at, '—')} />
           <Detail label="Type" value={row.transaction_type} />
           <Detail label="Paid By" value={row.paidBy?.label || '-'} />
           <Detail label="Paid To" value={row.paidTo?.label || '-'} />

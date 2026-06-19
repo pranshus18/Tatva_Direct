@@ -1,6 +1,7 @@
 import { supabase } from '../config/supabase.js';
 import { insertNotification } from '../repositories/notificationsRepository.js';
 import { buildOrderNetRevenueMap, fetchClosedReturnQuantityByOrderItem } from '../utils/netRevenue.js';
+import { formatPlatformDate } from '../utils/dateTime.js';
 import { recordLedgerEntry } from './ledgerService.js';
 import { ensurePaymentTransactionForPaidOrder } from './paymentTransactionService.js';
 import {
@@ -381,11 +382,7 @@ export async function buildCreditStatus({
 
   const formatDue = (iso) => {
     if (!iso) return '';
-    try {
-      return new Date(iso).toLocaleDateString('en-IN');
-    } catch {
-      return '';
-    }
+    return formatPlatformDate(iso, '');
   };
 
   if (!account) {

@@ -1,4 +1,5 @@
 import { fetchClosedReturnQuantityByOrderItem, getNetItemMetrics } from '../../utils/netRevenue.js';
+import { formatPlatformDate } from '../../utils/dateTime.js';
 
 export { fetchClosedReturnQuantityByOrderItem, getNetItemMetrics };
 
@@ -477,7 +478,7 @@ export async function generateAdminData({ supabase, console, isRevenueRecognized
         email: user.email,
         company: user.company || 'Individual',
         userType: user.user_type || 'general',
-        joinedDate: user.created_at ? new Date(user.created_at).toLocaleDateString() : 'Unknown',
+        joinedDate: user.created_at ? formatPlatformDate(user.created_at, 'Unknown') : 'Unknown',
         status: user.is_active ? 'active' : 'inactive'
       }));
 

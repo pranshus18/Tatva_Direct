@@ -298,6 +298,14 @@ export function registerSupplierWalletRoutes(ctx) {
       if (e?.code === 'WALLET_BALANCE_CONFLICT') {
         return res.status(409).json({ status: 'error', code: e.code, message: e.message });
       }
+      if (
+        e?.code === 'PLATFORM_FEE_RULE_MISSING' ||
+        e?.code === 'PLATFORM_FEE_ROLE_MISSING' ||
+        e?.code === 'PLATFORM_FEE_BRAND_MISSING' ||
+        e?.code === 'PLATFORM_FEE_ORDER_ITEMS_MISSING'
+      ) {
+        return res.status(400).json({ status: 'error', code: e.code, message: e.message });
+      }
       return res.status(500).json({ status: 'error', message: e.message || 'Failed to pay order from wallet' });
     }
   });

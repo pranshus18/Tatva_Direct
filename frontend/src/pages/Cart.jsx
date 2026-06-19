@@ -27,6 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
+import { formatDateIST } from '../utils/dateTime';
 
 const Cart = ({ onLoadCart }) => {
   const navigate = useNavigate();
@@ -40,6 +41,7 @@ const Cart = ({ onLoadCart }) => {
   const [copyingShareLink, setCopyingShareLink] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState('');
   const [draftGroupNames, setDraftGroupNames] = useState({});
+  const [draftGroupDates, setDraftGroupDates] = useState({});
   const [busyByGroupId, setBusyByGroupId] = useState({});
 
   const token = localStorage.getItem('token');
@@ -84,14 +86,53 @@ const Cart = ({ onLoadCart }) => {
     return { ...draft, items: nextFlat };
   };
 
-  const mergeGroupNameIntoDraft = (draft, groupId, nextName) => {
+  const mergeRemoveItemFromDraft = (draft, itemId) => {
+    if (!draft || typeof draft !== 'object') return draft;
+    const id = String(itemId || '');
+    if (Array.isArray(draft.boqGroups) && draft.boqGroups.length > 0) {
+      const nextBoqGroups = draft.boqGroups
+        .map((g) => ({
+          ...g,
+          items: Array.isArray(g.items) ? g.items.filter((it) => String(it?.id) !== id) : []
+        }))
+        .filter((g) => Array.isArray(g.items) && g.items.length > 0);
+      const nextFlat = nextBoqGroups.flatMap((g) => (Array.isArray(g.items) ? g.items : []));
+      return { ...draft, boqGroups: nextBoqGroups, items: nextFlat };
+    }
+    const nextFlat = Array.isArray(draft.items)
+      ? draft.items.filter((it) => String(it?.id) !== id)
+      : draft.items;
+    return { ...draft, items: nextFlat };
+  };
+
+  const getGroupRequiredDate = (group) => {
+    if (!group || typeof group !== 'object') return '';
+    const fromProject = String(group?.boqProject?.requiredDate || '').trim();
+    if (fromProject) return fromProject.slice(0, 10);
+    const fromGroup = String(group?.requiredDate || '').trim();
+    if (fromGroup) return fromGroup.slice(0, 10);
+    return '';
+  };
+
+  const mergeGroupDetailsIntoDraft = (draft, groupId, nextName, nextDate) => {
     if (!draft || typeof draft !== 'object') return draft;
     const normalizedGroupId = String(groupId || '').trim();
     if (!normalizedGroupId) return draft;
     const groups = Array.isArray(draft.boqGroups) ? [...draft.boqGroups] : [];
     const nextGroups = groups.map((group) =>
       String(group?.groupId || '') === normalizedGroupId
-        ? { ...group, boqName: nextName }
+        ? (() => {
+            const nextProjectMeta = {
+              ...(group?.boqProject && typeof group.boqProject === 'object' ? group.boqProject : {})
+            };
+            if (nextDate) nextProjectMeta.requiredDate = nextDate;
+            else delete nextProjectMeta.requiredDate;
+            return {
+              ...group,
+              boqName: nextName,
+              boqProject: nextProjectMeta
+            };
+          })()
         : group
     );
     return { ...draft, boqGroups: nextGroups };
@@ -209,13 +250,14 @@ const Cart = ({ onLoadCart }) => {
     }
   };
 
-  const updateProjectName = async (groupId, nextNameInput) => {
+  const updateProjectDetails = async (groupId, nextNameInput, nextDateInput) => {
     if (!token) {
-      setError('Please log in again to update project name.');
+      setError('Please log in again to update project details.');
       return;
     }
     const normalizedGroupId = String(groupId || '').trim();
     const nextName = String(nextNameInput || '').trim();
+    const nextDate = String(nextDateInput || '').trim();
     if (!normalizedGroupId) return;
     if (!nextName) {
       setError('Project name cannot be empty.');
@@ -233,17 +275,17 @@ const Cart = ({ onLoadCart }) => {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ boqName: nextName })
+          body: JSON.stringify({ boqName: nextName, expectedDeliveryDate: nextDate })
         }
       );
       const data = await response.json();
       if (!response.ok || data.status !== 'success') {
-        throw new Error(data.message || 'Failed to update project name');
+        throw new Error(data.message || 'Failed to update project details');
       }
 
       const prev = cartRef.current;
       if (prev?.draft) {
-        const nextDraft = mergeGroupNameIntoDraft(prev.draft, normalizedGroupId, nextName);
+        const nextDraft = mergeGroupDetailsIntoDraft(prev.draft, normalizedGroupId, nextName, nextDate);
         setCart({ ...prev, draft: nextDraft });
         if (typeof onLoadCart === 'function') {
           onLoadCart(nextDraft);
@@ -253,11 +295,56 @@ const Cart = ({ onLoadCart }) => {
       }
       setEditingGroupId('');
       setDraftGroupNames((prev) => ({ ...prev, [normalizedGroupId]: nextName }));
+      setDraftGroupDates((prev) => ({ ...prev, [normalizedGroupId]: nextDate }));
     } catch (e) {
-      setError(e.message || 'Failed to update project name');
+      setError(e.message || 'Failed to update project details');
     } finally {
       setBusyByGroupId((prev) => {
         const { [normalizedGroupId]: _removed, ...rest } = prev;
+        return rest;
+      });
+    }
+  };
+
+  const removeItem = async (itemId) => {
+    if (!token) {
+      setError('Please log in again to remove cart item.');
+      return;
+    }
+    const normalizedItemId = String(itemId || '').trim();
+    if (!normalizedItemId) return;
+
+    setBusyByItemId((prev) => ({ ...prev, [normalizedItemId]: true }));
+    setError('');
+    try {
+      const response = await fetch(
+        getApiUrl(`/api/po/cart/items/${encodeURIComponent(normalizedItemId)}`),
+        {
+          method: 'DELETE',
+          headers: {
+            Authorization: `Bearer ${token}`
+          }
+        }
+      );
+      const data = await response.json();
+      if (!response.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to remove item');
+      }
+      const prev = cartRef.current;
+      if (prev?.draft) {
+        const nextDraft = mergeRemoveItemFromDraft(prev.draft, normalizedItemId);
+        setCart({ ...prev, draft: nextDraft });
+        if (typeof onLoadCart === 'function') {
+          onLoadCart(nextDraft);
+        }
+      } else {
+        await loadCart({ silent: true, syncWorkflow: true });
+      }
+    } catch (e) {
+      setError(e.message || 'Failed to remove item');
+    } finally {
+      setBusyByItemId((prev) => {
+        const { [normalizedItemId]: _removed, ...rest } = prev;
         return rest;
       });
     }
@@ -524,15 +611,31 @@ const Cart = ({ onLoadCart }) => {
                                 }))
                               }
                             />
+                            <input
+                              type="date"
+                              className="h-9 rounded-md border bg-background px-2 text-sm"
+                              value={
+                                draftGroupDates[String(group?.groupId || '')] ??
+                                getGroupRequiredDate(group)
+                              }
+                              onChange={(e) =>
+                                setDraftGroupDates((prev) => ({
+                                  ...prev,
+                                  [String(group?.groupId || '')]: e.target.value
+                                }))
+                              }
+                            />
                             <Button
                               size="sm"
                               variant="secondary"
                               disabled={Boolean(busyByGroupId[String(group?.groupId || '')])}
                               onClick={() =>
-                                updateProjectName(
+                                updateProjectDetails(
                                   String(group?.groupId || ''),
                                   draftGroupNames[String(group?.groupId || '')] ??
-                                    String(group?.boqName || '')
+                                    String(group?.boqName || ''),
+                                  draftGroupDates[String(group?.groupId || '')] ??
+                                    getGroupRequiredDate(group)
                                 )
                               }
                             >
@@ -547,6 +650,10 @@ const Cart = ({ onLoadCart }) => {
                                 setDraftGroupNames((prev) => ({
                                   ...prev,
                                   [String(group?.groupId || '')]: String(group?.boqName || '')
+                                }));
+                                setDraftGroupDates((prev) => ({
+                                  ...prev,
+                                  [String(group?.groupId || '')]: getGroupRequiredDate(group)
                                 }));
                               }}
                             >
@@ -566,6 +673,10 @@ const Cart = ({ onLoadCart }) => {
                                   ...prev,
                                   [gid]: String(group?.boqName || '')
                                 }));
+                                setDraftGroupDates((prev) => ({
+                                  ...prev,
+                                  [gid]: getGroupRequiredDate(group)
+                                }));
                               }}
                               aria-label="Edit project name"
                             >
@@ -577,6 +688,13 @@ const Cart = ({ onLoadCart }) => {
                       {group?.boqProject?.name ? (
                         <p className="mt-1 text-sm text-muted-foreground">
                           Project: {String(group.boqProject.name)}
+                        </p>
+                      ) : null}
+                      {getGroupRequiredDate(group) ? (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground">
+                            Expected delivery: {formatDateIST(getGroupRequiredDate(group), '—')}
+                          </span>
                         </p>
                       ) : null}
                       <p className="mt-0.5 text-xs text-muted-foreground">
@@ -621,11 +739,15 @@ const Cart = ({ onLoadCart }) => {
                                   variant="ghost"
                                   size="icon"
                                   className="h-9 w-9 rounded-none"
-                                  disabled={isBusy || quantity <= 1}
-                                  onClick={() => updateQuantity(itemId, quantity - 1)}
-                                  aria-label="Decrease quantity"
+                                  disabled={isBusy}
+                                  onClick={() =>
+                                    quantity <= 1
+                                      ? removeItem(itemId)
+                                      : updateQuantity(itemId, quantity - 1)
+                                  }
+                                  aria-label={quantity <= 1 ? 'Remove item' : 'Decrease quantity'}
                                 >
-                                  −
+                                  {quantity <= 1 ? <Trash2 className="h-4 w-4" /> : '−'}
                                 </Button>
                                 <span className="min-w-[2.5rem] text-center text-sm font-semibold tabular-nums">
                                   {isBusy ? '…' : quantity}

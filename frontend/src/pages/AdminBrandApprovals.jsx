@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
 import { CheckCircle, Clock, Copy, RefreshCw, Search, Tag, XCircle } from 'lucide-react';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './AdminDashboard.css';
 
 const AdminBrandApprovals = () => {
@@ -198,7 +199,7 @@ const AdminBrandApprovals = () => {
                           ? `${requester.name || 'User'}${requester.email ? ` (${requester.email})` : ''}`
                           : b.requested_by || '-'}
                       </td>
-                      <td>{b.requested_at ? new Date(b.requested_at).toLocaleString() : '-'}</td>
+                      <td>{b.requested_at ? formatDateTimeIST(b.requested_at, '-') : '-'}</td>
                       <td style={{ color: status === 'rejected' ? '#b91c1c' : '#64748b' }}>
                         {b.rejection_reason || '-'}
                       </td>
@@ -354,11 +355,11 @@ const AdminBrandApprovals = () => {
                       </div>
                       <div style={{ color: '#475569', fontSize: '0.875rem' }}>
                         <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block' }}>Requested at</span>
-                        {b.requested_at ? new Date(b.requested_at).toLocaleString() : '-'}
+                        {b.requested_at ? formatDateTimeIST(b.requested_at, '-') : '-'}
                       </div>
                       <div style={{ color: '#475569', fontSize: '0.875rem', minWidth: 0, wordBreak: 'break-word' }}>
                         <span style={{ color: '#94a3b8', fontSize: '0.75rem', display: 'block' }}>Approved</span>
-                        {b.approved_at ? new Date(b.approved_at).toLocaleString() : '-'}
+                        {b.approved_at ? formatDateTimeIST(b.approved_at, '-') : '-'}
                         {approver?.name ? ` · ${approver.name}` : ''}
                       </div>
                     </div>

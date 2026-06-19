@@ -54,6 +54,7 @@ import {
   resolveUpstreamPaymentSelection
 } from '../../services/upstreamOrderInputService.js';
 import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuantity.js';
+import { formatPlatformDate } from '../../utils/dateTime.js';
 
 export function registerSupplierUpstreamRoutes(ctx) {
   const {
@@ -83,9 +84,12 @@ export function registerSupplierUpstreamRoutes(ctx) {
   const buildUpstreamProject = (payload = {}) => {
     const projectId = String(payload.projectId || `sup-proj-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
     const cartNameRaw = String(payload.cartName || '').trim();
+    const rawRequiredDate = String(payload.requiredDate || '').trim();
+    const requiredDate = /^\d{4}-\d{2}-\d{2}$/.test(rawRequiredDate) ? rawRequiredDate : '';
     return {
       projectId,
-      cartName: cartNameRaw || `Project ${new Date().toLocaleDateString('en-IN')}`,
+      cartName: cartNameRaw || `Project ${formatPlatformDate(new Date())}`,
+      requiredDate,
       selectedMine: normalizeSelectedMineQuantities(
         payload.selectedMine && typeof payload.selectedMine === 'object' ? payload.selectedMine : {}
       ),
@@ -98,6 +102,21 @@ export function registerSupplierUpstreamRoutes(ctx) {
       searchTerm: String(payload.searchTerm || '').trim(),
       createdAt: payload.createdAt || new Date().toISOString()
     };
+  };
+
+  const normalizeUpstreamProjectNameKey = (value) => String(value || '').trim().toLowerCase();
+  const normalizeUpstreamProjectDateKey = (value) => String(value || '').trim().slice(0, 10);
+  const hasDuplicateUpstreamProject = (projects, cartName, requiredDate, excludeProjectId = '') => {
+    const nameKey = normalizeUpstreamProjectNameKey(cartName);
+    const dateKey = normalizeUpstreamProjectDateKey(requiredDate);
+    return (Array.isArray(projects) ? projects : []).some((project) => {
+      const projectId = String(project?.projectId || '').trim();
+      if (excludeProjectId && projectId === excludeProjectId) return false;
+      return (
+        normalizeUpstreamProjectNameKey(project?.cartName || '') === nameKey &&
+        normalizeUpstreamProjectDateKey(project?.requiredDate || '') === dateKey
+      );
+    });
   };
 
   const normalizeUpstreamCartDraft = (rawDraft = {}) => {
@@ -808,7 +827,11 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       shippingAddress,
       profileRow: supplierProfileRow
     });
-    const normalizedBillingAddress = normalizeAddress(billingAddress || normalizedShippingAddress);
+    const profileBillingAddress = normalizeAddress(supplierProfileRow?.address || {});
+    const requestedBillingAddress = normalizeAddress(billingAddress || {});
+    const normalizedBillingAddress = isAddressComplete(requestedBillingAddress)
+      ? requestedBillingAddress
+      : profileBillingAddress;
 
     const selectedDeliveryDestination = (() => {
       const raw = String(deliveryDestination || 'shipping').toLowerCase().trim();
@@ -826,8 +849,11 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
           'Shipping address is incomplete. Add a complete branch location (shipping address) in your supplier profile.'
       });
     }
-    if (hasGstin && selectedDeliveryDestination === 'billing' && !isAddressComplete(normalizedBillingAddress)) {
-      return res.status(400).json({ status: 'error', message: 'Billing address is required when GSTIN is present.' });
+    if (hasGstin && !isAddressComplete(normalizedBillingAddress)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Registered billing address is incomplete. Update it in your supplier profile.'
+      });
     }
 
     const deliveryAddressForOrder = {
@@ -1243,6 +1269,10 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
 
     const mineSupplierProductId = String(req.body?.mineSupplierProductId || '').trim();
     const requestedQuantity = parseSupplierStockQuantity(req.body?.quantity);
+    const targetProjectId = String(req.body?.projectId || '').trim();
+    const requestedCartName = String(req.body?.cartName || '').trim();
+    const rawRequiredDate = String(req.body?.requiredDate || '').trim();
+    const requiredDate = /^\d{4}-\d{2}-\d{2}$/.test(rawRequiredDate) ? rawRequiredDate : '';
     if (!mineSupplierProductId) {
       return res.status(400).json({ status: 'error', message: 'mineSupplierProductId is required' });
     }
@@ -1250,6 +1280,24 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       return res.status(400).json({
         status: 'error',
         message: 'quantity must be a valid whole number (1 or greater)'
+      });
+    }
+    if (!targetProjectId && !requestedCartName) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'cartName is required when creating a new project'
+      });
+    }
+    if (!targetProjectId && !requiredDate) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'requiredDate is required when creating a new project'
+      });
+    }
+    if (rawRequiredDate && !requiredDate) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'requiredDate must be in YYYY-MM-DD format'
       });
     }
 
@@ -1289,18 +1337,45 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         ? cartRow.draft_payload
         : {}
     );
-    const newProject = buildUpstreamProject({
-      cartName: req.body?.cartName || `Quick Add - ${mineSupplierProductId.slice(0, 8)}`,
-      selectedMine: { [mineSupplierProductId]: quantity },
-      selectedUpstreamOffer: {},
-      suggestions: [],
-      brandFilter: '',
-      searchTerm: ''
-    });
+    const currentProjects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
+    let updatedProject = null;
+    let nextProjects = currentProjects;
+    if (targetProjectId) {
+      const idx = currentProjects.findIndex((project) => String(project?.projectId || '') === targetProjectId);
+      if (idx < 0) {
+        return res.status(404).json({ status: 'error', message: 'Selected project not found' });
+      }
+      const existing = buildUpstreamProject(currentProjects[idx]);
+      updatedProject = {
+        ...existing,
+        selectedMine: {
+          ...(existing.selectedMine || {}),
+          [mineSupplierProductId]: quantity
+        }
+      };
+      nextProjects[idx] = updatedProject;
+    } else {
+      if (hasDuplicateUpstreamProject(currentProjects, requestedCartName, requiredDate)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'A supplier project with the same name and expected delivery date already exists'
+        });
+      }
+      updatedProject = buildUpstreamProject({
+        cartName: requestedCartName || `Quick Add - ${mineSupplierProductId.slice(0, 8)}`,
+        requiredDate,
+        selectedMine: { [mineSupplierProductId]: quantity },
+        selectedUpstreamOffer: {},
+        suggestions: [],
+        brandFilter: '',
+        searchTerm: ''
+      });
+      // New add must appear first in cart.
+      nextProjects = [updatedProject, ...currentProjects];
+    }
     const nextDraftPayload = normalizeUpstreamCartDraft({
       ...currentDraft,
-      // New add must appear first in cart.
-      projects: [newProject, ...(currentDraft.projects || [])]
+      projects: nextProjects
     });
 
     const { data: saved, error: saveError } = await supabase
@@ -1328,8 +1403,9 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         quantityAdjusted
       },
       project: {
-        projectId: newProject.projectId,
-        cartName: newProject.cartName
+        projectId: updatedProject.projectId,
+        cartName: updatedProject.cartName,
+        requiredDate: updatedProject.requiredDate || null
       },
       cart: {
         id: saved.id,
@@ -1379,11 +1455,16 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
     }
     const cartName = String(req.body?.cartName || '').trim();
     const targetProjectId = String(req.body?.projectId || '').trim();
+    const rawRequiredDate = String(req.body?.requiredDate || '').trim();
+    const requiredDate = /^\d{4}-\d{2}-\d{2}$/.test(rawRequiredDate) ? rawRequiredDate : '';
     if (!cartName) {
       return res.status(400).json({ status: 'error', message: 'Project name is required' });
     }
     if (cartName.length > 120) {
       return res.status(400).json({ status: 'error', message: 'Project name must be 120 characters or fewer' });
+    }
+    if (rawRequiredDate && !requiredDate) {
+      return res.status(400).json({ status: 'error', message: 'requiredDate must be in YYYY-MM-DD format' });
     }
 
     const { data: cartRow, error: cartError } = await supabase
@@ -1399,6 +1480,27 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
         : {}
     );
     const projects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
+    const targetIdx = targetProjectId
+      ? projects.findIndex((p) => String(p?.projectId || '') === targetProjectId)
+      : 0;
+    const safeTargetIdx = targetIdx >= 0 ? targetIdx : 0;
+    const effectiveRequiredDate = rawRequiredDate
+      ? requiredDate
+      : String(projects[safeTargetIdx]?.requiredDate || '').trim();
+    const effectiveProjectId = String(projects[safeTargetIdx]?.projectId || '').trim();
+    if (
+      hasDuplicateUpstreamProject(
+        projects,
+        cartName,
+        effectiveRequiredDate,
+        targetProjectId || effectiveProjectId
+      )
+    ) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'A supplier project with the same name and expected delivery date already exists'
+      });
+    }
     if (projects.length === 0) {
       projects.push(
         buildUpstreamProject({
@@ -1413,7 +1515,8 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
       const safeIdx = idx >= 0 ? idx : 0;
       projects[safeIdx] = buildUpstreamProject({
         ...projects[safeIdx],
-        cartName
+        cartName,
+        requiredDate
       });
     }
     const nextDraftPayload = normalizeUpstreamCartDraft({
@@ -1436,12 +1539,13 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
 
     return res.json({
       status: 'success',
-      message: 'Upstream project name updated',
+      message: 'Upstream project details updated',
       cart: {
         id: saved.id,
         updatedAt: saved.updated_at,
         projectId: targetProjectId || null,
-        cartName
+        cartName,
+        requiredDate: requiredDate || null
       }
     });
   } catch (error) {
@@ -1472,6 +1576,7 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
     const nextProject = buildUpstreamProject({
       projectId: payloadInput.projectId || null,
       cartName: String(payloadInput.cartName || '').trim(),
+      requiredDate: String(payloadInput.requiredDate || '').trim(),
       selectedMine: payloadInput.selectedMine || {},
       selectedUpstreamOffer: payloadInput.selectedUpstreamOffer || {},
       suggestions: Array.isArray(payloadInput.suggestions) ? payloadInput.suggestions : [],
@@ -1480,6 +1585,19 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
     });
     let nextProjects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
     if (payloadInput.projectId) {
+      if (
+        hasDuplicateUpstreamProject(
+          nextProjects,
+          nextProject.cartName,
+          nextProject.requiredDate,
+          String(payloadInput.projectId || '')
+        )
+      ) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'A supplier project with the same name and expected delivery date already exists'
+        });
+      }
       const idx = nextProjects.findIndex((p) => String(p?.projectId || '') === String(payloadInput.projectId));
       if (idx >= 0) {
         nextProjects[idx] = nextProject;
@@ -1488,6 +1606,12 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       }
     } else {
       // No projectId means user intentionally saved a fresh project from upstream flow.
+      if (hasDuplicateUpstreamProject(nextProjects, nextProject.cartName, nextProject.requiredDate)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'A supplier project with the same name and expected delivery date already exists'
+        });
+      }
       nextProjects = [nextProject, ...nextProjects];
     }
     const draftPayload = normalizeUpstreamCartDraft({

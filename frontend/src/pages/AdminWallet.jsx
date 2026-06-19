@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Wallet as WalletIcon, RefreshCw } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { Button } from '@/components/ui/button';
+import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 
 const formatInr = (value) =>
   `₹${Number(value || 0).toLocaleString('en-IN', {
@@ -314,7 +315,7 @@ export default function AdminWallet() {
               <tbody>
                 {withdrawals.map((row) => (
                   <tr key={row.id} className="border-b last:border-b-0">
-                    <td className="px-2 py-2 text-slate-600">{new Date(row.created_at).toLocaleString()}</td>
+                    <td className="px-2 py-2 text-slate-600">{formatDateTimeIST(row.created_at, '—')}</td>
                     <td className="px-2 py-2 text-slate-900">
                       <div className="font-medium">{row.user?.name || row.user?.email || '-'}</div>
                       <div className="text-xs text-slate-500">{row.user?.company || row.user?.id || '-'}</div>
@@ -542,7 +543,7 @@ export default function AdminWallet() {
                     className="cursor-pointer border-b last:border-b-0 hover:bg-slate-50"
                     onClick={() => setSelectedTransaction(row)}
                   >
-                    <td className="px-2 py-2 text-slate-600">{new Date(row.created_at).toLocaleDateString()}</td>
+                    <td className="px-2 py-2 text-slate-600">{formatDateIST(row.created_at, '—')}</td>
                     <td className="px-2 py-2 font-medium text-slate-900">{row.description || row.transaction_type || '-'}</td>
                     <td
                       className={`px-2 py-2 text-right font-semibold ${row.direction === 'credit' ? 'text-green-600' : 'text-rose-600'}`}

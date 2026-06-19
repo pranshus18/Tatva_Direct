@@ -58,6 +58,51 @@ function flattenCartItems(draft) {
   return items;
 }
 
+function normalizeCartShippingAddress(raw = {}) {
+  return {
+    line1: String(raw?.line1 || raw?.street || '').trim(),
+    city: String(raw?.city || '').trim(),
+    state: String(raw?.state || '').trim(),
+    pincode: String(raw?.pincode || raw?.zipCode || '').trim(),
+    country: String(raw?.country || 'India').trim() || 'India'
+  };
+}
+
+function isCartShippingAddressComplete(address = {}) {
+  return ['line1', 'city', 'state', 'pincode', 'country'].every((key) =>
+    String(address?.[key] || '').trim()
+  );
+}
+
+/** Shipping picked in Product Discovery is stored on cart project metadata. */
+export function resolveDiscoveryShippingFromCartDraft(draft) {
+  if (!draft || typeof draft !== 'object') return null;
+
+  const root = normalizeCartShippingAddress(draft.shippingAddress || {});
+  if (isCartShippingAddressComplete(root)) {
+    return {
+      address: root,
+      shippingAddressId: String(draft.shippingAddressId || '').trim(),
+      projectName: ''
+    };
+  }
+
+  const groups = Array.isArray(draft.boqGroups) ? draft.boqGroups : [];
+  for (const group of groups) {
+    const project = group?.boqProject;
+    if (!project || typeof project !== 'object') continue;
+    const address = normalizeCartShippingAddress(project.shippingAddress || {});
+    if (!isCartShippingAddressComplete(address)) continue;
+    return {
+      address,
+      shippingAddressId: String(project.shippingAddressId || '').trim(),
+      projectName: String(group?.boqName || '').trim()
+    };
+  }
+
+  return null;
+}
+
 /** Load persisted PO cart — same source the voice agent uses on the server. */
 /** Notify App workflow state after voice syncs cart (suppliers, substitutions, PO fields). */
 export function emitVoiceCartUpdated(draft) {

@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { RotateCcw } from 'lucide-react';
+import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import './ServiceProviderReturns.css';
 
 const STATUS_LABEL = {
@@ -224,7 +225,7 @@ const ServiceProviderReturns = () => {
                       </div>
                       <div className="spr-meta">
                         {created ? (
-                          <span title={created.toLocaleString()}>Created {created.toLocaleDateString()}</span>
+                          <span title={formatDateTimeIST(created, '—')}>Created {formatDateIST(created, '—')}</span>
                         ) : null}
                       </div>
                     </div>
@@ -249,7 +250,7 @@ const ServiceProviderReturns = () => {
                             {r.metadata?.buyer_acknowledged_closure_at ? (
                               <span className="spr-ack">
                                 You confirmed on{' '}
-                                {new Date(r.metadata.buyer_acknowledged_closure_at).toLocaleString()}
+                                {formatDateTimeIST(r.metadata.buyer_acknowledged_closure_at, '—')}
                               </span>
                             ) : (
                               <span className="spr-ack spr-ack--pending">

@@ -12,6 +12,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './AdminDashboard.css';
 
 const ADMIN_DASHBOARD_CACHE_KEY = 'admin_dashboard_cache_v1';
@@ -351,7 +352,7 @@ const AdminTransactions = ({ user }) => {
                     <p><strong>Payment Status:</strong> {selectedTransaction.paymentStatus || 'pending'}</p>
                     <p><strong>Order Date:</strong> {selectedTransaction.date || selectedTransaction.createdAt || 'N/A'}</p>
                     {selectedTransaction.createdAt && selectedTransaction.date !== selectedTransaction.createdAt && (
-                      <p><strong>Created At:</strong> {new Date(selectedTransaction.createdAt).toLocaleString()}</p>
+                      <p><strong>Created At:</strong> {formatDateTimeIST(selectedTransaction.createdAt, '—')}</p>
                     )}
                   </div>
 

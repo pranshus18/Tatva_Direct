@@ -29,8 +29,8 @@ async function loadProfile(client) {
   const user = res.data?.user || res.data;
   const address = user?.address || profile?.address || {};
   const gstin = String(profile?.gstin || profile?.mainGstin || user?.gstin || '').trim();
-  const billingAddresses = Array.isArray(profile?.billingAddresses) ? profile.billingAddresses : [];
-  return { address, gstin, billingAddresses };
+  const shippingAddresses = Array.isArray(profile?.shippingAddresses) ? profile.shippingAddresses : [];
+  return { address, gstin, shippingAddresses };
 }
 
 async function groupPurchaseOrders(client, items, selectedVendors, substitutions) {
@@ -109,10 +109,10 @@ export async function finishPoGrouping(toolCtx, memory) {
 export async function advanceAfterSubstitution(toolCtx, memory, substitutions) {
   setCheckout(memory, { substitutions });
   const profile = await loadProfile(toolCtx.client);
-  const ship = profile?.address || {};
+  const ship = profile?.shippingAddresses?.[0] || profile?.address || {};
   setCheckout(memory, {
     shippingAddress: ship,
-    billingAddress: profile?.billingAddresses?.[0]?.address || ship,
+    billingAddress: profile?.address || ship,
     gstin: profile?.gstin || '',
     deliveryDestination: 'shipping',
     poFieldsQueue: ['requiredDate', 'paymentMethod', 'confirmAddresses'],

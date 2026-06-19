@@ -3,13 +3,19 @@ import {
   MAX_CART_ITEM_QUANTITY,
   buildPoCartDraftFromSavePayload,
   getContractErrorMessage,
+  mergeTransportSelection,
   appendDiscoveryItemAsNewProject,
   loadAdminBrandTerminalRoleMap,
   normalizePoCartDraft,
   parseWithSchema,
   poCartSaveSchema,
+  poCartTransportPatchSchema,
   supplierMatchesBrandTerminalRole
 } from './poImports.js';
+import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js';
+import { isAddressComplete, normalizeAddress } from './shared/poHelpers.js';
+import { formatShippingAddressText } from '../../services/vendorRequestContextService.js';
+import { geocodeAddressNominatim } from '../../utils/geoUtils.js';
 
 export function registerPoCartRoutes(ctx) {
   const {
@@ -18,6 +24,79 @@ export function registerPoCartRoutes(ctx) {
     isServiceProvider,
     supabase
   } = ctx;
+
+const normalizeProjectNameKey = (value) => String(value || '').trim().toLowerCase();
+const normalizeProjectDateKey = (value) => String(value || '').trim().slice(0, 10);
+
+async function resolveDiscoveryProjectShipping(supabaseClient, userId, body = {}) {
+  const shippingAddressId = String(body?.shippingAddressId || '').trim();
+  const inlineAddress =
+    body?.shippingAddress && typeof body.shippingAddress === 'object'
+      ? normalizeAddress(body.shippingAddress)
+      : null;
+
+  if (inlineAddress && isAddressComplete(inlineAddress)) {
+    return {
+      shippingAddressId: shippingAddressId || null,
+      shippingAddress: inlineAddress
+    };
+  }
+
+  if (!shippingAddressId) {
+    return null;
+  }
+
+  const { data: user, error } = await supabaseClient
+    .from('users')
+    .select('profile, user_type')
+    .eq('id', userId)
+    .maybeSingle();
+  if (error) throw error;
+
+  const saved = deriveShippingAddressesFromProfile(user || {});
+  const match = saved.find((entry) => String(entry.id) === shippingAddressId);
+  if (!match) {
+    return { error: 'Selected shipping address was not found in your profile.' };
+  }
+
+  return {
+    shippingAddressId,
+    shippingAddress: normalizeAddress(match)
+  };
+}
+
+async function enrichDiscoveryShippingMeta(shippingMeta) {
+  if (!shippingMeta?.shippingAddress) return shippingMeta;
+  const location = formatShippingAddressText(shippingMeta.shippingAddress);
+  let siteGeo = null;
+  try {
+    const geo = await geocodeAddressNominatim(location);
+    if (geo && typeof geo.lat === 'number' && typeof geo.lng === 'number') {
+      siteGeo = { lat: geo.lat, lng: geo.lng };
+    }
+  } catch {
+    // Geocoding is best-effort; ranking still uses city/state fallback.
+  }
+  return {
+    ...shippingMeta,
+    location,
+    siteGeo
+  };
+}
+
+const hasDuplicateProjectKey = (groups, nextName, nextDate, excludeGroupId = '') => {
+  const nameKey = normalizeProjectNameKey(nextName);
+  const dateKey = normalizeProjectDateKey(nextDate);
+  return (Array.isArray(groups) ? groups : []).some((group) => {
+    const gid = String(group?.groupId || '').trim();
+    if (excludeGroupId && gid === excludeGroupId) return false;
+    const existingNameKey = normalizeProjectNameKey(group?.boqName || '');
+    const existingDateKey = normalizeProjectDateKey(
+      group?.boqProject?.requiredDate || group?.requiredDate || ''
+    );
+    return existingNameKey === nameKey && existingDateKey === dateKey;
+  });
+};
 
 router.get('/cart', authenticateToken, isServiceProvider, async (req, res) => {
   try {
@@ -48,6 +127,20 @@ router.put('/cart', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const payload = parseWithSchema(poCartSaveSchema, req.body || {});
     const draftPayload = buildPoCartDraftFromSavePayload(payload);
+    const groups = Array.isArray(draftPayload?.boqGroups) ? draftPayload.boqGroups : [];
+    const seen = new Set();
+    for (const group of groups) {
+      const key = `${normalizeProjectNameKey(group?.boqName || '')}::${normalizeProjectDateKey(
+        group?.boqProject?.requiredDate || group?.requiredDate || ''
+      )}`;
+      if (seen.has(key)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Duplicate projects are not allowed with the same name and expected delivery date'
+        });
+      }
+      seen.add(key);
+    }
 
     const { data: saved, error } = await supabase
       .from('po_carts')
@@ -83,10 +176,38 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
     const productId = String(req.body?.productId || '').trim();
     const rawQty = Number(req.body?.quantity);
     const quantity = Number.isFinite(rawQty) ? Math.max(1, Math.floor(rawQty)) : 1;
+    const targetGroupId = String(req.body?.groupId || '').trim();
+    const providedProjectName = String(req.body?.projectName || '').trim();
+    const hasExpectedDeliveryDateField = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      'expectedDeliveryDate'
+    );
+    const providedExpectedDate = String(req.body?.expectedDeliveryDate || '').trim();
+    const expectedDeliveryDate = /^\d{4}-\d{2}-\d{2}$/.test(providedExpectedDate)
+      ? providedExpectedDate
+      : null;
 
     if (!productId) {
       return res.status(400).json({ status: 'error', message: 'productId is required' });
     }
+    if (hasExpectedDeliveryDateField && providedExpectedDate && !expectedDeliveryDate) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'expectedDeliveryDate must be in YYYY-MM-DD format'
+      });
+    }
+    if (!targetGroupId && providedProjectName && !expectedDeliveryDate) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'expectedDeliveryDate is required when creating a named new project'
+      });
+    }
+
+    const shippingMeta = await resolveDiscoveryProjectShipping(supabase, req.userId, req.body || {});
+    if (shippingMeta?.error) {
+      return res.status(400).json({ status: 'error', message: shippingMeta.error });
+    }
+    const enrichedShipping = shippingMeta ? await enrichDiscoveryShippingMeta(shippingMeta) : null;
 
     const { data: product, error: productError } = await supabase
       .from('products')
@@ -153,11 +274,54 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
       specifications: product.specifications || undefined
     };
 
-    const { boqGroups: nextGroups, groupId: resultGroupId } = appendDiscoveryItemAsNewProject(
-      currentDraft.boqGroups,
-      discoveryItem,
-      product.name
-    );
+    let nextGroups = Array.isArray(currentDraft.boqGroups) ? [...currentDraft.boqGroups] : [];
+    let resultGroupId = '';
+
+    if (targetGroupId) {
+      let matched = false;
+      nextGroups = nextGroups.map((group) => {
+        if (String(group?.groupId || '') !== targetGroupId) return group;
+        matched = true;
+        const existingItems = Array.isArray(group.items) ? group.items : [];
+        const nextProject = { ...(group.boqProject || {}) };
+        if (enrichedShipping?.shippingAddress) {
+          nextProject.shippingAddress = enrichedShipping.shippingAddress;
+          if (enrichedShipping.shippingAddressId) {
+            nextProject.shippingAddressId = enrichedShipping.shippingAddressId;
+          }
+          if (enrichedShipping.location) nextProject.location = enrichedShipping.location;
+          if (enrichedShipping.siteGeo) nextProject.siteGeo = enrichedShipping.siteGeo;
+        }
+        return {
+          ...group,
+          boqProject: nextProject,
+          items: [...existingItems, discoveryItem]
+        };
+      });
+      if (!matched) {
+        return res.status(404).json({ status: 'error', message: 'Selected project not found in cart' });
+      }
+      resultGroupId = targetGroupId;
+    } else {
+      const proposedProjectName = providedProjectName || product.name;
+      const proposedProjectDate = expectedDeliveryDate || '';
+      if (hasDuplicateProjectKey(currentDraft.boqGroups, proposedProjectName, proposedProjectDate)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'A project with the same name and expected delivery date already exists'
+        });
+      }
+      const appended = appendDiscoveryItemAsNewProject(currentDraft.boqGroups, discoveryItem, product.name, {
+        projectName: proposedProjectName,
+        expectedDeliveryDate,
+        shippingAddressId: enrichedShipping?.shippingAddressId || null,
+        shippingAddress: enrichedShipping?.shippingAddress || null,
+        location: enrichedShipping?.location || null,
+        siteGeo: enrichedShipping?.siteGeo || null
+      });
+      nextGroups = appended.boqGroups;
+      resultGroupId = appended.groupId;
+    }
 
     const nextDraftPayload = normalizePoCartDraft({
       ...currentDraft,
@@ -183,6 +347,57 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
   } catch (error) {
     console.error('Add discovery product to cart error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to add product to cart' });
+  }
+});
+
+router.patch('/cart/transport-selection', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const payload = parseWithSchema(poCartTransportPatchSchema, req.body || {});
+
+    const { data: cart, error: cartError } = await supabase
+      .from('po_carts')
+      .select('id, draft_payload')
+      .eq('service_provider_id', req.userId)
+      .maybeSingle();
+
+    if (cartError) throw cartError;
+
+    const currentDraft = normalizePoCartDraft(
+      cart?.draft_payload && typeof cart.draft_payload === 'object' ? cart.draft_payload : {}
+    );
+
+    let nextTransportSelection = currentDraft.transportSelection || null;
+    if (payload.clear === true) {
+      nextTransportSelection = null;
+    } else if (payload.transportSelection && typeof payload.transportSelection === 'object') {
+      nextTransportSelection = mergeTransportSelection(
+        currentDraft.transportSelection,
+        payload.transportSelection,
+        payload.transportVendorIds
+      );
+    }
+
+    const nextDraftPayload = {
+      ...currentDraft,
+      transportSelection: nextTransportSelection
+    };
+
+    const { error: saveError } = await supabase.from('po_carts').upsert(
+      {
+        service_provider_id: req.userId,
+        draft_payload: nextDraftPayload
+      },
+      { onConflict: 'service_provider_id' }
+    );
+    if (saveError) throw saveError;
+
+    return res.json({
+      status: 'success',
+      transportSelection: nextTransportSelection
+    });
+  } catch (error) {
+    console.error('Patch PO cart transport selection error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to save transport selection' });
   }
 });
 
@@ -260,18 +475,14 @@ router.patch('/cart/items/:itemId/quantity', authenticateToken, isServiceProvide
   }
 });
 
-router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider, async (req, res) => {
+router.delete('/cart/items/:itemId', authenticateToken, isServiceProvider, async (req, res) => {
   try {
-    const groupId = String(req.params?.groupId || '').trim();
-    const nextName = String(req.body?.boqName || '').trim();
-    if (!groupId) {
-      return res.status(400).json({ status: 'error', message: 'Cart group id is required' });
-    }
-    if (!nextName) {
-      return res.status(400).json({ status: 'error', message: 'Project name is required' });
-    }
-    if (nextName.length > 120) {
-      return res.status(400).json({ status: 'error', message: 'Project name must be 120 characters or fewer' });
+    const itemId = String(req.params?.itemId || '').trim();
+    if (!itemId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Cart item id is required'
+      });
     }
 
     const { data: cart, error: cartError } = await supabase
@@ -279,6 +490,7 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
       .select('id, draft_payload')
       .eq('service_provider_id', req.userId)
       .maybeSingle();
+
     if (cartError) throw cartError;
     if (!cart) {
       return res.status(404).json({ status: 'error', message: 'Saved cart not found' });
@@ -289,13 +501,23 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
     );
     const groups = Array.isArray(currentDraft.boqGroups) ? [...currentDraft.boqGroups] : [];
     let found = false;
-    const nextGroups = groups.map((group) => {
-      if (String(group?.groupId || '') !== groupId) return group;
-      found = true;
-      return { ...group, boqName: nextName };
-    });
+    const nextGroups = groups
+      .map((group) => {
+        const arr = Array.isArray(group.items) ? [...group.items] : [];
+        const nextItems = arr.filter((item) => {
+          const isTarget = item?.id !== undefined && item?.id !== null && String(item.id) === itemId;
+          if (isTarget) found = true;
+          return !isTarget;
+        });
+        return {
+          ...group,
+          items: nextItems
+        };
+      })
+      .filter((group) => Array.isArray(group.items) && group.items.length > 0);
+
     if (!found) {
-      return res.status(404).json({ status: 'error', message: 'Cart group not found' });
+      return res.status(404).json({ status: 'error', message: 'Cart item not found' });
     }
 
     const nextDraftPayload = normalizePoCartDraft({
@@ -312,10 +534,103 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
 
     return res.json({
       status: 'success',
-      message: 'Project name updated',
+      message: 'Cart item removed',
+      itemId
+    });
+  } catch (error) {
+    console.error('Delete PO cart item error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to remove cart item' });
+  }
+});
+
+router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const groupId = String(req.params?.groupId || '').trim();
+    const nextName = String(req.body?.boqName || '').trim();
+    const hasExpectedDeliveryDateField = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      'expectedDeliveryDate'
+    );
+    const providedExpectedDate = String(req.body?.expectedDeliveryDate || '').trim();
+    const expectedDeliveryDate = /^\d{4}-\d{2}-\d{2}$/.test(providedExpectedDate)
+      ? providedExpectedDate
+      : null;
+    if (!groupId) {
+      return res.status(400).json({ status: 'error', message: 'Cart group id is required' });
+    }
+    if (!nextName) {
+      return res.status(400).json({ status: 'error', message: 'Project name is required' });
+    }
+    if (nextName.length > 120) {
+      return res.status(400).json({ status: 'error', message: 'Project name must be 120 characters or fewer' });
+    }
+    if (hasExpectedDeliveryDateField && providedExpectedDate && !expectedDeliveryDate) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'expectedDeliveryDate must be in YYYY-MM-DD format'
+      });
+    }
+
+    const { data: cart, error: cartError } = await supabase
+      .from('po_carts')
+      .select('id, draft_payload')
+      .eq('service_provider_id', req.userId)
+      .maybeSingle();
+    if (cartError) throw cartError;
+    if (!cart) {
+      return res.status(404).json({ status: 'error', message: 'Saved cart not found' });
+    }
+
+    const currentDraft = normalizePoCartDraft(
+      cart.draft_payload && typeof cart.draft_payload === 'object' ? cart.draft_payload : {}
+    );
+    const groups = Array.isArray(currentDraft.boqGroups) ? [...currentDraft.boqGroups] : [];
+    const targetGroup = groups.find((group) => String(group?.groupId || '') === groupId);
+    if (!targetGroup) {
+      return res.status(404).json({ status: 'error', message: 'Cart group not found' });
+    }
+    const effectiveDate = hasExpectedDeliveryDateField
+      ? expectedDeliveryDate || ''
+      : String(targetGroup?.boqProject?.requiredDate || targetGroup?.requiredDate || '').trim();
+    if (hasDuplicateProjectKey(groups, nextName, effectiveDate, groupId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'A project with the same name and expected delivery date already exists'
+      });
+    }
+    let found = false;
+    const nextGroups = groups.map((group) => {
+      if (String(group?.groupId || '') !== groupId) return group;
+      found = true;
+      const nextProjectMeta =
+        group?.boqProject && typeof group.boqProject === 'object' ? { ...group.boqProject } : {};
+      if (hasExpectedDeliveryDateField) {
+        if (expectedDeliveryDate) nextProjectMeta.requiredDate = expectedDeliveryDate;
+        else delete nextProjectMeta.requiredDate;
+      }
+      return { ...group, boqName: nextName, boqProject: nextProjectMeta };
+    });
+    if (!found) return res.status(404).json({ status: 'error', message: 'Cart group not found' });
+
+    const nextDraftPayload = normalizePoCartDraft({
+      ...currentDraft,
+      boqGroups: nextGroups
+    });
+
+    const { error: updateError } = await supabase
+      .from('po_carts')
+      .update({ draft_payload: nextDraftPayload })
+      .eq('id', cart.id)
+      .eq('service_provider_id', req.userId);
+    if (updateError) throw updateError;
+
+    return res.json({
+      status: 'success',
+      message: 'Project details updated',
       group: {
         groupId,
-        boqName: nextName
+        boqName: nextName,
+        expectedDeliveryDate: hasExpectedDeliveryDateField ? expectedDeliveryDate : null
       }
     });
   } catch (error) {

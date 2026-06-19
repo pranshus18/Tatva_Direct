@@ -21,7 +21,15 @@ import { isVoiceGuidedActive, prepareSupplierSelectFromVoiceCart } from '../voic
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { Users } from 'lucide-react';
 import { formatRupee } from '../utils/formatRupee';
+import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
+import { formatDateIST } from '../utils/dateTime';
 import './VendorSelect.css';
+
+function enrichBoqProjectMeta(proj) {
+  if (!proj || typeof proj !== 'object') return proj;
+  const location = String(proj.location || '').trim() || formatShippingAddressPreview(proj.shippingAddress);
+  return location && !proj.location ? { ...proj, location } : proj;
+}
 
 function hydrateItemsFromWorkflow() {
   const wf = readSpWorkflow();
@@ -46,7 +54,9 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const [loadingItems, setLoadingItems] = useState(false);
   const [itemsLoadError, setItemsLoadError] = useState('');
   const [rankNotice, setRankNotice] = useState('');
-  const [boqMeta, setBoqMeta] = useState(boqProject || workflowSeed.project || null);
+  const [boqMeta, setBoqMeta] = useState(() =>
+    enrichBoqProjectMeta(boqProject || workflowSeed.project || null)
+  );
   const navigate = useNavigate();
   const location = useLocation();
   const itemsPropRef = useRef(items);
@@ -86,8 +96,19 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       boqId ||
       effectiveItems[0]?.boqId ||
       (typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null);
-    return buildVendorRankCacheKey(effectiveItems, effectiveBoqId);
-  }, [effectiveItems, boqId]);
+    return buildVendorRankCacheKey(effectiveItems, effectiveBoqId, boqMeta);
+  }, [effectiveItems, boqId, boqMeta]);
+
+  const deliverySiteLabel = useMemo(() => {
+    if (!boqMeta) return '';
+    if (boqMeta.location) return boqMeta.location;
+    if (boqMeta.shippingAddress) return formatShippingAddressPreview(boqMeta.shippingAddress);
+    return '';
+  }, [boqMeta]);
+
+  const hasDeliverySiteContext = Boolean(
+    boqMeta?.shippingAddress || boqMeta?.siteGeo || deliverySiteLabel
+  );
 
   useEffect(() => {
     itemsPropRef.current = items;
@@ -123,7 +144,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     setEffectiveItems(deduped);
     const proj = location.state?.supplierSelectBoqProject;
     if (proj && typeof proj === 'object') {
-      setBoqMeta(proj);
+      setBoqMeta(enrichBoqProjectMeta(proj));
     }
   }, [location.pathname, location.search, location.state]);
 
@@ -189,8 +210,14 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   };
 
   useEffect(() => {
-    if (boqProject && (boqProject.location || boqProject.requiredDate || boqProject.siteGeo)) {
-      setBoqMeta(boqProject);
+    if (
+      boqProject &&
+      (boqProject.location ||
+        boqProject.requiredDate ||
+        boqProject.siteGeo ||
+        boqProject.shippingAddress)
+    ) {
+      setBoqMeta(enrichBoqProjectMeta(boqProject));
     }
   }, [boqProject]);
 
@@ -317,6 +344,31 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     return cleanedVendors;
   };
 
+  const autoSelectNearestVendors = (cleanedVendors) => {
+    if (!hasDeliverySiteContext) return;
+    setSelections((prev) => {
+      if (Object.keys(prev).length > 0) return prev;
+      const next = {};
+      (effectiveItems || []).forEach((item) => {
+        const itemId = item.id?.toString() || String(item.id);
+        const vendors = cleanedVendors[itemId] || [];
+        const nearest = vendors[0];
+        if (!nearest) return;
+        const key = nearest.selectionId || nearest.supplierProductId || nearest.id;
+        if (key) next[itemId] = String(key);
+      });
+      return Object.keys(next).length > 0 ? next : prev;
+    });
+  };
+
+  const applyRankResults = (cleanedVendors, cacheKey) => {
+    setItemVendors(cleanedVendors);
+    autoSelectNearestVendors(cleanedVendors);
+    if (cacheKey) {
+      setVendorRankCache(cacheKey, cleanedVendors);
+    }
+  };
+
   const fetchVendors = async ({ force = false, silent = false, cacheKey: keyOverride } = {}) => {
     if (!effectiveItems || !Array.isArray(effectiveItems) || effectiveItems.length === 0) {
       setLoading(false);
@@ -327,7 +379,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     if (!force && cacheKey) {
       const cached = getVendorRankCache(cacheKey);
       if (cached) {
-        setItemVendors(cached);
+        applyRankResults(cached, null);
         setLoading(false);
         return;
       }
@@ -372,6 +424,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         body: JSON.stringify({
           items: effectiveItems,
           boqId: effectiveBoqId || undefined,
+          project: boqMeta && typeof boqMeta === 'object' ? boqMeta : undefined,
           _timestamp: timestamp,
           _random: random
         })
@@ -391,11 +444,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
       const data = await res.json();
       const cleanedVendors = normalizeRankResponse(data);
-      setItemVendors(cleanedVendors);
+      applyRankResults(cleanedVendors, cacheKey);
       setRankNotice('');
-      if (cacheKey) {
-        setVendorRankCache(cacheKey, cleanedVendors);
-      }
     } catch (error) {
       console.error('[VendorSelect] Failed to fetch vendors:', error);
       setItemVendors((prev) => ({ ...seedItemVendorShell(effectiveItems), ...prev }));
@@ -430,7 +480,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
     const cached = getVendorRankCache(rankCacheKey);
     if (cached) {
-      setItemVendors(cached);
+      applyRankResults(cached, null);
       return;
     }
 
@@ -573,57 +623,49 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     <SpWorkflowPage title="Supplier Selection" description="Choose the best vendor for each item" icon={Users}>
     <div className="page !p-0">
       <VoiceGuidedBanner />
+      {(deliverySiteLabel || boqMeta?.requiredDate) && (
+        <div
+          className="mb-4"
+          style={{
+            padding: '0.65rem 0.85rem',
+            background: '#eff6ff',
+            borderRadius: '8px',
+            border: '1px solid #bfdbfe',
+            fontSize: '0.85rem',
+            color: '#1e3a5f',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: '0.5rem',
+            maxWidth: '640px'
+          }}
+        >
+          <MapPin size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
+          <span>
+            {deliverySiteLabel && (
+              <>
+                <strong>{boqMeta?.shippingAddress ? 'Delivery address:' : 'Project site:'}</strong>{' '}
+                {deliverySiteLabel}
+              </>
+            )}
+            {boqMeta?.requiredDate && (
+              <>
+                {deliverySiteLabel ? ' · ' : ''}
+                <strong>Required by:</strong> {formatDateIST(boqMeta.requiredDate, '—')}
+              </>
+            )}
+            {deliverySiteLabel && (
+              <span style={{ display: 'block', marginTop: '0.25rem', fontSize: '0.78rem', opacity: 0.9 }}>
+                Suppliers are ranked by distance to this address when outlet coordinates exist; otherwise city or
+                state on the listing is used. The nearest supplier is pre-selected.
+              </span>
+            )}
+          </span>
+        </div>
+      )}
       <div className="page-header hidden">
         <div>
           <h1>Supplier Selection</h1>
           <p>Choose the best vendor for each item</p>
-          {(boqMeta?.location || boqMeta?.requiredDate) && (
-            <div
-              style={{
-                marginTop: '0.75rem',
-                padding: '0.65rem 0.85rem',
-                background: '#eff6ff',
-                borderRadius: '8px',
-                border: '1px solid #bfdbfe',
-                fontSize: '0.85rem',
-                color: '#1e3a5f',
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '0.5rem',
-                maxWidth: '640px'
-              }}
-            >
-              <MapPin size={18} style={{ flexShrink: 0, marginTop: '2px' }} />
-              <span>
-                {boqMeta.location && (
-                  <>
-                    <strong>Project site:</strong> {boqMeta.location}
-                  </>
-                )}
-                {boqMeta.requiredDate && (
-                  <>
-                    {boqMeta.location ? ' · ' : ''}
-                    <strong>Required by:</strong>{' '}
-                    {new Date(
-                      boqMeta.requiredDate.includes('T')
-                        ? boqMeta.requiredDate
-                        : `${boqMeta.requiredDate}T12:00:00`
-                    ).toLocaleDateString(undefined, {
-                      year: 'numeric',
-                      month: 'short',
-                      day: 'numeric'
-                    })}
-                  </>
-                )}
-                {boqMeta.location && (
-                  <span style={{ display: 'block', marginTop: '0.25rem', fontSize: '0.78rem', opacity: 0.9 }}>
-                    Suppliers are ranked nearer to this site when outlet coordinates exist; otherwise city or state on the
-                    listing is used.
-                  </span>
-                )}
-              </span>
-            </div>
-          )}
         </div>
         <button
           onClick={handleRefresh}
@@ -792,7 +834,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                               fontWeight: 600
                             }}
                           >
-                            ~{Math.round(vendor.distanceKm)} km from your project site
+                            ~{Math.round(vendor.distanceKm)} km from your{' '}
+                            {boqMeta?.shippingAddress ? 'delivery address' : 'project site'}
                           </div>
                         )}
                       </div>

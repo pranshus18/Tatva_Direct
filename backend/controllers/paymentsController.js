@@ -35,6 +35,7 @@ import {
 } from '../contracts/paymentContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
 import { upsertPaymentTransaction } from '../services/paymentTransactionService.js';
+import { applyPlatformFeeToPaidOrder } from '../services/platformFeeService.js';
 import { normalizePaymentMethodForOrder, httpStatusForUpstreamError } from '../utils/paymentNormalize.js';
 import { parseBooleanEnv } from '../utils/featureFlags.js';
 
@@ -280,20 +281,22 @@ router.post('/orders/:id/razorpay/confirm', authenticateToken, async (req, res) 
       .eq('id', order.id)
       .select('*')
       .single();
+    const feeApplied = await applyPlatformFeeToPaidOrder({ order: updatedOrder });
+    const paidOrder = feeApplied.order;
 
     const receiptDelivery = await createReceiptAndDeliver({
-      order: updatedOrder,
+      order: paidOrder,
       paymentMethod: method,
       paymentReference: razorpayPaymentId,
       actorUserId: req.userId
     });
     let invoiceSummary = null;
     try {
-      const { invoice } = await createInvoiceForOrder(updatedOrder);
-      const { pdfUrl, pdfPath } = await generateAndUploadInvoicePdf({ order: updatedOrder, invoice });
+      const { invoice } = await createInvoiceForOrder(paidOrder);
+      const { pdfUrl, pdfPath } = await generateAndUploadInvoicePdf({ order: paidOrder, invoice });
       let invoicePdfUrl = pdfUrl || null;
       if (pdfUrl) {
-        const updatedInv = await saveInvoicePdfUrlToInvoice({ orderId: updatedOrder.id, pdfUrl, pdfPath });
+        const updatedInv = await saveInvoicePdfUrlToInvoice({ orderId: paidOrder.id, pdfUrl, pdfPath });
         if (updatedInv?.metadata?.pdfUrl) invoicePdfUrl = updatedInv.metadata.pdfUrl;
       }
       invoiceSummary = {
@@ -309,7 +312,7 @@ router.post('/orders/:id/razorpay/confirm', authenticateToken, async (req, res) 
       actorRole: req.user?.user_type,
       action: 'payment_confirmed',
       resourceType: 'order',
-      resourceId: updatedOrder.id,
+      resourceId: paidOrder.id,
       ipAddress: req.ip,
       requestId: req.requestId,
       metadata: {
@@ -322,7 +325,7 @@ router.post('/orders/:id/razorpay/confirm', authenticateToken, async (req, res) 
 
     return res.json({
       status: 'success',
-      order: updatedOrder,
+      order: paidOrder,
       paymentTransaction: txn,
       receipt: receiptDelivery?.receipt || null,
       invoice: invoiceSummary
@@ -331,6 +334,19 @@ router.post('/orders/:id/razorpay/confirm', authenticateToken, async (req, res) 
     console.error('[Payments] confirm payment error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+    }
+    if (
+      e?.code === 'PLATFORM_FEE_RULE_MISSING' ||
+      e?.code === 'PLATFORM_FEE_ROLE_MISSING' ||
+      e?.code === 'PLATFORM_FEE_BRAND_MISSING' ||
+      e?.code === 'PLATFORM_FEE_ORDER_ITEMS_MISSING'
+    ) {
+      return res.status(400).json({
+        status: 'error',
+        code: e.code,
+        message: e.message,
+        ...(req.requestId ? { requestId: req.requestId } : {})
+      });
     }
     const status = httpStatusForUpstreamError(e);
     const message =
@@ -394,9 +410,11 @@ router.post('/orders/:id/bank-transfer/mark', authenticateToken, requireFinanceR
       .eq('id', order.id)
       .select('*')
       .single();
+    const feeApplied = await applyPlatformFeeToPaidOrder({ order: updatedOrder });
+    const paidOrder = feeApplied.order;
 
     await createReceiptAndDeliver({
-      order: updatedOrder,
+      order: paidOrder,
       paymentMethod: 'bank_transfer',
       paymentReference: bankReference,
       paidAt,
@@ -404,11 +422,11 @@ router.post('/orders/:id/bank-transfer/mark', authenticateToken, requireFinanceR
     });
     let invoiceSummary = null;
     try {
-      const { invoice } = await createInvoiceForOrder(updatedOrder);
-      const { pdfUrl, pdfPath } = await generateAndUploadInvoicePdf({ order: updatedOrder, invoice });
+      const { invoice } = await createInvoiceForOrder(paidOrder);
+      const { pdfUrl, pdfPath } = await generateAndUploadInvoicePdf({ order: paidOrder, invoice });
       let invoicePdfUrl = pdfUrl || null;
       if (pdfUrl) {
-        const updatedInv = await saveInvoicePdfUrlToInvoice({ orderId: updatedOrder.id, pdfUrl, pdfPath });
+        const updatedInv = await saveInvoicePdfUrlToInvoice({ orderId: paidOrder.id, pdfUrl, pdfPath });
         if (updatedInv?.metadata?.pdfUrl) invoicePdfUrl = updatedInv.metadata.pdfUrl;
       }
       invoiceSummary = {
@@ -424,7 +442,7 @@ router.post('/orders/:id/bank-transfer/mark', authenticateToken, requireFinanceR
       actorRole: req.user?.user_type,
       action: 'bank_transfer_marked_paid',
       resourceType: 'order',
-      resourceId: updatedOrder.id,
+      resourceId: paidOrder.id,
       ipAddress: req.ip,
       requestId: req.requestId,
       metadata: { bankReference, transactionId: tx.id }
@@ -432,7 +450,7 @@ router.post('/orders/:id/bank-transfer/mark', authenticateToken, requireFinanceR
 
     return res.json({
       status: 'success',
-      order: updatedOrder,
+      order: paidOrder,
       paymentTransaction: tx,
       invoice: invoiceSummary
     });
@@ -440,6 +458,14 @@ router.post('/orders/:id/bank-transfer/mark', authenticateToken, requireFinanceR
     console.error('[Payments] bank transfer mark paid error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
+    }
+    if (
+      e?.code === 'PLATFORM_FEE_RULE_MISSING' ||
+      e?.code === 'PLATFORM_FEE_ROLE_MISSING' ||
+      e?.code === 'PLATFORM_FEE_BRAND_MISSING' ||
+      e?.code === 'PLATFORM_FEE_ORDER_ITEMS_MISSING'
+    ) {
+      return res.status(400).json({ status: 'error', code: e.code, message: e.message });
     }
     return res.status(500).json({ status: 'error', message: e.message || 'Failed to mark bank transfer paid' });
   }

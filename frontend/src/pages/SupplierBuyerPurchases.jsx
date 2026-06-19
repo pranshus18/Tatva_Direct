@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BarChart3 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './Profile.css';
 
 export default function SupplierBuyerPurchases() {
@@ -385,7 +386,7 @@ export default function SupplierBuyerPurchases() {
                         )}
                       </td>
                       <td style={td}>
-                        {buyer.lastOrderAt ? new Date(buyer.lastOrderAt).toLocaleString() : '—'}
+                        {buyer.lastOrderAt ? formatDateTimeIST(buyer.lastOrderAt, '—') : '—'}
                       </td>
                     </tr>
                   ))}

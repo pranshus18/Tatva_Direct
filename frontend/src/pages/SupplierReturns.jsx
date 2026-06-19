@@ -7,6 +7,7 @@ import {
   RETURN_STATUS_LABEL as STATUS_LABEL,
   labelReturnStatus
 } from '../utils/orderReturnUi';
+import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 
 const MAIN_TABS = [
   { id: 'incoming', label: 'Process returns' },
@@ -338,7 +339,7 @@ const SupplierReturns = () => {
                       </div>
                       <div className="sr-meta">
                         {created ? (
-                          <span title={created.toLocaleString()}>Created {created.toLocaleDateString()}</span>
+                          <span title={formatDateTimeIST(created, '—')}>Created {formatDateIST(created, '—')}</span>
                         ) : null}
                       </div>
                     </div>
@@ -373,7 +374,7 @@ const SupplierReturns = () => {
                           <div className="sr-field__label">Inventory</div>
                           <div className="sr-field__value sr-ack-note">
                             Your upstream partner closed this return on{' '}
-                            {new Date(r.metadata.supplier_closed_at).toLocaleString()}. Their stock was
+                            {formatDateTimeIST(r.metadata.supplier_closed_at, '—')}. Their stock was
                             updated automatically.
                           </div>
                         </div>

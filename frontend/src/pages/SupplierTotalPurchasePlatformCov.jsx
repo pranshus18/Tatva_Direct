@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './Profile.css';
 
 export default function SupplierTotalPurchasePlatformCov() {
@@ -168,8 +169,8 @@ export default function SupplierTotalPurchasePlatformCov() {
                       <td style={td}>₹{Number(order.totalAmount || 0).toLocaleString()}</td>
                       <td style={td}>{order.status || '—'}</td>
                       <td style={td}>{order.paymentStatus || 'pending'}</td>
-                      <td style={td}>{order.createdAt ? new Date(order.createdAt).toLocaleString() : '—'}</td>
-                      <td style={td}>{order.updatedAt ? new Date(order.updatedAt).toLocaleString() : '—'}</td>
+                      <td style={td}>{order.createdAt ? formatDateTimeIST(order.createdAt, '—') : '—'}</td>
+                      <td style={td}>{order.updatedAt ? formatDateTimeIST(order.updatedAt, '—') : '—'}</td>
                     </tr>
                   ))}
                 </tbody>

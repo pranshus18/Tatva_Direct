@@ -19,6 +19,7 @@ import {
   normalizeProfileForEditor,
   syncBrandEntriesForSupplyChainStep
 } from '../utils/supplierSelectYourselfProfile';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './Profile.css';
 import './Dashboard.css';
 import './SupplierSelectYourself.css';
@@ -546,7 +547,7 @@ export default function SupplierSelectYourself() {
               You submitted supply-chain role details for admin review. Until an admin approves them, the platform
               continues to use your previously approved assignment.
               {profile.chainProfilePendingSubmittedAt
-                ? ` Submitted: ${new Date(profile.chainProfilePendingSubmittedAt).toLocaleString()}.`
+                ? ` Submitted: ${formatDateTimeIST(profile.chainProfilePendingSubmittedAt, '—')}.`
                 : ''}
             </p>
           </div>
@@ -557,7 +558,7 @@ export default function SupplierSelectYourself() {
             <p>
               Complete the remaining fields and click Save all to submit for admin approval.
               {profile.chainProfileDraftSavedAt
-                ? ` Last draft save: ${new Date(profile.chainProfileDraftSavedAt).toLocaleString()}.`
+                ? ` Last draft save: ${formatDateTimeIST(profile.chainProfileDraftSavedAt, '—')}.`
                 : ''}
             </p>
           </div>

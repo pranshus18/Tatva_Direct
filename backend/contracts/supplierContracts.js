@@ -45,7 +45,8 @@ export const supplierUpstreamCartSaveSchema = z.object({
   brandFilter: z.string().optional().default(''),
   searchTerm: z.string().optional().default(''),
   cartName: z.string().max(120).optional().default(''),
-  projectId: z.string().optional().nullable()
+  projectId: z.string().optional().nullable(),
+  requiredDate: z.string().optional().nullable()
 });
 
 export const supplierInventoryAdjustSchema = z.object({

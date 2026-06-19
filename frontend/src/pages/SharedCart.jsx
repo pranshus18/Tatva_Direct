@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AlertTriangle, Clipboard, LogIn, ShoppingCart } from 'lucide-react';
 import { getApiUrl } from '../config/api';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './SharedCart.css';
 
 const SharedCart = () => {
@@ -144,7 +145,7 @@ const SharedCart = () => {
           <ShoppingCart size={18} />
           <div>
             <strong>{itemCount || 0} item(s)</strong>
-            {shared?.expiresAt ? <span>Link expires on {new Date(shared.expiresAt).toLocaleString()}</span> : null}
+            {shared?.expiresAt ? <span>Link expires on {formatDateTimeIST(shared.expiresAt, '—')}</span> : null}
           </div>
         </div>
 

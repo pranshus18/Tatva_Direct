@@ -1233,7 +1233,7 @@ const SupplierDashboard = ({ user }) => {
                         <li key={idx} className="supplier-dashboard-status-timeline-item">
                           <strong>{ev.status || '—'}</strong>
                           {ev.timestamp || ev.at ? (
-                            <span className="supplier-dashboard-muted-text"> — {new Date(ev.timestamp || ev.at).toLocaleString()}</span>
+                            <span className="supplier-dashboard-muted-text"> — {formatDateTimeIST(ev.timestamp || ev.at, '—')}</span>
                           ) : null}
                           {ev.notes ? <div className="supplier-dashboard-status-note">{ev.notes}</div> : null}
                         </li>

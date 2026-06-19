@@ -1,5 +1,6 @@
 import { supabase } from '../../../config/supabase.js';
 import { recordInventoryMovement } from '../../../services/inventoryService.js';
+import { formatPlatformDateTime } from '../../../utils/dateTime.js';
 
 export function normalizeOrderNumberForTracking(orderNumber = '') {
   const normalized = String(orderNumber || '')
@@ -169,15 +170,5 @@ export async function restockInventoryForCancelledOrder({ orderId, actorUserId }
 }
 
 export function formatDate(date) {
-  if (!date) return 'N/A';
-
-  const orderDate = new Date(date);
-  const day = String(orderDate.getDate()).padStart(2, '0');
-  const month = String(orderDate.getMonth() + 1).padStart(2, '0');
-  const year = orderDate.getFullYear();
-  const hours = String(orderDate.getHours()).padStart(2, '0');
-  const minutes = String(orderDate.getMinutes()).padStart(2, '0');
-  const seconds = String(orderDate.getSeconds()).padStart(2, '0');
-
-  return `${day}/${month}/${year}, ${hours}:${minutes}:${seconds}`;
+  return formatPlatformDateTime(date, 'N/A');
 }

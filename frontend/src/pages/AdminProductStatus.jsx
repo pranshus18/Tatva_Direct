@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import './AdminProductStatus.css';
 import { polishSupplierListingWithAi } from '../utils/adminPolishListingApi';
+import { formatDateTimeIST } from '../utils/dateTime';
 
 const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
 const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
@@ -633,7 +634,7 @@ const AdminProductStatus = ({ user }) => {
                   {product.createdAt && (
                     <div className="product-date" style={{ marginTop: '0.4rem' }}>
                       <Clock size={14} />
-                      Submitted: {new Date(product.createdAt).toLocaleString()}
+                      Submitted: {formatDateTimeIST(product.createdAt, '—')}
                     </div>
                   )}
 
@@ -647,7 +648,7 @@ const AdminProductStatus = ({ user }) => {
                   {product.status === 'approved' && product.approvedAt && (
                     <div className="approval-date" style={{ marginTop: '0.4rem' }}>
                       <CheckCircle size={14} />
-                      <span>Approved: {new Date(product.approvedAt).toLocaleString()}</span>
+                      <span>Approved: {formatDateTimeIST(product.approvedAt, '—')}</span>
                     </div>
                   )}
                 </div>
@@ -2050,14 +2051,14 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               <h3>Approval Information</h3>
               <div className="approval-info-box">
                 <CheckCircle size={20} />
-                <p>Approved on {new Date(product.approvedAt).toLocaleString()}</p>
+                <p>Approved on {formatDateTimeIST(product.approvedAt, '—')}</p>
               </div>
             </div>
           )}
 
           {product.createdAt && (
             <div className="date-section">
-              <p><strong>Submitted:</strong> {new Date(product.createdAt).toLocaleString()}</p>
+              <p><strong>Submitted:</strong> {formatDateTimeIST(product.createdAt, '—')}</p>
             </div>
           )}
         </div>

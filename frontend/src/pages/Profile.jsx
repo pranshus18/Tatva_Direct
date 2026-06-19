@@ -5,7 +5,41 @@ import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import ProfilePhotoSection from '../components/ProfilePhotoSection';
 import { cacheProfilePhotoUrl } from '../utils/profilePhoto';
+import {
+  getGeolocationErrorMessage,
+  resolveAddressFromCurrentLocation
+} from '../utils/currentLocationAddress';
+import { formatShippingAddressLabel } from '../utils/shippingAddressLabel';
+import { formatDateTimeIST } from '../utils/dateTime';
 import './Profile.css';
+
+const formatSavedAddressLabel = (entry, index, options = {}) => {
+  const {
+    labelKey = 'label',
+    nameKey = 'name',
+    lineKey = 'line1',
+    streetKey = 'address',
+    cityKey = 'city'
+  } = options;
+  if (nameKey === 'name' && labelKey === 'label' && lineKey === 'line1' && streetKey === 'address') {
+    return formatShippingAddressLabel(
+      {
+        ...entry,
+        label: entry?.[labelKey],
+        name: entry?.[nameKey],
+        line1: entry?.[lineKey],
+        address: typeof entry?.[streetKey] === 'string' ? { line1: entry[streetKey] } : entry?.[streetKey],
+        city: entry?.[cityKey]
+      },
+      index
+    );
+  }
+  const label = String(entry?.[labelKey] || entry?.[nameKey] || '').trim();
+  if (label) return label;
+  const preview = [entry?.[lineKey] || entry?.[streetKey], entry?.[cityKey]].filter(Boolean).join(', ');
+  if (preview) return preview;
+  return `Address ${index + 1}`;
+};
 
 const Profile = ({ user }) => {
   const [profile, setProfile] = useState(null);
@@ -47,19 +81,21 @@ const Profile = ({ user }) => {
         ];
         const missing = requiredAddressFields.find((f) => !String(addr?.[f.key] || '').trim());
         if (missing) {
-          alert(`Please enter ${missing.label} in the profile address section.`);
+          alert(`Please enter ${missing.label} in the registered billing address section.`);
           return;
         }
 
-        const billingAddresses = Array.isArray(profile?.billingAddresses) ? profile.billingAddresses : [];
-        for (let i = 0; i < billingAddresses.length; i += 1) {
-          const entry = billingAddresses[i] || {};
-          const missingBillingField = requiredAddressFields.find(
+        const shippingAddresses = Array.isArray(profile?.shippingAddresses) ? profile.shippingAddresses : [];
+        for (let i = 0; i < shippingAddresses.length; i += 1) {
+          const entry = shippingAddresses[i] || {};
+          const hasAnyField = requiredAddressFields.some((f) => String(entry?.[f.key] || '').trim());
+          if (!hasAnyField) continue;
+          const missingShippingField = requiredAddressFields.find(
             (f) => !String(entry?.[f.key] || '').trim()
           );
-          if (missingBillingField) {
-            const label = String(entry?.label || '').trim() || `Billing Address ${i + 1}`;
-            alert(`Please enter ${missingBillingField.label} in ${label}.`);
+          if (missingShippingField) {
+            const label = String(entry?.label || '').trim() || `Shipping Address ${i + 1}`;
+            alert(`Please enter ${missingShippingField.label} in ${label}.`);
             return;
           }
         }
@@ -78,7 +114,7 @@ const Profile = ({ user }) => {
           return;
         }
 
-        const billingAddresses = Array.isArray(profile?.billingAddresses) ? profile.billingAddresses : [];
+        const billingAddr = profile?.address || {};
         const requiredBillingFields = [
           { key: 'line1', label: 'Address' },
           { key: 'city', label: 'City' },
@@ -86,40 +122,14 @@ const Profile = ({ user }) => {
           { key: 'pincode', label: 'PIN code' },
           { key: 'country', label: 'Country' }
         ];
-        for (let i = 0; i < billingAddresses.length; i += 1) {
-          const entry = billingAddresses[i] || {};
-          const missingBillingField = requiredBillingFields.find(
-            (f) => !String(entry?.[f.key] || '').trim()
-          );
-          if (missingBillingField) {
-            const label = String(entry?.label || '').trim() || `Billing Address ${i + 1}`;
-            alert(`Please enter ${missingBillingField.label} in ${label}.`);
-            return;
-          }
+        const missingBilling = requiredBillingFields.find((f) => !String(billingAddr?.[f.key] || '').trim());
+        if (missingBilling) {
+          alert(`Please enter ${missingBilling.label} in the registered billing address section.`);
+          return;
         }
       }
 
-      let payload = profile;
-      if (profile?.userType === 'supplier') {
-        const branches = Array.isArray(profile?.branches) ? profile.branches : [];
-        const primaryBranch = branches.find(
-          (branch) =>
-            ['address', 'city', 'state', 'country'].every((key) => String(branch?.[key] || '').trim()) &&
-            String(branch?.zipCode || branch?.pincode || '').trim()
-        );
-        if (primaryBranch) {
-          payload = {
-            ...profile,
-            address: {
-              line1: String(primaryBranch.address || primaryBranch.line1 || '').trim(),
-              city: String(primaryBranch.city || '').trim(),
-              state: String(primaryBranch.state || '').trim(),
-              pincode: String(primaryBranch.zipCode || primaryBranch.pincode || '').trim(),
-              country: String(primaryBranch.country || 'India').trim() || 'India'
-            }
-          };
-        }
-      }
+      const payload = profile;
 
       const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl('/api/profile'), {
@@ -255,6 +265,26 @@ const Profile = ({ user }) => {
 
 const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false }) => {
   const [locatingAddress, setLocatingAddress] = useState(false);
+  const [locatingShippingAddressId, setLocatingShippingAddressId] = useState(null);
+  const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
+
+  const shippingAddresses = profile?.shippingAddresses || [];
+
+  useEffect(() => {
+    if (shippingAddresses.length === 0) {
+      setSelectedShippingAddressId('');
+      return;
+    }
+    setSelectedShippingAddressId((prev) => {
+      if (prev && shippingAddresses.some((addr) => String(addr.id) === String(prev))) return prev;
+      return String(shippingAddresses[0].id);
+    });
+  }, [shippingAddresses]);
+
+  const selectedShippingAddress =
+    shippingAddresses.find((addr) => String(addr.id) === String(selectedShippingAddressId)) ||
+    shippingAddresses[0] ||
+    null;
 
   const addProject = () => {
     const newProject = {
@@ -287,7 +317,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
     });
   };
 
-  const addBillingAddress = () => {
+  const addShippingAddress = () => {
     const newAddress = {
       id: Date.now(),
       label: '',
@@ -299,23 +329,24 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
     };
     setProfile((prev) => ({
       ...prev,
-      billingAddresses: [...(prev?.billingAddresses || []), newAddress]
+      shippingAddresses: [...(prev?.shippingAddresses || []), newAddress]
     }));
+    setSelectedShippingAddressId(String(newAddress.id));
   };
 
-  const updateBillingAddress = (addressId, field, value) => {
+  const updateShippingAddress = (addressId, field, value) => {
     setProfile((prev) => ({
       ...prev,
-      billingAddresses: (prev?.billingAddresses || []).map((addr) =>
+      shippingAddresses: (prev?.shippingAddresses || []).map((addr) =>
         addr.id === addressId ? { ...addr, [field]: value } : addr
       )
     }));
   };
 
-  const removeBillingAddress = (addressId) => {
+  const removeShippingAddress = (addressId) => {
     setProfile((prev) => ({
       ...prev,
-      billingAddresses: (prev?.billingAddresses || []).filter((addr) => addr.id !== addressId)
+      shippingAddresses: (prev?.shippingAddresses || []).filter((addr) => addr.id !== addressId)
     }));
   };
 
@@ -329,96 +360,59 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
     });
   };
 
-  const getCurrentPositionAsync = () =>
-    new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error('Location is not supported in this browser.'));
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: true,
-        timeout: 12000,
-        maximumAge: 0
-      });
-    });
-
-  const reverseGeocodeLocation = async (lat, lon) => {
-    const url =
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1` +
-      `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
-    const res = await fetch(url, {
-      headers: {
-        'Accept-Language': 'en'
-      }
-    });
-    if (!res.ok) {
-      throw new Error('Could not fetch address from your current location.');
-    }
-    return res.json();
-  };
-
   const fillAddressFromCurrentLocation = async () => {
     if (!editing) return;
     setLocatingAddress(true);
     try {
-      const position = await getCurrentPositionAsync();
-      const latitude = position?.coords?.latitude;
-      const longitude = position?.coords?.longitude;
-
-      if (typeof latitude !== 'number' || typeof longitude !== 'number') {
-        throw new Error('Could not read your current coordinates.');
-      }
-
-      const geoData = await reverseGeocodeLocation(latitude, longitude);
-      const addr = geoData?.address || {};
-      const line1 =
-        [
-          addr.house_number,
-          addr.road || addr.pedestrian || addr.footway,
-          addr.neighbourhood || addr.suburb || addr.quarter
-        ]
-          .filter(Boolean)
-          .join(', ')
-          .trim() || geoData?.display_name || '';
-      const city =
-        addr.city ||
-        addr.town ||
-        addr.village ||
-        addr.municipality ||
-        addr.county ||
-        '';
-      const state = addr.state || addr.state_district || '';
-      const pincode = addr.postcode || '';
-      const country = addr.country || '';
-
+      const resolved = await resolveAddressFromCurrentLocation();
       setProfile((prev) => ({
         ...prev,
         address: {
           ...(prev?.address || {}),
-          line1: line1 || prev?.address?.line1 || '',
-          city: city || prev?.address?.city || '',
-          state: state || prev?.address?.state || '',
-          pincode: pincode || prev?.address?.pincode || '',
-          country: country || prev?.address?.country || '',
-          latitude,
-          longitude,
-          geoLocation: { lat: latitude, lng: longitude }
+          line1: resolved.line1 || prev?.address?.line1 || '',
+          city: resolved.city || prev?.address?.city || '',
+          state: resolved.state || prev?.address?.state || '',
+          pincode: resolved.pincode || prev?.address?.pincode || '',
+          country: resolved.country || prev?.address?.country || '',
+          latitude: resolved.latitude,
+          longitude: resolved.longitude,
+          geoLocation: resolved.geoLocation
         }
       }));
     } catch (error) {
-      let message = 'Unable to fetch your current location.';
-      if (error?.code === 1) {
-        message = 'Location permission is blocked. Please allow location access and try again.';
-      } else if (error?.code === 2) {
-        message = 'Your location is unavailable right now. Please try again.';
-      } else if (error?.code === 3) {
-        message = 'Location request timed out. Please try again.';
-      } else if (error?.message) {
-        message = error.message;
-      }
-      alert(message);
+      alert(getGeolocationErrorMessage(error));
     } finally {
       setLocatingAddress(false);
+    }
+  };
+
+  const fillShippingAddressFromCurrentLocation = async (addressId) => {
+    if (!editing || !addressId) return;
+    setLocatingShippingAddressId(addressId);
+    try {
+      const resolved = await resolveAddressFromCurrentLocation();
+      setProfile((prev) => ({
+        ...prev,
+        shippingAddresses: (prev?.shippingAddresses || []).map((addr) =>
+          addr.id === addressId
+            ? {
+                ...addr,
+                line1: resolved.line1 || addr.line1 || '',
+                city: resolved.city || addr.city || '',
+                state: resolved.state || addr.state || '',
+                pincode: resolved.pincode || addr.pincode || '',
+                country: resolved.country || addr.country || '',
+                latitude: resolved.latitude,
+                longitude: resolved.longitude,
+                geoLocation: resolved.geoLocation
+              }
+            : addr
+        )
+      }));
+    } catch (error) {
+      alert(getGeolocationErrorMessage(error));
+    } finally {
+      setLocatingShippingAddressId(null);
     }
   };
 
@@ -468,7 +462,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
           <div className="section-header">
             <h2>
               <MapPin size={20} />
-              Address and Location
+              Billing / Registered Company Address
             </h2>
             {editing ? (
               <button
@@ -482,6 +476,9 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
               </button>
             ) : null}
           </div>
+          <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
+            Single GST-registered company address used for billing on purchase orders and invoices.
+          </p>
           <div className="form-grid">
             <div className="form-group span-2">
               <label>Address (Street / Area)</label>
@@ -490,7 +487,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
                 value={profile?.address?.line1 || ''}
                 onChange={(e) => updateCompanyAddress('line1', e.target.value)}
                 disabled={!editing}
-                placeholder="Office address"
+                placeholder="Registered office address"
               />
             </div>
             <div className="form-group">
@@ -537,89 +534,141 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
         <div className="profile-section">
           <div className="section-header">
             <h2>
-              <FileText size={20} />
-              Billing Addresses (for PO)
+              <MapPin size={20} />
+              Shipping Addresses (for PO)
             </h2>
             {editing ? (
-              <button type="button" className="btn-add" onClick={addBillingAddress}>
+              <button type="button" className="btn-add" onClick={addShippingAddress}>
                 <Plus size={16} />
-                Add Billing Address
+                Add Shipping Address
               </button>
             ) : null}
           </div>
-          {(profile?.billingAddresses || []).length === 0 ? (
+          <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
+            Add one or more delivery sites. These appear in the Create PO shipping address dropdown.
+          </p>
+          {(profile?.shippingAddresses || []).length === 0 ? (
             <p style={{ color: '#64748b', margin: 0 }}>
-              No billing addresses added yet. Add one or more addresses to use in Create PO dropdown.
+              No shipping addresses added yet. Add one or more addresses to use in Create PO dropdown.
             </p>
           ) : (
-            <div className="branches-list">
-              {(profile?.billingAddresses || []).map((addr) => (
-                <div key={addr.id} className="branch-card">
-                  <div className="branch-header">
-                    <input
-                      type="text"
-                      value={addr.label || ''}
-                      onChange={(e) => updateBillingAddress(addr.id, 'label', e.target.value)}
-                      disabled={!editing}
-                      placeholder="Address label (e.g. Head Office GST)"
-                      className="branch-name-input"
-                    />
+            <>
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
+                <label>Choose shipping address</label>
+                <select
+                  value={String(selectedShippingAddressId || selectedShippingAddress?.id || '')}
+                  onChange={(e) => setSelectedShippingAddressId(e.target.value)}
+                >
+                  {(profile?.shippingAddresses || []).map((addr, index) => (
+                    <option key={addr.id} value={String(addr.id)}>
+                      {formatSavedAddressLabel(addr, index)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {selectedShippingAddress ? (
+                <div className="branches-list">
+                  <div key={selectedShippingAddress.id} className="branch-card">
+                    <div className="branch-header">
+                      <input
+                        type="text"
+                        value={selectedShippingAddress.label || ''}
+                        onChange={(e) =>
+                          updateShippingAddress(selectedShippingAddress.id, 'label', e.target.value)
+                        }
+                        disabled={!editing}
+                        placeholder="Address label (e.g. Site A, Warehouse)"
+                        className="branch-name-input"
+                      />
+                      {editing ? (
+                        <div className="branch-header-actions">
+                          <button
+                            className="btn-remove"
+                            onClick={() => removeShippingAddress(selectedShippingAddress.id)}
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
                     {editing ? (
-                      <button className="btn-remove" onClick={() => removeBillingAddress(addr.id)}>
-                        <X size={16} />
-                      </button>
+                      <div className="address-location-row">
+                        <button
+                          type="button"
+                          className="address-location-btn"
+                          onClick={() =>
+                            fillShippingAddressFromCurrentLocation(selectedShippingAddress.id)
+                          }
+                          disabled={locatingShippingAddressId === selectedShippingAddress.id}
+                        >
+                          <MapPin size={15} aria-hidden />
+                          {locatingShippingAddressId === selectedShippingAddress.id
+                            ? 'Detecting location…'
+                            : 'Use my current location'}
+                        </button>
+                      </div>
                     ) : null}
-                  </div>
-                  <div className="form-grid">
-                    <div className="form-group span-2">
-                      <label>Address (Street / Area)</label>
-                      <textarea
-                        rows="2"
-                        value={addr.line1 || ''}
-                        onChange={(e) => updateBillingAddress(addr.id, 'line1', e.target.value)}
-                        disabled={!editing}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>City</label>
-                      <input
-                        type="text"
-                        value={addr.city || ''}
-                        onChange={(e) => updateBillingAddress(addr.id, 'city', e.target.value)}
-                        disabled={!editing}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>State / Region</label>
-                      <input
-                        type="text"
-                        value={addr.state || ''}
-                        onChange={(e) => updateBillingAddress(addr.id, 'state', e.target.value)}
-                        disabled={!editing}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>PIN / ZIP Code</label>
-                      <input
-                        type="text"
-                        value={addr.pincode || ''}
-                        onChange={(e) => updateBillingAddress(addr.id, 'pincode', e.target.value)}
-                        disabled={!editing}
-                      />
-                    </div>
-                    <div className="form-group">
-                      <label>Country</label>
-                      <input
-                        type="text"
-                        value={addr.country || ''}
-                        onChange={(e) => updateBillingAddress(addr.id, 'country', e.target.value)}
-                        disabled={!editing}
-                      />
+                    <div className="form-grid">
+                      <div className="form-group span-2">
+                        <label>Address (Street / Area)</label>
+                        <textarea
+                          rows="2"
+                          value={selectedShippingAddress.line1 || ''}
+                          onChange={(e) =>
+                            updateShippingAddress(selectedShippingAddress.id, 'line1', e.target.value)
+                          }
+                          disabled={!editing}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>City</label>
+                        <input
+                          type="text"
+                          value={selectedShippingAddress.city || ''}
+                          onChange={(e) =>
+                            updateShippingAddress(selectedShippingAddress.id, 'city', e.target.value)
+                          }
+                          disabled={!editing}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>State / Region</label>
+                        <input
+                          type="text"
+                          value={selectedShippingAddress.state || ''}
+                          onChange={(e) =>
+                            updateShippingAddress(selectedShippingAddress.id, 'state', e.target.value)
+                          }
+                          disabled={!editing}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>PIN / ZIP Code</label>
+                        <input
+                          type="text"
+                          value={selectedShippingAddress.pincode || ''}
+                          onChange={(e) =>
+                            updateShippingAddress(selectedShippingAddress.id, 'pincode', e.target.value)
+                          }
+                          disabled={!editing}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Country</label>
+                        <input
+                          type="text"
+                          value={selectedShippingAddress.country || ''}
+                          onChange={(e) =>
+                            updateShippingAddress(selectedShippingAddress.id, 'country', e.target.value)
+                          }
+                          disabled={!editing}
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
-              ))}
-            </div>
+              ) : null}
+            </>
           )}
         </div>
       ) : null}
@@ -715,6 +764,20 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
     topMessage: null
   });
   const [locatingBranchId, setLocatingBranchId] = useState(null);
+  const [selectedBranchId, setSelectedBranchId] = useState('');
+
+  const branches = profile?.branches || [];
+
+  useEffect(() => {
+    if (branches.length === 0) {
+      setSelectedBranchId('');
+      return;
+    }
+    setSelectedBranchId((prev) => {
+      if (prev && branches.some((branch) => String(branch.id) === String(prev))) return prev;
+      return String(branches[0].id);
+    });
+  }, [branches]);
 
   /** Partner hints should reflect latest selection in real time (including pending chain edits). */
   const profileForChainPartners = useMemo(() => profile, [profile]);
@@ -805,6 +868,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
       ...profile,
       branches: [...(profile?.branches || []), newBranch]
     });
+    setSelectedBranchId(String(newBranch.id));
   };
 
   const updateBranch = (branchId, field, value) => {
@@ -823,132 +887,48 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
     });
   };
 
-  const addBillingAddress = () => {
-    const newAddress = {
-      id: Date.now(),
-      label: '',
-      line1: '',
-      city: '',
-      state: '',
-      pincode: '',
-      country: 'India'
-    };
-    setProfile((prev) => ({
-      ...prev,
-      billingAddresses: [...(prev?.billingAddresses || []), newAddress]
-    }));
-  };
+  const selectedBranch =
+    branches.find((branch) => String(branch.id) === String(selectedBranchId)) || branches[0] || null;
 
-  const updateBillingAddress = (addressId, field, value) => {
-    setProfile((prev) => ({
-      ...prev,
-      billingAddresses: (prev?.billingAddresses || []).map((addr) =>
-        addr.id === addressId ? { ...addr, [field]: value } : addr
-      )
-    }));
-  };
-
-  const removeBillingAddress = (addressId) => {
-    setProfile((prev) => ({
-      ...prev,
-      billingAddresses: (prev?.billingAddresses || []).filter((addr) => addr.id !== addressId)
-    }));
-  };
-
-  const getCurrentPositionAsync = () =>
-    new Promise((resolve, reject) => {
-      if (!navigator.geolocation) {
-        reject(new Error('Location is not supported in this browser.'));
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(resolve, reject, {
-        enableHighAccuracy: true,
-        timeout: 12000,
-        maximumAge: 0
-      });
-    });
-
-  const reverseGeocodeLocation = async (lat, lon) => {
-    const url =
-      `https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1` +
-      `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
-    const res = await fetch(url, {
-      headers: {
-        'Accept-Language': 'en'
+  const updateRegisteredAddress = (field, value) => {
+    setProfile({
+      ...profile,
+      address: {
+        ...(profile?.address || {}),
+        [field]: value
       }
     });
-    if (!res.ok) {
-      throw new Error('Could not fetch address from your current location.');
-    }
-    return res.json();
   };
 
   const fillBranchFromCurrentLocation = async (branchId) => {
     if (!editing) return;
     setLocatingBranchId(branchId);
     try {
-      const position = await getCurrentPositionAsync();
-      const latitude = position?.coords?.latitude;
-      const longitude = position?.coords?.longitude;
-
-      if (typeof latitude !== 'number' || typeof longitude !== 'number') {
-        throw new Error('Could not read your current coordinates.');
-      }
-
-      const geoData = await reverseGeocodeLocation(latitude, longitude);
-      const address = geoData?.address || {};
-      const streetAddress =
-        [
-          address.house_number,
-          address.road || address.pedestrian || address.footway,
-          address.neighbourhood || address.suburb || address.quarter
-        ]
-          .filter(Boolean)
-          .join(', ')
-          .trim() || geoData?.display_name || '';
-
-      const city =
-        address.city ||
-        address.town ||
-        address.village ||
-        address.municipality ||
-        address.county ||
-        '';
-      const state = address.state || address.state_district || '';
-      const zipCode = address.postcode || '';
-      const country = address.country || '';
-
+      const resolved = await resolveAddressFromCurrentLocation();
       setProfile((prev) => ({
         ...prev,
         branches: (prev?.branches || []).map((branch) =>
           branch.id === branchId
             ? {
                 ...branch,
-                name: (branch.name || '').trim() || city || 'Current Location Branch',
-                address: streetAddress || branch.address || '',
-                city: city || branch.city || '',
-                state: state || branch.state || '',
-                zipCode: zipCode || branch.zipCode || '',
-                country: country || branch.country || '',
-                latitude,
-                longitude,
-                geoLocation: { lat: latitude, lng: longitude }
+                name:
+                  (branch.name || '').trim() ||
+                  resolved.city ||
+                  'Current Location Branch',
+                address: resolved.line1 || branch.address || '',
+                city: resolved.city || branch.city || '',
+                state: resolved.state || branch.state || '',
+                zipCode: resolved.pincode || branch.zipCode || '',
+                country: resolved.country || branch.country || '',
+                latitude: resolved.latitude,
+                longitude: resolved.longitude,
+                geoLocation: resolved.geoLocation
               }
             : branch
         )
       }));
     } catch (error) {
-      let message = 'Unable to fetch your current location.';
-      if (error?.code === 1) {
-        message = 'Location permission is blocked. Please allow location access and try again.';
-      } else if (error?.code === 2) {
-        message = 'Your location is unavailable right now. Please try again.';
-      } else if (error?.code === 3) {
-        message = 'Location request timed out. Please try again.';
-      } else if (error?.message) {
-        message = error.message;
-      }
-      alert(message);
+      alert(getGeolocationErrorMessage(error));
     } finally {
       setLocatingBranchId(null);
     }
@@ -972,7 +952,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
             <strong>Profile brand assignment</strong> page, the platform continues to use your previously approved
             assignment for upstream matching and orders.
             {profile.chainProfilePendingSubmittedAt
-              ? ` Submitted: ${new Date(profile.chainProfilePendingSubmittedAt).toLocaleString()}.`
+              ? ` Submitted: ${formatDateTimeIST(profile.chainProfilePendingSubmittedAt, '—')}.`
               : ''}
           </p>
         </div>
@@ -1066,6 +1046,66 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
       <div className="profile-section">
         <div className="section-header">
           <h2>
+            <FileText size={20} />
+            Billing / Registered Company Address
+          </h2>
+        </div>
+        <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
+          Single GST-registered company address used for billing on upstream orders and invoices.
+        </p>
+        <div className="form-grid">
+          <div className="form-group span-2">
+            <label>Address (Street / Area)</label>
+            <textarea
+              rows="2"
+              value={profile?.address?.line1 || ''}
+              onChange={(e) => updateRegisteredAddress('line1', e.target.value)}
+              disabled={!editing}
+              placeholder="Registered office address"
+            />
+          </div>
+          <div className="form-group">
+            <label>City</label>
+            <input
+              type="text"
+              value={profile?.address?.city || ''}
+              onChange={(e) => updateRegisteredAddress('city', e.target.value)}
+              disabled={!editing}
+            />
+          </div>
+          <div className="form-group">
+            <label>State / Region</label>
+            <input
+              type="text"
+              value={profile?.address?.state || ''}
+              onChange={(e) => updateRegisteredAddress('state', e.target.value)}
+              disabled={!editing}
+            />
+          </div>
+          <div className="form-group">
+            <label>PIN / ZIP Code</label>
+            <input
+              type="text"
+              value={profile?.address?.pincode || ''}
+              onChange={(e) => updateRegisteredAddress('pincode', e.target.value)}
+              disabled={!editing}
+            />
+          </div>
+          <div className="form-group">
+            <label>Country</label>
+            <input
+              type="text"
+              value={profile?.address?.country || ''}
+              onChange={(e) => updateRegisteredAddress('country', e.target.value)}
+              disabled={!editing}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="profile-section">
+        <div className="section-header">
+          <h2>
             <MapPin size={20} />
             Shipping addresses (branch locations)
           </h2>
@@ -1077,198 +1117,131 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
           ) : null}
         </div>
         <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
-          Branch locations are your shipping addresses — used for upstream place order, transport quotes, and delivery.
+          Branch locations are your shipping addresses — used for upstream place order, transport quotes, Create PO, and delivery.
           Add at least one complete branch.
         </p>
 
         {(profile?.branches || []).length === 0 ? (
           <p style={{ color: '#64748b', margin: 0 }}>No shipping branches added yet.</p>
         ) : (
-          <div className="branches-list">
-            {(profile?.branches || []).map((branch) => (
-              <div key={branch.id} className="branch-card">
-                <div className="branch-header">
-                  <input
-                    type="text"
-                    value={branch.name}
-                    onChange={(e) => updateBranch(branch.id, 'name', e.target.value)}
-                    disabled={!editing}
-                    placeholder="Branch / warehouse name"
-                    className="branch-name-input"
-                  />
+          <>
+            <div className="form-group" style={{ marginBottom: '1rem' }}>
+              <label>Choose shipping branch</label>
+              <select
+                value={String(selectedBranchId || selectedBranch?.id || '')}
+                onChange={(e) => setSelectedBranchId(e.target.value)}
+              >
+                {(profile?.branches || []).map((branch, index) => (
+                  <option key={branch.id} value={String(branch.id)}>
+                    {formatSavedAddressLabel(branch, index, {
+                      nameKey: 'name',
+                      streetKey: 'address',
+                      cityKey: 'city'
+                    })}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {selectedBranch ? (
+              <div className="branches-list">
+                <div key={selectedBranch.id} className="branch-card">
+                  <div className="branch-header">
+                    <input
+                      type="text"
+                      value={selectedBranch.name}
+                      onChange={(e) => updateBranch(selectedBranch.id, 'name', e.target.value)}
+                      disabled={!editing}
+                      placeholder="Branch / warehouse name"
+                      className="branch-name-input"
+                    />
+                    {editing ? (
+                      <div className="branch-header-actions">
+                        <button className="btn-remove" onClick={() => removeBranch(selectedBranch.id)}>
+                          <X size={16} />
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
                   {editing ? (
-                    <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <div className="address-location-row">
                       <button
                         type="button"
-                        className="btn-secondary"
-                        onClick={() => fillBranchFromCurrentLocation(branch.id)}
-                        disabled={locatingBranchId === branch.id}
-                        style={{ padding: '0.45rem 0.7rem', fontSize: '0.82rem' }}
+                        className="address-location-btn"
+                        onClick={() => fillBranchFromCurrentLocation(selectedBranch.id)}
+                        disabled={locatingBranchId === selectedBranch.id}
                       >
-                        {locatingBranchId === branch.id ? 'Detecting...' : 'Use my current location'}
-                      </button>
-                      <button className="btn-remove" onClick={() => removeBranch(branch.id)}>
-                        <X size={16} />
+                        <MapPin size={15} aria-hidden />
+                        {locatingBranchId === selectedBranch.id
+                          ? 'Detecting location…'
+                          : 'Use my current location'}
                       </button>
                     </div>
                   ) : null}
-                </div>
 
-                <div className="form-grid">
-                  <div className="form-group span-2">
-                    <label>Address (Street / Area)</label>
-                    <textarea
-                      value={branch.address || ''}
-                      onChange={(e) => updateBranch(branch.id, 'address', e.target.value)}
-                      disabled={!editing}
-                      rows="2"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>City</label>
-                    <input
-                      type="text"
-                      value={branch.city || ''}
-                      onChange={(e) => updateBranch(branch.id, 'city', e.target.value)}
-                      disabled={!editing}
-                      placeholder="e.g. Pune"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>State / Region</label>
-                    <input
-                      type="text"
-                      value={branch.state || ''}
-                      onChange={(e) => updateBranch(branch.id, 'state', e.target.value)}
-                      disabled={!editing}
-                      placeholder="e.g. Maharashtra"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>PIN / ZIP Code</label>
-                    <input
-                      type="text"
-                      value={branch.zipCode || ''}
-                      onChange={(e) => updateBranch(branch.id, 'zipCode', e.target.value)}
-                      disabled={!editing}
-                      placeholder="e.g. 411026"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Country</label>
-                    <input
-                      type="text"
-                      value={branch.country || ''}
-                      onChange={(e) => updateBranch(branch.id, 'country', e.target.value)}
-                      disabled={!editing}
-                      placeholder="e.g. India"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Phone Number</label>
-                    <input
-                      type="tel"
-                      value={branch.phone || ''}
-                      onChange={(e) => updateBranch(branch.id, 'phone', e.target.value)}
-                      disabled={!editing}
-                    />
+                  <div className="form-grid">
+                    <div className="form-group span-2">
+                      <label>Address (Street / Area)</label>
+                      <textarea
+                        value={selectedBranch.address || ''}
+                        onChange={(e) => updateBranch(selectedBranch.id, 'address', e.target.value)}
+                        disabled={!editing}
+                        rows="2"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>City</label>
+                      <input
+                        type="text"
+                        value={selectedBranch.city || ''}
+                        onChange={(e) => updateBranch(selectedBranch.id, 'city', e.target.value)}
+                        disabled={!editing}
+                        placeholder="e.g. Pune"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>State / Region</label>
+                      <input
+                        type="text"
+                        value={selectedBranch.state || ''}
+                        onChange={(e) => updateBranch(selectedBranch.id, 'state', e.target.value)}
+                        disabled={!editing}
+                        placeholder="e.g. Maharashtra"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>PIN / ZIP Code</label>
+                      <input
+                        type="text"
+                        value={selectedBranch.zipCode || ''}
+                        onChange={(e) => updateBranch(selectedBranch.id, 'zipCode', e.target.value)}
+                        disabled={!editing}
+                        placeholder="e.g. 411026"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Country</label>
+                      <input
+                        type="text"
+                        value={selectedBranch.country || ''}
+                        onChange={(e) => updateBranch(selectedBranch.id, 'country', e.target.value)}
+                        disabled={!editing}
+                        placeholder="e.g. India"
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label>Phone Number</label>
+                      <input
+                        type="tel"
+                        value={selectedBranch.phone || ''}
+                        onChange={(e) => updateBranch(selectedBranch.id, 'phone', e.target.value)}
+                        disabled={!editing}
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div className="profile-section">
-        <div className="section-header">
-          <h2>
-            <FileText size={20} />
-            Billing Addresses
-          </h2>
-          {editing ? (
-            <button type="button" className="btn-add" onClick={addBillingAddress}>
-              <Plus size={16} />
-              Add Billing Address
-            </button>
-          ) : null}
-        </div>
-        <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
-          Add one or more GST billing addresses. The first entry is used by default on upstream place order when GSTIN is set.
-        </p>
-        {(profile?.billingAddresses || []).length === 0 ? (
-          <p style={{ color: '#64748b', margin: 0 }}>
-            No billing addresses added yet. For GST billing on upstream orders, add at least one billing address here.
-          </p>
-        ) : (
-          <div className="branches-list">
-            {(profile?.billingAddresses || []).map((addr) => (
-              <div key={addr.id} className="branch-card">
-                <div className="branch-header">
-                  <input
-                    type="text"
-                    value={addr.label || ''}
-                    onChange={(e) => updateBillingAddress(addr.id, 'label', e.target.value)}
-                    disabled={!editing}
-                    placeholder="Address label (e.g. Head Office GST)"
-                    className="branch-name-input"
-                  />
-                  {editing ? (
-                    <button className="btn-remove" onClick={() => removeBillingAddress(addr.id)}>
-                      <X size={16} />
-                    </button>
-                  ) : null}
-                </div>
-                <div className="form-grid">
-                  <div className="form-group span-2">
-                    <label>Address (Street / Area)</label>
-                    <textarea
-                      rows="2"
-                      value={addr.line1 || ''}
-                      onChange={(e) => updateBillingAddress(addr.id, 'line1', e.target.value)}
-                      disabled={!editing}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>City</label>
-                    <input
-                      type="text"
-                      value={addr.city || ''}
-                      onChange={(e) => updateBillingAddress(addr.id, 'city', e.target.value)}
-                      disabled={!editing}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>State / Region</label>
-                    <input
-                      type="text"
-                      value={addr.state || ''}
-                      onChange={(e) => updateBillingAddress(addr.id, 'state', e.target.value)}
-                      disabled={!editing}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>PIN / ZIP Code</label>
-                    <input
-                      type="text"
-                      value={addr.pincode || ''}
-                      onChange={(e) => updateBillingAddress(addr.id, 'pincode', e.target.value)}
-                      disabled={!editing}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Country</label>
-                    <input
-                      type="text"
-                      value={addr.country || ''}
-                      onChange={(e) => updateBillingAddress(addr.id, 'country', e.target.value)}
-                      disabled={!editing}
-                    />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
+            ) : null}
+          </>
         )}
       </div>
 

@@ -1,4 +1,9 @@
 import { supabase } from '../../config/supabase.js';
+import { isAddressComplete, normalizeAddress } from '../po/shared/poHelpers.js';
+import {
+  branchRecordToAddressInput,
+  isSupplierBranchAddressComplete
+} from '../../services/upstreamOrderInputService.js';
 import { ensureBrandApprovedOrRequest as ensureBrandApprovedOrRequestService } from '../../services/brandApprovalService.js';
 import {
   baselineChainFromProfile,
@@ -124,7 +129,7 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
 
   const { data: chainRows, error: chainError } = await supabase
     .from('category_supply_chains')
-    .select('category_name, stages, updated_at');
+    .select('id, category_name, summary, stages, updated_at');
   if (chainError) throw chainError;
 
   const perBrand = [];
@@ -156,7 +161,15 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
       normalizedBrand: b.normalized,
       status: brandStatus,
       hasSupplyChainDefinition: roles.length > 0,
-      roles
+      roles,
+      supplyChainDefinition: chainRow
+        ? {
+            id: chainRow.id || null,
+            summary: typeof chainRow.summary === 'string' ? chainRow.summary : '',
+            stages: Array.isArray(chainRow.stages) ? chainRow.stages : [],
+            updatedAt: chainRow.updated_at || null
+          }
+        : null
     });
   }
 
@@ -314,14 +327,111 @@ export async function ensureBrandApprovedOrRequest({ brandName, requesterUserId 
   return ensureBrandApprovedOrRequestService({ supabase, brandName, requesterUserId });
 }
 
+const SHIPPING_ADDRESS_REQUIRED_FIELDS = ['line1', 'city', 'state', 'pincode', 'country'];
+
+export function shippingAddressEntryFromBranch(branch) {
+  const normalized = normalizeAddress(branchRecordToAddressInput(branch));
+  const entry = {
+    id: String(branch?.id || '').trim(),
+    label: String(branch?.name || '').trim(),
+    ...normalized
+  };
+  return {
+    ...entry,
+    displayName: formatShippingAddressDisplayName(entry)
+  };
+}
+
+export function normalizeShippingAddressEntry(entry = {}) {
+  const nested = entry?.address && typeof entry.address === 'object' ? entry.address : {};
+  const flat = normalizeAddress({ ...nested, ...entry });
+  return {
+    ...(entry.latitude != null ? { latitude: entry.latitude } : {}),
+    ...(entry.longitude != null ? { longitude: entry.longitude } : {}),
+    ...(entry.geoLocation ? { geoLocation: entry.geoLocation } : {}),
+    id: String(entry?.id || '').trim(),
+    label: String(entry?.label || entry?.name || '').trim(),
+    ...flat
+  };
+}
+
+export function formatShippingAddressDisplayName(entry, index = 0) {
+  const normalized = normalizeShippingAddressEntry(entry);
+  if (normalized.label) return normalized.label;
+  const preview = [normalized.line1, normalized.city].filter(Boolean).join(', ');
+  if (preview) return preview;
+  return `Address ${index + 1}`;
+}
+
+export function validateShippingAddressEntries(shippingAddresses = [], { userType = '' } = {}) {
+  const entries = Array.isArray(shippingAddresses) ? shippingAddresses : [];
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = normalizeShippingAddressEntry(entries[i] || {});
+    const hasAnyField = SHIPPING_ADDRESS_REQUIRED_FIELDS.some((field) =>
+      String(entry?.[field] || '').trim()
+    );
+    if (!hasAnyField) continue;
+    const missingField = SHIPPING_ADDRESS_REQUIRED_FIELDS.find(
+      (field) => !String(entry?.[field] || '').trim()
+    );
+    if (missingField) {
+      const label = String(entry?.label || '').trim() || `Shipping address ${i + 1}`;
+      return {
+        ok: false,
+        code:
+          userType === 'supplier'
+            ? 'supplier_shipping_address_incomplete'
+            : 'service_provider_shipping_address_incomplete',
+        message: `Shipping address "${label}" is missing required field "${missingField}".`
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/** Single company-registered billing address (users.address), with legacy billingAddresses[0] fallback. */
+export function resolveRegisteredBillingAddress(user) {
+  const direct = normalizeAddress(user?.address || {});
+  if (isAddressComplete(direct)) return direct;
+
+  const legacyList = user?.profile?.billingAddresses;
+  if (Array.isArray(legacyList) && legacyList.length > 0) {
+    const fromLegacy = normalizeAddress(legacyList[0] || {});
+    if (isAddressComplete(fromLegacy)) return fromLegacy;
+  }
+
+  return direct;
+}
+
+export function deriveShippingAddressesFromProfile(user) {
+  const profile = user?.profile || {};
+  const userType = user?.user_type || profile?.userType;
+
+  if (userType === 'supplier') {
+    return (Array.isArray(profile.branches) ? profile.branches : [])
+      .filter((branch) => isSupplierBranchAddressComplete(branch))
+      .map((branch) => shippingAddressEntryFromBranch(branch))
+      .filter((entry) => entry.id && isAddressComplete(entry));
+  }
+
+  return (Array.isArray(profile.shippingAddresses) ? profile.shippingAddresses : [])
+    .map((entry) => normalizeShippingAddressEntry(entry))
+    .filter((entry) => entry.id && isAddressComplete(entry))
+    .map((entry, index) => ({
+      ...entry,
+      displayName: formatShippingAddressDisplayName(entry, index)
+    }));
+}
+
 export async function createProfileResponse(user) {
+  const registeredBillingAddress = resolveRegisteredBillingAddress(user);
   const baseProfile = {
     userId: user.id,
     companyName: user.company || '',
     contactPerson: user.name,
     phone: user.phone || '',
     email: user.email,
-    address: user.address || {},
+    address: registeredBillingAddress,
     website: user.profile?.website || '',
     description: user.profile?.description || '',
     profilePhotoUrl: String(user.profile?.profilePhotoUrl || '').trim(),
@@ -343,7 +453,7 @@ export async function createProfileResponse(user) {
     return {
       ...baseProfile,
       projects: user.profile?.projects || [],
-      billingAddresses: user.profile?.billingAddresses || [],
+      shippingAddresses: deriveShippingAddressesFromProfile(user),
       totalOrdersPlaced: purchaseSummary.totalOrdersPlaced,
       totalAmountPlaced: purchaseSummary.totalAmountPlaced,
       totalAmountPaid: purchaseSummary.totalAmountPaid,
@@ -450,7 +560,7 @@ export async function createProfileResponse(user) {
       ...baseProfile,
       businessType: base.businessType || '',
       categories: base.categories || [],
-      billingAddresses: base.billingAddresses || [],
+      shippingAddresses: deriveShippingAddressesFromProfile(user),
       branches: base.branches || [],
       skus: base.skus || [],
       supplierRole: displayChain.supplierRole || (firstEntry?.role || ''),

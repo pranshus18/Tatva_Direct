@@ -7,7 +7,6 @@ import {
 } from './supplyChainSharedService.js';
 
 const ROLE_SET = new Set(SUPPLY_CHAIN_ROLES_IN_ORDER);
-const DEFAULT_FEE_PERCENT = Number.parseFloat(process.env.PLATFORM_FEE_PERCENT_DEFAULT || '5') || 5;
 
 function toFiniteNumber(value, fallback = 0) {
   const parsed = Number.parseFloat(value);
@@ -80,9 +79,7 @@ function pickRuleBySpecificity(rows, normalizedBrand) {
   const exact =
     normalizedBrand &&
     nowRows.find((row) => normalizeBrandKey(row.normalized_brand || row.brand_name) === normalizedBrand);
-  if (exact) return exact;
-  const global = nowRows.find((row) => !String(row.normalized_brand || '').trim());
-  return global || null;
+  return exact || null;
 }
 
 export async function resolveFeeRule({ brandName, supplyChainRole }) {
@@ -103,9 +100,14 @@ export async function resolveFeeRule({ brandName, supplyChainRole }) {
 export function calculateLinePlatformFee({ lineAmount, feeRule }) {
   const amount = toFiniteNumber(lineAmount);
   if (amount <= 0) return 0;
+  if (!feeRule) {
+    const err = new Error('Platform fee rule is not configured for this brand and supply-chain role.');
+    err.code = 'PLATFORM_FEE_RULE_MISSING';
+    throw err;
+  }
 
   const feeType = String(feeRule?.fee_type || 'percentage').toLowerCase();
-  const feeValue = toFiniteNumber(feeRule?.fee_value, DEFAULT_FEE_PERCENT);
+  const feeValue = toFiniteNumber(feeRule?.fee_value, 0);
   if (feeType === 'fixed') return roundMoney(feeValue);
   return roundMoney((amount * feeValue) / 100);
 }
@@ -115,24 +117,10 @@ export async function calculateOrderPlatformFee({
   orderItems = [],
   supplierId
 }) {
-  const fallbackAmount = toFiniteNumber(order?.total_amount);
   if (!Array.isArray(orderItems) || orderItems.length === 0) {
-    const fallbackFee = roundMoney((fallbackAmount * DEFAULT_FEE_PERCENT) / 100);
-    return {
-      feeAmount: fallbackFee,
-      breakdown: [
-        {
-          orderItemId: null,
-          amount: fallbackAmount,
-          brand: null,
-          supplyChainRole: null,
-          feeType: 'percentage',
-          feeValue: DEFAULT_FEE_PERCENT,
-          feeAmount: fallbackFee,
-          source: 'env_fallback'
-        }
-      ]
-    };
+    const err = new Error('Platform fee cannot be computed because this order has no line items.');
+    err.code = 'PLATFORM_FEE_ORDER_ITEMS_MISSING';
+    throw err;
   }
 
   let totalFee = 0;
@@ -141,13 +129,32 @@ export async function calculateOrderPlatformFee({
   for (const item of orderItems) {
     const lineAmount = toFiniteNumber(item.total_price) || toFiniteNumber(item.unit_price) * toFiniteNumber(item.quantity, 1);
     const brandName = item?.product?.brand || item?.brand || null;
+    if (!String(brandName || '').trim()) {
+      const err = new Error('Platform fee cannot be computed: brand is missing for one or more order items.');
+      err.code = 'PLATFORM_FEE_BRAND_MISSING';
+      throw err;
+    }
     const role = await getSupplierRoleForBrand(supplierId || order?.supplier_id, brandName);
+    if (!role) {
+      const err = new Error(
+        `Platform fee cannot be computed: supplier role is not approved for brand "${brandName}".`
+      );
+      err.code = 'PLATFORM_FEE_ROLE_MISSING';
+      throw err;
+    }
     const feeRule = await resolveFeeRule({ brandName, supplyChainRole: role });
+    if (!feeRule) {
+      const err = new Error(
+        `Platform fee is not configured by admin for brand "${brandName}" at role "${role}".`
+      );
+      err.code = 'PLATFORM_FEE_RULE_MISSING';
+      throw err;
+    }
     const feeType = feeRule?.fee_type || 'percentage';
-    const feeValue = toFiniteNumber(feeRule?.fee_value, DEFAULT_FEE_PERCENT);
+    const feeValue = toFiniteNumber(feeRule?.fee_value, 0);
     const lineFee = calculateLinePlatformFee({
       lineAmount,
-      feeRule: feeRule || { fee_type: 'percentage', fee_value: DEFAULT_FEE_PERCENT }
+      feeRule
     });
     totalFee += lineFee;
     breakdown.push({
@@ -159,13 +166,101 @@ export async function calculateOrderPlatformFee({
       feeValue,
       feeAmount: lineFee,
       ruleId: feeRule?.id || null,
-      source: feeRule ? 'rule' : 'env_fallback'
+      source: 'brand_role_rule'
     });
   }
 
   return {
     feeAmount: roundMoney(totalFee),
     breakdown
+  };
+}
+
+async function loadOrderItemsForFee(orderId) {
+  const { data: rows, error } = await supabase
+    .from('order_items')
+    .select(`
+      id,
+      quantity,
+      unit_price,
+      total_price,
+      product:products (
+        id,
+        brand
+      )
+    `)
+    .eq('order_id', orderId);
+  if (error) throw error;
+  return rows || [];
+}
+
+/**
+ * Compute and persist platform fee economics for a paid order.
+ * Enforces strict admin-defined brand+role fee rules for every order line.
+ */
+export async function applyPlatformFeeToPaidOrder({ orderId, order: orderInput = null }) {
+  let order = orderInput || null;
+  if (!order) {
+    const { data: loadedOrder, error: orderLoadError } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', orderId)
+      .single();
+    if (orderLoadError) throw orderLoadError;
+    order = loadedOrder;
+  }
+  if (!order?.id) {
+    const err = new Error('Order not found while applying platform fee.');
+    err.code = 'ORDER_NOT_FOUND';
+    throw err;
+  }
+
+  const orderItems = await loadOrderItemsForFee(order.id);
+  const feeResult = await calculateOrderPlatformFee({
+    order,
+    orderItems,
+    supplierId: order.supplier_id
+  });
+  const grossAmount = roundMoney(order.total_amount);
+  const platformFeeAmount = Math.min(grossAmount, roundMoney(feeResult.feeAmount));
+  const supplierPayoutAmount = roundMoney(grossAmount - platformFeeAmount);
+  const inferredRole = feeResult.breakdown.find((line) => line.supplyChainRole)?.supplyChainRole || null;
+
+  const { data: updatedOrder, error: orderUpdateError } = await supabase
+    .from('orders')
+    .update({
+      platform_fee_amount: platformFeeAmount,
+      supplier_payout_amount: supplierPayoutAmount,
+      supply_chain_role_at_payment: inferredRole,
+      platform_fee_breakdown: feeResult.breakdown
+    })
+    .eq('id', order.id)
+    .select('*')
+    .single();
+  if (orderUpdateError) throw orderUpdateError;
+
+  const { error: payoutError } = await supabase.from('supplier_payouts').upsert(
+    {
+      order_id: order.id,
+      supplier_id: order.supplier_id,
+      gross_amount: grossAmount,
+      platform_fee_amount: platformFeeAmount,
+      net_amount: supplierPayoutAmount,
+      status: 'pending',
+      metadata: {
+        feeBreakdown: feeResult.breakdown
+      },
+      updated_at: new Date().toISOString()
+    },
+    { onConflict: 'order_id' }
+  );
+  if (payoutError) throw payoutError;
+
+  return {
+    order: updatedOrder,
+    platformFeeAmount,
+    supplierPayoutAmount,
+    feeBreakdown: feeResult.breakdown
   };
 }
 

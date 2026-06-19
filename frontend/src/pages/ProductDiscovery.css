@@ -9,6 +9,53 @@
   margin: 0 auto;
 }
 
+/* ── Project picker modal ─────────────────────────────────────── */
+
+.pd-modal-divider {
+  height: 1px;
+  background: #e2e8f0;
+  margin: 0.25rem 0;
+}
+
+.pd-modal-address-form {
+  padding: 0.85rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #f8fafc;
+}
+
+.pd-modal-address-form .checkout-address-location-row {
+  display: flex;
+  align-items: center;
+  margin: 0 0 0.25rem;
+}
+
+.pd-modal-address-form .checkout-location-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.85rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: #4f46e5;
+  background: rgba(79, 70, 229, 0.07);
+  border: 1px dashed rgba(79, 70, 229, 0.35);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  white-space: nowrap;
+}
+
+.pd-modal-address-form .checkout-location-btn:hover:not(:disabled) {
+  background: rgba(79, 70, 229, 0.12);
+  border-color: rgba(79, 70, 229, 0.5);
+}
+
+.pd-modal-address-form .checkout-location-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 /* ── Hero ──────────────────────────────────────────────────────── */
 
 .pd-hero {

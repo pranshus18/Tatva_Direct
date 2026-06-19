@@ -14,8 +14,34 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardFooter } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 import { formatRupeePerUnit } from '../utils/formatRupee';
+import {
+  getGeolocationErrorMessage,
+  resolveAddressFromCurrentLocation
+} from '../utils/currentLocationAddress';
+import {
+  formatShippingAddressLabel,
+  normalizeShippingAddressBookEntry
+} from '../utils/shippingAddressLabel';
+import { formatDateIST } from '../utils/dateTime';
 import './ProductDiscovery.css';
+
+const blankShippingAddress = {
+  label: '',
+  line1: '',
+  city: '',
+  state: '',
+  pincode: '',
+  country: 'India'
+};
 
 function formatPrice(price, unit) {
   const num = Number(price);
@@ -93,6 +119,16 @@ const ProductDiscovery = () => {
   const [recommendationMode, setRecommendationMode] = useState('');
   const [cartBusyByProductId, setCartBusyByProductId] = useState({});
   const [cartAddedByProductId, setCartAddedByProductId] = useState({});
+  const [cartProjects, setCartProjects] = useState([]);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [pendingProduct, setPendingProduct] = useState(null);
+  const [targetProjectId, setTargetProjectId] = useState('__new__');
+  const [newProjectName, setNewProjectName] = useState('');
+  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
+  const [shippingAddressBook, setShippingAddressBook] = useState([]);
+  const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
+  const [newShippingAddress, setNewShippingAddress] = useState(blankShippingAddress);
+  const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
   const pageSize = 24;
 
   const categories = useMemo(() => {
@@ -157,36 +193,215 @@ const ProductDiscovery = () => {
 
   const safePage = Math.min(Math.max(page, 1), pageCount);
 
-  const addToCart = async (product) => {
+  const loadCartProjects = async () => {
     const token = localStorage.getItem('token');
     if (!token) {
-      setError('Please log in again to add items to cart.');
-      return false;
+      return [];
     }
-    const productId = product?.id;
-    if (!productId) {
+    try {
+      const response = await fetch(getApiUrl('/api/po/cart'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to fetch cart');
+      }
+      const groups = Array.isArray(data?.cart?.draft?.boqGroups) ? data.cart.draft.boqGroups : [];
+      const normalizedGroups = groups
+        .filter((group) => String(group?.groupId || '').trim())
+        .map((group) => ({
+          groupId: String(group.groupId),
+          boqName: String(group?.boqName || '').trim() || 'Untitled project',
+          requiredDate: String(group?.boqProject?.requiredDate || '').trim().slice(0, 10),
+          shippingAddressId: String(group?.boqProject?.shippingAddressId || '').trim()
+        }));
+      setCartProjects(normalizedGroups);
+      return normalizedGroups;
+    } catch {
+      return [];
+    }
+  };
+
+  const loadProfileShippingAddresses = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return [];
+    try {
+      const response = await fetch(getApiUrl('/api/profile'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.profile) return [];
+      const entries = Array.isArray(data.profile.shippingAddresses)
+        ? data.profile.shippingAddresses
+            .map((entry) => normalizeShippingAddressBookEntry(entry))
+            .filter((entry) => entry.id)
+        : [];
+      setShippingAddressBook(entries);
+      return entries;
+    } catch {
+      return [];
+    }
+  };
+
+  const applyProjectShippingSelection = (projectId, groups, addresses) => {
+    const project = groups.find((group) => group.groupId === projectId);
+    const projectAddressId = String(project?.shippingAddressId || '').trim();
+    if (projectAddressId && addresses.some((entry) => entry.id === projectAddressId)) {
+      setSelectedShippingAddressId(projectAddressId);
+      setNewShippingAddress(blankShippingAddress);
+      return;
+    }
+    if (addresses.length > 0) {
+      setSelectedShippingAddressId(addresses[0].id);
+      setNewShippingAddress(blankShippingAddress);
+      return;
+    }
+    setSelectedShippingAddressId('__new__');
+  };
+
+  const openProjectPicker = async (product) => {
+    const pid = String(product?.id || '').trim();
+    if (!pid) {
       setError('This product cannot be added because its id is missing.');
-      return false;
+      return;
+    }
+    const [groups, addresses] = await Promise.all([loadCartProjects(), loadProfileShippingAddresses()]);
+    const initialProjectId = groups[0]?.groupId || '__new__';
+    setPendingProduct(product);
+    setTargetProjectId(initialProjectId);
+    setNewProjectName(String(product?.name || '').trim());
+    setExpectedDeliveryDate('');
+    applyProjectShippingSelection(initialProjectId, groups, addresses);
+    setProjectPickerOpen(true);
+  };
+
+  const fillShippingFromCurrentLocation = async () => {
+    setLocatingShippingAddress(true);
+    try {
+      const resolved = await resolveAddressFromCurrentLocation();
+      setNewShippingAddress((prev) => ({
+        ...prev,
+        line1: resolved.line1 || prev.line1,
+        city: resolved.city || prev.city,
+        state: resolved.state || prev.state,
+        pincode: resolved.pincode || prev.pincode,
+        country: resolved.country || prev.country || 'India',
+        label: prev.label || resolved.city || 'Current location'
+      }));
+      setSelectedShippingAddressId('__new__');
+    } catch (error) {
+      window.alert(getGeolocationErrorMessage(error));
+    } finally {
+      setLocatingShippingAddress(false);
+    }
+  };
+
+  const resolveShippingPayload = async (token) => {
+    if (!selectedShippingAddressId) {
+      return { shippingAddressId: null, shippingAddress: null };
     }
 
-    setCartBusyByProductId((prev) => ({ ...prev, [String(productId)]: true }));
-    setError('');
-    try {
-      const saveRes = await fetch(getApiUrl('/api/po/cart/discovery-item'), {
+    if (selectedShippingAddressId === '__new__') {
+      const missing = ['line1', 'city', 'state', 'pincode', 'country'].find(
+        (field) => !String(newShippingAddress?.[field] || '').trim()
+      );
+      if (missing) {
+        throw new Error('Please complete all shipping address fields or choose a saved address.');
+      }
+      const saveRes = await fetch(getApiUrl('/api/profile/shipping-addresses'), {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          productId: String(productId),
-          quantity: 1
+          label: newShippingAddress.label?.trim() || newShippingAddress.city,
+          line1: newShippingAddress.line1.trim(),
+          city: newShippingAddress.city.trim(),
+          state: newShippingAddress.state.trim(),
+          pincode: newShippingAddress.pincode.trim(),
+          country: newShippingAddress.country.trim()
         })
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.status !== 'success') {
+        throw new Error(saveData.message || 'Failed to save shipping address to profile.');
+      }
+      const saved = saveData.shippingAddress || {};
+      const normalized = normalizeShippingAddressBookEntry(saved);
+      setShippingAddressBook((prev) => {
+        const exists = prev.some((entry) => entry.id === normalized.id);
+        return exists ? prev : [...prev, normalized];
+      });
+      setSelectedShippingAddressId(normalized.id);
+      return {
+        shippingAddressId: normalized.id,
+        shippingAddress: normalized.address
+      };
+    }
+
+    const selected = shippingAddressBook.find((entry) => entry.id === selectedShippingAddressId);
+    if (!selected) {
+      throw new Error('Selected shipping address was not found. Please choose again.');
+    }
+    return {
+      shippingAddressId: selected.id,
+      shippingAddress: selected.address
+    };
+  };
+
+  const confirmAddToCart = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setError('Please log in again to add items to cart.');
+      return false;
+    }
+    const productId = pendingProduct?.id;
+    if (!productId) {
+      setError('No product selected for adding to cart.');
+      return false;
+    }
+    const isNewProject = targetProjectId === '__new__';
+    if (isNewProject && !newProjectName.trim()) {
+      setError('Please enter a project name for the new project.');
+      return false;
+    }
+    if (isNewProject && !expectedDeliveryDate) {
+      setError('Please select expected delivery date for the new project.');
+      return false;
+    }
+    setCartBusyByProductId((prev) => ({ ...prev, [String(productId)]: true }));
+    setError('');
+    try {
+      const shippingPayload = await resolveShippingPayload(token);
+      const payload = {
+        productId: String(productId),
+        quantity: 1
+      };
+      if (isNewProject) {
+        payload.projectName = newProjectName.trim();
+        payload.expectedDeliveryDate = expectedDeliveryDate;
+      } else {
+        payload.groupId = targetProjectId;
+      }
+      if (shippingPayload.shippingAddressId) {
+        payload.shippingAddressId = shippingPayload.shippingAddressId;
+        payload.shippingAddress = shippingPayload.shippingAddress;
+      }
+      const saveRes = await fetch(getApiUrl('/api/po/cart/discovery-item'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
       });
       const saveData = await saveRes.json();
       if (!saveRes.ok || saveData.status !== 'success') {
         throw new Error(saveData.message || 'Failed to save cart');
       }
+      setProjectPickerOpen(false);
+      setPendingProduct(null);
       setCartAddedByProductId((prev) => ({ ...prev, [String(productId)]: true }));
       window.dispatchEvent(new Event('sp-workflow-updated'));
       toast.success('Added to cart');
@@ -359,7 +574,7 @@ const ProductDiscovery = () => {
                   <button
                     type="button"
                     className="pd-card__cart-btn"
-                    onClick={() => addToCart(product)}
+                    onClick={() => openProjectPicker(product)}
                     disabled={Boolean(cartBusyByProductId[pid])}
                   >
                     {cartAddedByProductId[pid] ? (
@@ -374,6 +589,185 @@ const ProductDiscovery = () => {
           })}
         </div>
       )}
+      <Dialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen}>
+        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Select project for cart item</DialogTitle>
+            <DialogDescription>
+              Choose where to store this product in your cart. You can add multiple products under one project.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1">
+              <label className="text-sm font-medium">Project</label>
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={targetProjectId}
+                onChange={(event) => {
+                  const nextTarget = event.target.value;
+                  setTargetProjectId(nextTarget);
+                  if (nextTarget !== '__new__') {
+                    setExpectedDeliveryDate('');
+                    applyProjectShippingSelection(nextTarget, cartProjects, shippingAddressBook);
+                  }
+                }}
+              >
+                {cartProjects.map((group) => (
+                  <option key={group.groupId} value={group.groupId}>
+                    {group.boqName}
+                  </option>
+                ))}
+                <option value="__new__">+ Create new project</option>
+              </select>
+            </div>
+            {targetProjectId === '__new__' ? (
+              <div className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Project name</label>
+                  <Input
+                    maxLength={120}
+                    placeholder="e.g. Site A plumbing"
+                    value={newProjectName}
+                    onChange={(event) => setNewProjectName(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium">Expected delivery date</label>
+                  <Input
+                    type="date"
+                    value={expectedDeliveryDate}
+                    onChange={(event) => setExpectedDeliveryDate(event.target.value)}
+                  />
+                </div>
+              </div>
+            ) : null}
+            {targetProjectId !== '__new__' ? (
+              <p className="text-xs text-muted-foreground">
+                Expected delivery date for this project:{' '}
+                {(() => {
+                  const requiredDate = cartProjects.find((group) => group.groupId === targetProjectId)?.requiredDate;
+                  return requiredDate ? formatDateIST(requiredDate, '—') : 'Not set';
+                })()}
+              </p>
+            ) : null}
+
+            <div className="pd-modal-divider" />
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm font-medium">Shipping address</label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Optional. Saved to your profile when you add a new address.
+                </p>
+              </div>
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={selectedShippingAddressId}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setSelectedShippingAddressId(next);
+                  if (next !== '__new__') {
+                    setNewShippingAddress(blankShippingAddress);
+                  }
+                }}
+              >
+                <option value="">No shipping address</option>
+                {shippingAddressBook.map((entry, index) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.displayName || formatShippingAddressLabel(entry, index)}
+                  </option>
+                ))}
+                <option value="__new__">+ Add new address</option>
+              </select>
+
+              {selectedShippingAddressId === '__new__' ? (
+                <div className="pd-modal-address-form space-y-3">
+                  <div className="checkout-address-location-row">
+                    <button
+                      type="button"
+                      className="checkout-location-btn"
+                      onClick={fillShippingFromCurrentLocation}
+                      disabled={locatingShippingAddress}
+                    >
+                      <MapPin size={15} aria-hidden />
+                      {locatingShippingAddress ? 'Detecting location…' : 'Use my current location'}
+                    </button>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Address label</label>
+                    <Input
+                      maxLength={120}
+                      placeholder="e.g. Site A, Warehouse"
+                      value={newShippingAddress.label}
+                      onChange={(event) =>
+                        setNewShippingAddress((prev) => ({ ...prev, label: event.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Street address</label>
+                    <Input
+                      placeholder="Building / street / area"
+                      value={newShippingAddress.line1}
+                      onChange={(event) =>
+                        setNewShippingAddress((prev) => ({ ...prev, line1: event.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">City</label>
+                      <Input
+                        value={newShippingAddress.city}
+                        onChange={(event) =>
+                          setNewShippingAddress((prev) => ({ ...prev, city: event.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">State</label>
+                      <Input
+                        value={newShippingAddress.state}
+                        onChange={(event) =>
+                          setNewShippingAddress((prev) => ({ ...prev, state: event.target.value }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">PIN code</label>
+                      <Input
+                        value={newShippingAddress.pincode}
+                        onChange={(event) =>
+                          setNewShippingAddress((prev) => ({ ...prev, pincode: event.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">Country</label>
+                      <Input
+                        value={newShippingAddress.country}
+                        onChange={(event) =>
+                          setNewShippingAddress((prev) => ({ ...prev, country: event.target.value }))
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setProjectPickerOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmAddToCart}>
+              Add to cart
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SpPageLayout>
   );
 };
