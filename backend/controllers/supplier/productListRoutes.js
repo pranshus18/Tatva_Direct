@@ -9,7 +9,8 @@ import {
 } from './supplierImports.js';
 import {
   sanitizeImageUrls,
-  supplierOfferTsinFields
+  supplierOfferTsinFields,
+  resolveEffectiveSupplierOfferState
 } from './shared/productHelpers.js';
 import { mergeProductImageLists } from '../../services/productImageService.js';
 
@@ -93,6 +94,8 @@ router.get('/products', authenticateToken, async (req, res) => {
         const offerImages = sanitizeImageUrls(sp.attributes?.images);
         const baseImages = sanitizeImageUrls(sp.product?.images);
 
+        const effective = resolveEffectiveSupplierOfferState(sp, sp.product);
+
         return {
           ...sp.product,
           // Per-variant display: offer overrides shared catalog (same merge as PUT response)
@@ -119,19 +122,8 @@ router.get('/products', authenticateToken, async (req, res) => {
           sgst_rate: sp.sgst_rate ?? sp.attributes?.sgstRate ?? null,
           location: sp.location,
           min_order_quantity: sp.min_order_quantity,
-          // Reconcile status with admin approval:
-          // If the shared product is approved, but supplier_products row is still pending
-          // (can happen for legacy data / race conditions), show it as approved in UI.
-          status:
-            (sp.status === 'pending' || sp.status === null || sp.status === undefined || sp.status === '')
-            && sp.product?.status === 'approved'
-              ? 'approved'
-              : sp.status,
-          is_active:
-            (sp.status === 'pending' || sp.status === null || sp.status === undefined || sp.status === '')
-            && sp.product?.status === 'approved'
-              ? true
-              : sp.is_active,
+          status: effective.effectiveStatus,
+          is_active: effective.effectiveActive,
           rejection_reason: sp.rejection_reason,
           approved_by: sp.approved_by,
           approved_at: sp.approved_at,

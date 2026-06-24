@@ -1,5 +1,44 @@
-import { inferCityStateFromLocationText, geocodeAddressNominatim } from '../utils/geoUtils.js';
+import { inferCityStateFromLocationText, geocodeIndianAddress } from '../utils/geoUtils.js';
 import { isAddressComplete, normalizeAddress } from '../controllers/po/shared/poHelpers.js';
+import { deriveShippingAddressesFromProfile } from '../controllers/profile/profileHelpers.js';
+
+/** Expand shippingAddressId to full address from the customer's saved profile when needed. */
+export async function resolveProjectShippingAddress(project = {}, { supabase, userId } = {}) {
+  const base = project && typeof project === 'object' ? { ...project } : {};
+  const inline = base.shippingAddress && typeof base.shippingAddress === 'object' ? base.shippingAddress : null;
+  if (inline) {
+    const normalized = normalizeAddress(inline);
+    if (isAddressComplete(normalized)) {
+      return { ...base, shippingAddress: normalized };
+    }
+  }
+
+  const shippingAddressId = String(base.shippingAddressId || '').trim();
+  if (!shippingAddressId || !supabase || !userId) return base;
+
+  try {
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('profile, user_type')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error || !user) return base;
+
+    const saved = deriveShippingAddressesFromProfile(user);
+    const match = saved.find((entry) => String(entry.id) === shippingAddressId);
+    if (!match) return base;
+
+    const shippingAddress = normalizeAddress(match);
+    return {
+      ...base,
+      shippingAddressId,
+      shippingAddress,
+      location: base.location || formatShippingAddressText(shippingAddress)
+    };
+  } catch {
+    return base;
+  }
+}
 
 export function formatShippingAddressText(address = {}) {
   const normalized = normalizeAddress(address);
@@ -55,10 +94,6 @@ export async function loadDiscoveryProjectContextForRanking(project = {}) {
     return { siteGeoFromBoq, boqProjectCity, boqProjectState, requiredDateFromBoq, deliveryLocation };
   }
 
-  if (project.siteGeo && typeof project.siteGeo.lat === 'number' && typeof project.siteGeo.lng === 'number') {
-    siteGeoFromBoq = { lat: project.siteGeo.lat, lng: project.siteGeo.lng };
-  }
-
   const shippingAddress =
     project.shippingAddress && typeof project.shippingAddress === 'object' ? project.shippingAddress : null;
   deliveryLocation =
@@ -79,21 +114,35 @@ export async function loadDiscoveryProjectContextForRanking(project = {}) {
     requiredDateFromBoq = String(project.requiredDate);
   }
 
-  if (!siteGeoFromBoq) {
-    const geocodeText =
-      shippingAddress && isAddressComplete(normalizeAddress(shippingAddress))
-        ? formatShippingAddressText(shippingAddress)
-        : deliveryLocation;
-    if (geocodeText) {
+  // Always re-geocode from the selected shipping address — cached siteGeo can be from an old BOQ site.
+  if (shippingAddress) {
+    const normalized = normalizeAddress(shippingAddress);
+    if (isAddressComplete(normalized)) {
       try {
-        const geo = await geocodeAddressNominatim(geocodeText);
-        if (geo && typeof geo.lat === 'number' && typeof geo.lng === 'number') {
-          siteGeoFromBoq = { lat: geo.lat, lng: geo.lng };
-        }
+        const geo = await geocodeIndianAddress(normalized);
+        if (geo) siteGeoFromBoq = geo;
       } catch {
-        // Non-fatal — city/state fallback still applies in ranking.
+        // Non-fatal — fall through to location text / cached geo.
       }
     }
+  }
+
+  if (!siteGeoFromBoq && deliveryLocation) {
+    try {
+      const geo = await geocodeIndianAddress(deliveryLocation);
+      if (geo) siteGeoFromBoq = geo;
+    } catch {
+      // Non-fatal.
+    }
+  }
+
+  if (
+    !siteGeoFromBoq &&
+    project.siteGeo &&
+    typeof project.siteGeo.lat === 'number' &&
+    typeof project.siteGeo.lng === 'number'
+  ) {
+    siteGeoFromBoq = { lat: project.siteGeo.lat, lng: project.siteGeo.lng };
   }
 
   return { siteGeoFromBoq, boqProjectCity, boqProjectState, requiredDateFromBoq, deliveryLocation };

@@ -15,53 +15,76 @@ import {
   Wallet
 } from 'lucide-react';
 
+export const SUPPLIER_NAV_ITEMS = [
+  { path: '/supplier-dashboard', label: 'Dashboard', shortLabel: 'Dashboard', icon: BarChart3 },
+  { path: '/product-management', label: 'Manage Products', shortLabel: 'Products', icon: Package },
+  { path: '/manage-inventory', label: 'Manage Inventory', shortLabel: 'Inventory', icon: Boxes },
+  { path: '/supplier-bcov', label: 'Product COV', shortLabel: 'COV', icon: Table2 },
+  { path: '/supplier-upstream', label: 'Upstream Sourcing', shortLabel: 'Upstream', icon: Network },
+  { path: '/supplier-upstream-orders', label: 'My Upstream Orders', shortLabel: 'Orders', icon: ClipboardList },
+  { path: '/supplier-cart', label: 'Cart', shortLabel: 'Cart', icon: ShoppingCart, badgeKey: 'cart' },
+  { path: '/supplier-pos', label: 'POS Sales', shortLabel: 'POS', icon: ShoppingCart },
+  { path: '/supplier-returns', label: 'Returns', shortLabel: 'Returns', icon: RefreshCw },
+  { path: '/supplier-select-yourself', label: 'Select Yourself', shortLabel: 'Select', icon: UserCheck },
+  { path: '/supplier-wallet', label: 'Wallet', shortLabel: 'Wallet', icon: Wallet },
+  { path: '/supplier-discount-insights', label: 'Brand Level COV', shortLabel: 'Brand COV', icon: TrendingUp },
+  { path: '/supplier-buyer-purchases', label: 'Sales', shortLabel: 'Sales', icon: Users },
+  { path: '/supplier-credit-accounts', label: 'Credit on Account', shortLabel: 'Credit', icon: CreditCard },
+  {
+    path: '/supplier-total-purchase-platform-cov',
+    label: 'Total Purchase Platform COV',
+    shortLabel: 'Platform',
+    icon: ShoppingCart
+  },
+  { path: '/supplier-purchase-total', label: 'Supplier Purchase Total', shortLabel: 'Purchases', icon: ShoppingCart },
+  { path: '/supplier-portal-theme', label: 'Portal Theme', shortLabel: 'Theme', icon: Paintbrush }
+];
+
+const navByPath = Object.fromEntries(SUPPLIER_NAV_ITEMS.map((item) => [item.path, item]));
+
 export const SUPPLIER_NAV_GROUPS = [
   {
     id: 'overview',
     label: 'Overview',
-    items: [{ path: '/supplier-dashboard', label: 'Dashboard', icon: BarChart3 }]
+    items: [navByPath['/supplier-dashboard']]
   },
   {
     id: 'catalog',
     label: 'Catalog',
     items: [
-      { path: '/product-management', label: 'Manage Products', icon: Package },
-      { path: '/manage-inventory', label: 'Manage Inventory', icon: Boxes },
-      { path: '/supplier-bcov', label: 'Product COV', icon: Table2 }
+      navByPath['/product-management'],
+      navByPath['/manage-inventory'],
+      navByPath['/supplier-bcov']
     ]
   },
   {
     id: 'operations',
     label: 'Operations',
     items: [
-      { path: '/supplier-upstream', label: 'Upstream Sourcing', icon: Network },
-      { path: '/supplier-upstream-orders', label: 'My Upstream Orders', icon: ClipboardList },
-      { path: '/supplier-cart', label: 'Cart', icon: ShoppingCart, badgeKey: 'cart' },
-      { path: '/supplier-pos', label: 'POS Sales', icon: ShoppingCart },
-      { path: '/supplier-returns', label: 'Returns', icon: RefreshCw },
-      { path: '/supplier-select-yourself', label: 'Select Yourself', icon: UserCheck }
+      navByPath['/supplier-upstream'],
+      navByPath['/supplier-upstream-orders'],
+      navByPath['/supplier-cart'],
+      navByPath['/supplier-pos'],
+      navByPath['/supplier-returns'],
+      navByPath['/supplier-select-yourself']
     ]
   },
   {
     id: 'insights',
     label: 'Insights',
     items: [
-      { path: '/supplier-wallet', label: 'Wallet', icon: Wallet },
-      { path: '/supplier-discount-insights', label: 'Brand Level COV', icon: TrendingUp },
-      { path: '/supplier-buyer-purchases', label: 'Sales', icon: Users },
-      { path: '/supplier-credit-accounts', label: 'Credit on Account', icon: CreditCard },
-      {
-        path: '/supplier-total-purchase-platform-cov',
-        label: 'Total Purchase Platform COV',
-        icon: ShoppingCart
-      },
-      { path: '/supplier-purchase-total', label: 'Supplier Purchase Total', icon: ShoppingCart }
+      navByPath['/supplier-wallet'],
+      navByPath['/supplier-discount-insights'],
+      navByPath['/supplier-buyer-purchases'],
+      navByPath['/supplier-credit-accounts'],
+      navByPath['/supplier-total-purchase-platform-cov'],
+      navByPath['/supplier-purchase-total']
     ]
   },
   {
     id: 'account',
     label: 'Account',
-    items: [{ path: '/supplier-portal-theme', label: 'Portal Theme', icon: Paintbrush }]
+    items: [navByPath['/supplier-portal-theme']]
   }
 ];
 

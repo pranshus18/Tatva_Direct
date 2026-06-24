@@ -1,6 +1,68 @@
 /** Earth radius in km */
 const R_KM = 6371;
 
+/** Rough bounding box for India — rejects obviously wrong geocoder hits. */
+export function isGeoWithinIndia(geo) {
+  if (!geo || typeof geo.lat !== 'number' || typeof geo.lng !== 'number') return false;
+  return geo.lat >= 6 && geo.lat <= 37 && geo.lng >= 68 && geo.lng <= 98;
+}
+
+/**
+ * Structured Indian address geocoding: pincode + city + state first, then broader fallbacks.
+ * Accepts a normalized address object or a free-text location string.
+ */
+export async function geocodeIndianAddress(addressOrText) {
+  if (typeof addressOrText === 'string') {
+    const text = addressOrText.trim();
+    if (!text) return null;
+    const query = /\bindia\b/i.test(text) ? text : `${text}, India`;
+    const geo = await geocodeAddressNominatim(query);
+    return geo && isGeoWithinIndia(geo) ? geo : null;
+  }
+
+  const a = addressOrText && typeof addressOrText === 'object' ? addressOrText : {};
+  const line1 = String(a.line1 || a.street || '').trim();
+  const city = String(a.city || '').trim();
+  const state = String(a.state || '').trim();
+  const pincode = String(a.pincode || a.zipCode || a.postal_code || a.zip || '').trim();
+  const country = String(a.country || 'India').trim() || 'India';
+
+  const attempts = [];
+  if (pincode && city && state) {
+    attempts.push([line1, city, state, pincode, country].filter(Boolean).join(', '));
+  }
+  if (pincode) attempts.push(`${pincode}, India`);
+  if (city && state) attempts.push(`${city}, ${state}, India`);
+  if (line1 && city) attempts.push([line1, city, state, country].filter(Boolean).join(', '));
+  if (city) attempts.push(`${city}, India`);
+
+  const seen = new Set();
+  for (const query of attempts) {
+    const key = query.toLowerCase();
+    if (!query || seen.has(key)) continue;
+    seen.add(key);
+    const geo = await geocodeAddressNominatim(query);
+    if (geo && isGeoWithinIndia(geo)) return geo;
+  }
+  return null;
+}
+
+/** Prefer road distance when plausible; otherwise great-circle (avoids bad matrix cell assignments). */
+export function distanceKmForRanking(origin, destGeo, roadKm) {
+  const normalizedOrigin = normalizeLatLng(origin);
+  const normalizedDest = normalizeLatLng(destGeo);
+  if (!normalizedOrigin || !normalizedDest) return null;
+  const straightKm = haversineKm(
+    normalizedOrigin.lat,
+    normalizedOrigin.lng,
+    normalizedDest.lat,
+    normalizedDest.lng
+  );
+  if (typeof roadKm !== 'number' || !Number.isFinite(roadKm) || roadKm < 0) return straightKm;
+  if (roadKm < straightKm * 0.85 || roadKm > straightKm * 2.5 + 50) return straightKm;
+  return roadKm;
+}
+
 export function haversineKm(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);

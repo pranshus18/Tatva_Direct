@@ -79,11 +79,74 @@
 
 .supplier-project-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
   flex-wrap: wrap;
   margin-bottom: 0.8rem;
+}
+
+.supplier-project-head-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.supplier-project-edit-block {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.supplier-project-shipping-panel {
+  display: grid;
+  gap: 0.65rem;
+  border: 1px solid #dbe3ef;
+  border-radius: var(--supplier-radius-control);
+  background: #fff;
+  padding: 0.75rem;
+}
+
+.supplier-project-shipping-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.supplier-project-shipping-hint {
+  margin: 0.2rem 0 0;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.supplier-project-shipping-select {
+  height: 36px;
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: var(--supplier-radius-control);
+  background: #fff;
+  padding: 0 0.55rem;
+  font-size: 0.88rem;
+}
+
+.supplier-project-shipping-form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.supplier-project-shipping-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+}
+
+.supplier-project-add-address {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  color: #2563eb;
+  font-size: inherit;
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 .supplier-project-title {

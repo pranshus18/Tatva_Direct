@@ -742,53 +742,89 @@ const SupplierDashboard = ({ user }) => {
           accent="amber"
         />
         <SpStatCard label="Pending Quotes" value={stats.pendingQuotes} icon={Clock} accent="rose" />
-        <Card className="sp-market-card">
-          <CardContent className="p-4">
-            <div className="text-sm font-semibold text-slate-800">Inventory Snapshot</div>
-            <div className="mt-2 text-2xl font-semibold text-slate-900">
-              {inventorySummary?.summary?.totalStockQty ?? 0}
-            </div>
-            <p className="text-xs text-slate-500">
-              Value: ₹{Number(inventorySummary?.summary?.totalStockValue || 0).toLocaleString()}
-            </p>
-            {Array.isArray(restockSuggestions?.items) && restockSuggestions.items.length > 0 ? (
-              <div className="supplier-dashboard-restock-wrap">
-                <div className="supplier-dashboard-restock-title">Restock suggestions</div>
-                <div className="supplier-dashboard-restock-subtitle">
-                  Low {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} ≤ {restockSuggestions.threshold}
-                </div>
-                <div className="supplier-dashboard-restock-list">
-                  {restockSuggestions.items.slice(0, 3).map((it) => (
-                    <div key={it.supplierProductId} className="supplier-dashboard-restock-item">
-                      <div className="supplier-dashboard-restock-item-head">
-                        {SUPPLIER_CURRENT_STOCK_LABEL}: {it.stock ?? 0}
-                        {it.brandModel ? <span className="supplier-dashboard-restock-brand"> · {it.brandModel}</span> : null}
-                      </div>
-                      {Array.isArray(it.suggestions) && it.suggestions.length > 0 ? (
-                        <div className="supplier-dashboard-restock-suggestions">
-                          {it.suggestions.map((s) => (
-                            <div key={s.supplierProductId}>
-                              {s.supplierName}
-                              {typeof s.distanceKm === 'number' ? ` · ${s.distanceKm} km` : ''}
-                              {typeof s.stock === 'number'
-                                ? ` · ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} ${s.stock}`
-                                : ''}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <div className="supplier-dashboard-restock-empty">
-                          No upstream matches found.
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </CardContent>
-        </Card>
+        <SpStatCard
+          label="Inventory Units"
+          value={inventorySummary?.summary?.totalStockQty ?? 0}
+          icon={Package}
+          accent="indigo"
+          hint={`Value ₹${Number(inventorySummary?.summary?.totalStockValue || 0).toLocaleString()}`}
+        />
       </div>
+
+      <Card className="sp-market-card supplier-dashboard-restock-card mb-6">
+        <CardContent className="p-5">
+          <div className="supplier-dashboard-restock-header">
+            <div>
+              <div className="supplier-dashboard-restock-title">Restock suggestions</div>
+              <div className="supplier-dashboard-restock-subtitle">
+                Items with {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} at or below{' '}
+                {restockSuggestions?.threshold ?? 10}
+              </div>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => navigate('/supplier-upstream')}>
+              Open upstream sourcing
+            </Button>
+          </div>
+
+          {Array.isArray(restockSuggestions?.items) && restockSuggestions.items.length > 0 ? (
+            <div className="supplier-dashboard-restock-list">
+              {restockSuggestions.items.slice(0, 5).map((it) => (
+                <div key={it.supplierProductId} className="supplier-dashboard-restock-item">
+                  <div className="supplier-dashboard-restock-item-head">
+                    <div>
+                      <div className="supplier-dashboard-restock-product">
+                        {it.productName || 'Unmapped product'}
+                      </div>
+                      <div className="supplier-dashboard-restock-meta">
+                        {SUPPLIER_CURRENT_STOCK_LABEL}: {it.stock ?? 0}
+                        {it.brandModel ? (
+                          <span className="supplier-dashboard-restock-brand"> · {it.brandModel}</span>
+                        ) : null}
+                      </div>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="supplier-dashboard-restock-action"
+                      onClick={() =>
+                        navigate(
+                          `/supplier-upstream?supplierProductIds=${encodeURIComponent(it.supplierProductId)}`
+                        )
+                      }
+                    >
+                      Source
+                    </Button>
+                  </div>
+                  {Array.isArray(it.suggestions) && it.suggestions.length > 0 ? (
+                    <div className="supplier-dashboard-restock-suggestions">
+                      {it.suggestions.map((s) => (
+                        <div key={s.supplierProductId} className="supplier-dashboard-restock-offer">
+                          <span className="supplier-dashboard-restock-offer-name">{s.supplierName}</span>
+                          <span className="supplier-dashboard-restock-offer-meta">
+                            {typeof s.distanceKm === 'number' ? `${s.distanceKm} km` : 'Distance n/a'}
+                            {typeof s.stock === 'number'
+                              ? ` · ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} ${s.stock}`
+                              : ''}
+                            {typeof s.price === 'number' ? ` · ₹${Number(s.price).toLocaleString()}` : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="supplier-dashboard-restock-empty">
+                      {it.message || 'No upstream matches found for this item.'}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="supplier-dashboard-restock-empty supplier-dashboard-restock-empty--panel">
+              No low-stock items right now. Inventory above the restock threshold looks healthy.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="dashboard-content">
         <div className="dashboard-section">

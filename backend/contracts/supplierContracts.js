@@ -38,6 +38,28 @@ export const supplierUpstreamOrdersSchema = z.object({
     .min(1)
 });
 
+export const supplierUpstreamPreviewGroupsSchema = z.object({
+  deliveryDestination: z.enum(['shipping', 'billing']).optional().nullable(),
+  shippingAddress: z.record(z.any()).optional().nullable(),
+  billingAddress: z.record(z.any()).optional().nullable(),
+  reviewLines: z
+    .array(
+      z.object({
+        supplierId: z.string().uuid(),
+        supplierName: z.string().optional(),
+        productName: z.string().optional(),
+        quantity: z.union([z.number(), z.string()]),
+        unitPrice: z.union([z.number(), z.string()]).optional(),
+        lineTotal: z.union([z.number(), z.string()]).optional(),
+        unit: z.string().optional(),
+        specifications: z.record(z.any()).optional().nullable(),
+        images: z.array(z.any()).optional(),
+        shippingAddress: z.record(z.any()).optional().nullable()
+      })
+    )
+    .min(1)
+});
+
 export const supplierUpstreamCartSaveSchema = z.object({
   selectedMine: z.record(z.string(), z.union([z.number(), z.string()])),
   selectedUpstreamOffer: z.record(z.string(), z.union([z.string(), z.number()])),
@@ -46,7 +68,9 @@ export const supplierUpstreamCartSaveSchema = z.object({
   searchTerm: z.string().optional().default(''),
   cartName: z.string().max(120).optional().default(''),
   projectId: z.string().optional().nullable(),
-  requiredDate: z.string().optional().nullable()
+  requiredDate: z.string().optional().nullable(),
+  shippingAddressId: z.string().optional().nullable(),
+  shippingAddress: z.record(z.any()).optional().nullable()
 });
 
 export const supplierInventoryAdjustSchema = z.object({

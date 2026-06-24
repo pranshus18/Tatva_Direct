@@ -21,7 +21,8 @@ export {
   supplierUpstreamCartSaveSchema,
   supplierReturnStatusPatchSchema,
   supplierUnitCreateSchema,
-  supplierUpstreamOrdersSchema
+  supplierUpstreamOrdersSchema,
+  supplierUpstreamPreviewGroupsSchema
 } from '../../contracts/supplierContracts.js';
 export { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 export { recordInventoryMovement } from '../../services/inventoryService.js';
@@ -122,9 +123,11 @@ export {
 export { mapSupplyChainPartner } from '../../services/supplierPartnerMapperService.js';
 export {
   buildSupplyChainPartnerGroups,
+  buildRegisteredUpstreamPartnerIdsByBrandKey,
   getAllowedUpstreamRolesForBrand,
   getImmediateUpstreamRoleForBrand,
   getUpstreamRolesForBuyerOnBrand,
+  pickAnyUpstreamSellerRoleOnChain,
   pickUpstreamSellerRoleForBrand,
   sellerHasAnyUpstreamRoleForBrand,
   sellerHasRoleForBrand,
@@ -140,6 +143,7 @@ export {
   PARENT_ROLE_BY_MY_ROLE,
   pickDisplayRoleFromAllowedSet,
   pickMatchingUpstreamRoleForSeller,
+  resolveBuyerRoleForBrand,
   resolveRequiredUpstreamRoleFromAdminChain,
   ROLE_DEPTH,
   sellerMatchesUpstreamRoles,

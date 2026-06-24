@@ -48,7 +48,8 @@
 }
 
 @layer utilities {
-  .sp-content-panel {
+  .sp-content-panel,
+  .portal-shell-content {
     @apply bg-background/80 backdrop-blur-sm min-h-full;
   }
 }

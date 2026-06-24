@@ -2,7 +2,6 @@
 import {
   ROLE_DEPTH,
   SUPPLY_CHAIN_ROLE_LABELS,
-  UPSTREAM_RANK_PRIORITY,
   brandIsAllowedForSupplier,
   entryOverlapsViewerBrands,
   getContractErrorMessage,
@@ -10,6 +9,7 @@ import {
   getViewerBrandTokensUnionForAllRoles,
   haversineKm,
   loadEffectiveSupplierChainProfile,
+  parseBrandTokens,
   parseWithSchema,
   recordInventoryMovement,
   sellerMatchesUpstreamRoles,
@@ -113,7 +113,7 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
     // Load my low-stock offers
     const { data: myRows, error: myErr } = await supabase
       .from('supplier_products')
-      .select('id, product_id, stock, outlet_id, location, attributes')
+      .select('id, product_id, stock, outlet_id, location, attributes, product:products(id, name, brand)')
       .eq('supplier_id', req.userId)
       .eq('is_active', true)
       .neq('status', 'rejected')
@@ -142,8 +142,9 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
 
     // Union of immediate upstream partner types for every role the viewer declared (multi-role safe).
     const parentRolesUnion = getImmediateParentRolesUnion(req.user.profile);
-    const parentRolesLabel = [...parentRolesUnion]
-      .sort((a, b) => (ROLE_DEPTH[a] ?? 99) - (ROLE_DEPTH[b] ?? 99))
+    const parentRolesSorted = [...parentRolesUnion].sort((a, b) => (ROLE_DEPTH[a] ?? 99) - (ROLE_DEPTH[b] ?? 99));
+    const parentRole = parentRolesSorted[0] || null;
+    const parentRolesLabel = parentRolesSorted
       .map((r) => SUPPLY_CHAIN_ROLE_LABELS[r] || r)
       .join(', ');
 
@@ -162,87 +163,71 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
     }
 
     const viewerBrandTokens = getViewerBrandTokensUnionForAllRoles(req.user.profile);
-    const { data: upstreamUsers } = await supabase
-      .from('users')
-      .select('id, name, company, address, profile')
-      .eq('user_type', 'supplier')
-      .eq('is_active', true)
-      .neq('id', req.userId);
-
-    const upstreamSupplierIds = (upstreamUsers || [])
-      .filter((u) => u?.profile && sellerMatchesUpstreamRoles(u.profile, parentRolesUnion))
-      .filter((u) => {
-        if (!viewerBrandTokens || viewerBrandTokens.size === 0) return true;
-        const partnerEntries = (
-          Array.isArray(u.profile?.companyInfoEntries)
-            ? u.profile.companyInfoEntries
-            : u.profile?.companyInfoEntries && typeof u.profile.companyInfoEntries === 'object'
-              ? [u.profile.companyInfoEntries]
-              : []
-        ).filter(
-          (e) => e && parentRolesUnion.has(e.role)
-        );
-        if (partnerEntries.length > 0) {
-          return partnerEntries.some((e) => entryOverlapsViewerBrands(e, viewerBrandTokens));
-        }
-        if (u.profile?.supplierRole && parentRolesUnion.has(u.profile.supplierRole)) {
-          return entryOverlapsViewerBrands({ brands: u.profile?.brands || '' }, viewerBrandTokens);
-        }
-        return false;
-      })
-      .map((u) => u.id);
-
-    if (upstreamSupplierIds.length === 0) {
-      return res.json({
-        status: 'success',
-        threshold,
-        items: myOffers.map((r) => ({
-          supplierProductId: r.id,
-          productId: r.product_id,
-          stock: r.stock,
-          suggestions: [],
-          message: `No upstream suppliers found (${parentRolesLabel || 'matching roles'}) for your declared brands.`
-        }))
-      });
-    }
-
-    // Fetch upstream offers for all my product_ids at once
     const productIds = [...new Set(myOffers.map((r) => r.product_id).filter(Boolean))];
-    if (productIds.length === 0) {
-      return res.json({
-        status: 'success',
-        parentRole,
-        parentRoles: parentRolesSorted,
-        rankPriority: UPSTREAM_RANK_PRIORITY,
-        limit: limitPerItem,
-        items: myOffers.map((r) => ({
-          mineSupplierProductId: r.id,
-          productId: r.product_id || null,
-          brandModel: r?.attributes?.brandModel || null,
-          upstreamOffers: [],
-          message:
-            'Selected inventory item is not linked to a catalog product yet. Edit this item and map it to a product first.'
-        }))
+
+    let upstreamOffers = [];
+    if (productIds.length > 0) {
+      const { data: offerRows, error: offerErr } = await supabase
+        .from('supplier_products')
+        .select(
+          'id, product_id, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, product:products(id, name, brand)'
+        )
+        .in('product_id', productIds)
+        .neq('supplier_id', req.userId)
+        .neq('status', 'rejected')
+        .gt('stock', 0);
+      if (offerErr) throw offerErr;
+      upstreamOffers = (offerRows || []).filter((row) => row?.is_active !== false);
+    }
+
+    const upstreamSupplierIds = [...new Set(upstreamOffers.map((row) => row.supplier_id).filter(Boolean))];
+    const upstreamUserMap = {};
+    if (upstreamSupplierIds.length > 0) {
+      const { data: upstreamUsers } = await supabase
+        .from('users')
+        .select('id, name, company, address, profile')
+        .eq('user_type', 'supplier')
+        .eq('is_active', true)
+        .in('id', upstreamSupplierIds);
+      (upstreamUsers || []).forEach((u) => {
+        upstreamUserMap[u.id] = u;
       });
     }
-    const { data: upstreamOffers } = await supabase
-      .from('supplier_products')
-      .select('id, product_id, supplier_id, stock, price, outlet_id, location, status, is_active, attributes')
-      .in('supplier_id', upstreamSupplierIds)
-      .in('product_id', productIds)
-      .eq('is_active', true)
-      .neq('status', 'rejected')
-      .gt('stock', 0);
 
+    const allowedSupplierIds = new Set();
+    for (const supplierId of upstreamSupplierIds) {
+      const sup = upstreamUserMap[supplierId];
+      if (!sup?.profile || !sellerMatchesUpstreamRoles(sup.profile, parentRolesUnion)) continue;
+      if (viewerBrandTokens.size === 0) {
+        allowedSupplierIds.add(supplierId);
+        continue;
+      }
+      const partnerEntries = (
+        Array.isArray(sup.profile?.companyInfoEntries)
+          ? sup.profile.companyInfoEntries
+          : sup.profile?.companyInfoEntries && typeof sup.profile.companyInfoEntries === 'object'
+            ? [sup.profile.companyInfoEntries]
+            : []
+      ).filter((e) => e && parentRolesUnion.has(e.role));
+      const brandOk =
+        partnerEntries.length > 0
+          ? partnerEntries.some((e) => entryOverlapsViewerBrands(e, viewerBrandTokens))
+          : sup.profile?.supplierRole && parentRolesUnion.has(sup.profile.supplierRole)
+            ? entryOverlapsViewerBrands({ brands: sup.profile?.brands || '' }, viewerBrandTokens)
+            : false;
+      if (brandOk) allowedSupplierIds.add(supplierId);
+    }
+
+    const filteredOffers = upstreamOffers.filter((row) => allowedSupplierIds.has(row.supplier_id));
     const upstreamByProduct = new Map();
-    for (const row of upstreamOffers || []) {
+    for (const row of filteredOffers) {
       if (!row?.product_id) continue;
       if (!upstreamByProduct.has(row.product_id)) upstreamByProduct.set(row.product_id, []);
       upstreamByProduct.get(row.product_id).push(row);
     }
 
     // Load upstream outlets geo for distance calculation
-    const upstreamOutletIds = [...new Set((upstreamOffers || []).map((r) => r.outlet_id).filter(Boolean))];
+    const upstreamOutletIds = [...new Set(filteredOffers.map((r) => r.outlet_id).filter(Boolean))];
     const upstreamOutletGeoById = {};
     if (upstreamOutletIds.length > 0) {
       const { data: outs } = await supabase
@@ -253,25 +238,48 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
       for (const o of outs || []) upstreamOutletGeoById[o.id] = o.geo_location;
     }
 
-    // Load upstream supplier display info map
-    const upstreamUserMap = {};
-    (upstreamUsers || []).forEach((u) => {
-      upstreamUserMap[u.id] = u;
-    });
-
     const items = myOffers.map((mine) => {
+      if (!mine.product_id) {
+        return {
+          supplierProductId: mine.id,
+          productId: null,
+          productName: null,
+          stock: mine.stock,
+          brandModel: mine?.attributes?.brandModel || null,
+          upstreamRole: parentRole,
+          suggestions: [],
+          message:
+            'This item is not linked to a catalog product yet. Map it to a product to see upstream restock options.'
+        };
+      }
+
       const myGeo = mine.outlet_id ? outletGeoById[mine.outlet_id] : null;
-      const desiredBrand = String(mine?.attributes?.brandModel || '').trim().toLowerCase();
+      const desiredBrand = String(mine?.attributes?.brandModel || mine?.product?.brand || '').trim().toLowerCase();
       const candidates = (upstreamByProduct.get(mine.product_id) || [])
         .filter((u) => {
           if (!desiredBrand) return true;
-          const b = String(u?.attributes?.brandModel || '').trim().toLowerCase();
-          return b ? b === desiredBrand || b.includes(desiredBrand) || desiredBrand.includes(b) : true;
+          const offerBrand = String(u?.attributes?.brandModel || u?.product?.brand || '').trim().toLowerCase();
+          if (!offerBrand) return true;
+          return (
+            offerBrand === desiredBrand ||
+            offerBrand.includes(desiredBrand) ||
+            desiredBrand.includes(offerBrand) ||
+            parseBrandTokens(offerBrand).some((token) =>
+              parseBrandTokens(desiredBrand).some(
+                (mineToken) => mineToken === token || mineToken.includes(token) || token.includes(mineToken)
+              )
+            )
+          );
         })
         .map((u) => {
           const geo = u.outlet_id ? upstreamOutletGeoById[u.outlet_id] : null;
           const dist =
-            myGeo && geo && typeof myGeo.lat === 'number' && typeof myGeo.lng === 'number' && typeof geo.lat === 'number' && typeof geo.lng === 'number'
+            myGeo &&
+            geo &&
+            typeof myGeo.lat === 'number' &&
+            typeof myGeo.lng === 'number' &&
+            typeof geo.lat === 'number' &&
+            typeof geo.lng === 'number'
               ? haversineKm(myGeo.lat, myGeo.lng, geo.lat, geo.lng)
               : null;
           const sup = upstreamUserMap[u.supplier_id];
@@ -288,7 +296,6 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
           };
         })
         .sort((a, b) => {
-          // Prefer known distance, then nearest; else higher stock
           if (a.distanceKm != null && b.distanceKm == null) return -1;
           if (a.distanceKm == null && b.distanceKm != null) return 1;
           if (a.distanceKm != null && b.distanceKm != null) return a.distanceKm - b.distanceKm;
@@ -296,17 +303,37 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
         })
         .slice(0, limitPerItem);
 
+      let message = null;
+      if (candidates.length === 0) {
+        if (filteredOffers.length === 0) {
+          message =
+            upstreamOffers.length === 0
+              ? `No in-stock upstream offers found for this product (${parentRolesLabel || 'matching roles'}).`
+              : `No upstream suppliers matched your supply-chain role and brands (${parentRolesLabel || 'matching roles'}).`;
+        } else {
+          message = 'No upstream offers matched this product and brand combination.';
+        }
+      }
+
       return {
         supplierProductId: mine.id,
         productId: mine.product_id,
+        productName: mine?.product?.name || null,
         stock: mine.stock,
-        brandModel: mine?.attributes?.brandModel || null,
+        brandModel: mine?.attributes?.brandModel || mine?.product?.brand || null,
         upstreamRole: parentRole,
-        suggestions: candidates
+        suggestions: candidates,
+        ...(message ? { message } : {})
       };
     });
 
-    return res.json({ status: 'success', threshold, items });
+    return res.json({
+      status: 'success',
+      threshold,
+      parentRole,
+      parentRoles: parentRolesSorted,
+      items
+    });
   } catch (e) {
     console.error('Restock suggestions error:', e);
     return res.status(500).json({ status: 'error', message: 'Failed to load restock suggestions' });

@@ -1,5 +1,11 @@
 import { compactLocationText, uniqueLocationList } from './vendorRankingHelpersService.js';
-import { geocodeAddressNominatim, getDrivingDistanceMatrixKm, haversineKm } from '../utils/geoUtils.js';
+import {
+  distanceKmForRanking,
+  geocodeIndianAddress,
+  geocodeAddressNominatim,
+  getDrivingDistanceMatrixKm,
+  resolveGeoFromOutletAddress
+} from '../utils/geoUtils.js';
 
 export async function computeSupplierDistances({ supabase, supplierProducts, siteGeoFromBoq }) {
   const supplierIds = Object.keys(supplierProducts || {});
@@ -17,7 +23,7 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
     if (!key) return null;
     if (geocodeCache.has(key)) return geocodeCache.get(key);
     try {
-      const geo = await geocodeAddressNominatim(text);
+      const geo = (await geocodeIndianAddress(text)) || (await geocodeAddressNominatim(text));
       geocodeCache.set(key, geo || null);
       return geo || null;
     } catch {
@@ -28,16 +34,17 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
 
   const { data: outletRows } = await supabase
     .from('outlets')
-    .select('supplier_id, geo_location')
+    .select('supplier_id, geo_location, address')
     .in('supplier_id', supplierIds)
     .eq('is_active', true);
 
   const outletDistanceInputs = [];
   for (const row of outletRows || []) {
     const sid = row?.supplier_id;
-    const g = row?.geo_location;
-    if (!sid || !g || typeof g.lat !== 'number' || typeof g.lng !== 'number') continue;
-    outletDistanceInputs.push({ sid, geo: g });
+    if (!sid) continue;
+    const geo = await resolveGeoFromOutletAddress(row?.geo_location, row?.address);
+    if (!geo) continue;
+    outletDistanceInputs.push({ sid, geo });
   }
 
   if (outletDistanceInputs.length > 0) {
@@ -47,14 +54,11 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
     );
     outletDistanceInputs.forEach((entry, idx) => {
       const sid = entry.sid;
-      const roadKm = routeDistances[idx];
-      const km =
-        typeof roadKm === 'number' && Number.isFinite(roadKm)
-          ? roadKm
-          : haversineKm(siteGeoFromBoq.lat, siteGeoFromBoq.lng, entry.geo.lat, entry.geo.lng);
+      const km = distanceKmForRanking(siteGeoFromBoq, entry.geo, routeDistances[idx]);
+      if (km == null) return;
       if (distanceBySupplier[sid] == null || km < distanceBySupplier[sid]) {
         distanceBySupplier[sid] = km;
-        distanceSourceLocationBySupplier[sid] = 'Outlet geo location (road route)';
+        distanceSourceLocationBySupplier[sid] = 'Outlet geo location';
       }
     });
   }
@@ -77,14 +81,11 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
       geocodedCandidates.map((x) => x.geo)
     );
     geocodedCandidates.forEach((candidate, idx) => {
-      const roadKm = routeDistances[idx];
-      const km =
-        typeof roadKm === 'number' && Number.isFinite(roadKm)
-          ? roadKm
-          : haversineKm(siteGeoFromBoq.lat, siteGeoFromBoq.lng, candidate.geo.lat, candidate.geo.lng);
+      const km = distanceKmForRanking(siteGeoFromBoq, candidate.geo, routeDistances[idx]);
+      if (km == null) return;
       if (distanceBySupplier[sid] == null || km < distanceBySupplier[sid]) {
         distanceBySupplier[sid] = km;
-        distanceSourceLocationBySupplier[sid] = `${candidate.locText} (road route)`;
+        distanceSourceLocationBySupplier[sid] = candidate.locText;
       }
     });
   }

@@ -51,6 +51,126 @@ export function mapToDeliveryAddress(address = {}) {
   };
 }
 
+/** Stable key for merging shipments: same supplier + same delivery address → one transport pick. */
+export function buildShippingAddressKey(address = {}) {
+  const normalized = normalizeAddress(address);
+  const parts = [normalized.line1, normalized.city, normalized.state, normalized.pincode, normalized.country]
+    .map((part) => String(part || '').trim().toLowerCase())
+    .filter(Boolean);
+  return parts.length ? parts.join('|') : 'default';
+}
+
+export function buildTransportGroupId(vendorId, shippingAddress = {}) {
+  const vid = String(vendorId || '').trim();
+  const shipKey = buildShippingAddressKey(shippingAddress);
+  return `${vid}::${shipKey}`;
+}
+
+export function formatShippingAddressLabel(address = {}) {
+  const normalized = normalizeAddress(address);
+  return [normalized.line1, normalized.city, normalized.state, normalized.pincode, normalized.country]
+    .filter(Boolean)
+    .join(', ');
+}
+
+function resolveShippingFromBoqProject(boqProject) {
+  if (!boqProject || typeof boqProject !== 'object') return null;
+  const address = normalizeAddress(boqProject.shippingAddress || {});
+  if (!isAddressComplete(address)) return null;
+  return address;
+}
+
+function resolveShippingFromCartDraftForItems(draft, workflowItems = []) {
+  if (!draft || typeof draft !== 'object') return null;
+  const items = Array.isArray(workflowItems) ? workflowItems : [];
+  const lineIds = new Set(
+    items.map((it) => String(it?.id ?? '').trim()).filter(Boolean)
+  );
+  const productIds = new Set(
+    items.map((it) => String(it?.productId ?? '').trim()).filter(Boolean)
+  );
+  const groups = Array.isArray(draft.boqGroups) ? draft.boqGroups : [];
+  for (const group of groups) {
+    const groupItems = Array.isArray(group?.items) ? group.items : [];
+    const overlaps = groupItems.some((it) => {
+      const lineId = String(it?.id ?? '').trim();
+      const productId = String(it?.productId ?? '').trim();
+      return (lineId && lineIds.has(lineId)) || (productId && productIds.has(productId));
+    });
+    if (!overlaps) continue;
+    const fromProject = resolveShippingFromBoqProject(group?.boqProject);
+    if (fromProject) return fromProject;
+  }
+
+  const root = normalizeAddress(draft.shippingAddress || {});
+  if (isAddressComplete(root)) return root;
+
+  for (const group of groups) {
+    const fromProject = resolveShippingFromBoqProject(group?.boqProject);
+    if (fromProject) return fromProject;
+  }
+
+  return null;
+}
+
+/** Resolve checkout shipping from workflow project metadata, cart draft, or explicit request. */
+export function resolveCheckoutShippingAddress({
+  boqProject = null,
+  cartDraft = null,
+  workflowItems = [],
+  requestedAddress = null
+} = {}) {
+  const requested = normalizeAddress(requestedAddress || {});
+  if (isAddressComplete(requested)) return requested;
+
+  const fromProject = resolveShippingFromBoqProject(boqProject);
+  if (fromProject) return fromProject;
+
+  const fromCart = resolveShippingFromCartDraftForItems(cartDraft, workflowItems);
+  if (fromCart) return fromCart;
+
+  return null;
+}
+
+export async function loadServiceProviderPoCartDraft(supabase, userId) {
+  const { data: cart } = await supabase
+    .from('po_carts')
+    .select('draft_payload')
+    .eq('service_provider_id', userId)
+    .maybeSingle();
+  return normalizePoCartDraft(cart?.draft_payload || {});
+}
+
+/** Merge PO groups that share supplier + delivery address (safety net after per-item grouping). */
+export function consolidatePoTransportGroups(groups) {
+  if (!Array.isArray(groups) || groups.length <= 1) return groups || [];
+
+  const merged = new Map();
+  for (const group of groups) {
+    const vendorId = String(group?.vendorId || '').trim();
+    const shippingAddress = group?.shippingAddress || null;
+    const mergeKey = group?.transportGroupId || buildTransportGroupId(vendorId, shippingAddress || {});
+    if (!merged.has(mergeKey)) {
+      merged.set(mergeKey, {
+        ...group,
+        transportGroupId: mergeKey,
+        shippingAddressKey: group?.shippingAddressKey || buildShippingAddressKey(shippingAddress || {}),
+        items: [...(group.items || [])]
+      });
+      continue;
+    }
+    const existing = merged.get(mergeKey);
+    existing.items.push(...(group.items || []));
+    existing.total = Math.round((Number(existing.total || 0) + Number(group.total || 0)) * 100) / 100;
+    if (!existing.shippingAddress && shippingAddress) {
+      existing.shippingAddress = shippingAddress;
+      existing.shippingAddressLabel =
+        group.shippingAddressLabel || formatShippingAddressLabel(shippingAddress);
+    }
+  }
+  return Array.from(merged.values());
+}
+
 export function newPoCartGroupId() {
   try {
     return randomUUID();
@@ -291,6 +411,10 @@ export function mergeTransportSelection(existing, incoming, vendorIds = null) {
   if (incoming?.transportNotes) next.transportNotes = incoming.transportNotes;
   if (incoming?.trackingNumber) next.trackingNumber = incoming.trackingNumber;
   if (incoming?.trackingUrl) next.trackingUrl = incoming.trackingUrl;
+
+  if (Object.keys(next.byVendorId).some((id) => String(next.byVendorId[id] || '').trim())) {
+    next.shippingProvider = '';
+  }
 
   return next;
 }

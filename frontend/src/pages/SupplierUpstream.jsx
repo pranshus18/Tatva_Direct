@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
-import './Dashboard.css';
 import './SupplierUpstream.css';
+import './ProductDiscovery.css';
+import './CreatePO.css';
 import {
   Network,
   Package,
@@ -11,20 +12,39 @@ import {
   Loader2,
   AlertTriangle,
   X,
-  Info
+  Info,
+  MapPin,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  ImageOff
 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
+import SpEmptyState from '../components/sp/SpEmptyState';
 import UpstreamProductDisplay, { collectProductImages } from '../components/UpstreamProductDisplay';
 import SupplierProductDetailsModal from '../components/SupplierProductDetailsModal';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
-import { formatRupee } from '../utils/formatRupee';
+import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import { formatDateIST } from '../utils/dateTime';
 import { normalizeSupplierProductsFromApi } from '../utils/supplierProductRow';
+import { getProductImageList } from '../utils/productImages';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import { Skeleton } from '@/components/ui/skeleton';
+import {
+  getGeolocationErrorMessage,
+  resolveAddressFromCurrentLocation
+} from '../utils/currentLocationAddress';
+import {
+  formatShippingAddressLabel,
+  formatShippingAddressPreview,
+  normalizeShippingAddressBookEntry
+} from '../utils/shippingAddressLabel';
 import {
   Dialog,
   DialogContent,
@@ -33,6 +53,15 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
+
+const blankShippingAddress = {
+  label: '',
+  line1: '',
+  city: '',
+  state: '',
+  pincode: '',
+  country: 'India'
+};
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
@@ -51,6 +80,35 @@ const SELLER_LAYER_LABELS = {
 };
 const formatLayerLabel = (role) => (role ? SELLER_LAYER_LABELS[role] || role : 'N/A');
 
+function formatPrice(price, unit) {
+  const num = Number(price);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return formatRupeePerUnit(num, unit, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function SpecBadges({ specifications }) {
+  if (!specifications || typeof specifications !== 'object') return null;
+  const entries = Object.entries(specifications).filter(
+    ([, v]) => v !== null && v !== undefined && String(v).trim()
+  );
+  if (!entries.length) return null;
+  return (
+    <div className="pd-specs">
+      {entries.slice(0, 4).map(([key, val]) => (
+        <span key={key} className="pd-spec-badge">
+          <strong>{key}:</strong> {String(val)}
+        </span>
+      ))}
+      {entries.length > 4 && <span className="pd-spec-badge pd-spec-more">+{entries.length - 4} more</span>}
+    </div>
+  );
+}
+
+const UPSTREAM_PAGE_SIZE = 24;
+
 /** Stable keys for supplier_products junction IDs (avoids string/UUID mismatches in selection state). */
 const normalizeSupplierProductKey = (value) => String(value ?? '').trim();
 
@@ -66,21 +124,29 @@ const normalizeSelectionMap = (raw) => {
 
 const normalizeVariantToken = (value) => String(value ?? '').trim().toLowerCase();
 
-const isSameVariantOfferForMine = (mineProduct, offer, mineSupplierProductId) => {
+const isSameVariantOfferForMine = (mineProduct, offer, mineSupplierProductId, suggestionItem) => {
   if (!offer) return false;
 
-  const mineVariantKey = normalizeVariantToken(mineProduct?.variantKey);
-  const mineVariantAsin = normalizeVariantToken(mineProduct?.variantAsin);
+  const mineVariantKey = normalizeVariantToken(
+    mineProduct?.variantKey || suggestionItem?.mineVariantKey
+  );
+  const mineVariantAsin = normalizeVariantToken(
+    mineProduct?.variantAsin || suggestionItem?.mineVariantAsin
+  );
   const offerVariantKey = normalizeVariantToken(offer?.upstreamVariantKey || offer?.variantKey);
   const offerVariantAsin = normalizeVariantToken(offer?.upstreamVariantAsin || offer?.variantAsin);
 
-  if (mineVariantKey) return Boolean(offerVariantKey) && offerVariantKey === mineVariantKey;
-  if (mineVariantAsin) return Boolean(offerVariantAsin) && offerVariantAsin === mineVariantAsin;
+  if (mineVariantKey && offerVariantKey && offerVariantKey === mineVariantKey) return true;
+  if (mineVariantAsin && offerVariantAsin && offerVariantAsin === mineVariantAsin) return true;
 
+  // Supply-chain: same catalog product from a validated upstream partner offer.
   const upstreamProductId = String(offer?.upstreamProductId || offer?.productId || '').trim();
-  const mineProductId = String(mineProduct?.id || offer?.productId || '').trim();
-  const mineId = normalizeSupplierProductKey(mineSupplierProductId);
-  return Boolean(upstreamProductId) && Boolean(mineProductId) && upstreamProductId === mineProductId && Boolean(mineId);
+  const mineProductId = String(
+    mineProduct?.id || suggestionItem?.productId || offer?.productId || ''
+  ).trim();
+  if (upstreamProductId && mineProductId && upstreamProductId === mineProductId) return true;
+
+  return false;
 };
 
 const formatAddressText = (address) => {
@@ -106,8 +172,9 @@ const SupplierUpstream = ({ user }) => {
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState([]);
 
-  const [brandFilter, setBrandFilter] = useState('');
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [page, setPage] = useState(1);
 
   // Selected mine items (supplier_products junction IDs) -> quantity desired
   const [selectedMine, setSelectedMine] = useState({});
@@ -130,6 +197,11 @@ const SupplierUpstream = ({ user }) => {
   const [targetCartProjectId, setTargetCartProjectId] = useState('__new__');
   const [newCartProjectName, setNewCartProjectName] = useState('');
   const [newCartRequiredDate, setNewCartRequiredDate] = useState('');
+  const [shippingAddressBook, setShippingAddressBook] = useState([]);
+  const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
+  const [newShippingAddress, setNewShippingAddress] = useState(blankShippingAddress);
+  const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
+  const [activeProjectId, setActiveProjectId] = useState('');
 
   const [supplierDetailsOpen, setSupplierDetailsOpen] = useState(false);
   const [supplierDetails, setSupplierDetails] = useState(null);
@@ -137,18 +209,45 @@ const SupplierUpstream = ({ user }) => {
   const [viewingProduct, setViewingProduct] = useState(null);
 
   const filteredProducts = useMemo(() => {
-    const bf = brandFilter.trim().toLowerCase();
-    const st = searchTerm.trim().toLowerCase();
+    const q = searchQuery.trim().toLowerCase();
+    const cat = selectedCategory.trim().toLowerCase();
 
     return (products || []).filter((p) => {
-      const brandModel = String(p?.brandModel || '').toLowerCase();
+      const brandModel = String(p?.brandModel || p?.brand || '').toLowerCase();
       const name = String(p?.name || '').toLowerCase();
+      const category = String(p?.category || '').toLowerCase();
 
-      const matchesBrand = !bf || (brandModel && brandModel.includes(bf));
-      const matchesSearch = !st || name.includes(st);
-      return matchesBrand && matchesSearch;
+      const matchesSearch = !q || name.includes(q) || brandModel.includes(q);
+      const matchesCategory = !cat || category === cat;
+      return matchesSearch && matchesCategory;
     });
-  }, [products, brandFilter, searchTerm]);
+  }, [products, searchQuery, selectedCategory]);
+
+  const categories = useMemo(() => {
+    const unique = new Set();
+    (products || []).forEach((product) => {
+      const category = String(product?.category || '').trim();
+      if (category) unique.add(category);
+    });
+    return Array.from(unique).sort((a, b) => a.localeCompare(b));
+  }, [products]);
+
+  const pageCount = useMemo(() => {
+    const count = filteredProducts.length;
+    if (!count) return 1;
+    return Math.max(1, Math.ceil(count / UPSTREAM_PAGE_SIZE));
+  }, [filteredProducts.length]);
+
+  const safePage = Math.min(Math.max(page, 1), pageCount);
+
+  const pagedProducts = useMemo(() => {
+    const start = (safePage - 1) * UPSTREAM_PAGE_SIZE;
+    return filteredProducts.slice(start, start + UPSTREAM_PAGE_SIZE);
+  }, [filteredProducts, safePage]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [searchQuery, selectedCategory]);
 
   const fetchMyProducts = async () => {
     try {
@@ -170,43 +269,116 @@ const SupplierUpstream = ({ user }) => {
     fetchMyProducts();
   }, []);
 
+  const applyActiveCartProject = (project) => {
+    if (!project || typeof project !== 'object') return;
+    const projectId = String(project?.projectId || '').trim();
+    if (!projectId) return;
+    setActiveProjectId(projectId);
+    setCartName(String(project?.cartName || '').trim());
+  };
+
+  const hydrateActiveCartProject = async (preferredProjectId = '') => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return null;
+      const cartRes = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await cartRes.json();
+      if (!cartRes.ok || data.status !== 'success') return null;
+
+      const projects = Array.isArray(data?.cart?.draft?.projects) ? data.cart.draft.projects : [];
+      const normalized = projects
+        .filter((project) => String(project?.projectId || '').trim())
+        .map((project) => ({
+          projectId: String(project.projectId),
+          cartName: String(project?.cartName || '').trim() || 'Supplier Project',
+          requiredDate: String(project?.requiredDate || '').trim().slice(0, 10),
+          shippingAddressId: String(project?.shippingAddressId || '').trim(),
+          shippingAddress: project?.shippingAddress || null,
+          location: String(project?.location || '').trim()
+        }));
+      setCartProjects(normalized);
+
+      const hasShipping = (project) =>
+        Boolean(
+          project?.shippingAddress ||
+            project?.location ||
+            project?.shippingAddressId
+        );
+      const preferred = preferredProjectId
+        ? projects.find((project) => String(project?.projectId || '') === String(preferredProjectId))
+        : null;
+      const active =
+        (preferred && hasShipping(preferred) ? preferred : null) ||
+        projects.find(hasShipping) ||
+        preferred ||
+        projects[0] ||
+        null;
+      if (active) applyActiveCartProject(active);
+      return active;
+    } catch {
+      return null;
+    }
+  };
+
   useEffect(() => {
+    let preferredProjectId = '';
     try {
       const cartRaw = localStorage.getItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
       const restoreFromOrder = sessionStorage.getItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY) === '1';
       const orderRaw = restoreFromOrder ? localStorage.getItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY) : null;
       const raw = cartRaw || orderRaw;
-      if (!raw) return;
+      if (raw) {
+        const draft = JSON.parse(raw);
+        if (draft && typeof draft === 'object') {
+          if (draft.selectedMine && typeof draft.selectedMine === 'object') {
+            setSelectedMine(normalizeSelectionMap(draft.selectedMine));
+          }
+          if (draft.selectedUpstreamOffer && typeof draft.selectedUpstreamOffer === 'object') {
+            setSelectedUpstreamOffer(normalizeSelectionMap(draft.selectedUpstreamOffer));
+          }
+          if (Array.isArray(draft.suggestions)) {
+            setSuggestions(draft.suggestions);
+          }
+          if (typeof draft.searchQuery === 'string') {
+            setSearchQuery(draft.searchQuery);
+          } else {
+            const legacyParts = [draft.searchTerm, draft.brandFilter]
+              .map((v) => (typeof v === 'string' ? v.trim() : ''))
+              .filter(Boolean);
+            if (legacyParts.length) setSearchQuery(legacyParts.join(' '));
+          }
+          if (typeof draft.selectedCategory === 'string') setSelectedCategory(draft.selectedCategory);
+          if (typeof draft.cartName === 'string') setCartName(draft.cartName);
+          if (typeof draft.projectId === 'string' && draft.projectId.trim()) {
+            preferredProjectId = String(draft.projectId).trim();
+          }
+        }
 
-      const draft = JSON.parse(raw);
-      if (draft && typeof draft === 'object') {
-        if (draft.selectedMine && typeof draft.selectedMine === 'object') {
-          setSelectedMine(normalizeSelectionMap(draft.selectedMine));
-        }
-        if (draft.selectedUpstreamOffer && typeof draft.selectedUpstreamOffer === 'object') {
-          setSelectedUpstreamOffer(normalizeSelectionMap(draft.selectedUpstreamOffer));
-        }
-        if (Array.isArray(draft.suggestions)) {
-          setSuggestions(draft.suggestions);
-        }
-        if (typeof draft.brandFilter === 'string') setBrandFilter(draft.brandFilter);
-        if (typeof draft.searchTerm === 'string') setSearchTerm(draft.searchTerm);
-        if (typeof draft.cartName === 'string') setCartName(draft.cartName);
+        if (cartRaw) localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
+        if (restoreFromOrder) sessionStorage.removeItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY);
       }
-
-      if (cartRaw) localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
-      if (restoreFromOrder) sessionStorage.removeItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY);
     } catch (_) {
       localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
       sessionStorage.removeItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY);
     }
+
+    void hydrateActiveCartProject(preferredProjectId);
   }, []);
+
+  useEffect(() => {
+    const onCartUpdated = () => {
+      void hydrateActiveCartProject(activeProjectId);
+    };
+    window.addEventListener('supplier-upstream-cart-updated', onCartUpdated);
+    return () => window.removeEventListener('supplier-upstream-cart-updated', onCartUpdated);
+  }, [activeProjectId]);
 
   const selectedMineIds = useMemo(
     () => Object.keys(normalizeSelectionMap(selectedMine || {})),
     [selectedMine]
   );
-  const visibleInventoryCount = filteredProducts.length;
   const suggestedGroupCount = Array.isArray(suggestions) ? suggestions.length : 0;
 
   function resolveMineProduct(mineSupplierProductId) {
@@ -222,8 +394,19 @@ const SupplierUpstream = ({ user }) => {
     const mineKey = normalizeSupplierProductKey(item?.mineSupplierProductId);
     const mine = resolveMineProduct(mineKey);
     const offers = Array.isArray(item?.upstreamOffers) ? item.upstreamOffers : [];
-    return offers.filter((offer) => isSameVariantOfferForMine(mine, offer, mineKey));
+    return offers.filter((offer) => isSameVariantOfferForMine(mine, offer, mineKey, item));
   }
+
+  const resolveSuggestionShippingAddressId = () => {
+    const activeProject = cartProjects.find(
+      (project) => String(project?.projectId || '') === String(activeProjectId || '')
+    );
+    const projectAddressId = String(activeProject?.shippingAddressId || '').trim();
+    if (projectAddressId) return projectAddressId;
+    const selectedId = String(selectedShippingAddressId || '').trim();
+    if (selectedId && selectedId !== '__new__') return selectedId;
+    return String(shippingAddressBook[0]?.id || '').trim();
+  };
 
   const linesReadyToPlace = useMemo(() => {
     if (!Array.isArray(suggestions) || suggestions.length === 0) return 0;
@@ -270,15 +453,22 @@ const SupplierUpstream = ({ user }) => {
     try {
       const token = localStorage.getItem('token');
       const ids = selectedMineIds.join(',');
-      const res = await fetch(
-        getApiUrl(
-          `/api/supplier/upstream/suggestions?supplierProductIds=${encodeURIComponent(ids)}&limit=5&_=${Date.now()}`
-        ),
-        {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: 'no-store'
-        }
-      );
+      const params = new URLSearchParams({
+        supplierProductIds: ids,
+        limit: '5',
+        _: String(Date.now())
+      });
+      if (activeProjectId) {
+        params.set('projectId', activeProjectId);
+      }
+      const shippingAddressId = resolveSuggestionShippingAddressId();
+      if (shippingAddressId) {
+        params.set('shippingAddressId', shippingAddressId);
+      }
+      const res = await fetch(getApiUrl(`/api/supplier/upstream/suggestions?${params.toString()}`), {
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-store'
+      });
       const responseText = await res.text();
       let data = null;
       try {
@@ -299,25 +489,30 @@ const SupplierUpstream = ({ user }) => {
         distanceAvailable: data.distanceAvailable !== false,
         buyerGeoSource: data.buyerGeoSource || null,
         distanceRanking: data.distanceRanking || null,
+        deliveryAddressLabel: data.deliveryAddressLabel || null,
         buyerGeoDiagnostics: data.buyerGeoDiagnostics || null
       });
 
-      // Keep only upstream picks that still match this suggestion set (no auto-select).
+      // Keep prior picks; auto-select nearest (#1) when nothing chosen yet for that line.
       setSelectedUpstreamOffer((prev) => {
         const next = {};
         const normalizedPrev = normalizeSelectionMap(prev);
         (data.items || []).forEach((it) => {
           const mineId = normalizeSupplierProductKey(it.mineSupplierProductId);
           const prevPick = normalizedPrev[mineId];
-          if (!mineId || !prevPick) return;
-          const offers = getCompatibleOffersForItem(it);
+          const offers = Array.isArray(it.upstreamOffers) ? it.upstreamOffers : [];
+          if (!mineId || offers.length === 0) return;
           if (
+            prevPick &&
             offers.some(
               (o) => normalizeSupplierProductKey(o.upstreamSupplierProductId) === prevPick
             )
           ) {
             next[mineId] = prevPick;
+            return;
           }
+          const nearestId = normalizeSupplierProductKey(offers[0]?.upstreamSupplierProductId);
+          if (nearestId) next[mineId] = nearestId;
         });
         return next;
       });
@@ -397,6 +592,20 @@ const SupplierUpstream = ({ user }) => {
 
       const totalAmountEstimate = selectedLinesDetailed.reduce((sum, l) => sum + (Number(l.lineTotal) || 0), 0);
 
+      const activeProject =
+        cartProjects.find((project) => String(project?.projectId || '') === String(activeProjectId || '')) ||
+        cartProjects[0] ||
+        null;
+      const projectShipping =
+        activeProject?.shippingAddress && typeof activeProject.shippingAddress === 'object'
+          ? activeProject.shippingAddress
+          : null;
+
+      const reviewLinesWithShipping = selectedLinesDetailed.map((line) => ({
+        ...line,
+        ...(projectShipping ? { shippingAddress: projectShipping } : {})
+      }));
+
       // Persist a draft so the next page can ask required date + payment method.
       localStorage.setItem(
         SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY,
@@ -406,12 +615,14 @@ const SupplierUpstream = ({ user }) => {
           paymentMethod: 'online',
           itemCount: lines.length,
           totalAmountEstimate,
-          reviewLines: selectedLinesDetailed,
+          reviewLines: reviewLinesWithShipping,
+          checkoutShippingAddress: projectShipping,
           selectedMine,
           selectedUpstreamOffer,
           suggestions,
-          brandFilter,
-          searchTerm
+          searchQuery,
+          selectedCategory,
+          transportSelection: null
         })
       );
 
@@ -433,8 +644,8 @@ const SupplierUpstream = ({ user }) => {
       selectedMine,
       selectedUpstreamOffer,
       suggestions: Array.isArray(suggestions) ? suggestions : [],
-      brandFilter,
-      searchTerm,
+      searchQuery,
+      selectedCategory,
       cartName
     });
     if (ok) {
@@ -442,8 +653,8 @@ const SupplierUpstream = ({ user }) => {
       setSelectedUpstreamOffer({});
       setSuggestions(null);
       setSuggestionMeta(null);
-      setBrandFilter('');
-      setSearchTerm('');
+      setSearchQuery('');
+      setSelectedCategory('');
       emitSupplierCartUpdated();
       alert('Upstream cart saved successfully.');
       navigate('/supplier-cart');
@@ -492,7 +703,8 @@ const SupplierUpstream = ({ user }) => {
         .map((project) => ({
           projectId: String(project.projectId),
           cartName: String(project?.cartName || '').trim() || 'Supplier Project',
-          requiredDate: String(project?.requiredDate || '').trim().slice(0, 10)
+          requiredDate: String(project?.requiredDate || '').trim().slice(0, 10),
+          shippingAddressId: String(project?.shippingAddressId || '').trim()
         }));
       setCartProjects(normalized);
       return normalized;
@@ -501,14 +713,139 @@ const SupplierUpstream = ({ user }) => {
     }
   };
 
+  const loadProfileShippingAddresses = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return [];
+    try {
+      const res = await fetch(getApiUrl('/api/profile'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.profile) return [];
+      const entries = Array.isArray(data.profile.shippingAddresses)
+        ? data.profile.shippingAddresses
+            .map((entry) => normalizeShippingAddressBookEntry(entry))
+            .filter((entry) => entry.id)
+        : [];
+      setShippingAddressBook(entries);
+      return entries;
+    } catch {
+      return [];
+    }
+  };
+
+  useEffect(() => {
+    loadProfileShippingAddresses().then((entries) => {
+      if (entries.length > 0) {
+        setSelectedShippingAddressId((current) => current || entries[0].id);
+      }
+    });
+  }, []);
+
+  const applyProjectShippingSelection = (projectId, projects, addresses) => {
+    const project = projects.find((entry) => entry.projectId === projectId);
+    const projectAddressId = String(project?.shippingAddressId || '').trim();
+    if (projectAddressId && addresses.some((entry) => entry.id === projectAddressId)) {
+      setSelectedShippingAddressId(projectAddressId);
+      setNewShippingAddress(blankShippingAddress);
+      return;
+    }
+    if (addresses.length > 0) {
+      setSelectedShippingAddressId(addresses[0].id);
+      setNewShippingAddress(blankShippingAddress);
+      return;
+    }
+    setSelectedShippingAddressId('__new__');
+  };
+
+  const fillShippingFromCurrentLocation = async () => {
+    setLocatingShippingAddress(true);
+    try {
+      const resolved = await resolveAddressFromCurrentLocation();
+      setNewShippingAddress((prev) => ({
+        ...prev,
+        line1: resolved.line1 || prev.line1,
+        city: resolved.city || prev.city,
+        state: resolved.state || prev.state,
+        pincode: resolved.pincode || prev.pincode,
+        country: resolved.country || prev.country || 'India',
+        label: prev.label || resolved.city || 'Current location'
+      }));
+      setSelectedShippingAddressId('__new__');
+    } catch (error) {
+      window.alert(getGeolocationErrorMessage(error));
+    } finally {
+      setLocatingShippingAddress(false);
+    }
+  };
+
+  const resolveShippingPayload = async (token) => {
+    if (!selectedShippingAddressId) {
+      return { shippingAddressId: null, shippingAddress: null };
+    }
+
+    if (selectedShippingAddressId === '__new__') {
+      const missing = ['line1', 'city', 'state', 'pincode', 'country'].find(
+        (field) => !String(newShippingAddress?.[field] || '').trim()
+      );
+      if (missing) {
+        throw new Error('Please complete all shipping address fields or choose a saved address.');
+      }
+      const saveRes = await fetch(getApiUrl('/api/profile/shipping-addresses'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          label: newShippingAddress.label?.trim() || newShippingAddress.city,
+          line1: newShippingAddress.line1.trim(),
+          city: newShippingAddress.city.trim(),
+          state: newShippingAddress.state.trim(),
+          pincode: newShippingAddress.pincode.trim(),
+          country: newShippingAddress.country.trim()
+        })
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.status !== 'success') {
+        throw new Error(saveData.message || 'Failed to save shipping address to profile.');
+      }
+      const saved = saveData.shippingAddress || {};
+      const normalized = normalizeShippingAddressBookEntry(saved);
+      setShippingAddressBook((prev) => {
+        const exists = prev.some((entry) => entry.id === normalized.id);
+        return exists ? prev : [...prev, normalized];
+      });
+      setSelectedShippingAddressId(normalized.id);
+      return {
+        shippingAddressId: normalized.id,
+        shippingAddress: normalized.address
+      };
+    }
+
+    const selected = shippingAddressBook.find((entry) => entry.id === selectedShippingAddressId);
+    if (!selected) {
+      throw new Error('Selected shipping address was not found. Please choose again.');
+    }
+    return {
+      shippingAddressId: selected.id,
+      shippingAddress: selected.address
+    };
+  };
+
   const openAddToCartDialog = async (product) => {
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return;
-    const projects = await loadSupplierCartProjects();
+    const [projects, addresses] = await Promise.all([
+      loadSupplierCartProjects(),
+      loadProfileShippingAddresses()
+    ]);
+    const initialProjectId = projects[0]?.projectId || '__new__';
     setPendingCartProduct(product);
-    setTargetCartProjectId(projects[0]?.projectId || '__new__');
+    setTargetCartProjectId(initialProjectId);
     setNewCartProjectName(String(product?.name || '').trim() || 'Supplier Project');
     setNewCartRequiredDate('');
+    applyProjectShippingSelection(initialProjectId, projects, addresses);
     setAddCartDialogOpen(true);
   };
 
@@ -534,6 +871,11 @@ const SupplierUpstream = ({ user }) => {
     let responseMessage = '';
     try {
       const token = localStorage.getItem('token');
+      if (!token) {
+        alert('Please log in again to add items to cart.');
+        return;
+      }
+      const shippingPayload = await resolveShippingPayload(token);
       const res = await fetch(getApiUrl('/api/supplier/upstream/cart/items'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -542,25 +884,38 @@ const SupplierUpstream = ({ user }) => {
           quantity: nextQty,
           ...(isNewProject
             ? { cartName: newCartProjectName.trim(), requiredDate: newCartRequiredDate }
-            : { projectId: targetCartProjectId })
+            : { projectId: targetCartProjectId }),
+          ...(shippingPayload.shippingAddressId
+            ? {
+                shippingAddressId: shippingPayload.shippingAddressId,
+                shippingAddress: shippingPayload.shippingAddress
+              }
+            : {})
         })
       });
       const data = await res.json();
       ok = res.ok && data.status === 'success';
       responseMessage = data?.message || '';
-      if (ok && data?.item?.quantity != null) {
+      if (!ok) {
+        throw new Error(responseMessage || 'Failed to add this product to cart.');
+      }
+      if (data?.item?.quantity != null) {
         const savedQty = parseSupplierStockQuantity(data.item.quantity) ?? nextQty;
         setSelectedMine((prev) => ({ ...prev, [mineId]: savedQty }));
       }
+      if (data?.project?.projectId) {
+        await hydrateActiveCartProject(String(data.project.projectId));
+      }
     } catch (e) {
       ok = false;
+      responseMessage = e?.message || '';
     }
     setAddingCartByMineId((prev) => {
       const { [mineId]: _removed, ...rest } = prev;
       return rest;
     });
     if (!ok) {
-      alert('Failed to add this product to cart.');
+      alert(responseMessage || 'Failed to add this product to cart.');
       return;
     }
 
@@ -593,19 +948,29 @@ const SupplierUpstream = ({ user }) => {
 
   if (loading) {
     return (
-      <div className="dashboard-loading">
-        <div className="spinner" />
-        <p>Loading your supplier inventory…</p>
-      </div>
+      <SpPageLayout showStepper={false}>
+        <SpPageHeader title="Upstream Sourcing" description="" icon={Network} />
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Card key={i}>
+              <CardContent className="space-y-3 p-4 pt-4">
+                <Skeleton className="h-40 w-full rounded-lg" />
+                <Skeleton className="h-4 w-3/4" />
+                <Skeleton className="h-4 w-1/2" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </SpPageLayout>
     );
   }
 
   return (
     <SpPageLayout showStepper={false}>
-      <div className="dashboard-container supplier-upstream-page !max-w-none !p-0">
+      <div className="supplier-upstream-page">
       <SpPageHeader
         title="Upstream Sourcing"
-        description="Select inventory, find tier-above partners via brand chain routing, and build your purchase cart. Track placed orders on My Upstream Orders."
+        description=""
         icon={Network}
         actions={
           <>
@@ -622,22 +987,31 @@ const SupplierUpstream = ({ user }) => {
         }
       />
 
-      <div className="us-kpis">
-        <div className="us-kpi">
-          <div className="us-kpi__value">{selectedMineIds.length}</div>
-          <div className="us-kpi__label">Selected items</div>
+      <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center gap-3 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur">
+        <div className="relative min-w-[200px] flex-1">
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="pl-9"
+            placeholder="Search by name, brand, or model..."
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
         </div>
-        <div className="us-kpi">
-          <div className="us-kpi__value">{visibleInventoryCount}</div>
-          <div className="us-kpi__label">Inventory lines</div>
-        </div>
-        <div className="us-kpi">
-          <div className="us-kpi__value">{suggestedGroupCount}</div>
-          <div className="us-kpi__label">Suggested groups</div>
-        </div>
+        <select
+          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+          value={selectedCategory}
+          onChange={(event) => setSelectedCategory(event.target.value)}
+        >
+          <option value="">All categories</option>
+          {categories.map((category) => (
+            <option key={category} value={category}>
+              {category}
+            </option>
+          ))}
+        </select>
       </div>
 
-      <p className="us-routing-note">
+      <p className="us-routing-note mb-4">
         <Info size={15} aria-hidden />
         <span>
           <strong>Routing:</strong> purchases follow the admin brand chain (e.g. MGF → Stockist → … → Retailer).
@@ -645,235 +1019,193 @@ const SupplierUpstream = ({ user }) => {
         </span>
       </p>
 
-      <div className="dashboard-content">
-        <div className="dashboard-section upstream-section us-select-panel">
-          <div className="us-select-panel__header">
-            <div className="us-select-panel__title-block">
-              <h2>Select Brand + Products</h2>
-            </div>
-            <div className="us-select-panel__summary">
-              <span className="us-select-panel__summary-item">
-                <strong>{selectedMineIds.length}</strong> selected
-              </span>
-              <span className="us-select-panel__summary-divider" aria-hidden />
-              <span className="us-select-panel__summary-item">
-                <strong>{filteredProducts.length}</strong> lines shown
-              </span>
-            </div>
-          </div>
-
-          <div className="us-select-panel__filters">
-            <label className="us-field">
-              <span className="us-field__label">Brand / model</span>
-              <div className="us-field__control search-box upstream-filter">
-                <Search size={15} />
-                <input
-                  type="search"
-                  placeholder="e.g. acc, Amul"
-                  value={brandFilter}
-                  onChange={(e) => setBrandFilter(e.target.value)}
-                />
-              </div>
-            </label>
-            <label className="us-field">
-              <span className="us-field__label">Product name</span>
-              <div className="us-field__control search-box upstream-filter">
-                <Search size={15} />
-                <input
-                  type="search"
-                  placeholder="Search by name"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
-              </div>
-            </label>
-          </div>
-
-          <div className="us-product-table">
-            <div className="us-product-table__head">
-              <span aria-hidden />
-              <span aria-hidden />
-              <span>Product</span>
-              <span>{SUPPLIER_CURRENT_STOCK_LABEL}</span>
-              <span>Order</span>
-            </div>
-
-            <div className="us-product-table__body">
-              {filteredProducts.length === 0 ? (
-                <div className="us-product-table__empty">
-                  <Package size={28} />
-                  <h3>No matching products</h3>
-                  <p>Adjust brand or name filters.</p>
-                </div>
-              ) : (
-                filteredProducts.map((p) => {
-                  const mineId = normalizeSupplierProductKey(p.supplier_product_id);
-                  const minQty = Math.max(1, p.min_order_quantity ?? 1);
-                  const isSelected = !!selectedMine[mineId];
-                  const isAddingToCart = !!addingCartByMineId[mineId];
-                  const productImages = collectProductImages(p);
-                  const brandLabel = p.brandModel || p.brand || '—';
-
-                  return (
-                    <div
-                      key={mineId}
-                      className={`us-product-row ${isSelected ? 'us-product-row--selected' : ''}`}
-                    >
-                      <div className="us-product-row__check">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          onChange={() => handleToggleMine(mineId)}
-                          aria-label={`Select ${p.name || 'product'}`}
-                        />
-                      </div>
-
-                      <div
-                        className="us-product-row__thumb us-product-row__clickable"
-                        onClick={() => setViewingProduct(p)}
-                        onKeyDown={(e) => e.key === 'Enter' && setViewingProduct(p)}
-                        role="button"
-                        tabIndex={0}
-                        title="View full details"
-                      >
-                        {productImages.length > 0 ? (
-                          <ProductImageCarousel
-                            images={productImages}
-                            alt={p.name || 'Product'}
-                            height={56}
-                            rounded={6}
-                          />
-                        ) : (
-                          <div className="us-product-row__thumb-placeholder" aria-hidden />
-                        )}
-                      </div>
-
-                      <div
-                        className="us-product-row__main us-product-row__clickable"
-                        onClick={() => setViewingProduct(p)}
-                        onKeyDown={(e) => e.key === 'Enter' && setViewingProduct(p)}
-                        role="button"
-                        tabIndex={0}
-                        title="View full details"
-                      >
-                        <h4 className="us-product-row__name">{p.name}</h4>
-                        <dl className="us-facts">
-                          <div className="us-facts__item">
-                            <dt>Brand</dt>
-                            <dd>{brandLabel}</dd>
-                          </div>
-                          <div className="us-facts__item">
-                            <dt>Category</dt>
-                            <dd>{p.category || '—'}</dd>
-                          </div>
-                          <div className="us-facts__item">
-                            <dt>Min order</dt>
-                            <dd>
-                              {p.min_order_quantity ?? 1}
-                              {p.unit ? ` ${p.unit}` : ''}
-                            </dd>
-                          </div>
-                        </dl>
-                        <UpstreamProductDisplay
-                          product={p}
-                          showImage={false}
-                          showDescription={false}
-                          maxSpecs={24}
-                          specLayout="grid"
-                          collapsibleSpecs
-                          compact
-                        />
-                      </div>
-
-                      <div className="us-product-row__stock us-product-row__cell">
-                        <span className="us-product-row__cell-label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
-                        <span className="us-product-row__stock-value">
-                          {p.stock ?? 0}
-                          {p.unit ? ` ${p.unit}` : ''}
-                        </span>
-                      </div>
-
-                      <div className="us-product-row__order us-product-row__cell">
-                        <span className="us-product-row__cell-label">Quantity</span>
-                        {isSelected ? (
-                          <input
-                            type="number"
-                            min={minQty}
-                            step={1}
-                            inputMode="numeric"
-                            value={selectedMine[mineId] ?? minQty}
-                            onChange={(e) => {
-                              const v = parseSupplierStockQuantity(e.target.value);
-                              setSelectedMine((prev) => ({
-                                ...prev,
-                                [mineId]: v != null && v > 0 ? Math.max(minQty, v) : minQty
-                              }));
-                            }}
-                            className="upstream-qty-input us-product-row__qty"
-                          />
-                        ) : (
-                          <span className="us-product-row__qty-hint">Select row</span>
-                        )}
-                        <button
-                          type="button"
-                          className="btn-secondary us-product-row__cart-btn"
-                          onClick={() => openAddToCartDialog(p)}
-                          disabled={isAddingToCart}
-                        >
-                          {isAddingToCart ? 'Adding…' : 'Add to cart'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          <div className="us-select-panel__footer">
-            <p className="us-select-panel__footer-hint">
-              {selectedMineIds.length > 0
-                ? `${selectedMineIds.length} product${selectedMineIds.length !== 1 ? 's' : ''} ready to find suppliers.`
-                : 'Select one or more products, then find upstream suppliers.'}
-            </p>
-            <div className="us-select-panel__footer-actions">
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  setSelectedMine({});
-                  setSuggestions(null);
-                  setSuggestionMeta(null);
-                  setSelectedUpstreamOffer({});
-                }}
-                disabled={suggestionsLoading || creating}
-              >
-                Clear selection
-              </button>
-              <button
-                type="button"
-                className="btn-primary upstream-inline-btn"
-                onClick={fetchUpstreamSuggestions}
-                disabled={suggestionsLoading}
-              >
-                {suggestionsLoading ? <Loader2 size={16} className="upstream-spin" /> : null}
-                Find upstream suppliers
-              </button>
-            </div>
-          </div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="text-sm text-muted-foreground">
+          <strong className="text-foreground">{filteredProducts.length}</strong> product{filteredProducts.length === 1 ? '' : 's'}
+          {selectedMineIds.length > 0 ? (
+            <Badge className="ml-2" variant="secondary">{selectedMineIds.length} selected</Badge>
+          ) : null}
+          {suggestedGroupCount > 0 ? (
+            <Badge className="ml-2" variant="outline">{suggestedGroupCount} suggested</Badge>
+          ) : null}
         </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" disabled={safePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+            <ChevronLeft className="h-4 w-4" /> Prev
+          </Button>
+          <span className="text-sm text-muted-foreground">{safePage} / {pageCount}</span>
+          <Button variant="outline" size="sm" disabled={safePage >= pageCount} onClick={() => setPage((p) => p + 1)}>
+            Next <ChevronRight className="h-4 w-4" />
+          </Button>
+        </div>
+      </div>
 
-        <div className="dashboard-section upstream-section">
+      {filteredProducts.length === 0 ? (
+        <SpEmptyState
+          icon={Package}
+          title="No matching products"
+          description="Try a different search or category filter."
+        />
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          {pagedProducts.map((p) => {
+            const mineId = normalizeSupplierProductKey(p.supplier_product_id);
+            const minQty = Math.max(1, p.min_order_quantity ?? 1);
+            const isSelected = !!selectedMine[mineId];
+            const isAddingToCart = !!addingCartByMineId[mineId];
+            const imgs = getProductImageList(p);
+            const brandLabel = p.brandModel || p.brand || '';
+            const price = formatPrice(p?.price, p?.unit);
+            const stockQty = p.stock ?? 0;
+            const moq = Number(p?.min_order_quantity);
+
+            return (
+              <article
+                key={mineId}
+                className={`pd-card us-pd-card flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${isSelected ? 'us-pd-card--selected' : ''}`}
+              >
+                <label className="us-pd-card__select">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={() => handleToggleMine(mineId)}
+                    aria-label={`Select ${p.name || 'product'}`}
+                  />
+                  {isSelected ? <span className="us-pd-card__selected-badge"><Check size={12} /></span> : null}
+                </label>
+
+                <div
+                  className="pd-card__image us-pd-card__image"
+                  onClick={() => setViewingProduct(p)}
+                  onKeyDown={(e) => e.key === 'Enter' && setViewingProduct(p)}
+                  role="button"
+                  tabIndex={0}
+                  title="View full details"
+                >
+                  {imgs.length > 0 ? (
+                    <ProductImageCarousel images={imgs} alt={p.name} height={180} rounded={10} stopPropagation />
+                  ) : (
+                    <div className="pd-card__no-image">
+                      <ImageOff size={36} />
+                      <span>No image</span>
+                    </div>
+                  )}
+                  {p.category ? <span className="pd-card__category-badge">{p.category}</span> : null}
+                </div>
+
+                <div className="pd-card__body">
+                  <div className="pd-card__header">
+                    <h3
+                      className="pd-card__name us-pd-card__name"
+                      onClick={() => setViewingProduct(p)}
+                      onKeyDown={(e) => e.key === 'Enter' && setViewingProduct(p)}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      {p.name || 'Unnamed Product'}
+                    </h3>
+                    {brandLabel ? <span className="pd-card__brand">{brandLabel}</span> : null}
+                  </div>
+
+                  <SpecBadges specifications={p.specifications} />
+
+                  <div className="pd-card__details">
+                    {price ? (
+                      <span className="pd-card__price">{price}</span>
+                    ) : (
+                      <span className="pd-card__price pd-card__price--na">Your listing price n/a</span>
+                    )}
+
+                    <div className="pd-card__meta-row">
+                      {p.unit ? <span className="pd-card__meta-item">Unit: {p.unit}</span> : null}
+                      {moq > 1 ? <span className="pd-card__meta-item">MOQ: {moq}</span> : null}
+                      <span className="pd-card__stock pd-card__stock--in">
+                        {SUPPLIER_CURRENT_STOCK_LABEL}: {stockQty}{p.unit ? ` ${p.unit}` : ''}
+                      </span>
+                    </div>
+                  </div>
+
+                  {isSelected ? (
+                    <div className="us-pd-card__qty-row">
+                      <label className="us-pd-card__qty-label" htmlFor={`qty-${mineId}`}>Quantity</label>
+                      <input
+                        id={`qty-${mineId}`}
+                        type="number"
+                        min={minQty}
+                        step={1}
+                        inputMode="numeric"
+                        value={selectedMine[mineId] ?? minQty}
+                        onChange={(e) => {
+                          const v = parseSupplierStockQuantity(e.target.value);
+                          setSelectedMine((prev) => ({
+                            ...prev,
+                            [mineId]: v != null && v > 0 ? Math.max(minQty, v) : minQty
+                          }));
+                        }}
+                        className="us-pd-card__qty-input"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="pd-card__footer">
+                  <span className="us-pd-card__hint">
+                    {isSelected ? 'Selected for sourcing' : 'Select to source upstream'}
+                  </span>
+                  <button
+                    type="button"
+                    className="pd-card__cart-btn"
+                    onClick={() => openAddToCartDialog(p)}
+                    disabled={isAddingToCart}
+                  >
+                    {isAddingToCart ? (
+                      <><Loader2 size={16} className="upstream-spin" /> Adding…</>
+                    ) : (
+                      <><ShoppingCart size={16} /> Add to Cart</>
+                    )}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="us-discovery-actions">
+        <p className="us-discovery-actions__hint">
+          {selectedMineIds.length > 0
+            ? `${selectedMineIds.length} product${selectedMineIds.length !== 1 ? 's' : ''} ready to find suppliers.`
+            : 'Select one or more products, then find upstream suppliers.'}
+        </p>
+        <div className="us-discovery-actions__buttons">
+          <Button
+            variant="outline"
+            onClick={() => {
+              setSelectedMine({});
+              setSuggestions(null);
+              setSuggestionMeta(null);
+              setSelectedUpstreamOffer({});
+            }}
+            disabled={suggestionsLoading || creating}
+          >
+            Clear selection
+          </Button>
+          <Button onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading}>
+            {suggestionsLoading ? <Loader2 size={16} className="upstream-spin" /> : null}
+            Find upstream suppliers
+          </Button>
+        </div>
+      </div>
+
+        <div className="dashboard-section upstream-section us-suggestions-panel">
           <div className="section-header upstream-section-header upstream-suggestions-header">
             <div>
               <h2 className={suggestionMeta?.rankPriority ? 'upstream-title-with-meta' : ''}>
                 Choose upstream supplier (top {suggestionMeta?.limit ?? 5} matches)
               </h2>
-              
             </div>
             <div className="upstream-suggestions-actions">
-              <button
-                className="btn-primary upstream-inline-btn"
+              <Button
                 onClick={handleProceedToPlaceOrder}
                 disabled={
                   creating ||
@@ -885,29 +1217,30 @@ const SupplierUpstream = ({ user }) => {
               >
                 {creating ? <Loader2 size={18} className="upstream-spin" /> : <ShoppingCart size={18} />}
                 Proceed to Place Order
-              </button>
-              <button
-                className="btn-secondary"
-                onClick={handleSaveToCart}
-                disabled={savingCart}
-              >
+              </Button>
+              <Button variant="outline" onClick={handleSaveToCart} disabled={savingCart}>
                 {savingCart ? 'Saving Cart...' : 'Save to Cart'}
-              </button>
+              </Button>
             </div>
           </div>
 
-          {!suggestionsLoading && !suggestions ? (
-            <div className="empty-state upstream-empty-top">
-              <Network size={48} />
-              <h3>No upstream suggestions yet</h3>
-              <p>Select your products above and click “Find Upstream Suppliers”.</p>
+          {suggestionsLoading ? (
+            <div className="us-suggestions-loading">
+              <Loader2 size={28} className="upstream-spin" />
+              <p>Finding upstream suppliers…</p>
             </div>
+          ) : !suggestions ? (
+            <SpEmptyState
+              icon={Network}
+              title="No upstream suggestions yet"
+              description='Select your products above and click "Find upstream suppliers".'
+            />
           ) : suggestions && suggestions.length === 0 ? (
-            <div className="empty-state upstream-empty-top">
-              <AlertTriangle size={48} />
-              <h3>No upstream offers found</h3>
-              <p>Try a different brand or select fewer products.</p>
-            </div>
+            <SpEmptyState
+              icon={AlertTriangle}
+              title="No upstream offers found"
+              description="Try a different brand or select fewer products."
+            />
           ) : (
             <div className="upstream-suggestions-list">
               {(suggestions || []).map((it) => {
@@ -969,12 +1302,12 @@ const SupplierUpstream = ({ user }) => {
 
                     {offers.length === 0 ? (
                       <div className="upstream-offer-empty upstream-offer-empty-detailed">
-                        {it.message || 'No upstream offers for this exact variant.'}
+                        {it.message || 'No upstream offers from your supply-chain partners for this product.'}
                       </div>
                     ) : (
                       <div className="upstream-offers-stack">
                         <p className="upstream-offers-help">
-                          Best options first — <strong>select</strong> an upstream seller ({offers.length} shown). Each row shows that seller’s <strong>layer</strong> (not yours).
+                          Best options first by distance to your delivery address — <strong>nearest is pre-selected</strong> ({offers.length} shown). Each row shows that seller’s <strong>layer</strong> (not yours).
                         </p>
                         {offers.map((o, offerIdx) => {
                           const id = normalizeSupplierProductKey(o.upstreamSupplierProductId);
@@ -1026,6 +1359,7 @@ const SupplierUpstream = ({ user }) => {
                                     {Number(o.minimumOrderValueInr) > 0
                                       ? ` • min order ${formatRupee(o.minimumOrderValueInr)}`
                                       : ''}
+                                    {o.variantMatchType === 'catalog_product' ? ' • partner catalog SKU' : ''}
                                   </div>
                                   {o.rankComponents ? (
                                     <div className="upstream-offer-rank-keys">
@@ -1056,8 +1390,6 @@ const SupplierUpstream = ({ user }) => {
             </div>
           )}
         </div>
-
-      </div>
 
       {supplierDetailsOpen && supplierDetails && (
         <div
@@ -1155,6 +1487,7 @@ const SupplierUpstream = ({ user }) => {
                   if (nextProjectId !== '__new__') {
                     setNewCartRequiredDate('');
                   }
+                  applyProjectShippingSelection(nextProjectId, cartProjects, shippingAddressBook);
                 }}
               >
                 {cartProjects.map((project) => (
@@ -1194,6 +1527,117 @@ const SupplierUpstream = ({ user }) => {
                 })()}
               </p>
             )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-sm font-medium">Shipping address</label>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Optional. Saved to your profile when you add a new address.
+                </p>
+              </div>
+              <select
+                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                value={selectedShippingAddressId}
+                onChange={(event) => {
+                  const next = event.target.value;
+                  setSelectedShippingAddressId(next);
+                  if (next !== '__new__') {
+                    setNewShippingAddress(blankShippingAddress);
+                  }
+                }}
+              >
+                <option value="">No shipping address</option>
+                {shippingAddressBook.map((entry, index) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.displayName || formatShippingAddressLabel(entry, index)}
+                  </option>
+                ))}
+                <option value="__new__">+ Add new address</option>
+              </select>
+
+              {selectedShippingAddressId === '__new__' ? (
+                <div className="space-y-3">
+                  <div className="checkout-address-location-row">
+                    <button
+                      type="button"
+                      className="checkout-location-btn"
+                      onClick={fillShippingFromCurrentLocation}
+                      disabled={locatingShippingAddress}
+                    >
+                      <MapPin size={15} aria-hidden />
+                      {locatingShippingAddress ? 'Detecting location…' : 'Use my current location'}
+                    </button>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Address label</label>
+                    <Input
+                      maxLength={120}
+                      placeholder="e.g. Warehouse, Branch"
+                      value={newShippingAddress.label}
+                      onChange={(event) =>
+                        setNewShippingAddress((prev) => ({ ...prev, label: event.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-sm font-medium">Street address</label>
+                    <Input
+                      placeholder="Building / street / area"
+                      value={newShippingAddress.line1}
+                      onChange={(event) =>
+                        setNewShippingAddress((prev) => ({ ...prev, line1: event.target.value }))
+                      }
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">City</label>
+                      <Input
+                        value={newShippingAddress.city}
+                        onChange={(event) =>
+                          setNewShippingAddress((prev) => ({ ...prev, city: event.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">State</label>
+                      <Input
+                        value={newShippingAddress.state}
+                        onChange={(event) =>
+                          setNewShippingAddress((prev) => ({ ...prev, state: event.target.value }))
+                        }
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">PIN code</label>
+                      <Input
+                        value={newShippingAddress.pincode}
+                        onChange={(event) =>
+                          setNewShippingAddress((prev) => ({ ...prev, pincode: event.target.value }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium">Country</label>
+                      <Input
+                        value={newShippingAddress.country}
+                        onChange={(event) =>
+                          setNewShippingAddress((prev) => ({ ...prev, country: event.target.value }))
+                        }
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : selectedShippingAddressId ? (
+                <p className="text-xs text-muted-foreground">
+                  {formatShippingAddressPreview(
+                    shippingAddressBook.find((entry) => entry.id === selectedShippingAddressId) || {}
+                  )}
+                </p>
+              ) : null}
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddCartDialogOpen(false)}>

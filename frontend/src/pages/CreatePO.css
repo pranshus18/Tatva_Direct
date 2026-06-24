@@ -365,3 +365,13 @@
   color: #475569;
   max-width: 720px;
 }
+
+.checkout-address-preview--locked {
+  margin-top: 0;
+  padding: 0.85rem 1rem;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}

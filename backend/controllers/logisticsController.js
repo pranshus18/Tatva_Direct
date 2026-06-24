@@ -778,7 +778,9 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
       }
 
       return {
-        vendorId,
+        vendorId: group.transportGroupId || vendorId,
+        transportGroupId: group.transportGroupId || vendorId,
+        supplierVendorId: vendorId,
         vendorName: group.vendorName,
         pickupPincode,
         pickupAddressSummary: summary,

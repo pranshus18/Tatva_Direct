@@ -1,5 +1,6 @@
 import { getApiUrl } from '../config/api';
 import { persistSupplierSelectScopeFromCart } from '../constants/supplierSelectSession';
+import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 
 export const VOICE_GUIDED_KEY = 'tatvaVoiceGuided';
 export const VOICE_GUIDED_LABEL_KEY = 'tatvaVoiceGuidedLabel';
@@ -103,6 +104,63 @@ export function resolveDiscoveryShippingFromCartDraft(draft) {
   return null;
 }
 
+function resolveShippingFromBoqProject(boqProject) {
+  if (!boqProject || typeof boqProject !== 'object') return null;
+  const address = normalizeCartShippingAddress(boqProject.shippingAddress || {});
+  if (!isCartShippingAddressComplete(address)) return null;
+  return {
+    address,
+    shippingAddressId: String(boqProject.shippingAddressId || '').trim(),
+    projectName: String(boqProject.location || '').trim()
+  };
+}
+
+function resolveShippingFromCartDraftForItems(draft, workflowItems = []) {
+  if (!draft || typeof draft !== 'object') return null;
+  const items = Array.isArray(workflowItems) ? workflowItems : [];
+  const lineIds = new Set(
+    items.map((it) => String(it?.id ?? '').trim()).filter(Boolean)
+  );
+  const productIds = new Set(
+    items.map((it) => String(it?.productId ?? '').trim()).filter(Boolean)
+  );
+  const groups = Array.isArray(draft.boqGroups) ? draft.boqGroups : [];
+  for (const group of groups) {
+    const groupItems = Array.isArray(group?.items) ? group.items : [];
+    const overlaps = groupItems.some((it) => {
+      const lineId = String(it?.id ?? '').trim();
+      const productId = String(it?.productId ?? '').trim();
+      return (lineId && lineIds.has(lineId)) || (productId && productIds.has(productId));
+    });
+    if (!overlaps) continue;
+    const project = group?.boqProject;
+    if (!project || typeof project !== 'object') continue;
+    const address = normalizeCartShippingAddress(project.shippingAddress || {});
+    if (!isCartShippingAddressComplete(address)) continue;
+    return {
+      address,
+      shippingAddressId: String(project.shippingAddressId || '').trim(),
+      projectName: String(group?.boqName || '').trim()
+    };
+  }
+  return null;
+}
+
+/** Checkout shipping chosen in cart / supplier-select — not the full profile address book. */
+export function resolveWorkflowShippingAddress({
+  boqProject = null,
+  cartDraft = null,
+  workflowItems = []
+} = {}) {
+  const fromProject = resolveShippingFromBoqProject(boqProject);
+  if (fromProject) return fromProject;
+
+  const fromCartItems = resolveShippingFromCartDraftForItems(cartDraft, workflowItems);
+  if (fromCartItems) return fromCartItems;
+
+  return resolveDiscoveryShippingFromCartDraft(cartDraft);
+}
+
 /** Load persisted PO cart — same source the voice agent uses on the server. */
 /** Notify App workflow state after voice syncs cart (suppliers, substitutions, PO fields). */
 export function emitVoiceCartUpdated(draft) {
@@ -185,7 +243,15 @@ export async function fetchPoGroupsForVoiceCart(voiceCart) {
 }
 
 export async function prepareSupplierSelectFromVoiceCart() {
-  const { items } = await fetchVoiceCartDraft();
-  if (items.length) persistSupplierSelectScopeFromCart(items);
-  return items;
+  const cart = await fetchVoiceCartDraft();
+  const shipping = resolveDiscoveryShippingFromCartDraft(cart.draft);
+  const project = shipping
+    ? {
+        shippingAddress: shipping.address,
+        ...(shipping.shippingAddressId ? { shippingAddressId: shipping.shippingAddressId } : {}),
+        location: formatShippingAddressPreview(shipping.address)
+      }
+    : null;
+  if (cart.items.length) persistSupplierSelectScopeFromCart(cart.items, project);
+  return cart.items;
 }

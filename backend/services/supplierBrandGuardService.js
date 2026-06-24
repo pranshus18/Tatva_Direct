@@ -73,6 +73,8 @@ export function getViewerBrandTokensForRole(profile, myRole) {
     parseBrandTokens(profile.brands).forEach((t) => tokens.add(t));
   } else if (roleEntryFound && tokens.size === 0) {
     parseBrandTokens(profile.brands).forEach((t) => tokens.add(t));
+  } else if (!roleEntryFound && profile?.supplierRole === myRole) {
+    parseBrandTokens(profile.brands).forEach((t) => tokens.add(t));
   }
   return tokens;
 }
@@ -87,6 +89,18 @@ export function entryOverlapsViewerBrands(entry, viewerBrandTokens) {
     }
   }
   return false;
+}
+
+/** Whether a supply-chain role entry declares overlap with a product/catalog brand label. */
+export function roleDeclaresBrand(profile, role, brandInput) {
+  if (!profile || !role) return false;
+  const roleTokens = getViewerBrandTokensForRole(profile, role);
+  if (roleTokens.size === 0) return false;
+  const productTokens = new Set(parseBrandTokens(brandInput));
+  const normalized = normalizeBrandKey(brandInput);
+  if (normalized) productTokens.add(normalized);
+  if (productTokens.size === 0) return false;
+  return entryOverlapsViewerBrands({ brands: [...roleTokens].join(', ') }, productTokens);
 }
 
 export function getAllDeclaredBrandTokens(profile) {

@@ -9,6 +9,7 @@ import {
   clearSupplierSelectScopeSession,
   hasFreshCartSupplierSelectSession,
   readSupplierSelectScopeSessionIfFresh,
+  readSupplierSelectBoqProjectSessionIfFresh,
   dedupeSupplierSelectItems
 } from '../constants/supplierSelectSession';
 import {
@@ -29,6 +30,46 @@ function enrichBoqProjectMeta(proj) {
   if (!proj || typeof proj !== 'object') return proj;
   const location = String(proj.location || '').trim() || formatShippingAddressPreview(proj.shippingAddress);
   return location && !proj.location ? { ...proj, location } : proj;
+}
+
+/** Avoid unrelated saved BOQ (lastBoqId) when ranking from cart/discovery delivery address. */
+function resolveRankBoqId({ boqId, effectiveItems, boqMeta, cartSupplierHandoff }) {
+  if (boqId) return boqId;
+  const fromItems = effectiveItems?.[0]?.boqId;
+  if (fromItems) return fromItems;
+  if (boqMeta?.boqId) return boqMeta.boqId;
+  if (cartSupplierHandoff || boqMeta?.shippingAddress || boqMeta?.location) return null;
+  return typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null;
+}
+
+/** Pick nearest supplier when distance is known; otherwise first ranked approved option. */
+function pickRecommendedVendor(vendors) {
+  if (!Array.isArray(vendors) || vendors.length === 0) return null;
+  const eligible = vendors.filter((v) => v && (v.selectionId || v.supplierProductId || v.id));
+  if (!eligible.length) return null;
+
+  const nearestFlagged = eligible.filter((v) => v.isNearestRecommended);
+  if (nearestFlagged.length) {
+    return nearestFlagged.reduce((best, vendor) => {
+      const bestDist = typeof best.distanceKm === 'number' ? best.distanceKm : Infinity;
+      const vendorDist = typeof vendor.distanceKm === 'number' ? vendor.distanceKm : Infinity;
+      if (vendorDist !== bestDist) return vendorDist < bestDist ? vendor : best;
+      return (Number(vendor.rank) || Infinity) < (Number(best.rank) || Infinity) ? vendor : best;
+    });
+  }
+
+  const withDistance = eligible.filter(
+    (v) => typeof v.distanceKm === 'number' && !Number.isNaN(v.distanceKm)
+  );
+  if (withDistance.length) {
+    return withDistance.reduce((best, vendor) =>
+      vendor.distanceKm < best.distanceKm ? vendor : best
+    );
+  }
+
+  const approved = eligible.filter((v) => v.status === 'approved');
+  const pool = approved.length ? approved : eligible;
+  return pool.find((v) => v.rank === 1 || v.isNearestRecommended) || pool[0];
 }
 
 function hydrateItemsFromWorkflow() {
@@ -61,6 +102,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const location = useLocation();
   const itemsPropRef = useRef(items);
   const rankFetchAbortRef = useRef(null);
+  const shouldAutoSelectNearestRef = useRef(true);
   /** When set, parent `items` is ignored until it matches these line ids (avoids stale full cart overwriting one-line selection). */
   const lockedLineIdsRef = useRef(null);
 
@@ -90,14 +132,27 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     });
   }, [effectiveItems]);
 
+  /** Cart → supplier select: never auto-fetch an unrelated saved BOQ (lastBoqId) or show BOQ loading copy. */
+  const cartSupplierHandoff = useMemo(() => {
+    try {
+      if (new URLSearchParams(location.search || '').get('from') === 'cart') return true;
+    } catch {
+      /* ignore */
+    }
+    if (location?.state?.fromCartSupplierSelect === true) return true;
+    return hasFreshCartSupplierSelectSession();
+  }, [location.search, location.state]);
+
   const rankCacheKey = useMemo(() => {
     if (!effectiveItems?.length) return '';
-    const effectiveBoqId =
-      boqId ||
-      effectiveItems[0]?.boqId ||
-      (typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null);
+    const effectiveBoqId = resolveRankBoqId({
+      boqId,
+      effectiveItems,
+      boqMeta,
+      cartSupplierHandoff
+    });
     return buildVendorRankCacheKey(effectiveItems, effectiveBoqId, boqMeta);
-  }, [effectiveItems, boqId, boqMeta]);
+  }, [effectiveItems, boqId, boqMeta, cartSupplierHandoff]);
 
   const deliverySiteLabel = useMemo(() => {
     if (!boqMeta) return '';
@@ -111,19 +166,61 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   );
 
   useEffect(() => {
+    shouldAutoSelectNearestRef.current = true;
+    setSelections({});
+  }, [rankCacheKey]);
+
+  useEffect(() => {
+    if (boqMeta?.shippingAddress || boqMeta?.location) return;
+    const fromSession = readSupplierSelectBoqProjectSessionIfFresh();
+    if (fromSession?.shippingAddress || fromSession?.location) {
+      setBoqMeta(enrichBoqProjectMeta(fromSession));
+    }
+  }, [boqMeta?.shippingAddress, boqMeta?.location]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const hydrateDeliveryFromCart = async () => {
+      if (boqMeta?.shippingAddress || boqMeta?.location) return;
+
+      const fromSession = readSupplierSelectBoqProjectSessionIfFresh();
+      if (fromSession?.shippingAddress || fromSession?.location) {
+        setBoqMeta(enrichBoqProjectMeta(fromSession));
+        return;
+      }
+
+      if (!cartSupplierHandoff) return;
+      const token = localStorage.getItem('token');
+      if (!token) return;
+
+      try {
+        const res = await authFetch('/api/po/cart', { timeoutMs: 12000 });
+        const data = await res.json().catch(() => ({}));
+        if (cancelled || !res.ok) return;
+
+        const groups = Array.isArray(data?.cart?.draft?.boqGroups) ? data.cart.draft.boqGroups : [];
+        for (const group of groups) {
+          const project = group?.boqProject;
+          if (project?.shippingAddress || project?.location) {
+            setBoqMeta(enrichBoqProjectMeta(project));
+            break;
+          }
+        }
+      } catch {
+        // Non-fatal — ranking still runs without delivery geo.
+      }
+    };
+
+    hydrateDeliveryFromCart();
+    return () => {
+      cancelled = true;
+    };
+  }, [cartSupplierHandoff, boqMeta?.shippingAddress, boqMeta?.location]);
+
+  useEffect(() => {
     itemsPropRef.current = items;
   }, [items]);
-
-  /** Cart → supplier select: never auto-fetch an unrelated saved BOQ (lastBoqId) or show BOQ loading copy. */
-  const cartSupplierHandoff = useMemo(() => {
-    try {
-      if (new URLSearchParams(location.search || '').get('from') === 'cart') return true;
-    } catch {
-      /* ignore */
-    }
-    if (location?.state?.fromCartSupplierSelect === true) return true;
-    return hasFreshCartSupplierSelectSession();
-  }, [location.search, location.state]);
 
   // Cart passes router state + session backup. In production, `location.state` is often dropped
   // (hosting / hard reload); we must read session *without* clearing it first. BOQ clears session
@@ -142,7 +239,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     lockedLineIdsRef.current = ids.size > 0 ? ids : null;
 
     setEffectiveItems(deduped);
-    const proj = location.state?.supplierSelectBoqProject;
+    const proj =
+      location.state?.supplierSelectBoqProject || readSupplierSelectBoqProjectSessionIfFresh();
     if (proj && typeof proj === 'object') {
       setBoqMeta(enrichBoqProjectMeta(proj));
     }
@@ -345,20 +443,20 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   };
 
   const autoSelectNearestVendors = (cleanedVendors) => {
-    if (!hasDeliverySiteContext) return;
-    setSelections((prev) => {
-      if (Object.keys(prev).length > 0) return prev;
-      const next = {};
-      (effectiveItems || []).forEach((item) => {
-        const itemId = item.id?.toString() || String(item.id);
-        const vendors = cleanedVendors[itemId] || [];
-        const nearest = vendors[0];
-        if (!nearest) return;
-        const key = nearest.selectionId || nearest.supplierProductId || nearest.id;
-        if (key) next[itemId] = String(key);
-      });
-      return Object.keys(next).length > 0 ? next : prev;
+    if (!hasDeliverySiteContext || !shouldAutoSelectNearestRef.current) return;
+    const next = {};
+    (effectiveItems || []).forEach((item) => {
+      const itemId = item.id?.toString() || String(item.id);
+      const vendors = cleanedVendors[itemId] || [];
+      const nearest = pickRecommendedVendor(vendors);
+      if (!nearest) return;
+      const key = nearest.selectionId || nearest.supplierProductId || nearest.id;
+      if (key) next[itemId] = String(key);
     });
+    if (Object.keys(next).length > 0) {
+      setSelections(next);
+      shouldAutoSelectNearestRef.current = false;
+    }
   };
 
   const applyRankResults = (cleanedVendors, cacheKey) => {
@@ -406,10 +504,12 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       const timestamp = Date.now();
       const random = Math.random().toString(36).substring(7);
       const fullUrl = `${resolveApiPath('/api/vendors/rank')}?_t=${timestamp}&_r=${random}`;
-      const effectiveBoqId =
-        boqId ||
-        effectiveItems[0]?.boqId ||
-        (typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null);
+      const effectiveBoqId = resolveRankBoqId({
+        boqId,
+        effectiveItems,
+        boqMeta,
+        cartSupplierHandoff
+      });
 
       const res = await authFetch(fullUrl, {
         method: 'POST',
@@ -507,6 +607,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     const normalizedVendorId = String(vendorId || '');
 
     if (!selectionKey) return;
+
+    shouldAutoSelectNearestRef.current = false;
 
     console.log('Selecting vendor:', {
       selectionKey,
@@ -623,6 +725,16 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     <SpWorkflowPage title="Supplier Selection" description="Choose the best vendor for each item" icon={Users}>
     <div className="page !p-0">
       <VoiceGuidedBanner />
+      {cartSupplierHandoff && !hasDeliverySiteContext && (
+        <div
+          className="mx-4 mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+          role="status"
+        >
+          <strong>Delivery address missing.</strong> Suppliers cannot be ranked by distance until you set a
+          shipping address on your cart project. Go back to the cart, choose your delivery address, save the
+          project, then return here.
+        </div>
+      )}
       {(deliverySiteLabel || boqMeta?.requiredDate) && (
         <div
           className="mb-4"
@@ -656,7 +768,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             {deliverySiteLabel && (
               <span style={{ display: 'block', marginTop: '0.25rem', fontSize: '0.78rem', opacity: 0.9 }}>
                 Suppliers are ranked by distance to this address when outlet coordinates exist; otherwise city or
-                state on the listing is used. The nearest supplier is pre-selected.
+                    state on the listing is used. The nearest supplier is pre-selected and marked{' '}
+                    <strong>Nearest · Recommended</strong>.
               </span>
             )}
           </span>
@@ -839,7 +952,13 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                           </div>
                         )}
                       </div>
-                      {vendor.rank === 1 && <span className="badge">Recommended</span>}
+                      {vendor.rank === 1 && (
+                        <span className="badge">
+                          {typeof vendor.distanceKm === 'number' && hasDeliverySiteContext
+                            ? 'Nearest · Recommended'
+                            : 'Recommended'}
+                        </span>
+                      )}
                     </div>
                     <div className="vendor-product-info">
                       <div className="product-name">

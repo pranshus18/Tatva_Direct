@@ -1,7 +1,7 @@
 import {
-  entryOverlapsViewerBrands,
   getViewerBrandTokensForRole,
-  parseBrandTokens
+  parseBrandTokens,
+  roleDeclaresBrand
 } from './supplierBrandGuardService.js';
 import {
   buildAllowedUpstreamRolesSet,
@@ -57,7 +57,8 @@ export function getImmediateUpstreamRoleForBrand({
     profile,
     brandKey,
     chainRow,
-    parentRolesUnion
+    parentRolesUnion,
+    buyerRoleHint: role
   });
   if (chainRouting?.requiredUpstreamRole) return chainRouting.requiredUpstreamRole;
   const fromSet = pickDisplayRoleFromAllowedSet(allowedRolesSet);
@@ -66,13 +67,12 @@ export function getImmediateUpstreamRoleForBrand({
 }
 
 export function getAllowedUpstreamRolesForBrand(opts) {
-  const immediate = getImmediateUpstreamRoleForBrand(opts);
-  if (immediate) return new Set([immediate]);
   const { allowedRolesSet } = buildAllowedUpstreamRolesSet({
     profile: opts.profile,
     brandKey: opts.brandKey,
     chainRow: opts.chainRow,
-    parentRolesUnion: opts.parentRolesUnion
+    parentRolesUnion: opts.parentRolesUnion,
+    buyerRoleHint: opts.buyerRole
   });
   return allowedRolesSet;
 }
@@ -83,26 +83,7 @@ export function getAllowedUpstreamRolesForBrand(opts) {
 export function sellerHasRoleForBrand(sellerProfile, role, brandToken) {
   if (!sellerProfile || !role || !brandToken) return false;
   if (!userHasSupplierRole(sellerProfile, role)) return false;
-
-  const viewerTokens = new Set(parseBrandTokens(brandToken));
-  if (viewerTokens.size === 0) return false;
-
-  const entries = Array.isArray(sellerProfile.companyInfoEntries)
-    ? sellerProfile.companyInfoEntries
-    : sellerProfile.companyInfoEntries && typeof sellerProfile.companyInfoEntries === 'object'
-      ? [sellerProfile.companyInfoEntries]
-      : [];
-
-  const roleEntries = entries.filter((e) => e && e.role === role);
-  if (roleEntries.length > 0) {
-    return roleEntries.some((e) => entryOverlapsViewerBrands(e, viewerTokens));
-  }
-
-  if (sellerProfile.supplierRole === role) {
-    return entryOverlapsViewerBrands({ brands: sellerProfile.brands || '' }, viewerTokens);
-  }
-
-  return false;
+  return roleDeclaresBrand(sellerProfile, role, brandToken);
 }
 
 /** Role this seller uses for a product brand among allowed upstream tiers (admin chain for that brand). */
@@ -129,6 +110,16 @@ export function sellerMatchesUpstreamForBrand(
   chainRouting = {}
 ) {
   return !!pickUpstreamSellerRoleForBrand(sellerProfile, allowedRolesSet, brandToken, chainRouting);
+}
+
+/** Pick nearest upstream role the seller holds on the admin chain for this brand. */
+export function pickAnyUpstreamSellerRoleOnChain(sellerProfile, buyerRole, brandToken, chainRow) {
+  const upstreamRoles = getUpstreamRolesForBuyerOnBrand({ buyerRole, chainRow });
+  const ordered = [...upstreamRoles].sort((a, b) => (ROLE_DEPTH[b] ?? -1) - (ROLE_DEPTH[a] ?? -1));
+  for (const role of ordered) {
+    if (sellerHasRoleForBrand(sellerProfile, role, brandToken)) return role;
+  }
+  return null;
 }
 
 /**
@@ -202,4 +193,39 @@ export async function buildSupplyChainPartnerGroups({
   }
 
   return partnerGroups;
+}
+
+/**
+ * Supplier user ids registered as immediate upstream partners per brand (same rules as Profile).
+ */
+export function buildRegisteredUpstreamPartnerIdsByBrandKey({
+  buyerProfile,
+  adminBrandChainMap,
+  upstreamUsers,
+  parentRolesUnion
+}) {
+  const map = new Map();
+  const myRoles = sortRolesByChainDepthDesc(getMySupplierRoles(buyerProfile, ''));
+  for (const myRole of myRoles) {
+    const brandTokens = [...getViewerBrandTokensForRole(buyerProfile, myRole)];
+    for (const brandToken of brandTokens) {
+      const brandKey = normalizeBrandKey(brandToken);
+      const chainRow = adminBrandChainMap.get(brandKey) || null;
+      const parentRole = getImmediateUpstreamRoleForBrand({
+        profile: buyerProfile,
+        brandKey,
+        chainRow,
+        buyerRole: myRole,
+        parentRolesUnion
+      });
+      if (!parentRole) continue;
+      for (const u of upstreamUsers || []) {
+        if (!u?.id || !u?.profile) continue;
+        if (!sellerHasRoleForBrand(u.profile, parentRole, brandToken)) continue;
+        if (!map.has(brandKey)) map.set(brandKey, new Set());
+        map.get(brandKey).add(u.id);
+      }
+    }
+  }
+  return map;
 }

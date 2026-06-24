@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import '@/styles/sp-portal-theme.css';
+import '@/styles/portal-pill-nav.css';
 import '@/pages/Dashboard.css';
 import { Outlet, useLocation } from 'react-router-dom';
 import {
@@ -103,13 +104,13 @@ export default function SpAppShell({ user, onLogout, children }) {
       )}
       style={shellBackgroundStyle}
     >
-      <div className="hidden lg:flex">
+      <div className="hidden shrink-0 lg:flex">
         <SpSidebar />
       </div>
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent side="left" className="sp-portal w-[280px] p-0">
-          <SpSidebar onNavigate={() => setMobileNavOpen(false)} />
+        <SheetContent side="left" className="sp-portal portal-mobile-nav-sheet w-auto border-0 bg-transparent p-0 shadow-none">
+          <SpSidebar variant="mobile" onNavigate={() => setMobileNavOpen(false)} />
         </SheetContent>
       </Sheet>
 
@@ -120,7 +121,7 @@ export default function SpAppShell({ user, onLogout, children }) {
           onMenuClick={() => setMobileNavOpen(true)}
           onLogout={onLogout}
         />
-        <main className="sp-content-panel flex-1 overflow-auto">
+        <main className="portal-shell-content flex-1 overflow-auto">
           {children || <Outlet />}
         </main>
       </div>

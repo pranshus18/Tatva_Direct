@@ -1,4 +1,5 @@
 import { buildVariantAsinLikeId } from '../../../services/productIdentityService.js';
+import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 
 const IGST_ALLOWED_RATES = new Set([0, 5, 12, 18, 28]);
 const CGST_SGST_ALLOWED_RATES = new Set([0, 2.5, 6, 9, 14]);
@@ -200,3 +201,68 @@ export function isOrderNumberConflictError(error) {
 }
 
 export { isRevenueRecognizedOrder } from '../../../utils/salesMetrics.js';
+
+function isCatalogProductApproved(catalogProduct) {
+  return String(catalogProduct?.status ?? '').trim().toLowerCase() === 'approved';
+}
+
+/**
+ * Align supplier_products visibility with supplier inventory UI:
+ * when the shared catalog product is approved but the junction row is still pending,
+ * treat the offer as approved + active (legacy / race after catalog approval).
+ */
+export function resolveEffectiveSupplierOfferState(row, catalogProduct = null) {
+  const product = catalogProduct ?? row?.product ?? null;
+  const rawStatus = String(row?.status ?? '').trim().toLowerCase();
+  const rejected = rawStatus === 'rejected';
+  const pendingLike = !rawStatus || rawStatus === 'pending';
+  const catalogApproved = isCatalogProductApproved(product);
+
+  let effectiveStatus = row?.status ?? 'pending';
+  let effectiveActive = row?.is_active === true;
+
+  if (!rejected && pendingLike && catalogApproved) {
+    effectiveStatus = 'approved';
+    effectiveActive = true;
+  }
+  if (rejected) {
+    effectiveStatus = 'rejected';
+    effectiveActive = false;
+  }
+
+  const stock = parseSupplierStockQuantity(row?.stock) ?? 0;
+  const availableForUpstream = !rejected && effectiveActive && stock > 0;
+  const needsCatalogSync =
+    !rejected && pendingLike && catalogApproved && (row?.is_active !== true || rawStatus !== 'approved');
+
+  return {
+    rawStatus: row?.status ?? null,
+    rawIsActive: row?.is_active === true,
+    effectiveStatus,
+    effectiveActive,
+    availableForUpstream,
+    needsCatalogSync
+  };
+}
+
+export function isSupplierOfferAvailableForUpstream(row, catalogProduct = null) {
+  return resolveEffectiveSupplierOfferState(row, catalogProduct).availableForUpstream;
+}
+
+/** Persist approved catalog state onto stale pending supplier_products rows. */
+export async function syncSupplierOfferApprovalFromCatalog(supabase, row) {
+  const state = resolveEffectiveSupplierOfferState(row);
+  if (!state.needsCatalogSync || !row?.id || !supabase) return row;
+  const { data, error } = await supabase
+    .from('supplier_products')
+    .update({ status: 'approved', is_active: true })
+    .eq('id', row.id)
+    .select('*')
+    .maybeSingle();
+  if (error) {
+    console.warn('syncSupplierOfferApprovalFromCatalog failed:', row.id, error.message);
+    return row;
+  }
+  const synced = data ? { ...row, ...data, product: row.product } : row;
+  return synced;
+}

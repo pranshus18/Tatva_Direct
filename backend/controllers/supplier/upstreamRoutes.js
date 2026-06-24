@@ -25,28 +25,41 @@ import {
   supplierCanAccessBrandStrict,
   parseWithSchema,
   getAllowedUpstreamRolesForBrand,
+  buildRegisteredUpstreamPartnerIdsByBrandKey,
   pickMatchingUpstreamRoleForSeller,
+  pickAnyUpstreamSellerRoleOnChain,
   pickUpstreamSellerRoleForBrand,
+  getImmediateUpstreamRoleForBrand,
   rankUpstreamOffersForProduct,
+  resolveBuyerRoleForBrand,
   sortRolesByChainDepthDesc,
   getMySupplierRoles,
   recordInventoryMovement,
   resolveGeoFromOutletAddress,
   buildAllowedUpstreamRolesSet,
   resolveRequiredUpstreamRoleFromAdminChain,
+  sellerHasAnyUpstreamRoleForBrand,
   sellerMatchesUpstreamForBrand,
   supplierUpstreamCartSaveSchema,
-  supplierUpstreamOrdersSchema
+  supplierUpstreamOrdersSchema,
+  supplierUpstreamPreviewGroupsSchema
 } from './supplierImports.js';
 import {
   ORDER_INSERT_MAX_RETRIES,
-  isOrderNumberConflictError
+  isOrderNumberConflictError,
+  isSupplierOfferAvailableForUpstream,
+  resolveEffectiveSupplierOfferState,
+  syncSupplierOfferApprovalFromCatalog
 } from './shared/productHelpers.js';
 import { validateCreditForOrder } from '../../services/creditAccountService.js';
 import {
   isAddressComplete,
   mapToDeliveryAddress,
-  normalizeAddress
+  normalizeAddress,
+  buildTransportGroupId,
+  buildShippingAddressKey,
+  consolidatePoTransportGroups,
+  formatShippingAddressLabel
 } from '../po/shared/poHelpers.js';
 import {
   normalizeRequiredDateForUpstream,
@@ -55,6 +68,13 @@ import {
 } from '../../services/upstreamOrderInputService.js';
 import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuantity.js';
 import { formatPlatformDate } from '../../utils/dateTime.js';
+import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js';
+import { formatShippingAddressText, resolveProjectShippingAddress } from '../../services/vendorRequestContextService.js';
+import { geocodeIndianAddress } from '../../utils/geoUtils.js';
+import {
+  getUpstreamOfferMatchType,
+  upstreamOffersMatchForSupplyChain
+} from '../../services/upstreamOfferMatchService.js';
 
 export function registerSupplierUpstreamRoutes(ctx) {
   const {
@@ -81,12 +101,255 @@ export function registerSupplierUpstreamRoutes(ctx) {
     return supplierCanAccessBrandStrict(profile || {}, brandCandidate).allowed;
   };
 
+  const applyShippingToUpstreamProject = (project, enrichedShipping) => {
+    if (!project || typeof project !== 'object') return project;
+    if (enrichedShipping?.clear) {
+      const next = { ...project };
+      delete next.shippingAddress;
+      delete next.shippingAddressId;
+      delete next.location;
+      delete next.siteGeo;
+      return next;
+    }
+    if (!enrichedShipping?.shippingAddress) return project;
+    const next = { ...project, shippingAddress: enrichedShipping.shippingAddress };
+    if (enrichedShipping.shippingAddressId) {
+      next.shippingAddressId = enrichedShipping.shippingAddressId;
+    } else {
+      delete next.shippingAddressId;
+    }
+    if (enrichedShipping.location) next.location = enrichedShipping.location;
+    else delete next.location;
+    if (enrichedShipping.siteGeo) next.siteGeo = enrichedShipping.siteGeo;
+    else delete next.siteGeo;
+    return next;
+  };
+
+  async function resolveUpstreamProjectShipping(userId, body = {}) {
+    const shippingAddressId = String(body?.shippingAddressId || '').trim();
+    const inlineAddress =
+      body?.shippingAddress && typeof body.shippingAddress === 'object'
+        ? normalizeAddress(body.shippingAddress)
+        : null;
+
+    if (inlineAddress && isAddressComplete(inlineAddress)) {
+      return {
+        shippingAddressId: shippingAddressId || null,
+        shippingAddress: inlineAddress
+      };
+    }
+
+    if (!shippingAddressId) {
+      return null;
+    }
+
+    const { data: user, error } = await supabase
+      .from('users')
+      .select('profile, user_type')
+      .eq('id', userId)
+      .maybeSingle();
+    if (error) throw error;
+
+    const saved = deriveShippingAddressesFromProfile(user || {});
+    const match = saved.find((entry) => String(entry.id) === shippingAddressId);
+    if (!match) {
+      return { error: 'Selected shipping address was not found in your profile.' };
+    }
+
+    return {
+      shippingAddressId,
+      shippingAddress: normalizeAddress(match)
+    };
+  }
+
+  async function enrichUpstreamShippingMeta(shippingMeta) {
+    if (!shippingMeta?.shippingAddress) return shippingMeta;
+    const location = formatShippingAddressText(shippingMeta.shippingAddress);
+    let siteGeo = null;
+    try {
+      const geo = await geocodeIndianAddress(shippingMeta.shippingAddress);
+      if (geo && typeof geo.lat === 'number' && typeof geo.lng === 'number') {
+        siteGeo = { lat: geo.lat, lng: geo.lng };
+      }
+    } catch {
+      // Geocoding is best-effort; ranking still uses city/state fallback.
+    }
+    return {
+      ...shippingMeta,
+      location,
+      siteGeo
+    };
+  }
+
+  async function resolveBuyerGeosForUpstreamSuggestions({
+    userId,
+    myOffers,
+    projectId = '',
+    shippingAddressIdOverride = ''
+  }) {
+    const buyerOutletGeos = [];
+    const buyerGeoDiagnostics = {
+      cartShippingTried: false,
+      cartShippingResolved: false,
+      shippingAddressOverrideTried: false,
+      shippingAddressOverrideResolved: false,
+      outletsChecked: 0,
+      outletsResolved: 0,
+      profileAddressTried: false,
+      profileAddressResolved: false,
+      branchesTried: 0,
+      branchesResolved: 0,
+      inventoryLocationTried: 0,
+      inventoryLocationResolved: 0
+    };
+    let buyerGeoSource = 'none';
+    let deliveryAddressLabel = '';
+
+    const applyGeo = (geo, source, label) => {
+      if (!isValidGeoLocation(geo)) return false;
+      buyerOutletGeos.length = 0;
+      buyerOutletGeos.push({ lat: geo.lat, lng: geo.lng });
+      buyerGeoSource = source;
+      if (label) deliveryAddressLabel = label;
+      return true;
+    };
+
+    const applyGeoFromShippingProject = async (projectLike, source) => {
+      const resolved = await resolveProjectShippingAddress(projectLike, { supabase, userId });
+      const label =
+        String(resolved.location || '').trim() ||
+        formatShippingAddressText(resolved.shippingAddress || {});
+      if (resolved.siteGeo && isValidGeoLocation(resolved.siteGeo)) {
+        return applyGeo(resolved.siteGeo, source, label);
+      }
+      if (resolved.shippingAddress && isAddressComplete(normalizeAddress(resolved.shippingAddress))) {
+        const geo = await geocodeIndianAddress(resolved.shippingAddress);
+        return applyGeo(geo, source, label);
+      }
+      return false;
+    };
+
+    if (projectId) {
+      buyerGeoDiagnostics.cartShippingTried = true;
+      const { data: cartRow } = await supabase
+        .from('po_carts')
+        .select('draft_payload')
+        .eq('service_provider_id', userId)
+        .maybeSingle();
+      const draft = normalizeUpstreamCartDraft(
+        cartRow?.draft_payload && typeof cartRow.draft_payload === 'object'
+          ? cartRow.draft_payload
+          : {}
+      );
+      const project = (draft.projects || []).find((p) => String(p?.projectId || '') === projectId);
+      if (project && (await applyGeoFromShippingProject(project, 'cart_shipping_address'))) {
+        buyerGeoDiagnostics.cartShippingResolved = true;
+      }
+    }
+
+    if (buyerOutletGeos.length === 0 && shippingAddressIdOverride) {
+      buyerGeoDiagnostics.shippingAddressOverrideTried = true;
+      const shippingMeta = await resolveUpstreamProjectShipping(userId, {
+        shippingAddressId: shippingAddressIdOverride
+      });
+      if (shippingMeta?.shippingAddress) {
+        const enriched = await enrichUpstreamShippingMeta(shippingMeta);
+        if (
+          await applyGeoFromShippingProject(
+            {
+              shippingAddress: enriched.shippingAddress,
+              shippingAddressId: enriched.shippingAddressId,
+              siteGeo: enriched.siteGeo,
+              location: enriched.location
+            },
+            'selected_shipping_address'
+          )
+        ) {
+          buyerGeoDiagnostics.shippingAddressOverrideResolved = true;
+        }
+      }
+    }
+
+    if (buyerOutletGeos.length === 0) {
+      const { data: buyerOutletsGeoRows } = await supabase
+        .from('outlets')
+        .select('id, geo_location, address')
+        .eq('supplier_id', userId)
+        .eq('is_active', true)
+        .limit(120);
+      buyerGeoDiagnostics.outletsChecked = (buyerOutletsGeoRows || []).length;
+      for (const o of buyerOutletsGeoRows || []) {
+        const g = await resolveGeoFromOutletAddress(o?.geo_location, o?.address);
+        if (g && typeof g.lat === 'number' && typeof g.lng === 'number') {
+          buyerOutletGeos.push({ lat: g.lat, lng: g.lng });
+          buyerGeoDiagnostics.outletsResolved += 1;
+        }
+      }
+      if (buyerOutletGeos.length > 0) buyerGeoSource = 'outlet';
+    }
+
+    if (buyerOutletGeos.length === 0) {
+      const { data: buyerUser } = await supabase
+        .from('users')
+        .select('address, profile')
+        .eq('id', userId)
+        .maybeSingle();
+      buyerGeoDiagnostics.profileAddressTried = true;
+      const buyerGeoFallback = await resolveGeoFromOutletAddress(null, buyerUser?.address || null);
+      if (isValidGeoLocation(buyerGeoFallback)) {
+        buyerOutletGeos.push({ lat: buyerGeoFallback.lat, lng: buyerGeoFallback.lng });
+        buyerGeoSource = 'profile_address';
+        buyerGeoDiagnostics.profileAddressResolved = true;
+      }
+      if (buyerOutletGeos.length === 0) {
+        const legacyBranches = Array.isArray(buyerUser?.profile?.branches)
+          ? buyerUser.profile.branches
+          : [];
+        buyerGeoDiagnostics.branchesTried = legacyBranches.length;
+        for (const branch of legacyBranches) {
+          const branchAddr = buildOutletAddressString(branch);
+          if (!branchAddr) continue;
+          const g = await resolveGeoFromOutletAddress(null, branchAddr);
+          if (isValidGeoLocation(g)) {
+            buyerOutletGeos.push({ lat: g.lat, lng: g.lng });
+            buyerGeoSource = 'profile_branches';
+            buyerGeoDiagnostics.branchesResolved += 1;
+            break;
+          }
+        }
+      }
+    }
+
+    if (buyerOutletGeos.length === 0) {
+      const buyerLocationTexts = [
+        ...new Set((myOffers || []).map((r) => String(r?.location || '').trim()).filter(Boolean))
+      ];
+      buyerGeoDiagnostics.inventoryLocationTried = buyerLocationTexts.length;
+      for (const locText of buyerLocationTexts) {
+        const g = await geocodeAddressNominatim(locText);
+        if (isValidGeoLocation(g)) {
+          buyerOutletGeos.push({ lat: g.lat, lng: g.lng });
+          buyerGeoSource = 'inventory_location_text';
+          buyerGeoDiagnostics.inventoryLocationResolved += 1;
+          break;
+        }
+      }
+    }
+
+    return {
+      buyerOutletGeos,
+      buyerGeoSource,
+      buyerGeoDiagnostics,
+      deliveryAddressLabel
+    };
+  }
+
   const buildUpstreamProject = (payload = {}) => {
     const projectId = String(payload.projectId || `sup-proj-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
     const cartNameRaw = String(payload.cartName || '').trim();
     const rawRequiredDate = String(payload.requiredDate || '').trim();
     const requiredDate = /^\d{4}-\d{2}-\d{2}$/.test(rawRequiredDate) ? rawRequiredDate : '';
-    return {
+    const project = {
       projectId,
       cartName: cartNameRaw || `Project ${formatPlatformDate(new Date())}`,
       requiredDate,
@@ -102,6 +365,20 @@ export function registerSupplierUpstreamRoutes(ctx) {
       searchTerm: String(payload.searchTerm || '').trim(),
       createdAt: payload.createdAt || new Date().toISOString()
     };
+    const shippingAddressId = String(payload.shippingAddressId || '').trim();
+    const shippingAddress =
+      payload.shippingAddress && typeof payload.shippingAddress === 'object'
+        ? normalizeAddress(payload.shippingAddress)
+        : null;
+    if (shippingAddressId) project.shippingAddressId = shippingAddressId;
+    if (shippingAddress && isAddressComplete(shippingAddress)) {
+      project.shippingAddress = shippingAddress;
+    }
+    if (payload.location) project.location = String(payload.location).trim();
+    if (payload.siteGeo && typeof payload.siteGeo === 'object') {
+      project.siteGeo = payload.siteGeo;
+    }
+    return project;
   };
 
   const normalizeUpstreamProjectNameKey = (value) => String(value || '').trim().toLowerCase();
@@ -179,6 +456,8 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
         .filter(Boolean);
 
     const limitPerItem = Math.min(10, Math.max(1, parseInt(req.query.limit, 10) || 5));
+    const queryProjectId = String(req.query.projectId || '').trim();
+    const queryShippingAddressId = String(req.query.shippingAddressId || '').trim();
 
     if (supplierProductIds.length === 0) {
       return res.status(400).json({
@@ -239,11 +518,9 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       brandNames: selectedBrandNames
     });
 
-    // Fetch upstream offers for the same variant only.
-    // Priority:
-    // 1) Same variant_key
-    // 2) Same variant_asin
-    // 3) Fallback for legacy rows (no variant identity): same product_id
+    // Fetch upstream offers for the same catalog product (and variant when available).
+    // Supply-chain orders match registered upstream partners on shared catalog product id (TSIN);
+    // exact variant_key / variant_asin is preferred in ranking but not required.
     const productIds = [...new Set(myOffers.map((r) => r.product_id).filter(Boolean))];
     const myVariantKeys = [
       ...new Set(myOffers.map((r) => String(r?.variant_key || '').trim()).filter(Boolean))
@@ -269,42 +546,50 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       });
     }
 
+    const upstreamOfferSelect =
+      'id, product_id, variant_key, variant_asin, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, min_order_quantity, product:products(brand, status)';
+
     // Load upstream offers directly (source of truth) and then load supplier profiles for display.
     const upstreamOffersById = new Map();
-    const registerUpstreamRows = (rows = []) => {
+    const registerUpstreamRows = async (rows = []) => {
       for (const row of rows || []) {
-        if (row?.id) upstreamOffersById.set(row.id, row);
+        if (!row?.id) continue;
+        let effectiveRow = row;
+        const { needsCatalogSync } = resolveEffectiveSupplierOfferState(row, row.product);
+        if (needsCatalogSync) {
+          effectiveRow = await syncSupplierOfferApprovalFromCatalog(supabase, row);
+        }
+        if (isSupplierOfferAvailableForUpstream(effectiveRow, effectiveRow.product)) {
+          upstreamOffersById.set(effectiveRow.id, effectiveRow);
+        }
       }
     };
     if (productIds.length > 0) {
       const { data: rowsByProductId } = await supabase
         .from('supplier_products')
-        .select('id, product_id, variant_key, variant_asin, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, min_order_quantity')
+        .select(upstreamOfferSelect)
         .in('product_id', productIds)
-        .eq('is_active', true)
         .neq('status', 'rejected')
         .gt('stock', 0);
-      registerUpstreamRows(rowsByProductId || []);
+      await registerUpstreamRows(rowsByProductId || []);
     }
     if (myVariantKeys.length > 0) {
       const { data: rowsByVariantKey } = await supabase
         .from('supplier_products')
-        .select('id, product_id, variant_key, variant_asin, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, min_order_quantity')
+        .select(upstreamOfferSelect)
         .in('variant_key', myVariantKeys)
-        .eq('is_active', true)
         .neq('status', 'rejected')
         .gt('stock', 0);
-      registerUpstreamRows(rowsByVariantKey || []);
+      await registerUpstreamRows(rowsByVariantKey || []);
     }
     if (myVariantAsins.length > 0) {
       const { data: rowsByVariantAsin } = await supabase
         .from('supplier_products')
-        .select('id, product_id, variant_key, variant_asin, supplier_id, stock, price, outlet_id, location, status, is_active, attributes, min_order_quantity')
+        .select(upstreamOfferSelect)
         .in('variant_asin', myVariantAsins)
-        .eq('is_active', true)
         .neq('status', 'rejected')
         .gt('stock', 0);
-      registerUpstreamRows(rowsByVariantAsin || []);
+      await registerUpstreamRows(rowsByVariantAsin || []);
     }
     const upstreamOffers = [...upstreamOffersById.values()];
 
@@ -348,80 +633,25 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       upstreamUserMap[u.id] = u;
     });
 
-    // All of your outlet coordinates — distance to each upstream offer is the minimum km from ANY of these
-    // (so a new dealer opening near any of your locations surfaces as #1 on the next fetch; not fixed to one outlet).
-    const buyerOutletGeos = [];
-    const buyerGeoDiagnostics = {
-      outletsChecked: 0,
-      outletsResolved: 0,
-      profileAddressTried: false,
-      profileAddressResolved: false,
-      branchesTried: 0,
-      branchesResolved: 0,
-      inventoryLocationTried: 0,
-      inventoryLocationResolved: 0
-    };
-    let buyerGeoSource = 'none';
-    const { data: buyerOutletsGeoRows } = await supabase
-      .from('outlets')
-      .select('id, geo_location, address')
-      .eq('supplier_id', req.userId)
-      .eq('is_active', true)
-      .limit(120);
-    buyerGeoDiagnostics.outletsChecked = (buyerOutletsGeoRows || []).length;
-    for (const o of buyerOutletsGeoRows || []) {
-      const g = await resolveGeoFromOutletAddress(o?.geo_location, o?.address);
-      if (g && typeof g.lat === 'number' && typeof g.lng === 'number') {
-        buyerOutletGeos.push({ lat: g.lat, lng: g.lng });
-        buyerGeoDiagnostics.outletsResolved += 1;
-      }
-    }
-    if (buyerOutletGeos.length > 0) buyerGeoSource = 'outlet';
-    // Retailers may not have outlet rows; fall back to profile/address geocode.
-    if (buyerOutletGeos.length === 0) {
-      const { data: buyerUser } = await supabase
-        .from('users')
-        .select('address, profile')
-        .eq('id', req.userId)
-        .maybeSingle();
-      buyerGeoDiagnostics.profileAddressTried = true;
-      const buyerGeoFallback = await resolveGeoFromOutletAddress(null, buyerUser?.address || null);
-      if (isValidGeoLocation(buyerGeoFallback)) {
-        buyerOutletGeos.push({ lat: buyerGeoFallback.lat, lng: buyerGeoFallback.lng });
-        buyerGeoSource = 'profile_address';
-        buyerGeoDiagnostics.profileAddressResolved = true;
-      }
-      // Backward compatibility: many suppliers still store branch locations in profile.branches.
-      if (buyerOutletGeos.length === 0) {
-        const legacyBranches = Array.isArray(buyerUser?.profile?.branches) ? buyerUser.profile.branches : [];
-        buyerGeoDiagnostics.branchesTried = legacyBranches.length;
-        for (const branch of legacyBranches) {
-          const branchAddr = buildOutletAddressString(branch);
-          if (!branchAddr) continue;
-          const g = await resolveGeoFromOutletAddress(null, branchAddr);
-          if (isValidGeoLocation(g)) {
-            buyerOutletGeos.push({ lat: g.lat, lng: g.lng });
-            buyerGeoSource = 'profile_branches';
-            buyerGeoDiagnostics.branchesResolved += 1;
-            break;
-          }
-        }
-      }
-    }
-    // Additional fallback: use selected inventory location text if retailer has no outlet/address geo.
-    if (buyerOutletGeos.length === 0) {
-      const buyerLocationTexts = [...new Set((myOffers || []).map((r) => String(r?.location || '').trim()).filter(Boolean))];
-      buyerGeoDiagnostics.inventoryLocationTried = buyerLocationTexts.length;
-      for (const locText of buyerLocationTexts) {
-        const g = await geocodeAddressNominatim(locText);
-        if (isValidGeoLocation(g)) {
-          buyerOutletGeos.push({ lat: g.lat, lng: g.lng });
-          buyerGeoSource = 'inventory_location_text';
-          buyerGeoDiagnostics.inventoryLocationResolved += 1;
-          break;
-        }
-      }
-    }
+    const registeredPartnerIdsByBrandKey = buildRegisteredUpstreamPartnerIdsByBrandKey({
+      buyerProfile: req.user.profile || {},
+      adminBrandChainMap,
+      upstreamUsers: upstreamUsers || [],
+      parentRolesUnion
+    });
+
+    // Distance ranking origin: selected cart shipping address first, then legacy outlet/profile fallbacks.
+    const {
+      buyerOutletGeos,
+      buyerGeoSource,
+      buyerGeoDiagnostics,
+      deliveryAddressLabel
+    } = await resolveBuyerGeosForUpstreamSuggestions({
+      userId: req.userId,
+      myOffers,
+      projectId: queryProjectId,
+      shippingAddressIdOverride: queryShippingAddressId
+    });
 
     // Load upstream outlet geo for distance calc
     const upstreamOutletIds = [...new Set((upstreamOffers || []).map((r) => r.outlet_id).filter(Boolean))];
@@ -581,8 +811,7 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       const desiredBrand = String(brandLabel || '').trim().toLowerCase();
       const brandKey = normalizeBrandKeyFromAttributes(brandLabel);
       const chainRow = adminBrandChainMap.get(brandKey) || null;
-      const buyerRole =
-        sortRolesByChainDepthDesc(getMySupplierRoles(req.user.profile || {}, ''))[0] || null;
+      const buyerRole = resolveBuyerRoleForBrand(req.user.profile || {}, brandLabel || brandKey);
       const allowedRolesSet = getAllowedUpstreamRolesForBrand({
         profile: req.user.profile || {},
         brandKey,
@@ -594,38 +823,47 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
         profile: req.user.profile || {},
         brandKey,
         chainRow,
-        parentRolesUnion
+        parentRolesUnion,
+        buyerRoleHint: buyerRole
       });
 
-      const sameVariantOnlyPool = (upstreamOffers || []).filter((offer) => {
+      const upstreamEligiblePool = (upstreamOffers || []).filter((offer) => {
         if (!offer) return false;
-        const offerVariantKey = String(offer?.variant_key || '').trim();
-        const offerVariantAsin = String(offer?.variant_asin || '').trim();
-        if (mineVariantKey) return Boolean(offerVariantKey) && offerVariantKey === mineVariantKey;
-        if (mineVariantAsin) return Boolean(offerVariantAsin) && offerVariantAsin === mineVariantAsin;
-        // Legacy fallback when variant identity is missing.
-        return Boolean(offer?.product_id) && offer.product_id === mine.product_id;
+        if (offer.supplier_id === req.userId) return false;
+        return upstreamOffersMatchForSupplyChain(mine, offer);
       });
 
-      const brandMatchedPool = sameVariantOnlyPool.filter((u) => {
+      const brandMatchedPool = upstreamEligiblePool.filter((u) => {
         if (!desiredBrand) return true;
-        const offerBrand = resolveUpstreamBrandLabel(u?.attributes, null).toLowerCase();
+        const offerBrand = resolveUpstreamBrandLabel(u?.attributes, u?.product?.brand).toLowerCase();
         return offerBrand
           ? offerBrand === desiredBrand || offerBrand.includes(desiredBrand) || desiredBrand.includes(offerBrand)
           : true;
       });
 
       const brandTokenForMatch = brandLabel || desiredBrand || '';
+      const registeredPartnerIds = registeredPartnerIdsByBrandKey.get(brandKey) || new Set();
       const candidates = brandMatchedPool
         .filter((offer) => {
           if (!offer.supplier_id || offer.supplier_id === req.userId) return false;
           const sup = upstreamUserMap[offer.supplier_id];
           if (!sup?.profile) return false;
-          return sellerMatchesUpstreamForBrand(
+          if (registeredPartnerIds.has(offer.supplier_id)) return true;
+          if (
+            sellerMatchesUpstreamForBrand(
+              sup.profile,
+              allowedRolesSet,
+              brandTokenForMatch,
+              chainRouting
+            )
+          ) {
+            return true;
+          }
+          return sellerHasAnyUpstreamRoleForBrand(
             sup.profile,
-            allowedRolesSet,
+            buyerRole,
             brandTokenForMatch,
-            chainRouting
+            chainRow
           );
         })
         .map((u) => {
@@ -660,10 +898,21 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
                 allowedRolesSet,
                 brandTokenForMatch,
                 chainRouting
-              )
+              ) ||
+              pickAnyUpstreamSellerRoleOnChain(sup.profile, buyerRole, brandTokenForMatch, chainRow) ||
+              (registeredPartnerIds.has(u.supplier_id)
+                ? getImmediateUpstreamRoleForBrand({
+                    profile: req.user.profile || {},
+                    brandKey,
+                    chainRow,
+                    buyerRole,
+                    parentRolesUnion
+                  })
+                : null)
             : null;
           const roleForMap = matchedRole || parentRole;
           const { averageRating, ratingCount } = getSupplierRatingSummary(u.supplier_id);
+          const variantMatchType = getUpstreamOfferMatchType(mine, u) || 'catalog_product';
           const supplierDetails =
             sup && roleForMap
               ? (mapSupplyChainPartner(sup, roleForMap, viewerBrandTokens) || {
@@ -702,6 +951,7 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             mineVariantAsin: mineVariantAsin || null,
             upstreamVariantKey: String(u?.variant_key || '').trim() || null,
             upstreamVariantAsin: String(u?.variant_asin || '').trim() || null,
+            variantMatchType,
             supplierDetails,
             distanceKm: dist,
             distanceKmRaw: distRaw,
@@ -719,8 +969,17 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
 
       let itemMessage = null;
       if (top.length === 0) {
-        if (sameVariantOnlyPool.length === 0) {
-          itemMessage = 'No other suppliers list this exact variant with stock right now.';
+        const exactVariantPool = upstreamEligiblePool.filter((offer) =>
+          getUpstreamOfferMatchType(mine, offer) === 'exact_variant'
+        );
+        if (upstreamEligiblePool.length === 0) {
+          itemMessage =
+            'No upstream partners list this product with stock right now. Ask your local distributor to add it.';
+        } else if (exactVariantPool.length === 0 && registeredPartnerIds.size > 0) {
+          const registeredNames = [...registeredPartnerIds]
+            .map((id) => upstreamUserMap[id]?.name || upstreamUserMap[id]?.company)
+            .filter(Boolean);
+          itemMessage = `Your upstream partner(s) for "${brandLabel || desiredBrand}" (${registeredNames.join(', ')}) list this product but none passed supply-chain validation. Check their role and brand on Who are you.`;
         } else if (brandMatchedPool.length === 0) {
           itemMessage = `No upstream listings matched brand "${brandLabel || desiredBrand}".`;
         } else if (candidates.length === 0 && allowedRolesSet.size > 0) {
@@ -728,7 +987,20 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             .sort((a, b) => (ROLE_DEPTH[a] ?? 99) - (ROLE_DEPTH[b] ?? 99))
             .map((r) => SUPPLY_CHAIN_ROLE_LABELS[r] || r)
             .join(', ');
-          itemMessage = `Partners exist for this product, but none are registered upstream for brand "${brandLabel || desiredBrand}" at: ${tierLabels}. They need one of those roles and the same brand on Who are you.`;
+          const preferredTier =
+            chainRouting.requiredUpstreamRole || parentRole
+              ? SUPPLY_CHAIN_ROLE_LABELS[chainRouting.requiredUpstreamRole || parentRole] ||
+                chainRouting.requiredUpstreamRole ||
+                parentRole
+              : tierLabels;
+          const registeredNames = [...registeredPartnerIds]
+            .map((id) => upstreamUserMap[id]?.name || upstreamUserMap[id]?.company)
+            .filter(Boolean);
+          const registeredHint =
+            registeredNames.length > 0
+              ? ` Your registered upstream partner(s) for this brand (${registeredNames.join(', ')}) do not list this exact variant with stock — ask them to add it, or check their supply-chain role and brand on Who are you.`
+              : '';
+          itemMessage = `Listings exist for this product, but none match your upstream supply chain for brand "${brandLabel || desiredBrand}". Preferred seller layer: ${preferredTier}. Also accepted: ${tierLabels}.${registeredHint}`;
         } else if (candidates.length === 0) {
           itemMessage =
             'Partners exist for this product, but none match your allowed upstream supply-chain layer.';
@@ -766,17 +1038,99 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       distanceAvailable: buyerOutletGeos.length > 0,
       buyerGeoSource,
       buyerGeoDiagnostics,
+      deliveryAddressLabel: deliveryAddressLabel || null,
       chainPolicy:
         'Uses Admin → Supply Chain per brand. Upstream seller = tier directly above you in that chain (walkback skips absent tiers e.g. dealer).',
       distanceRanking:
         buyerOutletGeos.length > 0
-          ? 'Each run uses current outlet coordinates. Distance is the minimum km from any of your outlets to the partner’s outlet; the nearest partner ranks first (not a fixed previous choice).'
-          : 'Distance ranking is unavailable because your location could not be resolved. Add/update outlet geo or a complete address in profile (city/state/pincode).',
+          ? buyerGeoSource === 'selected_shipping_address' || buyerGeoSource === 'cart_shipping_address'
+            ? `Partners are ranked by road distance from your selected delivery address${
+                deliveryAddressLabel ? ` (${deliveryAddressLabel})` : ''
+              }. The nearest seller appears first for each product.`
+            : 'Distance ranking uses your outlet or profile location. Select a delivery address on the cart or upstream page for delivery-site ranking.'
+          : queryProjectId || queryShippingAddressId
+            ? 'Distance ranking is unavailable because the selected delivery address could not be geocoded. Check the address (street, city, state, PIN) and try again.'
+            : 'Distance ranking is unavailable because no delivery address was selected and your location could not be resolved. Add a shipping address to your cart project or profile.',
       items
     });
   } catch (e) {
     console.error('Upstream suggestions error:', e);
     return res.status(500).json({ status: 'error', message: 'Failed to load upstream suggestions' });
+  }
+});
+
+/**
+ * Preview how upstream checkout lines club into transport / order groups.
+ * Same upstream supplier + same delivery address → one group (one transport button).
+ */
+router.post('/upstream/orders/preview-groups', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can preview upstream order groups' });
+    }
+
+    const payload = parseWithSchema(supplierUpstreamPreviewGroupsSchema, req.body || {});
+    const normalizedShipping = normalizeAddress(payload.shippingAddress || {});
+    const normalizedBilling = normalizeAddress(payload.billingAddress || {});
+    const deliveryDestination =
+      String(payload.deliveryDestination || 'shipping').toLowerCase() === 'billing' ? 'billing' : 'shipping';
+    const defaultDelivery =
+      deliveryDestination === 'billing' && isAddressComplete(normalizedBilling)
+        ? normalizedBilling
+        : normalizedShipping;
+
+    const rawGroups = [];
+    for (const line of payload.reviewLines || []) {
+      const vendorId = String(line?.supplierId || '').trim();
+      if (!vendorId) continue;
+      const lineShipping = line?.shippingAddress
+        ? normalizeAddress(line.shippingAddress)
+        : defaultDelivery;
+      const transportGroupId = buildTransportGroupId(vendorId, lineShipping);
+      const qty = Number(line?.quantity || 0) || 0;
+      const unitPrice = Number(line?.unitPrice || 0) || 0;
+      const lineTotal = Number(line?.lineTotal ?? qty * unitPrice) || 0;
+
+      rawGroups.push({
+        vendorId,
+        transportGroupId,
+        shippingAddressKey: buildShippingAddressKey(lineShipping),
+        shippingAddress: lineShipping,
+        shippingAddressLabel: formatShippingAddressLabel(lineShipping),
+        vendorName: String(line?.supplierName || 'Supplier'),
+        total: lineTotal,
+        items: [
+          {
+            name: String(line?.productName || 'Product'),
+            quantity: qty,
+            unit: String(line?.unit || 'nos'),
+            price: unitPrice,
+            specifications: line?.specifications || null,
+            images: Array.isArray(line?.images) ? line.images : []
+          }
+        ]
+      });
+    }
+
+    const groups = consolidatePoTransportGroups(rawGroups).map((group) => ({
+      ...group,
+      total: Math.round((Number(group.total || 0)) * 100) / 100
+    }));
+
+    return res.json({
+      status: 'success',
+      groups,
+      message:
+        groups.length > 0
+          ? `${groups.length} shipment group(s) — same supplier + same delivery address are clubbed together`
+          : 'No groups could be built from the supplied lines'
+    });
+  } catch (error) {
+    console.error('Upstream preview groups error:', error);
+    if (String(error?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+    }
+    return res.status(500).json({ status: 'error', message: 'Failed to preview upstream order groups' });
   }
 });
 
@@ -871,7 +1225,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     // Validate my selected supplier products
     const { data: myRows, error: myErr } = await supabase
       .from('supplier_products')
-      .select('id, product_id, variant_key, variant_asin, attributes')
+      .select('id, product_id, variant_key, variant_asin, attributes, product:products(brand)')
       .eq('supplier_id', req.userId)
       .in('id', mineIds);
     if (myErr) throw myErr;
@@ -886,21 +1240,31 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
 
     const { data: upstreamOffers, error: upstreamErr } = await supabase
       .from('supplier_products')
-      .select('id, supplier_id, product_id, variant_key, variant_asin, price, stock, min_order_quantity, attributes, outlet_id, location, product:products(id, name, category, unit, description, specifications, brand)')
-      .eq('is_active', true)
+      .select(
+        'id, supplier_id, product_id, variant_key, variant_asin, price, stock, min_order_quantity, attributes, outlet_id, location, status, is_active, product:products(id, name, category, unit, description, specifications, brand, status)'
+      )
       .neq('status', 'rejected')
       .in('id', upstreamOfferIds);
     if (upstreamErr) throw upstreamErr;
 
     const upstreamOfferById = {};
-    (upstreamOffers || []).forEach((r) => (upstreamOfferById[r.id] = r));
+    for (const row of upstreamOffers || []) {
+      let effectiveRow = row;
+      const { needsCatalogSync } = resolveEffectiveSupplierOfferState(row, row.product);
+      if (needsCatalogSync) {
+        effectiveRow = await syncSupplierOfferApprovalFromCatalog(supabase, row);
+      }
+      if (isSupplierOfferAvailableForUpstream(effectiveRow, effectiveRow.product)) {
+        upstreamOfferById[effectiveRow.id] = effectiveRow;
+      }
+    }
 
     // Security guard: seller must match at least one immediate upstream role for any role the buyer declared.
     const parentRolesUnion = getImmediateParentRolesUnion(req.user.profile);
     const selectedBrandNames = [
       ...new Set(
         Object.values(myByMineId)
-          .map((r) => String(r?.attributes?.brandModel || '').trim())
+          .map((r) => resolveUpstreamBrandLabel(r?.attributes, r?.product?.brand))
           .filter(Boolean)
       )
     ];
@@ -927,19 +1291,11 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       upstreamProfileById[u.id] = u.profile;
     });
 
-    const sameVariantMatch = (mineOffer, upstreamOffer) => {
-      const mineVariantKey = String(mineOffer?.variant_key || '').trim();
-      const mineVariantAsin = String(mineOffer?.variant_asin || '').trim();
-      const upstreamVariantKey = String(upstreamOffer?.variant_key || '').trim();
-      const upstreamVariantAsin = String(upstreamOffer?.variant_asin || '').trim();
+    const sameVariantMatch = (mineOffer, upstreamOffer) =>
+      upstreamOffersMatchForSupplyChain(mineOffer, upstreamOffer);
 
-      if (mineVariantKey) return Boolean(upstreamVariantKey) && upstreamVariantKey === mineVariantKey;
-      if (mineVariantAsin) return Boolean(upstreamVariantAsin) && upstreamVariantAsin === mineVariantAsin;
-      return Boolean(mineOffer?.product_id) && upstreamOffer?.product_id === mineOffer.product_id;
-    };
-
-    // Group lines by upstream supplier (order per supplier)
-    const groups = new Map(); // supplier_id -> { supplierId, items: [...] }
+    // Group lines by upstream supplier + delivery address (one order / transport per club)
+    const groups = new Map(); // transportGroupId -> { supplierId, transportGroupId, items: [...] }
 
     for (const line of lines) {
       const mineSupplierProductId = line?.mineSupplierProductId;
@@ -971,7 +1327,8 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       if (!sameVariantMatch(myOffer, upstreamOffer)) {
         return res.status(400).json({
           status: 'error',
-          message: 'Selected upstream offer does not match the same variant as your chosen product.'
+          message:
+            'Selected upstream offer does not match your product on the shared catalog (same product family required).'
         });
       }
 
@@ -987,6 +1344,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       }
 
       const supplierId = upstreamOffer.supplier_id;
+      const groupKey = buildTransportGroupId(supplierId, selectedDeliveryAddress);
 
       if (supplierId === req.userId) {
         return res.status(400).json({ status: 'error', message: 'You cannot place an upstream order to your own listing.' });
@@ -994,11 +1352,13 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
 
       const upProfile = upstreamProfileById[supplierId];
       const brandKey = normalizeBrandKeyFromAttributes(
-        resolveUpstreamBrandLabel(myOffer?.attributes, null)
+        resolveUpstreamBrandLabel(myOffer?.attributes, myOffer?.product?.brand)
       );
       const chainRow = adminBrandChainMap.get(brandKey) || null;
-      const buyerRole =
-        sortRolesByChainDepthDesc(getMySupplierRoles(req.user.profile || {}, ''))[0] || null;
+      const buyerRole = resolveBuyerRoleForBrand(
+        req.user.profile || {},
+        resolveUpstreamBrandLabel(myOffer?.attributes, myOffer?.product?.brand) || brandKey
+      );
       const allowedRolesSet = getAllowedUpstreamRolesForBrand({
         profile: req.user.profile || {},
         brandKey,
@@ -1010,20 +1370,26 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         profile: req.user.profile || {},
         brandKey,
         chainRow,
-        parentRolesUnion
+        parentRolesUnion,
+        buyerRoleHint: buyerRole
       });
 
       const cartBrandToken =
         resolveUpstreamBrandLabel(myOffer?.attributes, myOffer?.product?.brand) || brandKey;
-      if (!sellerMatchesUpstreamForBrand(upProfile, allowedRolesSet, cartBrandToken, chainRouting)) {
+      const supplierAllowed =
+        sellerMatchesUpstreamForBrand(upProfile, allowedRolesSet, cartBrandToken, chainRouting) ||
+        sellerHasAnyUpstreamRoleForBrand(upProfile, buyerRole, cartBrandToken, chainRow);
+      if (!supplierAllowed) {
         return res.status(403).json({
           status: 'error',
           message: `Selected upstream supplier is not registered for brand "${cartBrandToken}" at any allowed supply-chain tier above you (per admin chain for that brand).`
         });
       }
 
-      if (!groups.has(supplierId)) groups.set(supplierId, { supplierId, items: [] });
-      groups.get(supplierId).items.push({
+      if (!groups.has(groupKey)) {
+        groups.set(groupKey, { supplierId, transportGroupId: groupKey, items: [] });
+      }
+      groups.get(groupKey).items.push({
         mineSupplierProductId,
         upstreamSupplierProductId,
         quantity,
@@ -1239,6 +1605,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         id: order.id,
         orderNumber: order.order_number,
         supplierId: order.supplier_id,
+        transportGroupId: group.transportGroupId || buildTransportGroupId(supplierId, selectedDeliveryAddress),
         totalAmount,
         status: order.status,
         paymentStatus: order.payment_status,
@@ -1301,6 +1668,17 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       });
     }
 
+    const hasShippingFields =
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'shippingAddressId') ||
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'shippingAddress');
+    const shippingMeta = hasShippingFields
+      ? await resolveUpstreamProjectShipping(req.userId, req.body || {})
+      : null;
+    if (shippingMeta?.error) {
+      return res.status(400).json({ status: 'error', message: shippingMeta.error });
+    }
+    const enrichedShipping = shippingMeta ? await enrichUpstreamShippingMeta(shippingMeta) : null;
+
     const { data: mineRow, error: mineError } = await supabase
       .from('supplier_products')
       .select('id, supplier_id, min_order_quantity, attributes, product:products(brand)')
@@ -1346,13 +1724,16 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         return res.status(404).json({ status: 'error', message: 'Selected project not found' });
       }
       const existing = buildUpstreamProject(currentProjects[idx]);
-      updatedProject = {
-        ...existing,
-        selectedMine: {
-          ...(existing.selectedMine || {}),
-          [mineSupplierProductId]: quantity
-        }
-      };
+      updatedProject = applyShippingToUpstreamProject(
+        {
+          ...existing,
+          selectedMine: {
+            ...(existing.selectedMine || {}),
+            [mineSupplierProductId]: quantity
+          }
+        },
+        enrichedShipping
+      );
       nextProjects[idx] = updatedProject;
     } else {
       if (hasDuplicateUpstreamProject(currentProjects, requestedCartName, requiredDate)) {
@@ -1361,15 +1742,18 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
           message: 'A supplier project with the same name and expected delivery date already exists'
         });
       }
-      updatedProject = buildUpstreamProject({
-        cartName: requestedCartName || `Quick Add - ${mineSupplierProductId.slice(0, 8)}`,
-        requiredDate,
-        selectedMine: { [mineSupplierProductId]: quantity },
-        selectedUpstreamOffer: {},
-        suggestions: [],
-        brandFilter: '',
-        searchTerm: ''
-      });
+      updatedProject = applyShippingToUpstreamProject(
+        buildUpstreamProject({
+          cartName: requestedCartName || `Quick Add - ${mineSupplierProductId.slice(0, 8)}`,
+          requiredDate,
+          selectedMine: { [mineSupplierProductId]: quantity },
+          selectedUpstreamOffer: {},
+          suggestions: [],
+          brandFilter: '',
+          searchTerm: ''
+        }),
+        enrichedShipping
+      );
       // New add must appear first in cart.
       nextProjects = [updatedProject, ...currentProjects];
     }
@@ -1467,6 +1851,37 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
       return res.status(400).json({ status: 'error', message: 'requiredDate must be in YYYY-MM-DD format' });
     }
 
+    const hasShippingAddressIdField = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      'shippingAddressId'
+    );
+    const hasShippingAddressField = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      'shippingAddress'
+    );
+    const wantsShippingUpdate = hasShippingAddressIdField || hasShippingAddressField;
+    let enrichedShipping = null;
+    if (wantsShippingUpdate) {
+      const shippingIdRaw = hasShippingAddressIdField
+        ? String(req.body?.shippingAddressId || '').trim()
+        : '';
+      const hasInlineShipping =
+        hasShippingAddressField &&
+        req.body?.shippingAddress &&
+        typeof req.body.shippingAddress === 'object';
+      if (!shippingIdRaw && !hasInlineShipping) {
+        enrichedShipping = { clear: true };
+      } else {
+        const shippingMeta = await resolveUpstreamProjectShipping(req.userId, req.body || {});
+        if (shippingMeta?.error) {
+          return res.status(400).json({ status: 'error', message: shippingMeta.error });
+        }
+        if (shippingMeta) {
+          enrichedShipping = await enrichUpstreamShippingMeta(shippingMeta);
+        }
+      }
+    }
+
     const { data: cartRow, error: cartError } = await supabase
       .from('po_carts')
       .select('id, draft_payload, updated_at')
@@ -1503,21 +1918,27 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
     }
     if (projects.length === 0) {
       projects.push(
-        buildUpstreamProject({
-          projectId: targetProjectId || null,
-          cartName
-        })
+        applyShippingToUpstreamProject(
+          buildUpstreamProject({
+            projectId: targetProjectId || null,
+            cartName
+          }),
+          wantsShippingUpdate ? enrichedShipping : null
+        )
       );
     } else {
       const idx = targetProjectId
         ? projects.findIndex((p) => String(p?.projectId || '') === targetProjectId)
         : 0;
       const safeIdx = idx >= 0 ? idx : 0;
-      projects[safeIdx] = buildUpstreamProject({
-        ...projects[safeIdx],
-        cartName,
-        requiredDate
-      });
+      projects[safeIdx] = applyShippingToUpstreamProject(
+        buildUpstreamProject({
+          ...projects[safeIdx],
+          cartName,
+          requiredDate
+        }),
+        wantsShippingUpdate ? enrichedShipping : null
+      );
     }
     const nextDraftPayload = normalizeUpstreamCartDraft({
       ...currentDraft,
@@ -1537,6 +1958,11 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
       .single();
     if (saveError) throw saveError;
 
+    const savedProject =
+      projects.find((p) => String(p?.projectId || '') === (targetProjectId || effectiveProjectId)) ||
+      projects[safeTargetIdx] ||
+      null;
+
     return res.json({
       status: 'success',
       message: 'Upstream project details updated',
@@ -1546,7 +1972,20 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
         projectId: targetProjectId || null,
         cartName,
         requiredDate: requiredDate || null
-      }
+      },
+      project: savedProject
+        ? {
+            projectId: savedProject.projectId,
+            cartName: savedProject.cartName,
+            requiredDate: savedProject.requiredDate || null,
+            shippingAddressId: enrichedShipping?.clear
+              ? null
+              : savedProject.shippingAddressId || null,
+            shippingAddress: enrichedShipping?.clear ? null : savedProject.shippingAddress || null,
+            location: enrichedShipping?.clear ? null : savedProject.location || null,
+            siteGeo: enrichedShipping?.clear ? null : savedProject.siteGeo || null
+          }
+        : null
     });
   } catch (error) {
     console.error('Update upstream cart name error:', error);
@@ -1561,6 +2000,17 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
     }
 
     const payloadInput = parseWithSchema(supplierUpstreamCartSaveSchema, req.body || {});
+    const hasShippingFields =
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'shippingAddressId') ||
+      Object.prototype.hasOwnProperty.call(req.body || {}, 'shippingAddress');
+    const shippingMeta = hasShippingFields
+      ? await resolveUpstreamProjectShipping(req.userId, payloadInput)
+      : null;
+    if (shippingMeta?.error) {
+      return res.status(400).json({ status: 'error', message: shippingMeta.error });
+    }
+    const enrichedShipping = shippingMeta ? await enrichUpstreamShippingMeta(shippingMeta) : null;
+
     const { data: currentCart, error: currentCartError } = await supabase
       .from('po_carts')
       .select('id, draft_payload')
@@ -1573,17 +2023,27 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
         : {}
     );
 
-    const nextProject = buildUpstreamProject({
-      projectId: payloadInput.projectId || null,
-      cartName: String(payloadInput.cartName || '').trim(),
-      requiredDate: String(payloadInput.requiredDate || '').trim(),
-      selectedMine: payloadInput.selectedMine || {},
-      selectedUpstreamOffer: payloadInput.selectedUpstreamOffer || {},
-      suggestions: Array.isArray(payloadInput.suggestions) ? payloadInput.suggestions : [],
-      brandFilter: String(payloadInput.brandFilter || '').trim(),
-      searchTerm: String(payloadInput.searchTerm || '').trim()
-    });
     let nextProjects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
+    const existingProject = payloadInput.projectId
+      ? nextProjects.find((p) => String(p?.projectId || '') === String(payloadInput.projectId))
+      : null;
+    let nextProject = buildUpstreamProject({
+      ...(existingProject || {}),
+      projectId: payloadInput.projectId || null,
+      cartName: String(payloadInput.cartName || '').trim() || existingProject?.cartName,
+      requiredDate: String(payloadInput.requiredDate || '').trim() || existingProject?.requiredDate,
+      selectedMine: payloadInput.selectedMine || existingProject?.selectedMine || {},
+      selectedUpstreamOffer: payloadInput.selectedUpstreamOffer || existingProject?.selectedUpstreamOffer || {},
+      suggestions: Array.isArray(payloadInput.suggestions)
+        ? payloadInput.suggestions
+        : existingProject?.suggestions || [],
+      brandFilter: String(payloadInput.brandFilter || '').trim() || existingProject?.brandFilter || '',
+      searchTerm: String(payloadInput.searchTerm || '').trim() || existingProject?.searchTerm || '',
+      createdAt: existingProject?.createdAt
+    });
+    if (enrichedShipping) {
+      nextProject = applyShippingToUpstreamProject(nextProject, enrichedShipping);
+    }
     if (payloadInput.projectId) {
       if (
         hasDuplicateUpstreamProject(

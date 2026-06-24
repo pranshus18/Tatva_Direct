@@ -1272,13 +1272,63 @@
 
 .us-select-panel__footer {
   display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.85rem;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #e2e8f0;
+  background: #fafbfc;
+}
+
+.us-ranking-address-panel {
+  display: grid;
+  gap: 0.55rem;
+  width: 100%;
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  background: #fff;
+  padding: 0.75rem 0.85rem;
+}
+
+.us-ranking-address-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.us-ranking-address-hint {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.us-ranking-address-preview {
+  margin: 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #f8fafc;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: #334155;
+  max-width: 520px;
+}
+
+.us-ranking-address-meta {
+  margin: 0;
+  font-size: 0.78rem;
+  color: #64748b;
+  line-height: 1.4;
+}
+
+.us-select-panel__footer-row {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
   flex-wrap: wrap;
-  padding: 1rem 1.5rem;
-  border-top: 1px solid #e2e8f0;
-  background: #fafbfc;
+  width: 100%;
 }
 
 .us-select-panel__footer-hint {
@@ -1564,4 +1614,170 @@
   .us-product-table__body {
     max-height: none;
   }
+
+  .us-discovery-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .us-discovery-actions__buttons {
+    width: 100%;
+  }
+
+  .us-discovery-actions__buttons .btn,
+  .us-discovery-actions__buttons button {
+    flex: 1;
+  }
+}
+
+/* ── Product Discovery-style inventory cards ── */
+.supplier-upstream-page {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.us-pd-card {
+  position: relative;
+}
+
+.us-pd-card--selected {
+  border-color: #818cf8 !important;
+  box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.25), 0 8px 30px rgba(15, 23, 42, 0.08) !important;
+}
+
+.us-pd-card__select {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  border: 1.5px solid #e2e8f0;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.08);
+}
+
+.us-pd-card__select input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+.us-pd-card--selected .us-pd-card__select {
+  border-color: #6366f1;
+  background: #eef2ff;
+}
+
+.us-pd-card__selected-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #4f46e5;
+}
+
+.us-pd-card__image {
+  cursor: pointer;
+}
+
+.us-pd-card__name {
+  cursor: pointer;
+}
+
+.us-pd-card__name:hover {
+  color: #4f46e5;
+}
+
+.us-pd-card__qty-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.35rem;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #e2e8f0;
+}
+
+.us-pd-card__qty-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.us-pd-card__qty-input {
+  width: 5.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  text-align: right;
+}
+
+.us-pd-card__qty-input:focus {
+  outline: none;
+  border-color: #818cf8;
+  box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.15);
+}
+
+.us-pd-card__hint {
+  font-size: 0.75rem;
+  color: #64748b;
+  max-width: 9rem;
+  line-height: 1.35;
+}
+
+.us-discovery-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 1.5rem 0;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--us-border);
+  border-radius: var(--us-radius-lg);
+  background: var(--us-surface-muted);
+}
+
+.us-discovery-actions__hint {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--us-text-secondary);
+  max-width: 28rem;
+  line-height: 1.45;
+}
+
+.us-discovery-actions__buttons {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
+.us-suggestions-panel {
+  margin-top: 0.5rem;
+  padding: 1.25rem;
+  border: 1px solid var(--us-border);
+  border-radius: var(--us-radius-lg);
+  background: var(--us-surface);
+}
+
+.us-suggestions-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 2.5rem 1rem;
+  color: #64748b;
+  font-size: 0.9rem;
 }

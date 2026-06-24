@@ -5,8 +5,14 @@ import {
   findUpstreamRoleWalkback,
   loadAdminBrandChainsByName,
   pickMatchingUpstreamRoleForSeller,
+  resolveBuyerRoleForBrand,
   resolveRequiredUpstreamRoleFromAdminChain
 } from '../services/supplierChainRoutingService.js';
+import { roleDeclaresBrand } from '../services/supplierBrandGuardService.js';
+import {
+  pickAnyUpstreamSellerRoleOnChain,
+  sellerHasRoleForBrand
+} from '../services/supplyChainPartnerGroupsService.js';
 
 test('resolveRequiredUpstreamRoleFromAdminChain: retailer buys from dealer per admin chain', () => {
   const chainRow = {
@@ -131,4 +137,104 @@ test('pickMatchingUpstreamRoleForSeller: prefers nearest upstream tier (dealer o
   const allowed = new Set(['local_distributor', 'dealer']);
   assert.equal(pickMatchingUpstreamRoleForSeller(sellerProfile, allowed), 'dealer');
   assert.equal(pickMatchingUpstreamRoleForSeller(sellerProfile, new Set(['dealer'])), 'dealer');
+});
+
+test('roleDeclaresBrand: fuzzy-matches product brand to declared profile brand', () => {
+  const profile = {
+    companyInfoEntries: [{ role: 'retailer', brands: 'Havells' }]
+  };
+  assert.equal(roleDeclaresBrand(profile, 'retailer', 'Havells Electrical'), true);
+  assert.equal(roleDeclaresBrand(profile, 'dealer', 'Havells'), false);
+});
+
+test('resolveBuyerRoleForBrand: picks retailer for apple brand when user holds dealer+retailer', () => {
+  const profile = {
+    companyInfoEntries: [
+      { role: 'dealer', brands: 'acc' },
+      { role: 'retailer', brands: 'apple' }
+    ]
+  };
+  assert.equal(resolveBuyerRoleForBrand(profile, 'apple'), 'retailer');
+  assert.equal(resolveBuyerRoleForBrand(profile, 'acc'), 'dealer');
+});
+
+test('buildAllowedUpstreamRolesSet: uses brand-specific buyer role for multi-role supplier', () => {
+  const profile = {
+    companyInfoEntries: [
+      { role: 'dealer', brands: 'acc' },
+      { role: 'retailer', brands: 'apple' }
+    ]
+  };
+  const parentRolesUnion = new Set(['dealer', 'local_distributor']);
+
+  const { allowedRolesSet, chainRouting } = buildAllowedUpstreamRolesSet({
+    profile,
+    brandKey: 'apple',
+    chainRow: null,
+    parentRolesUnion,
+    buyerRoleHint: 'retailer'
+  });
+
+  assert.equal(chainRouting.buyerRole, 'retailer');
+  assert.equal(allowedRolesSet.has('dealer'), true);
+  assert.equal(allowedRolesSet.has('local_distributor'), false);
+});
+
+test('buildAllowedUpstreamRolesSet: includes all upstream tiers on admin chain for retailer', () => {
+  const chainRow = {
+    category_name: 'apple',
+    stages: [
+      { role: 'manufacturer' },
+      { role: 'regional_distributor' },
+      { role: 'local_distributor' },
+      { role: 'retailer' }
+    ]
+  };
+  const profile = {
+    companyInfoEntries: [{ role: 'retailer', brands: 'apple' }]
+  };
+  const parentRolesUnion = new Set(['dealer']);
+
+  const { allowedRolesSet, chainRouting } = buildAllowedUpstreamRolesSet({
+    profile,
+    brandKey: 'apple',
+    chainRow,
+    parentRolesUnion,
+    buyerRoleHint: 'retailer'
+  });
+
+  assert.equal(chainRouting.requiredUpstreamRole, 'local_distributor');
+  assert.equal(allowedRolesSet.has('local_distributor'), true);
+  assert.equal(allowedRolesSet.has('regional_distributor'), true);
+  assert.equal(allowedRolesSet.has('manufacturer'), true);
+  assert.equal(allowedRolesSet.has('dealer'), false);
+});
+
+test('sellerHasRoleForBrand: legacy supplierRole with companyInfoEntries uses role entry brands', () => {
+  const profile = {
+    supplierRole: 'local_distributor',
+    brands: 'other',
+    companyInfoEntries: [{ role: 'local_distributor', brands: 'apple' }]
+  };
+  assert.equal(sellerHasRoleForBrand(profile, 'local_distributor', 'apple'), true);
+  assert.equal(sellerHasRoleForBrand(profile, 'local_distributor', 'other'), false);
+});
+
+test('pickAnyUpstreamSellerRoleOnChain: matches regional distributor on apple admin chain', () => {
+  const chainRow = {
+    category_name: 'apple',
+    stages: [
+      { role: 'manufacturer' },
+      { role: 'regional_distributor' },
+      { role: 'local_distributor' },
+      { role: 'retailer' }
+    ]
+  };
+  const sellerProfile = {
+    companyInfoEntries: [{ role: 'regional_distributor', brands: 'apple' }]
+  };
+  assert.equal(
+    pickAnyUpstreamSellerRoleOnChain(sellerProfile, 'retailer', 'apple', chainRow),
+    'regional_distributor'
+  );
 });

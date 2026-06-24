@@ -15,7 +15,7 @@ import {
 import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js';
 import { isAddressComplete, normalizeAddress } from './shared/poHelpers.js';
 import { formatShippingAddressText } from '../../services/vendorRequestContextService.js';
-import { geocodeAddressNominatim } from '../../utils/geoUtils.js';
+import { geocodeIndianAddress } from '../../utils/geoUtils.js';
 
 export function registerPoCartRoutes(ctx) {
   const {
@@ -70,7 +70,7 @@ async function enrichDiscoveryShippingMeta(shippingMeta) {
   const location = formatShippingAddressText(shippingMeta.shippingAddress);
   let siteGeo = null;
   try {
-    const geo = await geocodeAddressNominatim(location);
+    const geo = await geocodeIndianAddress(shippingMeta.shippingAddress);
     if (geo && typeof geo.lat === 'number' && typeof geo.lng === 'number') {
       siteGeo = { lat: geo.lat, lng: geo.lng };
     }
@@ -551,6 +551,15 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
       req.body || {},
       'expectedDeliveryDate'
     );
+    const hasShippingAddressIdField = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      'shippingAddressId'
+    );
+    const hasShippingAddressField = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      'shippingAddress'
+    );
+    const wantsShippingUpdate = hasShippingAddressIdField || hasShippingAddressField;
     const providedExpectedDate = String(req.body?.expectedDeliveryDate || '').trim();
     const expectedDeliveryDate = /^\d{4}-\d{2}-\d{2}$/.test(providedExpectedDate)
       ? providedExpectedDate
@@ -599,6 +608,26 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
       });
     }
     let found = false;
+    let enrichedShipping = null;
+    if (wantsShippingUpdate) {
+      const shippingIdRaw = hasShippingAddressIdField ? String(req.body?.shippingAddressId || '').trim() : '';
+      const hasInlineShipping =
+        hasShippingAddressField &&
+        req.body?.shippingAddress &&
+        typeof req.body.shippingAddress === 'object';
+      if (!shippingIdRaw && !hasInlineShipping) {
+        enrichedShipping = { clear: true };
+      } else {
+        const shippingMeta = await resolveDiscoveryProjectShipping(supabase, req.userId, req.body || {});
+        if (shippingMeta?.error) {
+          return res.status(400).json({ status: 'error', message: shippingMeta.error });
+        }
+        if (shippingMeta) {
+          enrichedShipping = await enrichDiscoveryShippingMeta(shippingMeta);
+        }
+      }
+    }
+
     const nextGroups = groups.map((group) => {
       if (String(group?.groupId || '') !== groupId) return group;
       found = true;
@@ -607,6 +636,19 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
       if (hasExpectedDeliveryDateField) {
         if (expectedDeliveryDate) nextProjectMeta.requiredDate = expectedDeliveryDate;
         else delete nextProjectMeta.requiredDate;
+      }
+      if (enrichedShipping?.clear) {
+        delete nextProjectMeta.shippingAddress;
+        delete nextProjectMeta.shippingAddressId;
+        delete nextProjectMeta.location;
+        delete nextProjectMeta.siteGeo;
+      } else if (enrichedShipping?.shippingAddress) {
+        nextProjectMeta.shippingAddress = enrichedShipping.shippingAddress;
+        if (enrichedShipping.shippingAddressId) {
+          nextProjectMeta.shippingAddressId = enrichedShipping.shippingAddressId;
+        }
+        if (enrichedShipping.location) nextProjectMeta.location = enrichedShipping.location;
+        if (enrichedShipping.siteGeo) nextProjectMeta.siteGeo = enrichedShipping.siteGeo;
       }
       return { ...group, boqName: nextName, boqProject: nextProjectMeta };
     });
@@ -630,7 +672,13 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
       group: {
         groupId,
         boqName: nextName,
-        expectedDeliveryDate: hasExpectedDeliveryDateField ? expectedDeliveryDate : null
+        expectedDeliveryDate: hasExpectedDeliveryDateField ? expectedDeliveryDate : null,
+        shippingAddressId: enrichedShipping?.clear
+          ? null
+          : enrichedShipping?.shippingAddressId || null,
+        shippingAddress: enrichedShipping?.clear ? null : enrichedShipping?.shippingAddress || null,
+        location: enrichedShipping?.clear ? null : enrichedShipping?.location || null,
+        siteGeo: enrichedShipping?.clear ? null : enrichedShipping?.siteGeo || null
       }
     });
   } catch (error) {

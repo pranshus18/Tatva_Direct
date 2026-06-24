@@ -17,12 +17,14 @@ import {
   isSameIndianState,
   loadAdminBrandTerminalRoleMap,
   logger,
+  loadServiceProviderPoCartDraft,
   mapToDeliveryAddress,
   normalizeAddress,
   parseWithSchema,
   poCreateRequestSchema,
   recordInventoryMovement,
   resolveB2bPaymentFromBody,
+  resolveCheckoutShippingAddress,
   sumGstLines,
   supplierMatchesBrandTerminalRole,
   toLifecycleStateFromStatus
@@ -143,15 +145,21 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       ''
     ).trim();
     const hasGstin = Boolean(profileGstin);
-    const storedShippingAddresses = Array.isArray(serviceProvider?.profile?.shippingAddresses)
-      ? serviceProvider.profile.shippingAddresses
-      : [];
-    const profileShippingFallback = storedShippingAddresses
-      .map((entry) => normalizeAddress(entry || {}))
+    const cartDraft = await loadServiceProviderPoCartDraft(supabase, req.userId);
+    const workflowItems = (Array.isArray(poGroups) ? poGroups : []).flatMap((group) =>
+      Array.isArray(group?.items) ? group.items : []
+    );
+    const groupShippingFallback = (Array.isArray(poGroups) ? poGroups : [])
+      .map((group) => normalizeAddress(group?.shippingAddress || {}))
       .find((entry) => isAddressComplete(entry));
-    const shippingAddress = isAddressComplete(requestedShippingAddress)
-      ? requestedShippingAddress
-      : profileShippingFallback || profileAddress;
+    const shippingAddress =
+      resolveCheckoutShippingAddress({
+        cartDraft,
+        workflowItems,
+        requestedAddress: requestedShippingAddress
+      }) ||
+      groupShippingFallback ||
+      profileAddress;
     const billingAddress = hasGstin
       ? (isAddressComplete(requestedBillingAddress) ? requestedBillingAddress : profileAddress)
       : shippingAddress;
@@ -165,7 +173,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     if (!isAddressComplete(shippingAddress)) {
       return res.status(400).json({
         status: 'error',
-        message: 'Shipping address is incomplete. Please update your profile address or provide shipping address in PO.'
+        message: 'Shipping address is incomplete. Set a delivery address in your cart before creating purchase orders.'
       });
     }
     if (hasGstin && !isAddressComplete(billingAddress)) {
@@ -727,6 +735,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         id: order.id,
         orderNumber: order.order_number,
         supplierId: supplier.id,
+        transportGroupId: group.transportGroupId || group.vendorId,
         supplier: group.vendorName,
         totalAmount: totalAmount,
         requiredDate: expectedDeliveryDate,

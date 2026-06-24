@@ -1,0 +1,45 @@
+/*
+ * Admin portal visual system
+ */
+
+body.admin-portal-active,
+.admin-portal {
+  --primary: 210 90% 52%;
+  --primary-foreground: 0 0% 100%;
+  --ring: 210 90% 52%;
+  --accent: 194 100% 96%;
+  --accent-foreground: 211 78% 28%;
+  --secondary: 210 40% 98%;
+  --secondary-foreground: 215 25% 28%;
+  --muted: 210 40% 96%;
+  --muted-foreground: 215 16% 47%;
+  --border: 214 32% 90%;
+  --input: 214 32% 90%;
+}
+
+body.admin-portal-active {
+  background: linear-gradient(165deg, #f8fbff 0%, #f3f7fc 48%, #f6f9fd 100%);
+}
+
+.admin-portal {
+  background-image:
+    radial-gradient(circle at 8% 12%, rgba(14, 165, 233, 0.09), transparent 32%),
+    radial-gradient(circle at 92% 88%, rgba(59, 130, 246, 0.07), transparent 34%);
+}
+
+.admin-portal .dashboard-section,
+.admin-portal .sp-market-card {
+  border-color: #dbe7f5 !important;
+  box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+}
+
+.admin-portal button.inline-flex.bg-primary,
+.admin-portal .btn-primary {
+  background: linear-gradient(135deg, #0ea5e9, #2563eb) !important;
+  color: #fff !important;
+  border: none !important;
+}
+
+.admin-portal .content {
+  padding: 0;
+}

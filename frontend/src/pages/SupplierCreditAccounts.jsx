@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Wallet, Users, Smartphone } from 'lucide-react';
+import { Wallet, Users } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { formatDateIST } from '../utils/dateTime';
 import './Profile.css';
@@ -46,10 +46,6 @@ export default function SupplierCreditAccounts() {
   const [buyers, setBuyers] = useState([]);
   const [drafts, setDrafts] = useState({});
   const [savingKey, setSavingKey] = useState(null);
-  const [posPhone, setPosPhone] = useState('');
-  const [posLimit, setPosLimit] = useState('');
-  const [posPeriod, setPosPeriod] = useState('30');
-  const [posNotes, setPosNotes] = useState('');
   const [filter, setFilter] = useState('');
 
   const loadData = useCallback(async () => {
@@ -116,11 +112,6 @@ export default function SupplierCreditAccounts() {
       }
     })();
   }, [loadData]);
-
-  const posAccounts = useMemo(
-    () => accounts.filter((a) => a.partyType === 'pos_customer' || a.customerPhone),
-    [accounts]
-  );
 
   const filteredBuyers = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -242,51 +233,6 @@ export default function SupplierCreditAccounts() {
     }
   };
 
-  const savePosCredit = async (e) => {
-    e.preventDefault();
-    const phone = posPhone.trim();
-    const limit = Number(posLimit);
-    if (!phone) {
-      alert('Enter customer phone.');
-      return;
-    }
-    if (!Number.isFinite(limit) || limit < 0) {
-      alert('Enter a valid credit limit.');
-      return;
-    }
-    try {
-      setSavingKey(`pos-${phone}`);
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/supplier/credit-accounts'), {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          customerPhone: phone,
-          creditLimit: limit,
-          paylaterThreshold: 0,
-          creditPeriodDays: Number(posPeriod) || 30,
-          isEnabled: true,
-          notes: posNotes || null
-        })
-      });
-      const payload = await res.json();
-      if (!res.ok || payload.status !== 'success') {
-        throw new Error(payload.message || 'Failed to save');
-      }
-      setPosPhone('');
-      setPosLimit('');
-      setPosNotes('');
-      await loadData();
-    } catch (err) {
-      alert(err.message || 'Failed to save');
-    } finally {
-      setSavingKey(null);
-    }
-  };
-
   if (loading) {
     return (
       <div className="dashboard-loading">
@@ -334,78 +280,6 @@ export default function SupplierCreditAccounts() {
               </p>
             </div>
           </div>
-        </div>
-
-        <div className="profile-section">
-          <h2 style={{ marginTop: 0, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Smartphone size={20} /> POS customers (by phone)
-          </h2>
-          <form onSubmit={savePosCredit} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginBottom: '1rem' }}>
-            <input
-              type="tel"
-              placeholder="Phone *"
-              value={posPhone}
-              onChange={(e) => setPosPhone(e.target.value)}
-              style={inputStyle}
-            />
-            <input
-              type="number"
-              min="0"
-              step="100"
-              placeholder="Limit ₹ *"
-              value={posLimit}
-              onChange={(e) => setPosLimit(e.target.value)}
-              style={{ ...inputStyle, width: 120 }}
-            />
-            <select
-              value={posPeriod}
-              onChange={(e) => setPosPeriod(e.target.value)}
-              style={inputStyle}
-              title="Loan cycle length in days"
-            >
-              {[7, 15, 30, 45, 60, 90].map((d) => (
-                <option key={d} value={d}>
-                  {d} day cycle
-                </option>
-              ))}
-            </select>
-            <input
-              type="text"
-              placeholder="Notes (optional)"
-              value={posNotes}
-              onChange={(e) => setPosNotes(e.target.value)}
-              style={{ ...inputStyle, minWidth: 160, flex: 1 }}
-            />
-            <button type="submit" className="btn-primary" disabled={savingKey?.startsWith('pos-')}>
-              Add / update
-            </button>
-          </form>
-          {posAccounts.length === 0 ? (
-            <p style={{ color: '#94a3b8', fontSize: '0.9rem' }}>No POS credit accounts yet.</p>
-          ) : (
-            <CreditTable
-              rows={posAccounts}
-              drafts={drafts}
-              savingKey={savingKey}
-              onDraft={updateDraft}
-              onSave={(row) =>
-                saveCredit({
-                  customerPhone: row.customerPhone,
-                  draftKey: row.customerPhone || row.customerId
-                })
-              }
-              onSettle={(row) =>
-                settleCycle({
-                  customerPhone: row.customerPhone,
-                  customerId: row.customerId,
-                  partyName: row.partyName
-                })
-              }
-              idKey={(r) => r.customerPhone || r.id}
-              draftKey={(r) => r.customerPhone || r.customerId}
-              nameCol={(r) => r.partyName || r.customerPhone}
-            />
-          )}
         </div>
 
         <div className="profile-section">
@@ -552,99 +426,9 @@ export default function SupplierCreditAccounts() {
 
         <p style={{ fontSize: '0.85rem', color: '#64748b' }}>
           <Link to="/supplier-buyer-purchases">View sales analytics</Link>
-          {' · '}
-          <Link to="/supplier-pos">Open POS</Link>
         </p>
       </div>
     </div>
-  );
-}
-
-function CreditTable({ rows, drafts, savingKey, onDraft, onSave, onSettle, idKey, draftKey, nameCol }) {
-  return (
-    <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: 900 }}>
-      <thead>
-        <tr>
-          <th style={th}>Customer</th>
-          <th style={th}>Limit</th>
-          <th style={th}>Outstanding</th>
-          <th style={th}>Cycle due</th>
-          <th style={th}>Used %</th>
-          <th style={th}>Available</th>
-          <th style={th} />
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => {
-          const key = draftKey(row);
-          const draft = drafts[key] || {};
-          const pct = utilizationPct(row);
-          const settleKey = `settle-${key}`;
-          return (
-            <tr
-              key={idKey(row)}
-              style={
-                row.cycleIsOverdue
-                  ? { background: '#fef2f2' }
-                  : pct >= 99
-                    ? { background: '#fef2f2' }
-                    : pct >= WARN_UTILIZATION * 100
-                      ? { background: '#fffbeb' }
-                      : {}
-              }
-            >
-              <td style={td}>{nameCol(row)}</td>
-              <td style={td}>
-                <input
-                  type="number"
-                  min="0"
-                  value={draft.creditLimit ?? row.creditLimit}
-                  onChange={(e) => onDraft(key, 'creditLimit', e.target.value)}
-                  style={cellInput}
-                />
-              </td>
-              <td style={td}>₹{Number(row.outstanding || 0).toLocaleString('en-IN')}</td>
-              <td style={td}>
-                {row.cycleDueAt ? (
-                  <span style={{ fontSize: '0.85rem', color: row.cycleIsOverdue ? '#b91c1c' : '#334155' }}>
-                    {formatDateIST(row.cycleDueAt, '—')}
-                    {row.cycleIsOverdue ? ' (overdue)' : ''}
-                  </span>
-                ) : (
-                  '—'
-                )}
-              </td>
-              <td style={td}>{pct}%</td>
-              <td style={td}>₹{Number(row.available || 0).toLocaleString('en-IN')}</td>
-              <td style={td}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    style={{ fontSize: '0.8rem' }}
-                    disabled={savingKey === key}
-                    onClick={() => onSave(row)}
-                  >
-                    {savingKey === key ? '…' : 'Save'}
-                  </button>
-                  {onSettle && Number(row.outstanding) > 0 ? (
-                    <button
-                      type="button"
-                      className="btn-primary"
-                      style={{ fontSize: '0.75rem' }}
-                      disabled={savingKey === settleKey}
-                      onClick={() => onSettle(row)}
-                    >
-                      {savingKey === settleKey ? '…' : 'Settle cycle'}
-                    </button>
-                  ) : null}
-                </div>
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
   );
 }
 

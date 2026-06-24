@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Check, Package, X } from 'lucide-react';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -7,20 +7,21 @@ import { API_BASE_URL, getApiUrl, resolveApiPath } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
-import { fetchVoiceCartDraft, isVoiceGuidedActive, resolveDiscoveryShippingFromCartDraft } from '../voice/voiceCartBridge';
+import { fetchVoiceCartDraft, isVoiceGuidedActive, resolveWorkflowShippingAddress } from '../voice/voiceCartBridge';
+import { readSupplierSelectBoqProjectSessionIfFresh } from '../constants/supplierSelectSession';
 import {
   formatQuoteMoney,
   getVendorTransportDetail,
   isTransportSelectionReady,
   isTransportSelectionReadyForVendor,
-  mergeTransportSelections
+  mergeTransportSelections,
+  normalizeTransportSelection,
+  getTransportGroupKey
 } from '../utils/poTransportSelection';
 import {
-  clearCartTransportSelection,
-  loadCartTransportSelection,
-  saveCartTransportSelection
+  clearCartTransportSelection
 } from '../utils/poCartTransportApi';
-import { formatShippingAddressLabel, normalizeShippingAddressBookEntry } from '../utils/shippingAddressLabel';
+import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import './CreatePO.css';
 
 /** Shown when pay-later is blocked (limit, cycle, or minimum). */
@@ -68,6 +69,11 @@ const addressPreview = (address = {}) =>
   [address.line1, address.city, address.state, address.pincode, address.country]
     .filter(Boolean)
     .join(', ');
+
+const isUsableShippingAddress = (address = {}) => {
+  const normalized = normalizeAddress(address);
+  return ['line1', 'city', 'state', 'pincode'].every((key) => String(normalized[key] || '').trim());
+};
 const normalizeSpecifications = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
   const seen = new Set();
@@ -83,21 +89,83 @@ const normalizeSpecifications = (value) => {
     }, []);
 };
 
-/** Align workflow line quantities with the persisted PO cart (source of truth after cart edits). */
-async function mergeWorkflowItemsWithSavedCart(workflowItems) {
+/** Align workflow lines with cart project shipping addresses for shipment grouping. */
+async function enrichItemsWithCartShipping(workflowItems, fallbackShipping = null) {
   if (!Array.isArray(workflowItems) || workflowItems.length === 0) return workflowItems;
   const token = localStorage.getItem('token');
-  if (!token) return workflowItems;
+  const lineToShipping = new Map();
+  const productToShipping = new Map();
+  const fallback = isUsableShippingAddress(fallbackShipping)
+    ? normalizeAddress(fallbackShipping)
+    : null;
+
+  const mapCartRow = (row, addr) => {
+    if (!isUsableShippingAddress(addr)) return;
+    const normalized = normalizeAddress(addr);
+    const lineId = String(row?.id ?? '').trim();
+    if (lineId) lineToShipping.set(lineId, normalized);
+    const productId = String(row?.productId ?? '').trim();
+    if (productId) productToShipping.set(productId, normalized);
+  };
+
+  if (token) {
+    try {
+      const res = await fetch(getApiUrl('/api/po/cart'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (res.ok && data?.status === 'success' && data.cart?.draft) {
+        const draft = data.cart.draft;
+        const rootAddr = isUsableShippingAddress(draft.shippingAddress)
+          ? normalizeAddress(draft.shippingAddress)
+          : fallback;
+        const groups = Array.isArray(draft.boqGroups) ? draft.boqGroups : [];
+        for (const group of groups) {
+          const projectAddr = group?.boqProject?.shippingAddress;
+          const addr = isUsableShippingAddress(projectAddr)
+            ? normalizeAddress(projectAddr)
+            : rootAddr;
+          for (const row of group.items || []) {
+            mapCartRow(row, addr);
+          }
+        }
+        for (const row of Array.isArray(draft.items) ? draft.items : []) {
+          mapCartRow(row, rootAddr);
+        }
+      }
+    } catch {
+      // Non-fatal — default shipping still applies below.
+    }
+  }
+
+  return workflowItems.map((it) => {
+    const id = it?.id !== undefined && it?.id !== null ? String(it.id).trim() : '';
+    const productId = String(it?.productId ?? '').trim();
+    const shippingAddress =
+      (id && lineToShipping.get(id)) ||
+      (productId && productToShipping.get(productId)) ||
+      fallback;
+    if (!isUsableShippingAddress(shippingAddress)) return it;
+    return { ...it, shippingAddress: normalizeAddress(shippingAddress) };
+  });
+}
+
+/** Align workflow line quantities with the persisted PO cart (source of truth after cart edits). */
+async function mergeWorkflowItemsWithSavedCart(workflowItems, fallbackShipping = null) {
+  if (!Array.isArray(workflowItems) || workflowItems.length === 0) return workflowItems;
+  const withShipping = await enrichItemsWithCartShipping(workflowItems, fallbackShipping);
+  const token = localStorage.getItem('token');
+  if (!token) return withShipping;
   try {
     const res = await fetch(getApiUrl('/api/po/cart'), {
       headers: { Authorization: `Bearer ${token}` }
     });
     const data = await res.json();
     if (!res.ok || data.status !== 'success' || !data.cart?.draft) {
-      return workflowItems;
+      return withShipping;
     }
     const cartItems = Array.isArray(data.cart.draft.items) ? data.cart.draft.items : [];
-    if (cartItems.length === 0) return workflowItems;
+    if (cartItems.length === 0) return withShipping;
     const qtyByLineId = new Map();
     for (const row of cartItems) {
       if (row?.id === undefined || row?.id === null) continue;
@@ -108,15 +176,15 @@ async function mergeWorkflowItemsWithSavedCart(workflowItems) {
         qtyByLineId.set(key, Math.floor(q));
       }
     }
-    if (qtyByLineId.size === 0) return workflowItems;
-    return workflowItems.map((it) => {
+    if (qtyByLineId.size === 0) return withShipping;
+    return withShipping.map((it) => {
       const id = it?.id !== undefined && it?.id !== null ? String(it.id).trim() : '';
       if (!id || !qtyByLineId.has(id)) return it;
       const q = qtyByLineId.get(id);
       return { ...it, quantity: q };
     });
   } catch {
-    return workflowItems;
+    return withShipping;
   }
 }
 
@@ -160,13 +228,12 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   const [serviceProviderGstin, setServiceProviderGstin] = useState('');
   const [shippingAddress, setShippingAddress] = useState(blankAddress);
   const [billingAddress, setBillingAddress] = useState(blankAddress);
-  const [shippingAddressBook, setShippingAddressBook] = useState([]);
-  const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
-  const [discoveryShippingProjectName, setDiscoveryShippingProjectName] = useState('');
+  const [checkoutShippingProjectName, setCheckoutShippingProjectName] = useState('');
   const [deliveryDestination, setDeliveryDestination] = useState('shipping');
   const [createdTransportOrders, setCreatedTransportOrders] = useState([]);
   const [selectedTransport, setSelectedTransport] = useState(null);
   const [expandedItemSpecs, setExpandedItemSpecs] = useState({});
+  const transportReturnHandledRef = useRef(false);
   const [creditChecks, setCreditChecks] = useState([]);
   const [creditCheckLoading, setCreditCheckLoading] = useState(false);
   const [creditCheckFailed, setCreditCheckFailed] = useState(false);
@@ -190,6 +257,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       ? voiceCart.selectedVendors
       : selectedVendors;
   const workflowSubs = voiceCart?.substitutions ?? substitutions;
+  const shippingAddressGroupingKey = useMemo(
+    () =>
+      ['line1', 'city', 'state', 'pincode', 'country']
+        .map((key) => String(shippingAddress?.[key] || '').trim().toLowerCase())
+        .join('|'),
+    [shippingAddress]
+  );
 
   // Load server PO cart for voice flow, discovery/cart checkout (no BOQ rows in App state), and to refresh after voice navigation.
   useEffect(() => {
@@ -240,9 +314,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       return;
     }
 
-    // Group by vendor
+    // Group by supplier + delivery address (re-runs when checkout address finishes loading).
     groupByVendor();
-  }, [cartContextReady, workflowVendors, workflowSubs, workflowItems]);
+  }, [cartContextReady, workflowVendors, workflowSubs, workflowItems, shippingAddressGroupingKey]);
 
   useEffect(() => {
     if (requiredDate) return;
@@ -275,40 +349,32 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         if (cancelled) return;
 
         let profileData = null;
-        let shippingAddresses = [];
         if (profileResponse.ok) {
           profileData = await profileResponse.json();
           if (profileData?.profile) {
             const profileAddress = normalizeAddress(profileData.profile.address || {});
-            shippingAddresses = Array.isArray(profileData.profile.shippingAddresses)
-              ? profileData.profile.shippingAddresses
-                  .map((entry) => normalizeShippingAddressBookEntry(entry))
-                  .filter((entry) => entry.id)
-              : [];
             const gstin = String(profileData.profile.gstin || profileData.profile.mainGstin || '').trim();
             setServiceProviderGstin(gstin);
             setBillingAddress(profileAddress);
-            setShippingAddressBook(shippingAddresses);
-            setDeliveryDestination(gstin ? 'shipping' : 'shipping');
+            setDeliveryDestination('shipping');
           }
         }
 
-        const discoveryShipping = resolveDiscoveryShippingFromCartDraft(cartSnapshot?.draft);
-        if (discoveryShipping?.address) {
-          setShippingAddress(discoveryShipping.address);
-          setDiscoveryShippingProjectName(discoveryShipping.projectName || '');
-          const matchedId = shippingAddresses.find(
-            (entry) => String(entry.id) === String(discoveryShipping.shippingAddressId || '')
-          )?.id;
-          setSelectedShippingAddressId(matchedId || '');
+        const sessionProject = readSupplierSelectBoqProjectSessionIfFresh();
+        const workflowShipping = resolveWorkflowShippingAddress({
+          boqProject: boqProject || sessionProject,
+          cartDraft: cartSnapshot?.draft || voiceCart,
+          workflowItems
+        });
+
+        if (workflowShipping?.address) {
+          setShippingAddress(workflowShipping.address);
+          setCheckoutShippingProjectName(workflowShipping.projectName || '');
           return;
         }
 
-        setDiscoveryShippingProjectName('');
-        if (shippingAddresses.length > 0) {
-          setSelectedShippingAddressId(shippingAddresses[0].id);
-          setShippingAddress(shippingAddresses[0].address);
-        } else if (profileData?.profile) {
+        setCheckoutShippingProjectName('');
+        if (profileData?.profile) {
           setShippingAddress(normalizeAddress(profileData.profile.address || {}));
         }
       } catch (profileError) {
@@ -320,7 +386,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     return () => {
       cancelled = true;
     };
-  }, [cartContextReady]);
+  }, [cartContextReady, boqProject, workflowItems, voiceCart]);
 
   const hasGstin = Boolean(serviceProviderGstin);
   const toggleItemSpecs = (groupVendorId, item, idx) => {
@@ -341,52 +407,32 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   useEffect(() => {
     const routeState = location.state || {};
     const incomingOrders = Array.isArray(routeState.createdOrders) ? routeState.createdOrders : [];
-    const incomingTransport = routeState.transportSelection && typeof routeState.transportSelection === 'object'
-      ? routeState.transportSelection
-      : null;
+    const incomingTransport =
+      routeState.transportSelection && typeof routeState.transportSelection === 'object'
+        ? routeState.transportSelection
+        : null;
+
     if (incomingOrders.length > 0) {
       setCreatedTransportOrders(incomingOrders);
     }
+
     if (incomingTransport) {
-      setSelectedTransport((prev) => {
-        const merged = mergeTransportSelections(prev, incomingTransport);
-        void saveCartTransportSelection(
-          merged,
-          Array.isArray(routeState.transportVendorIds)
-            ? routeState.transportVendorIds
-            : Object.keys(incomingTransport.byVendorId || {})
-        );
-        return merged;
-      });
-    }
-    if (incomingOrders.length > 0 || incomingTransport) {
+      transportReturnHandledRef.current = true;
+      setSelectedTransport((prev) =>
+        normalizeTransportSelection(mergeTransportSelections(prev, incomingTransport))
+      );
       navigate(location.pathname, { replace: true, state: null });
+      return;
     }
+
+    if (transportReturnHandledRef.current) {
+      transportReturnHandledRef.current = false;
+      return;
+    }
+
+    setSelectedTransport(null);
+    void clearCartTransportSelection();
   }, [location.pathname, location.state, navigate]);
-
-  useEffect(() => {
-    if (!cartContextReady) return undefined;
-    let cancelled = false;
-    (async () => {
-      const saved = await loadCartTransportSelection();
-      if (!cancelled && saved && typeof saved === 'object') {
-        setSelectedTransport((prev) => mergeTransportSelections(prev, saved));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [cartContextReady]);
-
-  const handleSelectShippingAddress = (id) => {
-    setSelectedShippingAddressId(id);
-    setDiscoveryShippingProjectName('');
-    if (!id) return;
-    const selected = shippingAddressBook.find((entry) => entry.id === id);
-    if (selected) {
-      setShippingAddress(selected.address);
-    }
-  };
 
   const groupByVendor = async () => {
     setLoading(true);
@@ -409,7 +455,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         body: JSON.stringify({
           selectedVendors: vendors,
           substitutions: subs,
-          items: await mergeWorkflowItemsWithSavedCart(lineItems)
+          items: await mergeWorkflowItemsWithSavedCart(lineItems, shippingAddress),
+          defaultShippingAddress: shippingAddress
         })
       });
       
@@ -681,16 +728,16 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     let confirmBody;
     if (hasPerVendor) {
       const perOrderTransport = orderList.map((o) => {
-        const sid = String(o.supplierId || '');
-        const sp = String(st.byVendorId[sid] || '').trim();
+        const transportKey = String(o.transportGroupId || o.supplierId || '').trim();
+        const sp = String(st.byVendorId[transportKey] || st.byVendorId[String(o.supplierId || '')] || '').trim();
         if (!sp) {
           throw new Error(
-            `Choose a courier for ${o.supplier || 'each supplier'} on Transport suggestion before confirming.`
+            `Choose a courier for ${o.supplier || 'each supplier shipment'} on Transport suggestion before confirming.`
           );
         }
         const det =
           st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object'
-            ? st.byVendorCourierDetail[sid]
+            ? st.byVendorCourierDetail[transportKey] || st.byVendorCourierDetail[String(o.supplierId || '')]
             : null;
         const quotedTransportAmount =
           parseQuoteInr(det?.fareValue) ?? parseQuoteInr(det?.rate);
@@ -820,7 +867,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       (key) => !String(shippingAddress?.[key] || '').trim()
     );
     if (missingShipping) {
-      alert('Please complete the shipping address before creating purchase orders.');
+      alert('Delivery address is missing. Go back to your cart and set a shipping address before creating purchase orders.');
       return;
     }
 
@@ -874,16 +921,15 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       return;
     }
     const scopedGroups = group ? [group] : poGroups;
-    const focusVendorId = group ? String(group.vendorId || '') : '';
+    const focusTransportGroupId = group ? getTransportGroupKey(group) : '';
 
-    const savedTransport = await loadCartTransportSelection();
-    const baseTransport = mergeTransportSelections(savedTransport, selectedTransport);
+    const baseTransport = normalizeTransportSelection(selectedTransport);
 
     const missingShipping = ['line1', 'city', 'state', 'pincode', 'country'].find(
       (key) => !String(shippingAddress?.[key] || '').trim()
     );
     if (missingShipping) {
-      alert('Please complete the shipping address before transport suggestions.');
+      alert('Delivery address is missing. Go back to your cart and set a shipping address before transport suggestions.');
       return;
     }
     if (hasGstin) {
@@ -940,7 +986,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       state: {
         poGroups: scopedGroups,
         allPoGroups: poGroups,
-        focusVendorId,
+        focusTransportGroupId,
+        focusVendorId: focusTransportGroupId,
         existingTransportSelection: baseTransport,
         grandTotalAllPos: group ? Number(group.total) || 0 : grandTotalAllPos,
         requiredDate,
@@ -1314,76 +1361,16 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         <div className="checkout-address-card">
           <div className="checkout-address-card__head">
             <h3>Shipping Address</h3>
-            <p>Where your suppliers should deliver the material.</p>
+            <p>Delivery address selected during checkout. To change it, go back to your cart.</p>
           </div>
-          {discoveryShippingProjectName ? (
+          {checkoutShippingProjectName ? (
             <p className="checkout-address-note" style={{ marginBottom: '0.75rem' }}>
-              From Product Discovery project: <strong>{discoveryShippingProjectName}</strong>
+              Project: <strong>{checkoutShippingProjectName}</strong>
             </p>
           ) : null}
-          {shippingAddressBook.length > 0 ? (
-            <div className="checkout-address-field checkout-address-field--wide" style={{ marginBottom: '0.75rem' }}>
-              <label>Choose saved shipping address</label>
-              <select
-                className="checkout-address-input"
-                value={selectedShippingAddressId}
-                onChange={(e) => handleSelectShippingAddress(e.target.value)}
-              >
-                {shippingAddressBook.map((entry, index) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.displayName || entry.label || formatShippingAddressLabel(entry, index)}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-          <div className="checkout-address-grid">
-            <div className="checkout-address-field checkout-address-field--wide">
-              <label>Street Address</label>
-              <input
-                className="checkout-address-input"
-                value={shippingAddress.line1}
-                onChange={(e) => setShippingAddress((prev) => ({ ...prev, line1: e.target.value }))}
-                placeholder="Flat / Building / Street"
-              />
-            </div>
-            <div className="checkout-address-field">
-              <label>City</label>
-              <input
-                className="checkout-address-input"
-                value={shippingAddress.city}
-                onChange={(e) => setShippingAddress((prev) => ({ ...prev, city: e.target.value }))}
-                placeholder="City"
-              />
-            </div>
-            <div className="checkout-address-field">
-              <label>State</label>
-              <input
-                className="checkout-address-input"
-                value={shippingAddress.state}
-                onChange={(e) => setShippingAddress((prev) => ({ ...prev, state: e.target.value }))}
-                placeholder="State"
-              />
-            </div>
-            <div className="checkout-address-field">
-              <label>PIN Code</label>
-              <input
-                className="checkout-address-input"
-                value={shippingAddress.pincode}
-                onChange={(e) => setShippingAddress((prev) => ({ ...prev, pincode: e.target.value }))}
-                placeholder="PIN code"
-              />
-            </div>
-            <div className="checkout-address-field">
-              <label>Country</label>
-              <input
-                className="checkout-address-input"
-                value={shippingAddress.country}
-                onChange={(e) => setShippingAddress((prev) => ({ ...prev, country: e.target.value }))}
-                placeholder="Country"
-              />
-            </div>
-          </div>
+          <p className="checkout-address-preview checkout-address-preview--locked">
+            {formatShippingAddressPreview(shippingAddress) || 'No delivery address found. Go back to cart and set a shipping address.'}
+          </p>
         </div>
         <div className="checkout-address-card checkout-address-card--billing">
           <div className="checkout-address-card__head">
@@ -1459,9 +1446,21 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         <>
           <div className="po-list">
             {poGroups.map((group) => (
-              <div key={group.vendorId} className="po-card">
+              <div key={getTransportGroupKey(group)} className="po-card">
                 <div className="po-header">
-                  <h3>{group.vendorName}</h3>
+                  <div>
+                    <h3>{group.vendorName}</h3>
+                    {group.items?.length > 1 ? (
+                      <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', color: '#475569' }}>
+                        {group.items.length} items · one shared transport for this supplier
+                      </p>
+                    ) : null}
+                    {group.shippingAddressLabel ? (
+                      <p style={{ margin: '0.2rem 0 0', fontSize: '0.78rem', color: '#64748b' }}>
+                        Delivery: {group.shippingAddressLabel}
+                      </p>
+                    ) : null}
+                  </div>
                   <div className="po-total">₹{group.total?.toLocaleString() || '0'}</div>
                 </div>
                 <table className="po-table">
@@ -1551,11 +1550,12 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                   </tbody>
                 </table>
                 <div className="po-transport-actions">
-                  {isTransportSelectionReadyForVendor(selectedTransport, group.vendorId) ? (
+                  {isTransportSelectionReadyForVendor(selectedTransport, group) ? (
                     <div className="po-transport-status">
                       <span className="po-transport-status__label">Transport selected</span>
                       {(() => {
-                        const d = getVendorTransportDetail(selectedTransport, group.vendorId);
+                        const transportKey = getTransportGroupKey(group);
+                        const d = getVendorTransportDetail(selectedTransport, group);
                         const priceLabel = formatQuoteMoney(d?.rate);
                         const modeLabel =
                           d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
@@ -1563,7 +1563,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                             : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
                               ? 'Trucking'
                               : 'Courier';
-                        const carrierName = d?.name || selectedTransport?.byVendorId?.[group.vendorId];
+                        const carrierName = d?.name || selectedTransport?.byVendorId?.[transportKey];
                         return (
                           <span className="po-transport-status__detail">
                             <span className="po-transport-status__mode">{modeLabel}:</span>
@@ -1604,7 +1604,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                     {Object.entries(selectedTransport.byVendorId)
                       .filter(([, name]) => String(name || '').trim())
                       .map(([vid, name]) => {
-                        const g = poGroups.find((x) => String(x.vendorId) === String(vid));
+                        const g =
+                          poGroups.find((x) => getTransportGroupKey(x) === String(vid)) ||
+                          poGroups.find((x) => String(x.vendorId) === String(vid));
                         const label = g?.vendorName || vid;
                         const d =
                           selectedTransport.byVendorCourierDetail &&

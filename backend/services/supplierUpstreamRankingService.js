@@ -1,5 +1,6 @@
 import { buildOutletAddressString, haversineKm } from '../utils/geoUtils.js';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
+import { UPSTREAM_VARIANT_MATCH_RANK } from './upstreamOfferMatchService.js';
 
 export const SUPPLY_CHAIN_ROLE_LABELS = {
   manufacturer: 'Manufacturers (MGF)',
@@ -52,6 +53,13 @@ export function dedupeUpstreamCandidatesBySupplierPreferClosest(candidates) {
       map.set(supplierId, c);
       continue;
     }
+    const tierNew = UPSTREAM_VARIANT_MATCH_RANK[c.variantMatchType] ?? 99;
+    const tierOld = UPSTREAM_VARIANT_MATCH_RANK[prev.variantMatchType] ?? 99;
+    if (tierNew < tierOld) {
+      map.set(supplierId, c);
+      continue;
+    }
+    if (tierNew > tierOld) continue;
     const dNew = c.distanceKmRaw != null && Number.isFinite(c.distanceKmRaw) ? c.distanceKmRaw : Infinity;
     const dOld = prev.distanceKmRaw != null && Number.isFinite(prev.distanceKmRaw) ? prev.distanceKmRaw : Infinity;
     if (dNew < dOld) {
@@ -76,6 +84,10 @@ export function rankUpstreamOffersForProduct(candidates) {
   if (!Array.isArray(candidates) || candidates.length === 0) return [];
 
   const sorted = [...candidates].sort((a, b) => {
+    const tierA = UPSTREAM_VARIANT_MATCH_RANK[a.variantMatchType] ?? 99;
+    const tierB = UPSTREAM_VARIANT_MATCH_RANK[b.variantMatchType] ?? 99;
+    if (tierA !== tierB) return tierA - tierB;
+
     const da = a.distanceKmRaw != null && Number.isFinite(a.distanceKmRaw) ? a.distanceKmRaw : Infinity;
     const db = b.distanceKmRaw != null && Number.isFinite(b.distanceKmRaw) ? b.distanceKmRaw : Infinity;
     if (da !== db) return da - db;

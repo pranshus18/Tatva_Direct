@@ -717,6 +717,24 @@
   border: 1px solid #fecaca;
 }
 
+.pos-station__credit-setup {
+  margin-top: 0.65rem;
+  padding: 0.75rem;
+  border: 1px solid #dbe7f5;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.pos-station__credit-setup-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.45rem;
+}
+
+.pos-station__credit-setup-row input {
+  flex: 1;
+}
+
 .pos-station__sync {
   margin-top: auto;
   padding: 0.875rem 1.25rem 1rem;

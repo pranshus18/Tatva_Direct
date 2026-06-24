@@ -12,39 +12,57 @@ import {
   Wallet
 } from 'lucide-react';
 
+export const SP_NAV_ITEMS = [
+  { path: '/dashboard', label: 'Dashboard', shortLabel: 'Dashboard', icon: BarChart3 },
+  { path: '/boq-normalize', label: 'BOQ Normalize', shortLabel: 'BOQ', icon: FileText },
+  { path: '/product-discovery', label: 'Product Discovery', shortLabel: 'Discover', icon: Search },
+  { path: '/voice', label: 'Voice Shop', shortLabel: 'Voice', icon: Mic },
+  { path: '/supplier-select', label: 'Supplier Select', shortLabel: 'Suppliers', icon: Users },
+  { path: '/substitution', label: 'Substitution', shortLabel: 'Substitute', icon: RefreshCw },
+  { path: '/cart', label: 'Cart', shortLabel: 'Cart', icon: ShoppingCart, badgeKey: 'cart' },
+  { path: '/create-po', label: 'Create PO', shortLabel: 'Create PO', icon: Package },
+  { path: '/transport-suggestion', label: 'Transport', shortLabel: 'Transport', icon: Truck },
+  { path: '/your-orders', label: 'Your Orders', shortLabel: 'Orders', icon: ShoppingCart },
+  { path: '/wallet', label: 'Wallet', shortLabel: 'Wallet', icon: Wallet },
+  { path: '/returns', label: 'Returns', shortLabel: 'Returns', icon: RefreshCw },
+  { path: '/portal-theme', label: 'Portal Theme', shortLabel: 'Theme', icon: Paintbrush }
+];
+
+const navByPath = Object.fromEntries(SP_NAV_ITEMS.map((item) => [item.path, item]));
+
 export const SP_NAV_GROUPS = [
   {
     id: 'home',
     label: 'Home',
-    items: [{ path: '/dashboard', label: 'Dashboard', icon: BarChart3 }]
+    items: [navByPath['/dashboard']]
   },
   {
     id: 'procure',
     label: 'Procure',
     items: [
-      { path: '/boq-normalize', label: 'BOQ Normalize', icon: FileText },
-      { path: '/product-discovery', label: 'Product Discovery', icon: Search },
-      { path: '/voice', label: 'Voice Shop', icon: Mic },
-      { path: '/supplier-select', label: 'Supplier Select', icon: Users },
-      { path: '/substitution', label: 'Substitution', icon: RefreshCw },
-      { path: '/cart', label: 'Cart', icon: ShoppingCart, badgeKey: 'cart' },
-      { path: '/create-po', label: 'Create PO', icon: Package },
-      { path: '/transport-suggestion', label: 'Transport', icon: Truck }
+      navByPath['/boq-normalize'],
+      navByPath['/product-discovery'],
+      navByPath['/voice'],
+      navByPath['/supplier-select'],
+      navByPath['/substitution'],
+      navByPath['/cart'],
+      navByPath['/create-po'],
+      navByPath['/transport-suggestion']
     ]
   },
   {
     id: 'orders',
     label: 'Orders',
     items: [
-      { path: '/your-orders', label: 'Your Orders', icon: ShoppingCart },
-      { path: '/wallet', label: 'Wallet', icon: Wallet },
-      { path: '/returns', label: 'Returns', icon: RefreshCw }
+      navByPath['/your-orders'],
+      navByPath['/wallet'],
+      navByPath['/returns']
     ]
   },
   {
     id: 'account',
     label: 'Account',
-    items: [{ path: '/portal-theme', label: 'Portal Theme', icon: Paintbrush }]
+    items: [navByPath['/portal-theme']]
   }
 ];
 

@@ -12,7 +12,8 @@ import {
   RefreshCw,
   Share2,
   ShoppingCart,
-  Trash2
+  Trash2,
+  MapPin
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl } from '../config/api';
@@ -21,6 +22,7 @@ import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import SpEmptyState from '../components/sp/SpEmptyState';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +30,31 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
 import { formatDateIST } from '../utils/dateTime';
+import {
+  getGeolocationErrorMessage,
+  resolveAddressFromCurrentLocation
+} from '../utils/currentLocationAddress';
+import {
+  formatShippingAddressLabel,
+  formatShippingAddressPreview,
+  normalizeShippingAddressBookEntry
+} from '../utils/shippingAddressLabel';
+import { clearVendorRankCache } from '../utils/vendorRankCache';
+
+const blankShippingAddress = {
+  label: '',
+  line1: '',
+  city: '',
+  state: '',
+  pincode: '',
+  country: 'India'
+};
+
+function isShippingAddressComplete(address = {}) {
+  return ['line1', 'city', 'state', 'pincode', 'country'].every((field) =>
+    String(address?.[field] || '').trim()
+  );
+}
 
 const Cart = ({ onLoadCart }) => {
   const navigate = useNavigate();
@@ -42,6 +69,9 @@ const Cart = ({ onLoadCart }) => {
   const [editingGroupId, setEditingGroupId] = useState('');
   const [draftGroupNames, setDraftGroupNames] = useState({});
   const [draftGroupDates, setDraftGroupDates] = useState({});
+  const [draftGroupShipping, setDraftGroupShipping] = useState({});
+  const [shippingAddressBook, setShippingAddressBook] = useState([]);
+  const [locatingShippingByGroup, setLocatingShippingByGroup] = useState({});
   const [busyByGroupId, setBusyByGroupId] = useState({});
 
   const token = localStorage.getItem('token');
@@ -114,7 +144,71 @@ const Cart = ({ onLoadCart }) => {
     return '';
   };
 
-  const mergeGroupDetailsIntoDraft = (draft, groupId, nextName, nextDate) => {
+  const getGroupShippingPreview = (group) => {
+    const project = group?.boqProject && typeof group.boqProject === 'object' ? group.boqProject : {};
+    if (project.location) return String(project.location);
+    if (project.shippingAddress) return formatShippingAddressPreview(project.shippingAddress);
+    return '';
+  };
+
+  const buildGroupShippingDraft = (group, addresses = shippingAddressBook) => {
+    const project = group?.boqProject && typeof group.boqProject === 'object' ? group.boqProject : {};
+    const savedId = String(project.shippingAddressId || '').trim();
+    if (savedId && addresses.some((entry) => entry.id === savedId)) {
+      return { selectedShippingAddressId: savedId, newShippingAddress: { ...blankShippingAddress } };
+    }
+    if (project.shippingAddress && typeof project.shippingAddress === 'object') {
+      const inline = project.shippingAddress;
+      const match = addresses.find((entry) => {
+        const addr = entry.address || {};
+        return (
+          String(addr.line1 || '') === String(inline.line1 || '') &&
+          String(addr.city || '') === String(inline.city || '') &&
+          String(addr.pincode || '') === String(inline.pincode || '')
+        );
+      });
+      if (match) {
+        return { selectedShippingAddressId: match.id, newShippingAddress: { ...blankShippingAddress } };
+      }
+      return {
+        selectedShippingAddressId: '__new__',
+        newShippingAddress: {
+          label: '',
+          line1: String(inline.line1 || ''),
+          city: String(inline.city || ''),
+          state: String(inline.state || ''),
+          pincode: String(inline.pincode || ''),
+          country: String(inline.country || 'India')
+        }
+      };
+    }
+    if (addresses.length > 0) {
+      return { selectedShippingAddressId: addresses[0].id, newShippingAddress: { ...blankShippingAddress } };
+    }
+    return { selectedShippingAddressId: '', newShippingAddress: { ...blankShippingAddress } };
+  };
+
+  const loadProfileShippingAddresses = async () => {
+    if (!token) return [];
+    try {
+      const response = await fetch(getApiUrl('/api/profile'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await response.json();
+      if (!response.ok || !data?.profile) return [];
+      const entries = Array.isArray(data.profile.shippingAddresses)
+        ? data.profile.shippingAddresses
+            .map((entry) => normalizeShippingAddressBookEntry(entry))
+            .filter((entry) => entry.id)
+        : [];
+      setShippingAddressBook(entries);
+      return entries;
+    } catch {
+      return [];
+    }
+  };
+
+  const mergeGroupDetailsIntoDraft = (draft, groupId, nextName, nextDate, shippingMeta) => {
     if (!draft || typeof draft !== 'object') return draft;
     const normalizedGroupId = String(groupId || '').trim();
     if (!normalizedGroupId) return draft;
@@ -127,6 +221,23 @@ const Cart = ({ onLoadCart }) => {
             };
             if (nextDate) nextProjectMeta.requiredDate = nextDate;
             else delete nextProjectMeta.requiredDate;
+            if (shippingMeta !== undefined) {
+              if (!shippingMeta || shippingMeta.clear) {
+                delete nextProjectMeta.shippingAddress;
+                delete nextProjectMeta.shippingAddressId;
+                delete nextProjectMeta.location;
+                delete nextProjectMeta.siteGeo;
+              } else {
+                if (shippingMeta.shippingAddress) {
+                  nextProjectMeta.shippingAddress = shippingMeta.shippingAddress;
+                }
+                if (shippingMeta.shippingAddressId) {
+                  nextProjectMeta.shippingAddressId = shippingMeta.shippingAddressId;
+                }
+                if (shippingMeta.location) nextProjectMeta.location = shippingMeta.location;
+                if (shippingMeta.siteGeo) nextProjectMeta.siteGeo = shippingMeta.siteGeo;
+              }
+            }
             return {
               ...group,
               boqName: nextName,
@@ -177,6 +288,7 @@ const Cart = ({ onLoadCart }) => {
 
   useEffect(() => {
     loadCart();
+    loadProfileShippingAddresses();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -250,6 +362,64 @@ const Cart = ({ onLoadCart }) => {
     }
   };
 
+  const resolveGroupShippingPayload = async (groupId) => {
+    const draft = draftGroupShipping[groupId] || buildGroupShippingDraft({});
+    const selectedId = String(draft.selectedShippingAddressId ?? '');
+
+    if (!selectedId) {
+      return { clear: true, shippingAddressId: '' };
+    }
+
+    if (selectedId === '__new__') {
+      const missing = ['line1', 'city', 'state', 'pincode', 'country'].find(
+        (field) => !String(draft.newShippingAddress?.[field] || '').trim()
+      );
+      if (missing) {
+        throw new Error('Please complete all shipping address fields or choose a saved address.');
+      }
+      const saveRes = await fetch(getApiUrl('/api/profile/shipping-addresses'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          label: draft.newShippingAddress.label?.trim() || draft.newShippingAddress.city,
+          line1: draft.newShippingAddress.line1.trim(),
+          city: draft.newShippingAddress.city.trim(),
+          state: draft.newShippingAddress.state.trim(),
+          pincode: draft.newShippingAddress.pincode.trim(),
+          country: draft.newShippingAddress.country.trim()
+        })
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.status !== 'success') {
+        throw new Error(saveData.message || 'Failed to save shipping address to profile.');
+      }
+      const normalized = normalizeShippingAddressBookEntry(saveData.shippingAddress || {});
+      if (!normalized.id) {
+        throw new Error('Saved address did not return an id.');
+      }
+      setShippingAddressBook((prev) => {
+        const without = prev.filter((entry) => entry.id !== normalized.id);
+        return [...without, normalized];
+      });
+      return {
+        shippingAddressId: normalized.id,
+        shippingAddress: normalized.address
+      };
+    }
+
+    const selected = shippingAddressBook.find((entry) => entry.id === selectedId);
+    if (!selected) {
+      throw new Error('Selected shipping address was not found. Please choose again.');
+    }
+    return {
+      shippingAddressId: selected.id,
+      shippingAddress: selected.address
+    };
+  };
+
   const updateProjectDetails = async (groupId, nextNameInput, nextDateInput) => {
     if (!token) {
       setError('Please log in again to update project details.');
@@ -267,6 +437,7 @@ const Cart = ({ onLoadCart }) => {
     setBusyByGroupId((prev) => ({ ...prev, [normalizedGroupId]: true }));
     setError('');
     try {
+      const shippingPayload = await resolveGroupShippingPayload(normalizedGroupId);
       const response = await fetch(
         getApiUrl(`/api/po/cart/groups/${encodeURIComponent(normalizedGroupId)}/name`),
         {
@@ -275,7 +446,14 @@ const Cart = ({ onLoadCart }) => {
             Authorization: `Bearer ${token}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({ boqName: nextName, expectedDeliveryDate: nextDate })
+          body: JSON.stringify({
+            boqName: nextName,
+            expectedDeliveryDate: nextDate,
+            shippingAddressId: shippingPayload.shippingAddressId ?? '',
+            ...(shippingPayload.shippingAddress
+              ? { shippingAddress: shippingPayload.shippingAddress }
+              : {})
+          })
         }
       );
       const data = await response.json();
@@ -283,9 +461,26 @@ const Cart = ({ onLoadCart }) => {
         throw new Error(data.message || 'Failed to update project details');
       }
 
+      const appliedShipping = data.group?.shippingAddress
+        ? {
+            shippingAddressId: data.group.shippingAddressId || null,
+            shippingAddress: data.group.shippingAddress,
+            location: data.group.location || null,
+            siteGeo: data.group.siteGeo || null
+          }
+        : shippingPayload.clear
+          ? { clear: true }
+          : shippingPayload;
+
       const prev = cartRef.current;
       if (prev?.draft) {
-        const nextDraft = mergeGroupDetailsIntoDraft(prev.draft, normalizedGroupId, nextName, nextDate);
+        const nextDraft = mergeGroupDetailsIntoDraft(
+          prev.draft,
+          normalizedGroupId,
+          nextName,
+          nextDate,
+          appliedShipping
+        );
         setCart({ ...prev, draft: nextDraft });
         if (typeof onLoadCart === 'function') {
           onLoadCart(nextDraft);
@@ -293,6 +488,7 @@ const Cart = ({ onLoadCart }) => {
       } else {
         await loadCart({ silent: true, syncWorkflow: true });
       }
+      clearVendorRankCache();
       setEditingGroupId('');
       setDraftGroupNames((prev) => ({ ...prev, [normalizedGroupId]: nextName }));
       setDraftGroupDates((prev) => ({ ...prev, [normalizedGroupId]: nextDate }));
@@ -378,6 +574,50 @@ const Cart = ({ onLoadCart }) => {
     }
   };
 
+  const resolveGroupBoqProjectForSupplierSelect = (group) => {
+    const groupId = String(group?.groupId || '').trim();
+    const saved =
+      group?.boqProject && typeof group.boqProject === 'object' ? { ...group.boqProject } : {};
+    if (saved.shippingAddress && isShippingAddressComplete(saved.shippingAddress)) {
+      return {
+        ...saved,
+        location: saved.location || formatShippingAddressPreview(saved.shippingAddress)
+      };
+    }
+
+    const draft = draftGroupShipping[groupId] || buildGroupShippingDraft(group, shippingAddressBook);
+    const selectedId = String(draft.selectedShippingAddressId ?? '');
+
+    if (selectedId && selectedId !== '__new__') {
+      const entry = shippingAddressBook.find((e) => e.id === selectedId);
+      if (entry?.address && isShippingAddressComplete(entry.address)) {
+        return {
+          ...saved,
+          shippingAddressId: entry.id,
+          shippingAddress: entry.address,
+          location: formatShippingAddressPreview(entry.address)
+        };
+      }
+    }
+
+    if (selectedId === '__new__' && isShippingAddressComplete(draft.newShippingAddress)) {
+      const addr = {
+        line1: String(draft.newShippingAddress.line1 || '').trim(),
+        city: String(draft.newShippingAddress.city || '').trim(),
+        state: String(draft.newShippingAddress.state || '').trim(),
+        pincode: String(draft.newShippingAddress.pincode || '').trim(),
+        country: String(draft.newShippingAddress.country || 'India').trim() || 'India'
+      };
+      return {
+        ...saved,
+        shippingAddress: addr,
+        location: formatShippingAddressPreview(addr)
+      };
+    }
+
+    return null;
+  };
+
   const buildDraftFromGroup = (group) => {
     if (!group || typeof group !== 'object') return null;
     const normalizedGroup = {
@@ -397,6 +637,44 @@ const Cart = ({ onLoadCart }) => {
       boqId: normalizedGroup.boqId,
       boqProject: normalizedGroup.boqProject
     };
+  };
+
+  const buildDraftFromAllGroups = (groupList, rootDraft = {}) => {
+    const mergedSelectedVendors = {};
+    const mergedSubstitutions = [];
+    const mergedItems = [];
+    const boqGroups = [];
+    const substitutionKeys = new Set();
+
+    for (const group of groupList || []) {
+      const groupDraft = buildDraftFromGroup(group);
+      if (!groupDraft) continue;
+      if (Array.isArray(groupDraft.boqGroups)) boqGroups.push(...groupDraft.boqGroups);
+      for (const item of groupDraft.items || []) mergedItems.push(item);
+      Object.assign(mergedSelectedVendors, groupDraft.selectedVendors || {});
+      for (const sub of groupDraft.substitutions || []) {
+        const key = `${String(sub?.originalItem || '')}::${String(sub?.suggestedItem || '')}`;
+        if (substitutionKeys.has(key)) continue;
+        substitutionKeys.add(key);
+        mergedSubstitutions.push(sub);
+      }
+    }
+
+    const firstGroup = Array.isArray(groupList) && groupList.length > 0 ? groupList[0] : null;
+    return {
+      selectedVendors: mergedSelectedVendors,
+      substitutions: mergedSubstitutions,
+      items: mergedItems,
+      boqGroups,
+      boqId: firstGroup?.boqId ?? rootDraft?.boqId ?? null,
+      boqProject: firstGroup?.boqProject ?? rootDraft?.boqProject ?? null
+    };
+  };
+
+  const handleSkipToCreatePo = () => {
+    const draft = buildDraftFromAllGroups(groups, cart?.draft || {});
+    if (typeof onLoadCart === 'function') onLoadCart(draft);
+    navigate('/create-po');
   };
 
   const buildDraftFromSingleItem = (item, group) => {
@@ -429,9 +707,21 @@ const Cart = ({ onLoadCart }) => {
   };
 
   const handleContinueToSupplierSelectionForGroup = (group) => {
-    const groupDraft = buildDraftFromGroup(group);
+    const resolvedProject = resolveGroupBoqProjectForSupplierSelect(group);
+    if (!resolvedProject?.shippingAddress) {
+      setError('Please set a delivery address for this project before selecting suppliers.');
+      return;
+    }
+    const groupWithShipping = {
+      ...group,
+      boqProject: {
+        ...(group?.boqProject && typeof group.boqProject === 'object' ? group.boqProject : {}),
+        ...resolvedProject
+      }
+    };
+    const groupDraft = buildDraftFromGroup(groupWithShipping);
     if (groupDraft && typeof onLoadCart === 'function') onLoadCart(groupDraft);
-    persistSupplierSelectScopeFromCart(groupDraft.items);
+    persistSupplierSelectScopeFromCart(groupDraft.items, groupDraft.boqProject);
     const navState = supplierSelectNavigationState(groupDraft);
     navigate(
       { pathname: '/supplier-select', search: '?from=cart' },
@@ -441,9 +731,21 @@ const Cart = ({ onLoadCart }) => {
 
   /** One cart line → supplier rank API only receives that product (correct supplier list). */
   const handleContinueToSupplierSelectionForItem = (item, group) => {
-    const draft = buildDraftFromSingleItem(item, group);
+    const resolvedProject = resolveGroupBoqProjectForSupplierSelect(group);
+    if (!resolvedProject?.shippingAddress) {
+      setError('Please set a delivery address for this project before selecting suppliers.');
+      return;
+    }
+    const groupWithShipping = {
+      ...group,
+      boqProject: {
+        ...(group?.boqProject && typeof group.boqProject === 'object' ? group.boqProject : {}),
+        ...resolvedProject
+      }
+    };
+    const draft = buildDraftFromSingleItem(item, groupWithShipping);
     if (draft && typeof onLoadCart === 'function') onLoadCart(draft);
-    persistSupplierSelectScopeFromCart(draft.items);
+    persistSupplierSelectScopeFromCart(draft.items, draft.boqProject);
     const navState = supplierSelectNavigationState(draft);
     navigate(
       { pathname: '/supplier-select', search: '?from=cart' },
@@ -589,76 +891,273 @@ const Cart = ({ onLoadCart }) => {
           ) : (
             groups.map((group, groupIndex) => {
               const items = Array.isArray(group?.items) ? group.items : [];
+              const groupId = String(group?.groupId || '');
+              const isEditing = editingGroupId === groupId;
+              const shippingDraft =
+                draftGroupShipping[groupId] || buildGroupShippingDraft(group, shippingAddressBook);
+              const shippingPreview = getGroupShippingPreview(group);
+
+              const beginEditingGroup = async () => {
+                const addresses = shippingAddressBook.length
+                  ? shippingAddressBook
+                  : await loadProfileShippingAddresses();
+                setEditingGroupId(groupId);
+                setDraftGroupNames((prev) => ({
+                  ...prev,
+                  [groupId]: String(group?.boqName || '')
+                }));
+                setDraftGroupDates((prev) => ({
+                  ...prev,
+                  [groupId]: getGroupRequiredDate(group)
+                }));
+                setDraftGroupShipping((prev) => ({
+                  ...prev,
+                  [groupId]: buildGroupShippingDraft(group, addresses)
+                }));
+              };
+
+              const fillShippingFromCurrentLocation = async () => {
+                setLocatingShippingByGroup((prev) => ({ ...prev, [groupId]: true }));
+                try {
+                  const resolved = await resolveAddressFromCurrentLocation();
+                  setDraftGroupShipping((prev) => ({
+                    ...prev,
+                    [groupId]: {
+                      selectedShippingAddressId: '__new__',
+                      newShippingAddress: {
+                        label: resolved.city || 'Current location',
+                        line1: resolved.line1 || '',
+                        city: resolved.city || '',
+                        state: resolved.state || '',
+                        pincode: resolved.pincode || '',
+                        country: resolved.country || 'India'
+                      }
+                    }
+                  }));
+                } catch (locationError) {
+                  window.alert(getGeolocationErrorMessage(locationError));
+                } finally {
+                  setLocatingShippingByGroup((prev) => ({ ...prev, [groupId]: false }));
+                }
+              };
+
               return (
                 <Card key={String(group?.groupId || groupIndex)} className="sp-market-card overflow-hidden">
                   <CardHeader className="flex flex-row items-start justify-between gap-4 space-y-0 border-b bg-muted/30 pb-4">
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <CardTitle className="text-base">
-                        {editingGroupId === String(group?.groupId || '') ? (
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="text"
-                              className="h-9 min-w-[220px] rounded-md border bg-background px-2 text-sm"
-                              maxLength={120}
-                              value={
-                                draftGroupNames[String(group?.groupId || '')] ??
-                                String(group?.boqName || '')
-                              }
-                              onChange={(e) =>
-                                setDraftGroupNames((prev) => ({
-                                  ...prev,
-                                  [String(group?.groupId || '')]: e.target.value
-                                }))
-                              }
-                            />
-                            <input
-                              type="date"
-                              className="h-9 rounded-md border bg-background px-2 text-sm"
-                              value={
-                                draftGroupDates[String(group?.groupId || '')] ??
-                                getGroupRequiredDate(group)
-                              }
-                              onChange={(e) =>
-                                setDraftGroupDates((prev) => ({
-                                  ...prev,
-                                  [String(group?.groupId || '')]: e.target.value
-                                }))
-                              }
-                            />
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              disabled={Boolean(busyByGroupId[String(group?.groupId || '')])}
-                              onClick={() =>
-                                updateProjectDetails(
-                                  String(group?.groupId || ''),
-                                  draftGroupNames[String(group?.groupId || '')] ??
-                                    String(group?.boqName || ''),
-                                  draftGroupDates[String(group?.groupId || '')] ??
-                                    getGroupRequiredDate(group)
-                                )
-                              }
-                            >
-                              <Check className="h-4 w-4" />
-                              Save
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              onClick={() => {
-                                setEditingGroupId('');
-                                setDraftGroupNames((prev) => ({
-                                  ...prev,
-                                  [String(group?.groupId || '')]: String(group?.boqName || '')
-                                }));
-                                setDraftGroupDates((prev) => ({
-                                  ...prev,
-                                  [String(group?.groupId || '')]: getGroupRequiredDate(group)
-                                }));
-                              }}
-                            >
-                              Cancel
-                            </Button>
+                        {isEditing ? (
+                          <div className="space-y-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <input
+                                type="text"
+                                className="h-9 min-w-[180px] flex-1 rounded-md border bg-background px-2 text-sm"
+                                maxLength={120}
+                                value={draftGroupNames[groupId] ?? String(group?.boqName || '')}
+                                onChange={(e) =>
+                                  setDraftGroupNames((prev) => ({
+                                    ...prev,
+                                    [groupId]: e.target.value
+                                  }))
+                                }
+                              />
+                              <input
+                                type="date"
+                                className="h-9 rounded-md border bg-background px-2 text-sm"
+                                value={draftGroupDates[groupId] ?? getGroupRequiredDate(group)}
+                                onChange={(e) =>
+                                  setDraftGroupDates((prev) => ({
+                                    ...prev,
+                                    [groupId]: e.target.value
+                                  }))
+                                }
+                              />
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                disabled={Boolean(busyByGroupId[groupId])}
+                                onClick={() =>
+                                  updateProjectDetails(
+                                    groupId,
+                                    draftGroupNames[groupId] ?? String(group?.boqName || ''),
+                                    draftGroupDates[groupId] ?? getGroupRequiredDate(group)
+                                  )
+                                }
+                              >
+                                <Check className="h-4 w-4" />
+                                Save
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => {
+                                  setEditingGroupId('');
+                                  setDraftGroupNames((prev) => ({
+                                    ...prev,
+                                    [groupId]: String(group?.boqName || '')
+                                  }));
+                                  setDraftGroupDates((prev) => ({
+                                    ...prev,
+                                    [groupId]: getGroupRequiredDate(group)
+                                  }));
+                                  setDraftGroupShipping((prev) => {
+                                    const { [groupId]: _removed, ...rest } = prev;
+                                    return rest;
+                                  });
+                                }}
+                              >
+                                Cancel
+                              </Button>
+                            </div>
+                            <div className="space-y-2 rounded-lg border bg-background p-3">
+                              <div>
+                                <p className="text-sm font-medium">Delivery address</p>
+                                <p className="text-xs text-muted-foreground">
+                                  Suppliers are ranked by distance to this address.
+                                </p>
+                              </div>
+                              <select
+                                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                                value={shippingDraft.selectedShippingAddressId}
+                                onChange={(event) => {
+                                  const next = event.target.value;
+                                  setDraftGroupShipping((prev) => ({
+                                    ...prev,
+                                    [groupId]: {
+                                      selectedShippingAddressId: next,
+                                      newShippingAddress:
+                                        next === '__new__'
+                                          ? prev[groupId]?.newShippingAddress || { ...blankShippingAddress }
+                                          : { ...blankShippingAddress }
+                                    }
+                                  }));
+                                }}
+                              >
+                                <option value="">No shipping address</option>
+                                {shippingAddressBook.map((entry, index) => (
+                                  <option key={entry.id} value={entry.id}>
+                                    {entry.displayName || formatShippingAddressLabel(entry, index)}
+                                  </option>
+                                ))}
+                                <option value="__new__">+ Add new address</option>
+                              </select>
+                              {shippingDraft.selectedShippingAddressId === '__new__' ? (
+                                <div className="space-y-2">
+                                  <button
+                                    type="button"
+                                    className="inline-flex items-center gap-1.5 text-sm text-primary hover:underline"
+                                    onClick={fillShippingFromCurrentLocation}
+                                    disabled={Boolean(locatingShippingByGroup[groupId])}
+                                  >
+                                    <MapPin className="h-4 w-4" />
+                                    {locatingShippingByGroup[groupId]
+                                      ? 'Detecting location…'
+                                      : 'Use my current location'}
+                                  </button>
+                                  <Input
+                                    maxLength={120}
+                                    placeholder="Address label (e.g. Site A)"
+                                    value={shippingDraft.newShippingAddress.label}
+                                    onChange={(event) =>
+                                      setDraftGroupShipping((prev) => ({
+                                        ...prev,
+                                        [groupId]: {
+                                          ...shippingDraft,
+                                          newShippingAddress: {
+                                            ...shippingDraft.newShippingAddress,
+                                            label: event.target.value
+                                          }
+                                        }
+                                      }))
+                                    }
+                                  />
+                                  <Input
+                                    placeholder="Street address"
+                                    value={shippingDraft.newShippingAddress.line1}
+                                    onChange={(event) =>
+                                      setDraftGroupShipping((prev) => ({
+                                        ...prev,
+                                        [groupId]: {
+                                          ...shippingDraft,
+                                          newShippingAddress: {
+                                            ...shippingDraft.newShippingAddress,
+                                            line1: event.target.value
+                                          }
+                                        }
+                                      }))
+                                    }
+                                  />
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <Input
+                                      placeholder="City"
+                                      value={shippingDraft.newShippingAddress.city}
+                                      onChange={(event) =>
+                                        setDraftGroupShipping((prev) => ({
+                                          ...prev,
+                                          [groupId]: {
+                                            ...shippingDraft,
+                                            newShippingAddress: {
+                                              ...shippingDraft.newShippingAddress,
+                                              city: event.target.value
+                                            }
+                                          }
+                                        }))
+                                      }
+                                    />
+                                    <Input
+                                      placeholder="State"
+                                      value={shippingDraft.newShippingAddress.state}
+                                      onChange={(event) =>
+                                        setDraftGroupShipping((prev) => ({
+                                          ...prev,
+                                          [groupId]: {
+                                            ...shippingDraft,
+                                            newShippingAddress: {
+                                              ...shippingDraft.newShippingAddress,
+                                              state: event.target.value
+                                            }
+                                          }
+                                        }))
+                                      }
+                                    />
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <Input
+                                      placeholder="PIN code"
+                                      value={shippingDraft.newShippingAddress.pincode}
+                                      onChange={(event) =>
+                                        setDraftGroupShipping((prev) => ({
+                                          ...prev,
+                                          [groupId]: {
+                                            ...shippingDraft,
+                                            newShippingAddress: {
+                                              ...shippingDraft.newShippingAddress,
+                                              pincode: event.target.value
+                                            }
+                                          }
+                                        }))
+                                      }
+                                    />
+                                    <Input
+                                      placeholder="Country"
+                                      value={shippingDraft.newShippingAddress.country}
+                                      onChange={(event) =>
+                                        setDraftGroupShipping((prev) => ({
+                                          ...prev,
+                                          [groupId]: {
+                                            ...shippingDraft,
+                                            newShippingAddress: {
+                                              ...shippingDraft.newShippingAddress,
+                                              country: event.target.value
+                                            }
+                                          }
+                                        }))
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         ) : (
                           <span className="inline-flex items-center gap-2">
@@ -666,19 +1165,8 @@ const Cart = ({ onLoadCart }) => {
                             <button
                               type="button"
                               className="inline-flex items-center text-muted-foreground hover:text-foreground"
-                              onClick={() => {
-                                const gid = String(group?.groupId || '');
-                                setEditingGroupId(gid);
-                                setDraftGroupNames((prev) => ({
-                                  ...prev,
-                                  [gid]: String(group?.boqName || '')
-                                }));
-                                setDraftGroupDates((prev) => ({
-                                  ...prev,
-                                  [gid]: getGroupRequiredDate(group)
-                                }));
-                              }}
-                              aria-label="Edit project name"
+                              onClick={beginEditingGroup}
+                              aria-label="Edit project details"
                             >
                               <Pencil className="h-4 w-4" />
                             </button>
@@ -695,6 +1183,20 @@ const Cart = ({ onLoadCart }) => {
                           <span className="font-semibold text-foreground">
                             Expected delivery: {formatDateIST(getGroupRequiredDate(group), '—')}
                           </span>
+                        </p>
+                      ) : null}
+                      {!isEditing ? (
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          <span className="font-semibold text-foreground">Delivery address:</span>{' '}
+                          {shippingPreview || (
+                            <button
+                              type="button"
+                              className="text-primary hover:underline"
+                              onClick={beginEditingGroup}
+                            >
+                              Not set — add address
+                            </button>
+                          )}
                         </p>
                       ) : null}
                       <p className="mt-0.5 text-xs text-muted-foreground">
@@ -824,7 +1326,7 @@ const Cart = ({ onLoadCart }) => {
                 variant="outline"
                 className="w-full"
                 disabled={allItems.length === 0}
-                onClick={() => navigate('/create-po')}
+                onClick={handleSkipToCreatePo}
               >
                 Skip to create PO
               </Button>

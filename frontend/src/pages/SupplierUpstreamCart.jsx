@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
 import './Dashboard.css';
 import './SupplierUpstreamCart.css';
-import { Check, Clipboard, Mail, MessageCircle, Pencil, Share2, Trash2 } from 'lucide-react';
+import { Check, Clipboard, Mail, MapPin, MessageCircle, Pencil, Share2, Trash2 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpStatCard from '../components/sp/SpStatCard';
 import UpstreamProductDisplay from '../components/UpstreamProductDisplay';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { formatRupee } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
@@ -16,9 +17,28 @@ import {
   buildSupplierProductLookupMap,
   normalizeSupplierProductsFromApi
 } from '../utils/supplierProductRow';
+import {
+  formatShippingAddressLabel,
+  formatShippingAddressPreview,
+  normalizeShippingAddressBookEntry
+} from '../utils/shippingAddressLabel';
+import {
+  getGeolocationErrorMessage,
+  resolveAddressFromCurrentLocation
+} from '../utils/currentLocationAddress';
+import './CreatePO.css';
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
+
+const blankShippingAddress = {
+  label: '',
+  line1: '',
+  city: '',
+  state: '',
+  pincode: '',
+  country: 'India'
+};
 
 const normalizeSupplierProductKey = (value) => String(value ?? '').trim();
 
@@ -46,6 +66,73 @@ const SupplierUpstreamCart = () => {
   const [sharingCart, setSharingCart] = useState(false);
   const [shareLink, setShareLink] = useState('');
   const [copyingShareLink, setCopyingShareLink] = useState(false);
+  const [shippingAddressBook, setShippingAddressBook] = useState([]);
+  const [draftProjectShipping, setDraftProjectShipping] = useState({});
+  const [locatingShippingByProject, setLocatingShippingByProject] = useState({});
+
+  const getProjectShippingPreview = (project) => {
+    if (!project || typeof project !== 'object') return '';
+    if (project.location) return String(project.location);
+    if (project.shippingAddress) return formatShippingAddressPreview(project.shippingAddress);
+    return '';
+  };
+
+  const buildProjectShippingDraft = (project, addresses = shippingAddressBook) => {
+    const savedId = String(project?.shippingAddressId || '').trim();
+    if (savedId && addresses.some((entry) => entry.id === savedId)) {
+      return { selectedShippingAddressId: savedId, newShippingAddress: { ...blankShippingAddress } };
+    }
+    if (project?.shippingAddress && typeof project.shippingAddress === 'object') {
+      const inline = project.shippingAddress;
+      const match = addresses.find((entry) => {
+        const addr = entry.address || {};
+        return (
+          String(addr.line1 || '') === String(inline.line1 || '') &&
+          String(addr.city || '') === String(inline.city || '') &&
+          String(addr.pincode || '') === String(inline.pincode || '')
+        );
+      });
+      if (match) {
+        return { selectedShippingAddressId: match.id, newShippingAddress: { ...blankShippingAddress } };
+      }
+      return {
+        selectedShippingAddressId: '__new__',
+        newShippingAddress: {
+          label: '',
+          line1: String(inline.line1 || ''),
+          city: String(inline.city || ''),
+          state: String(inline.state || ''),
+          pincode: String(inline.pincode || ''),
+          country: String(inline.country || 'India')
+        }
+      };
+    }
+    if (addresses.length > 0) {
+      return { selectedShippingAddressId: addresses[0].id, newShippingAddress: { ...blankShippingAddress } };
+    }
+    return { selectedShippingAddressId: '', newShippingAddress: { ...blankShippingAddress } };
+  };
+
+  const loadProfileShippingAddresses = async () => {
+    const token = localStorage.getItem('token');
+    if (!token) return [];
+    try {
+      const res = await fetch(getApiUrl('/api/profile'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.profile) return [];
+      const entries = Array.isArray(data.profile.shippingAddresses)
+        ? data.profile.shippingAddresses
+            .map((entry) => normalizeShippingAddressBookEntry(entry))
+            .filter((entry) => entry.id)
+        : [];
+      setShippingAddressBook(entries);
+      return entries;
+    } catch {
+      return [];
+    }
+  };
 
   const productBySupplierProductId = useMemo(
     () => buildSupplierProductLookupMap(products),
@@ -117,6 +204,7 @@ const SupplierUpstreamCart = () => {
 
   useEffect(() => {
     loadCart();
+    loadProfileShippingAddresses();
   }, []);
 
   const replaceProjectInState = (projectId, nextProject) => {
@@ -233,6 +321,8 @@ const SupplierUpstreamCart = () => {
     localStorage.setItem(
       SUPPLIER_UPSTREAM_CART_RESUME_KEY,
       JSON.stringify({
+        projectId: String(project?.projectId || '').trim(),
+        shippingAddressId: String(project?.shippingAddressId || '').trim(),
         selectedMine: normalizeSelectionMap(project?.selectedMine),
         selectedUpstreamOffer: normalizeSelectionMap(project?.selectedUpstreamOffer),
         suggestions: Array.isArray(project?.suggestions) ? project.suggestions : [],
@@ -244,7 +334,91 @@ const SupplierUpstreamCart = () => {
     navigate('/supplier-upstream');
   };
 
-  const saveProjectName = async (projectId) => {
+  const resolveProjectShippingPayload = async (projectId) => {
+    const draft = draftProjectShipping[projectId] || buildProjectShippingDraft({});
+    const selectedId = String(draft.selectedShippingAddressId ?? '');
+
+    if (!selectedId) {
+      return { clear: true, shippingAddressId: '' };
+    }
+
+    if (selectedId === '__new__') {
+      const missing = ['line1', 'city', 'state', 'pincode', 'country'].find(
+        (field) => !String(draft.newShippingAddress?.[field] || '').trim()
+      );
+      if (missing) {
+        throw new Error('Please complete all shipping address fields or choose a saved address.');
+      }
+      const token = localStorage.getItem('token');
+      const saveRes = await fetch(getApiUrl('/api/profile/shipping-addresses'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          label: draft.newShippingAddress.label?.trim() || draft.newShippingAddress.city,
+          line1: draft.newShippingAddress.line1.trim(),
+          city: draft.newShippingAddress.city.trim(),
+          state: draft.newShippingAddress.state.trim(),
+          pincode: draft.newShippingAddress.pincode.trim(),
+          country: draft.newShippingAddress.country.trim()
+        })
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok || saveData.status !== 'success') {
+        throw new Error(saveData.message || 'Failed to save shipping address to profile.');
+      }
+      const normalized = normalizeShippingAddressBookEntry(saveData.shippingAddress || {});
+      if (!normalized.id) {
+        throw new Error('Saved address did not return an id.');
+      }
+      setShippingAddressBook((prev) => {
+        const without = prev.filter((entry) => entry.id !== normalized.id);
+        return [...without, normalized];
+      });
+      return {
+        shippingAddressId: normalized.id,
+        shippingAddress: normalized.address
+      };
+    }
+
+    const selected = shippingAddressBook.find((entry) => entry.id === selectedId);
+    if (!selected) {
+      throw new Error('Selected shipping address was not found. Please choose again.');
+    }
+    return {
+      shippingAddressId: selected.id,
+      shippingAddress: selected.address
+    };
+  };
+
+  const beginEditingProject = async (project) => {
+    const projectId = String(project?.projectId || '');
+    const addresses = shippingAddressBook.length
+      ? shippingAddressBook
+      : await loadProfileShippingAddresses();
+    setEditingProjectId(projectId);
+    setProjectNameDraft(String(project?.cartName || ''));
+    setProjectDateDraft(String(project?.requiredDate || '').slice(0, 10));
+    setDraftProjectShipping((prev) => ({
+      ...prev,
+      [projectId]: buildProjectShippingDraft(project, addresses)
+    }));
+  };
+
+  const cancelEditingProject = (project) => {
+    const projectId = String(project?.projectId || '');
+    setEditingProjectId('');
+    setProjectNameDraft('');
+    setProjectDateDraft('');
+    setDraftProjectShipping((prev) => {
+      const { [projectId]: _removed, ...rest } = prev;
+      return rest;
+    });
+  };
+
+  const saveProjectDetails = async (projectId) => {
     const cartName = String(projectNameDraft || '').trim();
     const requiredDate = String(projectDateDraft || '').trim();
     if (!cartName) {
@@ -255,28 +429,74 @@ const SupplierUpstreamCart = () => {
     setError('');
     try {
       const token = localStorage.getItem('token');
+      const shippingPayload = await resolveProjectShippingPayload(projectId);
       const res = await fetch(getApiUrl('/api/supplier/upstream/cart/name'), {
         method: 'PATCH',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ projectId, cartName, requiredDate })
+        body: JSON.stringify({
+          projectId,
+          cartName,
+          requiredDate,
+          shippingAddressId: shippingPayload.shippingAddressId ?? '',
+          ...(shippingPayload.shippingAddress
+            ? { shippingAddress: shippingPayload.shippingAddress }
+            : {})
+        })
       });
       const data = await res.json();
       if (!res.ok || data.status !== 'success') {
-        throw new Error(data.message || 'Failed to update project name');
+        throw new Error(data.message || 'Failed to update project details');
       }
       const current = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
+      const appliedShipping = data.project?.shippingAddress
+        ? {
+            shippingAddressId: data.project.shippingAddressId || null,
+            shippingAddress: data.project.shippingAddress,
+            location: data.project.location || null,
+            siteGeo: data.project.siteGeo || null
+          }
+        : shippingPayload.clear
+          ? {
+              shippingAddressId: null,
+              shippingAddress: null,
+              location: null,
+              siteGeo: null
+            }
+          : null;
       if (current) {
-        replaceProjectInState(projectId, { ...current, cartName, requiredDate });
+        const nextProject = {
+          ...current,
+          cartName,
+          requiredDate
+        };
+        if (appliedShipping) {
+          if (appliedShipping.shippingAddress) {
+            nextProject.shippingAddress = appliedShipping.shippingAddress;
+            if (appliedShipping.shippingAddressId) {
+              nextProject.shippingAddressId = appliedShipping.shippingAddressId;
+            } else {
+              delete nextProject.shippingAddressId;
+            }
+            if (appliedShipping.location) nextProject.location = appliedShipping.location;
+            else delete nextProject.location;
+            if (appliedShipping.siteGeo) nextProject.siteGeo = appliedShipping.siteGeo;
+            else delete nextProject.siteGeo;
+          } else {
+            delete nextProject.shippingAddress;
+            delete nextProject.shippingAddressId;
+            delete nextProject.location;
+            delete nextProject.siteGeo;
+          }
+        }
+        replaceProjectInState(projectId, nextProject);
       }
-      setEditingProjectId('');
-      setProjectNameDraft('');
-      setProjectDateDraft('');
+      cancelEditingProject({ projectId });
       emitSupplierCartUpdated();
     } catch (e) {
-      setError(e.message || 'Failed to update project name');
+      setError(e.message || 'Failed to update project details');
     } finally {
       setSavingProjectName(false);
     }
@@ -432,6 +652,10 @@ const SupplierUpstreamCart = () => {
             <div className="supplier-projects-stack">
               {projectRows.map(({ project, rows }) => {
                 const projectId = String(project?.projectId || '');
+                const isEditing = editingProjectId === projectId;
+                const shippingDraft =
+                  draftProjectShipping[projectId] || buildProjectShippingDraft(project, shippingAddressBook);
+                const shippingPreview = getProjectShippingPreview(project);
                 const totalLines = rows.length;
                 const totalQuantity = rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
                 const totalAmount = rows.reduce((sum, row) => {
@@ -443,28 +667,206 @@ const SupplierUpstreamCart = () => {
                 return (
                   <section key={projectId} className="supplier-project-card">
                     <div className="supplier-project-head">
-                      <div>
-                        {editingProjectId === projectId ? (
-                          <div className="supplier-project-edit-row">
-                            <input
-                              type="text"
-                              maxLength={120}
-                              value={projectNameDraft}
-                              onChange={(e) => setProjectNameDraft(e.target.value)}
-                              className="supplier-project-name-input"
-                            />
-                            <input
-                              type="date"
-                              value={projectDateDraft}
-                              onChange={(e) => setProjectDateDraft(e.target.value)}
-                              className="supplier-project-name-input"
-                            />
-                            <button className="btn-primary" disabled={savingProjectName} onClick={() => saveProjectName(projectId)}>
-                              {savingProjectName ? 'Saving...' : 'Save'}
-                            </button>
-                            <button className="btn-secondary" onClick={() => setEditingProjectId('')}>
-                              Cancel
-                            </button>
+                      <div className="supplier-project-head-main">
+                        {isEditing ? (
+                          <div className="supplier-project-edit-block">
+                            <div className="supplier-project-edit-row">
+                              <input
+                                type="text"
+                                maxLength={120}
+                                value={projectNameDraft}
+                                onChange={(e) => setProjectNameDraft(e.target.value)}
+                                className="supplier-project-name-input"
+                              />
+                              <input
+                                type="date"
+                                value={projectDateDraft}
+                                onChange={(e) => setProjectDateDraft(e.target.value)}
+                                className="supplier-project-name-input"
+                              />
+                              <button
+                                className="btn-primary"
+                                disabled={savingProjectName}
+                                onClick={() => saveProjectDetails(projectId)}
+                              >
+                                {savingProjectName ? 'Saving...' : 'Save'}
+                              </button>
+                              <button className="btn-secondary" onClick={() => cancelEditingProject(project)}>
+                                Cancel
+                              </button>
+                            </div>
+                            <div className="supplier-project-shipping-panel">
+                              <div>
+                                <p className="supplier-project-shipping-title">Shipping address</p>
+                                <p className="supplier-project-shipping-hint">
+                                  Optional. Saved to your profile when you add a new address.
+                                </p>
+                              </div>
+                              <select
+                                className="supplier-project-shipping-select"
+                                value={shippingDraft.selectedShippingAddressId}
+                                onChange={(event) => {
+                                  const next = event.target.value;
+                                  setDraftProjectShipping((prev) => ({
+                                    ...prev,
+                                    [projectId]: {
+                                      selectedShippingAddressId: next,
+                                      newShippingAddress:
+                                        next === '__new__'
+                                          ? prev[projectId]?.newShippingAddress || { ...blankShippingAddress }
+                                          : { ...blankShippingAddress }
+                                    }
+                                  }));
+                                }}
+                              >
+                                <option value="">No shipping address</option>
+                                {shippingAddressBook.map((entry, index) => (
+                                  <option key={entry.id} value={entry.id}>
+                                    {entry.displayName || formatShippingAddressLabel(entry, index)}
+                                  </option>
+                                ))}
+                                <option value="__new__">+ Add new address</option>
+                              </select>
+                              {shippingDraft.selectedShippingAddressId === '__new__' ? (
+                                <div className="supplier-project-shipping-form">
+                                  <button
+                                    type="button"
+                                    className="checkout-location-btn"
+                                    onClick={async () => {
+                                      setLocatingShippingByProject((prev) => ({ ...prev, [projectId]: true }));
+                                      try {
+                                        const resolved = await resolveAddressFromCurrentLocation();
+                                        setDraftProjectShipping((prev) => ({
+                                          ...prev,
+                                          [projectId]: {
+                                            selectedShippingAddressId: '__new__',
+                                            newShippingAddress: {
+                                              label: resolved.city || 'Current location',
+                                              line1: resolved.line1 || '',
+                                              city: resolved.city || '',
+                                              state: resolved.state || '',
+                                              pincode: resolved.pincode || '',
+                                              country: resolved.country || 'India'
+                                            }
+                                          }
+                                        }));
+                                      } catch (locationError) {
+                                        window.alert(getGeolocationErrorMessage(locationError));
+                                      } finally {
+                                        setLocatingShippingByProject((prev) => ({ ...prev, [projectId]: false }));
+                                      }
+                                    }}
+                                    disabled={Boolean(locatingShippingByProject[projectId])}
+                                  >
+                                    <MapPin size={15} aria-hidden />
+                                    {locatingShippingByProject[projectId]
+                                      ? 'Detecting location…'
+                                      : 'Use my current location'}
+                                  </button>
+                                  <Input
+                                    maxLength={120}
+                                    placeholder="Address label (e.g. Warehouse)"
+                                    value={shippingDraft.newShippingAddress.label}
+                                    onChange={(event) =>
+                                      setDraftProjectShipping((prev) => ({
+                                        ...prev,
+                                        [projectId]: {
+                                          ...shippingDraft,
+                                          newShippingAddress: {
+                                            ...shippingDraft.newShippingAddress,
+                                            label: event.target.value
+                                          }
+                                        }
+                                      }))
+                                    }
+                                  />
+                                  <Input
+                                    placeholder="Street address"
+                                    value={shippingDraft.newShippingAddress.line1}
+                                    onChange={(event) =>
+                                      setDraftProjectShipping((prev) => ({
+                                        ...prev,
+                                        [projectId]: {
+                                          ...shippingDraft,
+                                          newShippingAddress: {
+                                            ...shippingDraft.newShippingAddress,
+                                            line1: event.target.value
+                                          }
+                                        }
+                                      }))
+                                    }
+                                  />
+                                  <div className="supplier-project-shipping-grid">
+                                    <Input
+                                      placeholder="City"
+                                      value={shippingDraft.newShippingAddress.city}
+                                      onChange={(event) =>
+                                        setDraftProjectShipping((prev) => ({
+                                          ...prev,
+                                          [projectId]: {
+                                            ...shippingDraft,
+                                            newShippingAddress: {
+                                              ...shippingDraft.newShippingAddress,
+                                              city: event.target.value
+                                            }
+                                          }
+                                        }))
+                                      }
+                                    />
+                                    <Input
+                                      placeholder="State"
+                                      value={shippingDraft.newShippingAddress.state}
+                                      onChange={(event) =>
+                                        setDraftProjectShipping((prev) => ({
+                                          ...prev,
+                                          [projectId]: {
+                                            ...shippingDraft,
+                                            newShippingAddress: {
+                                              ...shippingDraft.newShippingAddress,
+                                              state: event.target.value
+                                            }
+                                          }
+                                        }))
+                                      }
+                                    />
+                                  </div>
+                                  <div className="supplier-project-shipping-grid">
+                                    <Input
+                                      placeholder="PIN code"
+                                      value={shippingDraft.newShippingAddress.pincode}
+                                      onChange={(event) =>
+                                        setDraftProjectShipping((prev) => ({
+                                          ...prev,
+                                          [projectId]: {
+                                            ...shippingDraft,
+                                            newShippingAddress: {
+                                              ...shippingDraft.newShippingAddress,
+                                              pincode: event.target.value
+                                            }
+                                          }
+                                        }))
+                                      }
+                                    />
+                                    <Input
+                                      placeholder="Country"
+                                      value={shippingDraft.newShippingAddress.country}
+                                      onChange={(event) =>
+                                        setDraftProjectShipping((prev) => ({
+                                          ...prev,
+                                          [projectId]: {
+                                            ...shippingDraft,
+                                            newShippingAddress: {
+                                              ...shippingDraft.newShippingAddress,
+                                              country: event.target.value
+                                            }
+                                          }
+                                        }))
+                                      }
+                                    />
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
                         ) : (
                           <h3 className="supplier-project-title">
@@ -472,12 +874,8 @@ const SupplierUpstreamCart = () => {
                             <button
                               type="button"
                               className="btn-icon supplier-project-edit-icon"
-                              onClick={() => {
-                                setEditingProjectId(projectId);
-                                setProjectNameDraft(String(project?.cartName || ''));
-                                setProjectDateDraft(String(project?.requiredDate || '').slice(0, 10));
-                              }}
-                              aria-label="Edit project name"
+                              onClick={() => beginEditingProject(project)}
+                              aria-label="Edit project details"
                             >
                               <Pencil size={14} />
                             </button>
@@ -487,6 +885,20 @@ const SupplierUpstreamCart = () => {
                         {String(project?.requiredDate || '').trim() ? (
                           <p className="supplier-project-id">
                             <strong>Expected delivery: {String(project.requiredDate).slice(0, 10)}</strong>
+                          </p>
+                        ) : null}
+                        {!isEditing ? (
+                          <p className="supplier-project-id">
+                            <strong>Shipping address:</strong>{' '}
+                            {shippingPreview || (
+                              <button
+                                type="button"
+                                className="supplier-project-add-address"
+                                onClick={() => beginEditingProject(project)}
+                              >
+                                Not set — add address
+                              </button>
+                            )}
                           </p>
                         ) : null}
                       </div>

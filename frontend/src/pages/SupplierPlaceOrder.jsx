@@ -9,10 +9,24 @@ import {
   specificationsObjectForLogistics
 } from '../utils/specifications';
 import { formatRupee } from '../utils/formatRupee';
+import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
+import {
+  formatQuoteMoney,
+  getVendorTransportDetail,
+  isTransportSelectionReady,
+  isTransportSelectionReadyForVendor,
+  mergeTransportSelections,
+  normalizeTransportSelection,
+  getTransportGroupKey,
+  buildShippingAddressKey,
+  buildTransportGroupId,
+  consolidatePoTransportGroups,
+  normalizeShippingAddress
+} from '../utils/poTransportSelection';
 import './Dashboard.css';
 import './CreatePO.css';
 import './SupplierPlaceOrder.css';
@@ -32,13 +46,7 @@ const branchToShippingAddress = (branch) => ({
   country: String(branch?.country || 'India').trim() || 'India'
 });
 
-import {
-  formatQuoteMoney,
-  getVendorTransportDetail,
-  isTransportSelectionReady,
-  isTransportSelectionReadyForVendor,
-  mergeTransportSelections
-} from '../utils/poTransportSelection';
+function AddressFields({ prefix, address, onChange, disabled = false }) {
   const set = (field, value) => onChange({ ...address, [field]: value });
   return (
     <div className="checkout-address-grid">
@@ -157,8 +165,16 @@ const SupplierPlaceOrder = () => {
 
       setDraft(parsed);
       setRequiredDate(typeof parsed.requiredDate === 'string' ? parsed.requiredDate : '');
-      if (parsed.transportSelection && typeof parsed.transportSelection === 'object') {
-        setSelectedTransport(parsed.transportSelection);
+      setSelectedTransport(
+        parsed.transportSelection && typeof parsed.transportSelection === 'object'
+          ? normalizeTransportSelection(parsed.transportSelection)
+          : null
+      );
+      if (parsed.checkoutShippingAddress && typeof parsed.checkoutShippingAddress === 'object') {
+        setShippingAddress((prev) => ({
+          ...prev,
+          ...normalizeShippingAddress(parsed.checkoutShippingAddress)
+        }));
       }
     } catch (e) {
       console.error('Failed to load supplier upstream order draft:', e);
@@ -229,13 +245,17 @@ const SupplierPlaceOrder = () => {
           ...draft,
           requiredDate: requiredDate || '',
           paymentMethod,
-          transportSelection: selectedTransport || null
+          transportSelection: selectedTransport,
+          checkoutShippingAddress: normalizeShippingAddress(shippingAddress),
+          deliveryDestination,
+          shippingAddress: normalizeShippingAddress(shippingAddress),
+          billingAddress: normalizeShippingAddress(billingAddress)
         })
       );
     } catch (_) {
       // Non-fatal.
     }
-  }, [draft, requiredDate, paymentMethod, selectedTransport]);
+  }, [draft, requiredDate, paymentMethod, selectedTransport, shippingAddress, billingAddress, deliveryDestination]);
 
   // Prefill shipping/billing addresses from profile + GSTIN detection.
   useEffect(() => {
@@ -294,7 +314,9 @@ const SupplierPlaceOrder = () => {
         : null;
 
     if (incomingTransport) {
-      setSelectedTransport((prev) => mergeTransportSelections(prev, incomingTransport));
+      setSelectedTransport((prev) =>
+        normalizeTransportSelection(mergeTransportSelections(prev, incomingTransport))
+      );
     }
 
     if (typeof routeState.deliveryDestination === 'string') {
@@ -374,25 +396,41 @@ const SupplierPlaceOrder = () => {
   );
 
   const poGroups = useMemo(() => {
-    const groupsByVendorId = new Map();
+    const effectiveDeliveryAddress = normalizeShippingAddress(
+      deliveryDestination === 'billing' && hasGstin ? billingAddress : shippingAddress
+    );
+    const groupsByTransportKey = new Map();
+
     for (const line of reviewLines || []) {
-      const vendorId = line?.supplierId != null ? String(line.supplierId) : '';
+      const vendorId = line?.supplierId != null ? String(line.supplierId).trim() : '';
       const vendorName = line?.supplierName ? String(line.supplierName) : 'Supplier';
       if (!vendorId) continue;
 
-      if (!groupsByVendorId.has(vendorId)) {
-        groupsByVendorId.set(vendorId, {
+      const lineShipping =
+        line?.shippingAddress && typeof line.shippingAddress === 'object'
+          ? normalizeShippingAddress(line.shippingAddress)
+          : effectiveDeliveryAddress;
+      const transportGroupId = buildTransportGroupId(vendorId, lineShipping);
+      const shippingAddressLabel = formatShippingAddressPreview(lineShipping);
+
+      if (!groupsByTransportKey.has(transportGroupId)) {
+        groupsByTransportKey.set(transportGroupId, {
           vendorId,
+          transportGroupId,
+          shippingAddressKey: buildShippingAddressKey(lineShipping),
+          shippingAddress: { ...lineShipping },
+          shippingAddressLabel,
           vendorName,
           total: 0,
           items: []
         });
       }
 
-      const g = groupsByVendorId.get(vendorId);
+      const g = groupsByTransportKey.get(transportGroupId);
+      if (!g.vendorName && vendorName) g.vendorName = vendorName;
       const qty = Number(line?.quantity || 0) || 0;
       const unitPrice = Number(line?.unitPrice || 0) || 0;
-      const lineTotal = Number(line?.lineTotal || 0) || 0;
+      const lineTotal = Number(line?.lineTotal ?? qty * unitPrice) || 0;
 
       g.total += lineTotal;
       g.items.push({
@@ -405,8 +443,8 @@ const SupplierPlaceOrder = () => {
       });
     }
 
-    return Array.from(groupsByVendorId.values());
-  }, [reviewLines]);
+    return consolidatePoTransportGroups(Array.from(groupsByTransportKey.values()));
+  }, [reviewLines, shippingAddress, billingAddress, deliveryDestination, hasGstin]);
 
   const grandTotalAllPos = useMemo(() => {
     if (!poGroups.length) return 0;
@@ -461,8 +499,8 @@ const SupplierPlaceOrder = () => {
     }
 
     const scopedGroups = group ? [group] : poGroups;
-    const focusVendorId = group ? String(group.vendorId || '') : '';
-    const baseTransport = selectedTransport;
+    const focusTransportGroupId = group ? getTransportGroupKey(group) : '';
+    const baseTransport = normalizeTransportSelection(selectedTransport);
 
     const missingShipping = ['line1', 'city', 'state', 'pincode', 'country'].find(
       (key) => !String(shippingAddress?.[key] || '').trim()
@@ -486,7 +524,8 @@ const SupplierPlaceOrder = () => {
         returnPath: '/supplier-place-order',
         poGroups: scopedGroups,
         allPoGroups: poGroups,
-        focusVendorId,
+        focusTransportGroupId,
+        focusVendorId: focusTransportGroupId,
         existingTransportSelection: baseTransport,
         grandTotalAllPos: group ? Number(group.total) || 0 : grandTotalAllPos,
         requiredDate,
@@ -558,9 +597,14 @@ const SupplierPlaceOrder = () => {
       // If the user picked transport quotes, book the chosen transport against created orders.
       if (selectedTransport && createdOrders.length > 0 && selectedTransport.byVendorId) {
         const perOrderTransport = createdOrders.map((o) => {
-          const sid = String(o.supplierId || '');
-          const shippingProvider = selectedTransport?.byVendorId?.[sid];
-          const det = selectedTransport?.byVendorCourierDetail?.[sid] || {};
+          const transportKey = String(o.transportGroupId || o.supplierId || '').trim();
+          const shippingProvider =
+            selectedTransport?.byVendorId?.[transportKey] ||
+            selectedTransport?.byVendorId?.[String(o.supplierId || '')];
+          const det =
+            selectedTransport?.byVendorCourierDetail?.[transportKey] ||
+            selectedTransport?.byVendorCourierDetail?.[String(o.supplierId || '')] ||
+            {};
 
           const transportMode = det?.transport_mode ?? det?.transportMode ?? null;
           const source = det?.source ?? null;
@@ -839,14 +883,26 @@ const SupplierPlaceOrder = () => {
               <section className="spo-section">
                 <h2 className="spo-section-title">Upstream suppliers</h2>
                 <p className="spo-section-desc">
-                  Items are grouped by upstream supplier. Choose transport for each supplier before placing the
-                  order.
+                  Items from the same upstream supplier going to the same delivery address are clubbed into one
+                  shipment. Choose transport once per group before placing the order.
                 </p>
                 <div className="po-list">
                   {poGroups.map((group) => (
-                    <div key={group.vendorId} className="po-card">
+                    <div key={getTransportGroupKey(group)} className="po-card">
                       <div className="po-header">
-                        <h3>{group.vendorName}</h3>
+                        <div>
+                          <h3>{group.vendorName}</h3>
+                          {group.items?.length > 1 ? (
+                            <p style={{ margin: '0.25rem 0 0', fontSize: '0.82rem', color: '#475569' }}>
+                              {group.items.length} items · one shared transport for this supplier
+                            </p>
+                          ) : null}
+                          {group.shippingAddressLabel ? (
+                            <p style={{ margin: '0.2rem 0 0', fontSize: '0.78rem', color: '#64748b' }}>
+                              Delivery: {group.shippingAddressLabel}
+                            </p>
+                          ) : null}
+                        </div>
                         <div className="po-total">{formatRupee(group.total || 0)}</div>
                       </div>
                       <table className="po-table">
@@ -903,11 +959,12 @@ const SupplierPlaceOrder = () => {
                         </tbody>
                       </table>
                       <div className="po-transport-actions">
-                        {isTransportSelectionReadyForVendor(selectedTransport, group.vendorId) ? (
+                        {isTransportSelectionReadyForVendor(selectedTransport, group) ? (
                           <div className="po-transport-status">
                             <span className="po-transport-status__label">Transport selected</span>
                             {(() => {
-                              const d = getVendorTransportDetail(selectedTransport, group.vendorId);
+                              const transportKey = getTransportGroupKey(group);
+                              const d = getVendorTransportDetail(selectedTransport, group);
                               const priceLabel = formatQuoteMoney(d?.rate ?? d?.fareValue);
                               const modeLabel =
                                 d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
@@ -916,7 +973,7 @@ const SupplierPlaceOrder = () => {
                                     ? 'Trucking'
                                     : 'Courier';
                               const carrierName =
-                                d?.name || selectedTransport?.byVendorId?.[group.vendorId];
+                                d?.name || selectedTransport?.byVendorId?.[transportKey];
                               return (
                                 <span className="po-transport-status__detail">
                                   <span className="po-transport-status__mode">{modeLabel}:</span>
@@ -957,7 +1014,9 @@ const SupplierPlaceOrder = () => {
                       {Object.entries(selectedTransport.byVendorId || {})
                         .filter(([, name]) => String(name || '').trim())
                         .map(([vid, name]) => {
-                          const g = poGroups.find((x) => String(x.vendorId) === String(vid));
+                          const g =
+                            poGroups.find((x) => getTransportGroupKey(x) === String(vid)) ||
+                            poGroups.find((x) => String(x.vendorId) === String(vid));
                           const label = g?.vendorName || vid;
                           const d =
                             selectedTransport.byVendorCourierDetail &&

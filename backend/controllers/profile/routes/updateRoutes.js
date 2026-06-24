@@ -33,6 +33,7 @@ import {
   normalizeShippingAddressEntry,
   parseBrandTokens,
   resolveChainRoleOptionsForBrands,
+  shippingAddressEntryFromBranch,
   validateShippingAddressEntries
 } from '../profileHelpers.js';
 import { isAddressComplete, normalizeAddress } from '../../po/shared/poHelpers.js';
@@ -784,13 +785,6 @@ export function registerProfileUpdateRoutes(router) {
       }
 
       const userType = currentUser.user_type || currentUser.profile?.userType;
-      if (userType !== 'service_provider') {
-        return res.status(403).json({
-          status: 'error',
-          message: 'Only service providers can save shipping addresses to profile.'
-        });
-      }
-
       const normalized = normalizeAddress(payload);
       if (!isAddressComplete(normalized)) {
         return res.status(400).json({
@@ -800,6 +794,65 @@ export function registerProfileUpdateRoutes(router) {
       }
 
       const currentProfile = currentUser.profile || {};
+
+      if (userType === 'supplier') {
+        const existingBranches = Array.isArray(currentProfile.branches) ? currentProfile.branches : [];
+        const newBranch = {
+          id: uuidv4(),
+          name: String(payload.label || '').trim() || normalized.city || 'Shipping address',
+          address: normalized.line1,
+          city: normalized.city,
+          state: normalized.state,
+          zipCode: normalized.pincode,
+          country: normalized.country,
+          phone: '',
+          ...(payload.latitude != null ? { latitude: payload.latitude } : {}),
+          ...(payload.longitude != null ? { longitude: payload.longitude } : {}),
+          ...(payload.geoLocation ? { geoLocation: payload.geoLocation } : {})
+        };
+        const nextBranches = [...existingBranches, newBranch];
+        for (let i = 0; i < nextBranches.length; i += 1) {
+          const branch = nextBranches[i] || {};
+          if (!isSupplierBranchAddressComplete(branch)) {
+            const label = String(branch?.name || '').trim() || `Branch ${i + 1}`;
+            return res.status(400).json({
+              status: 'error',
+              code: 'supplier_branch_address_incomplete',
+              message: `Shipping address "${label}" is missing required fields.`
+            });
+          }
+        }
+
+        const { error: updateError } = await supabase
+          .from('users')
+          .update({
+            profile: {
+              ...currentProfile,
+              branches: nextBranches
+            }
+          })
+          .eq('id', req.userId);
+
+        if (updateError) throw updateError;
+
+        const savedEntry = shippingAddressEntryFromBranch(newBranch);
+        return res.json({
+          status: 'success',
+          message: 'Shipping address saved to profile',
+          shippingAddress: savedEntry,
+          shippingAddresses: nextBranches
+            .filter((branch) => isSupplierBranchAddressComplete(branch))
+            .map((branch) => shippingAddressEntryFromBranch(branch))
+        });
+      }
+
+      if (userType !== 'service_provider') {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Only service providers and suppliers can save shipping addresses to profile.'
+        });
+      }
+
       const existing = Array.isArray(currentProfile.shippingAddresses)
         ? currentProfile.shippingAddresses
         : [];

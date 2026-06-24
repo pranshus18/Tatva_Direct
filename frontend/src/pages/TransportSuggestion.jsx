@@ -6,7 +6,7 @@ import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { Truck } from 'lucide-react';
 import { useVoiceSessionContext } from '../voice/VoiceSessionContext';
 import { isVoiceGuidedActive } from '../voice/voiceCartBridge';
-import { mergeTransportSelections, getVendorTransportDetail } from '../utils/poTransportSelection';
+import { mergeTransportSelections, getVendorTransportDetail, getTransportGroupKey } from '../utils/poTransportSelection';
 import { saveCartTransportSelection } from '../utils/poCartTransportApi';
 
 const SELF_SHIP_PROVIDER_NAME = 'Self ship';
@@ -178,9 +178,12 @@ const TransportSuggestion = () => {
       : [];
   const poGroups = statePo.length ? statePo : draftPo;
   const allPoGroups = Array.isArray(location.state?.allPoGroups) ? location.state.allPoGroups : poGroups;
-  const focusVendorId = String(location.state?.focusVendorId || '').trim();
-  const focusGroup = focusVendorId
-    ? poGroups.find((g) => String(g.vendorId) === focusVendorId) || null
+  const focusTransportGroupId = String(
+    location.state?.focusTransportGroupId || location.state?.focusVendorId || ''
+  ).trim();
+  const focusGroup = focusTransportGroupId
+    ? poGroups.find((g) => String(g.transportGroupId || g.vendorId) === focusTransportGroupId) ||
+      poGroups.find((g) => String(g.vendorId) === focusTransportGroupId)
     : null;
   const existingTransportSelection =
     location.state?.existingTransportSelection &&
@@ -220,7 +223,7 @@ const TransportSuggestion = () => {
           items: Array.isArray(order.items) ? order.items : []
         }))
       : poGroups.map((group) => ({
-          key: group.vendorId,
+          key: getTransportGroupKey(group),
           vendorName: group.vendorName,
           total: group.total,
           items: Array.isArray(group.items) ? group.items : []
@@ -230,7 +233,7 @@ const TransportSuggestion = () => {
     const st = incomingTransportSelection;
     if (!st || typeof st !== 'object') return false;
     const by = st.byVendorId && typeof st.byVendorId === 'object' ? st.byVendorId : {};
-    const expectedIds = poGroups.map((g) => String(g.vendorId || '')).filter(Boolean);
+    const expectedIds = poGroups.map((g) => getTransportGroupKey(g)).filter(Boolean);
     const values = Object.values(by).map((v) => String(v || '').trim().toLowerCase());
     if (expectedIds.length > 0 && expectedIds.every((id) => String(by[id] || '').trim())) {
       return values.every((v) => v === 'self ship' || v === 'self-ship');
@@ -352,18 +355,19 @@ const TransportSuggestion = () => {
   const vendorIdsRequiringTransport = React.useMemo(() => {
     const fromQuotes = [];
     for (const s of shipments || []) {
-      if (!s.vendorId) continue;
+      const key = getTransportGroupKey(s);
+      if (!key) continue;
       const providers = s?.logistics?.providers;
       if (s?.logistics?.success && Array.isArray(providers) && providers.length > 0) {
-        fromQuotes.push(String(s.vendorId));
+        fromQuotes.push(key);
       }
     }
     if (fromQuotes.length) return [...new Set(fromQuotes)];
-    return [...new Set((poGroups || []).map((g) => String(g.vendorId || '')).filter(Boolean))];
+    return [...new Set((poGroups || []).map((g) => getTransportGroupKey(g)).filter(Boolean))];
   }, [shipments, poGroups]);
 
-  const pickProviderByKey = (vendorId, selectionKey) => {
-    const s = shipments.find((x) => String(x.vendorId) === String(vendorId));
+  const pickProviderByKey = (transportKey, selectionKey) => {
+    const s = shipments.find((x) => getTransportGroupKey(x) === String(transportKey));
     if (!s?.logistics?.success || !Array.isArray(s.logistics.providers)) return null;
     return s.logistics.providers.find((p) => providerSelectionKey(p) === selectionKey) || null;
   };
@@ -386,31 +390,35 @@ const TransportSuggestion = () => {
     return null;
   }, [transportModeChoice, vendorIdsRequiringTransport, selectedByVendorId, shipments]);
 
-  const vendorDisplayName = (vendorId) => {
-    const s = shipments.find((x) => String(x.vendorId) === String(vendorId));
+  const vendorDisplayName = (transportKey) => {
+    const s = shipments.find((x) => getTransportGroupKey(x) === String(transportKey));
     if (s?.vendorName) return s.vendorName;
-    const g = poGroups.find((x) => String(x.vendorId) === String(vendorId));
-    return g?.vendorName || vendorId;
+    const g =
+      poGroups.find((x) => getTransportGroupKey(x) === String(transportKey)) ||
+      poGroups.find((x) => String(x.vendorId) === String(transportKey));
+    return g?.vendorName || transportKey;
   };
 
   const otherConfiguredSuppliers = React.useMemo(() => {
     if (!existingTransportSelection?.byVendorId) return [];
-    const activeIds = new Set(poGroups.map((g) => String(g.vendorId || '')).filter(Boolean));
+    const activeIds = new Set(poGroups.map((g) => getTransportGroupKey(g)).filter(Boolean));
     return Object.entries(existingTransportSelection.byVendorId)
-      .filter(([vendorId, label]) => !activeIds.has(String(vendorId)) && String(label || '').trim())
-      .map(([vendorId, label]) => {
-        const fromAll = allPoGroups.find((g) => String(g.vendorId) === String(vendorId));
+      .filter(([transportKey, label]) => !activeIds.has(String(transportKey)) && String(label || '').trim())
+      .map(([transportKey, label]) => {
+        const fromAll =
+          allPoGroups.find((g) => getTransportGroupKey(g) === String(transportKey)) ||
+          allPoGroups.find((g) => String(g.vendorId) === String(transportKey));
         return {
-          vendorId,
+          vendorId: transportKey,
           vendorName: fromAll?.vendorName || label,
           label,
-          detail: getVendorTransportDetail(existingTransportSelection, vendorId)
+          detail: getVendorTransportDetail(existingTransportSelection, transportKey)
         };
       });
   }, [existingTransportSelection, poGroups, allPoGroups]);
 
   const vendorIdsToMerge = () =>
-    poGroups.map((g) => String(g.vendorId || '')).filter(Boolean);
+    poGroups.map((g) => getTransportGroupKey(g)).filter(Boolean);
 
   const finishTransportNavigation = async (transportSelection) => {
     const ids = vendorIdsToMerge();
@@ -446,7 +454,7 @@ const TransportSuggestion = () => {
       const byVendorId = {};
       const byVendorCourierDetail = {};
       for (const g of poGroups) {
-        const id = String(g.vendorId || '');
+        const id = getTransportGroupKey(g);
         if (!id) continue;
         byVendorId[id] = SELF_SHIP_PROVIDER_NAME;
         byVendorCourierDetail[id] = {
@@ -491,24 +499,16 @@ const TransportSuggestion = () => {
       );
       return;
     }
-    const firstChosen =
-      vendorIdsRequiringTransport.map((id) => selectedByVendorId[id]).find((v) => String(v || '').trim()) || '';
-    const byVendorSelectionKey = { ...selectedByVendorId };
-    for (const g of poGroups) {
-      const id = String(g.vendorId || '');
-      if (!id) continue;
-      if (!String(byVendorSelectionKey[id] || '').trim() && firstChosen) {
-        byVendorSelectionKey[id] = firstChosen;
-      }
-    }
 
     const byVendorId = {};
     const byVendorCourierDetail = {};
-    for (const id of Object.keys(byVendorSelectionKey)) {
-      const selKey = byVendorSelectionKey[id];
-      if (!String(selKey || '').trim()) continue;
+    for (const g of poGroups) {
+      const id = getTransportGroupKey(g);
+      if (!id) continue;
+      const selKey = String(selectedByVendorId[id] || '').trim();
+      if (!selKey) continue;
       const p = pickProviderByKey(id, selKey);
-      const sh = shipments.find((x) => String(x.vendorId) === String(id));
+      const sh = shipments.find((x) => getTransportGroupKey(x) === String(id));
       const displayName = String(p?.name || '').trim() || selKey;
       byVendorId[id] = displayName;
       const isTrucking =
@@ -737,7 +737,7 @@ const TransportSuggestion = () => {
             <div style={{ display: 'grid', gap: '1rem', marginTop: '0.75rem' }}>
               {shipments.map((shipment) => (
                 <div
-                  key={shipment.vendorId || shipment.vendorName}
+                  key={getTransportGroupKey(shipment) || shipment.vendorName}
                   style={{
                     border: '1px solid #cbd5e1',
                     borderRadius: 12,
@@ -803,7 +803,7 @@ const TransportSuggestion = () => {
                       </div>
                     ) : (
                       (shipment.logistics.providers || []).map((p, idx) => {
-                        const vid = String(shipment.vendorId || '');
+                        const vid = getTransportGroupKey(shipment);
                         const selKey = providerSelectionKey(p);
                         const selected = Boolean(
                           selKey && String(selectedByVendorId[vid] || '').trim() === selKey
@@ -811,7 +811,7 @@ const TransportSuggestion = () => {
                         const overCap = Boolean(p.capacity_exceeded);
                         return (
                           <TransportPickCard
-                            key={`${shipment.vendorId}-${selKey || idx}`}
+                            key={`${vid}-${selKey || idx}`}
                             provider={p}
                             selected={selected}
                             disabled={overCap}

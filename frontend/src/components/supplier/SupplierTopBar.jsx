@@ -25,7 +25,7 @@ import { getSupplierBreadcrumb } from '@/utils/supplierNavConfig';
 export default function SupplierTopBar({ user, pathname, onMenuClick, onLogout }) {
   const crumbs = getSupplierBreadcrumb(pathname);
   return (
-    <header className="supplier-topbar sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80">
+    <header className="supplier-topbar portal-shell-topbar sticky top-3 z-40">
       <div className="flex h-14 items-center gap-3 px-4 lg:px-6">
         <Button variant="ghost" size="icon" className="lg:hidden" onClick={onMenuClick} aria-label="Open menu">
           <Menu className="h-5 w-5" />

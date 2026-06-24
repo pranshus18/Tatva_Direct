@@ -14,11 +14,13 @@ export function buildVendorRankCacheKey(items, boqId, project = null) {
     .sort();
   const ship = project?.shippingAddress;
   const siteKey = ship
-    ? [ship.line1, ship.city, ship.pincode, project?.siteGeo?.lat, project?.siteGeo?.lng]
+    ? [ship.line1, ship.city, ship.state, ship.pincode]
         .map((part) => String(part ?? '').trim())
         .join('|')
     : String(project?.location || '').trim();
-  return `${String(boqId || '').trim()}::${siteKey}::${lines.join('|')}`;
+  const boqPart =
+    ship || project?.location ? '' : String(boqId || '').trim();
+  return `${boqPart}::${siteKey}::${lines.join('|')}`;
 }
 
 export function getVendorRankCache(key) {

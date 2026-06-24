@@ -1,6 +1,7 @@
 /** Short-lived backup when navigating Cart → supplier select (router state can be lost in production). */
 
 export const SESSION_SCOPE_KEY = 'tatvaSupplierSelectScope';
+export const SESSION_SCOPE_PROJECT_KEY = 'tatvaSupplierSelectScopeProject';
 export const SESSION_SCOPE_TS_KEY = 'tatvaSupplierSelectScopeTs';
 export const SESSION_SCOPE_SOURCE_KEY = 'tatvaSupplierSelectScopeSource';
 export const SESSION_SCOPE_FROM_CART = 'cart';
@@ -9,6 +10,7 @@ export const SCOPE_TTL_MS = 120000;
 export function clearSupplierSelectScopeSession() {
   try {
     sessionStorage.removeItem(SESSION_SCOPE_KEY);
+    sessionStorage.removeItem(SESSION_SCOPE_PROJECT_KEY);
     sessionStorage.removeItem(SESSION_SCOPE_TS_KEY);
     sessionStorage.removeItem(SESSION_SCOPE_SOURCE_KEY);
   } catch {
@@ -47,13 +49,18 @@ export function dedupeSupplierSelectItems(items) {
   return out;
 }
 
-export function persistSupplierSelectScopeFromCart(items) {
+export function persistSupplierSelectScopeFromCart(items, boqProject = null) {
   const scoped = dedupeSupplierSelectItems(items);
   if (!scoped.length) return;
   try {
     sessionStorage.setItem(SESSION_SCOPE_KEY, JSON.stringify(scoped));
     sessionStorage.setItem(SESSION_SCOPE_TS_KEY, String(Date.now()));
     sessionStorage.setItem(SESSION_SCOPE_SOURCE_KEY, SESSION_SCOPE_FROM_CART);
+    if (boqProject && typeof boqProject === 'object') {
+      sessionStorage.setItem(SESSION_SCOPE_PROJECT_KEY, JSON.stringify(boqProject));
+    } else {
+      sessionStorage.removeItem(SESSION_SCOPE_PROJECT_KEY);
+    }
   } catch {
     /* ignore */
   }
@@ -70,6 +77,20 @@ export function readSupplierSelectScopeSessionIfFresh() {
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) return null;
     return dedupeSupplierSelectItems(parsed);
+  } catch {
+    return null;
+  }
+}
+
+export function readSupplierSelectBoqProjectSessionIfFresh() {
+  try {
+    if (sessionStorage.getItem(SESSION_SCOPE_SOURCE_KEY) !== SESSION_SCOPE_FROM_CART) return null;
+    const ts = Number(sessionStorage.getItem(SESSION_SCOPE_TS_KEY) || 0);
+    if (!ts || Date.now() - ts >= SCOPE_TTL_MS) return null;
+    const raw = sessionStorage.getItem(SESSION_SCOPE_PROJECT_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : null;
   } catch {
     return null;
   }

@@ -73,6 +73,8 @@ const SupplierPOS = () => {
   const [scanMode, setScanMode] = useState('gsku');
   const [creditInfo, setCreditInfo] = useState(null);
   const [creditLoading, setCreditLoading] = useState(false);
+  const [posCreditLimit, setPosCreditLimit] = useState('');
+  const [savingPosCredit, setSavingPosCredit] = useState(false);
 
   const barcodeInputRef = useRef(null);
   const [isOnline, setIsOnline] = useState(
@@ -354,6 +356,58 @@ const SupplierPOS = () => {
     }, 400);
     return () => clearTimeout(timer);
   }, [customerName, customerPhone, totalAmount]);
+
+  const savePosCreditLimit = async () => {
+    const phone = (customerPhone || '').trim();
+    const limit = Number(posCreditLimit);
+    if (!phone) {
+      setError('Enter customer phone before setting a pay-later limit.');
+      return;
+    }
+    if (!Number.isFinite(limit) || limit <= 0) {
+      setError('Enter a valid pay-later limit greater than ₹0.');
+      return;
+    }
+    try {
+      setSavingPosCredit(true);
+      setError('');
+      const token = localStorage.getItem('token');
+      const res = await fetch(getApiUrl('/api/supplier/credit-accounts'), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          customerPhone: phone,
+          creditLimit: limit,
+          paylaterThreshold: 0,
+          creditPeriodDays: 30,
+          isEnabled: true
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to save pay-later limit');
+      }
+      setPosCreditLimit('');
+      setSuccessMessage(`Pay-later limit set for ${phone}.`);
+      const params = new URLSearchParams({
+        customerName: (customerName || '').trim(),
+        customerPhone: phone,
+        orderAmount: String(totalAmount || 0)
+      });
+      const checkRes = await fetch(getApiUrl(`/api/supplier/credit-accounts/check?${params}`), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const checkData = await checkRes.json();
+      setCreditInfo(checkData.status === 'success' ? checkData.credit : null);
+    } catch (err) {
+      setError(err.message || 'Failed to save pay-later limit');
+    } finally {
+      setSavingPosCredit(false);
+    }
+  };
 
   const handleCheckout = async ({ paymentOverride } = {}) => {
     setError('');
@@ -844,14 +898,32 @@ const SupplierPOS = () => {
                       ? creditInfo?.message
                       : creditInfo?.message
                         ? `${creditInfo.message} Cash, UPI, and card checkout are still available.`
-                        : (
-                        <>
-                          Pay later not set up.{' '}
-                          <Link to="/supplier-credit-accounts">Set limit & minimum</Link>
-                          {' '}— use cash, UPI, or card to checkout.
-                        </>
-                      )}
+                        : 'Pay later is not set up for this phone yet. Set a limit below or use cash, UPI, or card.'}
                 </p>
+              ) : null}
+              {(customerPhone || '').trim() && !creditLoading && !payLaterAvailable ? (
+                <div className="pos-station__credit-setup">
+                  <Label htmlFor="pos-credit-limit">Pay-later limit (₹)</Label>
+                  <div className="pos-station__credit-setup-row">
+                    <Input
+                      id="pos-credit-limit"
+                      type="number"
+                      min="1"
+                      step="100"
+                      value={posCreditLimit}
+                      onChange={(e) => setPosCreditLimit(e.target.value)}
+                      placeholder="e.g. 50000"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={savePosCreditLimit}
+                      disabled={savingPosCredit}
+                    >
+                      {savingPosCredit ? 'Saving…' : 'Set limit'}
+                    </Button>
+                  </div>
+                </div>
               ) : null}
               {cartItems.length > 0 && !trimmedCustomerName ? (
                 <p className="pos-station__alert pos-station__alert--warn" style={{ marginTop: '0.5rem' }}>

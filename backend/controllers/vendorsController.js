@@ -30,7 +30,8 @@ import { loadBuyerCovMetrics } from '../services/vendorBuyerMetricsService.js';
 import {
   loadBoqContextForRanking,
   loadDiscoveryProjectContextForRanking,
-  loadServiceProviderLocationContext
+  loadServiceProviderLocationContext,
+  resolveProjectShippingAddress
 } from '../services/vendorRequestContextService.js';
 import { loadReferenceProductForItem } from '../services/vendorReferenceProductService.js';
 import {
@@ -84,12 +85,39 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         userId: req.userId
       });
 
-    const discoveryContext = await loadDiscoveryProjectContextForRanking(payload.project);
+    const resolvedProject = await resolveProjectShippingAddress(payload.project || {}, {
+      supabase,
+      userId: req.userId
+    });
+    const discoveryContext = await loadDiscoveryProjectContextForRanking(resolvedProject);
 
-    const siteGeoFromBoq = boqSiteGeo || discoveryContext.siteGeoFromBoq;
-    const boqProjectCity = boqCity || discoveryContext.boqProjectCity;
-    const boqProjectState = boqState || discoveryContext.boqProjectState;
-    const requiredDateFromBoq = boqRequiredDate || discoveryContext.requiredDateFromBoq;
+    const prefersDiscoveryDelivery = Boolean(
+      resolvedProject?.shippingAddress ||
+        resolvedProject?.shippingAddressId ||
+        String(resolvedProject?.location || '').trim() ||
+        discoveryContext.deliveryLocation
+    );
+
+    let siteGeoFromBoq;
+    let boqProjectCity;
+    let boqProjectState;
+    let requiredDateFromBoq;
+
+    if (prefersDiscoveryDelivery) {
+      siteGeoFromBoq = discoveryContext.siteGeoFromBoq;
+      boqProjectCity = discoveryContext.boqProjectCity;
+      boqProjectState = discoveryContext.boqProjectState;
+      requiredDateFromBoq = discoveryContext.requiredDateFromBoq || boqRequiredDate;
+      rankLog(
+        `[Vendor Ranking] Ranking from cart/discovery delivery address: ${discoveryContext.deliveryLocation || 'n/a'}` +
+          (siteGeoFromBoq ? ` (${siteGeoFromBoq.lat.toFixed(4)}, ${siteGeoFromBoq.lng.toFixed(4)})` : ' (geo pending)')
+      );
+    } else {
+      siteGeoFromBoq = boqSiteGeo || discoveryContext.siteGeoFromBoq;
+      boqProjectCity = boqCity || discoveryContext.boqProjectCity;
+      boqProjectState = boqState || discoveryContext.boqProjectState;
+      requiredDateFromBoq = boqRequiredDate || discoveryContext.requiredDateFromBoq;
+    }
     
     rankLog(`\n[Vendor Ranking] ==========================================`);
     rankLog(`[Vendor Ranking] Vendor ranking request received at ${new Date().toISOString()}`);
@@ -255,16 +283,22 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       });
 
       // Sort primarily by proximity when site geo is known, then by overall rank score.
-      // This ensures the nearest suppliers appear first when the BOQ has a mapped location.
       sortVendorsByGeoThenRankScore(vendors, siteGeoFromBoq);
-      assignSequentialRank(vendors);
 
-      // Sort approved products first, then by rank score
-      prioritizeApprovedThenRankScore(vendors);
-      
-      // Return all eligible listings (in-stock / priced first); do not hide zero-stock suppliers.
+      // Without delivery coordinates, keep legacy approved-first + stock-weighted ordering.
+      if (!siteGeoFromBoq) {
+        prioritizeApprovedThenRankScore(vendors);
+      }
+
       const rankCap = includeAllVariants ? 500 : 50;
-      let validVendors = filterTopValidVendors(vendors, rankCap);
+      let validVendors = filterTopValidVendors(vendors, rankCap, {
+        preserveGeoOrder: !!siteGeoFromBoq
+      });
+
+      assignSequentialRank(validVendors);
+      if (siteGeoFromBoq && validVendors.length > 0) {
+        validVendors[0].isNearestRecommended = true;
+      }
       
       // CRITICAL: If we have a reference product with a supplier but no vendors were found,
       // create a vendor entry from the reference product to ensure it's shown

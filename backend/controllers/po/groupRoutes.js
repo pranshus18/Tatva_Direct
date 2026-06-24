@@ -20,7 +20,13 @@ import {
   normalizeAddress,
   parseWithSchema,
   poGroupRequestSchema,
+  buildShippingAddressKey,
+  buildTransportGroupId,
+  consolidatePoTransportGroups,
+  formatShippingAddressLabel,
+  loadServiceProviderPoCartDraft,
   resolveB2bPaymentFromBody,
+  resolveCheckoutShippingAddress,
   supplierMatchesBrandTerminalRole
 } from './poImports.js';
 
@@ -35,7 +41,14 @@ export function registerPoGroupRoutes(ctx) {
 router.post('/group', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const payload = parseWithSchema(poGroupRequestSchema, req.body || {});
-    const { selectedVendors, substitutions, items } = payload;
+    const { selectedVendors, substitutions, items, defaultShippingAddress } = payload;
+    const cartDraft = await loadServiceProviderPoCartDraft(supabase, req.userId);
+    const fallbackShipping =
+      resolveCheckoutShippingAddress({
+        cartDraft,
+        workflowItems: items,
+        requestedAddress: defaultShippingAddress
+      }) || null;
     const itemBrandCandidates = (items || [])
       .flatMap((item) => [
         item?.brand,
@@ -267,10 +280,21 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       }
 
       const supplierName = supplier?.name || supplier?.company || 'Unknown Supplier';
-      
-      if (!vendorGroups[vendorId]) {
-        vendorGroups[vendorId] = {
-          vendorId: vendorId,
+
+      const itemShipping =
+        item.shippingAddress && typeof item.shippingAddress === 'object'
+          ? normalizeAddress(item.shippingAddress)
+          : fallbackShipping;
+      const shippingAddressKey = buildShippingAddressKey(itemShipping || {});
+      const transportGroupId = buildTransportGroupId(vendorId, itemShipping || {});
+
+      if (!vendorGroups[transportGroupId]) {
+        vendorGroups[transportGroupId] = {
+          vendorId,
+          transportGroupId,
+          shippingAddressKey,
+          shippingAddress: itemShipping || null,
+          shippingAddressLabel: itemShipping ? formatShippingAddressLabel(itemShipping) : '',
           vendorName: supplierName,
           items: [],
           total: 0,
@@ -278,7 +302,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         };
       }
       if (supplierProduct.outlet_id) {
-        vendorGroups[vendorId].outletIds.add(supplierProduct.outlet_id);
+        vendorGroups[transportGroupId].outletIds.add(supplierProduct.outlet_id);
       }
 
       const quantity = parseFloat(item.quantity) || 0;
@@ -314,7 +338,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         ...supplierSpecs
       };
 
-      vendorGroups[vendorId].items.push({
+      vendorGroups[transportGroupId].items.push({
         name: itemName,
         quantity: quantity,
         price: price,
@@ -336,10 +360,12 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         originalItem: item.normalizedName || item.rawName
       });
 
-      vendorGroups[vendorId].total += itemTotal;
+      vendorGroups[transportGroupId].total += itemTotal;
     }
 
-    const supplierIdsForPins = Object.keys(vendorGroups);
+    const supplierIdsForPins = [
+      ...new Set(Object.values(vendorGroups).map((group) => group.vendorId).filter(Boolean))
+    ];
     const pickupMetaBySupplierId = {};
     if (supplierIdsForPins.length > 0) {
       const { data: pinRows } = await supabase
@@ -352,8 +378,9 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       }
 
       const singleOutletIdByVendor = {};
-      for (const vid of supplierIdsForPins) {
-        const ids = [...(vendorGroups[vid].outletIds || new Set())].filter(Boolean);
+      for (const group of Object.values(vendorGroups)) {
+        const vid = group.vendorId;
+        const ids = [...(group.outletIds || new Set())].filter(Boolean);
         if (ids.length === 1) singleOutletIdByVendor[vid] = ids[0];
       }
       const outletIdsToLoad = [...new Set(Object.values(singleOutletIdByVendor))];
@@ -389,6 +416,10 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       };
       return {
         vendorId: group.vendorId,
+        transportGroupId: group.transportGroupId,
+        shippingAddressKey: group.shippingAddressKey,
+        shippingAddress: group.shippingAddress || null,
+        shippingAddressLabel: group.shippingAddressLabel || '',
         vendorName: group.vendorName,
         total: Math.round(group.total * 100) / 100,
         pickupPincode: pickup.pincode || '',
@@ -400,15 +431,17 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       };
     });
 
+    const consolidatedGroups = consolidatePoTransportGroups(groups);
+
     // If no groups were created, return empty array
-    if (groups.length === 0) {
+    if (consolidatedGroups.length === 0) {
       return res.json({ 
         groups: [],
         message: 'No items with selected vendors found'
       });
     }
 
-    res.json({ groups });
+    res.json({ groups: consolidatedGroups });
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });

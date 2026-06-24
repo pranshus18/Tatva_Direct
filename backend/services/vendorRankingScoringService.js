@@ -60,7 +60,8 @@ export function assignSequentialRank(vendors) {
   });
 }
 
-export function filterTopValidVendors(vendors, limit = 10) {
+export function filterTopValidVendors(vendors, limit = 10, options = {}) {
+  const { preserveGeoOrder = false } = options || {};
   const eligible = (vendors || []).filter(
     (vendor) =>
       vendor &&
@@ -68,6 +69,10 @@ export function filterTopValidVendors(vendors, limit = 10) {
       vendor.name &&
       (vendor.status === 'approved' || vendor.status === 'pending')
   );
+
+  if (preserveGeoOrder) {
+    return eligible.slice(0, limit);
+  }
 
   const stockPriority = (v) => {
     const s = parseInt(v.stock, 10);

@@ -1,4 +1,4 @@
-import { getViewerBrandTokensForRole } from './supplierBrandGuardService.js';
+import { getViewerBrandTokensForRole, roleDeclaresBrand } from './supplierBrandGuardService.js';
 import {
   brandKeysMatchForChainLookup,
   normalizeBrandKey,
@@ -38,13 +38,15 @@ export const ROLE_DEPTH = {
 
 export function userHasSupplierRole(profile, role) {
   if (!profile || !role) return false;
-  if (profile.supplierRole === role) return true;
   const entries = Array.isArray(profile.companyInfoEntries)
     ? profile.companyInfoEntries
     : profile.companyInfoEntries && typeof profile.companyInfoEntries === 'object'
       ? [profile.companyInfoEntries]
       : [];
-  return entries.some((e) => e && e.role === role);
+  if (entries.length > 0) {
+    return entries.some((e) => e && e.role === role);
+  }
+  return profile.supplierRole === role;
 }
 
 export function getMySupplierRoles(profile, previewRole) {
@@ -178,9 +180,7 @@ export function resolveRequiredUpstreamRoleFromAdminChain({ profile, brandKey, c
     };
   }
 
-  const brandMatchedRoles = myRoles.filter((role) =>
-    getViewerBrandTokensForRole(profile, role).has(brandKey)
-  );
+  const brandMatchedRoles = myRoles.filter((role) => roleDeclaresBrand(profile, role, brandKey));
   const preferredRoles = brandMatchedRoles.length > 0 ? brandMatchedRoles : myRoles;
   const preferredSet = new Set(preferredRoles);
 
@@ -212,7 +212,21 @@ export function getImmediateParentRolesUnion(profile) {
  * Resolve which upstream seller role(s) may fulfill an order for this brand.
  * Prefers the admin-defined chain (including chains that skip dealer, etc.).
  */
-export function buildAllowedUpstreamRolesSet({ profile, brandKey, chainRow, parentRolesUnion }) {
+export function resolveBuyerRoleForBrand(profile, brandInput) {
+  const myRoles = getMySupplierRoles(profile, '');
+  if (myRoles.length === 0) return null;
+  const brandMatched = myRoles.filter((role) => roleDeclaresBrand(profile, role, brandInput));
+  const pool = brandMatched.length > 0 ? brandMatched : myRoles;
+  return sortRolesByChainDepthDesc(pool)[0] || null;
+}
+
+export function buildAllowedUpstreamRolesSet({
+  profile,
+  brandKey,
+  chainRow,
+  parentRolesUnion,
+  buyerRoleHint
+}) {
   const chainRouting = resolveRequiredUpstreamRoleFromAdminChain({
     profile,
     brandKey,
@@ -220,11 +234,16 @@ export function buildAllowedUpstreamRolesSet({ profile, brandKey, chainRow, pare
   });
 
   let required = chainRouting.requiredUpstreamRole || null;
+  const resolvedBuyerRole =
+    buyerRoleHint ||
+    chainRouting.buyerRole ||
+    resolveBuyerRoleForBrand(profile, brandKey) ||
+    sortRolesByChainDepthDesc(getMySupplierRoles(profile, ''))[0] ||
+    null;
 
   if (!required && chainRow) {
     const chainRoles = normalizeChainRolesFromStages(chainRow?.stages);
-    const buyerRole =
-      chainRouting.buyerRole || sortRolesByChainDepthDesc(getMySupplierRoles(profile, ''))[0] || null;
+    const buyerRole = resolvedBuyerRole;
     if (buyerRole && chainRoles.length > 0) {
       required = findUpstreamRoleWalkback(buyerRole, chainRoles);
       if (required) {
@@ -237,7 +256,7 @@ export function buildAllowedUpstreamRolesSet({ profile, brandKey, chainRow, pare
   }
 
   if (!required) {
-    const buyerRole = sortRolesByChainDepthDesc(getMySupplierRoles(profile, ''))[0] || null;
+    const buyerRole = resolvedBuyerRole;
     required = buyerRole ? findUpstreamRoleWalkback(buyerRole, SUPPLY_CHAIN_ROLES_IN_ORDER) : null;
     if (required) {
       chainRouting.source = chainRouting.source || 'standard_chain_walkback';
@@ -246,12 +265,24 @@ export function buildAllowedUpstreamRolesSet({ profile, brandKey, chainRow, pare
     }
   }
 
-  const allowedRolesSet =
-    required && SUPPLIER_ROLE_SET.has(required)
-      ? new Set([required])
-      : parentRolesUnion && parentRolesUnion.size > 0
-        ? parentRolesUnion
-        : new Set();
+  const chainRoles = normalizeChainRolesFromStages(chainRow?.stages);
+  let allowedRolesSet = null;
+  if (resolvedBuyerRole && chainRoles.length >= 2 && chainRoles.includes(resolvedBuyerRole)) {
+    const buyerDepth = ROLE_DEPTH[resolvedBuyerRole] ?? 99;
+    const upstreamOnChain = chainRoles.filter((r) => (ROLE_DEPTH[r] ?? 99) < buyerDepth);
+    if (upstreamOnChain.length > 0) {
+      allowedRolesSet = new Set(upstreamOnChain);
+    }
+  }
+
+  if (!allowedRolesSet || allowedRolesSet.size === 0) {
+    allowedRolesSet =
+      required && SUPPLIER_ROLE_SET.has(required)
+        ? new Set([required])
+        : parentRolesUnion && parentRolesUnion.size > 0
+          ? parentRolesUnion
+          : new Set();
+  }
 
   return { allowedRolesSet, chainRouting };
 }

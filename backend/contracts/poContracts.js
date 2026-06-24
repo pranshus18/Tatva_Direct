@@ -23,17 +23,6 @@ const poGroupItemSchema = z.object({
   specifications: productSpecsSchema
 }).passthrough();
 
-export const poGroupRequestSchema = z.object({
-  selectedVendors: z.record(z.string(), z.union([z.string(), z.number(), z.null(), z.undefined()])),
-  substitutions: z.array(
-    z.object({
-      originalItem: z.union([z.string(), z.number()]).optional(),
-      suggestedItem: z.union([z.string(), z.number()]).optional()
-    }).passthrough()
-  ).optional().default([]),
-  items: z.array(poGroupItemSchema).min(1)
-});
-
 const addressSchema = z.object({
   line1: z.string().optional(),
   city: z.string().optional(),
@@ -44,6 +33,18 @@ const addressSchema = z.object({
   zipCode: z.string().optional(),
   postalCode: z.string().optional(),
   postal_code: z.string().optional()
+});
+
+export const poGroupRequestSchema = z.object({
+  selectedVendors: z.record(z.string(), z.union([z.string(), z.number(), z.null(), z.undefined()])),
+  substitutions: z.array(
+    z.object({
+      originalItem: z.union([z.string(), z.number()]).optional(),
+      suggestedItem: z.union([z.string(), z.number()]).optional()
+    }).passthrough()
+  ).optional().default([]),
+  items: z.array(poGroupItemSchema).min(1),
+  defaultShippingAddress: addressSchema.optional()
 });
 
 export const poCreateRequestSchema = z.object({
@@ -66,7 +67,10 @@ export const poCreateRequestSchema = z.object({
           pincode: z.string().optional()
         })
         .optional()
-        .nullable()
+        .nullable(),
+      transportGroupId: z.string().optional(),
+      shippingAddressKey: z.string().optional(),
+      shippingAddress: addressSchema.optional()
     })
   ).min(1),
   boqId: z.preprocess((v) => (v === '' ? null : v), z.string().uuid().optional().nullable()),
