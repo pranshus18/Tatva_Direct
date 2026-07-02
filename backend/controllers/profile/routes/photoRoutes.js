@@ -33,7 +33,7 @@ export function registerProfilePhotoRoutes(router) {
       }
 
       tempPath = req.file.path;
-      const fileBuffer = fs.readFileSync(tempPath);
+      const fileBuffer = await fs.promises.readFile(tempPath);
       const ext = req.file.mimetype === 'image/png' ? 'png' : req.file.mimetype === 'image/webp' ? 'webp' : req.file.mimetype === 'image/gif' ? 'gif' : 'jpg';
       const storagePath = `${req.userId}/avatar-${Date.now()}.${ext}`;
 
@@ -86,7 +86,7 @@ export function registerProfilePhotoRoutes(router) {
     } finally {
       if (tempPath) {
         try {
-          fs.unlinkSync(tempPath);
+          await fs.promises.unlink(tempPath);
         } catch (cleanupError) {
           console.error('Failed to cleanup temp profile photo:', cleanupError);
         }

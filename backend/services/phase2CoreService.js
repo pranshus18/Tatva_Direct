@@ -1,5 +1,6 @@
 import { supabase } from '../config/supabase.js';
 import { recordInventoryMovement } from './inventoryService.js';
+import { parseServerDate } from '../utils/dateTime.js';
 import {
   LIFECYCLE_STATES,
   toLifecycleStateFromStatus,
@@ -104,6 +105,85 @@ export async function buildNormalizationTriageQueue({ threshold = 70, limit = 20
   return rows || [];
 }
 
+function checkoutHoldMovementNote(reservationId) {
+  return `Checkout inventory hold:${reservationId}`;
+}
+
+function checkoutHoldReleaseMovementNote(reservationId) {
+  return `Checkout hold released:${reservationId}`;
+}
+
+async function loadSupplierProductForReservation(supplierProductId) {
+  const { data: sp, error } = await supabase
+    .from('supplier_products')
+    .select('product_id')
+    .eq('id', supplierProductId)
+    .maybeSingle();
+  if (error) throw error;
+  return sp;
+}
+
+async function deductStockForReservation(row, actorUserId) {
+  const sp = await loadSupplierProductForReservation(row.supplier_product_id);
+  if (!sp?.product_id) return false;
+
+  const holdNote = checkoutHoldMovementNote(row.id);
+  const { data: existingHold } = await supabase
+    .from('inventory_movements')
+    .select('id')
+    .eq('supplier_product_id', row.supplier_product_id)
+    .eq('notes', holdNote)
+    .maybeSingle();
+  if (existingHold) return false;
+
+  await recordInventoryMovement({
+    supplierProductId: row.supplier_product_id,
+    supplierId: row.supplier_id,
+    productId: sp.product_id,
+    quantityChange: -safeNumber(row.reserved_quantity),
+    movementType: 'adjustment',
+    referenceOrderId: row.order_id || null,
+    referenceOrderItemId: row.order_item_id || null,
+    notes: holdNote,
+    userId: actorUserId || row.created_by || row.supplier_id
+  });
+  return true;
+}
+
+async function restockFromReservation(row, actorUserId, notes) {
+  const sp = await loadSupplierProductForReservation(row.supplier_product_id);
+  if (!sp?.product_id) return;
+
+  const releaseNote = checkoutHoldReleaseMovementNote(row.id);
+  const { data: existingRelease } = await supabase
+    .from('inventory_movements')
+    .select('id')
+    .eq('supplier_product_id', row.supplier_product_id)
+    .eq('notes', releaseNote)
+    .maybeSingle();
+  if (existingRelease) return;
+
+  const reservedQty = safeNumber(row.reserved_quantity);
+  if (reservedQty <= 0) return;
+
+  await recordInventoryMovement({
+    supplierProductId: row.supplier_product_id,
+    supplierId: row.supplier_id,
+    productId: sp.product_id,
+    quantityChange: reservedQty,
+    movementType: 'adjustment',
+    referenceOrderId: row.order_id || null,
+    referenceOrderItemId: row.order_item_id || null,
+    notes: notes || releaseNote,
+    userId: actorUserId || row.created_by || row.supplier_id
+  });
+}
+
+export async function reconcileActivePhysicalHolds() {
+  // Holds are applied once at reserve time via idempotent deductStockForReservation.
+  return { repaired: 0 };
+}
+
 export async function reserveInventory({
   supplierProductId,
   supplierId,
@@ -137,19 +217,18 @@ export async function reserveInventory({
     .single();
   if (stockErr || !current) throw new Error('Supplier product not found');
 
-  const activeStatuses = ['active'];
-  const { data: activeReservations } = await supabase
-    .from('inventory_reservations')
-    .select('reserved_quantity')
-    .eq('supplier_product_id', supplierProductId)
-    .in('status', activeStatuses);
-  const alreadyReserved = (activeReservations || []).reduce((sum, r) => sum + safeNumber(r.reserved_quantity), 0);
-  const available = Math.max(0, safeNumber(current.stock) - alreadyReserved);
+  // Stock is reduced when a hold is created, so on-hand stock is the true availability.
+  const available = Math.max(0, safeNumber(current.stock));
   if (available < qty) {
     throw new Error(`Insufficient available stock. Available=${available}, requested=${qty}`);
   }
 
   const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000).toISOString();
+  const reservationMetadata = {
+    ...metadata,
+    physicalHold: true,
+    stockBeforeHold: safeNumber(current.stock)
+  };
   const { data: created, error: insertErr } = await supabase
     .from('inventory_reservations')
     .insert({
@@ -161,12 +240,19 @@ export async function reserveInventory({
       reserved_quantity: qty,
       status: 'active',
       expires_at: expiresAt,
-      metadata,
+      metadata: reservationMetadata,
       created_by: actorUserId || supplierId
     })
     .select('*')
     .single();
   if (insertErr) throw insertErr;
+
+  try {
+    await deductStockForReservation(created, actorUserId);
+  } catch (deductErr) {
+    await supabase.from('inventory_reservations').delete().eq('id', created.id);
+    throw deductErr;
+  }
 
   return created;
 }
@@ -180,7 +266,11 @@ export async function settleReservation({ reservationId, mode = 'consume', actor
   if (error || !row) throw new Error('Reservation not found');
   if (row.status !== 'active') return row;
 
-  const nextStatus = mode === 'release' ? 'released' : 'consumed';
+  const physicalHold = row.metadata?.physicalHold === true;
+  const nextStatus = mode === 'consume' ? 'consumed' : mode === 'expire' ? 'expired' : 'released';
+
+  // Claim settlement before restock/consume side effects so concurrent expire sweeps
+  // cannot double-restore stock for the same reservation.
   const { data: updated, error: updErr } = await supabase
     .from('inventory_reservations')
     .update({
@@ -189,16 +279,18 @@ export async function settleReservation({ reservationId, mode = 'consume', actor
       metadata: { ...(row.metadata || {}), settledBy: actorUserId || null, settledAt: nowIso() }
     })
     .eq('id', row.id)
+    .eq('status', 'active')
     .select('*')
-    .single();
+    .maybeSingle();
   if (updErr) throw updErr;
+  if (!updated) return row;
 
-  if (nextStatus === 'consumed') {
-    const { data: sp } = await supabase
-      .from('supplier_products')
-      .select('product_id')
-      .eq('id', row.supplier_product_id)
-      .maybeSingle();
+  if ((mode === 'release' || mode === 'expire') && physicalHold) {
+    await restockFromReservation(updated, actorUserId, checkoutHoldReleaseMovementNote(updated.id));
+  }
+
+  if (nextStatus === 'consumed' && !physicalHold) {
+    const sp = await loadSupplierProductForReservation(row.supplier_product_id);
     if (sp?.product_id) {
       await recordInventoryMovement({
         supplierProductId: row.supplier_product_id,
@@ -218,18 +310,21 @@ export async function settleReservation({ reservationId, mode = 'consume', actor
 }
 
 export async function expireReservations() {
-  const { data: expired } = await supabase
+  const { data: active, error } = await supabase
     .from('inventory_reservations')
-    .select('id')
-    .eq('status', 'active')
-    .lte('expires_at', nowIso());
-  const ids = (expired || []).map((r) => r.id);
-  if (!ids.length) return { expired: 0 };
-  await supabase
-    .from('inventory_reservations')
-    .update({ status: 'expired', updated_at: nowIso() })
-    .in('id', ids);
-  return { expired: ids.length };
+    .select('*')
+    .eq('status', 'active');
+  if (error) throw error;
+
+  const now = Date.now();
+  let count = 0;
+  for (const row of active || []) {
+    const expiresAt = parseServerDate(row.expires_at);
+    if (!expiresAt || expiresAt.getTime() > now) continue;
+    await settleReservation({ reservationId: row.id, mode: 'expire', actorUserId: null });
+    count += 1;
+  }
+  return { expired: count };
 }
 
 export async function transitionOrderState({
@@ -502,6 +597,7 @@ export default {
   reserveInventory,
   settleReservation,
   expireReservations,
+  reconcileActivePhysicalHolds,
   transitionOrderState,
   upsertReturnPolicyDecision,
   computeBaselineKpis,

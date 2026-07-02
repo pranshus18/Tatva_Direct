@@ -42,6 +42,8 @@ export {
   poCancelSchema,
   poCartSaveSchema,
   poCartTransportPatchSchema,
+  poCheckoutReleaseSchema,
+  poCheckoutReserveSchema,
   poCreateRequestSchema,
   poGroupRequestSchema,
   poRatingSchema,

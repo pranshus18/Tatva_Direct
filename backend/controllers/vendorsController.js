@@ -42,6 +42,10 @@ import { buildSupplierProductsForRanking } from '../services/vendorSupplierAggre
 import { computeSupplierDistances } from '../services/vendorDistanceService.js';
 import { mapSupplierProductsToRankedVendors } from '../services/vendorFinalRankingService.js';
 import {
+  computeAvailableStock,
+  getActiveReservedQuantitiesByProductIds
+} from '../services/checkoutInventoryReservationService.js';
+import {
   logItemVendorResult,
   logNoVendorsDebug,
   logVendorRankingSummary
@@ -266,9 +270,17 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
 
       const urgencyBonus = computeUrgencyBonus(requiredDateFromBoq);
 
+      const offerIds = Object.values(supplierProducts || {}).flatMap((supplier) =>
+        (supplier?.products || [])
+          .map((product) => product?.supplierProductId)
+          .filter(Boolean)
+      );
+      const reservedQtyByProductId = await getActiveReservedQuantitiesByProductIds(offerIds);
+
       // Convert to array and calculate ranking score
       const vendors = mapSupplierProductsToRankedVendors({
         supplierProducts,
+        reservedQtyByProductId,
         siteGeoFromBoq,
         distanceBySupplier,
         distanceSourceLocationBySupplier,

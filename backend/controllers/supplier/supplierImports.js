@@ -21,6 +21,8 @@ export {
   supplierUpstreamCartSaveSchema,
   supplierReturnStatusPatchSchema,
   supplierUnitCreateSchema,
+  supplierUpstreamCheckoutReleaseSchema,
+  supplierUpstreamCheckoutReserveSchema,
   supplierUpstreamOrdersSchema,
   supplierUpstreamPreviewGroupsSchema
 } from '../../contracts/supplierContracts.js';

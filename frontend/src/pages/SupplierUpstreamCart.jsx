@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
 import './Dashboard.css';
 import './SupplierUpstreamCart.css';
@@ -27,6 +27,12 @@ import {
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
 import './CreatePO.css';
+import { formatDateIST } from '../utils/dateTime';
+import {
+  buildCheckoutHoldExpiredMessage,
+  clearCheckoutHoldExpired,
+  SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY
+} from '../utils/upstreamCheckoutReservation';
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
@@ -53,6 +59,8 @@ const normalizeSelectionMap = (raw) => {
 };
 const SupplierUpstreamCart = () => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [holdExpiredNotice, setHoldExpiredNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -141,7 +149,8 @@ const SupplierUpstreamCart = () => {
 
   const projectRows = useMemo(
     () =>
-      (projects || []).map((project) => {
+      (projects || [])
+        .map((project) => {
         const selectedMine = project?.selectedMine && typeof project.selectedMine === 'object'
           ? project.selectedMine
           : {};
@@ -149,19 +158,20 @@ const SupplierUpstreamCart = () => {
           .map(([mineId, qty]) => {
             const key = normalizeSupplierProductKey(mineId);
             const product = productBySupplierProductId[key];
-            const minQty = Math.max(1, product?.min_order_quantity ?? 1);
             const parsed = parseSupplierStockQuantity(qty);
-            const quantity =
-              parsed != null && parsed > 0 ? Math.max(minQty, parsed) : minQty;
+            if (parsed == null || parsed <= 0) return null;
+            const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+            const quantity = Math.max(minQty, parsed);
             return {
               mineId: key,
               quantity,
               product
             };
           })
-          .filter((row) => row.product);
+          .filter((row) => row && row.product);
         return { project, rows };
-      }),
+      })
+        .filter(({ rows }) => rows.length > 0),
     [projects, productBySupplierProductId]
   );
   const projectCount = projectRows.length;
@@ -188,7 +198,13 @@ const SupplierUpstreamCart = () => {
         throw new Error(productsData.message || 'Failed to load products');
       }
       const draft = cartData?.cart?.draft && typeof cartData.cart.draft === 'object' ? cartData.cart.draft : {};
-      setProjects(Array.isArray(draft.projects) ? draft.projects : []);
+      setProjects(
+        (Array.isArray(draft.projects) ? draft.projects : []).filter((project) => {
+          const selectedMine =
+            project?.selectedMine && typeof project.selectedMine === 'object' ? project.selectedMine : {};
+          return Object.values(selectedMine).some((qty) => Number(qty) > 0);
+        })
+      );
       setProducts(
         normalizeSupplierProductsFromApi(
           Array.isArray(productsData.products) ? productsData.products : []
@@ -201,6 +217,14 @@ const SupplierUpstreamCart = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!location.state?.checkoutHoldExpired) return;
+    setHoldExpiredNotice(
+      String(location.state.message || '').trim() || buildCheckoutHoldExpiredMessage()
+    );
+    navigate('/supplier-cart', { replace: true, state: {} });
+  }, [location.state, navigate]);
 
   useEffect(() => {
     loadCart();
@@ -287,10 +311,15 @@ const SupplierUpstreamCart = () => {
       selectedUpstreamOffer: nextSelectedUpstreamOffer
     };
     const ok = await persistProject(nextProject, { silent: true });
-    if (ok) {
+    if (!ok) return;
+    if (Object.keys(nextSelectedMine).length === 0) {
+      setProjects((prev) =>
+        (prev || []).filter((p) => String(p?.projectId || '') !== String(projectId || ''))
+      );
+    } else {
       replaceProjectInState(projectId, nextProject);
-      emitSupplierCartUpdated();
     }
+    emitSupplierCartUpdated();
   };
 
   const clearCart = async () => {
@@ -318,6 +347,7 @@ const SupplierUpstreamCart = () => {
   };
 
   const continueToUpstream = (project) => {
+    clearCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY);
     localStorage.setItem(
       SUPPLIER_UPSTREAM_CART_RESUME_KEY,
       JSON.stringify({
@@ -585,6 +615,12 @@ const SupplierUpstreamCart = () => {
         }
       />
 
+      {holdExpiredNotice ? (
+        <div className="supplier-cart-hold-expired-notice" role="status">
+          {holdExpiredNotice}
+        </div>
+      ) : null}
+
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <SpStatCard label="Projects" value={projectCount} icon={Pencil} accent="indigo" />
         <SpStatCard label="Cart Lines" value={totalCartLines} icon={Pencil} accent="emerald" />
@@ -722,7 +758,7 @@ const SupplierUpstreamCart = () => {
                                 <option value="">No shipping address</option>
                                 {shippingAddressBook.map((entry, index) => (
                                   <option key={entry.id} value={entry.id}>
-                                    {entry.displayName || formatShippingAddressLabel(entry, index)}
+                                    {formatShippingAddressLabel(entry, index)}
                                   </option>
                                 ))}
                                 <option value="__new__">+ Add new address</option>
@@ -884,7 +920,7 @@ const SupplierUpstreamCart = () => {
                         <p className="supplier-project-id">Project ID: {projectId}</p>
                         {String(project?.requiredDate || '').trim() ? (
                           <p className="supplier-project-id">
-                            <strong>Expected delivery: {String(project.requiredDate).slice(0, 10)}</strong>
+                            <strong>Expected delivery: {formatDateIST(project.requiredDate, '—')}</strong>
                           </p>
                         ) : null}
                         {!isEditing ? (

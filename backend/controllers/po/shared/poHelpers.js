@@ -179,6 +179,39 @@ export function newPoCartGroupId() {
   }
 }
 
+export function prunePoCartGroupItems(items = []) {
+  return (Array.isArray(items) ? items : []).filter((it) => {
+    const qty = Number(it?.quantity);
+    if (!Number.isFinite(qty)) return true;
+    return qty > 0;
+  });
+}
+
+/** Drop zero-qty lines and remove projects (groups) with no remaining lines. */
+export function prunePoCartGroups(boqGroups = []) {
+  return (Array.isArray(boqGroups) ? boqGroups : [])
+    .map((group) => ({
+      ...group,
+      items: prunePoCartGroupItems(group?.items)
+    }))
+    .filter((group) => Array.isArray(group.items) && group.items.length > 0);
+}
+
+export function poCartDraftNeedsPersistAfterPrune(rawDraft = {}, normalizedDraft = {}) {
+  const rawGroups = Array.isArray(rawDraft?.boqGroups) ? rawDraft.boqGroups : [];
+  const nextGroups = Array.isArray(normalizedDraft?.boqGroups) ? normalizedDraft.boqGroups : [];
+  if (rawGroups.length !== nextGroups.length) return true;
+  const rawLineCount = rawGroups.reduce(
+    (sum, group) => sum + (Array.isArray(group?.items) ? group.items.length : 0),
+    0
+  );
+  const nextLineCount = nextGroups.reduce(
+    (sum, group) => sum + (Array.isArray(group?.items) ? group.items.length : 0),
+    0
+  );
+  return rawLineCount !== nextLineCount;
+}
+
 /**
  * Optional merge of rows that share the same productId (legacy cleanup). Not applied on cart load/add by default.
  */
@@ -287,10 +320,12 @@ export function normalizePoCartDraft(raw) {
   }
   const hasGroups = Array.isArray(raw.boqGroups) && raw.boqGroups.length > 0;
   if (hasGroups) {
-    const boqGroups = raw.boqGroups.map((g) => ({
-      ...g,
-      items: Array.isArray(g?.items) ? [...g.items] : []
-    }));
+    const boqGroups = prunePoCartGroups(
+      raw.boqGroups.map((g) => ({
+        ...g,
+        items: Array.isArray(g?.items) ? [...g.items] : []
+      }))
+    );
     const items = boqGroups.flatMap((g) => (Array.isArray(g?.items) ? g.items : []));
     const mergedSelected = { ...(raw.selectedVendors || {}) };
     boqGroups.forEach((g) => {
@@ -328,7 +363,9 @@ export function normalizePoCartDraft(raw) {
 }
 
 export function buildPoCartDraftFromSavePayload(payload) {
-  let boqGroups = Array.isArray(payload.boqGroups) ? payload.boqGroups.map((g) => ({ ...g })) : [];
+  let boqGroups = prunePoCartGroups(
+    Array.isArray(payload.boqGroups) ? payload.boqGroups.map((g) => ({ ...g })) : []
+  );
   if (boqGroups.length === 0) {
     const gid = payload.boqId ? `${LEGACY_PO_CART_GROUP_PREFIX}-${payload.boqId}` : newPoCartGroupId();
     boqGroups = [

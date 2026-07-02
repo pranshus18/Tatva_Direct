@@ -6,6 +6,7 @@ import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import { fetchVoiceCartDraft, isVoiceGuidedActive } from '../voice/voiceCartBridge';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { RefreshCw } from 'lucide-react';
+import { clearCheckoutHoldExpired, SP_PO_CHECKOUT_HOLD_EXPIRED_KEY } from '../utils/checkoutReservation';
 import './Substitution.css';
 
 const Substitution = ({ selectedVendors, onComplete, items }) => {
@@ -79,6 +80,7 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
     if (suggestions.length === 0) {
       didAutoSkipRef.current = true;
       onComplete([]);
+      clearCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY);
       navigate('/create-po');
     }
   }, [hasFetchedSuggestions, loadingSuggestions, suggestions, workflowItems, substitutionsFetchFailed, onComplete, navigate]);
@@ -90,6 +92,7 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
   const handleProceed = () => {
     const approved = suggestions.filter(s => decisions[s.id] === true);
     onComplete(approved);
+    clearCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY);
     navigate('/create-po');
   };
 

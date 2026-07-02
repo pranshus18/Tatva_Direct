@@ -41,6 +41,8 @@ import {
   sellerHasAnyUpstreamRoleForBrand,
   sellerMatchesUpstreamForBrand,
   supplierUpstreamCartSaveSchema,
+  supplierUpstreamCheckoutReleaseSchema,
+  supplierUpstreamCheckoutReserveSchema,
   supplierUpstreamOrdersSchema,
   supplierUpstreamPreviewGroupsSchema
 } from './supplierImports.js';
@@ -75,6 +77,17 @@ import {
   getUpstreamOfferMatchType,
   upstreamOffersMatchForSupplyChain
 } from '../../services/upstreamOfferMatchService.js';
+import {
+  CHECKOUT_RESERVATION_MINUTES,
+  computeAvailableStock,
+  consumeCheckoutReservationsForOrder,
+  expireStaleReservations,
+  getActiveReservedQuantitiesByProductIds,
+  getUpstreamCheckoutReservationStatus,
+  releaseUpstreamCheckoutReservations,
+  reserveUpstreamCheckoutLines,
+  validateCheckoutReservationsForLines
+} from '../../services/upstreamInventoryReservationService.js';
 
 export function registerSupplierUpstreamRoutes(ctx) {
   const {
@@ -94,6 +107,24 @@ export function registerSupplierUpstreamRoutes(ctx) {
       if (qty != null && qty > 0) out[mineId] = qty;
     });
     return out;
+  };
+
+  const hasUpstreamProjectLines = (project = {}) =>
+    Object.keys(normalizeSelectedMineQuantities(project?.selectedMine || {})).length > 0;
+
+  const upstreamCartDraftNeedsPersistAfterPrune = (rawDraft = {}, normalizedDraft = {}) => {
+    const rawProjects = Array.isArray(rawDraft?.projects) ? rawDraft.projects : [];
+    const nextProjects = Array.isArray(normalizedDraft?.projects) ? normalizedDraft.projects : [];
+    if (rawProjects.length !== nextProjects.length) return true;
+    const rawLineCount = rawProjects.reduce((sum, project) => {
+      const mine = project?.selectedMine && typeof project.selectedMine === 'object' ? project.selectedMine : {};
+      return sum + Object.keys(mine).length;
+    }, 0);
+    const nextLineCount = nextProjects.reduce(
+      (sum, project) => sum + Object.keys(project?.selectedMine || {}).length,
+      0
+    );
+    return rawLineCount !== nextLineCount;
   };
 
   const isOfferBrandVisibleForSupplierProfile = (profile, attributes, productBrand) => {
@@ -400,25 +431,28 @@ export function registerSupplierUpstreamRoutes(ctx) {
     const raw = rawDraft && typeof rawDraft === 'object' ? rawDraft : {};
     let projects = [];
     if (Array.isArray(raw.projects) && raw.projects.length > 0) {
-      projects = raw.projects.map((p) => buildUpstreamProject(p));
+      projects = raw.projects
+        .map((p) => buildUpstreamProject(p))
+        .filter(hasUpstreamProjectLines);
     } else {
       const legacyHasData =
         (raw.selectedMine && Object.keys(raw.selectedMine || {}).length > 0) ||
         (raw.selectedUpstreamOffer && Object.keys(raw.selectedUpstreamOffer || {}).length > 0) ||
         (Array.isArray(raw.suggestions) && raw.suggestions.length > 0);
       if (legacyHasData) {
-        projects = [
-          buildUpstreamProject({
-            projectId: raw.projectId || null,
-            cartName: raw.cartName || 'Supplier Cart',
-            selectedMine: raw.selectedMine || {},
-            selectedUpstreamOffer: raw.selectedUpstreamOffer || {},
-            suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
-            brandFilter: String(raw.brandFilter || '').trim(),
-            searchTerm: String(raw.searchTerm || '').trim(),
-            createdAt: raw.createdAt || new Date().toISOString()
-          })
-        ];
+        const legacyProject = buildUpstreamProject({
+          projectId: raw.projectId || null,
+          cartName: raw.cartName || 'Supplier Cart',
+          selectedMine: raw.selectedMine || {},
+          selectedUpstreamOffer: raw.selectedUpstreamOffer || {},
+          suggestions: Array.isArray(raw.suggestions) ? raw.suggestions : [],
+          brandFilter: String(raw.brandFilter || '').trim(),
+          searchTerm: String(raw.searchTerm || '').trim(),
+          createdAt: raw.createdAt || new Date().toISOString()
+        });
+        if (hasUpstreamProjectLines(legacyProject)) {
+          projects = [legacyProject];
+        }
       }
     }
     projects.sort((a, b) => {
@@ -592,6 +626,9 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
       await registerUpstreamRows(rowsByVariantAsin || []);
     }
     const upstreamOffers = [...upstreamOffersById.values()];
+    const reservedQtyByProductId = await getActiveReservedQuantitiesByProductIds(
+      upstreamOffers.map((offer) => offer.id)
+    );
 
     const upstreamSupplierIds = [
       ...new Set((upstreamOffers || []).map((o) => o.supplier_id).filter(Boolean))
@@ -927,6 +964,11 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
                   brands: sup?.profile?.brands || ''
                 })
               : null;
+          const onHandStock = parseSupplierStockQuantity(u.stock) ?? 0;
+          const availableStock = computeAvailableStock(
+            onHandStock,
+            reservedQtyByProductId.get(u.id) || 0
+          );
           return {
             supplierId: u.supplier_id,
             supplierName: sup?.name || sup?.company || 'Supplier',
@@ -938,7 +980,8 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             upstreamProductId: u.product_id,
             offerStatus: u.status,
             isActive: u.is_active,
-            stock: parseSupplierStockQuantity(u.stock) ?? 0,
+            stock: availableStock,
+            availableStock,
             price: u.price,
             minOrderQuantity: u.min_order_quantity,
             location: locationDisplay,
@@ -1134,6 +1177,113 @@ router.post('/upstream/orders/preview-groups', authenticateToken, async (req, re
   }
 });
 
+router.get('/upstream/checkout-reservation-config', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can read checkout reservation config' });
+    }
+    return res.json({
+      status: 'success',
+      expiresInMinutes: CHECKOUT_RESERVATION_MINUTES
+    });
+  } catch (error) {
+    console.error('Upstream checkout reservation config error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to load checkout reservation config' });
+  }
+});
+
+router.post('/upstream/checkout-reservations', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can reserve upstream inventory' });
+    }
+
+    const payload = parseWithSchema(supplierUpstreamCheckoutReserveSchema, req.body || {});
+    const result = await reserveUpstreamCheckoutLines({
+      buyerUserId: req.userId,
+      checkoutSessionId: payload.checkoutSessionId,
+      lines: payload.lines
+    });
+
+    return res.json({
+      status: 'success',
+      message: `Inventory held for ${CHECKOUT_RESERVATION_MINUTES} minutes while you complete checkout`,
+      checkoutSessionId: result.checkoutSessionId,
+      expiresAt: result.expiresAt,
+      expiresInMinutes: result.expiresInMinutes,
+      reservations: (result.reservations || []).map((row) => ({
+        id: row.id,
+        supplierProductId: row.supplier_product_id,
+        supplierId: row.supplier_id,
+        reservedQuantity: row.reserved_quantity,
+        expiresAt: row.expires_at
+      }))
+    });
+  } catch (error) {
+    console.error('Upstream checkout reserve error:', error);
+    if (String(error?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+    }
+    return res.status(400).json({
+      status: 'error',
+      message: error?.message || 'Failed to reserve inventory for checkout'
+    });
+  }
+});
+
+router.get('/upstream/checkout-reservations/:checkoutSessionId', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can view checkout reservations' });
+    }
+
+    const checkoutSessionId = String(req.params?.checkoutSessionId || '').trim();
+    if (!checkoutSessionId) {
+      return res.status(400).json({ status: 'error', message: 'checkoutSessionId is required' });
+    }
+
+    const status = await getUpstreamCheckoutReservationStatus({
+      buyerUserId: req.userId,
+      checkoutSessionId
+    });
+
+    return res.json({ status: 'success', ...status });
+  } catch (error) {
+    console.error('Upstream checkout reservation status error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to load checkout reservation status' });
+  }
+});
+
+router.delete('/upstream/checkout-reservations', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can release checkout reservations' });
+    }
+
+    const payload = parseWithSchema(supplierUpstreamCheckoutReleaseSchema, req.body || {});
+    const result = await releaseUpstreamCheckoutReservations({
+      buyerUserId: req.userId,
+      checkoutSessionId: payload.checkoutSessionId || null,
+      actorUserId: req.userId
+    });
+
+    return res.json({
+      status: 'success',
+      message:
+        result.released > 0
+          ? 'Inventory hold released — stock is available again for other buyers'
+          : 'No active inventory hold to release',
+      released: result.released
+    });
+  } catch (error) {
+    console.error('Upstream checkout release error:', error);
+    if (String(error?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+    }
+    return res.status(500).json({ status: 'error', message: 'Failed to release checkout reservations' });
+  }
+});
+
 /**
  * Create upstream order(s): supplier (buyer) -> upstream supplier(s) (seller)
  *
@@ -1151,7 +1301,18 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     }
 
     const payloadInput = parseWithSchema(supplierUpstreamOrdersSchema, req.body || {});
-    const { lines, requiredDate, paymentMethod, shippingAddress, billingAddress, deliveryDestination } = payloadInput;
+    const {
+      lines,
+      requiredDate,
+      paymentMethod,
+      shippingAddress,
+      shippingAddressId,
+      billingAddress,
+      deliveryDestination,
+      checkoutSessionId
+    } = payloadInput;
+
+    await expireStaleReservations();
 
     const { expectedDeliveryDate, error: requiredDateError } =
       normalizeRequiredDateForUpstream(requiredDate);
@@ -1179,6 +1340,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
 
     const normalizedShippingAddress = resolvePrimarySupplierShippingAddress({
       shippingAddress,
+      shippingAddressId,
       profileRow: supplierProfileRow
     });
     const profileBillingAddress = normalizeAddress(supplierProfileRow?.address || {});
@@ -1221,6 +1383,20 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
 
     const mineIds = [...new Set(lines.map((l) => l?.mineSupplierProductId).filter(Boolean))];
     const upstreamOfferIds = [...new Set(lines.map((l) => l?.upstreamSupplierProductId).filter(Boolean))];
+
+    try {
+      await validateCheckoutReservationsForLines({
+        buyerUserId: req.userId,
+        checkoutSessionId,
+        lines
+      });
+    } catch (reservationError) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'inventory_hold_expired',
+        message: reservationError?.message || 'Inventory hold has expired. Return to your cart and proceed again.',
+      });
+    }
 
     // Validate my selected supplier products
     const { data: myRows, error: myErr } = await supabase
@@ -1340,6 +1516,14 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         return res.status(400).json({
           status: 'error',
           message: `Quantity must be at least ${minQty} (minimum order for this upstream offer)`
+        });
+      }
+
+      const onHandStock = parseSupplierStockQuantity(upstreamOffer.stock) ?? 0;
+      if (quantity > onHandStock) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Insufficient stock for one of the selected upstream offers (requested ${quantity}, on hand ${onHandStock}).`
         });
       }
 
@@ -1551,29 +1735,33 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         throw new Error('Failed to create upstream order items');
       }
 
-      // Inventory movement: decrease upstream seller stock
+      // Inventory: consume the checkout hold (deducts upstream seller stock once).
       try {
+        const orderItemBySupplierProductId = {};
         for (const inserted of insertedItems || []) {
-          const matchingLine = group.items.find((li) => li.upstreamSupplierProductId === inserted.supplier_product_id);
-          const qty = parseFloat(inserted.quantity || 0) || 0;
-          const up = inserted.supplier_product_id ? upstreamOfferById[inserted.supplier_product_id] : null;
-          if (!matchingLine || !up) continue;
-
-          await recordInventoryMovement({
-            supplierProductId: inserted.supplier_product_id,
-            supplierId: supplierId,
-            productId: up.product_id,
-            quantityChange: -qty,
-            movementType: 'sale_online',
-            referenceOrderId: order.id,
-            referenceOrderItemId: inserted.id,
-            notes: 'B2B upstream order created from supplier portal',
-            userId: req.userId
-          });
+          if (!inserted?.supplier_product_id) continue;
+          orderItemBySupplierProductId[inserted.supplier_product_id] = {
+            orderId: order.id,
+            orderItemId: inserted.id
+          };
         }
+
+        const groupLines = group.items.map((it) => ({
+          upstreamSupplierProductId: it.upstreamSupplierProductId,
+          supplierId: group.supplierId,
+          quantity: it.quantity
+        }));
+        await consumeCheckoutReservationsForOrder({
+          buyerUserId: req.userId,
+          checkoutSessionId,
+          lines: groupLines,
+          orderItemBySupplierProductId
+        });
       } catch (invErr) {
-        // Do not fail the order creation if inventory logging fails; monitor via logs.
-        console.error('[Upstream Orders] inventory movement error:', invErr);
+        console.error('[Upstream Orders] reservation consume error:', invErr);
+        await supabase.from('order_items').delete().eq('order_id', order.id);
+        await supabase.from('orders').delete().eq('id', order.id);
+        throw new Error(invErr?.message || 'Failed to finalize inventory for upstream order');
       }
 
       // Notify upstream supplier
@@ -1815,16 +2003,28 @@ router.get('/upstream/cart', authenticateToken, async (req, res) => {
       .maybeSingle();
     if (error) throw error;
 
+    if (!cart) {
+      return res.json({ status: 'success', cart: null });
+    }
+
+    const rawDraft = cart.draft_payload && typeof cart.draft_payload === 'object' ? cart.draft_payload : {};
+    const draft = normalizeUpstreamCartDraft(rawDraft);
+    if (upstreamCartDraftNeedsPersistAfterPrune(rawDraft, draft)) {
+      await supabase
+        .from('po_carts')
+        .update({ draft_payload: draft })
+        .eq('id', cart.id)
+        .eq('service_provider_id', req.userId);
+    }
+
     return res.json({
       status: 'success',
-      cart: cart
-        ? {
-            id: cart.id,
-            draft: normalizeUpstreamCartDraft(cart.draft_payload || {}),
-            updatedAt: cart.updated_at,
-            createdAt: cart.created_at
-          }
-        : null
+      cart: {
+        id: cart.id,
+        draft,
+        updatedAt: cart.updated_at,
+        createdAt: cart.created_at
+      }
     });
   } catch (error) {
     console.error('Get upstream cart error:', error);
@@ -2059,13 +2259,21 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
         });
       }
       const idx = nextProjects.findIndex((p) => String(p?.projectId || '') === String(payloadInput.projectId));
-      if (idx >= 0) {
+      if (!hasUpstreamProjectLines(nextProject)) {
+        if (idx >= 0) nextProjects.splice(idx, 1);
+      } else if (idx >= 0) {
         nextProjects[idx] = nextProject;
       } else {
         nextProjects = [nextProject, ...nextProjects];
       }
     } else {
       // No projectId means user intentionally saved a fresh project from upstream flow.
+      if (!hasUpstreamProjectLines(nextProject)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Add at least one product with quantity before saving a supplier project'
+        });
+      }
       if (hasDuplicateUpstreamProject(nextProjects, nextProject.cartName, nextProject.requiredDate)) {
         return res.status(400).json({
           status: 'error',

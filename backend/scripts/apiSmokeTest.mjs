@@ -50,7 +50,7 @@ function buildEndpoints() {
     let match;
     while ((match = routeRegex.exec(content)) !== null) {
       const method = match[1].toUpperCase();
-      const routePath = match[2].replace(/:([A-Za-z0-9_]+)/g, (_full, name) => {
+      const routePath = match[2].replace(/:([A-Za-z0-9_]+)(?:\([^)]*\))?/g, (_full, name) => {
         const key = String(name).toLowerCase();
         if (key === 'id') return '00000000-0000-0000-0000-000000000000';
         return `sample-${name}`;

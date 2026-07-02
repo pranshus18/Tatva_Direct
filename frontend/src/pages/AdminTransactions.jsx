@@ -230,8 +230,8 @@ const AdminTransactions = ({ user }) => {
           </div>
           
           {selectedTransaction && createPortal(
-            <div className="modal-overlay" onClick={() => setSelectedTransaction(null)} style={{ padding: 0, margin: 0, position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 }}>
-              <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: '100vw', height: '100vh', maxWidth: '100vw', maxHeight: '100vh', margin: 0, borderRadius: 0, position: 'fixed', top: 0, left: 0 }}>
+            <div className="modal-overlay" onClick={() => setSelectedTransaction(null)}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                   <h2>Transaction Details - #{selectedTransaction.id}</h2>
                   <button onClick={() => setSelectedTransaction(null)} className="btn-close-modal">
@@ -239,10 +239,6 @@ const AdminTransactions = ({ user }) => {
                   </button>
                 </div>
                 <div className="modal-body" style={{ 
-                  overflowY: 'auto', 
-                  overflowX: 'hidden', 
-                  height: 'calc(100vh - 120px)', 
-                  maxHeight: 'calc(100vh - 120px)',
                   boxSizing: 'border-box',
                   padding: '2rem 3rem'
                 }}>

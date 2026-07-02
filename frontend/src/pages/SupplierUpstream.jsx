@@ -28,6 +28,12 @@ import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import { formatDateIST } from '../utils/dateTime';
+import {
+  createUpstreamCheckoutSessionId,
+  clearCheckoutHoldExpired,
+  reserveUpstreamCheckoutInventory,
+  SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY
+} from '../utils/upstreamCheckoutReservation';
 import { normalizeSupplierProductsFromApi } from '../utils/supplierProductRow';
 import { getProductImageList } from '../utils/productImages';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -575,6 +581,7 @@ const SupplierUpstream = ({ user }) => {
       const lines = selectedLinesDetailed.map((l) => ({
         mineSupplierProductId: l.mineSupplierProductId,
         upstreamSupplierProductId: l.upstreamSupplierProductId,
+        supplierId: l.supplierId,
         quantity: l.quantity
       }));
 
@@ -592,6 +599,26 @@ const SupplierUpstream = ({ user }) => {
 
       const totalAmountEstimate = selectedLinesDetailed.reduce((sum, l) => sum + (Number(l.lineTotal) || 0), 0);
 
+      const checkoutSessionId = createUpstreamCheckoutSessionId();
+      clearCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY);
+      const token = localStorage.getItem('token');
+      const reservationPayload = selectedLinesDetailed.map((line) => ({
+        mineSupplierProductId: line.mineSupplierProductId,
+        upstreamSupplierProductId: line.upstreamSupplierProductId,
+        supplierId: line.supplierId,
+        quantity: line.quantity
+      }));
+      const missingSupplierLine = reservationPayload.find((line) => !line.supplierId);
+      if (missingSupplierLine) {
+        alert('Could not resolve the upstream supplier for one of the selected items. Please pick a supplier row again.');
+        return;
+      }
+      const reservation = await reserveUpstreamCheckoutInventory({
+        token,
+        checkoutSessionId,
+        lines: reservationPayload
+      });
+
       const activeProject =
         cartProjects.find((project) => String(project?.projectId || '') === String(activeProjectId || '')) ||
         cartProjects[0] ||
@@ -600,23 +627,36 @@ const SupplierUpstream = ({ user }) => {
         activeProject?.shippingAddress && typeof activeProject.shippingAddress === 'object'
           ? activeProject.shippingAddress
           : null;
+      const projectShippingId = String(activeProject?.shippingAddressId || '').trim();
 
       const reviewLinesWithShipping = selectedLinesDetailed.map((line) => ({
         ...line,
         ...(projectShipping ? { shippingAddress: projectShipping } : {})
       }));
 
+      const shippingAddressLabel = projectShipping
+        ? formatShippingAddressLabel(
+            shippingAddressBook.find((entry) => entry.id === projectShippingId) || projectShipping
+          )
+        : projectShipping
+          ? formatShippingAddressPreview(projectShipping)
+          : '';
+
       // Persist a draft so the next page can ask required date + payment method.
       localStorage.setItem(
         SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY,
         JSON.stringify({
           lines,
+          checkoutSessionId,
+          reservationExpiresAt: reservation.expiresAt || null,
           requiredDate: '',
           paymentMethod: 'online',
           itemCount: lines.length,
           totalAmountEstimate,
           reviewLines: reviewLinesWithShipping,
           checkoutShippingAddress: projectShipping,
+          shippingAddressId: projectShippingId || null,
+          shippingAddressLabel,
           selectedMine,
           selectedUpstreamOffer,
           suggestions,
@@ -1352,7 +1392,8 @@ const SupplierUpstream = ({ user }) => {
                                     )}
                                   </div>
                                   <div className="upstream-offer-meta">
-                                    {formatRupee(o.price || 0)} • {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} {o.stock ?? 0}
+                                    {formatRupee(o.price || 0)} • {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}{' '}
+                                    {o.availableStock ?? o.stock ?? 0}
                                     {typeof o.distanceKm === 'number' ? ` • ${o.distanceKm} km` : ' • distance n/a'}
                                     {' • '}
                                     {ratingLabel}
@@ -1400,7 +1441,7 @@ const SupplierUpstream = ({ user }) => {
             setSupplierOfferDetails(null);
           }}
         >
-          <div className="modal-content upstream-modal-content upstream-modal-content-narrow" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content upstream-modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Upstream Supplier Details</h2>
               <button className="btn-icon" onClick={() => setSupplierDetailsOpen(false)}>
@@ -1468,7 +1509,7 @@ const SupplierUpstream = ({ user }) => {
         <SupplierProductDetailsModal product={viewingProduct} onClose={() => setViewingProduct(null)} />
       ) : null}
       <Dialog open={addCartDialogOpen} onOpenChange={setAddCartDialogOpen}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Select supplier project</DialogTitle>
             <DialogDescription>
@@ -1549,7 +1590,7 @@ const SupplierUpstream = ({ user }) => {
                 <option value="">No shipping address</option>
                 {shippingAddressBook.map((entry, index) => (
                   <option key={entry.id} value={entry.id}>
-                    {entry.displayName || formatShippingAddressLabel(entry, index)}
+                    {formatShippingAddressLabel(entry, index)}
                   </option>
                 ))}
                 <option value="__new__">+ Add new address</option>

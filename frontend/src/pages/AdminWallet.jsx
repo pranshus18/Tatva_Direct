@@ -584,17 +584,19 @@ function MetricCard({ label, value }) {
 
 function AdminWalletRowDetail({ row, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl bg-white p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-900">Transaction detail</h3>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Transaction detail</h3>
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
         </div>
-        <pre className="max-h-[60vh] overflow-auto rounded-md bg-slate-50 p-3 text-xs text-slate-800">
-          {JSON.stringify(row, null, 2)}
-        </pre>
+        <div className="modal-body">
+          <pre className="overflow-auto rounded-md bg-slate-50 p-3 text-xs text-slate-800">
+            {JSON.stringify(row, null, 2)}
+          </pre>
+        </div>
       </div>
     </div>
   );

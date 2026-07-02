@@ -362,9 +362,7 @@
 }
 
 .supplier-dashboard-order-modal {
-  max-width: 800px;
-  max-height: 90vh;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .supplier-dashboard-modal-body-center {
@@ -783,7 +781,7 @@
   }
 
   .supplier-dashboard-order-modal {
-    border-radius: 12px;
+    border-radius: 0;
   }
 
   .supplier-dashboard-live-order-title {

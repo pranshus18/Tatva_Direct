@@ -882,7 +882,7 @@ const YourOrders = () => {
       )}
 
       <Dialog open={!!selectedOrderId} onOpenChange={(open) => !open && closeOrderDialog()}>
-        <DialogContent className="yo-order-dialog max-h-[90vh] max-w-2xl overflow-y-auto p-0 sm:max-w-3xl">
+        <DialogContent className="yo-order-dialog flex h-full max-h-none w-full max-w-none flex-col overflow-hidden p-0">
           <div className="yo-dialog-head">
             <DialogHeader className="space-y-3 text-left">
               <DialogTitle className="text-xl font-bold tracking-tight text-[#0f172a]">
@@ -910,7 +910,7 @@ const YourOrders = () => {
             </DialogHeader>
           </div>
 
-          <div className="space-y-4 px-6 py-4">
+          <div className="flex min-h-0 flex-1 flex-col space-y-4 overflow-y-auto px-6 py-4">
             {loadingOrderDetails ? (
               <div className="flex flex-col items-center justify-center py-16 text-[#64748b]">
                 <Loader2 className="h-8 w-8 animate-spin text-[#4f46e5]" />

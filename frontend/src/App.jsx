@@ -1,7 +1,5 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { Toaster } from 'sonner';
-import Layout from './components/Layout';
 import ProtectedRoute from './components/ProtectedRoute';
 import ServiceProviderRoute from './components/ServiceProviderRoute';
 import SupplierRoute from './components/SupplierRoute';
@@ -24,6 +22,23 @@ const safeLazy = (importer, label) =>
       return { default: buildLazyErrorFallback(label) };
     }
   });
+
+const safeLazyNamed = (importer, exportName, label) =>
+  lazy(async () => {
+    try {
+      const module = await importer();
+      if (!module?.[exportName]) {
+        throw new Error(`Missing export "${exportName}"`);
+      }
+      return { default: module[exportName] };
+    } catch (error) {
+      console.error(`Lazy load failed for ${label}:`, error);
+      return { default: buildLazyErrorFallback(label) };
+    }
+  });
+
+const Layout = safeLazy(() => import('./components/Layout'), 'Layout shell');
+const Toaster = safeLazyNamed(() => import('sonner'), 'Toaster', 'Toast notifications');
 
 const Login = safeLazy(() => import('./pages/Login'), 'Login page');
 const AdminLogin = safeLazy(() => import('./pages/AdminLogin'), 'Admin Login page');
@@ -115,6 +130,19 @@ const YourOrders = safeLazy(() => import('./pages/YourOrders'), 'Your Orders pag
 const Wallet = safeLazy(() => import('./pages/Wallet'), 'Wallet page');
 const Cart = safeLazy(() => import('./pages/Cart'), 'Cart page');
 const SharedCart = safeLazy(() => import('./pages/SharedCart'), 'Shared Cart page');
+
+const idlePrefetch = (importers = []) => {
+  if (typeof window === 'undefined') return () => {};
+  const run = () => importers.forEach((load) => Promise.resolve().then(load).catch(() => {}));
+
+  if (typeof window.requestIdleCallback === 'function') {
+    const id = window.requestIdleCallback(run, { timeout: 2000 });
+    return () => window.cancelIdleCallback?.(id);
+  }
+
+  const timeoutId = window.setTimeout(run, 450);
+  return () => window.clearTimeout(timeoutId);
+};
 
 function App() {
   const WORKFLOW_STORAGE_KEY = 'spBoqWorkflow';
@@ -285,6 +313,43 @@ function App() {
     window.addEventListener('voice-cart-updated', onVoiceCart);
     return () => window.removeEventListener('voice-cart-updated', onVoiceCart);
   }, [isAuthenticated]);
+
+  useEffect(() => {
+    const userType = normalizeUserType(user?.userType);
+
+    if (!isAuthenticated) {
+      return idlePrefetch([() => import('./pages/Login'), () => import('./pages/Signup')]);
+    }
+
+    if (userType === 'service_provider') {
+      return idlePrefetch([
+        () => import('./pages/ProductDiscovery'),
+        () => import('./pages/Cart'),
+        () => import('./pages/CreatePO'),
+        () => import('./pages/YourOrders'),
+        () => import('./pages/Wallet')
+      ]);
+    }
+
+    if (userType === 'supplier') {
+      return idlePrefetch([
+        () => import('./pages/SupplierUpstream'),
+        () => import('./pages/SupplierUpstreamOrders'),
+        () => import('./pages/SupplierWallet'),
+        () => import('./pages/SupplierPOS')
+      ]);
+    }
+
+    if (userType === 'admin') {
+      return idlePrefetch([
+        () => import('./pages/AdminTransactions'),
+        () => import('./pages/AdminWallet'),
+        () => import('./pages/AdminSupplyChain')
+      ]);
+    }
+
+    return () => {};
+  }, [isAuthenticated, user?.userType]);
 
   if (loading) {
     return (
@@ -665,7 +730,9 @@ function App() {
         <Route path="*" element={<Navigate to="/login" replace />} />
       </Routes>
       </Suspense>
-      <Toaster position="top-right" richColors closeButton />
+      <Suspense fallback={null}>
+        <Toaster position="top-right" richColors closeButton />
+      </Suspense>
     </BrowserRouter>
   );
 }

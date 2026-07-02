@@ -3,6 +3,7 @@ import {
   normalizeAddress,
   resolveB2bPaymentFromBody
 } from '../controllers/po/shared/poHelpers.js';
+import { deriveShippingAddressesFromProfile } from '../controllers/profile/profileHelpers.js';
 
 /** Supplier profile branches are the canonical shipping addresses. */
 export function branchRecordToAddressInput(branch) {
@@ -31,9 +32,28 @@ export function primaryBranchToUsersAddress(branches) {
   return normalizeAddress(branchRecordToAddressInput(primary));
 }
 
-export function resolvePrimarySupplierShippingAddress({ shippingAddress, profileRow } = {}) {
+export function resolveShippingAddressFromProfileBook(profileRow, shippingAddressId) {
+  const id = String(shippingAddressId || '').trim();
+  if (!id) return null;
+
+  const saved = deriveShippingAddressesFromProfile(profileRow || {});
+  const match = saved.find((entry) => String(entry.id) === id);
+  if (!match) return null;
+
+  const normalized = normalizeAddress(match);
+  return isAddressComplete(normalized) ? normalized : null;
+}
+
+export function resolvePrimarySupplierShippingAddress({
+  shippingAddress,
+  shippingAddressId,
+  profileRow
+} = {}) {
   const fromBody = normalizeAddress(shippingAddress || {});
   if (isAddressComplete(fromBody)) return fromBody;
+
+  const fromProfileBook = resolveShippingAddressFromProfileBook(profileRow, shippingAddressId);
+  if (fromProfileBook) return fromProfileBook;
 
   const branches = Array.isArray(profileRow?.profile?.branches) ? profileRow.profile.branches : [];
   for (const branch of branches) {

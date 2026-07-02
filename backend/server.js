@@ -9,6 +9,7 @@ import { warmSupportIndex } from './voice/supportRetriever.js';
 import logger from './utils/logger.js';
 import { createApp } from './app/createApp.js';
 import { setupGracefulShutdown } from './app/gracefulShutdown.js';
+import { expireStaleReservations } from './services/checkoutInventoryReservationService.js';
 
 registerProcessSafety();
 validateProductionEnv();
@@ -70,3 +71,17 @@ server.on('error', (err) => {
 });
 
 setupGracefulShutdown(server);
+
+const reservationSweepMinutes = Math.max(
+  1,
+  parseInt(String(process.env.CHECKOUT_RESERVATION_SWEEP_MINUTES ?? '1').trim(), 10) || 1
+);
+const reservationSweepMs = reservationSweepMinutes * 60 * 1000;
+const runReservationSweep = () => {
+  expireStaleReservations().catch((err) => {
+    logger.error('[Reservations] Expire sweep failed:', err?.message || err);
+  });
+};
+runReservationSweep();
+setInterval(runReservationSweep, reservationSweepMs);
+logger.info(`[Reservations] Expire sweep every ${reservationSweepMinutes} minute(s)`);

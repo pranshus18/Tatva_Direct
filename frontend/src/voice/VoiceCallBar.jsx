@@ -2,7 +2,6 @@ import React from 'react';
 import { PhoneOff } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 import { useVoiceSessionContext } from './VoiceSessionContext.jsx';
-import agentGif from '../images/agent.gif';
 import { isVoiceGuidedActive, getVoiceGuidedLabel } from './voiceCartBridge.js';
 import { voiceText } from './voiceText.js';
 import './VoiceCallBar.css';
@@ -54,7 +53,7 @@ const VoiceCallBar = () => {
 
   return (
     <div className="voice-call-bar" role="region" aria-label="Voice assistant call">
-      <img src={agentGif} alt="" className="voice-call-bar__orb" aria-hidden="true" />
+      <span className="voice-call-bar__orb" aria-hidden="true" />
       <div className="voice-call-bar__meta">
         <strong>{stepLabel}</strong>
         <span>{stateLabel}</span>

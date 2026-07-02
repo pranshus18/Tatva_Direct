@@ -1,6 +1,18 @@
 import { supabase } from '../config/supabase.js';
 import { maybeNotifyInventoryBelowMov } from './lowInventoryMovAlertService.js';
 
+export function computeNextStockLevel(currentStockValue, quantityChangeValue) {
+  const currentStock = parseInt(currentStockValue, 10) || 0;
+  const quantityChange = Number(quantityChangeValue) || 0;
+  const nextStock = currentStock + quantityChange;
+  if (quantityChange < 0 && nextStock < 0) {
+    throw new Error(
+      `Insufficient stock for inventory movement. Available=${currentStock}, requested=${Math.abs(quantityChange)}`
+    );
+  }
+  return Math.max(0, nextStock);
+}
+
 /**
  * Record an inventory movement and update supplier_products.stock.
  *
@@ -64,19 +76,45 @@ export async function recordInventoryMovement({
     );
   }
 
-  const currentStock = parseInt(row.stock, 10) || 0;
-  const newStock = Math.max(0, currentStock + quantityChange);
+  const maxAttempts = 5;
+  let currentStock = 0;
+  let newStock = 0;
 
-  // 2) Update stock on supplier_products (always scoped to row owner)
-  const { error: updateError } = await supabase
-    .from('supplier_products')
-    .update({ stock: newStock })
-    .eq('id', supplierProductId)
-    .eq('supplier_id', ownerSupplierId);
+  // 2) Update stock with optimistic locking to avoid lost updates during concurrent checkout holds.
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const { data: latestRow, error: latestError } = await supabase
+      .from('supplier_products')
+      .select('stock')
+      .eq('id', supplierProductId)
+      .eq('supplier_id', ownerSupplierId)
+      .maybeSingle();
 
-  if (updateError) {
-    console.error('[Inventory] Failed to update stock on supplier_products', updateError);
-    throw new Error('Failed to update stock for inventory movement');
+    if (latestError || !latestRow) {
+      console.error('[Inventory] Failed to reload supplier_product for movement retry', latestError);
+      throw new Error('Supplier product not found for inventory movement');
+    }
+
+    currentStock = parseInt(latestRow.stock, 10) || 0;
+    newStock = computeNextStockLevel(currentStock, quantityChange);
+
+    const { data: updatedRow, error: updateError } = await supabase
+      .from('supplier_products')
+      .update({ stock: newStock })
+      .eq('id', supplierProductId)
+      .eq('supplier_id', ownerSupplierId)
+      .eq('stock', currentStock)
+      .select('id')
+      .maybeSingle();
+
+    if (updateError) {
+      console.error('[Inventory] Failed to update stock on supplier_products', updateError);
+      throw new Error('Failed to update stock for inventory movement');
+    }
+
+    if (updatedRow) break;
+    if (attempt === maxAttempts - 1) {
+      throw new Error('Failed to update stock due to concurrent inventory changes. Please retry.');
+    }
   }
 
   // 3) Insert inventory_movements row for ledger

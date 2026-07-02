@@ -828,15 +828,15 @@ export default Wallet;
 
 function TransactionDetailModal({ row, onClose }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl bg-white p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-base font-semibold text-slate-900">Transaction detail</h3>
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <h3>Transaction detail</h3>
           <Button variant="outline" onClick={onClose}>
             Close
           </Button>
         </div>
-        <div className="space-y-2 text-sm">
+        <div className="modal-body space-y-2 text-sm">
           <Detail label="When" value={formatDateTimeIST(row.created_at, '—')} />
           <Detail label="Type" value={row.transaction_type} />
           <Detail label="Paid By" value={row.paidBy?.label || '-'} />

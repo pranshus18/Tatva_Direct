@@ -15,6 +15,7 @@ import {
   sellerMatchesUpstreamRoles,
   supplierInventoryAdjustSchema
 } from './supplierImports.js';
+import { expireStaleReservations } from '../../services/checkoutInventoryReservationService.js';
 
 export function registerSupplierInventoryRoutes(ctx) {
   const {
@@ -25,6 +26,8 @@ export function registerSupplierInventoryRoutes(ctx) {
 
 router.get('/inventory/summary', authenticateToken, async (req, res) => {
   try {
+    await expireStaleReservations();
+
     const { data: rows, error } = await supabase
       .from('supplier_products')
       .select(`

@@ -35,6 +35,24 @@ const addressSchema = z.object({
   postal_code: z.string().optional()
 });
 
+export const poCheckoutReserveSchema = z.object({
+  checkoutSessionId: z.string().uuid(),
+  lines: z
+    .array(
+      z.object({
+        supplierProductId: z.string().uuid(),
+        supplierId: z.string().uuid(),
+        quantity: z.union([z.number(), z.string()]),
+        productId: z.string().uuid().optional().nullable()
+      })
+    )
+    .min(1)
+});
+
+export const poCheckoutReleaseSchema = z.object({
+  checkoutSessionId: z.string().uuid().optional().nullable()
+});
+
 export const poGroupRequestSchema = z.object({
   selectedVendors: z.record(z.string(), z.union([z.string(), z.number(), z.null(), z.undefined()])),
   substitutions: z.array(
@@ -48,6 +66,7 @@ export const poGroupRequestSchema = z.object({
 });
 
 export const poCreateRequestSchema = z.object({
+  checkoutSessionId: z.string().uuid(),
   poGroups: z.array(
     z.object({
       vendorId: z.coerce.string().min(1),

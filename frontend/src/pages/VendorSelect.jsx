@@ -433,7 +433,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         cleanedVendors[itemId] = validVendors.map((v) => ({
           ...v,
           price: typeof v.price === 'number' ? v.price : parseFloat(v.price),
-          stock: typeof v.stock === 'number' ? v.stock : parseInt(v.stock || 0, 10)
+          stock: typeof v.availableStock === 'number' ? v.availableStock : typeof v.stock === 'number' ? v.stock : parseInt(v.stock || 0, 10)
         }));
       } else {
         cleanedVendors[itemId] = [];

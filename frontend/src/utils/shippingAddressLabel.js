@@ -15,9 +15,19 @@ export function getShippingAddressFields(entry = {}) {
 
 export function formatShippingAddressLabel(entry, index = 0) {
   const fields = getShippingAddressFields(entry);
-  if (fields.label) return fields.label;
-  const preview = [fields.line1, fields.city].filter(Boolean).join(', ');
+  const preview = formatShippingAddressPreview(entry);
+  if (fields.label && preview) {
+    const label = fields.label.trim();
+    const labelNorm = label.toLowerCase();
+    const cityNorm = fields.city.toLowerCase();
+    // Label is only a city nickname — show the full address instead of "Bengaluru" / "Pune, Pune".
+    if (labelNorm === cityNorm || labelNorm === preview.toLowerCase()) {
+      return preview;
+    }
+    return `${label} — ${preview}`;
+  }
   if (preview) return preview;
+  if (fields.label) return fields.label;
   return `Address ${index + 1}`;
 }
 
@@ -35,7 +45,7 @@ export function normalizeShippingAddressBookEntry(entry = {}) {
   return {
     id,
     label: String(entry?.label || entry?.name || '').trim(),
-    displayName: String(entry?.displayName || '').trim() || formatShippingAddressLabel(entry),
+    displayName: formatShippingAddressLabel(entry),
     address: {
       line1: fields.line1,
       city: fields.city,

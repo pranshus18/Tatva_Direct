@@ -1096,7 +1096,7 @@ const SupplierPOS = () => {
 
 
       <Dialog open={showPaymentModal} onOpenChange={setShowPaymentModal}>
-        <DialogContent className="pos-pay-dialog max-w-md sm:max-w-lg">
+        <DialogContent className="pos-pay-dialog flex h-full max-h-none w-full max-w-none flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Collect payment</DialogTitle>
             <DialogDescription>Confirm tender type and complete this in-store sale.</DialogDescription>
@@ -1245,7 +1245,7 @@ const SupplierPOS = () => {
         }}
       >
         {receiptData ? (
-          <DialogContent className="max-w-md">
+          <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden">
             <DialogHeader>
               <DialogTitle>Receipt</DialogTitle>
               <DialogDescription>

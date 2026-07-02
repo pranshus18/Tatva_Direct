@@ -5,7 +5,8 @@ const ProductImageCarousel = ({
   alt = 'Product',
   height = 120,
   rounded = 8,
-  stopPropagation = false
+  stopPropagation = false,
+  objectFit = 'contain'
 }) => {
   const imageList = useMemo(
     () => [...new Set((Array.isArray(images) ? images : []).filter(Boolean))],
@@ -44,7 +45,7 @@ const ProductImageCarousel = ({
         style={{
           width: '100%',
           height: `${height}px`,
-          objectFit: 'cover',
+          objectFit,
           borderRadius: `${rounded}px`,
           border: '1px solid #e5e7eb',
           background: '#f8fafc'

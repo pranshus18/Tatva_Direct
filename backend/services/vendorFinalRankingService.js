@@ -1,7 +1,9 @@
 import { computeLocationScore } from './vendorRankingScoringService.js';
+import { computeAvailableStock } from './checkoutInventoryReservationService.js';
 
 export function mapSupplierProductsToRankedVendors({
   supplierProducts,
+  reservedQtyByProductId = null,
   siteGeoFromBoq,
   distanceBySupplier,
   distanceSourceLocationBySupplier,
@@ -62,6 +64,12 @@ export function mapSupplierProductsToRankedVendors({
       const isOfferApproved =
         bestProduct?.status === 'approved' || bestProduct?.sharedProductStatus === 'approved';
       const selectionId = bestProduct?.supplierProductId || `${supplier.supplierId}:${bestProduct?.id || 'offer'}`;
+      const onHandStock = parseInt(bestProduct?.stock, 10) || 0;
+      const reservedQty =
+        reservedQtyByProductId instanceof Map
+          ? reservedQtyByProductId.get(bestProduct?.supplierProductId) || 0
+          : 0;
+      const availableStock = computeAvailableStock(onHandStock, reservedQty);
       rankedVendors.push({
       id: supplier.supplierId,
       selectionId,
@@ -78,7 +86,8 @@ export function mapSupplierProductsToRankedVendors({
       leadTime,
       rank: index + 1,
       rating: supplier.bestRating,
-      stock: parseInt(bestProduct?.stock, 10) || 0,
+      stock: availableStock,
+      availableStock,
       productCount: supplier.products.length,
       rankScore,
       distanceKm,
@@ -97,7 +106,7 @@ export function mapSupplierProductsToRankedVendors({
       category: productCategory,
       description: productDescription,
       specifications: productSpecifications,
-      isAvailable: (parseInt(bestProduct?.stock, 10) || 0) > 0,
+      isAvailable: availableStock > 0,
       status: isOfferApproved || supplier.hasApprovedProduct ? 'approved' : 'pending'
       });
     });

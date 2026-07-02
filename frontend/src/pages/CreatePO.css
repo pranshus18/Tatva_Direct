@@ -5,6 +5,47 @@
   margin-bottom: 2rem;
 }
 
+.po-reservation-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+  padding: 0.9rem 1.1rem;
+  border-radius: 12px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1e3a8a;
+}
+
+.po-reservation-banner p {
+  margin: 0.35rem 0 0;
+  color: #1d4ed8;
+  font-size: 0.92rem;
+}
+
+.po-reservation-banner--warning {
+  border-color: #fdba74;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
+.po-reservation-banner--warning p {
+  color: #c2410c;
+}
+
+.po-reservation-timer {
+  min-width: 4.5rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+  font-size: 1.1rem;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
 .po-card {
   background: white;
   border: 1px solid #e2e8f0;

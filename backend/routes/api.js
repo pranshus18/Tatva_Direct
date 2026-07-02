@@ -15,6 +15,7 @@ import { paymentsRouter } from './payments.js';
 import { adminSupplyChainRouter } from './adminSupplyChain.js';
 import { adminPlatformFeesRouter } from './adminPlatformFees.js';
 import { walletRouter } from './wallet.js';
+import { substitutionRouter } from './substitutions.js';
 import { vendorRequestLogger } from '../middleware/vendorRequestLogger.js';
 import { distanceDebug, getEnvDebug, getHealth, getHealthReady, getRuntimeDebug } from '../controllers/systemController.js';
 import { cartShareRouter } from '../controllers/cartShareController.js';
@@ -41,6 +42,7 @@ apiRouter.use('/pos', posRouter);
 apiRouter.use('/core-phase2', corePhase2Router);
 apiRouter.use('/payments', paymentsRouter);
 apiRouter.use('/wallet', walletRouter);
+apiRouter.use('/substitutions', substitutionRouter);
 apiRouter.use('/cart-share', cartShareRouter);
 apiRouter.use('/voice', voiceRouter);
 

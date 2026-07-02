@@ -279,14 +279,16 @@
   background: #f6f8fb;
 }
 
-/* Modal */
+/* Modal — full page */
 .yo-modal.modal-content {
-  max-width: 720px;
-  max-height: 90vh;
-  overflow-y: auto;
-  border-radius: 16px;
-  border: 1px solid #e8ecf1;
-  box-shadow: 0 25px 50px -12px rgba(15, 23, 42, 0.18);
+  width: 100%;
+  max-width: 100%;
+  height: 100vh;
+  max-height: 100vh;
+  overflow: hidden;
+  border-radius: 0;
+  border: none;
+  box-shadow: none;
 }
 
 .yo-modal__head {
@@ -399,7 +401,16 @@
   color: #94a3b8;
 }
 
+.yo-order-dialog {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100vh;
+  overflow: hidden;
+}
+
 .yo-order-dialog .yo-dialog-head {
+  flex-shrink: 0;
   padding: 1.35rem 1.5rem;
   background: linear-gradient(180deg, #fafbfc 0%, #ffffff 100%);
   border-bottom: 1px solid #f1f5f9;

@@ -7,15 +7,25 @@ import {
   appendDiscoveryItemAsNewProject,
   loadAdminBrandTerminalRoleMap,
   normalizePoCartDraft,
+  poCartDraftNeedsPersistAfterPrune,
   parseWithSchema,
   poCartSaveSchema,
   poCartTransportPatchSchema,
+  poCheckoutReleaseSchema,
+  poCheckoutReserveSchema,
   supplierMatchesBrandTerminalRole
 } from './poImports.js';
 import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js';
 import { isAddressComplete, normalizeAddress } from './shared/poHelpers.js';
 import { formatShippingAddressText } from '../../services/vendorRequestContextService.js';
 import { geocodeIndianAddress } from '../../utils/geoUtils.js';
+import {
+  CHECKOUT_RESERVATION_MINUTES,
+  CHECKOUT_SOURCES,
+  getCheckoutReservationStatus,
+  releaseCheckoutReservations,
+  reserveCheckoutLines
+} from '../../services/checkoutInventoryReservationService.js';
 
 export function registerPoCartRoutes(ctx) {
   const {
@@ -106,16 +116,28 @@ router.get('/cart', authenticateToken, isServiceProvider, async (req, res) => {
       .eq('service_provider_id', req.userId)
       .maybeSingle();
     if (error) throw error;
+    if (!cart) {
+      return res.json({ status: 'success', cart: null });
+    }
+
+    const rawDraft = cart.draft_payload && typeof cart.draft_payload === 'object' ? cart.draft_payload : {};
+    const draft = normalizePoCartDraft(rawDraft);
+    if (poCartDraftNeedsPersistAfterPrune(rawDraft, draft)) {
+      await supabase
+        .from('po_carts')
+        .update({ draft_payload: draft })
+        .eq('id', cart.id)
+        .eq('service_provider_id', req.userId);
+    }
+
     return res.json({
       status: 'success',
-      cart: cart
-        ? {
-            id: cart.id,
-            draft: normalizePoCartDraft(cart.draft_payload || {}),
-            updatedAt: cart.updated_at,
-            createdAt: cart.created_at
-          }
-        : null
+      cart: {
+        id: cart.id,
+        draft,
+        updatedAt: cart.updated_at,
+        createdAt: cart.created_at
+      }
     });
   } catch (error) {
     console.error('Get PO cart error:', error);
@@ -698,6 +720,96 @@ router.delete('/cart', authenticateToken, isServiceProvider, async (req, res) =>
   } catch (error) {
     console.error('Clear PO cart error:', error);
     return res.status(500).json({ status: 'error', message: 'Failed to clear cart' });
+  }
+});
+
+router.get('/checkout-reservation-config', authenticateToken, isServiceProvider, async (_req, res) => {
+  return res.json({
+    status: 'success',
+    expiresInMinutes: CHECKOUT_RESERVATION_MINUTES
+  });
+});
+
+router.post('/checkout-reservations', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const payload = parseWithSchema(poCheckoutReserveSchema, req.body || {});
+    const result = await reserveCheckoutLines({
+      buyerUserId: req.userId,
+      source: CHECKOUT_SOURCES.SP_PO,
+      checkoutSessionId: payload.checkoutSessionId,
+      lines: payload.lines
+    });
+
+    return res.json({
+      status: 'success',
+      message: `Inventory held for ${CHECKOUT_RESERVATION_MINUTES} minutes while you complete checkout`,
+      checkoutSessionId: result.checkoutSessionId,
+      expiresAt: result.expiresAt,
+      expiresInMinutes: result.expiresInMinutes,
+      reservations: (result.reservations || []).map((row) => ({
+        id: row.id,
+        supplierProductId: row.supplier_product_id,
+        supplierId: row.supplier_id,
+        reservedQuantity: row.reserved_quantity,
+        expiresAt: row.expires_at
+      }))
+    });
+  } catch (error) {
+    if (String(error?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+    }
+    console.error('PO checkout reserve error:', error);
+    return res.status(400).json({
+      status: 'error',
+      message: error?.message || 'Failed to reserve inventory for checkout'
+    });
+  }
+});
+
+router.get('/checkout-reservations/:checkoutSessionId', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const checkoutSessionId = String(req.params?.checkoutSessionId || '').trim();
+    if (!checkoutSessionId) {
+      return res.status(400).json({ status: 'error', message: 'checkoutSessionId is required' });
+    }
+
+    const status = await getCheckoutReservationStatus({
+      buyerUserId: req.userId,
+      source: CHECKOUT_SOURCES.SP_PO,
+      checkoutSessionId
+    });
+
+    return res.json({ status: 'success', ...status });
+  } catch (error) {
+    console.error('PO checkout reservation status error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to load checkout reservation status' });
+  }
+});
+
+router.delete('/checkout-reservations', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    const payload = parseWithSchema(poCheckoutReleaseSchema, req.body || {});
+    const result = await releaseCheckoutReservations({
+      buyerUserId: req.userId,
+      source: CHECKOUT_SOURCES.SP_PO,
+      checkoutSessionId: payload.checkoutSessionId || null,
+      actorUserId: req.userId
+    });
+
+    return res.json({
+      status: 'success',
+      message:
+        result.released > 0
+          ? 'Inventory hold released — stock is available again for other buyers'
+          : 'No active inventory hold to release',
+      released: result.released
+    });
+  } catch (error) {
+    if (String(error?.name || '') === 'ZodError') {
+      return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+    }
+    console.error('PO checkout release error:', error);
+    return res.status(500).json({ status: 'error', message: 'Failed to release checkout reservations' });
   }
 });
 

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { MapPin } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -9,7 +9,7 @@ import {
   specificationsObjectForLogistics
 } from '../utils/specifications';
 import { formatRupee } from '../utils/formatRupee';
-import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
+import { formatShippingAddressLabel, formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
@@ -30,6 +30,21 @@ import {
 import './Dashboard.css';
 import './CreatePO.css';
 import './SupplierPlaceOrder.css';
+import {
+  DEFAULT_CHECKOUT_RESERVATION_MINUTES,
+  SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY,
+  SUPPLIER_UPSTREAM_CART_PATH,
+  buildCheckoutHoldExpiredNavState,
+  fetchUpstreamCheckoutReservationConfig,
+  fetchUpstreamCheckoutReservationStatus,
+  formatReservationCountdown,
+  getReservationSecondsRemaining,
+  isCheckoutHoldExpired,
+  isInventoryHoldExpiredApiError,
+  markCheckoutHoldExpired,
+  readActiveCheckoutReservation,
+  releaseUpstreamCheckoutInventory
+} from '../utils/upstreamCheckoutReservation';
 
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
 const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
@@ -114,8 +129,13 @@ const SupplierPlaceOrder = () => {
   const navigate = useNavigate();
 
   const goBackToUpstream = () => {
+    void releaseCheckoutHold();
     try {
       sessionStorage.setItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY, '1');
+      if (draft) {
+        const { checkoutSessionId: _session, reservationExpiresAt: _expires, ...restoreDraft } = draft;
+        localStorage.setItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY, JSON.stringify(restoreDraft));
+      }
     } catch (_) {
       // Non-fatal.
     }
@@ -148,10 +168,54 @@ const SupplierPlaceOrder = () => {
   const [hasGstin, setHasGstin] = useState(false);
   const [shippingBranches, setShippingBranches] = useState([]);
   const [selectedShippingBranchId, setSelectedShippingBranchId] = useState('');
+  const [cartShippingLocked, setCartShippingLocked] = useState(false);
+  const [cartShippingLabel, setCartShippingLabel] = useState('');
+  const [cartShippingAddressId, setCartShippingAddressId] = useState('');
+  const cartShippingLockedRef = useRef(false);
   const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
 
   const [selectedTransport, setSelectedTransport] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [reservationExpiresAt, setReservationExpiresAt] = useState('');
+  const [reservationSecondsLeft, setReservationSecondsLeft] = useState(0);
+  const [reservationExpired, setReservationExpired] = useState(false);
+  const [reservationMinutes, setReservationMinutes] = useState(DEFAULT_CHECKOUT_RESERVATION_MINUTES);
+  const [reservationBootstrapDone, setReservationBootstrapDone] = useState(false);
+  const reservationHoldRef = useRef(false);
+
+  const releaseCheckoutHold = async () => {
+    const sessionId = String(draft?.checkoutSessionId || '').trim();
+    if (!sessionId) return;
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      await releaseUpstreamCheckoutInventory({ token, checkoutSessionId: sessionId });
+    } catch (e) {
+      console.error('Failed to release upstream checkout hold:', e);
+    }
+  };
+
+  const redirectToUpstreamCartAfterHoldExpiry = async (minutes = reservationMinutes) => {
+    setReservationExpired(true);
+    reservationHoldRef.current = false;
+    markCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY);
+    await releaseCheckoutHold();
+    try {
+      localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+    } catch (_) {
+      // Non-fatal.
+    }
+    setDraft(null);
+    navigate(SUPPLIER_UPSTREAM_CART_PATH, {
+      replace: true,
+      state: buildCheckoutHoldExpiredNavState(minutes)
+    });
+  };
+
+  const handleReservationExpired = async () => {
+    if (reservationExpired || !reservationHoldRef.current) return;
+    await redirectToUpstreamCartAfterHoldExpiry();
+  };
 
   useEffect(() => {
     try {
@@ -165,16 +229,48 @@ const SupplierPlaceOrder = () => {
 
       setDraft(parsed);
       setRequiredDate(typeof parsed.requiredDate === 'string' ? parsed.requiredDate : '');
+      const expiresAt = typeof parsed.reservationExpiresAt === 'string' ? parsed.reservationExpiresAt : '';
+      setReservationExpiresAt(expiresAt);
+      reservationHoldRef.current = Boolean(parsed.checkoutSessionId && expiresAt);
       setSelectedTransport(
         parsed.transportSelection && typeof parsed.transportSelection === 'object'
           ? normalizeTransportSelection(parsed.transportSelection)
           : null
       );
       if (parsed.checkoutShippingAddress && typeof parsed.checkoutShippingAddress === 'object') {
+        const normalized = normalizeShippingAddress(parsed.checkoutShippingAddress);
         setShippingAddress((prev) => ({
           ...prev,
-          ...normalizeShippingAddress(parsed.checkoutShippingAddress)
+          ...normalized
         }));
+        setCartShippingLocked(true);
+        cartShippingLockedRef.current = true;
+        setDeliveryDestination('shipping');
+        setCartShippingLabel(
+          typeof parsed.shippingAddressLabel === 'string' && parsed.shippingAddressLabel.trim()
+            ? parsed.shippingAddressLabel.trim()
+            : formatShippingAddressPreview(normalized)
+        );
+        if (parsed.shippingAddressId) {
+          setCartShippingAddressId(String(parsed.shippingAddressId));
+        }
+      } else {
+        const lineWithShipping = Array.isArray(parsed.reviewLines)
+          ? parsed.reviewLines.find(
+              (line) => line?.shippingAddress && typeof line.shippingAddress === 'object'
+            )
+          : null;
+        if (lineWithShipping?.shippingAddress) {
+          const normalized = normalizeShippingAddress(lineWithShipping.shippingAddress);
+          setShippingAddress((prev) => ({
+            ...prev,
+            ...normalized
+          }));
+          setCartShippingLocked(true);
+          cartShippingLockedRef.current = true;
+          setDeliveryDestination('shipping');
+          setCartShippingLabel(formatShippingAddressPreview(normalized));
+        }
       }
     } catch (e) {
       console.error('Failed to load supplier upstream order draft:', e);
@@ -182,6 +278,153 @@ const SupplierPlaceOrder = () => {
       setLoadingDraft(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (loadingDraft) return undefined;
+
+    let cancelled = false;
+
+    const finishBootstrap = () => {
+      if (!cancelled) setReservationBootstrapDone(true);
+    };
+
+    (async () => {
+      let resolvedMinutes = reservationMinutes;
+
+      if (isCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY)) {
+        if (!cancelled) {
+          navigate(SUPPLIER_UPSTREAM_CART_PATH, {
+            replace: true,
+            state: buildCheckoutHoldExpiredNavState(resolvedMinutes)
+          });
+        }
+        return;
+      }
+
+      const sessionId = String(draft?.checkoutSessionId || '').trim();
+      const token = localStorage.getItem('token');
+      if (!sessionId || !token) {
+        finishBootstrap();
+        return;
+      }
+
+      try {
+        const config = await fetchUpstreamCheckoutReservationConfig({ token });
+        if (!cancelled && Number(config?.expiresInMinutes) > 0) {
+          resolvedMinutes = Number(config.expiresInMinutes);
+          setReservationMinutes(resolvedMinutes);
+        }
+      } catch (e) {
+        console.error('Failed to load upstream checkout reservation config:', e);
+      }
+
+      try {
+        const restored = await readActiveCheckoutReservation({
+          token,
+          checkoutSessionId: sessionId,
+          fetchStatus: fetchUpstreamCheckoutReservationStatus
+        });
+        if (cancelled) return;
+
+        if (restored.active) {
+          setReservationExpiresAt(restored.expiresAt);
+          setReservationSecondsLeft(restored.secondsLeft || 0);
+          setReservationExpired(false);
+          reservationHoldRef.current = true;
+          setDraft((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  reservationExpiresAt: restored.expiresAt
+                }
+              : prev
+          );
+        } else {
+          markCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY);
+          await releaseCheckoutHold();
+          try {
+            localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+          } catch (_) {
+            // Non-fatal.
+          }
+          if (!cancelled) {
+            navigate(SUPPLIER_UPSTREAM_CART_PATH, {
+              replace: true,
+              state: buildCheckoutHoldExpiredNavState(resolvedMinutes)
+            });
+          }
+          return;
+        }
+      } catch (e) {
+        console.error('Failed to restore upstream checkout reservation:', e);
+        if (!cancelled) {
+          const expiresAt =
+            typeof draft?.reservationExpiresAt === 'string' ? draft.reservationExpiresAt : '';
+          const secondsLeft = getReservationSecondsRemaining(expiresAt);
+          if (expiresAt && secondsLeft > 0) {
+            setReservationExpiresAt(expiresAt);
+            setReservationSecondsLeft(secondsLeft);
+            reservationHoldRef.current = true;
+          } else {
+            markCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY);
+            navigate(SUPPLIER_UPSTREAM_CART_PATH, {
+              replace: true,
+              state: buildCheckoutHoldExpiredNavState(resolvedMinutes)
+            });
+            return;
+          }
+        }
+      } finally {
+        finishBootstrap();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [loadingDraft, draft?.checkoutSessionId]);
+
+  useEffect(() => {
+    const token = localStorage.getItem('token');
+    if (!token) return undefined;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const config = await fetchUpstreamCheckoutReservationConfig({ token });
+        if (!cancelled && Number(config?.expiresInMinutes) > 0) {
+          setReservationMinutes(Number(config.expiresInMinutes));
+        }
+      } catch (e) {
+        console.error('Failed to load upstream checkout reservation config:', e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!reservationBootstrapDone || !reservationExpiresAt || reservationExpired || !reservationHoldRef.current) {
+      if (!reservationExpiresAt || reservationExpired) {
+        setReservationSecondsLeft(0);
+      }
+      return undefined;
+    }
+
+    const tick = () => {
+      const secondsLeft = getReservationSecondsRemaining(reservationExpiresAt);
+      setReservationSecondsLeft(secondsLeft);
+      if (secondsLeft <= 0) {
+        void handleReservationExpired();
+      }
+    };
+
+    tick();
+    const timerId = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timerId);
+  }, [reservationExpiresAt, reservationExpired, reservationBootstrapDone]);
 
   // Older drafts may lack specs/images — hydrate from current supplier catalog.
   useEffect(() => {
@@ -248,6 +491,8 @@ const SupplierPlaceOrder = () => {
           transportSelection: selectedTransport,
           checkoutShippingAddress: normalizeShippingAddress(shippingAddress),
           deliveryDestination,
+          shippingAddressId: cartShippingAddressId || null,
+          shippingAddressLabel: cartShippingLabel || formatShippingAddressPreview(shippingAddress),
           shippingAddress: normalizeShippingAddress(shippingAddress),
           billingAddress: normalizeShippingAddress(billingAddress)
         })
@@ -255,9 +500,9 @@ const SupplierPlaceOrder = () => {
     } catch (_) {
       // Non-fatal.
     }
-  }, [draft, requiredDate, paymentMethod, selectedTransport, shippingAddress, billingAddress, deliveryDestination]);
+  }, [draft, requiredDate, paymentMethod, selectedTransport, shippingAddress, billingAddress, deliveryDestination, cartShippingAddressId, cartShippingLabel]);
 
-  // Prefill shipping/billing addresses from profile + GSTIN detection.
+  // Prefill billing address from profile when delivery is not locked to cart selection.
   useEffect(() => {
     let cancelled = false;
     const loadProfile = async () => {
@@ -274,12 +519,14 @@ const SupplierPlaceOrder = () => {
         const gstinRaw = profile?.gstin || profile?.mainGstin || '';
         setHasGstin(Boolean(String(gstinRaw || '').trim()));
 
-        const branches = (Array.isArray(profile?.branches) ? profile.branches : []).filter(isBranchComplete);
-        setShippingBranches(branches);
-        const primaryBranch = branches[0] || null;
-        if (primaryBranch) {
-          setSelectedShippingBranchId(String(primaryBranch.id || ''));
-          setShippingAddress(branchToShippingAddress(primaryBranch));
+        if (!cartShippingLockedRef.current) {
+          const branches = (Array.isArray(profile?.branches) ? profile.branches : []).filter(isBranchComplete);
+          setShippingBranches(branches);
+          const primaryBranch = branches[0] || null;
+          if (primaryBranch) {
+            setSelectedShippingBranchId(String(primaryBranch.id || ''));
+            setShippingAddress(branchToShippingAddress(primaryBranch));
+          }
         }
 
         const billingFromProfile = profile?.address || {};
@@ -327,7 +574,7 @@ const SupplierPlaceOrder = () => {
 
     if (routeState.hasGstin != null) setHasGstin(Boolean(routeState.hasGstin));
 
-    if (routeState.shippingAddress && typeof routeState.shippingAddress === 'object') {
+    if (routeState.shippingAddress && typeof routeState.shippingAddress === 'object' && !cartShippingLockedRef.current) {
       setShippingAddress((prev) => ({ ...prev, ...routeState.shippingAddress }));
     }
     if (routeState.billingAddress && typeof routeState.billingAddress === 'object') {
@@ -347,10 +594,11 @@ const SupplierPlaceOrder = () => {
   }, [hasGstin, deliveryDestination]);
 
   useEffect(() => {
+    if (cartShippingLocked || cartShippingLockedRef.current) return;
     if (!selectedShippingBranchId) return;
     const branch = shippingBranches.find((b) => String(b.id) === String(selectedShippingBranchId));
     if (branch) setShippingAddress(branchToShippingAddress(branch));
-  }, [selectedShippingBranchId, shippingBranches]);
+  }, [selectedShippingBranchId, shippingBranches, cartShippingLocked]);
 
   const fillShippingFromCurrentLocation = async () => {
     setLocatingShippingAddress(true);
@@ -532,6 +780,7 @@ const SupplierPlaceOrder = () => {
         hasGstin,
         deliveryDestination,
         shippingAddress,
+        shippingAddressId: cartShippingAddressId || null,
         billingAddress,
         createdOrders: []
       }
@@ -541,6 +790,14 @@ const SupplierPlaceOrder = () => {
   const handlePlaceOrder = async () => {
     if (!draft?.lines || !Array.isArray(draft.lines) || draft.lines.length === 0) {
       alert('No draft order found. Please select products again.');
+      return;
+    }
+    if (!draft?.checkoutSessionId) {
+      alert('This order draft is missing an inventory hold. Go back to upstream sourcing and proceed again.');
+      return;
+    }
+    if (!reservationHoldRef.current || reservationExpired || reservationSecondsLeft <= 0) {
+      await redirectToUpstreamCartAfterHoldExpiry();
       return;
     }
 
@@ -578,9 +835,11 @@ const SupplierPlaceOrder = () => {
         },
         body: JSON.stringify({
           lines: draft.lines,
+          checkoutSessionId: draft.checkoutSessionId,
           requiredDate: requiredDate || null,
           paymentMethod,
           shippingAddress,
+          shippingAddressId: cartShippingAddressId || null,
           billingAddress,
           deliveryDestination
         })
@@ -588,6 +847,10 @@ const SupplierPlaceOrder = () => {
 
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || data.status !== 'success') {
+        if (isInventoryHoldExpiredApiError(data)) {
+          await redirectToUpstreamCartAfterHoldExpiry();
+          return;
+        }
         alert(data?.message || 'Failed to place upstream orders.');
         return;
       }
@@ -688,8 +951,24 @@ const SupplierPlaceOrder = () => {
             <h1>Place Order</h1>
             <p>No order draft found. Start from Upstream Orders.</p>
           </div>
-          <button type="button" className="btn-secondary" onClick={goBackToUpstream}>
+          <button type="button" className="btn-secondary" onClick={() => navigate('/supplier-upstream')}>
             Back to Upstream Orders
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!draft.checkoutSessionId) {
+    return (
+      <div className="dashboard-container">
+        <div className="dashboard-header">
+          <div>
+            <h1>Place Order</h1>
+            <p>This draft is out of date. Return to upstream sourcing and proceed to checkout again.</p>
+          </div>
+          <button type="button" className="btn-secondary" onClick={() => navigate('/supplier-upstream')}>
+            Back to Upstream Sourcing
           </button>
         </div>
       </div>
@@ -709,6 +988,25 @@ const SupplierPlaceOrder = () => {
           Back
         </button>
       </div>
+
+      {reservationBootstrapDone && !reservationExpired && reservationSecondsLeft > 0 ? (
+      <div
+        className={`spo-reservation-banner ${
+          reservationSecondsLeft > 0 && reservationSecondsLeft <= 120 ? 'spo-reservation-banner--warning' : ''
+        }`}
+      >
+        <div>
+          <strong>Inventory held for checkout</strong>
+          <p>
+            Upstream stock is reserved for you for {reservationMinutes} minutes to prevent
+            overselling. Complete your order before the timer ends or stock will be released automatically.
+          </p>
+        </div>
+        <div className="spo-reservation-timer" aria-live="polite">
+          {formatReservationCountdown(reservationSecondsLeft)}
+        </div>
+      </div>
+      ) : null}
 
       <div className="spo-layout">
         <div className="spo-summary-bar">
@@ -774,107 +1072,135 @@ const SupplierPlaceOrder = () => {
 
           <section className="spo-section">
             <h2 className="spo-section-title">Delivery address</h2>
-            <p className="spo-section-desc">
-              Choose where material should be delivered. Only the selected address is shown and used for courier
-              quotes.
-            </p>
-
-            <div className="checkout-delivery-choice" style={{ marginBottom: '1rem' }}>
-              <label>
-                <input
-                  type="radio"
-                  name="spo-delivery-dest"
-                  checked={deliveryDestination === 'shipping'}
-                  onChange={() => setDeliveryDestination('shipping')}
-                />
-                Shipping branch address
-              </label>
-              <label style={!hasGstin ? { opacity: 0.55 } : undefined}>
-                <input
-                  type="radio"
-                  name="spo-delivery-dest"
-                  checked={deliveryDestination === 'billing'}
-                  disabled={!hasGstin}
-                  onChange={() => hasGstin && setDeliveryDestination('billing')}
-                />
-                Billing address {hasGstin ? '' : '(add GSTIN in profile)'}
-              </label>
-            </div>
-
-            {deliveryDestination === 'shipping' ? (
-              <div className="spo-address-single checkout-address-card">
-                <div className="checkout-address-card__head">
-                  <h3>Shipping (branch)</h3>
-                  <p>Material will be delivered to this branch location.</p>
-                </div>
-                {shippingBranches.length > 1 ? (
-                  <div className="spo-field" style={{ marginBottom: '0.75rem' }}>
-                    <label htmlFor="spo-shipping-branch">Branch</label>
-                    <select
-                      id="spo-shipping-branch"
-                      value={selectedShippingBranchId}
-                      onChange={(e) => setSelectedShippingBranchId(e.target.value)}
-                    >
-                      {shippingBranches.map((branch) => (
-                        <option key={branch.id} value={String(branch.id)}>
-                          {branch.name || 'Branch'} — {branch.city || 'City'}
-                        </option>
-                      ))}
-                    </select>
+            {cartShippingLocked ? (
+              <>
+                <p className="spo-section-desc">
+                  This is the address you selected when adding items to your upstream cart. It is used for courier
+                  quotes and delivery.
+                </p>
+                <div className="spo-address-single checkout-address-card">
+                  <div className="checkout-address-card__head">
+                    <h3>Cart delivery address</h3>
+                    <p>Material will be delivered to this location.</p>
                   </div>
-                ) : null}
-                <p className="checkout-address-note">
-                  From Company Profile → shipping branches.{' '}
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.78rem', marginLeft: '0.25rem' }}
-                    onClick={() => navigate('/profile')}
-                  >
-                    Edit profile
-                  </button>
-                </p>
-                <div className="checkout-address-location-row">
-                  <button
-                    type="button"
-                    className="checkout-location-btn"
-                    onClick={fillShippingFromCurrentLocation}
-                    disabled={locatingShippingAddress}
-                  >
-                    <MapPin size={15} aria-hidden />
-                    {locatingShippingAddress ? 'Detecting location…' : 'Use my current location'}
-                  </button>
+                  {cartShippingLabel ? (
+                    <p className="spo-cart-shipping-label" style={{ fontWeight: 600, marginBottom: '0.5rem' }}>
+                      {cartShippingLabel}
+                    </p>
+                  ) : null}
+                  <p className="checkout-address-note" style={{ marginBottom: 0 }}>
+                    {formatShippingAddressPreview(shippingAddress)}
+                  </p>
+                  <p className="spo-hint" style={{ marginTop: '0.75rem' }}>
+                    To change this address, go back to Upstream and update the shipping address on your cart project.
+                  </p>
                 </div>
-                <AddressFields
-                  prefix="ship"
-                  address={shippingAddress}
-                  onChange={setShippingAddress}
-                />
-              </div>
+              </>
             ) : (
-              <div className="spo-address-single checkout-address-card checkout-address-card--billing">
-                <div className="checkout-address-card__head">
-                  <h3>Billing address</h3>
-                  <p>Material will be delivered to this billing address (GSTIN on file).</p>
-                </div>
-                <p className="checkout-address-note">
-                  From Company Profile → registered billing address.{' '}
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    style={{ padding: '0.2rem 0.5rem', fontSize: '0.78rem', marginLeft: '0.25rem' }}
-                    onClick={() => navigate('/profile')}
-                  >
-                    Edit profile
-                  </button>
+              <>
+                <p className="spo-section-desc">
+                  Choose where material should be delivered. Only the selected address is shown and used for courier
+                  quotes.
                 </p>
-                <AddressFields
-                  prefix="bill"
-                  address={billingAddress}
-                  onChange={setBillingAddress}
-                  disabled
-                />
-              </div>
+
+                <div className="checkout-delivery-choice" style={{ marginBottom: '1rem' }}>
+                  <label>
+                    <input
+                      type="radio"
+                      name="spo-delivery-dest"
+                      checked={deliveryDestination === 'shipping'}
+                      onChange={() => setDeliveryDestination('shipping')}
+                    />
+                    Shipping branch address
+                  </label>
+                  <label style={!hasGstin ? { opacity: 0.55 } : undefined}>
+                    <input
+                      type="radio"
+                      name="spo-delivery-dest"
+                      checked={deliveryDestination === 'billing'}
+                      disabled={!hasGstin}
+                      onChange={() => hasGstin && setDeliveryDestination('billing')}
+                    />
+                    Billing address {hasGstin ? '' : '(add GSTIN in profile)'}
+                  </label>
+                </div>
+
+                {deliveryDestination === 'shipping' ? (
+                  <div className="spo-address-single checkout-address-card">
+                    <div className="checkout-address-card__head">
+                      <h3>Shipping (branch)</h3>
+                      <p>Material will be delivered to this branch location.</p>
+                    </div>
+                    {shippingBranches.length > 1 ? (
+                      <div className="spo-field" style={{ marginBottom: '0.75rem' }}>
+                        <label htmlFor="spo-shipping-branch">Branch</label>
+                        <select
+                          id="spo-shipping-branch"
+                          value={selectedShippingBranchId}
+                          onChange={(e) => setSelectedShippingBranchId(e.target.value)}
+                        >
+                          {shippingBranches.map((branch) => (
+                            <option key={branch.id} value={String(branch.id)}>
+                              {branch.name || 'Branch'} — {branch.city || 'City'}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    ) : null}
+                    <p className="checkout-address-note">
+                      From Company Profile → shipping branches.{' '}
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.78rem', marginLeft: '0.25rem' }}
+                        onClick={() => navigate('/profile')}
+                      >
+                        Edit profile
+                      </button>
+                    </p>
+                    <div className="checkout-address-location-row">
+                      <button
+                        type="button"
+                        className="checkout-location-btn"
+                        onClick={fillShippingFromCurrentLocation}
+                        disabled={locatingShippingAddress}
+                      >
+                        <MapPin size={15} aria-hidden />
+                        {locatingShippingAddress ? 'Detecting location…' : 'Use my current location'}
+                      </button>
+                    </div>
+                    <AddressFields
+                      prefix="ship"
+                      address={shippingAddress}
+                      onChange={setShippingAddress}
+                    />
+                  </div>
+                ) : (
+                  <div className="spo-address-single checkout-address-card checkout-address-card--billing">
+                    <div className="checkout-address-card__head">
+                      <h3>Billing address</h3>
+                      <p>Material will be delivered to this billing address (GSTIN on file).</p>
+                    </div>
+                    <p className="checkout-address-note">
+                      From Company Profile → registered billing address.{' '}
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ padding: '0.2rem 0.5rem', fontSize: '0.78rem', marginLeft: '0.25rem' }}
+                        onClick={() => navigate('/profile')}
+                      >
+                        Edit profile
+                      </button>
+                    </p>
+                    <AddressFields
+                      prefix="bill"
+                      address={billingAddress}
+                      onChange={setBillingAddress}
+                      disabled
+                    />
+                  </div>
+                )}
+              </>
             )}
           </section>
 

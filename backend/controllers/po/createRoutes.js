@@ -34,6 +34,11 @@ import {
   validateCreditForOrder
 } from '../../services/creditAccountService.js';
 import { loadSupplierProductForPoCreate } from './groupRoutes.js';
+import {
+  CHECKOUT_SOURCES,
+  consumeCheckoutReservationsForOrder,
+  validateCheckoutReservationsForLines
+} from '../../services/checkoutInventoryReservationService.js';
 
 export function registerPoCreateRoutes(ctx) {
   const {
@@ -46,7 +51,7 @@ export function registerPoCreateRoutes(ctx) {
 router.post('/create', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const payload = parseWithSchema(poCreateRequestSchema, req.body || {});
-    const { poGroups, boqId, requiredDate } = payload;
+    const { poGroups, boqId, requiredDate, checkoutSessionId } = payload;
     const itemBrandCandidates = (poGroups || [])
       .flatMap((group) => (Array.isArray(group?.items) ? group.items : []))
       .flatMap((item) => [
@@ -185,6 +190,31 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
     const createdOrders = [];
     const toMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+
+    const reservationLines = (Array.isArray(poGroups) ? poGroups : []).flatMap((group) =>
+      (Array.isArray(group?.items) ? group.items : [])
+        .map((item) => ({
+          supplierProductId: String(item?.supplierProductId || '').trim(),
+          quantity: Number(item?.quantity) || 0
+        }))
+        .filter((line) => line.supplierProductId && line.quantity > 0)
+    );
+
+    try {
+      await validateCheckoutReservationsForLines({
+        buyerUserId: req.userId,
+        source: CHECKOUT_SOURCES.SP_PO,
+        checkoutSessionId,
+        lines: reservationLines
+      });
+    } catch (reservationError) {
+      return res.status(409).json({
+        status: 'error',
+        code: 'inventory_hold_expired',
+        message: reservationError?.message || 'Inventory hold has expired. Return to your cart and proceed again.',
+      });
+    }
+
     let walletRemainingBalance = null;
     if (poPaymentMethod === 'wallet') {
       const groupedTotal = toMoney(
@@ -634,76 +664,36 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         throw err;
       }
 
-      // Record inventory movements for each ordered item (stock out) — parallel for latency.
+      // Inventory: consume checkout hold (deducts seller stock once).
       try {
-        const itemsWithIds = insertedItems || [];
-        await Promise.all(
-          itemsWithIds.map(async (orderItem) => {
-            const qty = parseFloat(orderItem.quantity) || 0;
-            if (!qty || qty <= 0) return;
+        const orderItemBySupplierProductId = {};
+        for (const inserted of insertedItems || []) {
+          if (!inserted?.supplier_product_id) continue;
+          orderItemBySupplierProductId[inserted.supplier_product_id] = {
+            orderId: order.id,
+            orderItemId: inserted.id
+          };
+        }
 
-            let supplierProduct = null;
-            if (orderItem.supplier_product_id) {
-              const { data: spById, error: spErrorById } = await supabase
-                .from('supplier_products')
-                .select('id, supplier_id, product_id')
-                .eq('id', orderItem.supplier_product_id)
-                .maybeSingle();
-              if (spErrorById) {
-                logger.warn('[PO] Inventory movement supplier_product_id lookup error:', spErrorById);
-              }
-              if (spById && spById.supplier_id === supplier.id) {
-                supplierProduct = spById;
-              } else if (spById && spById.supplier_id !== supplier.id) {
-                logger.error('[PO] order_items.supplier_product_id does not belong to this order supplier — skipping wrong inventory row', {
-                  orderSupplierId: supplier.id,
-                  offerOwnerId: spById.supplier_id,
-                  supplierProductId: spById.id
-                });
-              }
-            }
+        const groupLines = (Array.isArray(group.items) ? group.items : [])
+          .map((item) => ({
+            supplierProductId: String(item?.supplierProductId || '').trim(),
+            quantity: Number(item?.quantity) || 0
+          }))
+          .filter((line) => line.supplierProductId && line.quantity > 0);
 
-            if (!supplierProduct) {
-              const { data: spByFallback, error: spError } = await supabase
-                .from('supplier_products')
-                .select('id, supplier_id, product_id')
-                .eq('product_id', orderItem.product_id)
-                .eq('supplier_id', supplier.id)
-                .eq('is_active', true)
-                .order('created_at', { ascending: false })
-                .limit(1)
-                .maybeSingle();
-
-              if (spError) {
-                logger.warn('[PO] Inventory movement supplier fallback lookup error:', spError);
-              }
-              supplierProduct = spByFallback;
-            }
-
-            if (!supplierProduct) {
-              logger.warn('[PO] No supplier_products entry found for inventory movement', {
-                product_id: orderItem.product_id,
-                supplier_id: supplier.id
-              });
-              return;
-            }
-
-            await recordInventoryMovement({
-              supplierProductId: supplierProduct.id,
-              supplierId: supplier.id,
-              productId: supplierProduct.product_id || orderItem.product_id,
-              quantityChange: -qty,
-              movementType: 'sale_online',
-              referenceOrderId: order.id,
-              referenceOrderItemId: orderItem.id,
-              notes: 'B2B PO order created from BOQ',
-              userId: req.userId
-            });
-          })
-        );
+        await consumeCheckoutReservationsForOrder({
+          buyerUserId: req.userId,
+          source: CHECKOUT_SOURCES.SP_PO,
+          checkoutSessionId,
+          lines: groupLines,
+          orderItemBySupplierProductId
+        });
       } catch (invErr) {
-        logger.error('[PO] Inventory movement error for B2B PO:', invErr);
-        // Do not fail the order if inventory logging fails; monitor via logs.
+        logger.error('[PO] reservation consume error:', invErr);
+        await supabase.from('order_items').delete().eq('order_id', order.id);
+        await supabase.from('orders').delete().eq('id', order.id);
+        throw createHttpError(400, invErr?.message || 'Failed to finalize inventory for purchase order');
       }
 
       // Create notification for the supplier about the new order

@@ -22,6 +22,26 @@ import {
   clearCartTransportSelection
 } from '../utils/poCartTransportApi';
 import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
+import {
+  buildPoReservationLinesFromGroups,
+  buildCheckoutHoldExpiredNavState,
+  clearCheckoutHoldExpired,
+  createCheckoutSessionId,
+  DEFAULT_CHECKOUT_RESERVATION_MINUTES,
+  fetchPoCheckoutReservationConfig,
+  fetchPoCheckoutReservationStatus,
+  formatReservationCountdown,
+  getReservationSecondsRemaining,
+  isCheckoutHoldExpired,
+  isInventoryHoldExpiredApiError,
+  markCheckoutHoldExpired,
+  readActiveCheckoutReservation,
+  releasePoCheckoutInventory,
+  reservePoCheckoutInventory,
+  SP_PO_CHECKOUT_HOLD_EXPIRED_KEY,
+  SP_PO_CHECKOUT_SESSION_KEY,
+  SP_CHECKOUT_CART_PATH
+} from '../utils/checkoutReservation';
 import './CreatePO.css';
 
 /** Shown when pay-later is blocked (limit, cycle, or minimum). */
@@ -240,6 +260,142 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   const [payLaterEligibility, setPayLaterEligibility] = useState([]);
   const [walletBalance, setWalletBalance] = useState(0);
   const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
+  const [checkoutSessionId, setCheckoutSessionId] = useState('');
+  const [reservationExpiresAt, setReservationExpiresAt] = useState('');
+  const [reservationSecondsLeft, setReservationSecondsLeft] = useState(0);
+  const [reservationExpired, setReservationExpired] = useState(false);
+  const [reservingInventory, setReservingInventory] = useState(false);
+  const [reservationMinutes, setReservationMinutes] = useState(DEFAULT_CHECKOUT_RESERVATION_MINUTES);
+  const [checkoutBootstrapDone, setCheckoutBootstrapDone] = useState(false);
+  const reservationSignatureRef = useRef('');
+  const reservationHoldRef = useRef(false);
+  const checkoutSessionIdRef = useRef('');
+
+  const clearPoCheckoutSession = () => {
+    try {
+      sessionStorage.removeItem(SP_PO_CHECKOUT_SESSION_KEY);
+    } catch (_) {
+      // Non-fatal.
+    }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const finishBootstrap = () => {
+      if (!cancelled) setCheckoutBootstrapDone(true);
+    };
+
+    const token = localStorage.getItem('token');
+
+    (async () => {
+      let resolvedMinutes = reservationMinutes;
+
+      if (isCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY)) {
+        if (!cancelled) {
+          navigate(SP_CHECKOUT_CART_PATH, {
+            replace: true,
+            state: buildCheckoutHoldExpiredNavState(resolvedMinutes)
+          });
+        }
+        return;
+      }
+
+      if (token) {
+        try {
+          const config = await fetchPoCheckoutReservationConfig({ token });
+          if (!cancelled && Number(config?.expiresInMinutes) > 0) {
+            resolvedMinutes = Number(config.expiresInMinutes);
+            setReservationMinutes(resolvedMinutes);
+          }
+        } catch (e) {
+          console.error('Failed to load checkout reservation config:', e);
+        }
+      }
+
+      const savedSessionId = String(sessionStorage.getItem(SP_PO_CHECKOUT_SESSION_KEY) || '').trim();
+      if (savedSessionId && token) {
+        try {
+          const restored = await readActiveCheckoutReservation({
+            token,
+            checkoutSessionId: savedSessionId,
+            fetchStatus: fetchPoCheckoutReservationStatus
+          });
+          if (!cancelled && restored.active) {
+            checkoutSessionIdRef.current = restored.checkoutSessionId;
+            setCheckoutSessionId(restored.checkoutSessionId);
+            setReservationExpiresAt(restored.expiresAt);
+            reservationHoldRef.current = true;
+            setReservationSecondsLeft(restored.secondsLeft || 0);
+          } else if (!cancelled) {
+            clearPoCheckoutSession();
+            if (restored.reason === 'expired' || restored.reason === 'inactive') {
+              markCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY);
+              navigate(SP_CHECKOUT_CART_PATH, {
+                replace: true,
+                state: buildCheckoutHoldExpiredNavState(resolvedMinutes)
+              });
+              return;
+            }
+          }
+        } catch (e) {
+          console.error('Failed to restore PO checkout reservation:', e);
+          if (!cancelled) clearPoCheckoutSession();
+        }
+      }
+
+      finishBootstrap();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const releasePoCheckoutHold = async () => {
+    const sessionId = String(checkoutSessionId || sessionStorage.getItem(SP_PO_CHECKOUT_SESSION_KEY) || '').trim();
+    if (!sessionId) return;
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      await releasePoCheckoutInventory({ token, checkoutSessionId: sessionId });
+    } catch (e) {
+      console.error('Failed to release PO checkout hold:', e);
+    } finally {
+      clearPoCheckoutSession();
+    }
+  };
+
+  const redirectToCartAfterHoldExpiry = async (minutes = reservationMinutes) => {
+    setReservationExpired(true);
+    markCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY);
+    await releasePoCheckoutHold();
+    setPoGroups([]);
+    setCheckoutSessionId('');
+    setReservationExpiresAt('');
+    reservationHoldRef.current = false;
+    reservationSignatureRef.current = '';
+    navigate(SP_CHECKOUT_CART_PATH, {
+      replace: true,
+      state: buildCheckoutHoldExpiredNavState(minutes)
+    });
+  };
+
+  const handleReservationExpired = async () => {
+    if (reservationExpired || reservingInventory || !reservationHoldRef.current) return;
+    await redirectToCartAfterHoldExpiry();
+  };
+
+  const resetCheckoutReservationState = () => {
+    clearPoCheckoutSession();
+    checkoutSessionIdRef.current = '';
+    reservationSignatureRef.current = '';
+    reservationHoldRef.current = false;
+    setCheckoutSessionId('');
+    setReservationExpiresAt('');
+    setReservationExpired(false);
+    setReservationSecondsLeft(0);
+  };
 
   const grandTotalAllPos = useMemo(
     () => poGroups.reduce((sum, g) => sum + (Number(g.total) || 0), 0),
@@ -317,6 +473,85 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     // Group by supplier + delivery address (re-runs when checkout address finishes loading).
     groupByVendor();
   }, [cartContextReady, workflowVendors, workflowSubs, workflowItems, shippingAddressGroupingKey]);
+
+  useEffect(() => {
+    if (!checkoutBootstrapDone || loading || reservationExpired || !poGroups.length) return undefined;
+
+    const lines = buildPoReservationLinesFromGroups(poGroups);
+    if (!lines.length) return undefined;
+
+    const signature = JSON.stringify(lines);
+    if (signature === reservationSignatureRef.current && reservationHoldRef.current) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    (async () => {
+      setReservingInventory(true);
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) throw new Error('Please sign in again to reserve inventory for checkout.');
+
+        const sessionId =
+          checkoutSessionIdRef.current ||
+          String(checkoutSessionId || sessionStorage.getItem(SP_PO_CHECKOUT_SESSION_KEY) || '').trim() ||
+          createCheckoutSessionId();
+        checkoutSessionIdRef.current = sessionId;
+        const data = await reservePoCheckoutInventory({
+          token,
+          checkoutSessionId: sessionId,
+          lines
+        });
+        if (cancelled) return;
+
+        reservationSignatureRef.current = signature;
+        reservationHoldRef.current = true;
+        clearCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY);
+        const activeSessionId = data.checkoutSessionId || sessionId;
+        setCheckoutSessionId(activeSessionId);
+        setReservationExpiresAt(data.expiresAt || '');
+        if (Number(data.expiresInMinutes) > 0) {
+          setReservationMinutes(Number(data.expiresInMinutes));
+        }
+        sessionStorage.setItem(SP_PO_CHECKOUT_SESSION_KEY, activeSessionId);
+        setError(null);
+      } catch (reserveError) {
+        if (!cancelled) {
+          reservationHoldRef.current = false;
+          setError(reserveError?.message || 'Failed to reserve inventory for checkout.');
+          setPoGroups([]);
+          resetCheckoutReservationState();
+        }
+      } finally {
+        if (!cancelled) setReservingInventory(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [checkoutBootstrapDone, loading, poGroups, reservationExpired]);
+
+  useEffect(() => {
+    if (!reservationExpiresAt || reservationExpired || reservingInventory || !reservationHoldRef.current) {
+      if (!reservationExpiresAt || reservationExpired) {
+        setReservationSecondsLeft(0);
+      }
+      return undefined;
+    }
+
+    const tick = () => {
+      const secondsLeft = getReservationSecondsRemaining(reservationExpiresAt);
+      setReservationSecondsLeft(secondsLeft);
+      if (secondsLeft <= 0) {
+        void handleReservationExpired();
+      }
+    };
+
+    tick();
+    const timerId = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timerId);
+  }, [reservationExpiresAt, reservationExpired, reservingInventory]);
 
   useEffect(() => {
     if (requiredDate) return;
@@ -633,6 +868,15 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
 
   const createPurchaseOrders = async () => {
     const token = localStorage.getItem('token');
+    const sessionId =
+      String(checkoutSessionId || sessionStorage.getItem(SP_PO_CHECKOUT_SESSION_KEY) || '').trim();
+    if (!sessionId) {
+      throw new Error('Checkout inventory hold is missing. Return to supplier selection and try again.');
+    }
+    if (reservationExpired || reservationSecondsLeft <= 0) {
+      await redirectToCartAfterHoldExpiry();
+      throw new Error('Checkout inventory hold expired');
+    }
 
     console.log('Creating POs with groups:', poGroups, 'Required date:', requiredDate);
 
@@ -644,6 +888,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       },
       body: JSON.stringify({
         poGroups,
+        checkoutSessionId: sessionId,
         boqId,
         requiredDate,
         paymentMethod: poPaymentMethod,
@@ -658,11 +903,16 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     if (!res.ok) {
       const errorText = await res.text();
       let errorMessage = 'Failed to create purchase orders';
+      let errorData = null;
       try {
-        const errorData = JSON.parse(errorText);
+        errorData = JSON.parse(errorText);
         errorMessage = errorData.error || errorData.message || errorMessage;
       } catch (e) {
         errorMessage = errorText || errorMessage;
+      }
+      if (isInventoryHoldExpiredApiError(errorData || { message: errorMessage })) {
+        await redirectToCartAfterHoldExpiry();
+        throw new Error('Checkout inventory hold expired');
       }
       throw new Error(errorMessage);
     }
@@ -836,6 +1086,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       await finalizeTransportDetails(activeOrders);
       await clearCartTransportSelection();
       setSelectedTransport(null);
+      reservationSignatureRef.current = '';
+      reservationHoldRef.current = false;
+      clearPoCheckoutSession();
+      setCheckoutSessionId('');
+      setReservationExpiresAt('');
       setConfirmed(true);
     } catch (err) {
       console.error('Failed to finalize transport flow:', err);
@@ -904,6 +1159,15 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         );
         return;
       }
+    }
+
+    if (reservingInventory) {
+      alert('Refreshing inventory hold. Please wait a moment.');
+      return;
+    }
+    if (!reservationHoldRef.current || !checkoutSessionId || reservationExpired || reservationSecondsLeft <= 0) {
+      await redirectToCartAfterHoldExpiry();
+      return;
     }
 
     await completeOrderFlow();
@@ -1020,23 +1284,27 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     );
   }
 
-  if (loading) {
+  if (loading || reservingInventory) {
     return (
       <div className="page">
         <div className="page-header">
           <h1>Create Purchase Orders</h1>
           <p>
-            {cartContextReady
-              ? 'Grouping items by vendor…'
-              : 'Loading your cart and checkout…'}
+            {loading
+              ? cartContextReady
+                ? 'Grouping items by vendor…'
+                : 'Loading your cart and checkout…'
+              : 'Holding supplier inventory for your checkout…'}
           </p>
         </div>
         <div style={{ textAlign: 'center', padding: '3rem' }}>
           <div className="spinner" style={{ margin: '0 auto' }} />
           <p>
-            {cartContextReady
-              ? 'Please wait while we group your purchase orders…'
-              : 'Syncing your saved cart (voice or discovery) before creating purchase orders…'}
+            {loading
+              ? cartContextReady
+                ? 'Please wait while we group your purchase orders…'
+                : 'Syncing your saved cart (voice or discovery) before creating purchase orders…'
+              : `Reserving stock for ${reservationMinutes} minutes while checkout loads…`}
           </p>
         </div>
       </div>
@@ -1044,28 +1312,38 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   }
 
   if (error) {
+    const errorMessage = typeof error === 'string' ? error : String(error?.message || error);
+    const isReservationError = /inventory hold has expired/i.test(errorMessage);
+    if (isReservationError) {
+      void redirectToCartAfterHoldExpiry();
+      return null;
+    }
     return (
       <div className="page">
         <div className="page-header">
           <h1>Create Purchase Orders</h1>
-          <p>Error grouping purchase orders</p>
+          <p>{isReservationError ? 'Checkout inventory hold ended' : 'Error grouping purchase orders'}</p>
         </div>
-        <div style={{ 
-          background: '#fee2e2', 
-          border: '1px solid #fca5a5', 
-          borderRadius: '8px', 
-          padding: '1.5rem', 
+        <div style={{
+          background: '#fee2e2',
+          border: '1px solid #fca5a5',
+          borderRadius: '8px',
+          padding: '1.5rem',
           margin: '2rem 0',
           color: '#991b1b'
         }}>
           <h3 style={{ marginTop: 0, color: '#991b1b' }}>Error</h3>
-          <p>{error}</p>
-          <button 
-            className="btn-primary" 
-            onClick={groupByVendor}
+          <p>{errorMessage}</p>
+          <button
+            className="btn-primary"
+            onClick={() => {
+              resetCheckoutReservationState();
+              setError(null);
+              navigate(SP_CHECKOUT_CART_PATH, { replace: true });
+            }}
             style={{ marginTop: '1rem' }}
           >
-            Retry
+            Back to cart
           </button>
         </div>
       </div>
@@ -1076,6 +1354,28 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     <SpWorkflowPage title="Create Purchase Orders" description="Review and confirm POs grouped by vendor" icon={Package}>
     <div className="page !p-0">
       <VoiceGuidedBanner />
+
+      {(checkoutSessionId && reservationExpiresAt && !reservationExpired && reservationSecondsLeft > 0) ||
+      reservingInventory ? (
+        <div
+          className={`po-reservation-banner ${
+            reservationSecondsLeft > 0 && reservationSecondsLeft <= 120 ? 'po-reservation-banner--warning' : ''
+          }`}
+        >
+          <div>
+            <strong>Inventory held for checkout</strong>
+            <p>
+              Supplier stock is reserved for {reservationMinutes} minutes while you complete this order.
+              {reservingInventory ? ' Refreshing hold for your latest cart…' : ''}
+            </p>
+          </div>
+          <div className="po-reservation-timer" aria-live="polite">
+            {reservingInventory || !reservationExpiresAt
+              ? '…'
+              : formatReservationCountdown(reservationSecondsLeft)}
+          </div>
+        </div>
+      ) : null}
 
       <div style={{
         marginBottom: '1.5rem', 
@@ -1698,6 +1998,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
               disabled={
                 poGroups.length === 0 ||
                 creatingOrders ||
+                reservingInventory ||
+                !checkoutSessionId ||
+                reservationExpired ||
+                reservationSecondsLeft <= 0 ||
                 !isTransportSelectionReady(selectedTransport, poGroups) ||
                 (poPaymentMethod === 'wallet' && (loadingWalletBalance || !hasSufficientWalletBalance))
               }
@@ -1711,46 +2015,27 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       {showOnlineQrModal && (
         <div
           className="modal-overlay"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            background: 'rgba(15, 23, 42, 0.55)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '1rem'
-          }}
           onClick={() => !creatingOrders && setShowOnlineQrModal(false)}
         >
           <div
+            className="modal-content"
             role="dialog"
             aria-modal="true"
             aria-labelledby="platform-qr-title"
             onClick={(e) => e.stopPropagation()}
-            style={{
-              background: '#fff',
-              borderRadius: '16px',
-              maxWidth: '420px',
-              width: '100%',
-              padding: '1.5rem',
-              boxShadow: '0 25px 50px -12px rgba(0,0,0,0.25)'
-            }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '1rem' }}>
-              <h2 id="platform-qr-title" style={{ margin: 0, fontSize: '1.25rem', color: '#0f172a' }}>
-                Platform payment (test QR)
-              </h2>
+            <div className="modal-header">
+              <h2 id="platform-qr-title">Platform payment (test QR)</h2>
               <button
                 type="button"
                 className="btn-icon"
                 onClick={() => !creatingOrders && setShowOnlineQrModal(false)}
                 aria-label="Close"
-                style={{ border: 'none', background: 'transparent', cursor: 'pointer', padding: 4 }}
               >
                 <X size={22} color="#64748b" />
               </button>
             </div>
+            <div className="modal-body">
             <div
               style={{
                 textAlign: 'center',
@@ -1780,6 +2065,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
               <button type="button" className="btn-primary" onClick={handlePlaceOrderAfterPlatformQr} disabled={creatingOrders} style={{ flex: 1, minWidth: '200px' }}>
                 {creatingOrders ? 'Placing order…' : 'Place order'}
               </button>
+            </div>
             </div>
           </div>
         </div>

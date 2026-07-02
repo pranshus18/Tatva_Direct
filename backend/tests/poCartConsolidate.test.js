@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   appendDiscoveryItemAsNewProject,
   consolidateDuplicateProductLines,
-  normalizePoCartDraft
+  normalizePoCartDraft,
+  prunePoCartGroups
 } from '../controllers/po/shared/poHelpers.js';
 
 test('consolidateDuplicateProductLines merges same productId when explicitly called', () => {
@@ -32,7 +33,7 @@ test('appendDiscoveryItemAsNewProject creates a new group per add', () => {
   };
   const first = appendDiscoveryItemAsNewProject([], item, 'Cement');
   assert.equal(first.boqGroups.length, 1);
-  assert.equal(first.boqGroups[0].boqName, 'Discovery - Cement');
+  assert.equal(first.boqGroups[0].boqName, 'Cement');
   assert.equal(first.boqGroups[0].items[0].quantity, 2);
 
   const second = appendDiscoveryItemAsNewProject(
@@ -43,6 +44,24 @@ test('appendDiscoveryItemAsNewProject creates a new group per add', () => {
   assert.equal(second.boqGroups.length, 2);
   assert.notEqual(second.boqGroups[0].groupId, second.boqGroups[1].groupId);
   assert.equal(second.boqGroups[0].items[0].quantity, 5);
+});
+
+test('prunePoCartGroups removes zero-qty lines and empty projects', () => {
+  const groups = prunePoCartGroups([
+    {
+      groupId: 'g1',
+      boqName: 'Light',
+      items: [{ id: 'a', productId: 'p1', quantity: 0 }]
+    },
+    {
+      groupId: 'g2',
+      boqName: 'Cement',
+      items: [{ id: 'b', productId: 'p2', quantity: 2 }]
+    }
+  ]);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].boqName, 'Cement');
+  assert.equal(groups[0].items[0].quantity, 2);
 });
 
 test('normalizePoCartDraft keeps separate lines for the same productId', () => {

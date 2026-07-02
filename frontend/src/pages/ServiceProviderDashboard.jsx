@@ -977,7 +977,7 @@ const ServiceProviderDashboard = ({ user }) => {
       {/* Order Details Modal */}
       {selectedOrder && (
         <div className="modal-overlay" onClick={handleCloseOrderDetails}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <h2>Order Details - {orderDetails?.orderNumber || 'Loading...'}</h2>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>

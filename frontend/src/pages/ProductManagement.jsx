@@ -15,18 +15,18 @@ import {
   Upload,
   Image as ImageIcon,
   Loader,
-  ChevronDown,
   Wallet,
   Layers,
   MapPin,
   RefreshCw,
-  AlertTriangle
+  AlertTriangle,
+  ImageOff
 } from 'lucide-react';
 import './Dashboard.css';
+import './ProductDiscovery.css';
 import './ProductManagement.css';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import ProductImageCarousel from '../components/ProductImageCarousel';
-import ProductThumbnail from '../components/ProductThumbnail';
 import { getProductImageList } from '../utils/productImages';
 import {
   mergeSpecificationObjects,
@@ -89,36 +89,30 @@ const ProductManagement = ({ user }) => {
   const [viewingItem, setViewingItem] = useState(null);
   const [notifications, setNotifications] = useState([]);
   const [categories, setCategories] = useState([]);
-  /** Row keys (product ids) expanded to show TSIN, location, etc. */
-  const [expandedProductRowKeys, setExpandedProductRowKeys] = useState(() => new Set());
   const [refreshing, setRefreshing] = useState(false);
-
-  const toggleProductRowExpanded = (e, rowKey) => {
-    e.stopPropagation();
-    setExpandedProductRowKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(rowKey)) next.delete(rowKey);
-      else next.add(rowKey);
-      return next;
-    });
-  };
 
   useEffect(() => {
     fetchProducts();
     fetchNotifications();
-    
-    // Removed automatic polling - products will only be fetched on initial load
-    // Users can manually refresh if needed
   }, []);
 
-  // Fetch categories on initial load only
+  useEffect(() => {
+    if (!isInventoryView) return undefined;
+
+    const refreshInventory = () => fetchProducts({ silent: true });
+    const intervalId = window.setInterval(refreshInventory, 15000);
+    window.addEventListener('focus', refreshInventory);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener('focus', refreshInventory);
+    };
+  }, [isInventoryView]);
+
   useEffect(() => {
     fetchCategories();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run once on mount
-
-  // Removed automatic refresh on notifications - this was causing unwanted refreshes
-  // Products will only refresh when user performs actions (add, update, delete)
+  }, []);
 
   const fetchNotifications = async () => {
     try {
@@ -663,16 +657,7 @@ const ProductManagement = ({ user }) => {
           </div>
         </div>
 
-        <div className="pm-table-head">
-          <span aria-hidden />
-          <span aria-hidden />
-          <span>Product</span>
-          <span>{SUPPLIER_MRP_LABEL}</span>
-          <span>{SUPPLIER_CURRENT_STOCK_LABEL}</span>
-          <span>Actions</span>
-        </div>
-
-        <div className="pm-list">
+        <div className="pm-grid grid gap-4 p-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {filteredProducts.length > 0 ? (
             filteredProducts.map((product, productIndex) => {
               const rowKey = String(
@@ -682,176 +667,171 @@ const ProductManagement = ({ user }) => {
                   product._id ||
                   `row-${productIndex}`
               );
-              const isRowExpanded = expandedProductRowKeys.has(rowKey);
-              const hasExpandableDetails = Boolean(
-                product.asin || product.variantAsin || product.variant_asin || product.location
-              );
               const productStatus = product.status || 'pending';
               const status = STATUS_CONFIG[productStatus] || STATUS_CONFIG.pending;
               const stockHealth = getStockHealth(product.stock);
               const displayBrand = String(product.brand || product.brandModel || '').trim();
-              const stockNote =
-                stockHealth === 'out'
-                  ? { text: 'Out of stock', className: 'pm-row__stock-note--danger' }
-                  : stockHealth === 'low'
-                    ? { text: 'Low stock', className: 'pm-row__stock-note--warn' }
-                    : null;
+              const imgs = getProductImageList(product);
+              const inStock = Number(product.stock) > 0;
+              const moq = Number(product.min_order_quantity);
+              const variantCode = product.variantAsin || product.variant_asin;
 
               return (
-                <div
+                <article
                   key={rowKey}
-                  className={`pm-row ${productStatus === 'pending' ? 'pm-row--pending' : ''}`}
-                  onClick={() => setViewingItem(product)}
-                  title="View details"
+                  className={`pm-card pd-card flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${productStatus === 'pending' ? 'pm-card--pending' : ''}`}
                 >
                   <button
                     type="button"
-                    className="pm-row__chevron"
-                    aria-expanded={isRowExpanded}
-                    aria-label={isRowExpanded ? 'Collapse row' : 'Expand row'}
-                    disabled={!hasExpandableDetails}
-                    onClick={(e) => hasExpandableDetails && toggleProductRowExpanded(e, rowKey)}
+                    className="pm-card__image-btn"
+                    onClick={() => setViewingItem(product)}
+                    aria-label={`View ${product.name || 'product'}`}
                   >
-                    <ChevronDown size={16} strokeWidth={2} />
-                  </button>
-
-                  <div className="pm-row__thumb">
-                    <ProductThumbnail
-                      product={product}
-                      alt={product.name || 'Product'}
-                      size={52}
-                      rounded={6}
-                      fit="cover"
-                    />
-                  </div>
-
-                  <div className="pm-row__product">
-                    <div className="pm-row__meta">
-                      <span className={`pm-status ${status.statusClass}`}>{status.label}</span>
-                    </div>
-                    <h3 className="pm-row__name">{product.name}</h3>
-                    <p className="pm-row__sub">
-                      <span>{product.category || 'Uncategorized'}</span>
-                      {displayBrand ? <span>{displayBrand}</span> : null}
-                    </p>
-                  </div>
-
-                  <div className="pm-row__cell">
-                    <span className="pm-row__cell-label">{SUPPLIER_MRP_LABEL}</span>
-                    <span className="pm-row__price">{formatRupeePerUnit(product.price, product.unit)}</span>
-                  </div>
-
-                  <div className="pm-row__cell">
-                    <span className="pm-row__cell-label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
-                    <div className="pm-row__stock">
-                      <span className="pm-row__stock-qty">
-                        {product.stock} {product.unit}
-                      </span>
-                      {stockNote ? (
-                        <span className={`pm-row__stock-note ${stockNote.className}`}>{stockNote.text}</span>
-                      ) : null}
-                    </div>
-                  </div>
-
-                  <div className="pm-row__actions">
-                    {product.variantKey ? (
-                      <button
-                        type="button"
-                        className="pm-icon-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          const params = new URLSearchParams();
-                          params.set('variantKey', product.variantKey);
-                          if (product.variantAsin || product.variant_asin) {
-                            params.set('variantAsin', product.variantAsin || product.variant_asin);
-                          }
-                          if (product.name) params.set('variantName', product.name);
-                          if (product.brand) params.set('brand', product.brand);
-                          navigate(`/supplier-bcov?${params.toString()}`);
-                        }}
-                        title="ProductCOV"
-                      >
-                        <Wallet size={15} />
-                      </button>
-                    ) : null}
-                    {isInventoryView ? (
-                      <>
-                        <button
-                          type="button"
-                          className="pm-icon-btn"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setEditingItem(product);
-                          }}
-                          title="Edit inventory"
-                        >
-                          <Edit size={15} />
-                        </button>
-                        <button
-                          type="button"
-                          className="pm-icon-btn pm-icon-btn--danger"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteProduct(
-                              getSupplierOfferRowId(product) || product.id || product._id
-                            );
-                          }}
-                          title="Delete"
-                        >
-                          <Trash2 size={15} />
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        type="button"
-                        className="pm-icon-btn"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setViewingItem(product);
-                        }}
-                        title="View"
-                      >
-                        <Eye size={15} />
-                      </button>
-                    )}
-                  </div>
-
-                  {isRowExpanded && hasExpandableDetails ? (
-                    <div className="pm-row__expand">
-                      {(product.asin || product.variantAsin || product.variant_asin) && (
-                        <div style={{ marginBottom: product.location ? '0.35rem' : 0 }}>
-                          {product.asin ? (
-                            <span>
-                              TSIN <code>{product.asin}</code>
-                              {(product.variantAsin || product.variant_asin) ? ' · ' : ''}
-                            </span>
-                          ) : null}
-                          {(product.variantAsin || product.variant_asin) ? (
-                            <span>
-                              Variant <code>{product.variantAsin || product.variant_asin}</code>
-                            </span>
-                          ) : null}
+                    <div className="pd-card__image">
+                      {imgs.length > 0 ? (
+                        <ProductImageCarousel
+                          images={imgs}
+                          alt={product.name}
+                          height={160}
+                          rounded={0}
+                          stopPropagation
+                        />
+                      ) : (
+                        <div className="pd-card__no-image" style={{ height: 160 }}>
+                          <ImageOff size={32} />
+                          <span>No image</span>
                         </div>
                       )}
-                      {product.location ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <MapPin size={13} />
-                          <span>{product.location}</span>
-                        </div>
+                      {product.category ? (
+                        <span className="pd-card__category-badge">{product.category}</span>
                       ) : null}
+                      <span className={`pm-card__status-badge pm-status ${status.statusClass}`}>
+                        {status.label}
+                      </span>
                     </div>
-                  ) : null}
+                  </button>
 
-                  {productStatus === 'pending' ? (
-                    <div className="pm-row__notice">Pending admin approval before this variant is orderable.</div>
-                  ) : null}
+                  <div className="pd-card__body">
+                    <button
+                      type="button"
+                      className="pm-card__body-btn"
+                      onClick={() => setViewingItem(product)}
+                    >
+                      <div className="pd-card__header">
+                        <h3 className="pd-card__name">{product.name || 'Unnamed product'}</h3>
+                        {displayBrand ? <span className="pd-card__brand">{displayBrand}</span> : null}
+                      </div>
 
-                  {productStatus === 'rejected' && product.rejectionReason ? (
-                    <div className="pm-row__notice">
-                      Rejected: {product.rejectionReason}
+                      {productStatus === 'pending' ? (
+                        <p className="pm-card__notice">Pending admin approval before this variant is orderable.</p>
+                      ) : null}
+                      {productStatus === 'rejected' && product.rejectionReason ? (
+                        <p className="pm-card__notice pm-card__notice--danger">
+                          Rejected: {product.rejectionReason}
+                        </p>
+                      ) : null}
+
+                      <div className="pd-card__details">
+                        {Number(product.price) > 0 ? (
+                          <span className="pd-card__price">
+                            {formatRupeePerUnit(product.price, product.unit)}
+                          </span>
+                        ) : (
+                          <span className="pd-card__price pd-card__price--na">Price not set</span>
+                        )}
+
+                        <div className="pd-card__meta-row">
+                          {product.unit ? (
+                            <span className="pd-card__meta-item">Unit: {product.unit}</span>
+                          ) : null}
+                          {moq > 1 ? <span className="pd-card__meta-item">MOQ: {moq}</span> : null}
+                          <span
+                            className={`pd-card__stock ${inStock ? 'pd-card__stock--in' : 'pd-card__stock--out'}`}
+                          >
+                            {inStock
+                              ? `${product.stock} ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}`
+                              : 'Out of stock'}
+                          </span>
+                          {stockHealth === 'low' ? (
+                            <span className="pd-card__meta-item pm-card__meta-warn">Low stock</span>
+                          ) : null}
+                        </div>
+
+                        {product.location ? (
+                          <div className="pd-card__location">
+                            <MapPin size={13} />
+                            <span>{product.location}</span>
+                          </div>
+                        ) : null}
+
+                        {product.asin || variantCode ? (
+                          <div className="pm-card__codes">
+                            {product.asin ? <span>TSIN {product.asin}</span> : null}
+                            {variantCode ? <span>Variant {variantCode}</span> : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    </button>
+                  </div>
+
+                  <div className="pm-card__footer pd-card__footer">
+                    <span className="pm-card__footer-label">
+                      {isInventoryView ? 'Inventory' : 'Catalog'}
+                    </span>
+                    <div className="pm-card__actions">
+                      {product.variantKey ? (
+                        <button
+                          type="button"
+                          className="pm-card__action-btn"
+                          onClick={() => {
+                            const params = new URLSearchParams();
+                            params.set('variantKey', product.variantKey);
+                            if (variantCode) params.set('variantAsin', variantCode);
+                            if (product.name) params.set('variantName', product.name);
+                            if (product.brand) params.set('brand', product.brand);
+                            navigate(`/supplier-bcov?${params.toString()}`);
+                          }}
+                          title="ProductCOV"
+                        >
+                          <Wallet size={15} />
+                        </button>
+                      ) : null}
+                      {isInventoryView ? (
+                        <>
+                          <button
+                            type="button"
+                            className="pm-card__action-btn"
+                            onClick={() => setEditingItem(product)}
+                            title="Edit inventory"
+                          >
+                            <Edit size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            className="pm-card__action-btn pm-card__action-btn--danger"
+                            onClick={() =>
+                              handleDeleteProduct(
+                                getSupplierOfferRowId(product) || product.id || product._id
+                              )
+                            }
+                            title="Delete"
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          className="pm-card__action-btn"
+                          onClick={() => setViewingItem(product)}
+                          title="View"
+                        >
+                          <Eye size={15} />
+                        </button>
+                      )}
                     </div>
-                  ) : null}
-                </div>
+                  </div>
+                </article>
               );
             })
           ) : (

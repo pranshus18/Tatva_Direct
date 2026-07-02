@@ -1,5 +1,6 @@
 /** Supplier routes: productList */
 import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuantity.js';
+import { expireStaleReservations } from '../../services/checkoutInventoryReservationService.js';
 import {
   PRODUCT_IMAGES_BUCKET,
   resolveUpstreamBrandLabel,
@@ -25,6 +26,8 @@ export function registerSupplierProductListRoutes(ctx) {
 
 router.get('/products', authenticateToken, async (req, res) => {
   try {
+    await expireStaleReservations();
+
     const { data: profileRow } = await supabase
       .from('users')
       .select('profile')

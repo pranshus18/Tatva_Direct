@@ -73,6 +73,8 @@ test('resolvePrimarySupplierShippingAddress prefers profile branches over legacy
       profile: {
         branches: [
           {
+            id: 'branch-1',
+            name: 'Pune',
             address: 'Warehouse 1',
             city: 'Pune',
             state: 'MH',
@@ -86,5 +88,38 @@ test('resolvePrimarySupplierShippingAddress prefers profile branches over legacy
   assert.equal(branchRecordToAddressInput({ address: 'Warehouse 1' }).line1, 'Warehouse 1');
   assert.equal(out.line1, 'Warehouse 1');
   assert.equal(out.pincode, '411026');
+});
+
+test('resolvePrimarySupplierShippingAddress resolves shippingAddressId from supplier branches', () => {
+  const out = resolvePrimarySupplierShippingAddress({
+    shippingAddressId: 'branch-2',
+    profileRow: {
+      user_type: 'supplier',
+      profile: {
+        branches: [
+          {
+            id: 'branch-1',
+            name: 'Mumbai',
+            address: 'Dock 1',
+            city: 'Mumbai',
+            state: 'MH',
+            zipCode: '400001',
+            country: 'India'
+          },
+          {
+            id: 'branch-2',
+            name: 'Pune',
+            address: 'Plot 9',
+            city: 'Pune',
+            state: 'MH',
+            zipCode: '411026',
+            country: 'India'
+          }
+        ]
+      }
+    }
+  });
+  assert.equal(out.line1, 'Plot 9');
+  assert.equal(out.city, 'Pune');
 });
 

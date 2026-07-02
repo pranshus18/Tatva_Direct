@@ -15,7 +15,7 @@ import {
   Trash2,
   MapPin
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { getApiUrl } from '../config/api';
 import { persistSupplierSelectScopeFromCart } from '../constants/supplierSelectSession';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
@@ -40,6 +40,7 @@ import {
   normalizeShippingAddressBookEntry
 } from '../utils/shippingAddressLabel';
 import { clearVendorRankCache } from '../utils/vendorRankCache';
+import { clearCheckoutHoldExpired, SP_PO_CHECKOUT_HOLD_EXPIRED_KEY, buildCheckoutHoldExpiredMessage } from '../utils/checkoutReservation';
 
 const blankShippingAddress = {
   label: '',
@@ -58,6 +59,8 @@ function isShippingAddressComplete(address = {}) {
 
 const Cart = ({ onLoadCart }) => {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [holdExpiredNotice, setHoldExpiredNotice] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [cart, setCart] = useState(null);
@@ -79,6 +82,14 @@ const Cart = ({ onLoadCart }) => {
   useEffect(() => {
     cartRef.current = cart;
   }, [cart]);
+
+  useEffect(() => {
+    if (!location.state?.checkoutHoldExpired) return;
+    setHoldExpiredNotice(
+      String(location.state.message || '').trim() || buildCheckoutHoldExpiredMessage()
+    );
+    navigate('/cart', { replace: true, state: {} });
+  }, [location.state, navigate]);
 
   const getGroups = (draft) => {
     if (!draft || typeof draft !== 'object') return [];
@@ -301,7 +312,13 @@ const Cart = ({ onLoadCart }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const groups = useMemo(() => getGroups(cart?.draft || {}), [cart]);
+  const groups = useMemo(
+    () =>
+      getGroups(cart?.draft || {}).filter(
+        (group) => Array.isArray(group?.items) && group.items.length > 0
+      ),
+    [cart]
+  );
   const allItems = useMemo(
     () => groups.flatMap((group) => (Array.isArray(group?.items) ? group.items : [])),
     [groups]
@@ -674,6 +691,7 @@ const Cart = ({ onLoadCart }) => {
   const handleSkipToCreatePo = () => {
     const draft = buildDraftFromAllGroups(groups, cart?.draft || {});
     if (typeof onLoadCart === 'function') onLoadCart(draft);
+    clearCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY);
     navigate('/create-po');
   };
 
@@ -828,6 +846,13 @@ const Cart = ({ onLoadCart }) => {
       icon={ShoppingCart}
     >
       <VoiceGuidedBanner />
+
+      {holdExpiredNotice ? (
+        <Alert className="mb-4 border-amber-200 bg-amber-50 text-amber-950">
+          <AlertCircle className="h-4 w-4 text-amber-700" />
+          <AlertDescription>{holdExpiredNotice}</AlertDescription>
+        </Alert>
+      ) : null}
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
         <Button variant="outline" size="sm" onClick={loadCart} disabled={loading}>

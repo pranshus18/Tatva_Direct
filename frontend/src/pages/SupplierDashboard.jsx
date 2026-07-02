@@ -904,7 +904,7 @@ const SupplierDashboard = ({ user }) => {
                     </p>
                     <p className="supplier-dashboard-live-order-amount">
                       Amount: ₹{order.amount.toLocaleString()}
-                      {order.createdAt && ` • ${order.createdAt}`}
+                      {order.createdAt && ` • ${formatDateIST(order.createdAt, '—')}`}
                     </p>
                   </div>
                   <div className="item-status">

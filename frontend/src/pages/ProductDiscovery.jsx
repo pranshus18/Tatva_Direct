@@ -590,7 +590,7 @@ const ProductDiscovery = () => {
         </div>
       )}
       <Dialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen}>
-        <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
+        <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle>Select project for cart item</DialogTitle>
             <DialogDescription>

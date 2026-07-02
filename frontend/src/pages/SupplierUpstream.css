@@ -518,13 +518,11 @@
 }
 
 .upstream-modal-content {
-  max-width: 850px;
-  max-height: 90vh;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .upstream-modal-content-narrow {
-  max-width: 780px;
+  /* full-page — no narrow constraint */
 }
 
 .upstream-modal-header-actions {
@@ -771,8 +769,8 @@
 
   .upstream-modal-content,
   .upstream-modal-content-narrow {
-    width: min(94vw, 850px);
-    max-height: 88vh;
+    width: 100%;
+    max-height: 100vh;
   }
 }
 
@@ -1469,15 +1467,16 @@
   }
 }
 
-/* Product details modal */
+/* Product details modal — full page */
 .us-details-modal {
-  max-width: 760px !important;
-  width: 94% !important;
-  max-height: 90vh !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
   overflow: hidden !important;
   display: flex !important;
   flex-direction: column !important;
-  border-radius: 10px !important;
+  border-radius: 0 !important;
 }
 
 .us-details-modal__body {

@@ -111,7 +111,12 @@ export const ORDER_SNAPSHOT_META_KEYS = new Set([
   'snapshotAt',
   'productIdentification',
   'bcov',
-  'gst'
+  'gst',
+  'identity',
+  'catalogKey',
+  'matchSignals',
+  'asinLikeId',
+  'variantAsinLikeId'
 ]);
 
 const stripOrderSnapshotMetaKeys = (specs = {}) =>

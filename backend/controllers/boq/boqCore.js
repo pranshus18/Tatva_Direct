@@ -107,7 +107,7 @@ export const parsePDF = async (filePath) => {
     throw new Error('PDF parsing is not available. Please convert your BOQ file to CSV or Excel format (.csv, .xlsx, .xls).');
   }
 
-  const dataBuffer = fs.readFileSync(filePath);
+  const dataBuffer = await fs.readFile(filePath);
   
   let data;
   try {

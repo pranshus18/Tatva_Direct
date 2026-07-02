@@ -206,19 +206,26 @@ export async function buildReconciliationStatementPdf({ statement, settlement, l
   });
 }
 
-export async function buildReconciliationStatementDownload({
-  fromDate = null,
-  toDate = null,
-  filter = 'all'
-}) {
+export async function buildReconciliationStatementDownload(
+  {
+    fromDate = null,
+    toDate = null,
+    filter = 'all'
+  },
+  {
+    loadStatement = buildReconciliationStatement,
+    loadSettlement = buildSettlementSummary,
+    renderPdf = buildReconciliationStatementPdf
+  } = {}
+) {
   const [statement, settlement] = await Promise.all([
-    buildReconciliationStatement({ fromDate, toDate, filter }),
-    buildSettlementSummary({ fromDate, toDate })
+    loadStatement({ fromDate, toDate, filter }),
+    loadSettlement({ fromDate, toDate })
   ]);
 
   const stamp = new Date().toISOString().slice(0, 10);
   const periodSlug = `${fromDate ? String(fromDate).slice(0, 10) : 'all'}-to-${toDate ? String(toDate).slice(0, 10) : 'all'}`;
-  const buffer = await buildReconciliationStatementPdf({ statement, settlement });
+  const buffer = await renderPdf({ statement, settlement });
 
   return {
     buffer,

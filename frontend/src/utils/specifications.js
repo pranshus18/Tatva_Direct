@@ -1,6 +1,5 @@
 const PREFERRED_SPEC_KEYS = [
   'brandModel',
-  'identity',
   'variantAsin',
   'mpn',
   'catalogName',
@@ -19,7 +18,13 @@ const ORDER_SNAPSHOT_META_KEYS = new Set([
   'snapshotAt',
   'productIdentification',
   'bcov',
-  'gst'
+  'gst',
+  // Internal catalog identity bundle — too verbose for order line-item chips.
+  'identity',
+  'catalogKey',
+  'matchSignals',
+  'asinLikeId',
+  'variantAsinLikeId'
 ]);
 
 const isDisplayableSpecKey = (key) => {

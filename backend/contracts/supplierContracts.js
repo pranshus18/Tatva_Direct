@@ -15,7 +15,26 @@ export const supplierBcovResolvePriceSchema = z.object({
   brandCov: z.union([z.number(), z.string()]).optional()
 });
 
+export const supplierUpstreamCheckoutReserveSchema = z.object({
+  checkoutSessionId: z.string().uuid(),
+  lines: z
+    .array(
+      z.object({
+        mineSupplierProductId: z.string().uuid(),
+        upstreamSupplierProductId: z.string().uuid(),
+        supplierId: z.string().uuid(),
+        quantity: z.union([z.number(), z.string()])
+      })
+    )
+    .min(1)
+});
+
+export const supplierUpstreamCheckoutReleaseSchema = z.object({
+  checkoutSessionId: z.string().uuid().optional().nullable()
+});
+
 export const supplierUpstreamOrdersSchema = z.object({
+  checkoutSessionId: z.string().uuid(),
   requiredDate: z.string().optional().nullable(),
   // Mirrors the service-provider PO checkout values:
   // online | cod | bank_transfer | credit | card
@@ -26,12 +45,14 @@ export const supplierUpstreamOrdersSchema = z.object({
   deliveryDestination: z.enum(['shipping', 'billing']).optional().nullable(),
   // Address objects are validated/normalized in the controller (field-level completeness).
   shippingAddress: z.record(z.any()).optional().nullable(),
+  shippingAddressId: z.string().optional().nullable(),
   billingAddress: z.record(z.any()).optional().nullable(),
   lines: z
     .array(
       z.object({
         mineSupplierProductId: z.string().uuid(),
         upstreamSupplierProductId: z.string().uuid(),
+        supplierId: z.string().uuid().optional().nullable(),
         quantity: z.union([z.number(), z.string()])
       })
     )

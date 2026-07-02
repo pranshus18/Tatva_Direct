@@ -357,9 +357,28 @@ export function normalizeShippingAddressEntry(entry = {}) {
 
 export function formatShippingAddressDisplayName(entry, index = 0) {
   const normalized = normalizeShippingAddressEntry(entry);
-  if (normalized.label) return normalized.label;
-  const preview = [normalized.line1, normalized.city].filter(Boolean).join(', ');
+  const preview = [
+    normalized.line1,
+    normalized.city,
+    normalized.state,
+    normalized.pincode,
+    normalized.country
+  ]
+    .filter(Boolean)
+    .join(', ');
+  if (normalized.label && preview) {
+    const label = String(normalized.label).trim();
+    const labelNorm = label.toLowerCase();
+    const cityNorm = String(normalized.city || '')
+      .trim()
+      .toLowerCase();
+    if (labelNorm === cityNorm || labelNorm === preview.toLowerCase()) {
+      return preview;
+    }
+    return `${label} — ${preview}`;
+  }
   if (preview) return preview;
+  if (normalized.label) return normalized.label;
   return `Address ${index + 1}`;
 }
 

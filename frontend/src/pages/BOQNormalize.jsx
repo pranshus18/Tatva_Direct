@@ -989,26 +989,20 @@ const BOQNormalize = ({ onComplete }) => {
     </div>
       {/* Simple inline modal for product request confirmation */}
       {requestingProductForItem && (
-        <div className="modal-overlay" style={{
-          position: 'fixed',
-          inset: 0,
-          background: 'rgba(0,0,0,0.35)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 40
-        }}>
-          <div className="modal-content" style={{
-            background: 'white',
-            borderRadius: '12px',
-            padding: '1.5rem',
-            maxWidth: '480px',
-            width: '100%',
-            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1)'
-          }}>
-            <h3 style={{ marginBottom: '0.75rem', fontSize: '1.1rem', fontWeight: 600, color: '#111827' }}>
-              Request New Product
-            </h3>
+        <div className="modal-overlay" onClick={() => setRequestingProductForItem(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Request New Product</h3>
+              <button
+                type="button"
+                className="btn-icon"
+                onClick={() => setRequestingProductForItem(null)}
+                aria-label="Close"
+              >
+                ×
+              </button>
+            </div>
+            <div className="modal-body">
             <p style={{ fontSize: '0.9rem', color: '#4b5563', marginBottom: '0.75rem' }}>
               You are requesting a new catalog product based on this BOQ item. Admin will review and approve it,
               then all suppliers will be notified so they can add their offers.
@@ -1038,6 +1032,7 @@ const BOQNormalize = ({ onComplete }) => {
               >
                 {requestSubmitting ? 'Submitting...' : 'Submit Request'}
               </button>
+            </div>
             </div>
           </div>
         </div>

@@ -27,6 +27,16 @@
   font-weight: 600;
 }
 
+.supplier-cart-hold-expired-notice {
+  margin-bottom: 0.9rem;
+  padding: 0.75rem 1rem;
+  border-radius: 10px;
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #fcd34d;
+  font-weight: 500;
+}
+
 .supplier-cart-share-panel {
   margin-bottom: 0.9rem;
   border: 1px solid #dbe7f5;

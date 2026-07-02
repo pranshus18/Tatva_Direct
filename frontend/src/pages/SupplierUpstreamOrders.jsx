@@ -18,7 +18,7 @@ import {
   Package
 } from 'lucide-react';
 import { buildOrderUpiPayUri, qrServerImageUrl } from '../utils/upiPaymentQr';
-import { formatDateTimeIST } from '../utils/dateTime';
+import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import {
   canRequestReturnForOrder,
   getReturnRequestBlockReason,
@@ -541,7 +541,7 @@ export default function SupplierUpstreamOrders() {
                       </td>
                       <td>
                         {o.expectedDeliveryDate
-                          ? formatDateTimeIST(o.expectedDeliveryDate, '—')
+                          ? formatDateIST(o.expectedDeliveryDate, '—')
                           : '—'}
                       </td>
                       <td>{o.updatedAt ? formatDateTimeIST(o.updatedAt, '—') : '—'}</td>
@@ -610,7 +610,7 @@ export default function SupplierUpstreamOrders() {
                   <p>
                     <strong>Required by:</strong>{' '}
                     {orderDetails?.expectedDeliveryDate
-                      ? formatDateTimeIST(orderDetails.expectedDeliveryDate, 'N/A')
+                      ? formatDateIST(orderDetails.expectedDeliveryDate, 'N/A')
                       : '—'}
                   </p>
                   {orderDetails?.updatedAt ? (

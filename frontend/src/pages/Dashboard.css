@@ -867,44 +867,40 @@ button.product-row-chevron:not(:disabled):hover {
   color: #4f46e5;
 }
 
-/* Modal */
+/* Modal — full-page overlay (see also styles/fullPageOverlay.css) */
 .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  inset: 0;
   z-index: 1000;
-  padding: 1rem;
-  overflow: visible;
-}
-
-.modal-content {
-  background: white;
-  border-radius: 16px;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
   padding: 0;
-  max-width: 800px;
-  width: 100%;
-  max-height: 90vh;
-  overflow-y: auto;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  margin: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
 }
 
+.modal-content,
 .modal {
-  background: white;
-  border-radius: 16px;
-  padding: 0;
-  max-width: 600px;
-  width: 90%;
-  max-height: 90vh;
-  overflow-y: auto;
-  overflow-x: visible;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
   position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  width: 100%;
+  max-width: 100%;
+  height: 100vh;
+  max-height: 100vh;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
+  background: white;
+  box-shadow: none;
+  overflow: hidden;
 }
 
 .modal-header {
@@ -913,6 +909,7 @@ button.product-row-chevron:not(:disabled):hover {
   align-items: center;
   padding: 2rem 2rem 1rem;
   border-bottom: 1px solid #e5e7eb;
+  flex-shrink: 0;
 }
 
 .modal-header h2 {
@@ -930,6 +927,10 @@ button.product-row-chevron:not(:disabled):hover {
 
 .modal-body {
   padding: 2rem;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .order-info-section {
@@ -1072,7 +1073,10 @@ button.product-row-chevron:not(:disabled):hover {
 
 .modal-form {
   padding: 2rem;
-  overflow: visible;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   position: relative;
 }
 
