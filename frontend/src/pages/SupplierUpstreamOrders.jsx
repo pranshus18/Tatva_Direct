@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
 import './Dashboard.css';
@@ -564,7 +565,7 @@ export default function SupplierUpstreamOrders() {
         </section>
       </div>
 
-      {orderModalId && (
+      {orderModalId ? createPortal((
         <div className="modal-overlay" onClick={closeOrderModal}>
           <div className="modal-content upstream-modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -912,7 +913,7 @@ export default function SupplierUpstreamOrders() {
             )}
           </div>
         </div>
-      )}
+      ), document.body) : null}
     </SpPageLayout>
   );
 }

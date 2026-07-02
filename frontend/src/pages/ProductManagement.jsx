@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { getApiUrl } from '../config/api';
 import { 
   Package, 
@@ -608,7 +609,8 @@ const ProductManagement = ({ user }) => {
         </div>
       ) : null}
 
-      <section className="pm-panel">
+      {!viewingItem ? (
+        <section className="pm-panel">
         <div className="pm-toolbar">
           <div>
             <h2 className="pm-toolbar__title">
@@ -862,7 +864,8 @@ const ProductManagement = ({ user }) => {
             </div>
           )}
         </div>
-      </section>
+        </section>
+      ) : null}
 
       {/* Add Product Modal - only from Manage Products.
           We collect product identity fields here (product name, brand/model,
@@ -1094,7 +1097,7 @@ const ProductDetailsModal = ({
     }
   };
 
-  return (
+  const modalNode = (
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal pm-details-modal"
@@ -1366,6 +1369,12 @@ const ProductDetailsModal = ({
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalNode;
+  }
+
+  return createPortal(modalNode, document.body);
 };
 
 const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, showAdditionSteps = false }) => {
@@ -2622,7 +2631,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
   };
 
-  return (
+  const modalNode = (
     <div className="modal-overlay">
       <div className="modal">
         <div className="modal-header">
@@ -4089,6 +4098,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalNode;
+  }
+
+  return createPortal(modalNode, document.body);
 };
 
 export default ProductManagement;

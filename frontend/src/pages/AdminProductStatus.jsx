@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { getApiUrl } from '../config/api';
 import { 
   Package, 
@@ -1165,7 +1166,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
   const polishSourceText = getPolishSourceText({ product, editedProduct, isEditing });
   const canPolish = Boolean(polishSourceText) && Boolean(product?.name);
 
-  return (
+  const modalNode = (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content product-detail-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -2138,6 +2139,12 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalNode;
+  }
+
+  return createPortal(modalNode, document.body);
 };
 
 export default AdminProductStatus;

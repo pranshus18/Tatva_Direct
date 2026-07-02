@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { getApiUrl } from '../config/api';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
@@ -827,7 +828,7 @@ const Wallet = () => {
 export default Wallet;
 
 function TransactionDetailModal({ row, onClose }) {
-  return (
+  const modalNode = (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -853,6 +854,12 @@ function TransactionDetailModal({ row, onClose }) {
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalNode;
+  }
+
+  return createPortal(modalNode, document.body);
 }
 
 function Detail({ label, value }) {

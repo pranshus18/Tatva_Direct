@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from './ProductImageCarousel';
@@ -83,7 +84,7 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
   const brandLabel = product.brandModel || product.brand || '—';
   const statusLabel = String(product.status || 'pending').replace(/_/g, ' ');
 
-  return (
+  const modalNode = (
     <div className="modal-overlay" onClick={onClose} role="presentation">
       <div
         className="modal us-details-modal"
@@ -210,4 +211,10 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalNode;
+  }
+
+  return createPortal(modalNode, document.body);
 }

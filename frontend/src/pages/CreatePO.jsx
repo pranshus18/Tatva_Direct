@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { Check, Package, X } from 'lucide-react';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -2012,7 +2013,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         </>
       )}
 
-      {showOnlineQrModal && (
+      {showOnlineQrModal ? createPortal((
         <div
           className="modal-overlay"
           onClick={() => !creatingOrders && setShowOnlineQrModal(false)}
@@ -2069,7 +2070,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             </div>
           </div>
         </div>
-      )}
+      ), document.body) : null}
     </div>
     </SpWorkflowPage>
   );

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Wallet as WalletIcon, RefreshCw } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { Button } from '@/components/ui/button';
@@ -995,7 +996,7 @@ function MetricCard({ label, value }) {
 }
 
 function WalletRowDetailModal({ row, onClose }) {
-  return (
+  const modalNode = (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -1012,4 +1013,10 @@ function WalletRowDetailModal({ row, onClose }) {
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalNode;
+  }
+
+  return createPortal(modalNode, document.body);
 }

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
 import './SupplierUpstream.css';
@@ -1432,7 +1433,7 @@ const SupplierUpstream = ({ user }) => {
           )}
         </div>
 
-      {supplierDetailsOpen && supplierDetails && (
+      {supplierDetailsOpen && supplierDetails ? createPortal((
         <div
           className="modal-overlay"
           onClick={() => {
@@ -1503,7 +1504,7 @@ const SupplierUpstream = ({ user }) => {
             </div>
           </div>
         </div>
-      )}
+      ), document.body) : null}
 
       {viewingProduct ? (
         <SupplierProductDetailsModal product={viewingProduct} onClose={() => setViewingProduct(null)} />

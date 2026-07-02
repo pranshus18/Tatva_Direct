@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { getApiUrl } from '../config/api';
 import { 
   Package,
@@ -220,7 +221,7 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
 
   const status = statusInfo[product.status] || statusInfo.pending;
 
-  return (
+  const modalNode = (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal-content" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
@@ -646,6 +647,12 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
       </div>
     </div>
   );
+
+  if (typeof document === 'undefined') {
+    return modalNode;
+  }
+
+  return createPortal(modalNode, document.body);
 };
 
 export default ProductDetailModal;

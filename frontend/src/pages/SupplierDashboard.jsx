@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { authFetch, getApiUrl, resolveApiPath } from '../config/api';
 import { useNavigate } from 'react-router-dom';
 import { 
@@ -960,7 +961,7 @@ const SupplierDashboard = ({ user }) => {
       </div>
 
       {/* Order Details Modal */}
-      {selectedOrder && (
+      {selectedOrder ? createPortal((
         <div className="modal-overlay" onClick={handleCloseOrderDetails}>
           <div className="modal-content supplier-dashboard-order-modal" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
@@ -1376,7 +1377,7 @@ const SupplierDashboard = ({ user }) => {
             )}
           </div>
         </div>
-      )}
+      ), document.body) : null}
 
       </div>
     </SpPageLayout>

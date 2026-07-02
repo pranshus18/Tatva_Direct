@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import { clearSupplierSelectScopeSession } from '../constants/supplierSelectSession';
 import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, Search, PlusCircle, MapPin, Calendar, FileText } from 'lucide-react';
@@ -988,55 +989,58 @@ const BOQNormalize = ({ onComplete }) => {
       )}
     </div>
       {/* Simple inline modal for product request confirmation */}
-      {requestingProductForItem && (
-        <div className="modal-overlay" onClick={() => setRequestingProductForItem(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <h3>Request New Product</h3>
-              <button
-                type="button"
-                className="btn-icon"
-                onClick={() => setRequestingProductForItem(null)}
-                aria-label="Close"
-              >
-                ×
-              </button>
-            </div>
-            <div className="modal-body">
-            <p style={{ fontSize: '0.9rem', color: '#4b5563', marginBottom: '0.75rem' }}>
-              You are requesting a new catalog product based on this BOQ item. Admin will review and approve it,
-              then all suppliers will be notified so they can add their offers.
-            </p>
-            <div style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '0.75rem' }}>
-              <div><strong>BOQ Item:</strong> {requestingProductForItem.rawName}</div>
-              <div><strong>Normalized Name:</strong> {requestingProductForItem.normalizedName}</div>
-              {requestingProductForItem.category && (
-                <div><strong>Category:</strong> {requestingProductForItem.category}</div>
-              )}
-              <div><strong>Unit:</strong> {requestingProductForItem.unit || 'nos'}</div>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => setRequestingProductForItem(null)}
-                disabled={requestSubmitting}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => submitProductRequest(requestingProductForItem)}
-                disabled={requestSubmitting}
-              >
-                {requestSubmitting ? 'Submitting...' : 'Submit Request'}
-              </button>
-            </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {requestingProductForItem
+        ? createPortal(
+            <div className="modal-overlay" onClick={() => setRequestingProductForItem(null)}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <h3>Request New Product</h3>
+                  <button
+                    type="button"
+                    className="btn-icon"
+                    onClick={() => setRequestingProductForItem(null)}
+                    aria-label="Close"
+                  >
+                    ×
+                  </button>
+                </div>
+                <div className="modal-body">
+                  <p style={{ fontSize: '0.9rem', color: '#4b5563', marginBottom: '0.75rem' }}>
+                    You are requesting a new catalog product based on this BOQ item. Admin will review and approve it,
+                    then all suppliers will be notified so they can add their offers.
+                  </p>
+                  <div style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '0.75rem' }}>
+                    <div><strong>BOQ Item:</strong> {requestingProductForItem.rawName}</div>
+                    <div><strong>Normalized Name:</strong> {requestingProductForItem.normalizedName}</div>
+                    {requestingProductForItem.category && (
+                      <div><strong>Category:</strong> {requestingProductForItem.category}</div>
+                    )}
+                    <div><strong>Unit:</strong> {requestingProductForItem.unit || 'nos'}</div>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginTop: '1rem' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setRequestingProductForItem(null)}
+                      disabled={requestSubmitting}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      onClick={() => submitProductRequest(requestingProductForItem)}
+                      disabled={requestSubmitting}
+                    >
+                      {requestSubmitting ? 'Submitting...' : 'Submit Request'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
     </SpWorkflowPage>
     </>
   );

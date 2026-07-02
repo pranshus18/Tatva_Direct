@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { getApiUrl, authFetch } from '../config/api';
 import { 
   FileText,
@@ -975,7 +976,7 @@ const ServiceProviderDashboard = ({ user }) => {
       </div>
 
       {/* Order Details Modal */}
-      {selectedOrder && (
+      {selectedOrder ? createPortal((
         <div className="modal-overlay" onClick={handleCloseOrderDetails}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -1481,7 +1482,7 @@ const ServiceProviderDashboard = ({ user }) => {
             )}
           </div>
         </div>
-      )}
+      ), document.body) : null}
     </SpPageLayout>
   );
 };
