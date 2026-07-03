@@ -17,6 +17,15 @@ export async function findOrderById(orderId, dbClient = supabase) {
 }
 
 export async function deleteOrderById(orderId, dbClient = supabase) {
+  const { error: notifError } = await dbClient
+    .from('notifications')
+    .delete()
+    .eq('related_order_id', orderId);
+
+  if (notifError) {
+    return { error: notifError };
+  }
+
   return dbClient
     .from('orders')
     .delete()

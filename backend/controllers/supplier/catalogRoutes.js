@@ -60,6 +60,7 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     return res.json({
       status: 'success',
       suggestions: visibleSuggestions,
+      categories: Array.isArray(result.categories) ? result.categories : [],
       total: responseTotal,
       limit: result.limit,
       offset: result.offset,

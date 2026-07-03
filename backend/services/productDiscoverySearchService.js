@@ -276,10 +276,9 @@ export async function searchProductDiscoveryForUser(
       const productId = row?.product_id;
       if (!productId) continue;
       const normalizedStatus = String(row?.status || '').trim().toLowerCase();
-      const listedByStatus =
-        (normalizedStatus === 'approved' && row?.is_active === true) ||
-        normalizedStatus === 'pending' ||
-        !normalizedStatus;
+      // Keep Product Discovery "available suppliers" aligned with cart add rules:
+      // only approved and active offers are considered listed.
+      const listedByStatus = normalizedStatus === 'approved' && row?.is_active === true;
       if (!listedByStatus) continue;
       const product = productById.get(productId);
       const brandLabel = detectDiscoveryBrand(product);
@@ -301,6 +300,7 @@ export async function searchProductDiscoveryForUser(
     return {
       ...p,
       supplierCount,
+      canAddToCart: supplierCount > 0,
       recommendationScore
     };
     })
@@ -330,10 +330,19 @@ export async function searchProductDiscoveryForUser(
     return String(a?.name || '').localeCompare(String(b?.name || ''));
   });
 
+  const categories = Array.from(
+    new Set(
+      suggestions
+        .map((product) => String(product?.category || '').trim())
+        .filter(Boolean)
+    )
+  ).sort((a, b) => a.localeCompare(b));
+
   const paginatedSuggestions = suggestions.slice(offset, offset + safeLimit);
 
   return {
     suggestions: paginatedSuggestions,
+    categories,
     total: suggestions.length,
     limit: safeLimit,
     offset,

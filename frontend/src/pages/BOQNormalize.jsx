@@ -2,6 +2,11 @@ import React, { useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import { clearSupplierSelectScopeSession } from '../constants/supplierSelectSession';
+import {
+  formatResolvedAddressLine,
+  getGeolocationErrorMessage,
+  resolveAddressFromCurrentLocation
+} from '../utils/currentLocationAddress';
 import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, Search, PlusCircle, MapPin, Calendar, FileText } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
@@ -26,35 +31,26 @@ const BOQNormalize = ({ onComplete }) => {
   const [requestingProductForItem, setRequestingProductForItem] = useState(null);
   const [requestSubmitting, setRequestSubmitting] = useState(false);
   const [savedProjectMeta, setSavedProjectMeta] = useState(null);
+  const [locatingSite, setLocatingSite] = useState(false);
   const navigate = useNavigate();
 
-  const fillGeoFromBrowser = () => {
-    if (!navigator.geolocation) {
-      alert('Location is not supported in this browser.');
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setSiteLat(String(pos.coords.latitude));
-        setSiteLng(String(pos.coords.longitude));
-      },
-      (error) => {
-        let message = 'Could not read your location. Enter coordinates manually or rely on the site address.';
-        if (error?.code === 1) {
-          message = 'Location permission is blocked in your browser. Allow location access for this site and try again.';
-        } else if (error?.code === 2) {
-          message = 'Your location is currently unavailable. Check network/GPS and try again.';
-        } else if (error?.code === 3) {
-          message = 'Location request timed out. Please try again.';
-        }
-        alert(message);
-      },
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0
+  const fillGeoFromBrowser = async () => {
+    setLocatingSite(true);
+    try {
+      const resolved = await resolveAddressFromCurrentLocation();
+      const addressLine = formatResolvedAddressLine(resolved);
+      if (addressLine) {
+        setSiteLocation(addressLine);
       }
-    );
+      if (typeof resolved.latitude === 'number' && typeof resolved.longitude === 'number') {
+        setSiteLat(String(resolved.latitude));
+        setSiteLng(String(resolved.longitude));
+      }
+    } catch (error) {
+      alert(getGeolocationErrorMessage(error));
+    } finally {
+      setLocatingSite(false);
+    }
   };
 
   const handleFileUpload = async (e) => {
@@ -64,7 +60,7 @@ const BOQNormalize = ({ onComplete }) => {
     const loc = siteLocation.trim();
     const hasGeo = siteLat.trim() && siteLng.trim();
     if ((!loc && !hasGeo) || !requiredDate) {
-      alert('Please provide either site location or current coordinates, and select the required date before uploading your BOQ.');
+      alert('Please provide the project site location and select the required date before uploading your BOQ.');
       e.target.value = '';
       return;
     }
@@ -487,6 +483,15 @@ const BOQNormalize = ({ onComplete }) => {
                   onChange={(e) => setSiteLocation(e.target.value)}
                   autoComplete="street-address"
                 />
+                <button
+                  type="button"
+                  className="btn-geo boq-site-location-btn"
+                  onClick={fillGeoFromBrowser}
+                  disabled={locatingSite}
+                >
+                  <MapPin size={14} aria-hidden />
+                  {locatingSite ? 'Detecting location…' : 'Use my current location (optional)'}
+                </button>
               </label>
               <label className="boq-site-label">
                 <span className="boq-site-label-text">
@@ -500,29 +505,6 @@ const BOQNormalize = ({ onComplete }) => {
                   onChange={(e) => setRequiredDate(e.target.value)}
                 />
               </label>
-            </div>
-            <div className="boq-geo-row">
-              <button type="button" className="btn-geo" onClick={fillGeoFromBrowser}>
-                Use my current location (optional)
-              </button>
-              <div className="boq-geo-inputs">
-                <input
-                  type="text"
-                  className="boq-site-input boq-geo-input"
-                  placeholder="Latitude"
-                  value={siteLat}
-                  onChange={(e) => setSiteLat(e.target.value)}
-                  inputMode="decimal"
-                />
-                <input
-                  type="text"
-                  className="boq-site-input boq-geo-input"
-                  placeholder="Longitude"
-                  value={siteLng}
-                  onChange={(e) => setSiteLng(e.target.value)}
-                  inputMode="decimal"
-                />
-              </div>
             </div>
           </div>
           <div className="upload-zone">

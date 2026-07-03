@@ -11,10 +11,52 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
   const supplierIds = Object.keys(supplierProducts || {});
   const distanceBySupplier = {};
   const distanceSourceLocationBySupplier = {};
+  const distanceByOutletId = {};
+  const distanceSourceLocationByOutletId = {};
 
   for (const sid of supplierIds) distanceBySupplier[sid] = null;
   if (!siteGeoFromBoq || supplierIds.length === 0) {
-    return { distanceBySupplier, distanceSourceLocationBySupplier };
+    return { distanceBySupplier, distanceSourceLocationBySupplier, distanceByOutletId, distanceSourceLocationByOutletId };
+  }
+
+  // Each individual offer (supplier_products row) can carry its own `outlet_id`, which is the
+  // most authoritative location we have for that specific listing — more reliable than a
+  // free-text `location` string or the supplier's generic account address. Resolve those first,
+  // per exact outlet, so two offers from the same supplier (e.g. one per physical branch) get
+  // their own correct distance instead of sharing a single supplier-wide guess.
+  const offerOutletIds = new Set();
+  for (const sid of supplierIds) {
+    for (const product of supplierProducts[sid]?.products || []) {
+      if (product?.outlet_id) offerOutletIds.add(product.outlet_id);
+    }
+  }
+
+  if (offerOutletIds.size > 0) {
+    const { data: exactOutletRows } = await supabase
+      .from('outlets')
+      .select('id, geo_location, address')
+      .in('id', [...offerOutletIds])
+      .eq('is_active', true);
+
+    const exactOutletInputs = [];
+    for (const row of exactOutletRows || []) {
+      if (!row?.id) continue;
+      const geo = await resolveGeoFromOutletAddress(row?.geo_location, row?.address);
+      if (!geo) continue;
+      exactOutletInputs.push({ outletId: row.id, geo });
+    }
+    if (exactOutletInputs.length > 0) {
+      const routeDistances = await getDrivingDistanceMatrixKm(
+        siteGeoFromBoq,
+        exactOutletInputs.map((x) => x.geo)
+      );
+      exactOutletInputs.forEach((entry, idx) => {
+        const km = distanceKmForRanking(siteGeoFromBoq, entry.geo, routeDistances[idx]);
+        if (km == null) return;
+        distanceByOutletId[entry.outletId] = km;
+        distanceSourceLocationByOutletId[entry.outletId] = 'Outlet geo location';
+      });
+    }
   }
 
   const geocodeCache = new Map();
@@ -66,29 +108,31 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
   for (const sid of supplierIds) {
     if (distanceBySupplier[sid] != null) continue;
     const supplierInfo = supplierProducts[sid];
+    // `locationCandidates` is ordered by trust: the specific product/listing location
+    // comes first, then the supplier's registered account address, then branch addresses.
+    // We must use the FIRST candidate that successfully geocodes — never the one that
+    // happens to yield the smallest distance — otherwise a generic/stale account address
+    // (e.g. a signup pincode shared by many test accounts) can "win" over the real,
+    // more specific listing location just because it geocodes closer to the buyer,
+    // producing a wildly wrong distance (and a "Distance based on" label that
+    // contradicts the location actually shown on the card).
     const locCandidates = uniqueLocationList([...(supplierInfo?.locationCandidates || []), supplierInfo?.supplierLocation]);
-    const geocodedCandidates = [];
+    let matchedCandidate = null;
     for (const locText of locCandidates) {
       if (!locText) continue;
       const approxGeo = await geocodeCached(locText);
       if (approxGeo && typeof approxGeo.lat === 'number' && typeof approxGeo.lng === 'number') {
-        geocodedCandidates.push({ locText, geo: approxGeo });
+        matchedCandidate = { locText, geo: approxGeo };
+        break;
       }
     }
-    if (geocodedCandidates.length === 0) continue;
-    const routeDistances = await getDrivingDistanceMatrixKm(
-      siteGeoFromBoq,
-      geocodedCandidates.map((x) => x.geo)
-    );
-    geocodedCandidates.forEach((candidate, idx) => {
-      const km = distanceKmForRanking(siteGeoFromBoq, candidate.geo, routeDistances[idx]);
-      if (km == null) return;
-      if (distanceBySupplier[sid] == null || km < distanceBySupplier[sid]) {
-        distanceBySupplier[sid] = km;
-        distanceSourceLocationBySupplier[sid] = candidate.locText;
-      }
-    });
+    if (!matchedCandidate) continue;
+    const [routeKm] = await getDrivingDistanceMatrixKm(siteGeoFromBoq, [matchedCandidate.geo]);
+    const km = distanceKmForRanking(siteGeoFromBoq, matchedCandidate.geo, routeKm);
+    if (km == null) continue;
+    distanceBySupplier[sid] = km;
+    distanceSourceLocationBySupplier[sid] = matchedCandidate.locText;
   }
 
-  return { distanceBySupplier, distanceSourceLocationBySupplier };
+  return { distanceBySupplier, distanceSourceLocationBySupplier, distanceByOutletId, distanceSourceLocationByOutletId };
 }

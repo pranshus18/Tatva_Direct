@@ -1,12 +1,19 @@
 import { computeLocationScore } from './vendorRankingScoringService.js';
 import { computeAvailableStock } from './checkoutInventoryReservationService.js';
 
+const isPlaceholderLocationText = (value) => {
+  const t = String(value || '').trim().toLowerCase();
+  return !t || t === 'location not specified' || t === 'not specified' || t === 'n/a' || t === 'na' || t === '-';
+};
+
 export function mapSupplierProductsToRankedVendors({
   supplierProducts,
   reservedQtyByProductId = null,
   siteGeoFromBoq,
   distanceBySupplier,
   distanceSourceLocationBySupplier,
+  distanceByOutletId = {},
+  distanceSourceLocationByOutletId = {},
   boqProjectCity,
   serviceProviderCity,
   boqProjectState,
@@ -23,24 +30,11 @@ export function mapSupplierProductsToRankedVendors({
     const stockScore = Math.min((supplier.totalStock / 1000) * 20, 20);
 
     const supplierId = supplier.supplierId;
-    const distanceKm = siteGeoFromBoq && distanceBySupplier[supplierId] != null ? distanceBySupplier[supplierId] : null;
-    const distanceSourceLocation = distanceSourceLocationBySupplier[supplierId] || null;
-    const displayLocation =
-      supplier.supplierLocation && supplier.supplierLocation !== 'Location not specified'
-        ? supplier.supplierLocation
-        : distanceSourceLocation || supplier.supplierLocation;
+    const supplierDistanceKm =
+      siteGeoFromBoq && distanceBySupplier[supplierId] != null ? distanceBySupplier[supplierId] : null;
+    const supplierDistanceSourceLocation = distanceSourceLocationBySupplier[supplierId] || null;
 
-    const locationScore = computeLocationScore({
-      siteGeoFromBoq,
-      distanceKm,
-      supplierLocation: supplier.supplierLocation,
-      boqProjectCity,
-      serviceProviderCity,
-      boqProjectState,
-      serviceProviderState
-    });
-
-    const rankScore = priceScore + ratingScore + stockScore + locationScore + urgencyBonus;
+    const rankScore = priceScore + ratingScore + stockScore + urgencyBonus;
     const leadTime = supplier.totalStock > 500 ? 2 : supplier.totalStock > 100 ? 3 : 5;
     const sortedProducts = [...(supplier.products || [])].sort(
       (a, b) => (parseFloat(a.price) || 0) - (parseFloat(b.price) || 0)
@@ -48,6 +42,42 @@ export function mapSupplierProductsToRankedVendors({
     const productsToEmit = includeAllVariants ? sortedProducts : sortedProducts.slice(0, 1);
     productsToEmit.forEach((bestProduct) => {
       if (!bestProduct) return;
+      // Prefer the distance/location tied to THIS specific offer's outlet (when the supplier
+      // set one) over the supplier-wide fallback — two offers from the same supplier account
+      // can genuinely ship from different physical outlets, so they must not share one distance.
+      const offerOutletId = bestProduct?.outlet_id || null;
+      const hasExactOutletDistance = offerOutletId && distanceByOutletId[offerOutletId] != null;
+      const distanceKm = siteGeoFromBoq
+        ? hasExactOutletDistance
+          ? distanceByOutletId[offerOutletId]
+          : supplierDistanceKm
+        : null;
+      const distanceSourceLocation = hasExactOutletDistance
+        ? distanceSourceLocationByOutletId[offerOutletId] || null
+        : supplierDistanceSourceLocation;
+      // Show THIS offer's own listed location/pincode (not a value borrowed from a different
+      // product of the same supplier) — a supplier can list products from different outlets,
+      // and the card must always describe the specific item being shown.
+      const offerLocationText = String(bestProduct?.location || '').trim();
+      const offerPincodeMatch = offerLocationText.match(/\b(\d{6})\b/);
+      const offerPincode = offerPincodeMatch ? offerPincodeMatch[1] : null;
+      const displayLocation = !isPlaceholderLocationText(offerLocationText)
+        ? offerLocationText
+        : !isPlaceholderLocationText(supplier.supplierLocation)
+          ? supplier.supplierLocation
+          : distanceSourceLocation || supplier.supplierLocation;
+      const displayPincode = offerPincode || supplier.supplierPincode || null;
+
+      const locationScore = computeLocationScore({
+        siteGeoFromBoq,
+        distanceKm,
+        supplierLocation: supplier.supplierLocation,
+        boqProjectCity,
+        serviceProviderCity,
+        boqProjectState,
+        serviceProviderState
+      });
+      const finalRankScore = rankScore + locationScore;
     const productPrice = parseFloat(bestProduct?.price) || supplier.bestPrice;
     const supplierProductName = bestProduct?.name || null;
     const productDescription = bestProduct?.description || '';
@@ -76,8 +106,8 @@ export function mapSupplierProductsToRankedVendors({
       name: supplier.supplierName,
       company: supplier.supplierCompany,
       location: displayLocation,
-      pincode: supplier.supplierPincode || null,
-      supplierPincode: supplier.supplierPincode || null,
+      pincode: displayPincode,
+      supplierPincode: displayPincode,
       distanceSourceLocation,
       price: productPrice,
       basePrice: parseFloat(bestProduct?.basePrice) || productPrice,
@@ -89,7 +119,7 @@ export function mapSupplierProductsToRankedVendors({
       stock: availableStock,
       availableStock,
       productCount: supplier.products.length,
-      rankScore,
+      rankScore: finalRankScore,
       distanceKm,
       productName: itemName,
       supplierProductName,

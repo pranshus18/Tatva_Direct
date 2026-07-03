@@ -1,4 +1,5 @@
 import { deleteOrderRequestSchema } from '../../contracts/dashboardContracts.js';
+import { deleteOrderById } from '../../repositories/ordersRepository.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 
 function registerDeleteOrderRoute({
@@ -83,11 +84,8 @@ function registerDeleteOrderRoute({
         console.error(`[Delete Order] Cancel restock failed (${actorLabel} delete):`, e);
       }
 
-      // Delete the order
-      const { error: deleteError } = await supabase
-        .from('orders')
-        .delete()
-        .eq('id', order.id);
+      // Delete linked notifications first (FK has no ON DELETE action).
+      const { error: deleteError } = await deleteOrderById(order.id, supabase);
 
       if (deleteError) {
         console.error('Delete error:', deleteError);

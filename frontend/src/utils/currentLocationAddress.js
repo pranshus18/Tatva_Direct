@@ -53,6 +53,15 @@ export async function reverseGeocodeToAddress(lat, lon) {
   };
 }
 
+/** Human-readable single-line address for site location fields. */
+export function formatResolvedAddressLine(resolved) {
+  if (!resolved) return '';
+  return [resolved.line1, resolved.city, resolved.state, resolved.pincode]
+    .map((part) => String(part || '').trim())
+    .filter(Boolean)
+    .join(', ');
+}
+
 export async function resolveAddressFromCurrentLocation() {
   const position = await getCurrentPositionAsync();
   const latitude = position?.coords?.latitude;

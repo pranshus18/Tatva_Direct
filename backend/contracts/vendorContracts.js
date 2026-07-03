@@ -12,7 +12,21 @@ const rankingItemSchema = z.object({
   brandName: z.string().optional(),
   brandModel: z.string().optional(),
   specifications: z.record(z.string(), z.any()).optional(),
-  availableSuppliers: z.any().optional()
+  availableSuppliers: z.any().optional(),
+  nearestSupplier: z
+    .object({
+      supplierId: z.string().uuid().optional().nullable()
+    })
+    .passthrough()
+    .optional()
+    .nullable(),
+  supplyChainLastSupplier: z
+    .object({
+      supplierId: z.string().uuid().optional().nullable()
+    })
+    .passthrough()
+    .optional()
+    .nullable()
 });
 
 export const vendorRankSchema = z.object({

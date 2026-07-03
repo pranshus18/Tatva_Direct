@@ -121,13 +121,21 @@ export const supplierLocationCandidates = ({ productLocation, supplierAddress, s
 export const extractPostalCode = (obj = {}) =>
   firstNonEmpty(obj?.pincode, obj?.zipCode, obj?.postal_code, obj?.zip, obj?.zip_code);
 
-/** Best-effort supplier pincode for voice / display (address, branch, or location text). */
+/**
+ * Best-effort supplier pincode for voice / display.
+ * Prioritized the same way as `supplierLocationCandidates`: the specific product/listing
+ * location first (what's actually shown on the card), then the supplier's registered
+ * account address, then branch addresses. Using the account address first was causing
+ * the wrong pincode to show for suppliers whose listing location differs from their
+ * account signup address (e.g. a supplier registered in one city but shipping a
+ * specific product from another).
+ */
 export const resolveSupplierPincode = ({ productLocation, supplierAddress, supplierProfile } = {}) => {
-  const fromAddress = extractPostalCode(supplierAddress);
-  if (fromAddress) return String(fromAddress).replace(/\D/g, '').slice(0, 6);
-
   const locMatch = String(productLocation || '').match(/\b(\d{6})\b/);
   if (locMatch) return locMatch[1];
+
+  const fromAddress = extractPostalCode(supplierAddress);
+  if (fromAddress) return String(fromAddress).replace(/\D/g, '').slice(0, 6);
 
   const branches = Array.isArray(supplierProfile?.branches) ? supplierProfile.branches : [];
   for (const branch of branches) {

@@ -43,10 +43,28 @@ function resolveRankBoqId({ boqId, effectiveItems, boqMeta, cartSupplierHandoff 
 }
 
 /** Pick nearest supplier when distance is known; otherwise first ranked approved option. */
-function pickRecommendedVendor(vendors) {
+function pickRecommendedVendor(vendors, item = null) {
   if (!Array.isArray(vendors) || vendors.length === 0) return null;
   const eligible = vendors.filter((v) => v && (v.selectionId || v.supplierProductId || v.id));
   if (!eligible.length) return null;
+
+  const preferredSupplierId =
+    String(item?.nearestSupplier?.supplierId || '').trim() ||
+    String(item?.supplyChainLastSupplier?.supplierId || '').trim() ||
+    '';
+  if (preferredSupplierId) {
+    const preferred = eligible.filter((v) => String(v.id || '').trim() === preferredSupplierId);
+    const preferredInStock = preferred.filter((v) => Number(v?.stock || 0) > 0);
+    const preferredDistance = preferredInStock.filter((v) => typeof v.distanceKm === 'number');
+    if (preferredDistance.length) {
+      return preferredDistance.reduce((best, vendor) =>
+        vendor.distanceKm < best.distanceKm ? vendor : best
+      );
+    }
+    if (preferredInStock.length) {
+      return preferredInStock[0];
+    }
+  }
 
   const nearestFlagged = eligible.filter((v) => v.isNearestRecommended);
   if (nearestFlagged.length) {
@@ -448,7 +466,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     (effectiveItems || []).forEach((item) => {
       const itemId = item.id?.toString() || String(item.id);
       const vendors = cleanedVendors[itemId] || [];
-      const nearest = pickRecommendedVendor(vendors);
+      const nearest = pickRecommendedVendor(vendors, item);
       if (!nearest) return;
       const key = nearest.selectionId || nearest.supplierProductId || nearest.id;
       if (key) next[itemId] = String(key);

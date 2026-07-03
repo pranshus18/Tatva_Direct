@@ -111,6 +111,7 @@ const ProductDiscovery = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') || '');
   const [selectedCategory, setSelectedCategory] = useState('');
+  const [categoryOptions, setCategoryOptions] = useState([]);
   const [products, setProducts] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -132,13 +133,31 @@ const ProductDiscovery = () => {
   const pageSize = 24;
 
   const categories = useMemo(() => {
-    const unique = new Set();
+    const merged = new Map();
+
+    categoryOptions.forEach((option) => {
+      const value = String(option?.value || '').trim();
+      if (!value) return;
+      merged.set(value, String(option?.label || value).trim() || value);
+    });
+
+    // Keep discovered categories as fallback when API list is unavailable/incomplete.
     products.forEach((product) => {
       const category = String(product?.category || '').trim();
-      if (category) unique.add(category);
+      if (category && !merged.has(category)) {
+        merged.set(category, category);
+      }
     });
-    return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [products]);
+
+    const selected = String(selectedCategory || '').trim();
+    if (selected && !merged.has(selected)) {
+      merged.set(selected, selected);
+    }
+
+    return Array.from(merged.entries())
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [categoryOptions, products, selectedCategory]);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -169,6 +188,29 @@ const ProductDiscovery = () => {
         setProducts(Array.isArray(data.suggestions) ? data.suggestions : []);
         setTotal(Number.isFinite(Number(data.total)) ? Number(data.total) : 0);
         setRecommendationMode(String(data.recommendationMode || ''));
+        const discoveredCategories = (Array.isArray(data.categories) ? data.categories : [])
+          .map((category) => {
+            const value = String(category || '').trim();
+            return value ? { value, label: value } : null;
+          })
+          .filter(Boolean);
+        if (discoveredCategories.length > 0) {
+          setCategoryOptions((prev) => {
+            // Preserve current list while category is selected, but also merge any newly discovered category.
+            if (selectedCategory.trim() && prev.length > 0) {
+              const merged = new Map(prev.map((entry) => [entry.value, entry.label]));
+              discoveredCategories.forEach((entry) => {
+                if (!merged.has(entry.value)) {
+                  merged.set(entry.value, entry.label);
+                }
+              });
+              return Array.from(merged.entries())
+                .map(([value, label]) => ({ value, label }))
+                .sort((a, b) => a.label.localeCompare(b.label));
+            }
+            return discoveredCategories;
+          });
+        }
       } catch (fetchError) {
         setProducts([]);
         setTotal(0);
@@ -263,6 +305,10 @@ const ProductDiscovery = () => {
     const pid = String(product?.id || '').trim();
     if (!pid) {
       setError('This product cannot be added because its id is missing.');
+      return;
+    }
+    if (Number(product?.supplierCount || 0) <= 0) {
+      setError("This product is approved but not currently listed by an eligible supplier.");
       return;
     }
     const [groups, addresses] = await Promise.all([loadCartProjects(), loadProfileShippingAddresses()]);
@@ -456,8 +502,8 @@ const ProductDiscovery = () => {
         >
           <option value="">All categories</option>
           {categories.map((category) => (
-            <option key={category} value={category}>
-              {category}
+            <option key={category.value} value={category.value}>
+              {category.label}
             </option>
           ))}
         </select>
@@ -507,6 +553,7 @@ const ProductDiscovery = () => {
             const price = formatPrice(product?.price, product?.unit);
             const pid = String(product?.id || '');
             const inStock = Number(product?.stock) > 0;
+            const hasEligibleSupplier = Number(product?.supplierCount || 0) > 0;
             const moq = Number(product?.min_order_quantity);
 
             return (
@@ -575,10 +622,13 @@ const ProductDiscovery = () => {
                     type="button"
                     className="pd-card__cart-btn"
                     onClick={() => openProjectPicker(product)}
-                    disabled={Boolean(cartBusyByProductId[pid])}
+                    disabled={Boolean(cartBusyByProductId[pid]) || !hasEligibleSupplier}
+                    title={!hasEligibleSupplier ? 'No eligible supplier is currently listing this product' : undefined}
                   >
                     {cartAddedByProductId[pid] ? (
                       <><Check size={16} /> Added</>
+                    ) : !hasEligibleSupplier ? (
+                      <>No suppliers</>
                     ) : (
                       <><ShoppingCart size={16} /> Add to Cart</>
                     )}

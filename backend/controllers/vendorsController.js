@@ -262,7 +262,12 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         brandCovByBrand
       });
 
-      const { distanceBySupplier, distanceSourceLocationBySupplier } = await computeSupplierDistances({
+      const {
+        distanceBySupplier,
+        distanceSourceLocationBySupplier,
+        distanceByOutletId,
+        distanceSourceLocationByOutletId
+      } = await computeSupplierDistances({
         supabase,
         supplierProducts,
         siteGeoFromBoq
@@ -284,6 +289,8 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         siteGeoFromBoq,
         distanceBySupplier,
         distanceSourceLocationBySupplier,
+        distanceByOutletId,
+        distanceSourceLocationByOutletId,
         boqProjectCity,
         serviceProviderCity,
         boqProjectState,
@@ -309,7 +316,37 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
 
       assignSequentialRank(validVendors);
       if (siteGeoFromBoq && validVendors.length > 0) {
-        validVendors[0].isNearestRecommended = true;
+        const preferredSupplierId =
+          String(item?.nearestSupplier?.supplierId || '').trim() ||
+          String(item?.supplyChainLastSupplier?.supplierId || '').trim() ||
+          '';
+        const withDistance = validVendors.filter((vendor) => typeof vendor?.distanceKm === 'number');
+        const inStockWithDistance = withDistance.filter((vendor) => Number(vendor?.stock || 0) > 0);
+        const preferredWithDistance = preferredSupplierId
+          ? withDistance.filter((vendor) => String(vendor?.id || '') === preferredSupplierId)
+          : [];
+        const preferredInStockWithDistance = preferredWithDistance.filter(
+          (vendor) => Number(vendor?.stock || 0) > 0
+        );
+
+        const pickNearestFrom = (list) =>
+          list.reduce((best, vendor) =>
+            (vendor.distanceKm || Infinity) < (best.distanceKm || Infinity) ? vendor : best
+          );
+
+        const nearestRecommended =
+          (preferredInStockWithDistance.length > 0 && pickNearestFrom(preferredInStockWithDistance)) ||
+          (inStockWithDistance.length > 0 && pickNearestFrom(inStockWithDistance)) ||
+          (preferredWithDistance.length > 0 && pickNearestFrom(preferredWithDistance)) ||
+          (withDistance.length > 0 && pickNearestFrom(withDistance)) ||
+          validVendors[0];
+
+        validVendors.forEach((vendor) => {
+          delete vendor.isNearestRecommended;
+        });
+        if (nearestRecommended) {
+          nearestRecommended.isNearestRecommended = true;
+        }
       }
       
       // CRITICAL: If we have a reference product with a supplier but no vendors were found,

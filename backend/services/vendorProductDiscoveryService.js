@@ -165,6 +165,7 @@ export async function reconcileWithSupplierOffers({
           stock,
           min_order_quantity,
           location,
+          outlet_id,
           variant_key,
           variant_asin,
           attributes,
@@ -219,6 +220,7 @@ export async function reconcileWithSupplierOffers({
               price: Number.isFinite(parseFloat(row.price)) ? parseFloat(row.price) : 0,
               stock: Number.isFinite(parseInt(row.stock, 10)) ? parseInt(row.stock, 10) : 0,
               location: (row.location || meta.location || '').toString(),
+              outlet_id: row.outlet_id || null,
               status: row.status,
               sharedProductStatus: meta.status || null,
               is_active: row.is_active
