@@ -47,6 +47,24 @@ export async function geocodeIndianAddress(addressOrText) {
   return null;
 }
 
+/**
+ * Sanity bound for a road-distance figure against the great-circle distance for the same pair.
+ * A real production bug slipped past the old, much looser bound (2.5x + 50km): Google's Routes
+ * API once returned ~1112km for a pair whose straight-line distance was ~753km (a 1.48x ratio,
+ * comfortably "plausible" under the old rule) when the correct road distance — confirmed by two
+ * independent sources — was ~860km (1.14x). Real Indian highway routes between cities are
+ * usually 1.05x-1.3x of straight-line; even a notably indirect/hilly route rarely exceeds ~1.35x
+ * over any meaningful distance. The flat `+80` keeps short local trips (where ratios are
+ * naturally noisier in absolute-km terms) from being falsely rejected.
+ */
+function isRoadDistancePlausible(straightKm, roadKm) {
+  if (typeof roadKm !== 'number' || !Number.isFinite(roadKm) || roadKm < 0) return false;
+  if (typeof straightKm !== 'number' || !Number.isFinite(straightKm) || straightKm < 0) return false;
+  if (roadKm < straightKm * 0.85) return false;
+  if (roadKm > straightKm * 1.35 + 80) return false;
+  return true;
+}
+
 /** Prefer road distance when plausible; otherwise great-circle (avoids bad matrix cell assignments). */
 export function distanceKmForRanking(origin, destGeo, roadKm) {
   const normalizedOrigin = normalizeLatLng(origin);
@@ -58,9 +76,7 @@ export function distanceKmForRanking(origin, destGeo, roadKm) {
     normalizedDest.lat,
     normalizedDest.lng
   );
-  if (typeof roadKm !== 'number' || !Number.isFinite(roadKm) || roadKm < 0) return straightKm;
-  if (roadKm < straightKm * 0.85 || roadKm > straightKm * 2.5 + 50) return straightKm;
-  return roadKm;
+  return isRoadDistancePlausible(straightKm, roadKm) ? roadKm : straightKm;
 }
 
 export function haversineKm(lat1, lon1, lat2, lon2) {
@@ -99,6 +115,14 @@ function getPrimaryGoogleMapsApiKey() {
 /**
  * Compute road distance for many destinations from one origin.
  * Priority: Google Routes API -> Google Distance Matrix -> OSRM table API -> haversine fallback.
+ *
+ * Every candidate value from every source is cross-checked against the great-circle distance
+ * (via isRoadDistancePlausible) BEFORE being accepted. If a source's answer for a destination
+ * fails that check, it is discarded (left null) rather than kept — so the NEXT source in the
+ * cascade gets a chance to provide a better number for that specific destination, instead of a
+ * single bad API response silently becoming "the" distance shown to buyers. This is what would
+ * have caught the Routes API's ~1112km-instead-of-860km miss even if a future API regression
+ * reintroduces a similar issue.
  */
 export async function getDrivingDistanceMatrixKm(origin, destinations = []) {
   const normalizedOrigin = normalizeLatLng(origin);
@@ -106,6 +130,23 @@ export async function getDrivingDistanceMatrixKm(origin, destinations = []) {
 
   const normalizedDestinations = destinations.map((d) => normalizeLatLng(d));
   const results = normalizedDestinations.map(() => null);
+
+  /** Accepts `km` into results[idx] only if it's plausible against the straight-line distance. */
+  const tryAccept = (idx, km, sourceLabel) => {
+    const dest = normalizedDestinations[idx];
+    if (!dest || typeof km !== 'number' || !Number.isFinite(km)) return;
+    const straightKm = haversineKm(normalizedOrigin.lat, normalizedOrigin.lng, dest.lat, dest.lng);
+    if (!isRoadDistancePlausible(straightKm, km)) {
+      console.warn('[Geo] Rejecting implausible road distance, will try next source:', {
+        source: sourceLabel,
+        roadKm: Number(km.toFixed(1)),
+        straightLineKm: Number(straightKm.toFixed(1)),
+        ratio: Number((km / straightKm).toFixed(2))
+      });
+      return;
+    }
+    results[idx] = km;
+  };
 
   const primaryGoogleMapsApiKey = getPrimaryGoogleMapsApiKey();
   const routesApiKey =
@@ -150,7 +191,15 @@ export async function getDrivingDistanceMatrixKm(origin, destinations = []) {
             }
           })),
           travelMode: 'DRIVE',
-          routingPreference: 'TRAFFIC_AWARE'
+          // Distance (not ETA) is all this ranking engine needs. TRAFFIC_AWARE asks Google to
+          // route around live congestion, which for long inter-city routes can pick a genuinely
+          // different (and sometimes much longer) physical path than the standard route — e.g.
+          // this returned ~1112km for a Pune→Bengaluru pair where Google's own classic Distance
+          // Matrix API AND an independent OSRM lookup both agreed on ~860km. That wrong number
+          // was never caught because it came back first and every other source was skipped once
+          // it filled in a (plausible-looking, non-null) value. TRAFFIC_UNAWARE matches the
+          // other two sources reliably and is cheaper/faster to boot.
+          routingPreference: 'TRAFFIC_UNAWARE'
         };
         const response = await fetch('https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix', {
           method: 'POST',
@@ -174,7 +223,7 @@ export async function getDrivingDistanceMatrixKm(origin, destinations = []) {
           if (!Number.isFinite(meters) || meters < 0) return;
           const batchOffset = valid[destinationIndex]?.idx;
           if (typeof batchOffset === 'number') {
-            results[i + batchOffset] = meters / 1000;
+            tryAccept(i + batchOffset, meters / 1000, 'Google Routes API');
           }
         });
       } catch {
@@ -213,7 +262,7 @@ export async function getDrivingDistanceMatrixKm(origin, destinations = []) {
           if (!Number.isFinite(meters) || meters < 0) return;
           const batchOffset = valid[validIdx]?.idx;
           if (typeof batchOffset === 'number') {
-            results[i + batchOffset] = meters / 1000;
+            tryAccept(i + batchOffset, meters / 1000, 'Google Distance Matrix API');
           }
         });
       } catch {
@@ -250,7 +299,7 @@ export async function getDrivingDistanceMatrixKm(origin, destinations = []) {
             const meters = Number(distances[j]);
             if (!Number.isFinite(meters) || meters < 0) continue;
             const target = unresolved[j - 1];
-            if (target) results[target.idx] = meters / 1000;
+            if (target) tryAccept(target.idx, meters / 1000, 'OSRM');
           }
         }
       }
