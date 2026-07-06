@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   filterSuppliersAtTerminalRole,
-  resolveBrandAndTerminalRoleForProductRequest
+  resolveBrandAndTerminalRoleForProductRequest,
+  resolveProductRequestRecipients
 } from '../services/boqProductRequestNotificationService.js';
 
 const chainRows = [
@@ -98,4 +99,26 @@ test('resolveBrandAndTerminalRoleForProductRequest returns null role when no cha
 
   assert.equal(resolved.brandName, 'Unknown Brand');
   assert.equal(resolved.terminalRole, null);
+});
+
+test('resolveProductRequestRecipients falls back to all suppliers when no supply chain role exists', () => {
+  const allSuppliers = [
+    { id: 's1', profile: {} },
+    { id: 's2', profile: {} }
+  ];
+
+  const result = resolveProductRequestRecipients(allSuppliers, 'Unknown Brand', null);
+  assert.equal(result.notifyScope, 'all_suppliers');
+  assert.deepEqual(result.recipients.map((s) => s.id), ['s1', 's2']);
+});
+
+test('resolveProductRequestRecipients falls back to all suppliers when no terminal-role match exists', () => {
+  const allSuppliers = [
+    { id: 's1', profile: { supplierRole: 'manufacturer' } },
+    { id: 's2', profile: { supplierRole: 'stockist' } }
+  ];
+
+  const result = resolveProductRequestRecipients(allSuppliers, 'Asian Paints', 'dealer');
+  assert.equal(result.notifyScope, 'all_suppliers');
+  assert.deepEqual(result.recipients.map((s) => s.id), ['s1', 's2']);
 });

@@ -6,6 +6,11 @@ import SupplierRoute from './components/SupplierRoute';
 import AdminRoute from './components/AdminRoute';
 import { getApiUrl } from './config/api';
 import { normalizeUser, normalizeUserType } from './utils/userType';
+import {
+  clearSpWorkflowStorage,
+  ensureSpWorkflowOwner,
+  WORKFLOW_STORAGE_KEY
+} from './utils/spWorkflow';
 
 const buildLazyErrorFallback = (label) => () => (
   <div style={{ padding: '1rem', color: '#b91c1c' }}>
@@ -146,7 +151,6 @@ const idlePrefetch = (importers = []) => {
 };
 
 function App() {
-  const WORKFLOW_STORAGE_KEY = 'spBoqWorkflow';
   const [normalizedItems, setNormalizedItems] = useState([]);
   const [selectedVendors, setSelectedVendors] = useState({});
   const [substitutions, setSubstitutions] = useState([]);
@@ -167,14 +171,14 @@ function App() {
     if (token && savedUser) {
       try {
         const parsedUser = normalizeUser(JSON.parse(savedUser));
+        const ownerChanged = ensureSpWorkflowOwner(parsedUser?.id);
         setUser(parsedUser);
         setIsAuthenticated(true);
 
-        // Restore last BOQ id (allows revisiting supplier select without re-upload)
-        if (lastBoqId) {
+        if (!ownerChanged && lastBoqId) {
           setBoqId(lastBoqId);
         }
-        if (savedWorkflow) {
+        if (!ownerChanged && savedWorkflow) {
           try {
             const wf = JSON.parse(savedWorkflow);
             if (Array.isArray(wf.normalizedItems)) setNormalizedItems(wf.normalizedItems);
@@ -201,7 +205,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!isAuthenticated) return;
+    if (!isAuthenticated || !user?.id) return;
+    ensureSpWorkflowOwner(user.id);
     const payload = {
       normalizedItems,
       selectedVendors,
@@ -210,9 +215,13 @@ function App() {
       boqProject
     };
     localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(payload));
-    if (boqId) localStorage.setItem('lastBoqId', boqId);
+    if (boqId) {
+      localStorage.setItem('lastBoqId', boqId);
+    } else {
+      localStorage.removeItem('lastBoqId');
+    }
     window.dispatchEvent(new Event('sp-workflow-updated'));
-  }, [isAuthenticated, normalizedItems, selectedVendors, substitutions, boqId, boqProject]);
+  }, [isAuthenticated, user?.id, normalizedItems, selectedVendors, substitutions, boqId, boqProject]);
 
   // Update document title based on logged-in user
   useEffect(() => {
@@ -256,6 +265,10 @@ function App() {
 
   const handleLogin = async (userData) => {
     const normalizedUser = normalizeUser(userData);
+    const ownerChanged = ensureSpWorkflowOwner(normalizedUser?.id);
+    if (ownerChanged) {
+      resetWorkflow();
+    }
     setUser(normalizedUser);
     setIsAuthenticated(true);
     
@@ -285,17 +298,23 @@ function App() {
     setSubstitutions([]);
     setBoqId(null);
     setBoqProject(null);
-    localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+    clearSpWorkflowStorage();
   };
 
   const loadCartDraftIntoWorkflow = (draft = {}) => {
-    if (Array.isArray(draft.items)) setNormalizedItems(draft.items);
-    if (draft.selectedVendors && typeof draft.selectedVendors === 'object') {
-      setSelectedVendors(draft.selectedVendors);
-    }
-    if (Array.isArray(draft.substitutions)) setSubstitutions(draft.substitutions);
-    if (draft.boqId) setBoqId(draft.boqId);
-    if (draft.boqProject && typeof draft.boqProject === 'object') setBoqProject(draft.boqProject);
+    const groups = Array.isArray(draft?.boqGroups) ? draft.boqGroups : [];
+    const itemsFromGroups = groups.flatMap((group) =>
+      Array.isArray(group?.items) ? group.items : []
+    );
+    const nextItems = Array.isArray(draft.items) && draft.items.length > 0 ? draft.items : itemsFromGroups;
+
+    setNormalizedItems(nextItems);
+    setSelectedVendors(
+      draft.selectedVendors && typeof draft.selectedVendors === 'object' ? draft.selectedVendors : {}
+    );
+    setSubstitutions(Array.isArray(draft.substitutions) ? draft.substitutions : []);
+    setBoqId(draft.boqId || null);
+    setBoqProject(draft.boqProject && typeof draft.boqProject === 'object' ? draft.boqProject : null);
   };
 
   useEffect(() => {

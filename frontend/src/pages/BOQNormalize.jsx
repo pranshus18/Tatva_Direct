@@ -194,8 +194,7 @@ const BOQNormalize = ({ onComplete }) => {
     }
   };
 
-  // Submit a product request for an unavailable BOQ item so that
-  // admin can approve it and suppliers can later add offers.
+  // Notify terminal suppliers that a customer is looking for an unavailable BOQ item.
   const submitProductRequest = async (item) => {
     if (!item) return;
     const token = localStorage.getItem('token');
@@ -226,7 +225,7 @@ const BOQNormalize = ({ onComplete }) => {
 
       const data = await res.json();
       if (res.ok && data.status === 'success') {
-        alert(data.message || 'Product request submitted and is pending admin approval.');
+        alert(data.message || 'Suppliers were notified that a customer is looking for this product.');
         setRequestingProductForItem(null);
       } else {
         alert(data.message || 'Failed to submit product request. Please try again.');
@@ -989,8 +988,9 @@ const BOQNormalize = ({ onComplete }) => {
                 </div>
                 <div className="modal-body">
                   <p style={{ fontSize: '0.9rem', color: '#4b5563', marginBottom: '0.75rem' }}>
-                    You are requesting a new catalog product based on this BOQ item. Admin will review and approve it,
-                    and terminal suppliers in the supply chain will be notified that a customer is looking for this product.
+                    We will notify suppliers in the last supply-chain role for this brand that a customer is
+                    looking for this product. If no supply chain is configured, all suppliers on the platform
+                    will be notified. They can add the product from their supplier portal if they stock it.
                   </p>
                   <div style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '0.75rem' }}>
                     <div><strong>BOQ Item:</strong> {requestingProductForItem.rawName}</div>

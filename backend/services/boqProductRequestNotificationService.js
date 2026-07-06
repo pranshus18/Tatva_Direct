@@ -8,7 +8,6 @@ import {
   SUPPLY_CHAIN_ROLE_LABELS
 } from './supplyChainSharedService.js';
 import { insertNotifications } from '../repositories/notificationsRepository.js';
-import { findAdmins } from '../repositories/usersRepository.js';
 
 async function loadSupplyChainRows(db) {
   const { data, error } = await db
@@ -52,18 +51,6 @@ export async function resolveBrandAndTerminalRoleForProductRequest(db, productNa
   };
 }
 
-/** @deprecated Use resolveBrandAndTerminalRoleForProductRequest */
-export async function inferBrandNameForProductRequest(db, productName, explicitBrand) {
-  const resolved = await resolveBrandAndTerminalRoleForProductRequest(db, productName, explicitBrand);
-  return resolved.brandName;
-}
-
-/** @deprecated Use resolveBrandAndTerminalRoleForProductRequest */
-export async function resolveTerminalRoleForBrand(db, brandName) {
-  const resolved = await resolveBrandAndTerminalRoleForProductRequest(db, brandName, brandName);
-  return resolved.terminalRole;
-}
-
 export function filterSuppliersAtTerminalRole(suppliers, brandName, terminalRole) {
   if (!terminalRole) return [];
 
@@ -73,94 +60,86 @@ export function filterSuppliersAtTerminalRole(suppliers, brandName, terminalRole
   );
   if (brandMatches.length > 0) return brandMatches;
 
-  // Brand-specific match failed — still notify suppliers in the configured terminal role.
   return list.filter((supplier) => profileHasRoleForBrand(supplier?.profile, terminalRole, null));
+}
+
+export function resolveProductRequestRecipients(allSuppliers, brandName, terminalRole) {
+  const list = Array.isArray(allSuppliers) ? allSuppliers : [];
+  if (!list.length) {
+    return { recipients: [], notifyScope: 'none' };
+  }
+
+  if (terminalRole) {
+    const terminalMatches = filterSuppliersAtTerminalRole(list, brandName, terminalRole);
+    if (terminalMatches.length > 0) {
+      return { recipients: terminalMatches, notifyScope: 'terminal_role' };
+    }
+  }
+
+  return { recipients: list, notifyScope: 'all_suppliers' };
 }
 
 export async function notifyTerminalSuppliersAboutProductRequest({
   db,
-  product,
+  request,
   brandName,
   terminalRole,
   serviceProvider
 }) {
-  if (!terminalRole) {
-    return { notifiedCount: 0, terminalRole: null };
-  }
-
   const { data: suppliers, error } = await db
     .from('users')
     .select('id, name, company, profile')
     .eq('user_type', 'supplier');
   if (error) throw error;
 
-  const terminalSuppliers = filterSuppliersAtTerminalRole(suppliers || [], brandName, terminalRole);
-  if (!terminalSuppliers.length) {
-    return { notifiedCount: 0, terminalRole };
+  const { recipients, notifyScope } = resolveProductRequestRecipients(
+    suppliers || [],
+    brandName,
+    terminalRole
+  );
+
+  if (!recipients.length) {
+    return { notifiedCount: 0, terminalRole: terminalRole || null, notifyScope };
   }
 
-  const roleLabel = SUPPLY_CHAIN_ROLE_LABELS[terminalRole] || terminalRole;
+  const roleLabel = terminalRole ? SUPPLY_CHAIN_ROLE_LABELS[terminalRole] || terminalRole : null;
   const requesterLabel =
-    serviceProvider?.company || serviceProvider?.name || serviceProvider?.email || 'A service provider';
+    serviceProvider?.company || serviceProvider?.name || serviceProvider?.email || 'A customer';
   const brandHint = brandName ? ` for brand "${brandName}"` : '';
+  const productName = String(request?.name || '').trim() || 'this product';
 
-  const notifications = terminalSuppliers.map((supplier) => ({
+  const message =
+    notifyScope === 'terminal_role' && roleLabel
+      ? `${requesterLabel} is looking for "${productName}"${brandHint}. ` +
+        `As the ${roleLabel} (last role in the supply chain), you can add this product with your price, stock, and location in the supplier portal if you stock it.`
+      : `${requesterLabel} is looking for "${productName}"${brandHint}. ` +
+        'If you stock this item, you can add it with your price, stock, and location in the supplier portal.';
+
+  const notifications = recipients.map((supplier) => ({
     user_id: supplier.id,
-    type: 'product_request',
-    title: `Customer looking for: ${product.name}`,
-    message:
-      `${requesterLabel} is looking for "${product.name}"${brandHint}. ` +
-      `As the ${roleLabel} (last role in the supply chain), please add this product with your price, stock, and location in the supplier portal so it can be matched in upcoming BOQs.`,
-    related_product_id: product.id,
+    type: 'system',
+    title: `Customer looking for: ${productName}`,
+    message,
+    related_product_id: null,
     metadata: {
-      productId: product.id,
-      productName: product.name,
-      productCategory: product.category,
-      productUnit: product.unit,
+      productName,
+      productCategory: request?.category || null,
+      productUnit: request?.unit || null,
+      productDescription: request?.description || null,
       brandName: brandName || null,
-      terminalRole,
-      requestedByServiceProviderId: product.requested_by_service_provider_id || null,
-      source: 'service_provider_boq_request_terminal_suppliers'
+      terminalRole: terminalRole || null,
+      notifyScope,
+      boqId: request?.boqId || null,
+      requestedByServiceProviderId: request?.requestedByServiceProviderId || null,
+      source: 'service_provider_boq_customer_lookup'
     },
     is_read: false
   }));
 
   await insertNotifications(notifications, db);
-  return { notifiedCount: notifications.length, terminalRole };
-}
-
-export async function notifyAdminsAboutProductRequest({
-  db,
-  product,
-  serviceProvider,
-  boqId,
-  adminEmail
-}) {
-  const { data: admins } = await findAdmins(adminEmail, db);
-  if (!admins?.length) return 0;
-
-  const notifications = admins.map((admin) => ({
-    user_id: admin.id,
-    type: 'product_approval',
-    title: `New Product Requested by Service Provider: ${product.name}`,
-    message: `${serviceProvider?.name || 'A service provider'} (${serviceProvider?.company || serviceProvider?.email || ''}) has requested a new product "${product.name}" in category "${product.category}". Please review and approve it so terminal suppliers can add their offers.`,
-    related_product_id: product.id,
-    related_supplier_id: null,
-    metadata: {
-      productId: product.id,
-      productName: product.name,
-      productCategory: product.category,
-      productUnit: product.unit,
-      requestedByServiceProviderId: product.requested_by_service_provider_id,
-      requestedByServiceProviderName: serviceProvider?.name,
-      requestedByServiceProviderCompany: serviceProvider?.company,
-      requestedByServiceProviderEmail: serviceProvider?.email,
-      source: 'service_provider_boq_request',
-      boqId: boqId || null
-    },
-    is_read: false
-  }));
-
-  await insertNotifications(notifications, db);
-  return notifications.length;
+  return {
+    notifiedCount: notifications.length,
+    terminalRole: terminalRole || null,
+    notifyScope
+  };
 }

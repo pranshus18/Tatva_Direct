@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { SUPPLIER_NAV_GROUPS } from '@/utils/supplierNavConfig';
 import { getApiUrl } from '@/config/api';
+import { countSupplierUpstreamCartDraft } from '@/utils/cartBadge';
 import PillSidebar from '@/components/shared/PillSidebar';
 
 export default function SupplierSidebar({ className, onNavigate, variant = 'desktop' }) {
@@ -24,23 +25,7 @@ export default function SupplierSidebar({ className, onNavigate, variant = 'desk
         const data = await response.json();
         if (!active || !response.ok || data?.status !== 'success') return;
         const draft = data?.cart?.draft && typeof data.cart.draft === 'object' ? data.cart.draft : {};
-        const projects = Array.isArray(draft.projects) ? draft.projects : [];
-        const nextCount =
-          projects.length > 0
-            ? projects.reduce(
-                (sum, project) =>
-                  sum +
-                  Object.keys(
-                    project?.selectedMine && typeof project.selectedMine === 'object'
-                      ? project.selectedMine
-                      : {}
-                  ).length,
-                0
-              )
-            : draft.selectedMine && typeof draft.selectedMine === 'object'
-              ? Object.keys(draft.selectedMine).length
-              : 0;
-        setCartCount(nextCount);
+        setCartCount(countSupplierUpstreamCartDraft(draft));
       } catch (_) {
         if (active) setCartCount(0);
       }

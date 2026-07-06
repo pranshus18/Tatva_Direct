@@ -4,10 +4,19 @@ import { boqRequestProductSchema } from '../../contracts/boqContracts.js';
 import { supabase } from '../../config/supabase.js';
 import { findUserBasicById } from '../../repositories/usersRepository.js';
 import {
-  notifyAdminsAboutProductRequest,
   notifyTerminalSuppliersAboutProductRequest,
   resolveBrandAndTerminalRoleForProductRequest
 } from '../../services/boqProductRequestNotificationService.js';
+import { SUPPLY_CHAIN_ROLE_LABELS } from '../../services/supplyChainSharedService.js';
+
+function buildSuccessMessage({ productName, suppliersNotified, terminalRole, notifyScope }) {
+  if (notifyScope === 'all_suppliers') {
+    return `Request sent. ${suppliersNotified} supplier${suppliersNotified === 1 ? '' : 's'} on the platform ${suppliersNotified === 1 ? 'was' : 'were'} notified that a customer is looking for "${productName}". They can add the product from their supplier portal if they stock it.`;
+  }
+
+  const roleLabel = SUPPLY_CHAIN_ROLE_LABELS[terminalRole] || terminalRole;
+  return `Request sent. ${suppliersNotified} ${roleLabel} supplier${suppliersNotified === 1 ? '' : 's'} notified that a customer is looking for "${productName}". They can add the product from their supplier portal if they stock it.`;
+}
 
 export function registerBoqRequestProductRoutes(ctx) {
   const {
@@ -37,89 +46,56 @@ router.post('/request-product', authenticateToken, isServiceProvider, async (req
       }
     }
 
-    const { data: newProduct, error: productError } = await supabase
-      .from('products')
-      .insert({
-        name: name.trim(),
-        description: description || '',
+    const { data: serviceProvider } = await findUserBasicById(req.userId, supabase);
+    const productName = name.trim();
+
+    const resolved = await resolveBrandAndTerminalRoleForProductRequest(supabase, productName, brand);
+    const resolvedBrand = resolved.brandName || brand || productName;
+    const terminalRole = resolved.terminalRole;
+
+    const supplierResult = await notifyTerminalSuppliersAboutProductRequest({
+      db: supabase,
+      request: {
+        name: productName,
         category: String(category).trim().toLowerCase(),
         unit: String(unit).trim().toLowerCase(),
-        price: 0,
-        stock: 0,
-        min_order_quantity: 1,
-        location: 'Not specified',
-        status: 'pending',
-        is_active: false,
-        requested_by_service_provider_id: req.userId,
-        specifications: {},
-        tags: ['requested_via_boq']
-      })
-      .select()
-      .single();
-
-    if (productError || !newProduct) {
-      console.error('[BOQ Product Request] Product creation error:', productError);
-      return res.status(500).json({
-        status: 'error',
-        message: productError?.message || 'Failed to create requested product'
-      });
-    }
-
-    console.log(`[BOQ Product Request] New product requested by service provider ${req.userId}:`, {
-      id: newProduct.id,
-      name: newProduct.name,
-      category: newProduct.category
+        description: description || '',
+        boqId: boqId || null,
+        requestedByServiceProviderId: req.userId
+      },
+      brandName: resolvedBrand,
+      terminalRole,
+      serviceProvider
     });
 
-    const { data: serviceProvider } = await findUserBasicById(req.userId, supabase);
+    const { notifiedCount: suppliersNotified, notifyScope } = supplierResult;
 
-    let adminsNotified = 0;
-    let suppliersNotified = 0;
-    let resolvedBrand = null;
-    let terminalRole = null;
+    console.log(
+      `[BOQ Product Request] Notified ${suppliersNotified} supplier(s) for "${productName}" (brand: ${resolvedBrand || 'n/a'}, scope: ${notifyScope}, role: ${terminalRole || 'none'})`
+    );
 
-    try {
-      adminsNotified = await notifyAdminsAboutProductRequest({
-        db: supabase,
-        product: newProduct,
-        serviceProvider,
-        boqId: boqId || null,
-        adminEmail: process.env.ADMIN_EMAIL || 'admin@tatvadirect.com'
+    if (suppliersNotified === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'No suppliers are registered on the platform yet.',
+        brand: resolvedBrand,
+        terminalRole: terminalRole || null,
+        notifyScope
       });
-    } catch (notifError) {
-      console.error('[BOQ Product Request] Failed to create admin notifications:', notifError);
-    }
-
-    try {
-      const resolved = await resolveBrandAndTerminalRoleForProductRequest(supabase, name, brand);
-      resolvedBrand = resolved.brandName;
-      terminalRole = resolved.terminalRole;
-      const supplierResult = await notifyTerminalSuppliersAboutProductRequest({
-        db: supabase,
-        product: newProduct,
-        brandName: resolvedBrand,
-        terminalRole,
-        serviceProvider
-      });
-      suppliersNotified = supplierResult.notifiedCount;
-      console.log(
-        `[BOQ Product Request] Notified ${suppliersNotified} terminal supplier(s) for "${newProduct.name}" (brand: ${resolvedBrand || 'n/a'}, role: ${terminalRole || 'none configured'})`
-      );
-    } catch (supplierNotifError) {
-      console.error('[BOQ Product Request] Failed to notify terminal suppliers:', supplierNotifError);
     }
 
     return res.status(201).json({
       status: 'success',
-      message:
-        suppliersNotified > 0
-          ? `Product request submitted. ${suppliersNotified} terminal supplier${suppliersNotified === 1 ? '' : 's'} notified to add this product. Admin review is pending.`
-          : 'Product request submitted and is pending admin approval.',
-      product: newProduct,
+      message: buildSuccessMessage({
+        productName,
+        suppliersNotified,
+        terminalRole,
+        notifyScope
+      }),
       suppliersNotified,
-      adminsNotified,
       brand: resolvedBrand,
-      terminalRole
+      terminalRole: terminalRole || null,
+      notifyScope
     });
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {
@@ -128,7 +104,7 @@ router.post('/request-product', authenticateToken, isServiceProvider, async (req
     console.error('[BOQ Product Request] Unexpected error:', error);
     res.status(500).json({
       status: 'error',
-      message: 'Failed to submit product request'
+      message: 'Failed to notify suppliers about this product request'
     });
   }
 });

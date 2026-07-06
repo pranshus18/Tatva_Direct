@@ -46,6 +46,7 @@ import {
   SP_PO_CHECKOUT_SESSION_KEY,
   buildCheckoutHoldExpiredMessage
 } from '../utils/checkoutReservation';
+import { emitServiceProviderCartCount } from '../utils/spCartBadge';
 
 const blankShippingAddress = {
   label: '',
@@ -301,8 +302,20 @@ const Cart = ({ onLoadCart }) => {
         throw new Error(data.message || 'Failed to load cart');
       }
       setCart(data.cart || null);
-      if (syncWorkflow && data.cart?.draft && typeof onLoadCart === 'function') {
-        onLoadCart(data.cart.draft);
+      emitServiceProviderCartCount(data.cart?.draft ?? null);
+      if (syncWorkflow && typeof onLoadCart === 'function') {
+        if (data.cart?.draft && typeof data.cart.draft === 'object') {
+          onLoadCart(data.cart.draft);
+        } else {
+          onLoadCart({
+            items: [],
+            boqGroups: [],
+            selectedVendors: {},
+            substitutions: [],
+            boqId: null,
+            boqProject: null
+          });
+        }
       }
     } catch (e) {
       setError(e.message || 'Failed to load cart');
@@ -376,6 +389,7 @@ const Cart = ({ onLoadCart }) => {
         if (prev?.draft) {
           const nextDraft = mergeItemQuantityIntoDraft(prev.draft, id, qty);
           setCart({ ...prev, draft: nextDraft });
+          emitServiceProviderCartCount(nextDraft);
           if (typeof onLoadCart === 'function') {
             onLoadCart(nextDraft);
           }
@@ -563,6 +577,7 @@ const Cart = ({ onLoadCart }) => {
       if (prev?.draft) {
         const nextDraft = mergeRemoveItemFromDraft(prev.draft, normalizedItemId);
         setCart({ ...prev, draft: nextDraft });
+        emitServiceProviderCartCount(nextDraft);
         if (typeof onLoadCart === 'function') {
           onLoadCart(nextDraft);
         }
@@ -599,6 +614,7 @@ const Cart = ({ onLoadCart }) => {
         throw new Error(data.message || 'Failed to clear cart');
       }
       setCart(null);
+      emitServiceProviderCartCount(0);
       if (typeof onLoadCart === 'function') onLoadCart({});
     } catch (e) {
       setError(e.message || 'Failed to clear cart');

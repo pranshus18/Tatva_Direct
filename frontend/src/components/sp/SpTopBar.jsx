@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Menu, Search, ShoppingCart, User, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -23,25 +23,14 @@ import {
 } from '@/components/ui/dropdown-menu';
 import UserAvatar from '@/components/UserAvatar';
 import { getSpBreadcrumb } from '@/utils/spNavConfig';
-import { getCartItemCount } from '@/utils/spWorkflow';
+import { useServiceProviderCartCount } from '@/hooks/useServiceProviderCartCount';
 import SpNotificationsBell from './SpNotificationsBell';
 
 export default function SpTopBar({ user, pathname, onMenuClick, onLogout }) {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [cartCount, setCartCount] = useState(0);
+  const cartCount = useServiceProviderCartCount();
   const crumbs = getSpBreadcrumb(pathname);
-
-  useEffect(() => {
-    const refreshCart = () => setCartCount(getCartItemCount());
-    refreshCart();
-    window.addEventListener('storage', refreshCart);
-    window.addEventListener('sp-workflow-updated', refreshCart);
-    return () => {
-      window.removeEventListener('storage', refreshCart);
-      window.removeEventListener('sp-workflow-updated', refreshCart);
-    };
-  }, [pathname]);
 
   const handleSearch = (e) => {
     e.preventDefault();

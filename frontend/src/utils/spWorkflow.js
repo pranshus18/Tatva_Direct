@@ -1,4 +1,7 @@
+import { countServiceProviderCartDraft } from './cartBadge';
+
 const WORKFLOW_STORAGE_KEY = 'spBoqWorkflow';
+const WORKFLOW_OWNER_KEY = 'spBoqWorkflowOwnerId';
 
 export const PROCUREMENT_STEPS = [
   { id: 'boq', path: '/boq-normalize', label: 'BOQ' },
@@ -14,6 +17,32 @@ export const PROCUREMENT_PATHS = new Set([
   '/voice',
   '/transport-suggestion'
 ]);
+
+export function clearSpWorkflowStorage() {
+  try {
+    localStorage.removeItem(WORKFLOW_STORAGE_KEY);
+    localStorage.removeItem(WORKFLOW_OWNER_KEY);
+    localStorage.removeItem('lastBoqId');
+  } catch {
+    // Ignore storage errors.
+  }
+}
+
+export function ensureSpWorkflowOwner(userId) {
+  const nextOwner = userId != null ? String(userId).trim() : '';
+  if (!nextOwner) return false;
+
+  try {
+    const currentOwner = localStorage.getItem(WORKFLOW_OWNER_KEY);
+    if (currentOwner && currentOwner !== nextOwner) {
+      clearSpWorkflowStorage();
+    }
+    localStorage.setItem(WORKFLOW_OWNER_KEY, nextOwner);
+    return currentOwner && currentOwner !== nextOwner;
+  } catch {
+    return false;
+  }
+}
 
 export function readSpWorkflow() {
   try {
@@ -37,7 +66,7 @@ export function getWorkflowStepStatus() {
     discover: items.length > 0,
     supplier: Object.keys(vendors).length > 0,
     substitution: subs.length > 0 || Object.keys(vendors).length > 0,
-    cart: items.length > 0,
+    cart: items.some((item) => Number(item?.quantity) > 0),
     po: false
   };
 }
@@ -45,9 +74,23 @@ export function getWorkflowStepStatus() {
 export function getCartItemCount() {
   const wf = readSpWorkflow();
   const items = Array.isArray(wf?.normalizedItems) ? wf.normalizedItems : [];
-  return items.reduce((sum, it) => sum + (Number(it?.quantity) || 1), 0);
+  const fromItems = items.reduce((sum, it) => {
+    const qty = Number(it?.quantity);
+    if (!Number.isFinite(qty) || qty <= 0) return sum;
+    return sum + qty;
+  }, 0);
+  if (fromItems > 0) return fromItems;
+
+  const draft = wf?.cartDraft;
+  if (draft && typeof draft === 'object') {
+    return countServiceProviderCartDraft(draft);
+  }
+
+  return 0;
 }
 
 export function isProcurementPath(pathname) {
   return PROCUREMENT_PATHS.has(pathname);
 }
+
+export { WORKFLOW_STORAGE_KEY, WORKFLOW_OWNER_KEY };

@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
+import { refreshServiceProviderCartCount } from '../utils/spCartBadge';
 import { formatRupeePerUnit } from '../utils/formatRupee';
 import {
   getGeolocationErrorMessage,
@@ -449,6 +450,7 @@ const ProductDiscovery = () => {
       setProjectPickerOpen(false);
       setPendingProduct(null);
       setCartAddedByProductId((prev) => ({ ...prev, [String(productId)]: true }));
+      await refreshServiceProviderCartCount({ immediate: true });
       window.dispatchEvent(new Event('sp-workflow-updated'));
       toast.success('Added to cart');
       setTimeout(() => {
