@@ -150,6 +150,7 @@ function TransportPickCard({ provider, selected, onPick, disabled = false, disab
         {overCapacity ? <span style={{ color: '#b45309' }}>Over capacity — split shipment · </span> : null}
         {provider.capacity_kg != null ? <span>Capacity: {provider.capacity_kg} kg · </span> : null}
         {provider.etd ? <span>ETD: {provider.etd} · </span> : null}
+        {provider.transit_days != null ? <span>Transit: {provider.transit_days} day(s) · </span> : null}
         {provider.rating != null && provider.rating !== '' ? <span>Rating: {provider.rating} · </span> : null}
         {provider.cod != null ? <span>COD: {String(provider.cod)}</span> : null}
       </div>
@@ -282,7 +283,7 @@ const TransportSuggestion = () => {
       setLogisticsError('');
       try {
         const token = localStorage.getItem('token');
-        const res = await fetch(resolveApiPath('/api/logistics/service-providers'), {
+        const res = await fetch(resolveApiPath('/api/logistics/quote-transport-groups'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -527,10 +528,16 @@ const TransportSuggestion = () => {
         fareValue,
         rate: fareValue ?? p?.rate ?? p?.estimated_fare ?? p?.fare_value ?? null,
         etd: p?.etd ?? null,
+        transit_days: p?.transit_days ?? null,
+        transitDays: p?.transit_days ?? null,
+        transportGroupId: sh?.transportGroupId || id,
+        pickupPincode: sh?.pickupPincode ?? g?.pickupPincode ?? null,
+        booking_hints: sh?.logistics?.bookingHints ?? null,
         source: p?.source ?? null,
         rating: p?.rating ?? null,
         cod: p?.cod ?? null,
-        weightKg: sh?.weightKg ?? null,
+        weightKg: sh?.weightKg ?? sh?.logistics?.aggregatedWeightKg ?? null,
+        lane: sh?.lane ?? sh?.logistics?.lane ?? null,
         pickup_lat: sh?.pickupLat ?? null,
         pickup_lng: sh?.pickupLng ?? null,
         delivery_lat: sh?.deliveryLat ?? null,
@@ -750,7 +757,30 @@ const TransportSuggestion = () => {
                   </div>
                   <div style={{ fontSize: '0.82rem', color: '#475569', marginBottom: '0.5rem' }}>
                     Pickup pincode: <strong>{shipment.pickupPincode || '—'}</strong> · Chargeable weight:{' '}
-                    <strong>{shipment.weightKg} kg</strong>
+                    <strong>
+                      {shipment.logistics?.aggregatedWeightKg ?? shipment.weightKg ?? '—'} kg
+                    </strong>
+                    {shipment.lane || shipment.logistics?.lane ? (
+                      <>
+                        {' '}
+                        · Lane: <strong>{shipment.lane || shipment.logistics.lane}</strong>
+                      </>
+                    ) : null}
+                    {shipment.distanceKm != null || shipment.logistics?.distanceKm != null ? (
+                      <>
+                        {' '}
+                        · Distance:{' '}
+                        <strong>
+                          {Number(shipment.distanceKm ?? shipment.logistics?.distanceKm).toFixed(1)} km
+                        </strong>
+                      </>
+                    ) : null}
+                    {shipment.logistics?.itemCount != null ? (
+                      <>
+                        {' '}
+                        · Items: <strong>{shipment.logistics.itemCount}</strong>
+                      </>
+                    ) : null}
                     {shipment.logistics?.mode ? (
                       <>
                         {' '}
@@ -758,6 +788,23 @@ const TransportSuggestion = () => {
                       </>
                     ) : null}
                   </div>
+                  {Array.isArray(shipment.logistics?.messages) && shipment.logistics.messages.length > 0 ? (
+                    <div
+                      style={{
+                        fontSize: '0.78rem',
+                        color: '#475569',
+                        background: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 8,
+                        padding: '0.4rem 0.55rem',
+                        marginBottom: '0.45rem'
+                      }}
+                    >
+                      {shipment.logistics.messages.map((msg, idx) => (
+                        <div key={`msg-${idx}`}>{msg}</div>
+                      ))}
+                    </div>
+                  ) : null}
                   {shipment.pickupOutletName ? (
                     <div style={{ fontSize: '0.78rem', color: '#475569', marginBottom: '0.25rem' }}>
                       Warehouse: <strong>{shipment.pickupOutletName}</strong>

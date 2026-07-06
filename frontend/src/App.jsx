@@ -122,6 +122,7 @@ const AdminFinance = safeLazy(() => import('./pages/AdminFinance'), 'Admin Finan
 const AdminWallet = safeLazy(() => import('./pages/AdminWallet'), 'Admin Wallet page');
 const AdminSupplyChain = safeLazy(() => import('./pages/AdminSupplyChain'), 'Admin Supply Chain page');
 const BOQNormalize = safeLazy(() => import('./pages/BOQNormalize'), 'BOQ Normalize page');
+const BoqListing = safeLazy(() => import('./pages/BoqListing'), 'BOQ Listing page');
 const VendorSelect = safeLazy(() => import('./pages/VendorSelect'), 'Vendor Select page');
 const Substitution = safeLazy(() => import('./pages/Substitution'), 'Substitution page');
 const CreatePO = safeLazy(() => import('./pages/CreatePO'), 'Create PO page');
@@ -619,6 +620,14 @@ function App() {
                 />
               </ServiceProviderRoute>
             } 
+          />
+          <Route
+            path="boqs"
+            element={
+              <ServiceProviderRoute user={user}>
+                <BoqListing />
+              </ServiceProviderRoute>
+            }
           />
           <Route
             path="portal-theme"

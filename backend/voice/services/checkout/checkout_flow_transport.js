@@ -61,7 +61,7 @@ export async function loadTransportQuotes(toolCtx, memory) {
   let logisticsRes;
   try {
     logisticsRes = await client.post(
-    '/api/logistics/service-providers',
+    '/api/logistics/quote-transport-groups',
     {
       poGroups: checkout.poGroups,
       shippingAddress: checkout.shippingAddress,
@@ -83,7 +83,7 @@ export async function loadTransportQuotes(toolCtx, memory) {
   const shipments = Array.isArray(logisticsRes.data?.shipments) ? logisticsRes.data.shipments : [];
   const optionsByVendor = {};
   for (const sh of shipments) {
-    const vendorId = String(sh.vendorId || sh.supplierId || '');
+    const vendorId = String(sh.transportGroupId || sh.vendorId || sh.supplierId || '');
     const providers = providersFromShipment(sh);
     optionsByVendor[vendorId] = {
       vendorName: sh.vendorName || sh.supplier,
@@ -105,7 +105,7 @@ export async function loadTransportQuotes(toolCtx, memory) {
 
   const vendorLines = [];
   for (const sh of shipments) {
-    const vendorId = String(sh.vendorId || sh.supplierId || '');
+    const vendorId = String(sh.transportGroupId || sh.vendorId || sh.supplierId || '');
     const vendorName = sh.vendorName || sh.supplier || voiceText(memory, 'transport.vendorFallback');
     const providers = providersFromShipment(sh).length
       ? providersFromShipment(sh)

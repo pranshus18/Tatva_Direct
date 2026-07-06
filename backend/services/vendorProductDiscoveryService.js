@@ -219,7 +219,16 @@ export async function reconcileWithSupplierOffers({
               supplier_id: supplier.id,
               price: Number.isFinite(parseFloat(row.price)) ? parseFloat(row.price) : 0,
               stock: Number.isFinite(parseInt(row.stock, 10)) ? parseInt(row.stock, 10) : 0,
-              location: (row.location || meta.location || '').toString(),
+              // Never fall back to the shared catalog product's `location` (`meta.location`) here:
+              // that field belongs to whichever supplier originally created this catalog listing,
+              // which can be a COMPLETELY DIFFERENT supplier than the one on this offer row. Doing
+              // so previously made every supplier who left their own offer location blank silently
+              // "inherit" the catalog creator's address/city — e.g. a Pune-based seller showing up
+              // as if they ship from the catalog creator's Bengaluru address, with a matching (and
+              // very wrong) short "distance from your project site". Leave it blank instead, so
+              // downstream ranking falls back to THIS supplier's own registered account/branch
+              // address (see vendorRankingHelpersService.supplierLocationCandidates).
+              location: (row.location || '').toString(),
               outlet_id: row.outlet_id || null,
               status: row.status,
               sharedProductStatus: meta.status || null,

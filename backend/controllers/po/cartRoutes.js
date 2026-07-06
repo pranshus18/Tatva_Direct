@@ -4,6 +4,7 @@ import {
   buildPoCartDraftFromSavePayload,
   getContractErrorMessage,
   mergeTransportSelection,
+  mergeOrAppendCartGroupItem,
   appendDiscoveryItemAsNewProject,
   loadAdminBrandTerminalRoleMap,
   normalizePoCartDraft,
@@ -314,10 +315,13 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
           if (enrichedShipping.location) nextProject.location = enrichedShipping.location;
           if (enrichedShipping.siteGeo) nextProject.siteGeo = enrichedShipping.siteGeo;
         }
+        // Same product added again to the SAME project: increase the existing line's quantity
+        // instead of appending a second row for it. A different project always gets its own line
+        // (handled below in the "new project" branch), so this only dedupes within one project.
         return {
           ...group,
           boqProject: nextProject,
-          items: [...existingItems, discoveryItem]
+          items: mergeOrAppendCartGroupItem(existingItems, discoveryItem)
         };
       });
       if (!matched) {

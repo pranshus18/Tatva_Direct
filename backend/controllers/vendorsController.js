@@ -266,7 +266,9 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         distanceBySupplier,
         distanceSourceLocationBySupplier,
         distanceByOutletId,
-        distanceSourceLocationByOutletId
+        distanceSourceLocationByOutletId,
+        distanceByLocationText,
+        distanceSourceLocationByLocationText
       } = await computeSupplierDistances({
         supabase,
         supplierProducts,
@@ -291,6 +293,8 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         distanceSourceLocationBySupplier,
         distanceByOutletId,
         distanceSourceLocationByOutletId,
+        distanceByLocationText,
+        distanceSourceLocationByLocationText,
         boqProjectCity,
         serviceProviderCity,
         boqProjectState,

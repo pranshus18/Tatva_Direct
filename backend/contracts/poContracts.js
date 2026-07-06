@@ -121,7 +121,12 @@ const perOrderTransportRowSchema = z.object({
   trackingUrl: z.string().url().optional().nullable(),
   transportNotes: z.string().max(1000).optional().nullable(),
   /** Quoted courier charge (INR) from logistics — stored on the order for receipts/invoices. */
-  quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable()
+  quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable(),
+  /** From quote provider — used with schedule-courier when order has expected_delivery_date. */
+  transitDays: z.coerce.number().int().nonnegative().optional().nullable(),
+  transportGroupId: z.string().max(240).optional().nullable(),
+  pickupPincode: z.string().max(6).optional().nullable(),
+  etd: z.string().max(120).optional().nullable()
 });
 
 export const poTransportConfirmSchema = z
@@ -143,6 +148,10 @@ export const poTransportConfirmSchema = z
     trackingNumber: z.string().max(120).optional().nullable(),
     trackingUrl: z.string().url().optional().nullable(),
     transportNotes: z.string().max(1000).optional().nullable(),
+    transitDays: z.coerce.number().int().nonnegative().optional().nullable(),
+    transportGroupId: z.string().max(240).optional().nullable(),
+    pickupPincode: z.string().max(6).optional().nullable(),
+    etd: z.string().max(120).optional().nullable(),
     perOrderTransport: z.array(perOrderTransportRowSchema).optional(),
     /** When not using perOrderTransport and exactly one order — same as per-row quoted amount. */
     quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable()

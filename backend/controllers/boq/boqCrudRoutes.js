@@ -12,6 +12,60 @@ export function registerBoqCrudRoutes(ctx) {
     supabase
   } = ctx;
 
+router.get('/', authenticateToken, isServiceProvider, async (req, res) => {
+  try {
+    let { data: boqs, error: boqError } = await supabase
+      .from('boqs')
+      .select(`
+        *,
+        items:boq_items (id)
+      `)
+      .eq('service_provider_id', req.userId)
+      .order('created_at', { ascending: false });
+
+    if (boqError) {
+      const { data: boqsWithoutItems, error: boqError2 } = await supabase
+        .from('boqs')
+        .select('*')
+        .eq('service_provider_id', req.userId)
+        .order('created_at', { ascending: false });
+
+      if (boqError2) {
+        throw boqError2;
+      }
+
+      boqs = boqsWithoutItems || [];
+      for (const boq of boqs) {
+        const { data: items } = await supabase
+          .from('boq_items')
+          .select('id')
+          .eq('boq_id', boq.id);
+        boq.items = items || [];
+      }
+    }
+
+    const formatted = (boqs || []).map((boq) => ({
+      id: boq.id,
+      name: boq.name,
+      itemCount: Array.isArray(boq.items) ? boq.items.length : 0,
+      createdAt: boq.created_at,
+      status: boq.status,
+      totalValue: parseFloat(boq.total_value || 0)
+    }));
+
+    return res.json({
+      status: 'success',
+      boqs: formatted
+    });
+  } catch (error) {
+    console.error('List BOQs error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to fetch BOQs'
+    });
+  }
+});
+
 router.get('/:id/items', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const { id } = req.params;

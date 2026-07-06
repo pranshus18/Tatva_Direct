@@ -251,6 +251,41 @@ export function consolidateDuplicateProductLines(boqGroups) {
   return out.filter((g) => (g.items || []).length > 0);
 }
 
+/**
+ * Add an item to a cart project's line list: if a line for the SAME product already exists in
+ * this project, increase its quantity instead of appending a duplicate row. A different project
+ * (a different `items` array entirely) always keeps its own separate line — this only dedupes
+ * within one project's item list.
+ */
+export function mergeOrAppendCartGroupItem(existingItems, newItem) {
+  const items = Array.isArray(existingItems) ? existingItems : [];
+  const productId = String(newItem?.productId || '').trim();
+  const addQty = Math.max(0, Math.floor(Number(newItem?.quantity) || 0));
+  if (!productId) return [...items, newItem];
+
+  const existingIndex = items.findIndex((it) => String(it?.productId || '').trim() === productId);
+  if (existingIndex < 0) return [...items, newItem];
+
+  return items.map((it, idx) => {
+    if (idx !== existingIndex) return it;
+    return {
+      ...it,
+      quantity: Math.min(MAX_CART_ITEM_QUANTITY, (Number(it.quantity) || 0) + addQty)
+    };
+  });
+}
+
+/**
+ * Same idea as `mergeOrAppendCartGroupItem` but for the supplier upstream cart's
+ * `selectedMine` map (`{ [supplierProductId]: quantity }`): adding the same product to the
+ * same project increases the existing quantity instead of overwriting it.
+ */
+export function mergeUpstreamSelectedMineQuantity(existingSelectedMine, key, addQty) {
+  const existingQuantity = Number(existingSelectedMine?.[key]) || 0;
+  const delta = Math.max(0, Math.floor(Number(addQty) || 0));
+  return Math.min(MAX_CART_ITEM_QUANTITY, existingQuantity + delta);
+}
+
 export function isDiscoveryBoqGroup(group) {
   if (!group || typeof group !== 'object') return false;
   if (group.boqProject?.source === 'product_discovery') return true;

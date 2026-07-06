@@ -61,7 +61,8 @@ import {
   buildTransportGroupId,
   buildShippingAddressKey,
   consolidatePoTransportGroups,
-  formatShippingAddressLabel
+  formatShippingAddressLabel,
+  mergeUpstreamSelectedMineQuantity
 } from '../po/shared/poHelpers.js';
 import {
   normalizeRequiredDateForUpstream,
@@ -1312,7 +1313,8 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       checkoutSessionId
     } = payloadInput;
 
-    await expireStaleReservations();
+    // Scoped to this buyer's own holds before consuming them for the new order.
+    await expireStaleReservations({ buyerUserId: req.userId });
 
     const { expectedDeliveryDate, error: requiredDateError } =
       normalizeRequiredDateForUpstream(requiredDate);
@@ -1912,12 +1914,20 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         return res.status(404).json({ status: 'error', message: 'Selected project not found' });
       }
       const existing = buildUpstreamProject(currentProjects[idx]);
+      // Same product added again to the SAME project: increase the existing quantity instead of
+      // overwriting it. A different project always gets its own entry (the `else` branch below
+      // creates a brand-new project), so this only merges quantities within one project.
+      const mergedQuantity = mergeUpstreamSelectedMineQuantity(
+        existing.selectedMine,
+        mineSupplierProductId,
+        quantity
+      );
       updatedProject = applyShippingToUpstreamProject(
         {
           ...existing,
           selectedMine: {
             ...(existing.selectedMine || {}),
-            [mineSupplierProductId]: quantity
+            [mineSupplierProductId]: mergedQuantity
           }
         },
         enrichedShipping

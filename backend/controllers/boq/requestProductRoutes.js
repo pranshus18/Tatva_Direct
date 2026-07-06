@@ -2,24 +2,26 @@
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 import { boqRequestProductSchema } from '../../contracts/boqContracts.js';
 import { supabase } from '../../config/supabase.js';
-import { insertNotifications } from '../../repositories/notificationsRepository.js';
-import { findAdmins } from '../../repositories/usersRepository.js';
+import { findUserBasicById } from '../../repositories/usersRepository.js';
+import {
+  notifyAdminsAboutProductRequest,
+  notifyTerminalSuppliersAboutProductRequest,
+  resolveBrandAndTerminalRoleForProductRequest
+} from '../../services/boqProductRequestNotificationService.js';
 
 export function registerBoqRequestProductRoutes(ctx) {
   const {
     router,
     authenticateToken,
     isServiceProvider,
-    supabase,
-    upload
+    supabase
   } = ctx;
 
 router.post('/request-product', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const payload = parseWithSchema(boqRequestProductSchema, req.body || {});
-    const { name, category, unit, description, boqId } = payload;
+    const { name, category, unit, description, boqId, brand } = payload;
 
-    // Optionally validate that BOQ (if provided) belongs to this service provider
     if (boqId) {
       const { data: boq, error: boqError } = await supabase
         .from('boqs')
@@ -35,9 +37,6 @@ router.post('/request-product', authenticateToken, isServiceProvider, async (req
       }
     }
 
-    // Create a lightweight catalog product entry that will be reviewed by admin.
-    // Price/stock/location are set to safe defaults; suppliers will provide their
-    // own values later via supplier portal.
     const { data: newProduct, error: productError } = await supabase
       .from('products')
       .insert({
@@ -72,50 +71,55 @@ router.post('/request-product', authenticateToken, isServiceProvider, async (req
       category: newProduct.category
     });
 
-    // Notify all admins that a new product is pending approval
-    const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
-    const { data: admins } = await findAdmins(adminEmail, supabase);
+    const { data: serviceProvider } = await findUserBasicById(req.userId, supabase);
 
-    if (admins && admins.length > 0) {
-      // Fetch service provider details for richer notification content
-      const { data: serviceProvider } = await findUserBasicById(req.userId, supabase);
+    let adminsNotified = 0;
+    let suppliersNotified = 0;
+    let resolvedBrand = null;
+    let terminalRole = null;
 
-      const notifications = admins.map((admin) => ({
-        user_id: admin.id,
-        type: 'product_approval',
-        title: `New Product Requested by Service Provider: ${newProduct.name}`,
-        message: `${serviceProvider?.name || 'A service provider'} (${serviceProvider?.company || serviceProvider?.email || ''}) has requested a new product "${newProduct.name}" in category "${newProduct.category}". Please review and approve it so suppliers can add their offers.`,
-        related_product_id: newProduct.id,
-        related_supplier_id: null,
-        metadata: {
-          productId: newProduct.id,
-          productName: newProduct.name,
-          productCategory: newProduct.category,
-          productUnit: newProduct.unit,
-          requestedByServiceProviderId: req.userId,
-          requestedByServiceProviderName: serviceProvider?.name,
-          requestedByServiceProviderCompany: serviceProvider?.company,
-          requestedByServiceProviderEmail: serviceProvider?.email,
-          source: 'service_provider_boq_request',
-          boqId: boqId || null
-        },
-        is_read: false
-      }));
+    try {
+      adminsNotified = await notifyAdminsAboutProductRequest({
+        db: supabase,
+        product: newProduct,
+        serviceProvider,
+        boqId: boqId || null,
+        adminEmail: process.env.ADMIN_EMAIL || 'admin@tatvadirect.com'
+      });
+    } catch (notifError) {
+      console.error('[BOQ Product Request] Failed to create admin notifications:', notifError);
+    }
 
-      try {
-        await insertNotifications(notifications, supabase);
-        console.log(
-          `[BOQ Product Request] Created ${notifications.length} admin notification(s) for requested product ${newProduct.id}`
-        );
-      } catch (notifError) {
-        console.error('[BOQ Product Request] Failed to create admin notifications:', notifError);
-      }
+    try {
+      const resolved = await resolveBrandAndTerminalRoleForProductRequest(supabase, name, brand);
+      resolvedBrand = resolved.brandName;
+      terminalRole = resolved.terminalRole;
+      const supplierResult = await notifyTerminalSuppliersAboutProductRequest({
+        db: supabase,
+        product: newProduct,
+        brandName: resolvedBrand,
+        terminalRole,
+        serviceProvider
+      });
+      suppliersNotified = supplierResult.notifiedCount;
+      console.log(
+        `[BOQ Product Request] Notified ${suppliersNotified} terminal supplier(s) for "${newProduct.name}" (brand: ${resolvedBrand || 'n/a'}, role: ${terminalRole || 'none configured'})`
+      );
+    } catch (supplierNotifError) {
+      console.error('[BOQ Product Request] Failed to notify terminal suppliers:', supplierNotifError);
     }
 
     return res.status(201).json({
       status: 'success',
-      message: 'Product request submitted and is pending admin approval',
-      product: newProduct
+      message:
+        suppliersNotified > 0
+          ? `Product request submitted. ${suppliersNotified} terminal supplier${suppliersNotified === 1 ? '' : 's'} notified to add this product. Admin review is pending.`
+          : 'Product request submitted and is pending admin approval.',
+      product: newProduct,
+      suppliersNotified,
+      adminsNotified,
+      brand: resolvedBrand,
+      terminalRole
     });
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {

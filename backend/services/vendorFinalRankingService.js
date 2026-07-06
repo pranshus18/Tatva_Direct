@@ -1,10 +1,6 @@
 import { computeLocationScore } from './vendorRankingScoringService.js';
 import { computeAvailableStock } from './checkoutInventoryReservationService.js';
-
-const isPlaceholderLocationText = (value) => {
-  const t = String(value || '').trim().toLowerCase();
-  return !t || t === 'location not specified' || t === 'not specified' || t === 'n/a' || t === 'na' || t === '-';
-};
+import { compactLocationText, isPlaceholderLocationText } from './vendorRankingHelpersService.js';
 
 export function mapSupplierProductsToRankedVendors({
   supplierProducts,
@@ -14,6 +10,8 @@ export function mapSupplierProductsToRankedVendors({
   distanceSourceLocationBySupplier,
   distanceByOutletId = {},
   distanceSourceLocationByOutletId = {},
+  distanceByLocationText = {},
+  distanceSourceLocationByLocationText = {},
   boqProjectCity,
   serviceProviderCity,
   boqProjectState,
@@ -42,19 +40,28 @@ export function mapSupplierProductsToRankedVendors({
     const productsToEmit = includeAllVariants ? sortedProducts : sortedProducts.slice(0, 1);
     productsToEmit.forEach((bestProduct) => {
       if (!bestProduct) return;
-      // Prefer the distance/location tied to THIS specific offer's outlet (when the supplier
-      // set one) over the supplier-wide fallback — two offers from the same supplier account
-      // can genuinely ship from different physical outlets, so they must not share one distance.
+      // Prefer the distance/location tied to THIS specific offer over the supplier-wide
+      // fallback — two offers from the same supplier account can genuinely ship from
+      // different physical locations, so they must not share one distance. Priority:
+      // 1) an exact outlet_id match, 2) this offer's own listed location text geocoded
+      // individually, 3) the supplier-wide fallback (account address / nearest outlet).
       const offerOutletId = bestProduct?.outlet_id || null;
       const hasExactOutletDistance = offerOutletId && distanceByOutletId[offerOutletId] != null;
+      const offerLocationKey = compactLocationText(bestProduct?.location).toLowerCase();
+      const hasOwnLocationDistance =
+        !hasExactOutletDistance && offerLocationKey && distanceByLocationText[offerLocationKey] != null;
       const distanceKm = siteGeoFromBoq
         ? hasExactOutletDistance
           ? distanceByOutletId[offerOutletId]
-          : supplierDistanceKm
+          : hasOwnLocationDistance
+            ? distanceByLocationText[offerLocationKey]
+            : supplierDistanceKm
         : null;
       const distanceSourceLocation = hasExactOutletDistance
         ? distanceSourceLocationByOutletId[offerOutletId] || null
-        : supplierDistanceSourceLocation;
+        : hasOwnLocationDistance
+          ? distanceSourceLocationByLocationText[offerLocationKey] || null
+          : supplierDistanceSourceLocation;
       // Show THIS offer's own listed location/pincode (not a value borrowed from a different
       // product of the same supplier) — a supplier can list products from different outlets,
       // and the card must always describe the specific item being shown.

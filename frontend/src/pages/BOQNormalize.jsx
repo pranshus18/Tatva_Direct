@@ -208,9 +208,10 @@ const BOQNormalize = ({ onComplete }) => {
     try {
       const body = {
         name: item.normalizedName || item.rawName,
-        category: item.category || '',
+        category: item.category || 'other',
         unit: item.unit || 'nos',
         description: item.rawName || '',
+        brand: item.brand || item.normalizedName || item.rawName || '',
         boqId: boqId || null
       };
 
@@ -989,7 +990,7 @@ const BOQNormalize = ({ onComplete }) => {
                 <div className="modal-body">
                   <p style={{ fontSize: '0.9rem', color: '#4b5563', marginBottom: '0.75rem' }}>
                     You are requesting a new catalog product based on this BOQ item. Admin will review and approve it,
-                    then all suppliers will be notified so they can add their offers.
+                    and terminal suppliers in the supply chain will be notified that a customer is looking for this product.
                   </p>
                   <div style={{ fontSize: '0.85rem', color: '#374151', marginBottom: '0.75rem' }}>
                     <div><strong>BOQ Item:</strong> {requestingProductForItem.rawName}</div>

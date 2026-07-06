@@ -17,6 +17,7 @@ import SpTopBar from './SpTopBar';
 const routePrefetchers = {
   '/dashboard': () => import('@/pages/ServiceProviderDashboard'),
   '/boq-normalize': () => import('@/pages/BOQNormalize'),
+  '/boqs': () => import('@/pages/BoqListing'),
   '/product-discovery': () => import('@/pages/ProductDiscovery'),
   '/voice': () => import('@/pages/VoiceCommerce'),
   '/supplier-select': () => import('@/pages/VendorSelect'),

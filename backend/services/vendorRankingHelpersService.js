@@ -77,10 +77,11 @@ export const compactLocationText = (value) =>
     .replace(/\s+/g, ' ')
     .replace(/\s*,\s*/g, ', ');
 
-const isPlaceholderLocation = (value) => {
+export const isPlaceholderLocationText = (value) => {
   const t = compactLocationText(value).toLowerCase();
   return !t || t === 'location not specified' || t === 'not specified' || t === 'n/a' || t === 'na' || t === '-';
 };
+const isPlaceholderLocation = isPlaceholderLocationText;
 
 export const uniqueLocationList = (values = []) => [...new Set(values.map(compactLocationText).filter(Boolean))];
 

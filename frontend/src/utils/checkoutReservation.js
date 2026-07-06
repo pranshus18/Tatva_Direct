@@ -206,6 +206,24 @@ export async function fetchUpstreamCheckoutReservationStatus({ token, checkoutSe
   });
 }
 
+/**
+ * Order-independent signature for a set of reservation lines. Grouping/ranking effects can
+ * legitimately re-run and rebuild the same lines in a different order (e.g. once an async
+ * shipping-address lookup resolves); using a plain JSON.stringify of the unsorted array would
+ * treat that as "the cart changed" and trigger a real release + re-reserve of an identical hold.
+ */
+export function buildStableReservationLineSignature(lines = []) {
+  const normalized = (Array.isArray(lines) ? lines : []).map((line) => ({
+    supplierProductId: String(line?.supplierProductId || '').trim(),
+    supplierId: String(line?.supplierId || '').trim(),
+    quantity: Number(line?.quantity) || 0
+  }));
+  normalized.sort((a, b) =>
+    `${a.supplierProductId}|${a.supplierId}`.localeCompare(`${b.supplierProductId}|${b.supplierId}`)
+  );
+  return JSON.stringify(normalized);
+}
+
 export function buildPoReservationLinesFromGroups(poGroups = []) {
   return (Array.isArray(poGroups) ? poGroups : [])
     .flatMap((group) =>

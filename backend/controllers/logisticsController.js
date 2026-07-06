@@ -17,6 +17,7 @@ import {
   LOGISTICS_TRUCKING_MIN_WEIGHT_KG
 } from '../utils/logisticsQuotePolicy.js';
 import { classifyQuoteProvider, TRANSPORT_KIND } from '../utils/logisticsTransportIntent.js';
+import { mapShipmentToLogisticsQuoteBody } from '../utils/logisticsApiPayload.js';
 
 export { inferLogisticsCategory } from '../utils/logisticsQuotePolicy.js';
 
@@ -29,6 +30,18 @@ const LOGISTICS_BASE = String(process.env.LOGISTICS_MODULE_URL || 'http://localh
   /\/$/,
   ''
 );
+
+function quoteTransportGroupUrl() {
+  const explicit = String(process.env.LOGISTICS_QUOTE_TRANSPORT_GROUP_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  return `${LOGISTICS_BASE}/api/logistics/quote-transport-group`;
+}
+
+function quoteTransportGroupsUrl() {
+  const explicit = String(process.env.LOGISTICS_QUOTE_TRANSPORT_GROUPS_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  return `${LOGISTICS_BASE}/api/logistics/quote-transport-groups`;
+}
 
 const LOGISTICS_UPSTREAM_TIMEOUT_MS = Math.max(
   0,
@@ -815,6 +828,283 @@ async function fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups }) {
   return { shipments, deliveryAddressUsed };
 }
 
+function mapQuoteTransportGroupUpstreamResult(result = {}, groupMeta = {}) {
+  const providers = Array.isArray(result.providers)
+    ? result.providers.map((p) => normalizeProviderForUi(p))
+    : [];
+  const messages = Array.isArray(result.messages) ? result.messages : [];
+  const upstreamMsg = messages.length ? messages.join(' · ') : pickStr(result.message);
+
+  const logistics = {
+    success: Boolean(result.success) && providers.length > 0,
+    mode: result.lane === 'intracity' ? 'mixed' : 'courier',
+    requestedMode: null,
+    modeRecommendation: null,
+    message: upstreamMsg || null,
+    messages,
+    quoteNote: upstreamMsg || null,
+    apiVersion: result.api_version ?? result.apiVersion ?? null,
+    lane: result.lane ?? null,
+    laneReason: result.lane_reason ?? result.laneReason ?? null,
+    distanceKm: result.distance_km ?? result.distanceKm ?? null,
+    aggregated_weight_kg: result.aggregated_weight_kg ?? result.aggregatedWeightKg ?? null,
+    aggregatedWeightKg: result.aggregated_weight_kg ?? result.aggregatedWeightKg ?? null,
+    itemCount: result.item_count ?? result.itemCount ?? null,
+    modesQueried: result.modes_queried ?? result.modesQueried ?? null,
+    bookingHints: result.booking_hints ?? result.bookingHints ?? null,
+    providers
+  };
+
+  if (!logistics.success && !logistics.message) {
+    logistics.message =
+      providers.length === 0
+        ? 'No transport quotes were returned for this group.'
+        : null;
+  }
+
+  return {
+    vendorId: groupMeta.transportGroupId || groupMeta.vendorId,
+    transportGroupId: result.transportGroupId || groupMeta.transportGroupId || groupMeta.vendorId,
+    supplierVendorId: groupMeta.vendorId,
+    vendorName: groupMeta.vendorName,
+    pickupPincode: groupMeta.pickupPincode,
+    pickupAddressSummary: groupMeta.pickupAddressSummary,
+    pickupAddress: groupMeta.pickupAddress || null,
+    pickupOutletId: groupMeta.pickupOutletId || null,
+    pickupOutletName: groupMeta.pickupOutletName || null,
+    pickupLat: groupMeta.pickupLat ?? null,
+    pickupLng: groupMeta.pickupLng ?? null,
+    deliveryLat: groupMeta.deliveryLat ?? null,
+    deliveryLng: groupMeta.deliveryLng ?? null,
+    deliveryPincode: groupMeta.deliveryPincode,
+    weightKg: logistics.aggregatedWeightKg ?? groupMeta.weightKg ?? null,
+    lane: logistics.lane,
+    distanceKm: logistics.distanceKm,
+    itemCount: logistics.itemCount,
+    items: Array.isArray(groupMeta.items) ? groupMeta.items : [],
+    logistics
+  };
+}
+
+function pickStr(...vals) {
+  for (const v of vals) {
+    if (v === null || v === undefined) continue;
+    const s = String(v).trim();
+    if (s) return s;
+  }
+  return null;
+}
+
+async function postQuoteTransportGroupsUpstream(groups) {
+  const url = quoteTransportGroupsUrl();
+  let r = null;
+  let raw = '';
+  let json = {};
+
+  for (let attempt = 1; attempt <= LOGISTICS_UPSTREAM_MAX_RETRIES; attempt++) {
+    const fetchOpts = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ groups })
+    };
+    if (LOGISTICS_UPSTREAM_TIMEOUT_MS > 0) {
+      fetchOpts.signal = AbortSignal.timeout(LOGISTICS_UPSTREAM_TIMEOUT_MS);
+    }
+
+    r = await fetch(url, fetchOpts);
+    raw = await r.text();
+    json = parseFirstJsonObject(raw) || {};
+
+    const retryable = !r.ok && RETRYABLE_UPSTREAM_HTTP.has(r.status);
+    if (!retryable || attempt >= LOGISTICS_UPSTREAM_MAX_RETRIES) break;
+    await delay(450 * attempt);
+  }
+
+  return { r, raw, json, url };
+}
+
+/**
+ * Quote transport for each PO group via logistics module quote-transport-groups.
+ * Sends groups[] objects as-is (camelCase) with geocoded lat/lng when available.
+ */
+async function fetchQuoteTransportGroups({ poGroups, deliveryPincode, deliveryAddr }) {
+  const fallbackMetaByVendor = await loadFallbackSupplierPickupMeta(poGroups);
+
+  const shippingAddressPayload = applyPrimaryStreetLine({
+    line1: deliveryAddr.line1,
+    city: deliveryAddr.city,
+    state: deliveryAddr.state,
+    country: deliveryAddr.country,
+    pincode: deliveryPincode
+  });
+
+  const deliveryGeo = await resolveCoordsForAddress(
+    shippingAddressPayload,
+    `delivery|${deliveryPincode}|${addressGeocodeText(shippingAddressPayload)}`
+  );
+
+  const groupMetas = [];
+  const upstreamGroups = [];
+
+  for (const group of poGroups || []) {
+    const vendorId = group.vendorId;
+    const fallback = vendorId ? fallbackMetaByVendor[vendorId] : null;
+    const resolved = resolveGroupPickupMeta(group, fallback);
+    const pickupPincode = resolved.pincode;
+    let pickupAddress = resolved.pickupAddress;
+    if (pickupAddress) {
+      pickupAddress = applyPrimaryStreetLine(pickupAddress);
+      if (pickupPincode) pickupAddress = { ...pickupAddress, pincode: pickupPincode };
+    }
+    const summaryParts = [pickupAddress?.line1, pickupAddress?.city, pickupAddress?.state].filter(Boolean);
+    const summary =
+      pickupPincode && summaryParts.length
+        ? `${summaryParts.join(', ')} · PIN ${pickupPincode}`
+        : resolved.summary;
+
+    const groupShipping =
+      group.shippingAddress && typeof group.shippingAddress === 'object'
+        ? applyPrimaryStreetLine({
+            ...normalizeAddress(group.shippingAddress),
+            pincode: digitsPin6(group.shippingAddress.pincode) || deliveryPincode
+          })
+        : shippingAddressPayload;
+
+    let pickupGeo = null;
+    if (pickupAddress) {
+      pickupGeo = await resolveCoordsForAddress(
+        pickupAddress,
+        `pickup|${vendorId || ''}|${pickupPincode}|${addressGeocodeText(pickupAddress)}`
+      );
+    }
+
+    const weightKg = computeGroupWeightKg(group);
+    const category = weightKg === null ? 'general' : inferLogisticsCategory(group, weightKg);
+
+    const meta = {
+      vendorId,
+      transportGroupId: group.transportGroupId || vendorId,
+      vendorName: group.vendorName,
+      pickupPincode,
+      pickupAddressSummary: summary,
+      pickupAddress: pickupAddress || null,
+      pickupOutletId: group.pickupOutletId || null,
+      pickupOutletName: group.pickupOutletName || null,
+      pickupLat: pickupGeo?.lat ?? null,
+      pickupLng: pickupGeo?.lng ?? null,
+      deliveryLat: deliveryGeo?.lat ?? null,
+      deliveryLng: deliveryGeo?.lng ?? null,
+      deliveryPincode,
+      weightKg,
+      category,
+      items: Array.isArray(group.items) ? group.items : [],
+      shippingAddress: groupShipping,
+      quoteError: null
+    };
+
+    if (!pickupPincode) {
+      meta.quoteError =
+        'Supplier warehouse pincode is missing. Ask the supplier to complete their profile or outlet address (PIN / postal code).';
+    } else if (weightKg === null) {
+      meta.quoteError =
+        'Product weight is required for logistics quotes. Add valid weight in item specifications (for example: "Weight: 25 kg"), then retry.';
+    } else {
+      upstreamGroups.push(
+        mapShipmentToLogisticsQuoteBody(
+          {
+            ...meta,
+            supplierVendorId: meta.vendorId,
+            correlationId: meta.transportGroupId
+          },
+          groupShipping
+        )
+      );
+    }
+
+    groupMetas.push(meta);
+  }
+
+  let upstreamResults = [];
+  if (upstreamGroups.length > 0) {
+    try {
+      const { r, raw, json, url } = await postQuoteTransportGroupsUpstream(upstreamGroups);
+      if (!r.ok) {
+        const upstreamMsg =
+          pickStr(json.message, json.error, json.detail) ||
+          (raw.length > 0 && raw.length < 500 && !raw.trimStart().startsWith('<')
+            ? `Logistics API HTTP ${r.status}: ${raw.trim().slice(0, 400)}`
+            : `Logistics quote-transport-groups returned HTTP ${r.status}.`);
+        const errDetail = `URL: ${url} · ${upstreamMsg}`;
+        console.error('[logistics] quote-transport-groups upstream error:', errDetail);
+        for (const meta of groupMetas) {
+          if (!meta.quoteError) meta.quoteError = errDetail;
+        }
+      } else {
+        upstreamResults = Array.isArray(json.results)
+          ? json.results
+          : Array.isArray(json.groups)
+            ? json.groups
+            : Array.isArray(json)
+              ? json
+              : [];
+      }
+    } catch (e) {
+      const name = String(e?.name || '');
+      const errMsg =
+        name === 'TimeoutError' || name === 'AbortError'
+          ? 'Transport quote timed out. Retry, or raise LOGISTICS_UPSTREAM_TIMEOUT_MS on the server.'
+          : `${e?.message || 'Logistics service unreachable'}. Is LOGISTICS_MODULE_URL correct?`;
+      for (const meta of groupMetas) {
+        if (!meta.quoteError) meta.quoteError = errMsg;
+      }
+    }
+  }
+
+  const quotableMetas = groupMetas.filter((m) => !m.quoteError);
+  const shipments = groupMetas.map((meta) => {
+    if (meta.quoteError) {
+      return {
+        vendorId: meta.transportGroupId || meta.vendorId,
+        transportGroupId: meta.transportGroupId || meta.vendorId,
+        supplierVendorId: meta.vendorId,
+        vendorName: meta.vendorName,
+        pickupPincode: meta.pickupPincode,
+        pickupAddressSummary: meta.pickupAddressSummary,
+        pickupAddress: meta.pickupAddress,
+        pickupOutletId: meta.pickupOutletId,
+        pickupOutletName: meta.pickupOutletName,
+        pickupLat: meta.pickupLat,
+        pickupLng: meta.pickupLng,
+        deliveryLat: meta.deliveryLat,
+        deliveryLng: meta.deliveryLng,
+        deliveryPincode: meta.deliveryPincode,
+        weightKg: meta.weightKg,
+        items: meta.items,
+        logistics: {
+          success: false,
+          mode: 'courier',
+          message: meta.quoteError,
+          providers: []
+        }
+      };
+    }
+
+    const idx = quotableMetas.indexOf(meta);
+    const result = idx >= 0 ? upstreamResults[idx] || {} : {};
+    return mapQuoteTransportGroupUpstreamResult(result, meta);
+  });
+
+  const deliveryAddressUsed = {
+    line1: shippingAddressPayload.line1,
+    city: shippingAddressPayload.city,
+    state: shippingAddressPayload.state,
+    country: shippingAddressPayload.country,
+    pincode: deliveryPincode
+  };
+
+  return { shipments, deliveryAddressUsed };
+}
+
 router.options('/bridge-session/:id', (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -880,6 +1170,42 @@ router.post(
       res.status(500).json({
         status: 'error',
         message: error?.message || 'Failed to create logistics bridge session'
+      });
+    }
+  }
+);
+
+router.post(
+  '/quote-transport-groups',
+  authenticateToken,
+  isServiceProviderOrSupplier,
+  async (req, res) => {
+    try {
+      const body = req.body || {};
+      const { poGroups } = body;
+      if (!Array.isArray(poGroups) || poGroups.length === 0) {
+        return res.status(400).json({ status: 'error', message: 'poGroups array is required' });
+      }
+
+      const { deliveryAddr, deliveryPincode } = resolveDeliveryPincode(body);
+      if (!isAddressComplete(deliveryAddr) || !deliveryPincode) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Complete delivery address with a valid 6-digit pincode is required for logistics quotes.'
+        });
+      }
+
+      const result = await fetchQuoteTransportGroups({ poGroups, deliveryPincode, deliveryAddr });
+      res.json({
+        deliveryPincode,
+        deliveryAddress: result.deliveryAddressUsed,
+        shipments: result.shipments
+      });
+    } catch (error) {
+      console.error('[logistics] quote-transport-groups error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: error?.message || 'Failed to load transport group quotes'
       });
     }
   }

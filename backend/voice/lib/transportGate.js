@@ -20,7 +20,7 @@ export function listTransportVendorEntriesFromCheckout(checkout = {}) {
 
   return (checkout.shipments || [])
     .map((sh) => ({
-      vendorId: String(sh.vendorId || sh.supplierId || sh.vendor_id || ''),
+      vendorId: String(sh.transportGroupId || sh.vendorId || sh.supplierId || sh.vendor_id || ''),
       providers: providersFromShipment(sh)
     }))
     .filter((e) => e.vendorId);

@@ -1,4 +1,4 @@
-import { compactLocationText, uniqueLocationList } from './vendorRankingHelpersService.js';
+import { compactLocationText, isPlaceholderLocationText, uniqueLocationList } from './vendorRankingHelpersService.js';
 import {
   distanceKmForRanking,
   geocodeIndianAddress,
@@ -13,10 +13,19 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
   const distanceSourceLocationBySupplier = {};
   const distanceByOutletId = {};
   const distanceSourceLocationByOutletId = {};
+  const distanceByLocationText = {};
+  const distanceSourceLocationByLocationText = {};
 
   for (const sid of supplierIds) distanceBySupplier[sid] = null;
   if (!siteGeoFromBoq || supplierIds.length === 0) {
-    return { distanceBySupplier, distanceSourceLocationBySupplier, distanceByOutletId, distanceSourceLocationByOutletId };
+    return {
+      distanceBySupplier,
+      distanceSourceLocationBySupplier,
+      distanceByOutletId,
+      distanceSourceLocationByOutletId,
+      distanceByLocationText,
+      distanceSourceLocationByLocationText
+    };
   }
 
   // Each individual offer (supplier_products row) can carry its own `outlet_id`, which is the
@@ -73,6 +82,35 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
       return null;
     }
   };
+
+  // A single supplier account can list the SAME product from multiple different physical
+  // locations (e.g. one offer shipped from an HSR Layout outlet, another from a Pune outlet),
+  // each carrying its own free-text `location` on the offer/listing itself. When an offer has
+  // no resolvable `outlet_id` distance, we must geocode THAT OFFER'S OWN listed location and
+  // never let it silently inherit a supplier-wide distance computed from a *different* offer's
+  // (or the account's) address — otherwise two offers hundreds of km apart end up showing the
+  // exact same "~X km from your project site" figure.
+  const offerLocationTexts = new Set();
+  for (const sid of supplierIds) {
+    for (const product of supplierProducts[sid]?.products || []) {
+      const hasOutletId = !!product?.outlet_id;
+      if (hasOutletId && distanceByOutletId[product.outlet_id] != null) continue;
+      const locText = compactLocationText(product?.location);
+      if (!locText || isPlaceholderLocationText(locText)) continue;
+      offerLocationTexts.add(locText);
+    }
+  }
+
+  for (const locText of offerLocationTexts) {
+    const key = locText.toLowerCase();
+    const geo = await geocodeCached(locText);
+    if (!geo || typeof geo.lat !== 'number' || typeof geo.lng !== 'number') continue;
+    const [routeKm] = await getDrivingDistanceMatrixKm(siteGeoFromBoq, [geo]);
+    const km = distanceKmForRanking(siteGeoFromBoq, geo, routeKm);
+    if (km == null) continue;
+    distanceByLocationText[key] = km;
+    distanceSourceLocationByLocationText[key] = locText;
+  }
 
   const { data: outletRows } = await supabase
     .from('outlets')
@@ -134,5 +172,18 @@ export async function computeSupplierDistances({ supabase, supplierProducts, sit
     distanceSourceLocationBySupplier[sid] = matchedCandidate.locText;
   }
 
-  return { distanceBySupplier, distanceSourceLocationBySupplier, distanceByOutletId, distanceSourceLocationByOutletId };
+  return {
+    distanceBySupplier,
+    distanceSourceLocationBySupplier,
+    distanceByOutletId,
+    distanceSourceLocationByOutletId,
+    distanceByLocationText,
+    distanceSourceLocationByLocationText
+  };
 }
+
+
+
+
+
+

@@ -2,6 +2,7 @@
 import {
   bookCourierCheckout,
   bookTrucking,
+  scheduleCourier,
   getContractErrorMessage,
   logger,
   parseWithSchema,
@@ -17,6 +18,7 @@ import {
   resolveBookingIntent,
   TRANSPORT_KIND
 } from '../../utils/logisticsTransportIntent.js';
+import { getSupplierPickupMeta } from '../../utils/pickupPincode.js';
 
 export function registerPoTransportRoutes(ctx) {
   const {
@@ -86,6 +88,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         total_amount,
         supplier_id,
         service_provider_id,
+        expected_delivery_date,
         order_items (
           id,
           product_id,
@@ -109,6 +112,19 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         message: 'Some orders were not found for this service provider',
         missingOrderIds: missingIds
       });
+    }
+
+    const supplierIds = [...new Set((orders || []).map((row) => row.supplier_id).filter(Boolean))];
+    const pickupPincodeBySupplierId = {};
+    if (supplierIds.length > 0) {
+      const { data: supplierRows } = await supabase
+        .from('users')
+        .select('id, address, profile')
+        .in('id', supplierIds)
+        .eq('user_type', 'supplier');
+      for (const row of supplierRows || []) {
+        pickupPincodeBySupplierId[row.id] = getSupplierPickupMeta(row).pincode || '';
+      }
     }
 
     const rowContexts = [];
@@ -164,6 +180,22 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       const deliveryLng = pick?.deliveryLng ?? (isSingleRoot ? rootDeliveryLng : null);
       const truckingCarrier = pick?.carrier ?? (isSingleRoot ? rootCarrier : null);
       const truckingMatter = pick?.matter ?? (isSingleRoot ? rootMatter : null);
+      const transitDaysRaw = pick?.transitDays ?? (isSingleRoot ? payload.transitDays : null);
+      const transitDays =
+        transitDaysRaw === null || transitDaysRaw === undefined || transitDaysRaw === ''
+          ? null
+          : Number(transitDaysRaw);
+      const transportGroupId = String(
+        pick?.transportGroupId ?? (isSingleRoot ? payload.transportGroupId : null) ?? ''
+      ).trim() || null;
+      const pickupPincodeFromPick = String(
+        pick?.pickupPincode ?? (isSingleRoot ? payload.pickupPincode : null) ?? ''
+      ).replace(/\D/g, '').slice(0, 6);
+      const pickupPincode =
+        pickupPincodeFromPick.length === 6
+          ? pickupPincodeFromPick
+          : String(pickupPincodeBySupplierId[row.supplier_id] || '').replace(/\D/g, '').slice(0, 6);
+      const etdRaw = pick?.etd ?? (isSingleRoot ? payload.etd : null);
 
       const logisticsDelivery = orderDeliveryJsonToLogisticsAddress(prevAddr);
       const bookingIntent = resolveBookingIntent({
@@ -234,7 +266,12 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         weightKg: computeOrderWeightKgForCourier(row.order_items),
         resolvedSp: String(sp).trim(),
         orderNotes: tnotes || null,
-        logisticsBookingMeta: null
+        logisticsBookingMeta: null,
+        expectedDeliveryDate: row.expected_delivery_date || null,
+        transitDays: Number.isFinite(transitDays) ? Math.trunc(transitDays) : null,
+        transportGroupId,
+        pickupPincode: pickupPincode.length === 6 ? pickupPincode : null,
+        etdRaw: etdRaw ? String(etdRaw) : null
       });
     }
 
@@ -259,29 +296,59 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
 
         try {
           if (willBookCourier) {
-            const booked = await bookCourierCheckout({
-              courierCompanyId: bookingIntent.courierCompanyId,
-              courierDisplayName: String(sp).trim(),
-              deliveryAddress: logisticsDelivery,
-              sessionBuyer,
-              lines,
-              weightKg,
-              orderId: row.id,
-              orderNumber: row.order_number || undefined,
-              vendorId: row.supplier_id || null
-            });
+            const clientReference =
+              ctx.transportGroupId ||
+              row.order_number ||
+              (row.id ? `tatva-order:${row.id}` : null);
+            const useSchedule =
+              ctx.expectedDeliveryDate &&
+              ctx.transitDays != null &&
+              ctx.pickupPincode;
+
+            const booked = useSchedule
+              ? await scheduleCourier({
+                  courierCompanyId: bookingIntent.courierCompanyId,
+                  courierDisplayName: String(sp).trim(),
+                  deliveryAddress: logisticsDelivery,
+                  sessionBuyer,
+                  weightKg,
+                  expectedDeliveryDate: ctx.expectedDeliveryDate,
+                  transitDays: ctx.transitDays,
+                  pickupPincode: ctx.pickupPincode,
+                  orderId: row.id,
+                  orderNumber: row.order_number || undefined,
+                  clientReference,
+                  etdRaw: ctx.etdRaw
+                })
+              : await bookCourierCheckout({
+                  courierCompanyId: bookingIntent.courierCompanyId,
+                  courierDisplayName: String(sp).trim(),
+                  deliveryAddress: logisticsDelivery,
+                  sessionBuyer,
+                  lines,
+                  weightKg,
+                  orderId: row.id,
+                  orderNumber: row.order_number || undefined,
+                  vendorId: row.supplier_id || null,
+                  clientReference
+                });
             if (booked.trackingNumber) ctx.tn = booked.trackingNumber;
             if (booked.trackingUrl) ctx.tu = booked.trackingUrl;
             if (booked.shippingProvider) ctx.resolvedSp = booked.shippingProvider;
 
             ctx.logisticsBookingMeta = {
-              mode: 'courier',
+              mode: useSchedule ? 'schedule_courier' : 'courier',
               shipmentId: booked.shipmentId,
               shiprocketOrderId: booked.shiprocketOrderId,
               pendingReason: booked.pendingReason || null,
-              usedLegacyCarrierBook: booked.usedLegacyCarrierBook,
+              usedLegacyCarrierBook: booked.usedLegacyCarrierBook || false,
+              scheduledId: booked.scheduledId || null,
+              dispatchDate: booked.dispatchDate || null,
+              dispatchImmediately: booked.dispatchImmediately ?? null,
+              logisticsOrderId: booked.logisticsOrderId || null,
               trackingNumber: booked.trackingNumber || null,
               trackingUrl: booked.trackingUrl || null,
+              clientReference,
               ...(booked.debug ? { debug: booked.debug } : {})
             };
 

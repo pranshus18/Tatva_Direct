@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   appendDiscoveryItemAsNewProject,
   consolidateDuplicateProductLines,
+  mergeOrAppendCartGroupItem,
+  mergeUpstreamSelectedMineQuantity,
   normalizePoCartDraft,
   prunePoCartGroups
 } from '../controllers/po/shared/poHelpers.js';
@@ -62,6 +64,41 @@ test('prunePoCartGroups removes zero-qty lines and empty projects', () => {
   assert.equal(groups.length, 1);
   assert.equal(groups[0].boqName, 'Cement');
   assert.equal(groups[0].items[0].quantity, 2);
+});
+
+test('mergeOrAppendCartGroupItem increases quantity when the same product is re-added to the same project', () => {
+  const existingItems = [{ id: 'a', productId: 'p1', name: 'Mac Air M1', quantity: 1 }];
+  const nextItems = mergeOrAppendCartGroupItem(existingItems, {
+    id: 'pd-item-new',
+    productId: 'p1',
+    name: 'Mac Air M1',
+    quantity: 1
+  });
+  assert.equal(nextItems.length, 1, 'must not create a duplicate row for the same product');
+  assert.equal(nextItems[0].id, 'a', 'the original line id is kept, only quantity changes');
+  assert.equal(nextItems[0].quantity, 2);
+});
+
+test('mergeOrAppendCartGroupItem appends a new row for a different product in the same project', () => {
+  const existingItems = [{ id: 'a', productId: 'p1', name: 'Mac Air M1', quantity: 1 }];
+  const nextItems = mergeOrAppendCartGroupItem(existingItems, {
+    id: 'pd-item-new',
+    productId: 'p2',
+    name: 'Mac Air M2',
+    quantity: 1
+  });
+  assert.equal(nextItems.length, 2);
+  assert.equal(nextItems[1].productId, 'p2');
+});
+
+test('mergeUpstreamSelectedMineQuantity increases quantity for the same supplier-product key', () => {
+  const merged = mergeUpstreamSelectedMineQuantity({ 'sp-1': 2 }, 'sp-1', 3);
+  assert.equal(merged, 5, 'same product re-added to the same project must add to the existing quantity');
+});
+
+test('mergeUpstreamSelectedMineQuantity starts fresh for a key not yet in the project', () => {
+  const merged = mergeUpstreamSelectedMineQuantity({ 'sp-1': 2 }, 'sp-2', 3);
+  assert.equal(merged, 3);
 });
 
 test('normalizePoCartDraft keeps separate lines for the same productId', () => {

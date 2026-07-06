@@ -9,7 +9,10 @@ import { computeGroupWeightKg } from '../controllers/logisticsController.js';
 import { resolveShipmentQuoteStrategy } from '../utils/logisticsQuotePolicy.js';
 import {
   buildBookCourierCheckoutPayload,
-  buildTruckingBookPayload
+  buildTruckingBookPayload,
+  buildQuoteTransportGroupBody,
+  buildScheduleCourierPayload,
+  mapShipmentToLogisticsQuoteBody
 } from '../utils/logisticsApiPayload.js';
 
 test('classifyQuoteProvider prefers trucking when vehicle_type_id is set', () => {
@@ -143,4 +146,116 @@ test('computeGroupWeightKg parses gram values into decimal kg', () => {
     ]
   });
   assert.equal(weight, 0.75);
+});
+
+test('mapShipmentToLogisticsQuoteBody uses supplier UUID as vendorId and snake_case coords', () => {
+  const body = mapShipmentToLogisticsQuoteBody(
+    {
+      vendorId: '88b2ad28-0120-4bcb-a0d2-99dc922bed62',
+      supplierVendorId: '88b2ad28-0120-4bcb-a0d2-99dc922bed62',
+      transportGroupId: '88b2ad28-0120-4bcb-a0d2-99dc922bed62::hsr-560102',
+      vendorName: 'karthik',
+      pickupPincode: '411026',
+      pickupAddress: { line1: 'Pune', city: 'Pune', state: 'Maharashtra', country: 'India', pincode: '411026' },
+      pickupLat: 18.6374972,
+      pickupLng: 73.8360251,
+      deliveryLat: 12.9347862,
+      deliveryLng: 77.6341896,
+      weightKg: 1.5,
+      items: [{ name: 'Mac Air M2', quantity: 1, price: 85, specifications: { Weight: '1.5 kg' } }]
+    },
+    {
+      line1: '384, 9th Main Road, HSR Layout',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      country: 'India',
+      pincode: '560102'
+    }
+  );
+  assert.equal(body.vendorId, '88b2ad28-0120-4bcb-a0d2-99dc922bed62');
+  assert.notEqual(body.vendorId, body.transportGroupId);
+  assert.equal(body.pickup_lat, 18.6374972);
+  assert.equal(body.delivery_lng, 77.6341896);
+  assert.equal(body.weight_kg, 1.5);
+  assert.equal(body.shippingAddress.pincode, '560102');
+});
+
+test('buildQuoteTransportGroupBody preserves groups[] camelCase shape', () => {
+  const body = buildQuoteTransportGroupBody(
+    {
+      vendorId: 'vendor-a',
+      transportGroupId: 'vendor-a::hsr-560102',
+      vendorName: 'karthik',
+      total: 167,
+      pickupPincode: '411026',
+      pickupAddress: { line1: 'Pune', city: 'Pune', state: 'Maharashtra', country: 'India', pincode: '411026' },
+      items: [{ name: 'Mac Air M2', quantity: 2, price: 85, specifications: { Weight: '1.5 kg' } }]
+    },
+    {
+      shippingAddress: {
+        line1: 'HSR',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        country: 'India',
+        pincode: '560102'
+      },
+      pickupLat: 18.5,
+      pickupLng: 73.8,
+      deliveryLat: 12.9,
+      deliveryLng: 77.6,
+      weightKg: 3,
+      correlationId: 'vendor-a::hsr-560102'
+    }
+  );
+  assert.equal(body.vendorId, 'vendor-a');
+  assert.equal(body.transportGroupId, 'vendor-a::hsr-560102');
+  assert.equal(body.weight_kg, 3);
+  assert.equal(body.pickup_lat, 18.5);
+  assert.equal(body.delivery_lng, 77.6);
+  assert.equal(body.items.length, 1);
+  assert.equal(body.correlation_id, 'vendor-a::hsr-560102');
+});
+
+test('buildScheduleCourierPayload uses schedule-courier field names', () => {
+  const body = buildScheduleCourierPayload({
+    courierCompanyId: 43,
+    courierDisplayName: 'Delhivery Surface',
+    deliveryAddress: {
+      line1: 'Site Plot 12',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560001'
+    },
+    sessionBuyer: { name: 'Builder Co', email: 'builder@test.com', phone: '9876543210' },
+    weightKg: 20,
+    expectedDeliveryDate: '2026-07-15',
+    transitDays: 3,
+    pickupPincode: '562123',
+    clientReference: 'vendor-a::hsr-560102',
+    orderId: 'uuid-from-ecommerce'
+  });
+  assert.equal(body.customer_name, 'Builder Co');
+  assert.equal(body.phone, '9876543210');
+  assert.equal(body.expected_delivery_date, '2026-07-15');
+  assert.equal(body.transit_days, 3);
+  assert.equal(body.pickup_pincode, '562123');
+  assert.equal(body.client_reference, 'vendor-a::hsr-560102');
+  assert.equal(body.ecommerce_order_id, 'uuid-from-ecommerce');
+});
+
+test('buildBookCourierCheckoutPayload accepts clientReference override', () => {
+  const body = buildBookCourierCheckoutPayload({
+    courierCompanyId: 7,
+    deliveryAddress: {
+      line1: '12 MG Road',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560001'
+    },
+    sessionBuyer: { name: 'Buyer', email: 'b@test.com', phone: '9876543210' },
+    lines: [{ name: 'Paint', quantity: 1, unit_price: 100, total_price: 100 }],
+    weightKg: 5,
+    clientReference: 'vendor-a::hsr-560102'
+  });
+  assert.equal(body.client_reference, 'vendor-a::hsr-560102');
 });

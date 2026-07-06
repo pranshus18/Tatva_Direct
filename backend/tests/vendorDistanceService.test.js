@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { computeSupplierDistances } from '../services/vendorDistanceService.js';
+import { __resetGeocodeCacheForTests } from '../utils/geoUtils.js';
+
+// Geocoding is cached process-wide in production (see geoUtils.js) so repeated ranking
+// requests don't hammer external geocoders. Reset it between tests here so each test's mocked
+// fetch responses are actually exercised instead of being shadowed by a previous test's cache
+// entry for the same address text, and disable the inter-request throttle so tests stay fast.
+process.env.GEOCODE_NOMINATIM_MIN_GAP_MS = '0';
+test.beforeEach(() => {
+  __resetGeocodeCacheForTests();
+});
 
 /**
  * Regression test for the "supplier in Pune shows as 4km away from a Bengaluru delivery
@@ -107,6 +117,54 @@ test('computeSupplierDistances prefers the highest-priority geocodable candidate
     distanceBySupplier['karthik-id'] > 500,
     `expected a large distance for a Pune supplier vs a Bengaluru delivery address, got ${distanceBySupplier['karthik-id']}`
   );
+});
+
+test('computeSupplierDistances gives two offers from the SAME supplier at different locations their own distances', async (t) => {
+  const originalFetch = global.fetch;
+  const originalGoogleKey = process.env.GOOGLE_GEOCODING_API_KEY;
+  const originalGoogleMapsKey = process.env.GOOGLE_MAPS_API_KEY;
+  delete process.env.GOOGLE_GEOCODING_API_KEY;
+  delete process.env.GOOGLE_MAPS_API_KEY;
+  global.fetch = makeFetchMock();
+  t.after(() => {
+    global.fetch = originalFetch;
+    if (originalGoogleKey !== undefined) process.env.GOOGLE_GEOCODING_API_KEY = originalGoogleKey;
+    if (originalGoogleMapsKey !== undefined) process.env.GOOGLE_MAPS_API_KEY = originalGoogleMapsKey;
+  });
+
+  const supabase = makeFakeSupabase({ outletRows: [] });
+
+  // Same supplier ("karthik") lists the SAME product from two different physical locations,
+  // neither of which has a resolvable outlet_id. Both offers used to collapse onto a single
+  // supplier-wide distance (whichever candidate geocoded first), even though one listing is
+  // right next to the buyer and the other is ~700km away.
+  const supplierProducts = {
+    'karthik-id': {
+      supplierId: 'karthik-id',
+      supplierName: 'karthik',
+      supplierLocation: 'HSR Layout, Bengaluru, Karnataka, 560102, India',
+      locationCandidates: [
+        'HSR Layout, Bengaluru, Karnataka, 560102, India',
+        'Pune, Pune, Maharashtra, 411026, India'
+      ],
+      products: [
+        { id: 'p-hsr', outlet_id: null, price: 82, stock: 117, location: 'HSR Layout, Bengaluru, Karnataka, 560102, India' },
+        { id: 'p-pune', outlet_id: null, price: 95, stock: 99, location: 'Pune, Pune, Maharashtra, 411026, India' }
+      ]
+    }
+  };
+
+  const { distanceByLocationText } = await computeSupplierDistances({
+    supabase,
+    supplierProducts,
+    siteGeoFromBoq: SITE_GEO
+  });
+
+  const hsrKm = distanceByLocationText['hsr layout, bengaluru, karnataka, 560102, india'];
+  const puneKm = distanceByLocationText['pune, pune, maharashtra, 411026, india'];
+
+  assert.ok(hsrKm != null && hsrKm < 50, `expected the HSR offer to be close to the site, got ${hsrKm}`);
+  assert.ok(puneKm != null && puneKm > 500, `expected the Pune offer to be far from the site, got ${puneKm}`);
 });
 
 test('computeSupplierDistances resolves an exact per-offer outlet distance when outlet_id is set', async (t) => {

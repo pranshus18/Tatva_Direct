@@ -34,6 +34,7 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import BoqDetailDialog from '../components/sp/BoqDetailDialog';
 import './Dashboard.css';
 
 const DASHBOARD_CACHE_KEY = 'sp_dashboard_cache_v1';
@@ -64,6 +65,7 @@ const ServiceProviderDashboard = ({ user }) => {
   const [notificationsPanelVisible, setNotificationsPanelVisible] = useState(false);
   const [markingAllNotificationsRead, setMarkingAllNotificationsRead] = useState(false);
   const [dashboardError, setDashboardError] = useState('');
+  const [selectedBoq, setSelectedBoq] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -761,7 +763,7 @@ const ServiceProviderDashboard = ({ user }) => {
             <h2>Recent BOQs</h2>
             <button 
               className="btn-secondary"
-              onClick={() => navigate('/boq-normalize')}
+              onClick={() => navigate('/boqs')}
             >
               View All
             </button>
@@ -770,7 +772,13 @@ const ServiceProviderDashboard = ({ user }) => {
           <div className="items-list">
             {recentBOQs.length > 0 ? (
               recentBOQs.map((boq) => (
-                <div key={boq.id} className="item-card">
+                <div
+                  key={boq.id}
+                  className="item-card"
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => setSelectedBoq(boq)}
+                  title="Click to view BOQ items"
+                >
                   <div className="item-info">
                     <h4>{boq.name}</h4>
                     <p>{boq.itemCount} items • Created {boq.createdAt}</p>
@@ -785,6 +793,10 @@ const ServiceProviderDashboard = ({ user }) => {
                     <button 
                       className="btn-icon"
                       title="View BOQ"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedBoq(boq);
+                      }}
                     >
                       <Eye size={16} />
                     </button>
@@ -1483,6 +1495,15 @@ const ServiceProviderDashboard = ({ user }) => {
           </div>
         </div>
       ), document.body) : null}
+      <BoqDetailDialog
+        open={Boolean(selectedBoq)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setSelectedBoq(null);
+        }}
+        boqId={selectedBoq?.id}
+        boqName={selectedBoq?.name}
+        boqStatus={selectedBoq?.status}
+      />
     </SpPageLayout>
   );
 };

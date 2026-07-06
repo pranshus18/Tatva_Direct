@@ -184,6 +184,32 @@ export async function reconcileActivePhysicalHolds() {
   return { repaired: 0 };
 }
 
+/**
+ * True only if an existing reservation row can be safely handed back as "the" hold for its
+ * idempotency key: it must still be active AND not past its expiry. A row that was
+ * consumed/released/expired (by checkout completing, a re-reserve releasing it, or the sweep)
+ * is settled and final — its `expires_at` is stale and must never be resurrected.
+ */
+export function isReservationRowStillHoldable(row) {
+  if (!row || row.status !== 'active') return false;
+  const expiresAt = parseServerDate(row.expires_at);
+  return !expiresAt || expiresAt.getTime() > Date.now();
+}
+
+/**
+ * Free a settled row's idempotency_key (unique) so a brand-new hold can be inserted with the
+ * same key. The settled row itself is left untouched — it has already gone through its final
+ * stock side effects and must not be mutated.
+ */
+async function supersedeStaleIdempotencyKey(row) {
+  const supersededKey = `${row.idempotency_key}::superseded:${row.id}`;
+  await supabase
+    .from('inventory_reservations')
+    .update({ idempotency_key: supersededKey })
+    .eq('id', row.id)
+    .eq('idempotency_key', row.idempotency_key);
+}
+
 export async function reserveInventory({
   supplierProductId,
   supplierId,
@@ -206,7 +232,14 @@ export async function reserveInventory({
       .select('*')
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle();
-    if (existing) return existing;
+    if (existing) {
+      if (isReservationRowStillHoldable(existing)) return existing;
+      // A prior hold under this exact key was already settled (e.g. released moments ago by a
+      // re-reserve in the same checkout session). Returning it here previously handed the
+      // caller a hold that looked seconds-from-expiry (or already expired) even though the new
+      // hold hadn't been created yet. Free the key and fall through to create a fresh one.
+      await supersedeStaleIdempotencyKey(existing);
+    }
   }
 
   const { data: current, error: stockErr } = await supabase
@@ -229,23 +262,43 @@ export async function reserveInventory({
     physicalHold: true,
     stockBeforeHold: safeNumber(current.stock)
   };
-  const { data: created, error: insertErr } = await supabase
-    .from('inventory_reservations')
-    .insert({
-      idempotency_key: idempotencyKey,
-      supplier_product_id: supplierProductId,
-      supplier_id: supplierId,
-      order_id: orderId,
-      order_item_id: orderItemId,
-      reserved_quantity: qty,
-      status: 'active',
-      expires_at: expiresAt,
-      metadata: reservationMetadata,
-      created_by: actorUserId || supplierId
-    })
-    .select('*')
-    .single();
-  if (insertErr) throw insertErr;
+  const insertRow = {
+    idempotency_key: idempotencyKey,
+    supplier_product_id: supplierProductId,
+    supplier_id: supplierId,
+    order_id: orderId,
+    order_item_id: orderItemId,
+    reserved_quantity: qty,
+    status: 'active',
+    expires_at: expiresAt,
+    metadata: reservationMetadata,
+    created_by: actorUserId || supplierId
+  };
+
+  let created;
+  try {
+    const { data, error: insertErr } = await supabase
+      .from('inventory_reservations')
+      .insert(insertRow)
+      .select('*')
+      .single();
+    if (insertErr) throw insertErr;
+    created = data;
+  } catch (insertErr) {
+    // Two concurrent requests can both pass the "no existing row" check above and race to
+    // insert under the same idempotency key (common at high concurrency — e.g. a double-click
+    // or duplicate network retry). Postgres's unique constraint lets exactly one insert win;
+    // the loser should adopt that winner's hold instead of failing the whole checkout.
+    if (idempotencyKey && insertErr?.code === '23505') {
+      const { data: racedRow } = await supabase
+        .from('inventory_reservations')
+        .select('*')
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+      if (racedRow && isReservationRowStillHoldable(racedRow)) return racedRow;
+    }
+    throw insertErr;
+  }
 
   try {
     await deductStockForReservation(created, actorUserId);
@@ -309,21 +362,58 @@ export async function settleReservation({ reservationId, mode = 'consume', actor
   return updated;
 }
 
-export async function expireReservations() {
-  const { data: active, error } = await supabase
+/** Settle a batch of expired rows with bounded parallelism (each settle is a few round-trips). */
+async function settleExpiredRowsConcurrently(rows, concurrency = 10) {
+  let cursor = 0;
+  let settledCount = 0;
+
+  async function worker() {
+    for (;;) {
+      const i = cursor;
+      cursor += 1;
+      if (i >= rows.length) return;
+      try {
+        await settleReservation({ reservationId: rows[i].id, mode: 'expire', actorUserId: null });
+        settledCount += 1;
+      } catch (err) {
+        console.error('[Reservations] Failed to expire reservation', rows[i]?.id, err?.message || err);
+      }
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(concurrency, rows.length));
+  await Promise.all(Array.from({ length: workerCount }, worker));
+  return settledCount;
+}
+
+/**
+ * Settle every reservation whose hold has passed its `expires_at`.
+ *
+ * At scale this must never load "all active reservations" — that set grows with total
+ * platform traffic and gets re-scanned in JS on every call. Instead we filter to already-expired
+ * rows directly in the query (`status = active AND expires_at <= now`), which stays small and
+ * indexable regardless of how many holds are currently in flight. Callers on hot read paths
+ * (e.g. computing reserved quantity for a handful of products during vendor ranking) can pass
+ * `supplierProductIds`/`buyerUserId` to bound the sweep to just what they need instead of
+ * touching the whole table.
+ */
+export async function expireReservations({ buyerUserId = null, supplierId = null, supplierProductIds = null } = {}) {
+  let query = supabase
     .from('inventory_reservations')
     .select('*')
-    .eq('status', 'active');
-  if (error) throw error;
-
-  const now = Date.now();
-  let count = 0;
-  for (const row of active || []) {
-    const expiresAt = parseServerDate(row.expires_at);
-    if (!expiresAt || expiresAt.getTime() > now) continue;
-    await settleReservation({ reservationId: row.id, mode: 'expire', actorUserId: null });
-    count += 1;
+    .eq('status', 'active')
+    .lte('expires_at', nowIso());
+  if (buyerUserId) query = query.eq('created_by', buyerUserId);
+  if (supplierId) query = query.eq('supplier_id', supplierId);
+  if (Array.isArray(supplierProductIds) && supplierProductIds.length > 0) {
+    query = query.in('supplier_product_id', supplierProductIds);
   }
+
+  const { data: expired, error } = await query;
+  if (error) throw error;
+  if (!expired || expired.length === 0) return { expired: 0 };
+
+  const count = await settleExpiredRowsConcurrently(expired);
   return { expired: count };
 }
 

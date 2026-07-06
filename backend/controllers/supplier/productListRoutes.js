@@ -26,7 +26,8 @@ export function registerSupplierProductListRoutes(ctx) {
 
 router.get('/products', authenticateToken, async (req, res) => {
   try {
-    await expireStaleReservations();
+    // Scoped to this supplier's own holds — no need to sweep the whole platform on every page load.
+    await expireStaleReservations({ supplierId: req.userId });
 
     const { data: profileRow } = await supabase
       .from('users')

@@ -46,7 +46,7 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-import { buildBookCourierCheckoutPayload } from '../utils/logisticsApiPayload.js';
+import { buildBookCourierCheckoutPayload, buildScheduleCourierPayload } from '../utils/logisticsApiPayload.js';
 
 function pickStr(...vals) {
   for (const v of vals) {
@@ -280,7 +280,52 @@ async function postJson(url, body) {
   throw lastErr || new Error('Logistics booking request failed');
 }
 
+function scheduleCourierUrl() {
+  const explicit = String(process.env.LOGISTICS_SCHEDULE_COURIER_URL || '').trim();
+  if (explicit) return explicit.replace(/\/$/, '');
+  return `${LOGISTICS_BASE}/api/logistics/schedule-courier`;
+}
+
 const BOOK_CARRIER_URL = () => `${LOGISTICS_BASE}/carrier/book`;
+
+/**
+ * Read schedule-courier response (top level, scheduling, or immediate_book).
+ */
+export function extractScheduleBookingTracking(json) {
+  if (!json || typeof json !== 'object') {
+    return {
+      trackingNumber: null,
+      trackingUrl: null,
+      shippingProvider: null,
+      shipmentId: null,
+      shiprocketOrderId: null,
+      pendingReason: null,
+      scheduledId: null,
+      status: null,
+      dispatchDate: null,
+      dispatchImmediately: null,
+      logisticsOrderId: null
+    };
+  }
+  const immediate =
+    json.immediate_book && typeof json.immediate_book === 'object' ? json.immediate_book : null;
+  const base = extractBookingTracking(immediate || json);
+  const scheduling =
+    json.scheduling && typeof json.scheduling === 'object' ? json.scheduling : null;
+  return {
+    ...base,
+    trackingNumber: pickStr(base.trackingNumber, immediate?.tracking_number, json.tracking_number),
+    scheduledId: pickStr(json.scheduled_id, json.scheduledId, immediate?.id),
+    status: pickStr(json.status, immediate?.status),
+    dispatchDate: pickStr(scheduling?.dispatch_date, json.dispatch_date, immediate?.dispatch_date),
+    dispatchImmediately:
+      scheduling?.dispatch_immediately ?? json.dispatch_immediately ?? null,
+    logisticsOrderId: pickStr(json.logistics_order_id, immediate?.logistics_order_id),
+    pendingReason:
+      base.pendingReason ||
+      pickStr(json.message, scheduling?.buffer_mode ? `buffer_mode: ${scheduling.buffer_mode}` : null)
+  };
+}
 
 
 /**
@@ -304,7 +349,8 @@ export async function bookCourierCheckout({
   weightKg,
   orderId,
   orderNumber,
-  vendorId = null
+  vendorId = null,
+  clientReference = null
 }) {
   const id = Number(courierCompanyId);
   if (!Number.isFinite(id) || id <= 0) {
@@ -320,7 +366,8 @@ export async function bookCourierCheckout({
     weightKg,
     orderId,
     orderNumber,
-    vendorId
+    vendorId,
+    clientReference
   });
 
   let res = await postJson(bookCourierCheckoutUrl(), checkoutBody);
@@ -390,6 +437,115 @@ export async function bookCourierCheckout({
         trackingUrl: result.trackingUrl,
         shippingProvider: result.shippingProvider
       },
+      responsePreview: safeJsonPreview(res.json)
+    };
+  }
+
+  return result;
+}
+
+/**
+ * Deferred or immediate courier booking by promised delivery date.
+ * Logistics module decides dispatch_immediately vs scheduled dispatch.
+ *
+ * @returns {Promise<{
+ *   trackingNumber: string|null,
+ *   trackingUrl: string|null,
+ *   shippingProvider: string|null,
+ *   shipmentId: number|null,
+ *   shiprocketOrderId: number|null,
+ *   pendingReason: string|null,
+ *   scheduledId: string|null,
+ *   status: string|null,
+ *   dispatchDate: string|null,
+ *   dispatchImmediately: boolean|null,
+ *   logisticsOrderId: string|null,
+ *   usedScheduleEndpoint: boolean,
+ *   debug?: object
+ * }>}
+ */
+export async function scheduleCourier({
+  courierCompanyId,
+  courierDisplayName = null,
+  deliveryAddress,
+  sessionBuyer,
+  weightKg,
+  expectedDeliveryDate,
+  transitDays,
+  bufferDays = 1,
+  pickupPincode,
+  orderId = null,
+  orderNumber = null,
+  clientReference = null,
+  etdRaw = null
+}) {
+  const id = Number(courierCompanyId);
+  if (!Number.isFinite(id) || id <= 0) {
+    throw new Error('Invalid courier_company_id for schedule-courier');
+  }
+
+  const scheduleBody = buildScheduleCourierPayload({
+    courierCompanyId: id,
+    courierDisplayName,
+    deliveryAddress,
+    sessionBuyer,
+    weightKg,
+    expectedDeliveryDate,
+    transitDays,
+    bufferDays,
+    pickupPincode,
+    clientReference,
+    orderId,
+    orderNumber,
+    etdRaw
+  });
+
+  let res = await postJson(scheduleCourierUrl(), scheduleBody);
+
+  if (!res.ok && RETRYABLE.has(res.status)) {
+    await delay(500);
+    res = await postJson(scheduleCourierUrl(), scheduleBody);
+  }
+
+  if (!res.ok) {
+    const msg =
+      res.json?.message ||
+      formatUpstreamBookError(res.json?.detail) ||
+      res.raw?.slice(0, 500) ||
+      `Schedule courier HTTP ${res.status}`;
+    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+    err.statusCode = res.status >= 400 && res.status < 600 ? res.status : 502;
+    throw err;
+  }
+
+  const extracted = extractScheduleBookingTracking(res.json);
+  let trackingUrl = extracted.trackingUrl;
+  const trackingNumber = extracted.trackingNumber;
+  if (!trackingUrl && trackingNumber) {
+    trackingUrl = shiprocketPublicTrackingUrl(trackingNumber);
+  }
+
+  const result = {
+    trackingNumber: trackingNumber || null,
+    trackingUrl: trackingUrl || null,
+    shippingProvider: extracted.shippingProvider || courierDisplayName || null,
+    shipmentId: extracted.shipmentId,
+    shiprocketOrderId: extracted.shiprocketOrderId,
+    pendingReason: extracted.pendingReason,
+    scheduledId: extracted.scheduledId,
+    status: extracted.status,
+    dispatchDate: extracted.dispatchDate,
+    dispatchImmediately: extracted.dispatchImmediately,
+    logisticsOrderId: extracted.logisticsOrderId,
+    usedScheduleEndpoint: true
+  };
+
+  if (bookDebugEnabled) {
+    result.debug = {
+      scheduleUrl: scheduleCourierUrl(),
+      httpStatus: res.status,
+      requestPreview: safeJsonPreview(scheduleBody),
+      extractedFromUpstream: extracted,
       responsePreview: safeJsonPreview(res.json)
     };
   }

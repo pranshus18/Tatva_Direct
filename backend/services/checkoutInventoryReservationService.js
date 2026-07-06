@@ -93,8 +93,8 @@ function reservationsMatchLines(rows = [], lines = []) {
   return true;
 }
 
-export async function expireStaleReservations() {
-  return expireReservations();
+export async function expireStaleReservations(filters = {}) {
+  return expireReservations(filters);
 }
 
 /** @internal test export */
@@ -103,9 +103,14 @@ export function dedupeCheckoutLinesByProductForTest(lines = []) {
 }
 
 export async function getActiveReservedQuantitiesByProductIds(supplierProductIds = []) {
-  await expireStaleReservations();
   const ids = [...new Set((supplierProductIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
   if (!ids.length) return new Map();
+  // Scoped sweep: this runs on hot read paths (e.g. once per BOQ line during vendor ranking),
+  // so it must never scan every active reservation platform-wide. Bounding it to the handful of
+  // supplier_product_ids actually being asked about keeps cost proportional to the request, not
+  // to total platform traffic. The `isReservationStillActive` filter below already excludes
+  // clock-expired rows from the count even if the sweep hasn't physically settled them yet.
+  await expireStaleReservations({ supplierProductIds: ids });
 
   const { data, error } = await supabase
     .from('inventory_reservations')
@@ -146,7 +151,9 @@ async function loadCheckoutReservationsForBuyer(
   checkoutSessionId = null,
   { includeClockExpired = false } = {}
 ) {
-  await expireStaleReservations();
+  // Scoped to this buyer only — settling their expired holds (to restock stock correctly)
+  // never requires touching other buyers' active reservations.
+  await expireStaleReservations({ buyerUserId });
   const { data, error } = await supabase
     .from('inventory_reservations')
     .select('*')
@@ -210,8 +217,8 @@ export async function reserveCheckoutLines({
     throw new Error('At least one line is required to reserve inventory');
   }
 
-  await expireStaleReservations();
-
+  // loadActiveCheckoutReservationsForBuyer below already sweeps this buyer's expired rows
+  // (scoped, not platform-wide) before reading — no separate unscoped sweep needed here.
   const existing = await loadActiveCheckoutReservationsForBuyer(buyerUserId, source);
   const toRelease = existing.filter((row) => {
     const sessionId = String(row?.metadata?.checkoutSessionId || '');
@@ -337,7 +344,7 @@ export async function consumeCheckoutReservationsForOrder({
   lines = [],
   orderItemBySupplierProductId = {}
 }) {
-  await expireStaleReservations();
+  await expireStaleReservations({ buyerUserId });
   const normalizedLines = dedupeCheckoutLinesByProduct(lines);
   if (!normalizedLines.length) {
     throw new Error('No valid checkout lines for inventory consume');

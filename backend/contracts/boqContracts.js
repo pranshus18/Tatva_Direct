@@ -16,6 +16,7 @@ export const boqRequestProductSchema = z.object({
   category: z.string().min(1),
   unit: z.string().min(1),
   description: z.string().optional(),
+  brand: z.string().optional(),
   boqId: z.string().uuid().optional().nullable()
 });
 

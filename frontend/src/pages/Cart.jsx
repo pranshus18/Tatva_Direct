@@ -40,7 +40,12 @@ import {
   normalizeShippingAddressBookEntry
 } from '../utils/shippingAddressLabel';
 import { clearVendorRankCache } from '../utils/vendorRankCache';
-import { clearCheckoutHoldExpired, SP_PO_CHECKOUT_HOLD_EXPIRED_KEY, buildCheckoutHoldExpiredMessage } from '../utils/checkoutReservation';
+import {
+  clearCheckoutHoldExpired,
+  SP_PO_CHECKOUT_HOLD_EXPIRED_KEY,
+  SP_PO_CHECKOUT_SESSION_KEY,
+  buildCheckoutHoldExpiredMessage
+} from '../utils/checkoutReservation';
 
 const blankShippingAddress = {
   label: '',
@@ -90,6 +95,17 @@ const Cart = ({ onLoadCart }) => {
     );
     navigate('/cart', { replace: true, state: {} });
   }, [location.state, navigate]);
+
+  // Starting a fresh checkout attempt from the cart should never inherit an old, possibly
+  // already-settled reservation session left over from a previous visit — that stale id is what
+  // was causing CreatePO to show "hold expired" instantly, before it even created a new hold.
+  const clearStalePoCheckoutSession = () => {
+    try {
+      sessionStorage.removeItem(SP_PO_CHECKOUT_SESSION_KEY);
+    } catch (_) {
+      // Non-fatal.
+    }
+  };
 
   const getGroups = (draft) => {
     if (!draft || typeof draft !== 'object') return [];
@@ -692,6 +708,7 @@ const Cart = ({ onLoadCart }) => {
     const draft = buildDraftFromAllGroups(groups, cart?.draft || {});
     if (typeof onLoadCart === 'function') onLoadCart(draft);
     clearCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY);
+    clearStalePoCheckoutSession();
     navigate('/create-po');
   };
 
@@ -740,6 +757,7 @@ const Cart = ({ onLoadCart }) => {
     const groupDraft = buildDraftFromGroup(groupWithShipping);
     if (groupDraft && typeof onLoadCart === 'function') onLoadCart(groupDraft);
     persistSupplierSelectScopeFromCart(groupDraft.items, groupDraft.boqProject);
+    clearStalePoCheckoutSession();
     const navState = supplierSelectNavigationState(groupDraft);
     navigate(
       { pathname: '/supplier-select', search: '?from=cart' },
@@ -764,6 +782,7 @@ const Cart = ({ onLoadCart }) => {
     const draft = buildDraftFromSingleItem(item, groupWithShipping);
     if (draft && typeof onLoadCart === 'function') onLoadCart(draft);
     persistSupplierSelectScopeFromCart(draft.items, draft.boqProject);
+    clearStalePoCheckoutSession();
     const navState = supplierSelectNavigationState(draft);
     navigate(
       { pathname: '/supplier-select', search: '?from=cart' },

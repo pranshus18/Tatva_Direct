@@ -69,6 +69,7 @@ export const SP_NAV_GROUPS = [
 const ROUTE_META = {
   '/dashboard': { group: 'Home', title: 'Dashboard' },
   '/boq-normalize': { group: 'Procure', title: 'BOQ Normalize' },
+  '/boqs': { group: 'Procure', title: 'All BOQs' },
   '/product-discovery': { group: 'Procure', title: 'Product Discovery' },
   '/voice': { group: 'Procure', title: 'Voice Shop' },
   '/supplier-select': { group: 'Procure', title: 'Supplier Select' },

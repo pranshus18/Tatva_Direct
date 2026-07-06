@@ -356,6 +356,47 @@ export async function resolveGeoFromOutletAddress(geo_location, address) {
   return geocodeAddressNominatim(text);
 }
 
+// Geocoding results for a given address text almost never change. At scale, the same handful
+// of supplier/outlet addresses get re-geocoded on every single vendor-ranking request (once per
+// BOQ line, once per concurrent user) — that's redundant external API traffic and, worse, risks
+// tripping Nominatim's strict "max 1 request/second, no bulk geocoding" usage policy, which can
+// get this server's IP rate-limited/banned and silently break distance-based ranking for
+// *everyone*. Cache resolved addresses process-wide; cache misses/failures for a shorter window
+// so a transient outage doesn't stick around for hours.
+function geocodePositiveTtlMs() {
+  return Number(process.env.GEOCODE_POSITIVE_TTL_MS ?? 6 * 60 * 60 * 1000) || 0;
+}
+function geocodeNegativeTtlMs() {
+  return Number(process.env.GEOCODE_NEGATIVE_TTL_MS ?? 5 * 60 * 1000) || 0;
+}
+const geocodeResultCache = new Map();
+
+/** Test-only: avoid cross-test pollution when mocking fetch with different results for the same address text. */
+export function __resetGeocodeCacheForTests() {
+  geocodeResultCache.clear();
+  lastNominatimCallAt = 0;
+}
+
+let lastNominatimCallAt = 0;
+let nominatimQueue = Promise.resolve();
+
+/** Serializes ALL Nominatim calls process-wide with a minimum gap, per their fair-use policy. */
+function scheduleNominatimCall(fn) {
+  const minGapMs = Number(process.env.GEOCODE_NOMINATIM_MIN_GAP_MS ?? 1100) || 0;
+  const run = nominatimQueue.then(async () => {
+    const wait = lastNominatimCallAt + minGapMs - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastNominatimCallAt = Date.now();
+    return fn();
+  });
+  // Keep the queue alive even if this call throws/rejects.
+  nominatimQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 /**
  * Forward geocode a free-text address.
  * Priority: GOOGLE_GEOCODING_API_KEY or GOOGLE_MAPS_API_KEY → Google Geocoding API; else Nominatim.
@@ -364,6 +405,22 @@ export async function geocodeAddressNominatim(address) {
   const q = (address || '').trim();
   if (!q) return null;
 
+  const cacheKey = q.toLowerCase();
+  const cached = geocodeResultCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < cached.ttl) {
+    return cached.geo;
+  }
+
+  const geo = await resolveGeocodeUncached(q);
+  geocodeResultCache.set(cacheKey, {
+    geo,
+    ts: Date.now(),
+    ttl: geo ? geocodePositiveTtlMs() : geocodeNegativeTtlMs()
+  });
+  return geo;
+}
+
+async function resolveGeocodeUncached(q) {
   // 1) Try Google Geocoding API when key is configured
   const googleKey =
     process.env.GOOGLE_GEOCODING_API_KEY || getPrimaryGoogleMapsApiKey();
@@ -409,28 +466,32 @@ export async function geocodeAddressNominatim(address) {
   for (const query of queryCandidates) {
     // First pass: constrain to India for better precision when possible
     for (const countryFilter of ['in', '']) {
-      try {
-        const countryParam = countryFilter ? `&countrycodes=${countryFilter}` : '';
-        const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
-          query
-        )}&format=json&limit=${1}${countryParam}`;
-        const res = await fetch(url, {
-          headers: {
-            Accept: 'application/json',
-            'User-Agent': 'TatvaDirect-BOQ/1.0'
-          },
-          signal: AbortSignal.timeout(10000)
-        });
-        if (!res.ok) continue;
-        const data = await res.json();
-        if (!Array.isArray(data) || data.length === 0) continue;
-        const lat = parseFloat(data[0].lat);
-        const lng = parseFloat(data[0].lon);
-        if (Number.isNaN(lat) || Number.isNaN(lng)) continue;
-        return { lat, lng };
-      } catch {
-        // keep trying the next fallback strategy
-      }
+      const hit = await scheduleNominatimCall(async () => {
+        try {
+          const countryParam = countryFilter ? `&countrycodes=${countryFilter}` : '';
+          const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(
+            query
+          )}&format=json&limit=${1}${countryParam}`;
+          const res = await fetch(url, {
+            headers: {
+              Accept: 'application/json',
+              'User-Agent': 'TatvaDirect-BOQ/1.0'
+            },
+            signal: AbortSignal.timeout(10000)
+          });
+          if (!res.ok) return null;
+          const data = await res.json();
+          if (!Array.isArray(data) || data.length === 0) return null;
+          const lat = parseFloat(data[0].lat);
+          const lng = parseFloat(data[0].lon);
+          if (Number.isNaN(lat) || Number.isNaN(lng)) return null;
+          return { lat, lng };
+        } catch {
+          // keep trying the next fallback strategy
+          return null;
+        }
+      });
+      if (hit) return hit;
     }
   }
   return null;

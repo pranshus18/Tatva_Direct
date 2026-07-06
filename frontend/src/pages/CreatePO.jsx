@@ -25,6 +25,7 @@ import {
 import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import {
   buildPoReservationLinesFromGroups,
+  buildStableReservationLineSignature,
   buildCheckoutHoldExpiredNavState,
   clearCheckoutHoldExpired,
   createCheckoutSessionId,
@@ -481,7 +482,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     const lines = buildPoReservationLinesFromGroups(poGroups);
     if (!lines.length) return undefined;
 
-    const signature = JSON.stringify(lines);
+    // Order-independent signature: grouping re-running (e.g. once the delivery address finishes
+    // loading async) can produce the same lines in a different order, which would otherwise look
+    // like a real cart change and trigger release + re-reserve of an identical hold — handing
+    // back a just-released reservation row with a stale, already-past expiry.
+    const signature = buildStableReservationLineSignature(lines);
     if (signature === reservationSignatureRef.current && reservationHoldRef.current) {
       return undefined;
     }
@@ -1014,6 +1019,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           if (Number.isFinite(courierCompanyId) && courierCompanyId > 0) {
             row.courierCompanyId = courierCompanyId;
           }
+          const td = det?.transit_days ?? det?.transitDays;
+          if (td != null && td !== '') row.transitDays = Number(td);
+          if (det?.transportGroupId) row.transportGroupId = String(det.transportGroupId);
+          if (det?.pickupPincode) row.pickupPincode = String(det.pickupPincode).replace(/\D/g, '').slice(0, 6);
+          if (det?.etd) row.etd = String(det.etd);
         }
         return row;
       });
@@ -1048,6 +1058,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           if (Number.isFinite(n) && n > 0) {
             confirmBody.courierCompanyId = n;
           }
+          const td = det?.transit_days ?? det?.transitDays;
+          if (td != null && td !== '') confirmBody.transitDays = Number(td);
+          if (det?.transportGroupId) confirmBody.transportGroupId = String(det.transportGroupId);
+          if (det?.pickupPincode) {
+            confirmBody.pickupPincode = String(det.pickupPincode).replace(/\D/g, '').slice(0, 6);
+          }
+          if (det?.etd) confirmBody.etd = String(det.etd);
         }
       }
     }
