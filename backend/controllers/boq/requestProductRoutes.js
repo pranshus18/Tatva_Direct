@@ -7,6 +7,11 @@ import {
   notifyTerminalSuppliersAboutProductRequest,
   resolveBrandAndTerminalRoleForProductRequest
 } from '../../services/boqProductRequestNotificationService.js';
+import {
+  buildBoqProductRequestKey,
+  findExistingBoqProductRequest,
+  recordBoqProductRequest
+} from '../../services/boqProductRequestDedupService.js';
 import { SUPPLY_CHAIN_ROLE_LABELS } from '../../services/supplyChainSharedService.js';
 
 function buildSuccessMessage({ productName, suppliersNotified, terminalRole, notifyScope }) {
@@ -100,6 +105,29 @@ router.post('/request-product', authenticateToken, isServiceProvider, async (req
     }
 
     const productName = name.trim();
+    const requestKey = buildBoqProductRequestKey({
+      boqId: payload.boqId || null,
+      boqItemId: payload.boqItemId ?? null,
+      name: productName
+    });
+
+    const existingRequest = await findExistingBoqProductRequest(supabase, req.userId, {
+      boqId: payload.boqId || null,
+      boqItemId: payload.boqItemId ?? null,
+      name: productName
+    });
+    if (existingRequest) {
+      return res.status(409).json({
+        status: 'error',
+        alreadyRequested: true,
+        message: 'You have already made a request for this product.'
+      });
+    }
+
+    await recordBoqProductRequest(supabase, req.userId, {
+      ...payload,
+      name: productName
+    });
 
     const { count: supplierCount, error: supplierCountError } = await supabase
       .from('users')
@@ -116,7 +144,8 @@ router.post('/request-product', authenticateToken, isServiceProvider, async (req
     res.status(201).json({
       status: 'success',
       message: buildPendingSuccessMessage(productName),
-      asyncDelivery: true
+      asyncDelivery: true,
+      requestKey
     });
 
     void deliverProductRequestNotifications({

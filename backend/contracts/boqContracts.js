@@ -17,7 +17,8 @@ export const boqRequestProductSchema = z.object({
   unit: z.string().min(1),
   description: z.string().optional(),
   brand: z.string().optional(),
-  boqId: z.string().uuid().optional().nullable()
+  boqId: z.string().uuid().optional().nullable(),
+  boqItemId: z.union([z.string(), z.number()]).optional().nullable()
 });
 
 export const boqDeleteSchema = z.object({});

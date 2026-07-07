@@ -19,6 +19,22 @@ const CONFIRM_MATCH_THRESHOLD = 0.99;
 const REQUEST_PRODUCT_PARAM = 'requestProduct';
 const todayDateMin = getTodayDateInputValue();
 
+function normalizeProductRequestName(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function buildProductRequestKey(item, currentBoqId) {
+  const boqPart = currentBoqId ? String(currentBoqId).trim() : 'draft';
+  const itemPart =
+    item?.id != null && String(item.id).trim() !== ''
+      ? `item:${String(item.id).trim()}`
+      : `name:${normalizeProductRequestName(item?.normalizedName || item?.rawName)}`;
+  return `${boqPart}:${itemPart}`;
+}
+
 const BOQNormalize = ({ onComplete }) => {
   const [siteLocation, setSiteLocation] = useState('');
   const [requiredDate, setRequiredDate] = useState('');
@@ -32,6 +48,7 @@ const BOQNormalize = ({ onComplete }) => {
   const [suggestionsByItemId, setSuggestionsByItemId] = useState({});
   const [loadingSuggestionsForId, setLoadingSuggestionsForId] = useState(null);
   const [requestSubmitting, setRequestSubmitting] = useState(false);
+  const [submittedProductRequestKeys, setSubmittedProductRequestKeys] = useState(() => new Set());
   const [savedProjectMeta, setSavedProjectMeta] = useState(null);
   const [locatingSite, setLocatingSite] = useState(false);
   const navigate = useNavigate();
@@ -45,6 +62,11 @@ const BOQNormalize = ({ onComplete }) => {
 
   const openRequestProductModal = useCallback((item) => {
     if (!item?.id) return;
+    const requestKey = buildProductRequestKey(item, boqId);
+    if (submittedProductRequestKeys.has(requestKey)) {
+      alert('You have already made a request for this product.');
+      return;
+    }
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -53,7 +75,7 @@ const BOQNormalize = ({ onComplete }) => {
       },
       { replace: false }
     );
-  }, [setSearchParams]);
+  }, [boqId, setSearchParams, submittedProductRequestKeys]);
 
   const closeRequestProductModal = useCallback(() => {
     if (!searchParams.get(REQUEST_PRODUCT_PARAM)) return;
@@ -145,6 +167,7 @@ const BOQNormalize = ({ onComplete }) => {
       
       if (data.items && data.items.length > 0) {
         setItems(data.items);
+        setSubmittedProductRequestKeys(new Set());
         if (data.boqId) {
           setBoqId(data.boqId);
           try {
@@ -179,6 +202,7 @@ const BOQNormalize = ({ onComplete }) => {
       alert(errorMessage);
       setFile(null);
       setItems([]);
+      setSubmittedProductRequestKeys(new Set());
     } finally {
       setLoading(false);
     }
@@ -228,6 +252,13 @@ const BOQNormalize = ({ onComplete }) => {
   // Notify terminal suppliers that a customer is looking for an unavailable BOQ item.
   const submitProductRequest = async (item) => {
     if (!item) return;
+    const requestKey = buildProductRequestKey(item, boqId);
+    if (submittedProductRequestKeys.has(requestKey)) {
+      alert('You have already made a request for this product.');
+      closeRequestProductModal();
+      return;
+    }
+
     const token = localStorage.getItem('token');
     if (!token) {
       alert('Please log in again to request a new product.');
@@ -242,7 +273,8 @@ const BOQNormalize = ({ onComplete }) => {
         unit: item.unit || 'nos',
         description: item.rawName || '',
         brand: item.brand || item.normalizedName || item.rawName || '',
-        boqId: boqId || null
+        boqId: boqId || null,
+        boqItemId: item.id ?? null
       };
 
       const res = await fetch(getApiUrl('/api/boq/request-product'), {
@@ -255,7 +287,14 @@ const BOQNormalize = ({ onComplete }) => {
       });
 
       const data = await res.json();
+      if (res.status === 409 || data.alreadyRequested) {
+        setSubmittedProductRequestKeys((prev) => new Set(prev).add(requestKey));
+        closeRequestProductModal();
+        alert(data.message || 'You have already made a request for this product.');
+        return;
+      }
       if (res.ok && data.status === 'success') {
+        setSubmittedProductRequestKeys((prev) => new Set(prev).add(requestKey));
         closeRequestProductModal();
         alert(data.message || 'Suppliers were notified that a customer is looking for this product.');
       } else {
@@ -571,6 +610,8 @@ const BOQNormalize = ({ onComplete }) => {
                   const hasSuppliers = (item.availableSuppliers || 0) > 0;
                   const isAvailable = item.isAvailable ?? hasSuppliers;
                   const suggestions = suggestionsByItemId[item.id] || [];
+                  const productRequestKey = buildProductRequestKey(item, boqId);
+                  const alreadyRequestedProduct = submittedProductRequestKeys.has(productRequestKey);
 
                   return (
                   <div key={item.id} className="item-card">
@@ -727,6 +768,7 @@ const BOQNormalize = ({ onComplete }) => {
                           <button
                             type="button"
                             onClick={() => openRequestProductModal(item)}
+                            disabled={alreadyRequestedProduct}
                             style={{
                               display: 'flex',
                               alignItems: 'center',
@@ -735,30 +777,33 @@ const BOQNormalize = ({ onComplete }) => {
                               fontSize: '0.65rem',
                               fontWeight: 500,
                               padding: '0.25rem 0.4rem',
-                              backgroundColor: '#4f46e5',
-                              border: '1px solid #4f46e5',
+                              backgroundColor: alreadyRequestedProduct ? '#9ca3af' : '#4f46e5',
+                              border: `1px solid ${alreadyRequestedProduct ? '#9ca3af' : '#4f46e5'}`,
                               borderRadius: '4px',
                               color: '#ffffff',
-                              cursor: 'pointer',
+                              cursor: alreadyRequestedProduct ? 'not-allowed' : 'pointer',
                               transition: 'all 0.2s',
                               width: '100%',
                               boxSizing: 'border-box',
                               whiteSpace: 'nowrap',
                               overflow: 'hidden',
-                              textOverflow: 'ellipsis'
+                              textOverflow: 'ellipsis',
+                              opacity: alreadyRequestedProduct ? 0.85 : 1
                             }}
                             onMouseEnter={(e) => {
+                              if (alreadyRequestedProduct) return;
                               e.currentTarget.style.backgroundColor = '#4338ca';
                               e.currentTarget.style.borderColor = '#4338ca';
                             }}
                             onMouseLeave={(e) => {
+                              if (alreadyRequestedProduct) return;
                               e.currentTarget.style.backgroundColor = '#4f46e5';
                               e.currentTarget.style.borderColor = '#4f46e5';
                             }}
                           >
                             <PlusCircle size={10} style={{ flexShrink: 0, color: '#ffffff' }} />
                             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              Request New Product
+                              {alreadyRequestedProduct ? 'Request sent' : 'Request New Product'}
                             </span>
                           </button>
                         </div>

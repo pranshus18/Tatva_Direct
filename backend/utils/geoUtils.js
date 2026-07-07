@@ -598,58 +598,111 @@ export function parseNominatimReverseAddress(addr = {}, displayName = '') {
 
 function parseGoogleReverseGeocodeResult(result) {
   const components = result?.address_components || [];
-  const streetNumber = pickGoogleAddressComponent(components, 'street_number', 'premise');
+  const formattedAddress = String(result?.formatted_address || '').trim();
+  const streetNumber = pickGoogleAddressComponent(components, 'street_number', 'premise', 'subpremise');
   const route = pickGoogleAddressComponent(components, 'route', 'neighborhood', 'sublocality_level_2');
-  const line1 = [streetNumber, route].filter(Boolean).join(', ').trim();
+  const locality = pickGoogleAddressComponent(
+    components,
+    'sublocality_level_1',
+    'sublocality',
+    'neighborhood',
+    'locality',
+    'administrative_area_level_2'
+  );
+  const line1 =
+    [streetNumber, route].filter(Boolean).join(', ').trim() ||
+    locality ||
+    formattedAddress.split(',')[0]?.trim() ||
+    '';
   const city = pickGoogleAddressComponent(
     components,
     'locality',
     'administrative_area_level_2',
-    'sublocality',
     'sublocality_level_1',
+    'sublocality',
     'neighborhood'
   );
   const state = pickGoogleAddressComponent(components, 'administrative_area_level_1');
   const pincode = pickGoogleAddressComponent(components, 'postal_code');
   const country = pickGoogleAddressComponent(components, 'country') || 'India';
 
-  if (!line1 && !city && !state && result?.formatted_address) {
-    const parts = String(result.formatted_address)
+  if (!line1 && !city && !state && formattedAddress) {
+    const parts = formattedAddress
       .split(',')
       .map((part) => part.trim())
       .filter(Boolean);
     return {
-      line1: parts.slice(0, 2).join(', '),
+      line1: parts.slice(0, 2).join(', ') || formattedAddress,
       city: parts[2] || parts[1] || '',
-      state: parts.find((part) => /pradesh|nadu|bengal|kerala|goa|delhi|gujarat|maharashtra|karnataka|rajasthan|punjab|haryana|assam|odisha|bihar|jharkhand|uttarakhand|chhattisgarh|telangana|jammu|ladakh|islands/i.test(part)) || parts[parts.length - 2] || '',
+      state:
+        parts.find((part) =>
+          /pradesh|nadu|bengal|kerala|goa|delhi|gujarat|maharashtra|karnataka|rajasthan|punjab|haryana|assam|odisha|bihar|jharkhand|uttarakhand|chhattisgarh|telangana|jammu|ladakh|islands/i.test(
+            part
+          )
+        ) ||
+        parts[parts.length - 2] ||
+        '',
       pincode: parts.find((part) => /^\d{6}$/.test(part)) || pincode,
-      country
+      country,
+      formattedAddress
     };
   }
 
-  return { line1, city, state, pincode, country };
+  if (!line1 && !city && !state && !formattedAddress) return null;
+
+  return {
+    line1: line1 || formattedAddress,
+    city,
+    state,
+    pincode,
+    country,
+    formattedAddress: formattedAddress || [line1, city, state, pincode, country].filter(Boolean).join(', ')
+  };
+}
+
+async function fetchGoogleReverseGeocode(lat, lng, apiKey, querySuffix) {
+  const url =
+    `https://maps.googleapis.com/maps/api/geocode/json?latlng=${encodeURIComponent(`${lat},${lng}`)}` +
+    `${querySuffix}&key=${encodeURIComponent(apiKey)}`;
+  const response = await fetch(url, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(10000)
+  });
+  if (!response.ok) {
+    console.warn('[Geo] Google reverse geocode HTTP error:', response.status, { lat, lng });
+    return null;
+  }
+  const body = await response.json();
+  if (body.status !== 'OK' || !Array.isArray(body.results) || body.results.length === 0) {
+    if (body.status && body.status !== 'ZERO_RESULTS') {
+      console.warn('[Geo] Google reverse geocode not OK:', {
+        status: body.status,
+        errorMessage: body.error_message || null,
+        lat,
+        lng
+      });
+    }
+    return null;
+  }
+  return body.results[0];
 }
 
 async function reverseGeocodeWithGoogle(lat, lng, apiKey) {
   try {
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${encodeURIComponent(
-      `${lat},${lng}`
-    )}&result_type=${encodeURIComponent(
-      'street_address|route|neighborhood|sublocality|locality|administrative_area_level_2'
-    )}&region=IN&key=${encodeURIComponent(apiKey)}`;
-    const response = await fetch(url, {
-      headers: { Accept: 'application/json' },
-      signal: AbortSignal.timeout(8000)
-    });
-    if (!response.ok) return null;
-    const body = await response.json();
-    if (body.status !== 'OK' || !Array.isArray(body.results) || body.results.length === 0) {
-      return null;
+    const attempts = [
+      '&language=en&region=IN',
+      '&result_type=street_address|route|neighborhood|sublocality|locality|administrative_area_level_2&language=en&region=IN'
+    ];
+
+    for (const querySuffix of attempts) {
+      const result = await fetchGoogleReverseGeocode(lat, lng, apiKey, querySuffix);
+      if (!result) continue;
+      const parsed = parseGoogleReverseGeocodeResult(result);
+      if (parsed) return parsed;
     }
-    const parsed = parseGoogleReverseGeocodeResult(body.results[0]);
-    if (!parsed.line1 && !parsed.city && !parsed.state) return null;
-    return parsed;
-  } catch {
+    return null;
+  } catch (error) {
+    console.warn('[Geo] Google reverse geocode failed:', error?.message || error);
     return null;
   }
 }
@@ -659,7 +712,7 @@ async function reverseGeocodeWithNominatim(lat, lng) {
     try {
       const url =
         `https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1` +
-        `&zoom=18&layer=address&accept-language=en&countrycodes=in` +
+        `&zoom=18&accept-language=en&countrycodes=in` +
         `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
       const response = await fetch(url, {
         headers: {

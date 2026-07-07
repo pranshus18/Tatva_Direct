@@ -2,9 +2,74 @@
 
 import { authFetch } from '../config/api';
 
-const ACCEPTABLE_ACCURACY_METERS = 75;
-const LOCATION_HARD_TIMEOUT_MS = 12000;
-const LOCATION_SOFT_TIMEOUT_MS = 6000;
+function getClientGoogleMapsApiKey() {
+  return String(
+    import.meta.env.VITE_GOOGLE_MAPS_API_KEY ||
+      import.meta.env.VITE_GOOGLE_GEOCODING_API_KEY ||
+      ''
+  ).trim();
+}
+
+function buildResolvedAddress(payload, lat, lon) {
+  return {
+    ...payload,
+    latitude: lat,
+    longitude: lon,
+    geoLocation: { lat, lng: lon }
+  };
+}
+
+function parseGoogleClientResult(result) {
+  const formattedAddress = String(result?.formatted_address || '').trim();
+  const components = Array.isArray(result?.address_components) ? result.address_components : [];
+  const pick = (...types) => {
+    for (const type of types) {
+      const hit = components.find((component) => Array.isArray(component?.types) && component.types.includes(type));
+      if (hit?.long_name) return String(hit.long_name).trim();
+    }
+    return '';
+  };
+
+  const line1 =
+    [pick('street_number', 'premise'), pick('route', 'neighborhood', 'sublocality_level_2')]
+      .filter(Boolean)
+      .join(', ')
+      .trim() ||
+    pick('sublocality_level_1', 'sublocality', 'neighborhood') ||
+    formattedAddress.split(',')[0]?.trim() ||
+    formattedAddress;
+
+  return {
+    line1,
+    city: pick('locality', 'administrative_area_level_2', 'sublocality_level_1', 'sublocality', 'neighborhood'),
+    state: pick('administrative_area_level_1'),
+    pincode: pick('postal_code'),
+    country: pick('country') || 'India',
+    formattedAddress
+  };
+}
+
+async function reverseGeocodeWithGoogleClient(lat, lon) {
+  const apiKey = getClientGoogleMapsApiKey();
+  if (!apiKey) return null;
+
+  const url =
+    `https://maps.googleapis.com/maps/api/geocode/json?latlng=${encodeURIComponent(`${lat},${lon}`)}` +
+    `&language=en&region=IN&key=${encodeURIComponent(apiKey)}`;
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) return null;
+
+  const body = await res.json();
+  if (body.status !== 'OK' || !Array.isArray(body.results) || !body.results.length) {
+    return null;
+  }
+
+  const parsed = parseGoogleClientResult(body.results[0]);
+  if (!parsed.line1 && !parsed.city && !parsed.state && !parsed.formattedAddress) {
+    return null;
+  }
+  return parsed;
+}
 
 export function getCurrentPositionAsync() {
   return new Promise((resolve, reject) => {
@@ -13,168 +78,54 @@ export function getCurrentPositionAsync() {
       return;
     }
 
-    const options = {
+    navigator.geolocation.getCurrentPosition(resolve, reject, {
       enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: LOCATION_HARD_TIMEOUT_MS
-    };
-
-    let bestPosition = null;
-    let watchId = null;
-    let finished = false;
-    let hardTimeoutId = null;
-    let softTimeoutId = null;
-
-    const cleanup = () => {
-      if (watchId != null) navigator.geolocation.clearWatch(watchId);
-      if (hardTimeoutId) clearTimeout(hardTimeoutId);
-      if (softTimeoutId) clearTimeout(softTimeoutId);
-    };
-
-    const finish = (position, error) => {
-      if (finished) return;
-      finished = true;
-      cleanup();
-      if (position) resolve(position);
-      else reject(error || new Error('Unable to fetch your current location.'));
-    };
-
-    const consider = (position) => {
-      if (!position?.coords) return;
-      const accuracy = Number(position.coords.accuracy);
-      if (
-        !bestPosition ||
-        (Number.isFinite(accuracy) &&
-          accuracy < Number(bestPosition.coords.accuracy ?? Number.POSITIVE_INFINITY))
-      ) {
-        bestPosition = position;
-      }
-      if (Number.isFinite(accuracy) && accuracy <= ACCEPTABLE_ACCURACY_METERS) {
-        finish(position);
-      }
-    };
-
-    hardTimeoutId = setTimeout(() => {
-      if (bestPosition) {
-        finish(bestPosition);
-        return;
-      }
-      navigator.geolocation.getCurrentPosition(
-        (position) => finish(position),
-        (error) => finish(null, error),
-        options
-      );
-    }, LOCATION_HARD_TIMEOUT_MS);
-
-    softTimeoutId = setTimeout(() => {
-      if (bestPosition) finish(bestPosition);
-    }, LOCATION_SOFT_TIMEOUT_MS);
-
-    watchId = navigator.geolocation.watchPosition(
-      consider,
-      (error) => {
-        if (bestPosition) finish(bestPosition);
-        else if (error?.code === 1) finish(null, error);
-      },
-      options
-    );
-  });
-}
-
-function parseNominatimReverseAddress(addr = {}, displayName = '') {
-  const line1 = [
-    addr.house_number,
-    addr.building,
-    addr.road || addr.pedestrian || addr.residential || addr.footway,
-    addr.neighbourhood || addr.suburb || addr.quarter || addr.hamlet
-  ]
-    .filter(Boolean)
-    .join(', ')
-    .trim();
-
-  const city =
-    addr.city ||
-    addr.city_district ||
-    addr.town ||
-    addr.village ||
-    addr.municipality ||
-    addr.suburb ||
-    addr.neighbourhood ||
-    '';
-
-  const state = addr.state || addr.state_district || '';
-  const pincode = addr.postcode || '';
-  const country = addr.country || 'India';
-
-  const fallbackLine1 = String(displayName || '')
-    .split(',')
-    .slice(0, 2)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .join(', ');
-
-  return {
-    line1: line1 || fallbackLine1,
-    city,
-    state,
-    pincode,
-    country
-  };
-}
-
-async function reverseGeocodeDirect(lat, lon) {
-  const url =
-    `https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1` +
-    `&zoom=18&layer=address&accept-language=en&countrycodes=in` +
-    `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
-  const res = await fetch(url, {
-    headers: { 'Accept-Language': 'en' }
-  });
-  if (!res.ok) {
-    throw new Error('Could not fetch address from your current location.');
-  }
-  const geoData = await res.json();
-  const parsed = parseNominatimReverseAddress(geoData?.address || {}, geoData?.display_name || '');
-  return {
-    ...parsed,
-    latitude: lat,
-    longitude: lon,
-    geoLocation: { lat, lng: lon }
-  };
-}
-
-export async function reverseGeocodeToAddress(lat, lon) {
-  try {
-    const params = new URLSearchParams({
-      lat: String(lat),
-      lng: String(lon)
+      timeout: 15000,
+      maximumAge: 0
     });
-    const res = await authFetch(`/api/geo/reverse?${params.toString()}`, {
-      timeoutMs: 15000
-    });
-    const data = await res.json();
-    if (res.ok && data.status === 'success' && data.address) {
-      return {
-        ...data.address,
-        latitude: lat,
-        longitude: lon,
-        geoLocation: { lat, lng: lon }
-      };
-    }
-  } catch {
-    // Fall back to direct reverse geocoding when the API is unavailable.
-  }
-
-  return reverseGeocodeDirect(lat, lon);
+  });
 }
 
 /** Human-readable single-line address for site location fields. */
 export function formatResolvedAddressLine(resolved) {
   if (!resolved) return '';
-  return [resolved.line1, resolved.city, resolved.state, resolved.pincode]
+
+  const formattedAddress = String(resolved.formattedAddress || '').trim();
+  const structured = [resolved.line1, resolved.city, resolved.state, resolved.pincode]
     .map((part) => String(part || '').trim())
     .filter(Boolean)
     .join(', ');
+
+  return structured || formattedAddress;
+}
+
+export async function reverseGeocodeToAddress(lat, lon) {
+  const params = new URLSearchParams({
+    lat: String(lat),
+    lng: String(lon)
+  });
+
+  try {
+    const res = await authFetch(`/api/geo/reverse?${params.toString()}`, {
+      timeoutMs: 20000
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (res.ok && data.status === 'success' && data.address) {
+      return buildResolvedAddress(data.address, lat, lon);
+    }
+  } catch {
+    // Fall through to browser-side Google lookup when the backend route is unavailable.
+  }
+
+  const clientGoogleAddress = await reverseGeocodeWithGoogleClient(lat, lon);
+  if (clientGoogleAddress) {
+    return buildResolvedAddress(clientGoogleAddress, lat, lon);
+  }
+
+  throw new Error(
+    'Could not fetch address from your current location. Please try again or enter it manually.'
+  );
 }
 
 export async function resolveAddressFromCurrentLocation() {
