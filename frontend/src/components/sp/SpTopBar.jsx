@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import React, { useEffect, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Menu, Search, ShoppingCart, User, LogOut } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -28,14 +28,70 @@ import SpNotificationsBell from './SpNotificationsBell';
 
 export default function SpTopBar({ user, pathname, onMenuClick, onLogout }) {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const isDiscoveryPage = location.pathname === '/product-discovery';
+  const discoveryQuery = isDiscoveryPage ? (searchParams.get('q') || '') : '';
   const [search, setSearch] = useState('');
+  const searchDebounceRef = useRef(null);
   const cartCount = useServiceProviderCartCount();
   const crumbs = getSpBreadcrumb(pathname);
 
+  useEffect(() => {
+    if (isDiscoveryPage) {
+      setSearch(discoveryQuery);
+    }
+  }, [discoveryQuery, isDiscoveryPage]);
+
+  useEffect(
+    () => () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    },
+    []
+  );
+
+  const buildDiscoveryPath = (rawValue) => {
+    const q = String(rawValue || '').trim();
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    const category = isDiscoveryPage ? searchParams.get('category') : null;
+    if (category) params.set('category', category);
+    const queryString = params.toString();
+    return queryString ? `/product-discovery?${queryString}` : '/product-discovery';
+  };
+
+  const runDiscoverySearch = (rawValue) => {
+    const trimmed = String(rawValue || '').trim();
+    if (isDiscoveryPage) {
+      if (trimmed === discoveryQuery) return;
+      navigate(buildDiscoveryPath(rawValue), { replace: true });
+      return;
+    }
+    if (trimmed) {
+      navigate(buildDiscoveryPath(rawValue));
+    }
+  };
+
+  const queueDiscoverySearch = (rawValue, { immediate = false } = {}) => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    if (immediate) {
+      runDiscoverySearch(rawValue);
+      return;
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      runDiscoverySearch(rawValue);
+    }, 300);
+  };
+
+  const handleSearchChange = (event) => {
+    const value = event.target.value;
+    setSearch(value);
+    queueDiscoverySearch(value);
+  };
+
   const handleSearch = (e) => {
     e.preventDefault();
-    const q = search.trim();
-    navigate(q ? `/product-discovery?q=${encodeURIComponent(q)}` : '/product-discovery');
+    queueDiscoverySearch(search, { immediate: true });
   };
 
   return (
@@ -69,7 +125,7 @@ export default function SpTopBar({ user, pathname, onMenuClick, onLogout }) {
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={handleSearchChange}
               placeholder="Search products..."
               className="pl-9"
             />

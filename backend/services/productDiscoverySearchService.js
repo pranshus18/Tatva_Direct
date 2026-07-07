@@ -34,20 +34,9 @@ function escapeIlikeLiteral(text) {
     .replace(/_/g, '\\_');
 }
 
-function applyCategoryFilter(
-  productsQuery,
-  { legacyCategory, normalizedCategoryLegacy, trimmedCategoryVoice }
-) {
-  if (legacyCategory) {
-    if (normalizedCategoryLegacy) {
-      return productsQuery.eq('category', normalizedCategoryLegacy);
-    }
-    return productsQuery;
-  }
-  if (trimmedCategoryVoice) {
-    return productsQuery.ilike('category', escapeIlikeLiteral(trimmedCategoryVoice));
-  }
-  return productsQuery;
+function applyCategoryFilter(productsQuery, { trimmedCategory }) {
+  if (!trimmedCategory) return productsQuery;
+  return productsQuery.ilike('category', escapeIlikeLiteral(trimmedCategory));
 }
 
 function buildListedProductsQuery(supabase, categoryOpts) {
@@ -87,9 +76,9 @@ function buildListedProductsQuery(supabase, categoryOpts) {
 
 function applyTextSearchFilter(productsQuery, query) {
   if (!query) return productsQuery;
-  const ilikeQuery = `%${query.replace(/\s+/g, '%')}%`;
+  const ilikeQuery = `%${escapeIlikeLiteral(query).replace(/\s+/g, '%')}%`;
   return productsQuery.or(
-    `name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery}`
+    `name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery},description.ilike.${ilikeQuery},category.ilike.${ilikeQuery}`
   );
 }
 
@@ -100,9 +89,14 @@ function applyTokenSearchFilter(productsQuery, query) {
   const parts = [];
   for (const pattern of patterns) {
     const escaped = pattern.replace(/,/g, ' ');
-    parts.push(`name.ilike.${escaped}`, `brand.ilike.${escaped}`);
+    parts.push(
+      `name.ilike.${escaped}`,
+      `brand.ilike.${escaped}`,
+      `description.ilike.${escaped}`,
+      `category.ilike.${escaped}`
+    );
   }
-  return productsQuery.or(parts.slice(0, 14).join(','));
+  return productsQuery.or(parts.slice(0, 16).join(','));
 }
 
 /**
@@ -135,14 +129,10 @@ export async function searchProductDiscoveryForUser(
 
   const query = sanitizeDiscoverySearchQuery(normalizeSearchQueryAliases(sanitizeDiscoverySearchQuery(q)));
   const rankingPoolLimit = query ? 250 : 500;
-  const legacyCategory = Boolean(legacyManualDiscoveryCategoryFilter);
-  const normalizedCategoryLegacy = String(category || '').trim().toLowerCase();
-  const trimmedCategoryVoice = String(category || '').trim();
+  const trimmedCategory = String(category || '').trim();
 
   const categoryOpts = {
-    legacyCategory,
-    normalizedCategoryLegacy,
-    trimmedCategoryVoice
+    trimmedCategory
   };
 
   let productsQuery = applyTextSearchFilter(

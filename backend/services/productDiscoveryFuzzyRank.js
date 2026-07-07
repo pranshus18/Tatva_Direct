@@ -21,10 +21,14 @@ export function rankProductsByQuery(query, products = []) {
       const name = String(p?.name || '');
       const desc = String(p?.description || '');
       const brand = String(p?.brand || '');
-      const combinedDesc = [desc, brand].filter(Boolean).join(' ');
+      const category = String(p?.category || '');
+      const tags = Array.isArray(p?.tags) ? p.tags.filter(Boolean).join(' ') : '';
+      const combinedDesc = [desc, brand, category, tags].filter(Boolean).join(' ');
       const matchScore = Math.max(
         calculateMatchConfidence(q, name, combinedDesc),
+        category ? calculateMatchConfidence(q, category, name) * 0.98 : 0,
         aliasQuery !== q ? calculateMatchConfidence(aliasQuery, name, combinedDesc) : 0,
+        category && aliasQuery !== q ? calculateMatchConfidence(aliasQuery, category, name) * 0.98 : 0,
         brand ? calculateMatchConfidence(q, brand, name) * 0.95 : 0,
         brand && aliasQuery !== q ? calculateMatchConfidence(aliasQuery, brand, name) * 0.95 : 0
       );

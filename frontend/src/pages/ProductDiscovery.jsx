@@ -110,10 +110,10 @@ function TagList({ tags }) {
 }
 
 const ProductDiscovery = () => {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
-  const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') || '');
-  const [selectedCategory, setSelectedCategory] = useState('');
+  const searchQuery = searchParams.get('q') || '';
+  const selectedCategory = searchParams.get('category') || '';
   const [categoryOptions, setCategoryOptions] = useState([]);
   const [products, setProducts] = useState([]);
   const [total, setTotal] = useState(0);
@@ -134,6 +134,36 @@ const ProductDiscovery = () => {
   const [newShippingAddress, setNewShippingAddress] = useState(blankShippingAddress);
   const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
   const pageSize = 24;
+
+  const updateSearchQuery = (value) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        const trimmed = String(value || '').trim();
+        if (trimmed) next.set('q', trimmed);
+        else next.delete('q');
+        next.delete('page');
+        return next;
+      },
+      { replace: true }
+    );
+    setPage(1);
+  };
+
+  const updateSelectedCategory = (value) => {
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        const trimmed = String(value || '').trim();
+        if (trimmed) next.set('category', trimmed);
+        else next.delete('category');
+        next.delete('page');
+        return next;
+      },
+      { replace: true }
+    );
+    setPage(1);
+  };
 
   const categories = useMemo(() => {
     const merged = new Map();
@@ -230,6 +260,13 @@ const ProductDiscovery = () => {
   useEffect(() => {
     setPage(1);
   }, [searchQuery, selectedCategory]);
+
+  useEffect(() => {
+    const pageFromUrl = Number.parseInt(String(searchParams.get('page') || ''), 10);
+    if (Number.isFinite(pageFromUrl) && pageFromUrl >= 1) {
+      setPage(pageFromUrl);
+    }
+  }, [searchParams]);
 
   const pageCount = useMemo(() => {
     if (!total || total < 1) return 1;
@@ -498,15 +535,15 @@ const ProductDiscovery = () => {
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             className="pl-9"
-            placeholder="Search by name, brand, or description..."
+            placeholder="Search by name, brand, category, or description..."
             value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
+            onChange={(event) => updateSearchQuery(event.target.value)}
           />
         </div>
         <select
           className="h-10 rounded-md border border-input bg-background px-3 text-sm"
           value={selectedCategory}
-          onChange={(event) => setSelectedCategory(event.target.value)}
+          onChange={(event) => updateSelectedCategory(event.target.value)}
         >
           <option value="">All categories</option>
           {categories.map((category) => (
