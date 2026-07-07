@@ -66,25 +66,36 @@ async function sendNotificationEmails(notifications = [], dbClient = supabase) {
   );
 }
 
-export async function insertNotification(notification, dbClient = supabase) {
+export async function insertNotification(notification, dbClient = supabase, options = {}) {
   const result = await dbClient
     .from('notifications')
     .insert(notification);
 
-  if (!result?.error) {
-    await sendNotificationEmails([notification], dbClient);
+  if (!result?.error && options.skipEmail !== true) {
+    void sendNotificationEmails([notification], dbClient).catch((emailErr) => {
+      console.error('[notificationsRepository] Background notification email failed:', emailErr);
+    });
   }
   return result;
 }
 
-export async function insertNotifications(notifications, dbClient = supabase) {
-  const result = await dbClient
-    .from('notifications')
-    .insert(notifications);
+const NOTIFICATION_INSERT_BATCH_SIZE = 100;
 
-  if (!result?.error) {
-    await sendNotificationEmails(notifications, dbClient);
+export async function insertNotifications(notifications, dbClient = supabase, options = {}) {
+  const rows = Array.isArray(notifications) ? notifications.filter(Boolean) : [];
+  if (!rows.length) return { error: null };
+
+  for (let index = 0; index < rows.length; index += NOTIFICATION_INSERT_BATCH_SIZE) {
+    const batch = rows.slice(index, index + NOTIFICATION_INSERT_BATCH_SIZE);
+    const result = await dbClient.from('notifications').insert(batch);
+    if (result?.error) return result;
   }
-  return result;
+
+  if (options.skipEmail !== true) {
+    void sendNotificationEmails(rows, dbClient).catch((emailErr) => {
+      console.error('[notificationsRepository] Background notification email batch failed:', emailErr);
+    });
+  }
+  return { error: null };
 }
 

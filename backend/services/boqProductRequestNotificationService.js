@@ -79,6 +79,26 @@ export function resolveProductRequestRecipients(allSuppliers, brandName, termina
   return { recipients: list, notifyScope: 'all_suppliers' };
 }
 
+async function loadSupplierRecipients(db, brandName, terminalRole) {
+  if (!terminalRole) {
+    const { data, error } = await db.from('users').select('id').eq('user_type', 'supplier');
+    if (error) throw error;
+    return resolveProductRequestRecipients(data || [], brandName, null);
+  }
+
+  const { data: suppliers, error } = await db.from('users').select('id, profile').eq('user_type', 'supplier');
+  if (error) throw error;
+
+  const resolved = resolveProductRequestRecipients(suppliers || [], brandName, terminalRole);
+  if (resolved.notifyScope === 'all_suppliers') {
+    return {
+      ...resolved,
+      recipients: (suppliers || []).map((supplier) => ({ id: supplier.id }))
+    };
+  }
+  return resolved;
+}
+
 export async function notifyTerminalSuppliersAboutProductRequest({
   db,
   request,
@@ -86,17 +106,7 @@ export async function notifyTerminalSuppliersAboutProductRequest({
   terminalRole,
   serviceProvider
 }) {
-  const { data: suppliers, error } = await db
-    .from('users')
-    .select('id, name, company, profile')
-    .eq('user_type', 'supplier');
-  if (error) throw error;
-
-  const { recipients, notifyScope } = resolveProductRequestRecipients(
-    suppliers || [],
-    brandName,
-    terminalRole
-  );
+  const { recipients, notifyScope } = await loadSupplierRecipients(db, brandName, terminalRole);
 
   if (!recipients.length) {
     return { notifiedCount: 0, terminalRole: terminalRole || null, notifyScope };
@@ -136,7 +146,7 @@ export async function notifyTerminalSuppliersAboutProductRequest({
     is_read: false
   }));
 
-  await insertNotifications(notifications, db);
+  await insertNotifications(notifications, db, { skipEmail: true });
   return {
     notifiedCount: notifications.length,
     terminalRole: terminalRole || null,

@@ -256,8 +256,8 @@ const BOQNormalize = ({ onComplete }) => {
 
       const data = await res.json();
       if (res.ok && data.status === 'success') {
-        alert(data.message || 'Suppliers were notified that a customer is looking for this product.');
         closeRequestProductModal();
+        alert(data.message || 'Suppliers were notified that a customer is looking for this product.');
       } else {
         alert(data.message || 'Failed to submit product request. Please try again.');
       }
