@@ -385,7 +385,9 @@
 .project-name-input:disabled,
 .branch-name-input:disabled {
   background: transparent;
-  cursor: default;
+  color: #64748b;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .btn-remove {

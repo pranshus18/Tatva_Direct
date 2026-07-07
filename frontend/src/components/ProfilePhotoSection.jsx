@@ -11,7 +11,7 @@ import {
 import ProfileCameraCapture from './ProfileCameraCapture';
 import './ProfilePhotoSection.css';
 
-export default function ProfilePhotoSection({ profile }) {
+export default function ProfilePhotoSection({ profile, editing = false }) {
   const galleryInputRef = useRef(null);
   const cameraFallbackInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
@@ -24,6 +24,12 @@ export default function ProfilePhotoSection({ profile }) {
   useEffect(() => {
     setPhotoUrl(String(profile?.profilePhotoUrl || '').trim());
   }, [profile?.profilePhotoUrl]);
+
+  useEffect(() => {
+    if (!editing) {
+      setCameraOpen(false);
+    }
+  }, [editing]);
 
   const displayName = profile?.contactPerson || profile?.companyName || 'User';
   const initials = getProfileInitials(displayName);
@@ -56,6 +62,7 @@ export default function ProfilePhotoSection({ profile }) {
   };
 
   const uploadFile = async (file) => {
+    if (!editing) return;
     if (!file.type.startsWith('image/')) {
       setError('Please choose an image file (JPEG, PNG, WebP, or GIF).');
       return;
@@ -92,12 +99,16 @@ export default function ProfilePhotoSection({ profile }) {
     }
   };
 
+  const canEditPhoto = editing && !uploading;
+
   const handlePickGallery = () => {
+    if (!editing) return;
     setError('');
     galleryInputRef.current?.click();
   };
 
   const handleOpenCamera = () => {
+    if (!editing) return;
     setError('');
     if (navigator.mediaDevices?.getUserMedia) {
       setCameraOpen(true);
@@ -107,6 +118,10 @@ export default function ProfilePhotoSection({ profile }) {
   };
 
   const handleFileChange = async (event) => {
+    if (!editing) {
+      event.target.value = '';
+      return;
+    }
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
@@ -114,6 +129,7 @@ export default function ProfilePhotoSection({ profile }) {
   };
 
   const handleRemove = async () => {
+    if (!editing) return;
     setUploading(true);
     setError('');
     try {
@@ -165,19 +181,21 @@ export default function ProfilePhotoSection({ profile }) {
               ) : null}
             </div>
           )}
-          <button
-            type="button"
-            className="profile-photo-section__camera-btn"
-            onClick={(event) => {
-              event.stopPropagation();
-              handleOpenCamera();
-            }}
-            disabled={uploading}
-            aria-label="Take profile photo with camera"
-            title="Take photo with camera"
-          >
-            <Camera size={16} />
-          </button>
+          {editing ? (
+            <button
+              type="button"
+              className="profile-photo-section__camera-btn"
+              onClick={(event) => {
+                event.stopPropagation();
+                handleOpenCamera();
+              }}
+              disabled={!canEditPhoto}
+              aria-label="Take profile photo with camera"
+              title="Take photo with camera"
+            >
+              <Camera size={16} />
+            </button>
+          ) : null}
         </div>
 
         <div className="profile-photo-section__meta">
@@ -187,24 +205,28 @@ export default function ProfilePhotoSection({ profile }) {
           ) : null}
           <p className="profile-photo-section__hint">
             <User size={14} aria-hidden />
-            Use the camera icon to take a photo, or choose one from your device.
+            {editing
+              ? 'Use the camera icon to take a photo, or choose one from your device.'
+              : 'Click Edit Profile to update your photo or company details.'}
           </p>
-          <div className="profile-photo-section__actions">
-            <button type="button" className="btn-primary" onClick={handleOpenCamera} disabled={uploading}>
-              <Camera size={16} aria-hidden />
-              Take photo
-            </button>
-            <button type="button" className="btn-secondary" onClick={handlePickGallery} disabled={uploading}>
-              <ImagePlus size={16} aria-hidden />
-              {resolvedPhoto ? 'Choose from gallery' : 'Upload from device'}
-            </button>
-            {resolvedPhoto ? (
-              <button type="button" className="btn-secondary" onClick={handleRemove} disabled={uploading}>
-                <Trash2 size={16} aria-hidden />
-                Remove
+          {editing ? (
+            <div className="profile-photo-section__actions">
+              <button type="button" className="btn-primary" onClick={handleOpenCamera} disabled={!canEditPhoto}>
+                <Camera size={16} aria-hidden />
+                Take photo
               </button>
-            ) : null}
-          </div>
+              <button type="button" className="btn-secondary" onClick={handlePickGallery} disabled={!canEditPhoto}>
+                <ImagePlus size={16} aria-hidden />
+                {resolvedPhoto ? 'Choose from gallery' : 'Upload from device'}
+              </button>
+              {resolvedPhoto ? (
+                <button type="button" className="btn-secondary" onClick={handleRemove} disabled={!canEditPhoto}>
+                  <Trash2 size={16} aria-hidden />
+                  Remove
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {error ? <p className="profile-photo-section__error">{error}</p> : null}
         </div>
 

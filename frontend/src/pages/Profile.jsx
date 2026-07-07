@@ -180,7 +180,7 @@ const Profile = ({ user }) => {
 
   const profileBody = (
     <div className="profile-container">
-      {profile ? <ProfilePhotoSection profile={profile} /> : null}
+      {profile ? <ProfilePhotoSection profile={profile} editing={editing} /> : null}
       {!isServiceProvider ? (
       <div className="profile-header">
         <div className="profile-title">
