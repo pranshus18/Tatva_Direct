@@ -32,7 +32,8 @@ const SERVICE_PROVIDER_THEME_IDS = new Set([
   'custom'
 ]);
 const SUPPLIER_PORTAL_THEME_IDS = new Set(['default', 'ocean', 'sky', 'slate', 'custom']);
-const MAX_THEME_IMAGE_DATA_URL_LENGTH = 3_500_000;
+const THEME_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const MAX_THEME_IMAGE_DATA_URL_LENGTH = Math.ceil((THEME_IMAGE_MAX_BYTES * 4) / 3) + 64;
 
 /** Max upload size for profile avatar (multer + API validation). */
 export const PROFILE_PHOTO_MAX_BYTES = 20 * 1024 * 1024;

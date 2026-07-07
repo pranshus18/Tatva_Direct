@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Crop, ImagePlus, Paintbrush, RotateCcw, Upload } from 'lucide-react';
+import { ImagePlus, Paintbrush, RotateCcw, Upload } from 'lucide-react';
 import {
   SUPPLIER_PORTAL_THEMES,
   getSupplierPortalThemePrefs,
@@ -7,6 +7,8 @@ import {
   saveSupplierPortalThemePrefsToApi,
   resolveSupplierPortalThemeBackground
 } from '../utils/supplierPortalTheme';
+import { readThemeImageFile, validateThemeImageFile } from '../utils/themeImageCrop';
+import ThemeImageCropper from '../components/ThemeImageCropper';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import './ServiceProviderThemeSettings.css';
@@ -16,9 +18,6 @@ const SupplierPortalThemeSettings = () => {
   const [uploadError, setUploadError] = useState('');
   const [saving, setSaving] = useState(false);
   const [pendingImageDataUrl, setPendingImageDataUrl] = useState('');
-  const [cropXPercent, setCropXPercent] = useState(50);
-  const [cropYPercent, setCropYPercent] = useState(50);
-  const [cropZoom, setCropZoom] = useState(1.4);
   const fileRef = useRef(null);
 
   const previewBackground = useMemo(
@@ -58,32 +57,24 @@ const SupplierPortalThemeSettings = () => {
     fileRef.current?.click();
   };
 
-  const handleImageUpload = (event) => {
+  const handleImageUpload = async (event) => {
     const file = event.target.files?.[0];
+    event.target.value = '';
     if (!file) return;
-    if (!file.type.startsWith('image/')) {
-      setUploadError('Please upload a valid image file.');
+
+    const validationError = validateThemeImageFile(file);
+    if (validationError) {
+      setUploadError(validationError);
       return;
     }
-    if (file.size > 3 * 1024 * 1024) {
-      setUploadError('Image is too large. Please upload up to 3MB.');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result || '');
-      if (!dataUrl) {
-        setUploadError('Could not read uploaded image.');
-        return;
-      }
+
+    try {
+      const dataUrl = await readThemeImageFile(file);
       setPendingImageDataUrl(dataUrl);
-      setCropXPercent(50);
-      setCropYPercent(50);
-      setCropZoom(1.4);
       setUploadError('');
-    };
-    reader.onerror = () => setUploadError('Could not read uploaded image.');
-    reader.readAsDataURL(file);
+    } catch (error) {
+      setUploadError(error?.message || 'Could not read uploaded image.');
+    }
   };
 
   const resetToDefault = () => {
@@ -99,81 +90,26 @@ const SupplierPortalThemeSettings = () => {
       .finally(() => setSaving(false));
   };
 
-  const buildCroppedImageDataUrl = async ({ sourceDataUrl, xPercent, yPercent, zoom }) => {
-    const image = await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.onload = () => resolve(img);
-      img.onerror = () => reject(new Error('Failed to load image for cropping.'));
-      img.src = sourceDataUrl;
-    });
-
-    const imageWidth = image.width;
-    const imageHeight = image.height;
-    const aspectRatio = 16 / 9;
-
-    const maxCropWidth = imageWidth / zoom;
-    const maxCropHeight = imageHeight / zoom;
-    let cropWidth = maxCropWidth;
-    let cropHeight = cropWidth / aspectRatio;
-    if (cropHeight > maxCropHeight) {
-      cropHeight = maxCropHeight;
-      cropWidth = cropHeight * aspectRatio;
-    }
-
-    const maxX = Math.max(0, imageWidth - cropWidth);
-    const maxY = Math.max(0, imageHeight - cropHeight);
-    const sx = (Math.max(0, Math.min(100, xPercent)) / 100) * maxX;
-    const sy = (Math.max(0, Math.min(100, yPercent)) / 100) * maxY;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 1920;
-    canvas.height = 1080;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) throw new Error('Could not initialize canvas for cropping.');
-    ctx.drawImage(image, sx, sy, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height);
-    return canvas.toDataURL('image/jpeg', 0.92);
-  };
-
-  const applyCroppedImage = async () => {
-    if (!pendingImageDataUrl) return;
+  const saveCustomWallpaper = async (customImageDataUrl) => {
     setSaving(true);
     try {
-      const croppedDataUrl = await buildCroppedImageDataUrl({
-        sourceDataUrl: pendingImageDataUrl,
-        xPercent: cropXPercent,
-        yPercent: cropYPercent,
-        zoom: cropZoom
-      });
       const nextPrefs = await saveSupplierPortalThemePrefsToApi({
         themeId: 'custom',
-        customImageDataUrl: croppedDataUrl
+        customImageDataUrl
       });
       setPrefs(nextPrefs);
       setPendingImageDataUrl('');
       setUploadError('');
     } catch (error) {
-      setUploadError(error?.message || 'Could not crop image.');
+      setUploadError(error?.message || 'Could not save uploaded image.');
+      throw error;
     } finally {
       setSaving(false);
     }
   };
 
-  const useFullImageWithoutCrop = async () => {
-    if (!pendingImageDataUrl) return;
-    setSaving(true);
-    try {
-      const nextPrefs = await saveSupplierPortalThemePrefsToApi({
-        themeId: 'custom',
-        customImageDataUrl: pendingImageDataUrl
-      });
-      setPrefs(nextPrefs);
-      setPendingImageDataUrl('');
-      setUploadError('');
-    } catch {
-      setUploadError('Could not save uploaded image.');
-    } finally {
-      setSaving(false);
-    }
+  const cancelPendingImage = () => {
+    setPendingImageDataUrl('');
   };
 
   return (
@@ -230,74 +166,14 @@ const SupplierPortalThemeSettings = () => {
             onChange={handleImageUpload}
           />
           {pendingImageDataUrl ? (
-            <div className="sp-theme-settings__cropper">
-              <h3>
-                <Crop size={16} /> Crop your image
-              </h3>
-              <p>Select the exact portion you want as wallpaper.</p>
-              <div
-                className="sp-theme-settings__crop-preview"
-                style={{
-                  backgroundImage: `url('${pendingImageDataUrl}')`,
-                  backgroundSize: `${cropZoom * 100}%`,
-                  backgroundPosition: `${cropXPercent}% ${cropYPercent}%`
-                }}
-              />
-              <div className="sp-theme-settings__crop-controls">
-                <label>
-                  Horizontal
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={cropXPercent}
-                    onChange={(event) => setCropXPercent(Number(event.target.value))}
-                  />
-                </label>
-                <label>
-                  Vertical
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={cropYPercent}
-                    onChange={(event) => setCropYPercent(Number(event.target.value))}
-                  />
-                </label>
-                <label>
-                  Zoom
-                  <input
-                    type="range"
-                    min="1"
-                    max="3"
-                    step="0.05"
-                    value={cropZoom}
-                    onChange={(event) => setCropZoom(Number(event.target.value))}
-                  />
-                </label>
-              </div>
-              <div className="sp-theme-settings__actions">
-                <button type="button" className="btn-primary" onClick={applyCroppedImage} disabled={saving}>
-                  <Crop size={16} /> Apply cropped image
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={useFullImageWithoutCrop}
-                  disabled={saving}
-                >
-                  Use full image
-                </button>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={() => setPendingImageDataUrl('')}
-                  disabled={saving}
-                >
-                  Cancel crop
-                </button>
-              </div>
-            </div>
+            <ThemeImageCropper
+              key={pendingImageDataUrl}
+              imageSrc={pendingImageDataUrl}
+              saving={saving}
+              onCancel={cancelPendingImage}
+              onApplyFull={(fullImageDataUrl) => saveCustomWallpaper(fullImageDataUrl)}
+              onApplyCrop={(croppedDataUrl) => saveCustomWallpaper(croppedDataUrl)}
+            />
           ) : null}
           {prefs.themeId === 'custom' && prefs.customImageDataUrl ? (
             <p className="sp-theme-settings__hint">
