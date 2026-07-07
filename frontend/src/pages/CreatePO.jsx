@@ -44,7 +44,10 @@ import {
   SP_PO_CHECKOUT_SESSION_KEY,
   SP_CHECKOUT_CART_PATH
 } from '../utils/checkoutReservation';
+import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import './CreatePO.css';
+
+const todayDateMin = getTodayDateInputValue();
 
 /** Shown when pay-later is blocked (limit, cycle, or minimum). */
 const PAY_LATER_UNAVAILABLE_MESSAGE =
@@ -1134,6 +1137,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       if (!proceed) {
         return;
       }
+    } else if (isDateBeforeToday(requiredDate)) {
+      alert('Required by date cannot be in the past.');
+      return;
     }
 
     const missingShipping = ['line1', 'city', 'state', 'pincode', 'country'].find(
@@ -1420,8 +1426,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           </label>
           <input
             type="date"
+            min={todayDateMin}
             value={requiredDate}
-            onChange={(e) => setRequiredDate(e.target.value)}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (next && isDateBeforeToday(next)) return;
+              setRequiredDate(next);
+            }}
             style={{
               width: '100%',
               padding: '0.5rem 0.75rem',

@@ -20,6 +20,7 @@ import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js
 import { isAddressComplete, normalizeAddress } from './shared/poHelpers.js';
 import { formatShippingAddressText } from '../../services/vendorRequestContextService.js';
 import { geocodeIndianAddress } from '../../utils/geoUtils.js';
+import { validateRequiredDateNotPast } from '../../utils/dateTime.js';
 import {
   CHECKOUT_RESERVATION_MINUTES,
   CHECKOUT_SOURCES,
@@ -218,6 +219,12 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
         status: 'error',
         message: 'expectedDeliveryDate must be in YYYY-MM-DD format'
       });
+    }
+    if (expectedDeliveryDate) {
+      const dateValidation = validateRequiredDateNotPast(expectedDeliveryDate);
+      if (dateValidation.error) {
+        return res.status(400).json({ status: 'error', message: dateValidation.error });
+      }
     }
     if (!targetGroupId && providedProjectName && !expectedDeliveryDate) {
       return res.status(400).json({
@@ -604,6 +611,12 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
         status: 'error',
         message: 'expectedDeliveryDate must be in YYYY-MM-DD format'
       });
+    }
+    if (expectedDeliveryDate) {
+      const dateValidation = validateRequiredDateNotPast(expectedDeliveryDate);
+      if (dateValidation.error) {
+        return res.status(400).json({ status: 'error', message: dateValidation.error });
+      }
     }
 
     const { data: cart, error: cartError } = await supabase

@@ -28,7 +28,7 @@ import SupplierProductDetailsModal from '../components/SupplierProductDetailsMod
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
-import { formatDateIST } from '../utils/dateTime';
+import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import {
   createUpstreamCheckoutSessionId,
   clearCheckoutHoldExpired,
@@ -69,6 +69,8 @@ const blankShippingAddress = {
   pincode: '',
   country: 'India'
 };
+
+const todayDateMin = getTodayDateInputValue();
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
@@ -906,6 +908,10 @@ const SupplierUpstream = ({ user }) => {
       alert('Please select expected delivery date for new supplier project.');
       return;
     }
+    if (isNewProject && isDateBeforeToday(newCartRequiredDate)) {
+      alert('Expected delivery date cannot be in the past.');
+      return;
+    }
 
     setAddingCartByMineId((prev) => ({ ...prev, [mineId]: true }));
     let ok = false;
@@ -1555,8 +1561,13 @@ const SupplierUpstream = ({ user }) => {
                   <label className="text-sm font-medium">Expected delivery date</label>
                   <Input
                     type="date"
+                    min={todayDateMin}
                     value={newCartRequiredDate}
-                    onChange={(event) => setNewCartRequiredDate(event.target.value)}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      if (next && isDateBeforeToday(next)) return;
+                      setNewCartRequiredDate(next);
+                    }}
                   />
                 </div>
               </div>

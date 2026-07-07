@@ -13,6 +13,8 @@ import { boqNormalizeBodySchema } from '../../contracts/boqContracts.js';
 import { deleteBoqById } from '../../repositories/boqsRepository.js';
 import { inferUnitAndCategory } from '../../services/materialClassificationService.js';
 import { geocodeAddressNominatim, parseOptionalGeo } from '../../utils/geoUtils.js';
+import { validateRequiredDateNotPast } from '../../utils/dateTime.js';
+import { extractBoqQuantity, isBoqQuantityColumn, normalizeBoqColumnKey } from '../../utils/boqRowParsing.js';
 
 export function registerBoqNormalizeRoutes(ctx) {
   const {
@@ -38,7 +40,20 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
     }
 
     const siteLocation = String(body.siteLocation || body.site_location || '').trim();
-    const requiredDate = String(body.requiredDate || body.required_date || '').trim();
+    const requiredDateRaw = String(body.requiredDate || body.required_date || '').trim();
+    const requiredDateValidation = validateRequiredDateNotPast(requiredDateRaw);
+    if (requiredDateValidation.error) {
+      try {
+        await fs.remove(req.file.path);
+      } catch (cleanupErr) {
+        console.error('BOQ normalize cleanup (invalid required date):', cleanupErr);
+      }
+      return res.status(400).json({
+        status: 'error',
+        message: requiredDateValidation.error
+      });
+    }
+    const requiredDate = requiredDateValidation.value || requiredDateRaw;
     const providedGeo = parseOptionalGeo(body.siteLatitude ?? body.site_lat, body.siteLongitude ?? body.site_lng);
     if ((!siteLocation && !providedGeo) || !requiredDate) {
       try {
@@ -144,7 +159,7 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
       // Find description
       const descKeys = ['description', 'item', 'name', 'product', 'item description', 'item name', 'material', 'product name'];
       for (const key of descKeys) {
-        const foundKey = keys.find(k => k.toLowerCase() === key.toLowerCase());
+        const foundKey = keys.find((k) => normalizeBoqColumnKey(k) === key.toLowerCase());
         if (foundKey && rawItem[foundKey] && String(rawItem[foundKey]).trim()) {
           description = String(rawItem[foundKey]).trim();
           break;
@@ -154,6 +169,8 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
       // If no description found, use first non-empty TEXT column
       if (!description) {
         for (const key of keys) {
+          if (isBoqQuantityColumn(key)) continue;
+
           const value = rawItem[key];
           const str = String(value ?? '').trim();
           
@@ -178,28 +195,7 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
         console.log(`Row ${i + 1}: Using fallback description`, rawItem);
       }
       
-      // Find quantity
-      const qtyKeys = ['quantity', 'qty', 'qty.', 'amount', 'nos', 'number', 'count'];
-      for (const key of qtyKeys) {
-        const foundKey = keys.find(k => k.toLowerCase() === key.toLowerCase());
-        if (foundKey) {
-          const qtyValue = parseFloat(rawItem[foundKey]);
-          if (!isNaN(qtyValue) && qtyValue > 0) {
-            quantity = qtyValue;
-            break;
-          }
-        }
-      }
-      
-      if (quantity <= 0) {
-        for (const key of keys) {
-          const value = parseFloat(rawItem[key]);
-          if (!isNaN(value) && value > 0 && value < 1000000) {
-            quantity = value;
-            break;
-          }
-        }
-      }
+      quantity = extractBoqQuantity(rawItem);
       
       // Find unit
       const unitKeys = ['unit', 'uom', 'unit of measure', 'uom.'];

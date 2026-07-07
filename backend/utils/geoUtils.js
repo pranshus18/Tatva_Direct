@@ -546,6 +546,168 @@ async function resolveGeocodeUncached(q) {
   return null;
 }
 
+function pickGoogleAddressComponent(components, ...types) {
+  if (!Array.isArray(components)) return '';
+  for (const type of types) {
+    const hit = components.find((component) => Array.isArray(component?.types) && component.types.includes(type));
+    if (hit?.long_name) return String(hit.long_name).trim();
+  }
+  return '';
+}
+
+export function parseNominatimReverseAddress(addr = {}, displayName = '') {
+  const line1 = [
+    addr.house_number,
+    addr.building,
+    addr.road || addr.pedestrian || addr.residential || addr.footway,
+    addr.neighbourhood || addr.suburb || addr.quarter || addr.hamlet
+  ]
+    .filter(Boolean)
+    .join(', ')
+    .trim();
+
+  const city =
+    addr.city ||
+    addr.city_district ||
+    addr.town ||
+    addr.village ||
+    addr.municipality ||
+    addr.suburb ||
+    addr.neighbourhood ||
+    '';
+
+  const state = addr.state || addr.state_district || '';
+  const pincode = addr.postcode || '';
+  const country = addr.country || 'India';
+
+  const fallbackLine1 = String(displayName || '')
+    .split(',')
+    .slice(0, 2)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(', ');
+
+  return {
+    line1: line1 || fallbackLine1,
+    city,
+    state,
+    pincode,
+    country
+  };
+}
+
+function parseGoogleReverseGeocodeResult(result) {
+  const components = result?.address_components || [];
+  const streetNumber = pickGoogleAddressComponent(components, 'street_number', 'premise');
+  const route = pickGoogleAddressComponent(components, 'route', 'neighborhood', 'sublocality_level_2');
+  const line1 = [streetNumber, route].filter(Boolean).join(', ').trim();
+  const city = pickGoogleAddressComponent(
+    components,
+    'locality',
+    'administrative_area_level_2',
+    'sublocality',
+    'sublocality_level_1',
+    'neighborhood'
+  );
+  const state = pickGoogleAddressComponent(components, 'administrative_area_level_1');
+  const pincode = pickGoogleAddressComponent(components, 'postal_code');
+  const country = pickGoogleAddressComponent(components, 'country') || 'India';
+
+  if (!line1 && !city && !state && result?.formatted_address) {
+    const parts = String(result.formatted_address)
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    return {
+      line1: parts.slice(0, 2).join(', '),
+      city: parts[2] || parts[1] || '',
+      state: parts.find((part) => /pradesh|nadu|bengal|kerala|goa|delhi|gujarat|maharashtra|karnataka|rajasthan|punjab|haryana|assam|odisha|bihar|jharkhand|uttarakhand|chhattisgarh|telangana|jammu|ladakh|islands/i.test(part)) || parts[parts.length - 2] || '',
+      pincode: parts.find((part) => /^\d{6}$/.test(part)) || pincode,
+      country
+    };
+  }
+
+  return { line1, city, state, pincode, country };
+}
+
+async function reverseGeocodeWithGoogle(lat, lng, apiKey) {
+  try {
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?latlng=${encodeURIComponent(
+      `${lat},${lng}`
+    )}&result_type=${encodeURIComponent(
+      'street_address|route|neighborhood|sublocality|locality|administrative_area_level_2'
+    )}&region=IN&key=${encodeURIComponent(apiKey)}`;
+    const response = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(8000)
+    });
+    if (!response.ok) return null;
+    const body = await response.json();
+    if (body.status !== 'OK' || !Array.isArray(body.results) || body.results.length === 0) {
+      return null;
+    }
+    const parsed = parseGoogleReverseGeocodeResult(body.results[0]);
+    if (!parsed.line1 && !parsed.city && !parsed.state) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function reverseGeocodeWithNominatim(lat, lng) {
+  return scheduleNominatimCall(async () => {
+    try {
+      const url =
+        `https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1` +
+        `&zoom=18&layer=address&accept-language=en&countrycodes=in` +
+        `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}`;
+      const response = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'TatvaDirect-Platform/1.0'
+        },
+        signal: AbortSignal.timeout(10000)
+      });
+      if (!response.ok) return null;
+      const geoData = await response.json();
+      const parsed = parseNominatimReverseAddress(geoData?.address || {}, geoData?.display_name || '');
+      if (!parsed.line1 && !parsed.city && !parsed.state) return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  });
+}
+
+/** Reverse geocode coordinates into structured Indian address fields. */
+export async function reverseGeocodeCoordinates(lat, lng) {
+  const normalized = normalizeLatLng({ lat, lng });
+  if (!normalized || !isGeoWithinIndia(normalized)) return null;
+
+  const googleKey = process.env.GOOGLE_GEOCODING_API_KEY || getPrimaryGoogleMapsApiKey();
+  if (googleKey) {
+    const googleResult = await reverseGeocodeWithGoogle(normalized.lat, normalized.lng, googleKey);
+    if (googleResult) {
+      return {
+        ...googleResult,
+        latitude: normalized.lat,
+        longitude: normalized.lng,
+        geoLocation: normalized
+      };
+    }
+  }
+
+  const nominatimResult = await reverseGeocodeWithNominatim(normalized.lat, normalized.lng);
+  if (!nominatimResult) return null;
+
+  return {
+    ...nominatimResult,
+    latitude: normalized.lat,
+    longitude: normalized.lng,
+    geoLocation: normalized
+  };
+}
+
 /** "City, State" style split for text proximity fallback */
 export function inferCityStateFromLocationText(text) {
   const t = (text || '').trim();

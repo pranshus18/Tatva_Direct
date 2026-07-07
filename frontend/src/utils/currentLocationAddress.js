@@ -1,4 +1,10 @@
-/** Browser geolocation + OpenStreetMap reverse geocode → normalized address fields. */
+/** Browser geolocation + server reverse geocode → normalized address fields. */
+
+import { authFetch } from '../config/api';
+
+const ACCEPTABLE_ACCURACY_METERS = 75;
+const LOCATION_HARD_TIMEOUT_MS = 12000;
+const LOCATION_SOFT_TIMEOUT_MS = 6000;
 
 export function getCurrentPositionAsync() {
   return new Promise((resolve, reject) => {
@@ -6,17 +12,120 @@ export function getCurrentPositionAsync() {
       reject(new Error('Location is not supported in this browser.'));
       return;
     }
-    navigator.geolocation.getCurrentPosition(resolve, reject, {
+
+    const options = {
       enableHighAccuracy: true,
-      timeout: 12000,
-      maximumAge: 0
-    });
+      maximumAge: 0,
+      timeout: LOCATION_HARD_TIMEOUT_MS
+    };
+
+    let bestPosition = null;
+    let watchId = null;
+    let finished = false;
+    let hardTimeoutId = null;
+    let softTimeoutId = null;
+
+    const cleanup = () => {
+      if (watchId != null) navigator.geolocation.clearWatch(watchId);
+      if (hardTimeoutId) clearTimeout(hardTimeoutId);
+      if (softTimeoutId) clearTimeout(softTimeoutId);
+    };
+
+    const finish = (position, error) => {
+      if (finished) return;
+      finished = true;
+      cleanup();
+      if (position) resolve(position);
+      else reject(error || new Error('Unable to fetch your current location.'));
+    };
+
+    const consider = (position) => {
+      if (!position?.coords) return;
+      const accuracy = Number(position.coords.accuracy);
+      if (
+        !bestPosition ||
+        (Number.isFinite(accuracy) &&
+          accuracy < Number(bestPosition.coords.accuracy ?? Number.POSITIVE_INFINITY))
+      ) {
+        bestPosition = position;
+      }
+      if (Number.isFinite(accuracy) && accuracy <= ACCEPTABLE_ACCURACY_METERS) {
+        finish(position);
+      }
+    };
+
+    hardTimeoutId = setTimeout(() => {
+      if (bestPosition) {
+        finish(bestPosition);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (position) => finish(position),
+        (error) => finish(null, error),
+        options
+      );
+    }, LOCATION_HARD_TIMEOUT_MS);
+
+    softTimeoutId = setTimeout(() => {
+      if (bestPosition) finish(bestPosition);
+    }, LOCATION_SOFT_TIMEOUT_MS);
+
+    watchId = navigator.geolocation.watchPosition(
+      consider,
+      (error) => {
+        if (bestPosition) finish(bestPosition);
+        else if (error?.code === 1) finish(null, error);
+      },
+      options
+    );
   });
 }
 
-export async function reverseGeocodeToAddress(lat, lon) {
+function parseNominatimReverseAddress(addr = {}, displayName = '') {
+  const line1 = [
+    addr.house_number,
+    addr.building,
+    addr.road || addr.pedestrian || addr.residential || addr.footway,
+    addr.neighbourhood || addr.suburb || addr.quarter || addr.hamlet
+  ]
+    .filter(Boolean)
+    .join(', ')
+    .trim();
+
+  const city =
+    addr.city ||
+    addr.city_district ||
+    addr.town ||
+    addr.village ||
+    addr.municipality ||
+    addr.suburb ||
+    addr.neighbourhood ||
+    '';
+
+  const state = addr.state || addr.state_district || '';
+  const pincode = addr.postcode || '';
+  const country = addr.country || 'India';
+
+  const fallbackLine1 = String(displayName || '')
+    .split(',')
+    .slice(0, 2)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join(', ');
+
+  return {
+    line1: line1 || fallbackLine1,
+    city,
+    state,
+    pincode,
+    country
+  };
+}
+
+async function reverseGeocodeDirect(lat, lon) {
   const url =
     `https://nominatim.openstreetmap.org/reverse?format=jsonv2&addressdetails=1` +
+    `&zoom=18&layer=address&accept-language=en&countrycodes=in` +
     `&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`;
   const res = await fetch(url, {
     headers: { 'Accept-Language': 'en' }
@@ -25,32 +134,38 @@ export async function reverseGeocodeToAddress(lat, lon) {
     throw new Error('Could not fetch address from your current location.');
   }
   const geoData = await res.json();
-  const addr = geoData?.address || {};
-  const line1 =
-    [
-      addr.house_number,
-      addr.road || addr.pedestrian || addr.footway,
-      addr.neighbourhood || addr.suburb || addr.quarter
-    ]
-      .filter(Boolean)
-      .join(', ')
-      .trim() || geoData?.display_name || '';
-  const city =
-    addr.city || addr.town || addr.village || addr.municipality || addr.county || '';
-  const state = addr.state || addr.state_district || '';
-  const pincode = addr.postcode || '';
-  const country = addr.country || 'India';
-
+  const parsed = parseNominatimReverseAddress(geoData?.address || {}, geoData?.display_name || '');
   return {
-    line1,
-    city,
-    state,
-    pincode,
-    country,
+    ...parsed,
     latitude: lat,
     longitude: lon,
     geoLocation: { lat, lng: lon }
   };
+}
+
+export async function reverseGeocodeToAddress(lat, lon) {
+  try {
+    const params = new URLSearchParams({
+      lat: String(lat),
+      lng: String(lon)
+    });
+    const res = await authFetch(`/api/geo/reverse?${params.toString()}`, {
+      timeoutMs: 15000
+    });
+    const data = await res.json();
+    if (res.ok && data.status === 'success' && data.address) {
+      return {
+        ...data.address,
+        latitude: lat,
+        longitude: lon,
+        geoLocation: { lat, lng: lon }
+      };
+    }
+  } catch {
+    // Fall back to direct reverse geocoding when the API is unavailable.
+  }
+
+  return reverseGeocodeDirect(lat, lon);
 }
 
 /** Human-readable single-line address for site location fields. */

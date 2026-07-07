@@ -29,7 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/utils';
-import { formatDateIST } from '../utils/dateTime';
+import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
@@ -56,6 +56,8 @@ const blankShippingAddress = {
   pincode: '',
   country: 'India'
 };
+
+const todayDateMin = getTodayDateInputValue();
 
 function isShippingAddressComplete(address = {}) {
   return ['line1', 'city', 'state', 'pincode', 'country'].every((field) =>
@@ -478,6 +480,10 @@ const Cart = ({ onLoadCart }) => {
     if (!normalizedGroupId) return;
     if (!nextName) {
       setError('Project name cannot be empty.');
+      return;
+    }
+    if (nextDate && isDateBeforeToday(nextDate)) {
+      setError('Expected delivery date cannot be in the past.');
       return;
     }
 
@@ -1024,13 +1030,16 @@ const Cart = ({ onLoadCart }) => {
                               <input
                                 type="date"
                                 className="h-9 rounded-md border bg-background px-2 text-sm"
+                                min={todayDateMin}
                                 value={draftGroupDates[groupId] ?? getGroupRequiredDate(group)}
-                                onChange={(e) =>
+                                onChange={(e) => {
+                                  const next = e.target.value;
+                                  if (next && isDateBeforeToday(next)) return;
                                   setDraftGroupDates((prev) => ({
                                     ...prev,
-                                    [groupId]: e.target.value
-                                  }))
-                                }
+                                    [groupId]: next
+                                  }));
+                                }}
                               />
                               <Button
                                 size="sm"

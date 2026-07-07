@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import { clearSupplierSelectScopeSession } from '../constants/supplierSelectSession';
@@ -8,13 +8,16 @@ import {
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
 import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, Search, PlusCircle, MapPin, Calendar, FileText } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import './BOQNormalize.css';
 
 // Ask the user to confirm ANY match that is not nearly exact.
 // 0.99 means even 81%, 90%, etc. will be confirmed like a "Did you mean" suggestion.
 const CONFIRM_MATCH_THRESHOLD = 0.99;
+const REQUEST_PRODUCT_PARAM = 'requestProduct';
+const todayDateMin = getTodayDateInputValue();
 
 const BOQNormalize = ({ onComplete }) => {
   const [siteLocation, setSiteLocation] = useState('');
@@ -28,11 +31,34 @@ const BOQNormalize = ({ onComplete }) => {
   const [savingCart, setSavingCart] = useState(false);
   const [suggestionsByItemId, setSuggestionsByItemId] = useState({});
   const [loadingSuggestionsForId, setLoadingSuggestionsForId] = useState(null);
-  const [requestingProductForItem, setRequestingProductForItem] = useState(null);
   const [requestSubmitting, setRequestSubmitting] = useState(false);
   const [savedProjectMeta, setSavedProjectMeta] = useState(null);
   const [locatingSite, setLocatingSite] = useState(false);
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const requestingProductForItem = useMemo(() => {
+    const itemId = searchParams.get(REQUEST_PRODUCT_PARAM);
+    if (!itemId) return null;
+    return items.find((item) => String(item.id) === String(itemId)) || null;
+  }, [items, searchParams]);
+
+  const openRequestProductModal = useCallback((item) => {
+    if (!item?.id) return;
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set(REQUEST_PRODUCT_PARAM, String(item.id));
+        return next;
+      },
+      { replace: false }
+    );
+  }, [setSearchParams]);
+
+  const closeRequestProductModal = useCallback(() => {
+    if (!searchParams.get(REQUEST_PRODUCT_PARAM)) return;
+    navigate(-1);
+  }, [navigate, searchParams]);
 
   const fillGeoFromBrowser = async () => {
     setLocatingSite(true);
@@ -61,6 +87,11 @@ const BOQNormalize = ({ onComplete }) => {
     const hasGeo = siteLat.trim() && siteLng.trim();
     if ((!loc && !hasGeo) || !requiredDate) {
       alert('Please provide the project site location and select the required date before uploading your BOQ.');
+      e.target.value = '';
+      return;
+    }
+    if (isDateBeforeToday(requiredDate)) {
+      alert('Required by date cannot be in the past.');
       e.target.value = '';
       return;
     }
@@ -226,7 +257,7 @@ const BOQNormalize = ({ onComplete }) => {
       const data = await res.json();
       if (res.ok && data.status === 'success') {
         alert(data.message || 'Suppliers were notified that a customer is looking for this product.');
-        setRequestingProductForItem(null);
+        closeRequestProductModal();
       } else {
         alert(data.message || 'Failed to submit product request. Please try again.');
       }
@@ -501,8 +532,13 @@ const BOQNormalize = ({ onComplete }) => {
                 <input
                   type="date"
                   className="boq-site-input"
+                  min={todayDateMin}
                   value={requiredDate}
-                  onChange={(e) => setRequiredDate(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (next && isDateBeforeToday(next)) return;
+                    setRequiredDate(next);
+                  }}
                 />
               </label>
             </div>
@@ -690,7 +726,7 @@ const BOQNormalize = ({ onComplete }) => {
 
                           <button
                             type="button"
-                            onClick={() => setRequestingProductForItem(item)}
+                            onClick={() => openRequestProductModal(item)}
                             style={{
                               display: 'flex',
                               alignItems: 'center',
@@ -973,14 +1009,14 @@ const BOQNormalize = ({ onComplete }) => {
       {/* Simple inline modal for product request confirmation */}
       {requestingProductForItem
         ? createPortal(
-            <div className="modal-overlay" onClick={() => setRequestingProductForItem(null)}>
+            <div className="modal-overlay" onClick={closeRequestProductModal}>
               <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                   <h3>Request New Product</h3>
                   <button
                     type="button"
                     className="btn-icon"
-                    onClick={() => setRequestingProductForItem(null)}
+                    onClick={closeRequestProductModal}
                     aria-label="Close"
                   >
                     ×
@@ -1004,7 +1040,7 @@ const BOQNormalize = ({ onComplete }) => {
                     <button
                       type="button"
                       className="btn-secondary"
-                      onClick={() => setRequestingProductForItem(null)}
+                      onClick={closeRequestProductModal}
                       disabled={requestSubmitting}
                     >
                       Cancel

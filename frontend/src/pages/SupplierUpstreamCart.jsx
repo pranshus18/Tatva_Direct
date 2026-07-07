@@ -27,7 +27,7 @@ import {
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
 import './CreatePO.css';
-import { formatDateIST } from '../utils/dateTime';
+import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import {
   buildCheckoutHoldExpiredMessage,
   clearCheckoutHoldExpired,
@@ -36,6 +36,7 @@ import {
 
 const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
+const todayDateMin = getTodayDateInputValue();
 
 const blankShippingAddress = {
   label: '',
@@ -455,6 +456,10 @@ const SupplierUpstreamCart = () => {
       setError('Project name cannot be empty.');
       return;
     }
+    if (requiredDate && isDateBeforeToday(requiredDate)) {
+      setError('Expected delivery date cannot be in the past.');
+      return;
+    }
     setSavingProjectName(true);
     setError('');
     try {
@@ -716,8 +721,13 @@ const SupplierUpstreamCart = () => {
                               />
                               <input
                                 type="date"
+                                min={todayDateMin}
                                 value={projectDateDraft}
-                                onChange={(e) => setProjectDateDraft(e.target.value)}
+                                onChange={(e) => {
+                                  const next = e.target.value;
+                                  if (next && isDateBeforeToday(next)) return;
+                                  setProjectDateDraft(next);
+                                }}
                                 className="supplier-project-name-input"
                               />
                               <button

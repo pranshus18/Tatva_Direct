@@ -19,6 +19,7 @@ import { substitutionRouter } from './substitutions.js';
 import { vendorRequestLogger } from '../middleware/vendorRequestLogger.js';
 import { distanceDebug, getEnvDebug, getHealth, getHealthReady, getRuntimeDebug } from '../controllers/systemController.js';
 import { cartShareRouter } from '../controllers/cartShareController.js';
+import { geoRouter } from './geo.js';
 import { logisticsRouter } from '../controllers/logisticsController.js';
 import { voiceRouter } from './voice.js';
 import { authRateLimiter } from '../middleware/rateLimits.js';
@@ -27,6 +28,7 @@ const apiRouter = express.Router();
 
 apiRouter.use('/auth', authRateLimiter, authRouter);
 apiRouter.use('/profile', profileRouter);
+apiRouter.use('/geo', geoRouter);
 apiRouter.use('/supplier', supplierRouter);
 apiRouter.use('/dashboard', dashboardRouter);
 apiRouter.use('/receipts', receiptsRouter);

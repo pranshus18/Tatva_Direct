@@ -32,7 +32,7 @@ import {
   formatShippingAddressLabel,
   normalizeShippingAddressBookEntry
 } from '../utils/shippingAddressLabel';
-import { formatDateIST } from '../utils/dateTime';
+import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import './ProductDiscovery.css';
 
 const blankShippingAddress = {
@@ -43,6 +43,8 @@ const blankShippingAddress = {
   pincode: '',
   country: 'India'
 };
+
+const todayDateMin = getTodayDateInputValue();
 
 function formatPrice(price, unit) {
   const num = Number(price);
@@ -417,6 +419,10 @@ const ProductDiscovery = () => {
       setError('Please select expected delivery date for the new project.');
       return false;
     }
+    if (isNewProject && isDateBeforeToday(expectedDeliveryDate)) {
+      setError('Expected delivery date cannot be in the past.');
+      return false;
+    }
     setCartBusyByProductId((prev) => ({ ...prev, [String(productId)]: true }));
     setError('');
     try {
@@ -687,8 +693,13 @@ const ProductDiscovery = () => {
                   <label className="text-sm font-medium">Expected delivery date</label>
                   <Input
                     type="date"
+                    min={todayDateMin}
                     value={expectedDeliveryDate}
-                    onChange={(event) => setExpectedDeliveryDate(event.target.value)}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      if (next && isDateBeforeToday(next)) return;
+                      setExpectedDeliveryDate(next);
+                    }}
                   />
                 </div>
               </div>

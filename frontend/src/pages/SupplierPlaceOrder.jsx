@@ -9,6 +9,7 @@ import {
   specificationsObjectForLogistics
 } from '../utils/specifications';
 import { formatRupee } from '../utils/formatRupee';
+import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import { formatShippingAddressLabel, formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import {
   getGeolocationErrorMessage,
@@ -30,6 +31,8 @@ import {
 import './Dashboard.css';
 import './CreatePO.css';
 import './SupplierPlaceOrder.css';
+
+const todayDateMin = getTodayDateInputValue();
 import {
   DEFAULT_CHECKOUT_RESERVATION_MINUTES,
   SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY,
@@ -630,13 +633,7 @@ const SupplierPlaceOrder = () => {
     return Number.isFinite(n) ? n : null;
   }, [draft]);
 
-  const todayDateInput = useMemo(() => {
-    const d = new Date();
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  }, []);
+  const todayDateInput = todayDateMin;
 
   const reviewLines = useMemo(
     () => (Array.isArray(draft?.reviewLines) ? draft.reviewLines : []),
@@ -732,6 +729,10 @@ const SupplierPlaceOrder = () => {
       window.alert('Please select a "Required By Date" before getting transport suggestions.');
       return;
     }
+    if (isDateBeforeToday(requiredDate)) {
+      window.alert('Required by date cannot be in the past.');
+      return;
+    }
 
     if (!poGroups.length) {
       window.alert('No vendor groups found for transport suggestion.');
@@ -817,6 +818,9 @@ const SupplierPlaceOrder = () => {
         'You have not specified a "Required By" date.\n\nDo you want to continue without a required date?'
       );
       if (!proceed) return;
+    } else if (isDateBeforeToday(requiredDate)) {
+      window.alert('Required by date cannot be in the past.');
+      return;
     }
 
     if (!isTransportSelectionReady(selectedTransport, poGroups)) {
@@ -1037,7 +1041,11 @@ const SupplierPlaceOrder = () => {
                   id="spo-required-date"
                   type="date"
                   value={requiredDate}
-                  onChange={(e) => setRequiredDate(e.target.value)}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    if (next && isDateBeforeToday(next)) return;
+                    setRequiredDate(next);
+                  }}
                   min={todayDateInput}
                 />
                 <p className="spo-hint">Stored on each upstream order as the expected delivery date.</p>

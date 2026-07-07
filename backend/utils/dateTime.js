@@ -68,3 +68,27 @@ export function formatPlatformDateTime(value, fallback = 'N/A') {
 
 export const formatDateIST = formatPlatformDate;
 export const formatDateTimeIST = formatPlatformDateTime;
+
+/** YYYY-MM-DD for `<input type="date">` min values in IST */
+export function getTodayDateInputValue(now = new Date(), timeZone = INDIA_TIMEZONE) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(now);
+}
+
+export function validateRequiredDateNotPast(requiredDate, now = new Date(), timeZone = INDIA_TIMEZONE) {
+  const raw = String(requiredDate || '').trim().slice(0, 10);
+  if (!raw) {
+    return { value: null, error: null };
+  }
+  if (!DATE_ONLY_PATTERN.test(raw)) {
+    return { value: null, error: 'Required date must be in YYYY-MM-DD format.' };
+  }
+  if (raw < getTodayDateInputValue(now, timeZone)) {
+    return { value: null, error: 'Required date cannot be in the past.' };
+  }
+  return { value: raw, error: null };
+}
