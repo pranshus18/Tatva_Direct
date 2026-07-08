@@ -49,12 +49,13 @@ const isBlankRow = (row) => {
 
 const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
   const errs = [];
+  const hasFilledRows = rowsToValidate.some((row) => !isBlankRow(row));
   const mrp =
     catalogMrp === null || catalogMrp === undefined || catalogMrp === ''
       ? null
       : Number(catalogMrp);
 
-  if (mrp === null || !Number.isFinite(mrp) || mrp < 0) {
+  if (hasFilledRows && (mrp === null || !Number.isFinite(mrp) || mrp < 0)) {
     errs.push(
       `Set catalog ${SUPPLIER_MRP_LABEL} for this variant in Manage Inventory before saving Product_COV.`
     );
@@ -78,6 +79,8 @@ const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
     const buyerCov = Number(row.buyerCov);
     if (!Number.isFinite(buyerCov) || buyerCov < 0) {
       errs.push(`${label}: Brand_cov must be 0 or more`);
+    } else if (supplierCovThreshold !== null && buyerCov >= supplierCovThreshold) {
+      errs.push(`${label}: Brand_cov must be less than Supplier_COV`);
     }
     const price = Number(row.price);
     if (!Number.isFinite(price) || price < 0) {
@@ -92,8 +95,10 @@ const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
       const buyerPcov = Number(row.buyerPcov);
       if (!Number.isFinite(buyerPcov) || buyerPcov < 0) {
         errs.push(`${label}: Platform_COV must be 0 or more`);
-      } else if (Number.isFinite(buyerCov) && buyerPcov < buyerCov) {
-        errs.push(`${label}: Platform_COV must be greater than or equal to Brand_cov`);
+      } else if (Number.isFinite(buyerCov) && buyerCov === buyerPcov) {
+        errs.push(`${label}: Brand_cov must not be equal to Platform_COV`);
+      } else if (Number.isFinite(buyerCov) && buyerCov >= buyerPcov) {
+        errs.push(`${label}: Brand_cov must be less than Platform_COV`);
       } else if (supplierCovThreshold !== null && buyerPcov < supplierCovThreshold) {
         errs.push(`${label}: Platform_COV must be greater than or equal to Supplier_COV`);
       }
@@ -127,13 +132,13 @@ const SupplierBCOV = () => {
     [rows, catalogMrp]
   );
 
-  const loadRows = async () => {
+  const loadRows = async ({ silent = false } = {}) => {
     if (!variantKey) {
-      setLoading(false);
-      return;
+      if (!silent) setLoading(false);
+      return false;
     }
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const token = localStorage.getItem('token');
       const res = await fetch(
         getApiUrl(`/api/supplier/bcov-levels?variantKey=${encodeURIComponent(variantKey)}`),
@@ -155,16 +160,18 @@ const SupplierBCOV = () => {
           buyerPcov: item.buyerPcov ?? item.maxPurchaseQty ?? '',
           price: item.price ?? ''
         }));
-        setRows(mapped.length > 0 ? mapped : [{ ...EMPTY_ROW, levelName: 'Level 1' }]);
+        setRows(mapped.length > 0 ? mapped : [{ ...EMPTY_ROW }]);
         setIsStepCompleted(mapped.length > 0);
-      } else {
-        alert(data.message || 'Failed to load Product_COV table');
+        return true;
       }
+      alert(data.message || 'Failed to load Product_COV table');
+      return false;
     } catch (e) {
       console.error('Failed to load Product_COV table:', e);
       alert('Failed to load Product_COV table');
+      return false;
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -183,34 +190,34 @@ const SupplierBCOV = () => {
     ]);
   };
 
-  const removeRow = (index) => {
-    setRows((prev) => {
-      if (prev.length === 1) return [{ ...EMPTY_ROW }];
-      return prev.filter((_, i) => i !== index);
-    });
-  };
+  const buildPayloadRows = (rowsToSend) =>
+    rowsToSend
+      .filter((row) => !isBlankRow(row))
+      .map((row) => ({
+        id: row.id || undefined,
+        variantKey,
+        variantAsin: variantAsin || undefined,
+        variantName: variantName || undefined,
+        levelName: String(row.levelName || '').trim() || null,
+        buyerBcov: String(row.buyerBcov || '').trim() || null,
+        buyerCov: Number(row.buyerCov),
+        buyerPcov: String(row.buyerPcov).trim() === '' ? null : Number(row.buyerPcov),
+        price: Number(row.price)
+      }));
 
-  const handleSave = async () => {
+  const persistRows = async (rowsToSend, { showSuccess = false } = {}) => {
     if (!variantKey) {
-      alert('No variant selected. Please open this page from a product variant.');
-      return;
-    }
-    if (validationErrors.length > 0) {
-      alert(validationErrors[0]);
-      return;
+      return { ok: false };
     }
 
-    const payloadRows = rows.filter((row) => !isBlankRow(row)).map((row) => ({
-      id: row.id || undefined,
-      variantKey,
-      variantAsin: variantAsin || undefined,
-      variantName: variantName || undefined,
-      levelName: String(row.levelName || '').trim() || null,
-      buyerBcov: String(row.buyerBcov || '').trim() || null,
-      buyerCov: Number(row.buyerCov),
-      buyerPcov: String(row.buyerPcov).trim() === '' ? null : Number(row.buyerPcov),
-      price: Number(row.price)
-    }));
+    const filledRows = rowsToSend.filter((row) => !isBlankRow(row));
+    if (filledRows.length > 0) {
+      const errs = getValidationErrorsForRows(rowsToSend, catalogMrp);
+      if (errs.length > 0) {
+        alert(errs[0]);
+        return { ok: false };
+      }
+    }
 
     try {
       setSaving(true);
@@ -225,22 +232,65 @@ const SupplierBCOV = () => {
           variantKey,
           variantAsin: variantAsin || undefined,
           variantName: variantName || undefined,
-          levels: payloadRows
+          levels: buildPayloadRows(rowsToSend)
         })
       });
       const data = await res.json();
       if (res.ok && data.status === 'success') {
-        setSaveMessage('Product_COV table saved successfully.');
-        setIsStepCompleted(true);
-        await loadRows();
-      } else {
-        alert(data.message || 'Failed to save Product_COV table');
+        if (showSuccess) {
+          setSaveMessage('Product_COV table saved successfully.');
+        } else {
+          setSaveMessage('');
+        }
+        setIsStepCompleted(filledRows.length > 0);
+        return { ok: true, data };
       }
+      alert(data.message || 'Failed to save Product_COV table');
+      return { ok: false };
     } catch (e) {
       console.error('Failed to save Product_COV table:', e);
       alert('Failed to save Product_COV table');
+      return { ok: false };
     } finally {
       setSaving(false);
+    }
+  };
+
+  const removeRow = async (index) => {
+    let nextRows;
+    setRows((prev) => {
+      if (prev.length === 1) {
+        nextRows = [{ ...EMPTY_ROW }];
+        return nextRows;
+      }
+      nextRows = prev.filter((_, i) => i !== index);
+      if (nextRows.length === 0) {
+        nextRows = [{ ...EMPTY_ROW }];
+      }
+      return nextRows;
+    });
+
+    const result = await persistRows(nextRows);
+    if (!result.ok) {
+      await loadRows({ silent: true });
+      return;
+    }
+    await loadRows({ silent: true });
+  };
+
+  const handleSave = async () => {
+    if (!variantKey) {
+      alert('No variant selected. Please open this page from a product variant.');
+      return;
+    }
+    if (validationErrors.length > 0) {
+      alert(validationErrors[0]);
+      return;
+    }
+
+    const result = await persistRows(rows, { showSuccess: true });
+    if (result.ok) {
+      await loadRows();
     }
   };
 
@@ -397,6 +447,7 @@ const SupplierBCOV = () => {
                     <button
                       className="btn-icon bcov-delete-btn"
                       onClick={() => removeRow(index)}
+                      disabled={saving}
                       title="Delete row"
                     >
                       <Trash2 size={16} />

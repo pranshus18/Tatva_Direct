@@ -35,7 +35,7 @@ export function validateAndNormalizeBcovLevels(levelsRaw = [], options = {}) {
     return { ok: false, message: 'Maximum 500 BCOV rows allowed per save' };
   }
 
-  if (requireCatalogMrp && (catalogMrp === null || catalogMrp < 0)) {
+  if (requireCatalogMrp && levelsRaw.length > 0 && (catalogMrp === null || catalogMrp < 0)) {
     return {
       ok: false,
       message:
@@ -100,11 +100,24 @@ export function validateAndNormalizeBcovLevels(levelsRaw = [], options = {}) {
       };
     }
 
+    if (buyerCov >= supplierCovThreshold) {
+      return {
+        ok: false,
+        message: `Row ${i + 1}: Brand_cov must be less than Supplier_COV`
+      };
+    }
+
     if (buyerPcov !== null) {
-      if (buyerPcov < buyerCov) {
+      if (buyerCov === buyerPcov) {
         return {
           ok: false,
-          message: `Row ${i + 1}: PlatformCOV must be greater than or equal to Brand_cov`
+          message: `Row ${i + 1}: Brand_cov must not be equal to Platform_COV`
+        };
+      }
+      if (buyerCov >= buyerPcov) {
+        return {
+          ok: false,
+          message: `Row ${i + 1}: Brand_cov must be less than Platform_COV`
         };
       }
       if (buyerPcov < supplierCovThreshold) {

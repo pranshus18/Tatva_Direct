@@ -249,7 +249,13 @@ test('validateAndNormalizeBcovLevels requires variantKey and threshold fields pe
   assert.equal(good.levels[0].buyerBcov, '200');
 });
 
-test('validateAndNormalizeBcovLevels: platform COV must be >= brand and supplier COV', () => {
+test('validateAndNormalizeBcovLevels: empty levels can clear Product_COV without catalog MRP', () => {
+  const cleared = validateAndNormalizeBcovLevels([], { requireCatalogMrp: true });
+  assert.equal(cleared.ok, true);
+  assert.equal(cleared.levels.length, 0);
+});
+
+test('validateAndNormalizeBcovLevels: brand COV must be below supplier and platform COV', () => {
   const base = {
     variantKey: 'vk-1',
     levelName: 'L1',
@@ -259,18 +265,29 @@ test('validateAndNormalizeBcovLevels: platform COV must be >= brand and supplier
     buyerBcov: '200'
   };
 
-  const equalThresholds = validateAndNormalizeBcovLevels(
-    [{ ...base, buyerCov: 200, buyerPcov: 200, buyerBcov: '200' }],
-    { catalogMrp: 100, requireCatalogMrp: true }
-  );
-  assert.equal(equalThresholds.ok, true);
+  const valid = validateAndNormalizeBcovLevels([base], { catalogMrp: 100, requireCatalogMrp: true });
+  assert.equal(valid.ok, true);
 
-  const belowBrand = validateAndNormalizeBcovLevels(
-    [{ ...base, buyerCov: 500, buyerPcov: 400 }],
+  const equalPlatform = validateAndNormalizeBcovLevels(
+    [{ ...base, buyerCov: 500, buyerPcov: 500, buyerBcov: '1000' }],
     { catalogMrp: 100, requireCatalogMrp: true }
   );
-  assert.equal(belowBrand.ok, false);
-  assert.match(belowBrand.message, /greater than or equal to Brand_cov/i);
+  assert.equal(equalPlatform.ok, false);
+  assert.match(equalPlatform.message, /must not be equal to Platform_COV/i);
+
+  const abovePlatform = validateAndNormalizeBcovLevels(
+    [{ ...base, buyerCov: 450, buyerPcov: 400, buyerBcov: '1000' }],
+    { catalogMrp: 100, requireCatalogMrp: true }
+  );
+  assert.equal(abovePlatform.ok, false);
+  assert.match(abovePlatform.message, /less than Platform_COV/i);
+
+  const equalSupplier = validateAndNormalizeBcovLevels(
+    [{ ...base, buyerCov: 200, buyerPcov: 500, buyerBcov: '200' }],
+    { catalogMrp: 100, requireCatalogMrp: true }
+  );
+  assert.equal(equalSupplier.ok, false);
+  assert.match(equalSupplier.message, /less than Supplier_COV/i);
 
   const belowSupplier = validateAndNormalizeBcovLevels(
     [{ ...base, buyerBcov: '1000', buyerPcov: 500 }],
