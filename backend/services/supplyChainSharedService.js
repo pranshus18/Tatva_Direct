@@ -105,12 +105,20 @@ export function prepareSupplyChainStagesForSave(stages) {
 /** Pick the best admin chain row for a brand (fuzzy name + prefer latest update). */
 export function findCategorySupplyChainRowForBrandKey(chainRows, wantedKey) {
   if (!wantedKey) return null;
+  const wantedNormalized = normalizeBrandKey(wantedKey);
+  const wantedDedup = catalogBrandDedupKey(wantedKey);
   let best = null;
   let bestScore = -1;
   for (const row of chainRows || []) {
     const categoryKey = normalizeBrandKey(row?.category_name);
+    const categoryDedup = catalogBrandDedupKey(row?.category_name);
     if (!categoryKey) continue;
-    if (categoryKey !== wantedKey && !brandKeysMatchForChainLookup(wantedKey, categoryKey)) continue;
+    const matches =
+      categoryKey === wantedNormalized ||
+      categoryDedup === wantedDedup ||
+      brandKeysMatchForChainLookup(wantedNormalized, categoryKey) ||
+      brandKeysMatchForChainLookup(wantedDedup, categoryDedup);
+    if (!matches) continue;
     const roleCount = normalizeChainRolesFromStages(row?.stages).length;
     const updatedTs = Date.parse(row?.updated_at || 0) || 0;
     const score = updatedTs * 10 + roleCount;

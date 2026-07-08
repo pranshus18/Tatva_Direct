@@ -68,6 +68,7 @@ export default function SupplierSelectYourself() {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
   const [focusSupplyChainEntryId, setFocusSupplyChainEntryId] = useState('');
   const [discountInsights, setDiscountInsights] = useState(null);
+  const [assignmentChainInfo, setAssignmentChainInfo] = useState({ loading: false, data: null });
   const supplyChainSectionRef = useRef(null);
 
   const hasUnsavedChanges = useMemo(() => {
@@ -84,6 +85,17 @@ export default function SupplierSelectYourself() {
 
   const supplyChainFormProfile = useMemo(() => buildSupplyChainFormProfile(profile), [profile]);
 
+  const hasSavedBrandEntries = useMemo(
+    () =>
+      getCompanyInfoEntriesForSave(profile || {}).some((entry) => String(entry?.brands || '').trim()),
+    [profile]
+  );
+
+  const chainReadyBrandCount = useMemo(
+    () => supplyChainSummaryRows.filter((row) => row.hasAdminSupplyChain).length,
+    [supplyChainSummaryRows]
+  );
+
   const selectedAssignment = useMemo(
     () => supplyChainSummaryRows.find((row) => row.id === selectedAssignmentId) || null,
     [supplyChainSummaryRows, selectedAssignmentId]
@@ -94,10 +106,61 @@ export default function SupplierSelectYourself() {
       setSelectedAssignmentId('');
       return;
     }
-    if (!supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId)) {
-      setSelectedAssignmentId(supplyChainSummaryRows[0].id);
+    if (selectedAssignmentId && supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId)) {
+      return;
     }
+    const profileBrandRow = supplyChainSummaryRows.find((row) => !String(row.id || '').startsWith('catalog-'));
+    setSelectedAssignmentId(profileBrandRow?.id || '');
   }, [supplyChainSummaryRows, selectedAssignmentId]);
+
+  const selectedAssignmentChainState = useMemo(() => {
+    const brand = String(selectedAssignment?.brand || '').trim();
+    const payload = assignmentChainInfo.data;
+    if (!brand || !payload || !Array.isArray(payload.brands)) return null;
+    const brandKey = brandKeyForDuplicateCheck(brand);
+    return (
+      payload.brands.find(
+        (row) => brandKeyForDuplicateCheck(row?.brand || row?.normalizedBrand) === brandKey
+      ) || null
+    );
+  }, [assignmentChainInfo.data, selectedAssignment?.brand]);
+
+  useEffect(() => {
+    const brand = String(selectedAssignment?.brand || '').trim();
+    if (!brand) {
+      setAssignmentChainInfo({ loading: false, data: null });
+      return undefined;
+    }
+
+    let cancelled = false;
+    const loadAssignmentChain = async () => {
+      setAssignmentChainInfo({ loading: true, data: null });
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(
+          getApiUrl(`/api/profile/supplier/chain-role-options?brands=${encodeURIComponent(brand)}`),
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (!cancelled) {
+          setAssignmentChainInfo({
+            loading: false,
+            data: response.ok && data?.status === 'success' ? data : null
+          });
+        }
+      } catch (error) {
+        console.error('Failed to load assignment chain info:', error);
+        if (!cancelled) {
+          setAssignmentChainInfo({ loading: false, data: null });
+        }
+      }
+    };
+
+    loadAssignmentChain();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedAssignment?.brand]);
 
   const applyBrandStepProfile = (next) => {
     const entries = syncBrandEntriesForSupplyChainStep(ensureAtLeastOneCompanyInfoEntry(next));
@@ -185,6 +248,43 @@ export default function SupplierSelectYourself() {
     );
   }, []);
 
+  const ensureBrandEntryForSupplyChain = useCallback(
+    (brandLabel) => {
+      const label = String(brandLabel || '').trim();
+      if (!label || !profile) return '';
+
+      const existingId = findProfileEntryIdForBrand(label);
+      if (existingId) return existingId;
+
+      const entries = getCompanyInfoEntriesForSave(profile);
+      const newEntry = {
+        id:
+          typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `entry-${Date.now()}`,
+        role: '',
+        brands: label,
+        gstin: '',
+        companyName: '',
+        ownershipDetails: '',
+        brandApprovalDocumentUrls: [],
+        brandApprovalDocumentUrl: '',
+        authorizationCertificateUrls: [],
+        authorizationCertificateUrl: '',
+        minimumOrderValue: '',
+        supplyChainRegistrationStarted: true
+      };
+      setProfile(
+        buildSupplierChainSavePayload(
+          profile,
+          syncBrandEntriesForSupplyChainStep([...entries, newEntry])
+        )
+      );
+      return newEntry.id;
+    },
+    [findProfileEntryIdForBrand, profile]
+  );
+
   const navigateToAddRole = useCallback(
     (rowOrBrand) => {
       const row =
@@ -197,10 +297,7 @@ export default function SupplierSelectYourself() {
       const brandLabel = String(row?.brand || rowOrBrand || '').trim();
       if (!brandLabel) return;
 
-      const entryId =
-        (row && !String(row.id || '').startsWith('catalog-') ? String(row.id || '').trim() : '') ||
-        findProfileEntryIdForBrand(brandLabel);
-
+      const entryId = ensureBrandEntryForSupplyChain(brandLabel);
       if (!entryId) {
         setBrandSectionExpanded(true);
         window.requestAnimationFrame(() => {
@@ -216,15 +313,21 @@ export default function SupplierSelectYourself() {
         supplyChainSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     },
-    [findProfileEntryIdForBrand, supplyChainSummaryRows]
+    [ensureBrandEntryForSupplyChain, supplyChainSummaryRows]
   );
 
   const handleAssignmentBrandChange = (event) => {
     const nextId = event.target.value;
-    const nextRow = supplyChainSummaryRows.find((row) => row.id === nextId);
     setSelectedAssignmentId(nextId);
-    if (nextRow && !nextRow.hasRole && promptAddRoleForBrand(nextRow.brand)) {
-      navigateToAddRole(nextRow);
+    const nextRow = supplyChainSummaryRows.find((row) => row.id === nextId);
+    if (!nextRow?.brand) return;
+
+    const entryId = ensureBrandEntryForSupplyChain(nextRow.brand);
+    if (entryId) {
+      setFocusSupplyChainEntryId(entryId);
+      window.requestAnimationFrame(() => {
+        supplyChainSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     }
   };
 
@@ -547,10 +650,20 @@ export default function SupplierSelectYourself() {
 
       <div className="profile-content">
         <p className="supplier-select-page-intro">
-          Two separate steps: first pick your <strong>brand</strong>, then in the next section select your{' '}
-          <strong>supply-chain role</strong> for that brand. The brand you choose in Step 1 is filled automatically in
-          Step 2.
+          Admin defines each brand&apos;s supply chain once. Any supplier can select a brand below and pick their
+          role from that admin-defined chain — no prior setup required.
         </p>
+
+        {!hasSavedBrandEntries && chainReadyBrandCount > 0 ? (
+          <div className="supplier-select-alert supplier-select-alert--draft">
+            <strong>Welcome — pick your brand</strong>
+            <p>
+              Admin has already set up supply chains for {chainReadyBrandCount} brand
+              {chainReadyBrandCount === 1 ? '' : 's'}. Select a brand in the dropdown below to see the chain and choose
+              your role in Step 2.
+            </p>
+          </div>
+        ) : null}
 
         <div className="supplier-select-flow-card" aria-label="Select yourself steps">
           <div className="supplier-select-flow-card__step">
@@ -579,9 +692,11 @@ export default function SupplierSelectYourself() {
                 value={selectedAssignmentId}
                 onChange={handleAssignmentBrandChange}
               >
+                <option value="">Select brand…</option>
                 {supplyChainSummaryRows.map((row) => (
                   <option key={row.id} value={row.id}>
                     {row.brand}
+                    {row.hasAdminSupplyChain ? ' — supply chain ready' : ''}
                   </option>
                 ))}
               </select>
@@ -603,6 +718,22 @@ export default function SupplierSelectYourself() {
                   </span>
                 </div>
                 <div className="supplier-select-assignments__detail-row">
+                  <span className="supplier-select-assignments__detail-label">Admin supply chain</span>
+                  {assignmentChainInfo.loading ? (
+                    <span className="supplier-select-assignments__chain-hint">Loading…</span>
+                  ) : selectedAssignmentChainState?.hasSupplyChainDefinition ? (
+                    <span className="supplier-select-assignments__chain-value">
+                      {(selectedAssignmentChainState.roles || [])
+                        .map((role) => formatSupplyChainRoleLabel(role))
+                        .join(' → ')}
+                    </span>
+                  ) : (
+                    <span className="supplier-select-assignments__chain-hint supplier-select-assignments__chain-hint--missing">
+                      Not defined by admin yet
+                    </span>
+                  )}
+                </div>
+                <div className="supplier-select-assignments__detail-row">
                   <span className="supplier-select-assignments__detail-label">Status</span>
                   {selectedAssignment.hasRole && selectedAssignment.hasRoleDocuments ? (
                     <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
@@ -620,13 +751,17 @@ export default function SupplierSelectYourself() {
                 </div>
                 {!selectedAssignment.hasRole ? (
                   <div className="supplier-select-assignments__role-prompt">
-                    <p>This brand does not have a supply-chain role yet.</p>
+                    <p>
+                      {selectedAssignmentChainState?.hasSupplyChainDefinition
+                        ? 'Admin has defined the supply chain for this brand. Pick your role in Step 2 below.'
+                        : 'This brand does not have a supply-chain role yet.'}
+                    </p>
                     <button
                       type="button"
                       className="btn-primary supplier-select-assignments__role-prompt-btn"
                       onClick={() => navigateToAddRole(selectedAssignment)}
                     >
-                      Add role
+                      {selectedAssignmentChainState?.hasSupplyChainDefinition ? 'Select role' : 'Add role'}
                     </button>
                   </div>
                 ) : null}
@@ -714,11 +849,21 @@ export default function SupplierSelectYourself() {
             Supply-chain role for your brand
           </h2>
           <p className="supplier-select-section__intro">
-            For each brand you picked in Step 1, select your role in the supply chain and upload documents. The brand
-            name is already filled — do not change it here.
+            Select a brand above, then choose your role from the admin-defined supply chain and upload documents.
+            The brand name is filled automatically — do not change it here.
           </p>
 
-          {!supplyChainFormProfile?.companyInfoEntries?.length ? (
+          {!selectedAssignmentId ? (
+            <div className="supplier-select-alert supplier-select-alert--draft">
+              <strong>Select a brand to continue</strong>
+              <p>
+                Pick any brand from the <strong>Your supply chain by brand</strong> dropdown above. If admin has defined
+                its supply chain, your role options will appear here automatically.
+              </p>
+            </div>
+          ) : null}
+
+          {!supplyChainFormProfile?.companyInfoEntries?.length && selectedAssignmentId ? (
             <div className="supplier-select-alert supplier-select-alert--draft">
               <strong>No supply-chain forms yet</strong>
               <p>
@@ -728,7 +873,7 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {supplyChainFormProfile ? (
+          {supplyChainFormProfile && selectedAssignmentId ? (
             <SupplierSupplyChainEntriesEditor
               key={`form-${editorResetKey}`}
               profile={supplyChainFormProfile}
@@ -743,6 +888,7 @@ export default function SupplierSelectYourself() {
               savingEntryId={savingEntryId}
               focusEntryId={focusSupplyChainEntryId}
               onFocusEntryHandled={handleFocusEntryHandled}
+              filterBrandName={selectedAssignment?.brand || ''}
             />
           ) : null}
         </div>

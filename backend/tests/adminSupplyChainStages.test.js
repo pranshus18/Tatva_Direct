@@ -65,3 +65,20 @@ test('findCategorySupplyChainRowForBrandKey: prefers latest updated chain', () =
     'retailer'
   ]);
 });
+
+test('findCategorySupplyChainRowForBrandKey: matches spelling variants via dedup key', () => {
+  const rows = [
+    {
+      category_name: 'Philips',
+      stages: [{ role: 'manufacturer' }, { role: 'dealer' }, { role: 'retailer' }],
+      updated_at: '2026-06-01T00:00:00.000Z'
+    }
+  ];
+  const picked = findCategorySupplyChainRowForBrandKey(rows, 'Phillips');
+  assert.equal(picked?.category_name, 'Philips');
+  assert.deepEqual(normalizeChainRolesFromStages(picked?.stages), [
+    'manufacturer',
+    'dealer',
+    'retailer'
+  ]);
+});

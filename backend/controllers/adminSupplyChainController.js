@@ -21,9 +21,9 @@ import {
   prepareSupplyChainStagesForSave
 } from '../services/supplyChainSharedService.js';
 import {
-  findBrandByCatalogDedupKey,
   getCanonicalBrandNormalizedName,
-  pickCanonicalBrandDisplayName
+  pickCanonicalBrandDisplayName,
+  resolveBrandRowForName
 } from '../services/brandDedupService.js';
 
 const router = express.Router();
@@ -222,16 +222,8 @@ router.put('/definitions', authenticateToken, requireAdminPrivileges, async (req
       const nowIso = new Date().toISOString();
       const normalizedBrand = getCanonicalBrandNormalizedName(brand);
       if (normalizedBrand) {
-        const { data: existingBrand } = await findBrandByCatalogDedupKey(brand, supabase);
-        const resolvedBrand =
-          existingBrand ||
-          (
-            await supabase
-              .from('brands')
-              .select('id, status')
-              .eq('normalized_name', normalizedBrand)
-              .maybeSingle()
-          ).data;
+        const { data: resolvedBrand, error: resolveErr } = await resolveBrandRowForName(brand, supabase);
+        if (resolveErr) throw resolveErr;
 
         if (resolvedBrand?.id) {
           if (String(resolvedBrand.status || '').toLowerCase() !== 'approved') {

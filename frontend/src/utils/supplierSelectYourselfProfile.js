@@ -182,7 +182,9 @@ export function buildSupplyChainSummaryRows(catalogBrands = [], entries = []) {
       roleLabel: 'Not set',
       hasRole: false,
       hasRoleDocuments: false,
-      registrationStarted: false
+      registrationStarted: false,
+      hasAdminSupplyChain:
+        typeof item === 'object' && item?.hasAdminSupplyChain === true
     });
   }
 

@@ -1,4 +1,8 @@
-import { catalogBrandDedupKey, normalizeBrandKey } from './supplyChainSharedService.js';
+import {
+  catalogBrandDedupKey,
+  normalizeBrandKey,
+  normalizeChainRolesFromStages
+} from './supplyChainSharedService.js';
 import { brandIsAllowedForSupplier, getDeclaredBrandLabels } from './supplierBrandGuardService.js';
 
 function upsertCatalogBrand(brands, name, extra = {}) {
@@ -18,7 +22,9 @@ function upsertCatalogBrand(brands, name, extra = {}) {
       normalizedName: normalizeBrandKey(nextName),
       status: 'approved',
       source: extra.source || existing.source || 'catalog',
-      fromProfile: extra.fromProfile === true || existing.fromProfile === true
+      fromProfile: extra.fromProfile === true || existing.fromProfile === true,
+      hasAdminSupplyChain:
+        extra.hasAdminSupplyChain === true || existing.hasAdminSupplyChain === true
     };
     return;
   }
@@ -28,7 +34,8 @@ function upsertCatalogBrand(brands, name, extra = {}) {
     normalizedName: normalizeBrandKey(trimmed),
     status: 'approved',
     source: extra.source || 'catalog',
-    ...(extra.fromProfile ? { fromProfile: true } : {})
+    ...(extra.fromProfile ? { fromProfile: true } : {}),
+    ...(extra.hasAdminSupplyChain ? { hasAdminSupplyChain: true } : {})
   });
 }
 
@@ -48,7 +55,8 @@ function upsertApprovedCatalogRow(brands, row) {
       name: nextName,
       normalizedName: normalizeBrandKey(nextName),
       status: 'approved',
-      source: 'catalog'
+      source: 'catalog',
+      hasAdminSupplyChain: existing.hasAdminSupplyChain === true
     };
     return;
   }
@@ -63,8 +71,9 @@ function upsertApprovedCatalogRow(brands, row) {
 }
 
 /**
- * All admin-approved brands in the platform catalog.
- * Used on Select yourself (Step 1) so suppliers can pick an existing approved brand.
+ * All brands available for Select yourself:
+ * - admin-approved brands in the catalog
+ * - any brand with an admin-defined supply chain (even if brands-table sync lagged)
  * Spelling variants (e.g. Philips / Phillips) are merged into one catalog entry.
  */
 export async function listApprovedCatalogBrands(supabase) {
@@ -81,6 +90,20 @@ export async function listApprovedCatalogBrands(supabase) {
   const brands = [];
   for (const row of approvedRows || []) {
     upsertApprovedCatalogRow(brands, row);
+  }
+
+  const { data: chainRows, error: chainError } = await supabase
+    .from('category_supply_chains')
+    .select('category_name, stages')
+    .order('category_name', { ascending: true });
+
+  if (!chainError) {
+    for (const row of chainRows || []) {
+      const name = String(row?.category_name || '').trim();
+      const roles = normalizeChainRolesFromStages(row?.stages);
+      if (!name || roles.length === 0) continue;
+      upsertCatalogBrand(brands, name, { source: 'admin_chain', hasAdminSupplyChain: true });
+    }
   }
 
   return brands.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));

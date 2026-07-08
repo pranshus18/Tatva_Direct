@@ -16,6 +16,7 @@ import {
 } from '../../services/supplierChainProfileService.js';
 import {
   SUPPLY_CHAIN_ROLES_IN_ORDER,
+  brandKeysMatchForChainLookup,
   catalogBrandDedupKey,
   findCategorySupplyChainRowForBrandKey,
   normalizeBrandKey,
@@ -140,25 +141,60 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
   const notApprovedBrands = [];
   const missingChainBrands = [];
   for (const b of normalizedBrands) {
-    const brandRow = brandByDedupKey.get(b.dedupKey) || null;
-    const brandStatus = String(brandRow?.status || 'missing');
+    let brandRow = brandByDedupKey.get(b.dedupKey) || null;
 
-    const chainRow = findCategorySupplyChainRowForBrandKey(chainRows, b.normalized);
+    const chainRow =
+      findCategorySupplyChainRowForBrandKey(chainRows, b.dedupKey) ||
+      findCategorySupplyChainRowForBrandKey(chainRows, b.normalized) ||
+      findCategorySupplyChainRowForBrandKey(chainRows, b.original);
+
+    if (!brandRow && chainRow?.category_name) {
+      const chainBrandKey = catalogBrandDedupKey(chainRow.category_name);
+      brandRow = brandByDedupKey.get(chainBrandKey) || brandRow;
+    }
+
     const roles = normalizeChainRolesFromStages(chainRow?.stages);
+    let brandStatus = String(brandRow?.status || 'missing');
+    let displayBrandName = brandRow?.name || b.original;
+
+    // Supplier spelling may differ from the admin chain row. If admin defined a chain
+    // for this brand, unlock role options even when the brands table is out of sync.
+    if (brandStatus !== 'approved' && roles.length > 0 && chainRow?.category_name) {
+      const chainBrandKey = catalogBrandDedupKey(chainRow.category_name);
+      const supplierMatchesChain =
+        b.dedupKey &&
+        chainBrandKey &&
+        (b.dedupKey === chainBrandKey ||
+          brandKeysMatchForChainLookup(b.dedupKey, chainBrandKey) ||
+          brandKeysMatchForChainLookup(b.normalized, normalizeBrandKey(chainRow.category_name)));
+
+      if (supplierMatchesChain) {
+        const approvedChainBrand = brandByDedupKey.get(chainBrandKey) || null;
+        if (String(approvedChainBrand?.status || '').toLowerCase() === 'approved') {
+          brandRow = approvedChainBrand;
+          brandStatus = 'approved';
+          displayBrandName = approvedChainBrand?.name || displayBrandName;
+        } else {
+          brandStatus = 'approved';
+          displayBrandName = chainRow.category_name;
+        }
+      }
+    }
+
     if (brandStatus !== 'approved') {
       blockedReason = 'brand_not_approved';
-      notApprovedBrands.push(brandRow?.name || b.original);
+      notApprovedBrands.push(displayBrandName);
     }
     if (roles.length === 0) {
       if (!blockedReason) blockedReason = 'supply_chain_not_defined';
-      missingChainBrands.push(brandRow?.name || b.original);
+      missingChainBrands.push(displayBrandName);
     } else {
       roleLists.push(roles);
     }
     rolesByBrand[b.normalized] = roles;
 
     perBrand.push({
-      brand: brandRow?.name || b.original,
+      brand: displayBrandName,
       normalizedBrand: b.normalized,
       status: brandStatus,
       hasSupplyChainDefinition: roles.length > 0,

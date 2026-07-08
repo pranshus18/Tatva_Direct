@@ -199,8 +199,11 @@ const CompanyInfoEntryCard = ({
   const roleDocUrls = resolveAuthorizationCertificateUrls(entry);
   const resolvedBrandName =
     String(brandMeta?.brand || '').trim() || String(brandMeta?.normalizedBrand || '').trim() || selectedBrand;
-  const brandStatus = String(brandMeta?.status || (selectedBrand ? 'missing' : 'unselected')).toLowerCase();
-  const chainDefined = !!brandMeta?.hasSupplyChainDefinition;
+  const hasResolvedChainRoles = availableRoleOptions.length > 0;
+  const brandStatus = String(
+    brandMeta?.status || (hasResolvedChainRoles ? 'approved' : selectedBrand ? 'missing' : 'unselected')
+  ).toLowerCase();
+  const chainDefined = !!brandMeta?.hasSupplyChainDefinition || hasResolvedChainRoles;
   const hasBrandValue = !!selectedBrand;
   const statusTone =
     brandStatus === 'approved' && chainDefined
@@ -222,9 +225,9 @@ const CompanyInfoEntryCard = ({
             : brandStatus === 'rejected'
               ? 'Rejected by admin'
               : 'Not requested yet';
-  const brandApprovalReadyForRole = hasBrandValue && brandStatus === 'approved' && chainDefined;
-  const roleSelectionEnabled =
-    editing && brandApprovalReadyForRole && !roleOptionsLoading && availableRoleOptions.length > 0;
+  const brandApprovalReadyForRole =
+    hasBrandValue && brandStatus === 'approved' && chainDefined && hasResolvedChainRoles;
+  const roleSelectionEnabled = editing && brandApprovalReadyForRole && !roleOptionsLoading;
   const approvedRoleLabel = approvedRole ? formatSupplyChainRoleLabel(approvedRole) : '';
   const pendingRoleChange =
     !!approvedRole && !!entry.role && String(entry.role).trim() !== String(approvedRole).trim();
@@ -639,7 +642,8 @@ export default function SupplierSupplyChainEntriesEditor({
   approvedBaselineEntries = [],
   focusEntryId = '',
   onFocusEntryHandled = null,
-  onBrandPickedWithoutRole = null
+  onBrandPickedWithoutRole = null,
+  filterBrandName = ''
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -749,6 +753,13 @@ export default function SupplierSupplyChainEntriesEditor({
       ? indexedEntries.filter((item) => item.entry.id === resolvedSelectedEntryId)
       : indexedEntries;
 
+  const activeBrandFilterKey = brandKeyForDuplicateCheck(filterBrandName);
+  const visibleEntriesToRender = activeBrandFilterKey
+    ? entriesToRender.filter(
+        (item) => brandKeyForDuplicateCheck(normalizeSingleBrand(item.entry?.brands)) === activeBrandFilterKey
+      )
+    : entriesToRender;
+
   useEffect(() => {
     setExpandedEntryIds((prev) => {
       const validIds = new Set(displayEntries.map((entry) => entry.id));
@@ -790,13 +801,22 @@ export default function SupplierSupplyChainEntriesEditor({
             { headers: { Authorization: `Bearer ${token}` } }
           );
           const data = await response.json().catch(() => ({}));
-          const roleSet = new Set(Array.isArray(data?.roles) ? data.roles : []);
-          const options = SUPPLY_CHAIN_ROLE_OPTIONS.filter((opt) => roleSet.has(opt.value));
           const brandStates = Array.isArray(data?.brands) ? data.brands : [];
           const selectedBrandState = brandStates.find((b) => {
-            const key = normalizeBrandToken(b?.normalizedBrand || b?.brand);
-            return key && key === normalizeBrandToken(brandsValue);
+            const stateKey = brandKeyForDuplicateCheck(b?.brand || b?.normalizedBrand);
+            const entryKey = brandKeyForDuplicateCheck(brandsValue);
+            return stateKey && entryKey && stateKey === entryKey;
           });
+          const effectiveRoles =
+            Array.isArray(data?.roles) && data.roles.length > 0
+              ? data.roles
+              : String(selectedBrandState?.status || '').toLowerCase() === 'approved' &&
+                  selectedBrandState?.hasSupplyChainDefinition &&
+                  Array.isArray(selectedBrandState?.roles)
+                ? selectedBrandState.roles
+                : [];
+          const roleSet = new Set(effectiveRoles);
+          const options = SUPPLY_CHAIN_ROLE_OPTIONS.filter((opt) => roleSet.has(opt.value));
           const brandStatusText = Array.isArray(data?.brands)
             ? data.brands
                 .map((b) => {
@@ -822,7 +842,10 @@ export default function SupplierSupplyChainEntriesEditor({
             loading: false,
             options,
             brandMeta: selectedBrandState || null,
-            adminChainReady: !!data?.eligible && options.length > 0,
+            adminChainReady:
+              options.length > 0 &&
+              String(selectedBrandState?.status || '').toLowerCase() === 'approved' &&
+              !!selectedBrandState?.hasSupplyChainDefinition,
             adminChainStatusText: brandStatusText,
             adminChainPathText: selectedBrandChainPath
               ? `Admin-defined chain for this brand: ${selectedBrandChainPath}`
@@ -831,7 +854,9 @@ export default function SupplierSupplyChainEntriesEditor({
               options.length > 0
                 ? ''
                 : data?.message ||
-                  'No role available. Brand must be admin approved and supply chain must be defined by admin.'
+                  (selectedBrandState?.hasSupplyChainDefinition
+                    ? 'Brand must be admin approved before you can select a supply-chain role.'
+                    : 'No role available. Brand must be admin approved and supply chain must be defined by admin.')
           };
         } catch (_err) {
           nextState[entry.id] = {
@@ -1267,7 +1292,7 @@ export default function SupplierSupplyChainEntriesEditor({
           </div>
         ) : null}
 
-        {entriesToRender.map(({ entry, index }) => {
+        {visibleEntriesToRender.map(({ entry, index }) => {
           const roleUiState = entryRoleOptions[entry.id] || {};
           const expanded = expandedEntryIds.includes(entry.id);
           return (
