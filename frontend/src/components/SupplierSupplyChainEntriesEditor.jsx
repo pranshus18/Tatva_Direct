@@ -185,7 +185,9 @@ const CompanyInfoEntryCard = ({
   excludeBrands = [],
   duplicateBrandMessage = '',
   brandPickerAtTop = false,
-  approvedRole = ''
+  showBrandStepCustomInput = false,
+  approvedRole = '',
+  highlighted = false
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const catalogBrandSelected =
@@ -230,7 +232,10 @@ const CompanyInfoEntryCard = ({
   const isBrandOnlyStep = sectionView === 'brand';
   const isSupplyChainOnlyStep = sectionView === 'form';
   const showCustomBrandNameField =
-    useBrandNameTextInput && editing && (!selectedBrand || !catalogBrandSelected) && !brandPickerAtTop;
+    useBrandNameTextInput &&
+    editing &&
+    (!selectedBrand || !catalogBrandSelected) &&
+    (!brandPickerAtTop || showBrandStepCustomInput);
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave;
@@ -245,7 +250,10 @@ const CompanyInfoEntryCard = ({
   };
 
   return (
-    <article className="chain-entry-card">
+    <article
+      className={`chain-entry-card${highlighted ? ' chain-entry-card--focus-highlight' : ''}`}
+      data-chain-entry-id={entry.id}
+    >
       {showHeader ? <header className="chain-entry-header">
         <div className="chain-entry-header__main">
           <span className="chain-entry-header__eyebrow">
@@ -628,7 +636,10 @@ export default function SupplierSupplyChainEntriesEditor({
   onRemoveEntry = null,
   savingEntryId = null,
   showAddEntry = null,
-  approvedBaselineEntries = []
+  approvedBaselineEntries = [],
+  focusEntryId = '',
+  onFocusEntryHandled = null,
+  onBrandPickedWithoutRole = null
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -637,6 +648,8 @@ export default function SupplierSupplyChainEntriesEditor({
   const [entryRoleOptions, setEntryRoleOptions] = useState({});
   const [expandedEntryIds, setExpandedEntryIds] = useState([]);
   const [selectedEntryId, setSelectedEntryId] = useState('');
+  const [brandStepOtherMode, setBrandStepOtherMode] = useState(false);
+  const [highlightedEntryId, setHighlightedEntryId] = useState('');
   const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
   const usesBrandCatalogFields = sectionView === 'brand' || sectionView === 'all';
   const { brandNames: catalogBrandNames } = useSupplierBrands({
@@ -751,7 +764,7 @@ export default function SupplierSupplyChainEntriesEditor({
   );
 
   useEffect(() => {
-    if (!editing || sectionView === 'brand') return;
+    if (!editing) return;
     let isCancelled = false;
 
     const loadRoleOptions = async () => {
@@ -1066,14 +1079,23 @@ export default function SupplierSupplyChainEntriesEditor({
     const brand = sanitizeCustomBrandInput(nextBrand);
     if (!brand) return;
 
+    setBrandStepOtherMode(false);
+
     const currentEntries = getDisplayEntries();
     const matchKey = brandKeyForDuplicateCheck(brand);
     const existing = currentEntries.find(
       (entry) => brandKeyForDuplicateCheck(normalizeSingleBrand(entry?.brands)) === matchKey
     );
 
+    const notifyIfRoleMissing = (entry) => {
+      if (!String(entry?.role || '').trim()) {
+        onBrandPickedWithoutRole?.(brand);
+      }
+    };
+
     if (existing) {
       setSelectedEntryId(existing.id);
+      notifyIfRoleMissing(existing);
       return;
     }
 
@@ -1082,6 +1104,7 @@ export default function SupplierSupplyChainEntriesEditor({
 
     if (activeEntry && activeBrandEmpty) {
       updateCompanyInfoEntry(activeEntry.id, 'brands', brand);
+      notifyIfRoleMissing({ ...activeEntry, brands: brand });
       return;
     }
 
@@ -1115,10 +1138,53 @@ export default function SupplierSupplyChainEntriesEditor({
     const next = [...base, newEntry];
     setProfile(syncProfileFromEntries(profile, next));
     setSelectedEntryId(newEntry.id);
+    notifyIfRoleMissing(newEntry);
   };
 
   const activeEntryForBrandPicker = displayEntries.find((entry) => entry.id === resolvedSelectedEntryId) || null;
   const activeEntryBrandValue = normalizeSingleBrand(activeEntryForBrandPicker?.brands);
+  const activeEntryUsesCustomBrand =
+    !!activeEntryBrandValue &&
+    !catalogBrandNames.some((name) => name.toLowerCase() === activeEntryBrandValue.toLowerCase());
+  const showBrandStepCustomInput = isBrandStepPicker && (brandStepOtherMode || activeEntryUsesCustomBrand);
+
+  useEffect(() => {
+    if (!isBrandStepPicker) return;
+    if (!activeEntryBrandValue) return;
+    const inCatalog = catalogBrandNames.some(
+      (name) => name.toLowerCase() === activeEntryBrandValue.toLowerCase()
+    );
+    setBrandStepOtherMode(!inCatalog);
+  }, [isBrandStepPicker, activeEntryBrandValue, catalogBrandNames]);
+
+  useEffect(() => {
+    const targetId = String(focusEntryId || '').trim();
+    if (!targetId) return;
+
+    const targetEntry = displayEntries.find((entry) => String(entry?.id || '').trim() === targetId);
+    if (!targetEntry) {
+      onFocusEntryHandled?.();
+      return;
+    }
+
+    setExpandedEntryIds((prev) => (prev.includes(targetId) ? prev : [...prev, targetId]));
+    setHighlightedEntryId(targetId);
+
+    const scrollTimer = window.setTimeout(() => {
+      const card = document.querySelector(`[data-chain-entry-id="${targetId}"]`);
+      card?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      onFocusEntryHandled?.();
+    }, 120);
+
+    const highlightTimer = window.setTimeout(() => {
+      setHighlightedEntryId('');
+    }, 2400);
+
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(highlightTimer);
+    };
+  }, [focusEntryId, entryIdsSignature, onFocusEntryHandled, displayEntries]);
 
   return (
     <div
@@ -1135,6 +1201,11 @@ export default function SupplierSupplyChainEntriesEditor({
               name={`entry-selector-${sectionView}`}
               value={activeEntryBrandValue}
               onChange={handleBrandStepCatalogPick}
+              onSelectionModeChange={(mode) => {
+                if (mode === 'other') setBrandStepOtherMode(true);
+                else if (mode === 'catalog') setBrandStepOtherMode(false);
+                else if (mode === 'empty') setBrandStepOtherMode(false);
+              }}
               disabled={!editing}
               required={false}
               allowOther
@@ -1143,6 +1214,11 @@ export default function SupplierSupplyChainEntriesEditor({
               hideHint
               className="chain-brand-select"
             />
+            {showBrandStepCustomInput ? (
+              <p className="chain-field__sublabel">
+                Enter the brand name below for admin approval. It is not in the approved catalog yet.
+              </p>
+            ) : null}
           </div>
         ) : null}
 
@@ -1246,7 +1322,9 @@ export default function SupplierSupplyChainEntriesEditor({
             excludeBrands={reservedBrandsForEntry(displayEntries, entry.id)}
             duplicateBrandMessage={duplicateBrandMessages.get(entry.id) || ''}
             brandPickerAtTop={isBrandStepPicker}
+            showBrandStepCustomInput={showBrandStepCustomInput}
             approvedRole={getApprovedRoleForEntry(approvedBaselineEntries, entry)}
+            highlighted={highlightedEntryId === entry.id}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]

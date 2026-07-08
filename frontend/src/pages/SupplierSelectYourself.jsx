@@ -1,9 +1,13 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { UserCheck, Save, RotateCcw } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainEntriesEditor';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
-import { validateCompanyInfoEntriesList, validateUniqueBrandsAcrossEntries } from '../utils/supplierChainEntryValidation';
+import {
+  brandKeyForDuplicateCheck,
+  validateCompanyInfoEntriesList,
+  validateUniqueBrandsAcrossEntries
+} from '../utils/supplierChainEntryValidation';
 import {
   buildApprovedBaselineSnapshot,
   buildSupplierChainSavePayload,
@@ -62,7 +66,9 @@ export default function SupplierSelectYourself() {
   const [editorResetKey, setEditorResetKey] = useState(0);
   const [brandSectionExpanded, setBrandSectionExpanded] = useState(false);
   const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
+  const [focusSupplyChainEntryId, setFocusSupplyChainEntryId] = useState('');
   const [discountInsights, setDiscountInsights] = useState(null);
+  const supplyChainSectionRef = useRef(null);
 
   const hasUnsavedChanges = useMemo(() => {
     if (!profile || !baseline) return false;
@@ -158,6 +164,83 @@ export default function SupplierSelectYourself() {
     () => getApprovedBaselineEntries(baseline || profile || {}),
     [baseline, profile]
   );
+
+  const findProfileEntryIdForBrand = useCallback(
+    (brandName) => {
+      const brandKey = brandKeyForDuplicateCheck(brandName);
+      if (!brandKey) return '';
+      const entry = getCompanyInfoEntriesForSave(profile || {}).find(
+        (row) => brandKeyForDuplicateCheck(row?.brands) === brandKey
+      );
+      return String(entry?.id || '').trim();
+    },
+    [profile]
+  );
+
+  const promptAddRoleForBrand = useCallback((brandLabel) => {
+    const label = String(brandLabel || '').trim();
+    if (!label) return false;
+    return window.confirm(
+      `${label} does not have a supply-chain role yet.\n\nDo you want to add a role?`
+    );
+  }, []);
+
+  const navigateToAddRole = useCallback(
+    (rowOrBrand) => {
+      const row =
+        rowOrBrand && typeof rowOrBrand === 'object'
+          ? rowOrBrand
+          : supplyChainSummaryRows.find(
+              (item) =>
+                brandKeyForDuplicateCheck(item.brand) === brandKeyForDuplicateCheck(String(rowOrBrand || ''))
+            ) || null;
+      const brandLabel = String(row?.brand || rowOrBrand || '').trim();
+      if (!brandLabel) return;
+
+      const entryId =
+        (row && !String(row.id || '').startsWith('catalog-') ? String(row.id || '').trim() : '') ||
+        findProfileEntryIdForBrand(brandLabel);
+
+      if (!entryId) {
+        setBrandSectionExpanded(true);
+        window.requestAnimationFrame(() => {
+          document
+            .querySelector('.supplier-select-section--brand')
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        });
+        return;
+      }
+
+      setFocusSupplyChainEntryId(entryId);
+      window.requestAnimationFrame(() => {
+        supplyChainSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    },
+    [findProfileEntryIdForBrand, supplyChainSummaryRows]
+  );
+
+  const handleAssignmentBrandChange = (event) => {
+    const nextId = event.target.value;
+    const nextRow = supplyChainSummaryRows.find((row) => row.id === nextId);
+    setSelectedAssignmentId(nextId);
+    if (nextRow && !nextRow.hasRole && promptAddRoleForBrand(nextRow.brand)) {
+      navigateToAddRole(nextRow);
+    }
+  };
+
+  const handleBrandPickedWithoutRole = useCallback(
+    (brandName) => {
+      const label = String(brandName || '').trim();
+      if (!label) return;
+      if (!promptAddRoleForBrand(label)) return;
+      navigateToAddRole(label);
+    },
+    [navigateToAddRole, promptAddRoleForBrand]
+  );
+
+  const handleFocusEntryHandled = useCallback(() => {
+    setFocusSupplyChainEntryId('');
+  }, []);
 
   const handleSave = async () => {
     const allEntries = getCompanyInfoEntriesForSave(profile);
@@ -494,7 +577,7 @@ export default function SupplierSelectYourself() {
                 id="assignment-brand-select"
                 className="supplier-select-assignments__picker-select"
                 value={selectedAssignmentId}
-                onChange={(e) => setSelectedAssignmentId(e.target.value)}
+                onChange={handleAssignmentBrandChange}
               >
                 {supplyChainSummaryRows.map((row) => (
                   <option key={row.id} value={row.id}>
@@ -535,6 +618,18 @@ export default function SupplierSelectYourself() {
                     </span>
                   )}
                 </div>
+                {!selectedAssignment.hasRole ? (
+                  <div className="supplier-select-assignments__role-prompt">
+                    <p>This brand does not have a supply-chain role yet.</p>
+                    <button
+                      type="button"
+                      className="btn-primary supplier-select-assignments__role-prompt-btn"
+                      onClick={() => navigateToAddRole(selectedAssignment)}
+                    >
+                      Add role
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -605,11 +700,15 @@ export default function SupplierSelectYourself() {
               allowEntryManagement
               showAddEntry
               onRemoveEntry={handleRemoveEntry}
+              onBrandPickedWithoutRole={handleBrandPickedWithoutRole}
             />
           ) : null}
         </div>
 
-        <div className="profile-section supplier-select-section supplier-select-section--form">
+        <div
+          ref={supplyChainSectionRef}
+          className="profile-section supplier-select-section supplier-select-section--form"
+        >
           <h2>
             <span className="supplier-select-section__label">Step 2</span>
             Supply-chain role for your brand
@@ -642,6 +741,8 @@ export default function SupplierSelectYourself() {
               showAddEntry={false}
               onSaveEntry={handleSaveEntry}
               savingEntryId={savingEntryId}
+              focusEntryId={focusSupplyChainEntryId}
+              onFocusEntryHandled={handleFocusEntryHandled}
             />
           ) : null}
         </div>

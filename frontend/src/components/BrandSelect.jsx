@@ -38,7 +38,8 @@ export default function BrandSelect({
   source = 'profile',
   dropdownOnly = false,
   hideHint = false,
-  excludeBrands = []
+  excludeBrands = [],
+  onSelectionModeChange = null
 }) {
   const { brands, brandNames: rawBrandNames, loading, error: loadError } = useSupplierBrands({ source });
 
@@ -74,6 +75,10 @@ export default function BrandSelect({
   });
   const [otherMode, setOtherMode] = useState(() => allowOther && !!normalizedValue && !valueInList);
 
+  const notifySelectionMode = (mode) => {
+    onSelectionModeChange?.(mode);
+  };
+
   useEffect(() => {
     if (!normalizedValue) {
       if (otherMode) {
@@ -102,12 +107,15 @@ export default function BrandSelect({
     setSelectValue(next);
     if (next === '') {
       setOtherMode(false);
+      notifySelectionMode('empty');
       onChange?.('');
     } else if (next === OTHER_VALUE) {
       setOtherMode(true);
+      notifySelectionMode('other');
       onChange?.(normalizedValue && !valueInList ? normalizedValue : '');
     } else {
       setOtherMode(false);
+      notifySelectionMode('catalog');
       onChange?.(next);
     }
   };
