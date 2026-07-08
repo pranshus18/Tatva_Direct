@@ -16,6 +16,7 @@ import {
   deduplicateCompanyInfoEntriesByBrand,
   detectEntryRoleChanges,
   ensureAtLeastOneCompanyInfoEntry,
+  formatSupplyChainRoleLabel,
   getApprovedBaselineEntries,
   getCompanyInfoEntriesForSave,
   mergeCompanyInfoEntriesById,
