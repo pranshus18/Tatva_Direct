@@ -444,16 +444,39 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
 }
 
 /** Build PUT payload that keeps every brand entry while syncing legacy top-level fields. */
-export function buildSupplierChainSavePayload(profile, entries = null) {
+export function buildSupplierChainSavePayload(profile, entries = null, options = {}) {
   const nextEntries = deduplicateCompanyInfoEntriesByBrand(entries || getCompanyInfoEntriesForSave(profile));
   const first = nextEntries[0] || {};
-  return {
-    ...profile,
+  const chainFields = {
     companyInfoEntries: nextEntries,
     supplierRole: first.role || profile?.supplierRole || '',
     brands: first.brands || profile?.brands || '',
     gstin: first.gstin || profile?.gstin || '',
     companyName: first.companyName || profile?.companyName || '',
     minimumOrderValue: first.minimumOrderValue ?? profile?.minimumOrderValue ?? ''
+  };
+
+  if (options.forApi) {
+    const payload = {
+      userType: profile?.userType || 'supplier',
+      companyInfoEntries: nextEntries,
+      supplierRole: first.role || profile?.supplierRole || '',
+      brands: first.brands || profile?.brands || ''
+    };
+    const gstin = String(first.gstin || '').trim();
+    const companyName = String(first.companyName || '').trim();
+    const mov = first.minimumOrderValue;
+    if (gstin) payload.gstin = gstin;
+    if (companyName) payload.companyName = companyName;
+    if (mov !== '' && mov !== null && mov !== undefined) payload.minimumOrderValue = mov;
+    if (options.saveAsDraft) payload.saveAsDraft = true;
+    if (options.saveBrandApprovalOnly) payload.saveBrandApprovalOnly = true;
+    if (options.saveSupplyChainEntryId) payload.saveSupplyChainEntryId = options.saveSupplyChainEntryId;
+    return payload;
+  }
+
+  return {
+    ...profile,
+    ...chainFields
   };
 }

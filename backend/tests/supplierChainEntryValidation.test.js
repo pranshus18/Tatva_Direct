@@ -72,8 +72,27 @@ test('supplierProfileIncludesChainDraft detects legacy supply-chain fields', () 
 });
 
 test('hasSupplyChainRegistrationData detects in-progress entry rows', () => {
-  assert.equal(hasSupplyChainRegistrationData({ gstin: '22AAAAA0000A1Z5' }), true);
+  assert.equal(hasSupplyChainRegistrationData({ gstin: '22AAAAA0000A1Z5' }), false);
+  assert.equal(hasSupplyChainRegistrationData({ brands: 'Cement' }), true);
   assert.equal(hasSupplyChainRegistrationData({}), false);
+});
+
+test('company profile save does not require brand for mirrored profile-only entries', () => {
+  const mirroredEntry = {
+    id: 'e1',
+    brands: '',
+    gstin: '29JVJPS2072B1ZA',
+    companyName: 'Acme Traders',
+    ownershipDetails: 'Pvt Ltd'
+  };
+  assert.equal(
+    supplierProfileIncludesChainDraft({
+      companyInfoEntries: [mirroredEntry]
+    }),
+    false
+  );
+  const result = validateCompanyInfoEntriesList([mirroredEntry]);
+  assert.equal(result.ok, true);
 });
 
 test('validateCompanyInfoEntriesList rejects multiple brands in one entry', () => {

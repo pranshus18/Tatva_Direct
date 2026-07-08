@@ -152,18 +152,16 @@ export function resolveCompanyInfoEntriesForValidation(profile) {
 export function hasSupplyChainRegistrationData(entry = {}) {
   if (entry?.supplyChainRegistrationStarted === true) return true;
   const role = String(entry?.role || '').trim();
-  const gstin = String(entry?.gstin || '').trim();
-  const companyName = String(entry?.companyName || '').trim();
-  const ownershipDetails = String(entry?.ownershipDetails || '').trim();
   const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
+  const brandDocumentUrls = resolveBrandApprovalDocumentUrls(entry);
+  const brands = parseBrandsListForValidation(entry?.brands);
   const mov = entry?.minimumOrderValue;
   const hasMov = mov !== '' && mov !== null && mov !== undefined;
   return !!(
+    brands.length > 0 ||
     role ||
-    gstin ||
-    companyName ||
-    ownershipDetails ||
     roleCertificateUrls.length > 0 ||
+    brandDocumentUrls.length > 0 ||
     hasMov
   );
 }
@@ -202,6 +200,20 @@ export function validateCompanyInfoEntriesList(entries) {
     const brandList = parseBrandsListForValidation(entry.brands);
     const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
 
+    if (!entryRequiresSupplyChainCompletion(entry)) {
+      if (brandList.length === 0) {
+        continue;
+      }
+      if (brandList.length > 1) {
+        return {
+          ok: false,
+          message: `Entry ${entryNum}: Only one brand is allowed per entry. Add another block for a second brand.`,
+          entryIndex: i,
+          field: 'brands'
+        };
+      }
+      continue;
+    }
     if (brandList.length === 0) {
       return {
         ok: false,
@@ -217,9 +229,6 @@ export function validateCompanyInfoEntriesList(entries) {
         entryIndex: i,
         field: 'brands'
       };
-    }
-    if (!entryRequiresSupplyChainCompletion(entry)) {
-      continue;
     }
     if (roleCertificateUrls.length === 0) {
       return {

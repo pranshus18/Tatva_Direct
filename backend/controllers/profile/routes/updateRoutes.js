@@ -128,58 +128,73 @@ export function registerProfileUpdateRoutes(router) {
         }));
         profileUpdate.projects = projects;
       } else if (profileData.userType === 'supplier') {
-        const branches = (profileData.branches || []).map((branch) => ({
-          ...branch,
-          id: branch.id || uuidv4()
-        }));
-        const hasCompleteShippingBranch = branches.some((branch) => isSupplierBranchAddressComplete(branch));
-        if (!hasCompleteShippingBranch) {
-          return res.status(400).json({
-            status: 'error',
-            code: 'supplier_shipping_branch_required',
-            message:
-              'At least one complete branch location (shipping address) is required. Fill address, city, state, PIN, and country.'
-          });
-        }
-        for (let i = 0; i < branches.length; i += 1) {
-          const branch = branches[i] || {};
-          const hasAnyField = ['address', 'city', 'state', 'zipCode', 'pincode', 'country'].some((field) =>
-            String(branch?.[field] || '').trim()
-          );
-          if (!hasAnyField) continue;
-          if (!isSupplierBranchAddressComplete(branch)) {
-            const label = String(branch?.name || '').trim() || `Branch ${i + 1}`;
+        const updatingBranches = profileData.branches !== undefined;
+        const updatingBillingAddress = profileData.address !== undefined;
+
+        if (updatingBranches) {
+          const branches = (profileData.branches || []).map((branch) => ({
+            ...branch,
+            id: branch.id || uuidv4()
+          }));
+          const hasCompleteShippingBranch = branches.some((branch) => isSupplierBranchAddressComplete(branch));
+          if (!hasCompleteShippingBranch) {
             return res.status(400).json({
               status: 'error',
-              code: 'supplier_branch_address_incomplete',
-              message: `Branch "${label}" is missing required address fields.`
+              code: 'supplier_shipping_branch_required',
+              message:
+                'At least one complete branch location (shipping address) is required. Fill address, city, state, PIN, and country.'
             });
           }
+          for (let i = 0; i < branches.length; i += 1) {
+            const branch = branches[i] || {};
+            const hasAnyField = ['address', 'city', 'state', 'zipCode', 'pincode', 'country'].some((field) =>
+              String(branch?.[field] || '').trim()
+            );
+            if (!hasAnyField) continue;
+            if (!isSupplierBranchAddressComplete(branch)) {
+              const label = String(branch?.name || '').trim() || `Branch ${i + 1}`;
+              return res.status(400).json({
+                status: 'error',
+                code: 'supplier_branch_address_incomplete',
+                message: `Branch "${label}" is missing required address fields.`
+              });
+            }
+          }
+          profileUpdate.branches = branches;
         }
-        profileUpdate.branches = branches;
 
-        const mergedBillingAddress = {
-          ...(currentUser.address || {}),
-          ...(profileData.address || {})
-        };
-        const requiredBillingFields = ['line1', 'city', 'state', 'pincode', 'country'];
-        const missingBillingField = requiredBillingFields.find(
-          (field) => !String(mergedBillingAddress?.[field] || '').trim()
-        );
-        if (missingBillingField) {
-          return res.status(400).json({
-            status: 'error',
-            code: 'supplier_billing_address_required',
-            message: `Registered billing address field "${missingBillingField}" is required.`
-          });
+        if (updatingBillingAddress) {
+          const mergedBillingAddress = {
+            ...(currentUser.address || {}),
+            ...(profileData.address || {})
+          };
+          const requiredBillingFields = ['line1', 'city', 'state', 'pincode', 'country'];
+          const missingBillingField = requiredBillingFields.find(
+            (field) => !String(mergedBillingAddress?.[field] || '').trim()
+          );
+          if (missingBillingField) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'supplier_billing_address_required',
+              message: `Registered billing address field "${missingBillingField}" is required.`
+            });
+          }
+          updateData.address = mergedBillingAddress;
+          delete profileUpdate.billingAddresses;
         }
-        updateData.address = mergedBillingAddress;
-        delete profileUpdate.billingAddresses;
 
-        profileUpdate.businessType = profileData.businessType;
-        profileUpdate.categories = profileData.categories || [];
-        profileUpdate.gstin = profileData.gstin || profileData.mainGstin;
-        profileUpdate.ownershipDetails = profileData.ownershipDetails;
+        if (profileData.businessType !== undefined) {
+          profileUpdate.businessType = profileData.businessType;
+        }
+        if (profileData.categories !== undefined) {
+          profileUpdate.categories = profileData.categories || [];
+        }
+        if (profileData.gstin !== undefined || profileData.mainGstin !== undefined) {
+          profileUpdate.gstin = profileData.gstin || profileData.mainGstin;
+        }
+        if (profileData.ownershipDetails !== undefined) {
+          profileUpdate.ownershipDetails = profileData.ownershipDetails;
+        }
         if (profileData.skus !== undefined) {
           profileUpdate.skus = profileData.skus;
         } else if (profileData.skuList !== undefined) {
@@ -211,6 +226,11 @@ export function registerProfileUpdateRoutes(router) {
             ? incomingEntries.some((e) => String(e?.role || '').trim())
             : hasAnySupplyChainRole(incomingChain);
         const saveSupplyChainEntryId = String(profileData.saveSupplyChainEntryId || '').trim();
+        const includesChainUpdateIntent = () =>
+          wantsBrandApprovalSave ||
+          wantsDraftSave ||
+          isIncompleteChainDraft ||
+          supplierProfileIncludesChainDraft(profileData);
 
         if (supplierProfileIncludesChainDraft(profileData) && !wantsBrandApprovalSave) {
           const chainEntriesForValidation = resolveCompanyInfoEntriesForValidation(profileData);
@@ -327,26 +347,27 @@ export function registerProfileUpdateRoutes(router) {
           return failures.length > 0 ? failures : null;
         };
 
-        if (wantsBrandApprovalSave) {
-          const brandStrings = collectBrandStringsFromChain(incomingChain);
-          const uniqueBrands = [
-            ...new Set(
-              brandStrings
-                .flatMap((s) => parseBrandTokens(s))
-                .map((b) => b.trim())
-                .filter(Boolean)
-            )
-          ];
-          if (uniqueBrands.length === 0) {
-            return res.status(400).json({
-              status: 'error',
-              code: 'brand_required_for_brand_approval',
-              message: 'Enter at least one brand name before saving brand approval.'
-            });
+        if (includesChainUpdateIntent()) {
+          if (wantsBrandApprovalSave) {
+            const brandStrings = collectBrandStringsFromChain(incomingChain);
+            const uniqueBrands = [
+              ...new Set(
+                brandStrings
+                  .flatMap((s) => parseBrandTokens(s))
+                  .map((b) => b.trim())
+                  .filter(Boolean)
+              )
+            ];
+            if (uniqueBrands.length === 0) {
+              return res.status(400).json({
+                status: 'error',
+                code: 'brand_required_for_brand_approval',
+                message: 'Enter at least one brand name before saving brand approval.'
+              });
+            }
           }
-        }
 
-        if (wantsBrandApprovalSave) {
+          if (wantsBrandApprovalSave) {
           profileUpdate.chainProfileDraft = null;
           profileUpdate.chainProfileDraftUpdatedAt = null;
           const brandFailures = await runGlobalBrandGate(incomingChain, { force: true });
@@ -609,6 +630,7 @@ export function registerProfileUpdateRoutes(router) {
             profileUpdate.brands = incomingChain.brands;
             profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
           }
+        }
         }
       }
 

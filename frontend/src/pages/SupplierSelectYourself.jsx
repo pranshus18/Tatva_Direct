@@ -384,8 +384,9 @@ export default function SupplierSelectYourself() {
       setSaving(true);
       const token = localStorage.getItem('token');
       const payload = buildSupplierChainSavePayload(
-        saveAsDraft ? { ...profile, saveAsDraft: true } : profile,
-        getCompanyInfoEntriesForSave(profile)
+        profile,
+        getCompanyInfoEntriesForSave(profile),
+        { forApi: true, saveAsDraft: saveAsDraft || undefined }
       );
       const response = await fetch(getApiUrl('/api/profile'), {
         method: 'PUT',
@@ -493,7 +494,10 @@ export default function SupplierSelectYourself() {
       entriesForEntrySave.push({ ...selectedEntry });
     }
 
-    const profileForEntrySave = buildSupplierChainSavePayload(profile, entriesForEntrySave);
+    const profileForEntrySave = buildSupplierChainSavePayload(profile, entriesForEntrySave, {
+      forApi: true,
+      saveSupplyChainEntryId: selectedEntry?.id || entryId
+    });
 
     try {
       setSavingEntryId(entryId);
@@ -504,10 +508,7 @@ export default function SupplierSelectYourself() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({
-          ...profileForEntrySave,
-          saveSupplyChainEntryId: selectedEntry?.id || entryId
-        })
+        body: JSON.stringify(profileForEntrySave)
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.status !== 'success') {
@@ -555,11 +556,12 @@ export default function SupplierSelectYourself() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`
         },
-        body: JSON.stringify({
-          ...buildSupplierChainSavePayload(profile, syncBrandEntriesForSupplyChainStep(allEntries)),
-          userType: profile?.userType || 'supplier',
-          saveBrandApprovalOnly: true
-        })
+        body: JSON.stringify(
+          buildSupplierChainSavePayload(profile, syncBrandEntriesForSupplyChainStep(allEntries), {
+            forApi: true,
+            saveBrandApprovalOnly: true
+          })
+        )
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.status !== 'success') {

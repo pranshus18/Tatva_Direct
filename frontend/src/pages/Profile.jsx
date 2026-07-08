@@ -41,6 +41,34 @@ const formatSavedAddressLabel = (entry, index, options = {}) => {
   return `Address ${index + 1}`;
 };
 
+/** Company Profile saves only business/address fields — not supply-chain data from Select yourself. */
+function buildProfileSavePayload(profile) {
+  if (!profile) return profile;
+  if (profile.userType === 'supplier') {
+    return {
+      userType: profile.userType,
+      companyName: profile.companyName,
+      contactPerson: profile.contactPerson,
+      phone: profile.phone,
+      email: profile.email,
+      address: profile.address,
+      website: profile.website,
+      description: profile.description,
+      profilePhotoUrl: profile.profilePhotoUrl,
+      gstin: profile.gstin,
+      mainGstin: profile.mainGstin,
+      ownershipDetails: profile.ownershipDetails,
+      businessType: profile.businessType,
+      categories: profile.categories,
+      branches: profile.branches,
+      skus: profile.skus,
+      shippingAddresses: profile.shippingAddresses,
+      supplierPortalTheme: profile.supplierPortalTheme
+    };
+  }
+  return profile;
+}
+
 const Profile = ({ user }) => {
   const [profile, setProfile] = useState(null);
   const [editing, setEditing] = useState(false);
@@ -129,7 +157,7 @@ const Profile = ({ user }) => {
         }
       }
 
-      const payload = profile;
+      const payload = buildProfileSavePayload(profile);
 
       const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl('/api/profile'), {
