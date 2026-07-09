@@ -37,6 +37,56 @@ export function normalizeAddress(address = {}) {
   };
 }
 
+const SIGNUP_PLACEHOLDER_PINCODE = '000000';
+
+function hasSignupPlaceholderCoreFields(address = {}) {
+  const normalized = normalizeAddress(address);
+  return (
+    /^pending$/i.test(normalized.city) &&
+    /^pending$/i.test(normalized.state) &&
+    normalized.pincode === SIGNUP_PLACEHOLDER_PINCODE
+  );
+}
+
+/** True when a field still holds the placeholder value written at signup (not user-entered). */
+export function isSignupPlaceholderAddressField(field, value, address = {}, companyName = '') {
+  const text = String(value || '').trim();
+  if (!text) return false;
+
+  const company = String(companyName || '').trim();
+  const corePlaceholders = hasSignupPlaceholderCoreFields(address);
+
+  switch (field) {
+    case 'city':
+      return /^pending$/i.test(text);
+    case 'state':
+      return /^pending$/i.test(text);
+    case 'pincode':
+      return text === SIGNUP_PLACEHOLDER_PINCODE;
+    case 'line1':
+      if (/^address pending$/i.test(text)) return true;
+      return corePlaceholders && company && text.toLowerCase() === company.toLowerCase();
+    case 'country':
+      return corePlaceholders && text === 'India';
+    default:
+      return false;
+  }
+}
+
+/** Strip signup placeholder values so profile UI can show empty fields with placeholders. */
+export function sanitizeSignupPlaceholderAddress(address = {}, { companyName = '' } = {}) {
+  const normalized = normalizeAddress(address);
+  const sanitized = { ...normalized };
+
+  for (const field of ADDRESS_REQUIRED_FIELDS) {
+    if (isSignupPlaceholderAddressField(field, sanitized[field], normalized, companyName)) {
+      sanitized[field] = '';
+    }
+  }
+
+  return sanitized;
+}
+
 export function isAddressComplete(address = {}) {
   return ADDRESS_REQUIRED_FIELDS.every((field) => String(address?.[field] || '').trim());
 }

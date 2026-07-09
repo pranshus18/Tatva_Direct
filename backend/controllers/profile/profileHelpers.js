@@ -1,5 +1,5 @@
 import { supabase } from '../../config/supabase.js';
-import { isAddressComplete, normalizeAddress } from '../po/shared/poHelpers.js';
+import { isAddressComplete, normalizeAddress, sanitizeSignupPlaceholderAddress } from '../po/shared/poHelpers.js';
 import {
   branchRecordToAddressInput,
   isSupplierBranchAddressComplete
@@ -481,13 +481,16 @@ export function deriveShippingAddressesFromProfile(user) {
 
 export async function createProfileResponse(user) {
   const registeredBillingAddress = resolveRegisteredBillingAddress(user);
+  const displayBillingAddress = sanitizeSignupPlaceholderAddress(registeredBillingAddress, {
+    companyName: user.company || ''
+  });
   const baseProfile = {
     userId: user.id,
     companyName: user.company || '',
     contactPerson: user.name,
     phone: user.phone || '',
     email: user.email,
-    address: registeredBillingAddress,
+    address: displayBillingAddress,
     website: user.profile?.website || '',
     description: user.profile?.description || '',
     profilePhotoUrl: String(user.profile?.profilePhotoUrl || '').trim(),

@@ -16,6 +16,7 @@ import {
 } from '../utils/currentLocationAddress';
 import { formatShippingAddressLabel } from '../utils/shippingAddressLabel';
 import { formatDateTimeIST } from '../utils/dateTime';
+import { sanitizeSignupPlaceholderAddress } from '../utils/addressPlaceholders';
 import './Profile.css';
 
 const formatSavedAddressLabel = (entry, index, options = {}) => {
@@ -115,8 +116,16 @@ const Profile = ({ user }) => {
         }
       });
       const data = await response.json();
-      setProfile(data.profile);
-      cacheProfilePhotoUrl(data.profile?.profilePhotoUrl || '');
+      const profileData = data.profile
+        ? {
+            ...data.profile,
+            address: sanitizeSignupPlaceholderAddress(data.profile.address || {}, {
+              companyName: data.profile.companyName || ''
+            })
+          }
+        : null;
+      setProfile(profileData);
+      cacheProfilePhotoUrl(profileData?.profilePhotoUrl || '');
     } catch (error) {
       console.error('Failed to fetch profile:', error);
     } finally {
@@ -164,7 +173,9 @@ const Profile = ({ user }) => {
           return;
         }
 
-        const billingAddr = profile?.address || {};
+        const billingAddr = sanitizeSignupPlaceholderAddress(profile?.address || {}, {
+          companyName: profile?.companyName || ''
+        });
         const requiredBillingFields = [
           { key: 'line1', label: 'Address' },
           { key: 'city', label: 'City' },
@@ -1028,6 +1039,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
               value={profile?.address?.city || ''}
               onChange={(e) => updateRegisteredAddress('city', e.target.value)}
               disabled={!editing}
+              placeholder="e.g. Pune"
             />
           </div>
           <div className="form-group">
@@ -1037,6 +1049,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
               value={profile?.address?.state || ''}
               onChange={(e) => updateRegisteredAddress('state', e.target.value)}
               disabled={!editing}
+              placeholder="e.g. Maharashtra"
             />
           </div>
           <div className="form-group">
@@ -1046,6 +1059,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
               value={profile?.address?.pincode || ''}
               onChange={(e) => updateRegisteredAddress('pincode', e.target.value)}
               disabled={!editing}
+              placeholder="e.g. 411026"
             />
           </div>
           <div className="form-group">
@@ -1055,6 +1069,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
               value={profile?.address?.country || ''}
               onChange={(e) => updateRegisteredAddress('country', e.target.value)}
               disabled={!editing}
+              placeholder="e.g. India"
             />
           </div>
         </div>
