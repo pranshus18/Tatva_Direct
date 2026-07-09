@@ -26,6 +26,7 @@ import {
 } from '../../../services/supplierProductWriteService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import { mergeProductImageLists, syncCatalogProductImages } from '../../../services/productImageService.js';
+import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 
 export function registerSupplierProductUpdateRoute(ctx) {
   const {
@@ -188,6 +189,10 @@ export function registerSupplierProductUpdateRoute(ctx) {
               : (spUpdateError?.message || 'Failed to update product')
           });
         }
+
+        void syncCatalogProductSnapshotFromOffers(supabase, updatedSupplierProduct.product_id).catch((syncError) => {
+          console.error('[CatalogSnapshot] update product sync failed:', syncError?.message || syncError);
+        });
 
         if (req.body.stock !== undefined) {
           const prevS = parseInt(supplierProduct.stock, 10) || 0;

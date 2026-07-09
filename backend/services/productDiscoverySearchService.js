@@ -12,6 +12,12 @@ import {
   loadAdminBrandTerminalRoleMap,
   supplierMatchesBrandTerminalRole
 } from '../utils/adminBrandSupplyChain.js';
+import {
+  aggregateEligibleDiscoveryOffers,
+  reconcileDiscoveryProductFields,
+  syncCatalogProductSnapshotFromOffers
+} from './catalogOfferSnapshotService.js';
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 
 /**
  * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` treats commas as delimiters; commas/parens in the
@@ -254,47 +260,52 @@ export async function searchProductDiscoveryForUser(
   const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, discoveryBrandCandidates);
   const productIds = productsWithImages.map((p) => p?.id).filter(Boolean);
   const productById = new Map(productsWithImages.map((p) => [p?.id, p]));
-  const eligibleSupplierCountByProduct = new Map();
+  let offerAggregates = {
+    eligibleSupplierCountByProduct: new Map(),
+    totalStockByProduct: new Map(),
+    bestOfferByProduct: new Map()
+  };
   if (productIds.length > 0) {
     const { data: offerRows } = await supabase
       .from('supplier_products')
-      .select('product_id, status, is_active, supplier:users!supplier_products_supplier_id_fkey(profile)')
+      .select(
+        'product_id, price, stock, min_order_quantity, location, status, is_active, supplier:users!supplier_products_supplier_id_fkey(profile)'
+      )
       .in('product_id', productIds)
       .neq('status', 'rejected');
 
-    for (const row of offerRows || []) {
-      const productId = row?.product_id;
-      if (!productId) continue;
-      const normalizedStatus = String(row?.status || '').trim().toLowerCase();
-      // Keep Product Discovery "available suppliers" aligned with cart add rules:
-      // only approved and active offers are considered listed.
-      const listedByStatus = normalizedStatus === 'approved' && row?.is_active === true;
-      if (!listedByStatus) continue;
-      const product = productById.get(productId);
-      const brandLabel = detectDiscoveryBrand(product);
-      const supplierProfile = row?.supplier?.profile || {};
-      if (!supplierMatchesBrandTerminalRole(supplierProfile, brandLabel, terminalRoleByBrandMap)) continue;
-      eligibleSupplierCountByProduct.set(
-        productId,
-        (eligibleSupplierCountByProduct.get(productId) || 0) + 1
-      );
-    }
+    offerAggregates = aggregateEligibleDiscoveryOffers({
+      offerRows: offerRows || [],
+      productById,
+      detectDiscoveryBrand,
+      terminalRoleByBrandMap,
+      supplierMatchesBrandTerminalRoleFn: supplierMatchesBrandTerminalRole
+    });
   }
 
   const suggestions = productsWithImages
     .map((p) => {
-      const supplierCount = Number(eligibleSupplierCountByProduct.get(p?.id) || 0);
-    const categoryKey = String(p?.category || '').trim().toLowerCase();
-    const affinityScore = categoryAffinity.get(categoryKey) || 0;
-    const recommendationScore = Number(affinityScore.toFixed(3));
-    return {
-      ...p,
-      supplierCount,
-      canAddToCart: supplierCount > 0,
-      recommendationScore
-    };
+      const categoryKey = String(p?.category || '').trim().toLowerCase();
+      const affinityScore = categoryAffinity.get(categoryKey) || 0;
+      const recommendationScore = Number(affinityScore.toFixed(3));
+      return {
+        ...reconcileDiscoveryProductFields(p, offerAggregates),
+        recommendationScore
+      };
     })
     .filter((p) => Number(p?.supplierCount || 0) > 0);
+
+  for (const suggestion of suggestions) {
+    const catalogStock = parseSupplierStockQuantity(
+      productById.get(suggestion?.id)?.stock
+    ) ?? 0;
+    const reconciledStock = parseSupplierStockQuantity(suggestion?.stock) ?? 0;
+    if (reconciledStock !== catalogStock) {
+      void syncCatalogProductSnapshotFromOffers(supabase, suggestion.id).catch((syncError) => {
+        console.error('[CatalogSnapshot] discovery heal sync failed:', syncError?.message || syncError);
+      });
+    }
+  }
 
   suggestions.sort((a, b) => {
     if (query) {

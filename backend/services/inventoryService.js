@@ -1,5 +1,6 @@
 import { supabase } from '../config/supabase.js';
 import { maybeNotifyInventoryBelowMov } from './lowInventoryMovAlertService.js';
+import { syncCatalogProductSnapshotFromOffers } from './catalogOfferSnapshotService.js';
 
 export function computeNextStockLevel(currentStockValue, quantityChangeValue) {
   const currentStock = parseInt(currentStockValue, 10) || 0;
@@ -143,6 +144,10 @@ export async function recordInventoryMovement({
     previousStock: currentStock,
     newStock,
     quantityChange
+  });
+
+  void syncCatalogProductSnapshotFromOffers(supabase, effectiveProductId).catch((syncError) => {
+    console.error('[CatalogSnapshot] inventory movement sync failed:', syncError?.message || syncError);
   });
 
   return { previousStock: currentStock, newStock };

@@ -6,6 +6,7 @@ import {
   adminProductRejectSchema
 } from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
+import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
 
 export function registerAdminProductModerationRoutes({ router, authenticateToken, isAdmin, supabase }) {
   // Approve product (admin only)
@@ -117,6 +118,10 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         approvedSupplierProducts = updatedSupplierProducts;
       }
       console.log(`[ADMIN APPROVE PRODUCT] supplier_products updated rows: ${updatedSupplierProducts?.length || 0}`);
+
+      void syncCatalogProductSnapshotFromOffers(supabase, product.id).catch((syncError) => {
+        console.error('[CatalogSnapshot] admin approve sync failed:', syncError?.message || syncError);
+      });
 
       // Create notification(s) for supplier(s) whose offer got approved
       const suppliersToNotify = (approvedSupplierProducts || [])

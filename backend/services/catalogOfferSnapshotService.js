@@ -1,0 +1,195 @@
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
+
+export function parseOfferPrice(raw) {
+  const price = Number.parseFloat(String(raw ?? ''));
+  return Number.isFinite(price) && price >= 0 ? price : 0;
+}
+
+export function isListedSupplierOffer(row = {}) {
+  const normalizedStatus = String(row?.status || '').trim().toLowerCase();
+  return normalizedStatus === 'approved' && row?.is_active === true;
+}
+
+/** Prefer higher stock; tie-break on lower positive price. */
+export function pickBetterListedOffer(existing, candidate) {
+  if (!existing) return candidate;
+  if (candidate._stock > existing._stock) return candidate;
+  if (candidate._stock < existing._stock) return existing;
+  if (candidate._price > 0 && (existing._price <= 0 || candidate._price < existing._price)) {
+    return candidate;
+  }
+  return existing;
+}
+
+export function aggregateListedSupplierOffers(offerRows = []) {
+  const byProduct = new Map();
+
+  for (const row of offerRows) {
+    const productId = row?.product_id;
+    if (!productId || !isListedSupplierOffer(row)) continue;
+
+    const stock = parseSupplierStockQuantity(row.stock) ?? 0;
+    const price = parseOfferPrice(row.price);
+    const candidate = {
+      ...row,
+      _stock: stock,
+      _price: price
+    };
+
+    const existing = byProduct.get(productId) || {
+      productId,
+      listedOfferCount: 0,
+      totalStock: 0,
+      bestOffer: null,
+      bestInStockOffer: null,
+      lowestPriceOffer: null
+    };
+
+    existing.listedOfferCount += 1;
+    existing.totalStock += stock;
+    existing.bestOffer = pickBetterListedOffer(existing.bestOffer, candidate);
+    if (stock > 0) {
+      existing.bestInStockOffer = pickBetterListedOffer(existing.bestInStockOffer, candidate);
+    }
+    if (price > 0 && (!existing.lowestPriceOffer || price < existing.lowestPriceOffer._price)) {
+      existing.lowestPriceOffer = candidate;
+    }
+
+    byProduct.set(productId, existing);
+  }
+
+  return { byProduct };
+}
+
+export function buildCatalogSnapshotPatch(aggregate) {
+  if (!aggregate || aggregate.listedOfferCount === 0) {
+    return {
+      stock: 0,
+      price: 0,
+      min_order_quantity: null,
+      location: null
+    };
+  }
+
+  const priceSource =
+    aggregate.bestInStockOffer ||
+    aggregate.lowestPriceOffer ||
+    aggregate.bestOffer;
+
+  return {
+    stock: aggregate.totalStock,
+    price: parseOfferPrice(priceSource?.price),
+    min_order_quantity: priceSource?.min_order_quantity ?? null,
+    location: String(priceSource?.location || '').trim() || null
+  };
+}
+
+export function aggregateEligibleDiscoveryOffers({
+  offerRows = [],
+  productById,
+  detectDiscoveryBrand,
+  terminalRoleByBrandMap,
+  supplierMatchesBrandTerminalRoleFn
+}) {
+  const eligibleSupplierCountByProduct = new Map();
+  const totalStockByProduct = new Map();
+  const bestOfferByProduct = new Map();
+
+  for (const row of offerRows) {
+    const productId = row?.product_id;
+    if (!productId || !isListedSupplierOffer(row)) continue;
+
+    const product = productById.get(productId);
+    const brandLabel = detectDiscoveryBrand(product);
+    const supplierProfile = row?.supplier?.profile || {};
+    if (!supplierMatchesBrandTerminalRoleFn(supplierProfile, brandLabel, terminalRoleByBrandMap)) continue;
+
+    eligibleSupplierCountByProduct.set(
+      productId,
+      (eligibleSupplierCountByProduct.get(productId) || 0) + 1
+    );
+
+    const stock = parseSupplierStockQuantity(row.stock) ?? 0;
+    totalStockByProduct.set(productId, (totalStockByProduct.get(productId) || 0) + stock);
+
+    const candidate = {
+      ...row,
+      _stock: stock,
+      _price: parseOfferPrice(row.price)
+    };
+    bestOfferByProduct.set(productId, pickBetterListedOffer(bestOfferByProduct.get(productId), candidate));
+  }
+
+  return { eligibleSupplierCountByProduct, totalStockByProduct, bestOfferByProduct };
+}
+
+export function reconcileDiscoveryProductFields(product, aggregates) {
+  const productId = product?.id;
+  const supplierCount = Number(aggregates.eligibleSupplierCountByProduct.get(productId) || 0);
+  const totalStock = Number(aggregates.totalStockByProduct.get(productId) || 0);
+  const bestOffer = aggregates.bestOfferByProduct.get(productId);
+  const catalogPrice = parseOfferPrice(product?.price);
+  const offerPrice = parseOfferPrice(bestOffer?.price);
+  const catalogStock = parseSupplierStockQuantity(product?.stock);
+  const resolvedStock = supplierCount > 0 ? totalStock : (catalogStock ?? 0);
+
+  return {
+    ...product,
+    supplierCount,
+    canAddToCart: supplierCount > 0,
+    stock: resolvedStock,
+    price: catalogPrice > 0 ? catalogPrice : offerPrice,
+    min_order_quantity: bestOffer?.min_order_quantity ?? product?.min_order_quantity ?? null,
+    location:
+      String(product?.location || '').trim() ||
+      String(bestOffer?.location || '').trim() ||
+      product?.location
+  };
+}
+
+/**
+ * Keep shared catalog `products` stock/price aligned with listed supplier offers.
+ * Supplier inventory is authoritative in `supplier_products`; this snapshot prevents
+ * service-provider discovery and legacy readers from seeing stale zero stock.
+ */
+export async function syncCatalogProductSnapshotFromOffers(supabase, productId) {
+  const normalizedProductId = String(productId || '').trim();
+  if (!normalizedProductId) {
+    return { ok: false, reason: 'missing_product_id' };
+  }
+
+  const { data: offerRows, error } = await supabase
+    .from('supplier_products')
+    .select('product_id, price, stock, min_order_quantity, location, status, is_active')
+    .eq('product_id', normalizedProductId)
+    .neq('status', 'rejected');
+
+  if (error) {
+    console.error('[CatalogSnapshot] Failed to load supplier offers:', error.message || error);
+    return { ok: false, reason: 'load_failed', error };
+  }
+
+  const aggregates = aggregateListedSupplierOffers(offerRows || []);
+  const aggregate = aggregates.byProduct.get(normalizedProductId);
+  const snapshot = buildCatalogSnapshotPatch(aggregate);
+  const patch = {
+    stock: snapshot.stock,
+    updated_at: new Date().toISOString()
+  };
+
+  if (snapshot.price > 0) patch.price = snapshot.price;
+  if (snapshot.min_order_quantity != null) patch.min_order_quantity = snapshot.min_order_quantity;
+  if (snapshot.location) patch.location = snapshot.location;
+
+  const { error: updateError } = await supabase
+    .from('products')
+    .update(patch)
+    .eq('id', normalizedProductId);
+
+  if (updateError) {
+    console.error('[CatalogSnapshot] Failed to update products snapshot:', updateError.message || updateError);
+    return { ok: false, reason: 'update_failed', error: updateError };
+  }
+
+  return { ok: true, productId: normalizedProductId, ...snapshot };
+}

@@ -23,6 +23,7 @@ import {
 } from '../supplierImports.js';
 import { sanitizeImageUrls } from '../shared/productHelpers.js';
 import { mergeProductImageLists, syncCatalogProductImages } from '../../../services/productImageService.js';
+import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 import {
   createBaseProductIfNeeded,
   ensureCategoryAndUnit,
@@ -334,6 +335,10 @@ export function buildSupplierProductCreateHandler(ctx) {
           message: supplierProductError.message || 'Error creating supplier product entry'
         });
       }
+
+      void syncCatalogProductSnapshotFromOffers(supabase, productId).catch((syncError) => {
+        console.error('[CatalogSnapshot] create product sync failed:', syncError?.message || syncError);
+      });
 
       let syncedCatalogImages = [];
       if (normalizedImageUrls.length > 0) {

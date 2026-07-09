@@ -1,8 +1,5 @@
-import {
-  getContractErrorMessage,
-  parseWithSchema,
-  supplierProductDeleteSchema
-} from '../supplierImports.js';
+import { getContractErrorMessage, parseWithSchema, supplierProductDeleteSchema } from '../supplierImports.js';
+import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 
 export function registerSupplierProductDeleteRoute(ctx) {
   const { router, authenticateToken, supabase } = ctx;
@@ -65,6 +62,10 @@ export function registerSupplierProductDeleteRoute(ctx) {
           .from('products')
           .delete()
           .eq('id', productId);
+      } else {
+        void syncCatalogProductSnapshotFromOffers(supabase, productId).catch((syncError) => {
+          console.error('[CatalogSnapshot] delete product sync failed:', syncError?.message || syncError);
+        });
       }
 
       return res.json({
