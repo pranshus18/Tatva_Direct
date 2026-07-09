@@ -77,8 +77,6 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       ? payload.paymentDetails
       : null;
     const requestedShippingAddress = normalizeAddress(payload.shippingAddress || {});
-    const requestedBillingAddress = normalizeAddress(payload.billingAddress || {});
-    const rawDeliveryDestination = String(payload.deliveryDestination || 'shipping').toLowerCase().trim();
     
     // Validate poGroups
     if (!poGroups) {
@@ -165,26 +163,14 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       }) ||
       groupShippingFallback ||
       profileAddress;
-    const billingAddress = hasGstin
-      ? (isAddressComplete(requestedBillingAddress) ? requestedBillingAddress : profileAddress)
-      : shippingAddress;
-    const deliveryDestination = hasGstin && rawDeliveryDestination === 'billing'
-      ? 'billing'
-      : 'shipping';
-    const selectedDeliveryAddress = deliveryDestination === 'billing'
-      ? billingAddress
-      : shippingAddress;
+    const billingAddress = shippingAddress;
+    const deliveryDestination = 'shipping';
+    const selectedDeliveryAddress = shippingAddress;
 
     if (!isAddressComplete(shippingAddress)) {
       return res.status(400).json({
         status: 'error',
         message: 'Shipping address is incomplete. Set a delivery address in your cart before creating purchase orders.'
-      });
-    }
-    if (hasGstin && !isAddressComplete(billingAddress)) {
-      return res.status(400).json({
-        status: 'error',
-        message: 'Billing address is required when GSTIN is present.'
       });
     }
 

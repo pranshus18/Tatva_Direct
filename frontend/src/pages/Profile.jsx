@@ -4,7 +4,12 @@ import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Use
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import ProfilePhotoSection from '../components/ProfilePhotoSection';
-import { cacheProfilePhotoUrl } from '../utils/profilePhoto';
+import {
+  cacheProfilePhotoUrl,
+  commitProfilePhotoDraft,
+  EMPTY_PROFILE_PHOTO_DRAFT,
+  revokeProfilePhotoPreviewUrl
+} from '../utils/profilePhoto';
 import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
@@ -66,6 +71,21 @@ function buildProfileSavePayload(profile) {
       supplierPortalTheme: profile.supplierPortalTheme
     };
   }
+  if (profile.userType === 'service_provider') {
+    return {
+      userType: profile.userType,
+      companyName: profile.companyName,
+      contactPerson: profile.contactPerson,
+      phone: profile.phone,
+      email: profile.email,
+      website: profile.website,
+      description: profile.description,
+      profilePhotoUrl: profile.profilePhotoUrl,
+      projects: profile.projects,
+      shippingAddresses: profile.shippingAddresses,
+      serviceProviderPortalTheme: profile.serviceProviderPortalTheme
+    };
+  }
   return profile;
 }
 
@@ -73,6 +93,14 @@ const Profile = ({ user }) => {
   const [profile, setProfile] = useState(null);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [photoDraft, setPhotoDraft] = useState(EMPTY_PROFILE_PHOTO_DRAFT);
+
+  const resetPhotoDraft = () => {
+    setPhotoDraft((current) => {
+      revokeProfilePhotoPreviewUrl(current.previewUrl);
+      return EMPTY_PROFILE_PHOTO_DRAFT;
+    });
+  };
 
   useEffect(() => {
     fetchProfile();
@@ -99,7 +127,6 @@ const Profile = ({ user }) => {
   const handleSave = async () => {
     try {
       if (profile?.userType === 'service_provider') {
-        const addr = profile?.address || {};
         const requiredAddressFields = [
           { key: 'line1', label: 'Address' },
           { key: 'city', label: 'City' },
@@ -107,11 +134,6 @@ const Profile = ({ user }) => {
           { key: 'pincode', label: 'PIN code' },
           { key: 'country', label: 'Country' }
         ];
-        const missing = requiredAddressFields.find((f) => !String(addr?.[f.key] || '').trim());
-        if (missing) {
-          alert(`Please enter ${missing.label} in the registered billing address section.`);
-          return;
-        }
 
         const shippingAddresses = Array.isArray(profile?.shippingAddresses) ? profile.shippingAddresses : [];
         for (let i = 0; i < shippingAddresses.length; i += 1) {
@@ -159,6 +181,11 @@ const Profile = ({ user }) => {
 
       const payload = buildProfileSavePayload(profile);
 
+      const photoResult = await commitProfilePhotoDraft(photoDraft);
+      if (photoResult.changed) {
+        cacheProfilePhotoUrl(photoResult.profilePhotoUrl || '');
+      }
+
       const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl('/api/profile'), {
         method: 'PUT',
@@ -177,11 +204,15 @@ const Profile = ({ user }) => {
         alert(data.message || 'Submitted for admin approval.');
       }
       if (data.profile) {
-        setProfile(data.profile);
-        cacheProfilePhotoUrl(data.profile?.profilePhotoUrl || '');
+        const mergedProfile = photoResult.changed
+          ? { ...data.profile, profilePhotoUrl: photoResult.profilePhotoUrl || '' }
+          : data.profile;
+        setProfile(mergedProfile);
+        cacheProfilePhotoUrl(mergedProfile?.profilePhotoUrl || '');
       } else {
         await fetchProfile();
       }
+      resetPhotoDraft();
       setEditing(false);
     } catch (error) {
       console.error('Failed to save profile:', error);
@@ -190,6 +221,7 @@ const Profile = ({ user }) => {
   };
 
   const handleCancel = async () => {
+    resetPhotoDraft();
     // Re-load persisted profile so local unsaved edits are discarded.
     await fetchProfile();
     setEditing(false);
@@ -208,7 +240,14 @@ const Profile = ({ user }) => {
 
   const profileBody = (
     <div className="profile-container">
-      {profile ? <ProfilePhotoSection profile={profile} editing={editing} /> : null}
+      {profile ? (
+        <ProfilePhotoSection
+          profile={profile}
+          editing={editing}
+          photoDraft={photoDraft}
+          onPhotoDraftChange={setPhotoDraft}
+        />
+      ) : null}
       {!isServiceProvider ? (
       <div className="profile-header">
         <div className="profile-title">
@@ -259,7 +298,7 @@ const Profile = ({ user }) => {
       <SpPageLayout showStepper={false}>
         <SpPageHeader
           title="Company Profile"
-          description="Manage your company details, projects, and billing addresses."
+          description="Manage your company details, projects, and shipping addresses."
           icon={User}
           actions={
             <div className="profile-page-header-actions">
@@ -292,7 +331,6 @@ const Profile = ({ user }) => {
 };
 
 const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false }) => {
-  const [locatingAddress, setLocatingAddress] = useState(false);
   const [locatingShippingAddressId, setLocatingShippingAddressId] = useState(null);
   const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
 
@@ -378,42 +416,6 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
     }));
   };
 
-  const updateCompanyAddress = (field, value) => {
-    setProfile({
-      ...profile,
-      address: {
-        ...(profile?.address || {}),
-        [field]: value
-      }
-    });
-  };
-
-  const fillAddressFromCurrentLocation = async () => {
-    if (!editing) return;
-    setLocatingAddress(true);
-    try {
-      const resolved = await resolveAddressFromCurrentLocation();
-      setProfile((prev) => ({
-        ...prev,
-        address: {
-          ...(prev?.address || {}),
-          line1: resolved.line1 || prev?.address?.line1 || '',
-          city: resolved.city || prev?.address?.city || '',
-          state: resolved.state || prev?.address?.state || '',
-          pincode: resolved.pincode || prev?.address?.pincode || '',
-          country: resolved.country || prev?.address?.country || '',
-          latitude: resolved.latitude,
-          longitude: resolved.longitude,
-          geoLocation: resolved.geoLocation
-        }
-      }));
-    } catch (error) {
-      alert(getGeolocationErrorMessage(error));
-    } finally {
-      setLocatingAddress(false);
-    }
-  };
-
   const fillShippingAddressFromCurrentLocation = async (addressId) => {
     if (!editing || !addressId) return;
     setLocatingShippingAddressId(addressId);
@@ -484,79 +486,6 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
           </div>
         </div>
       </div>
-
-      {!isAdmin ? (
-        <div className="profile-section">
-          <div className="section-header">
-            <h2>
-              <MapPin size={20} />
-              Billing / Registered Company Address
-            </h2>
-            {editing ? (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={fillAddressFromCurrentLocation}
-                disabled={locatingAddress}
-                style={{ padding: '0.45rem 0.7rem', fontSize: '0.82rem' }}
-              >
-                {locatingAddress ? 'Detecting...' : 'Use my current location'}
-              </button>
-            ) : null}
-          </div>
-          <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
-            Single GST-registered company address used for billing on purchase orders and invoices.
-          </p>
-          <div className="form-grid">
-            <div className="form-group span-2">
-              <label>Address (Street / Area)</label>
-              <textarea
-                rows="2"
-                value={profile?.address?.line1 || ''}
-                onChange={(e) => updateCompanyAddress('line1', e.target.value)}
-                disabled={!editing}
-                placeholder="Registered office address"
-              />
-            </div>
-            <div className="form-group">
-              <label>City</label>
-              <input
-                type="text"
-                value={profile?.address?.city || ''}
-                onChange={(e) => updateCompanyAddress('city', e.target.value)}
-                disabled={!editing}
-              />
-            </div>
-            <div className="form-group">
-              <label>State / Region</label>
-              <input
-                type="text"
-                value={profile?.address?.state || ''}
-                onChange={(e) => updateCompanyAddress('state', e.target.value)}
-                disabled={!editing}
-              />
-            </div>
-            <div className="form-group">
-              <label>PIN / ZIP Code</label>
-              <input
-                type="text"
-                value={profile?.address?.pincode || ''}
-                onChange={(e) => updateCompanyAddress('pincode', e.target.value)}
-                disabled={!editing}
-              />
-            </div>
-            <div className="form-group">
-              <label>Country</label>
-              <input
-                type="text"
-                value={profile?.address?.country || ''}
-                onChange={(e) => updateCompanyAddress('country', e.target.value)}
-                disabled={!editing}
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       {!isAdmin ? (
         <div className="profile-section">

@@ -61,7 +61,7 @@ export function registerProfileUpdateRoutes(router) {
         phone: profileData.phone
       };
 
-      // Service providers persist billing in users.address; suppliers in supplier block below.
+      // Service providers may optionally update users.address when sent; suppliers below.
       if (profileData.address && profileData.userType === 'service_provider') {
         updateData.address = {
           ...(currentUser.address || {}),
@@ -83,23 +83,6 @@ export function registerProfileUpdateRoutes(router) {
       let brandAlreadyApproved = false;
 
       if (profileData.userType === 'service_provider') {
-        const mergedAddress = {
-          ...(currentUser.address || {}),
-          ...(profileData.address || {})
-        };
-        const requiredAddressFields = ['line1', 'city', 'state', 'pincode', 'country'];
-        const missingField = requiredAddressFields.find(
-          (field) => !String(mergedAddress?.[field] || '').trim()
-        );
-        if (missingField) {
-          return res.status(400).json({
-            status: 'error',
-            code: 'service_provider_address_required',
-            message: `Address field "${missingField}" is required for service provider profile.`
-          });
-        }
-
-        updateData.address = mergedAddress;
         const shippingAddresses = Array.isArray(profileData.shippingAddresses)
           ? profileData.shippingAddresses.map((entry) =>
               normalizeShippingAddressEntry({

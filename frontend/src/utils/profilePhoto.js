@@ -1,6 +1,14 @@
+import { getApiUrl } from '@/config/api';
+
 export const PROFILE_PHOTO_CACHE_KEY = 'profilePhotoUrl';
 export const PROFILE_PHOTO_MAX_BYTES = 20 * 1024 * 1024;
 export const PROFILE_PHOTO_MAX_SIZE_LABEL = '20MB';
+
+export const EMPTY_PROFILE_PHOTO_DRAFT = {
+  previewUrl: null,
+  pendingFile: null,
+  remove: false
+};
 
 export function getProfileInitials(name) {
   return String(name || 'U')
@@ -31,4 +39,62 @@ export function cacheProfilePhotoUrl(url) {
     // ignore quota errors
   }
   window.dispatchEvent(new CustomEvent('profile-photo-updated', { detail: { url: next } }));
+}
+
+export function resolveProfilePhotoDisplayUrl(profilePhotoUrl, photoDraft = EMPTY_PROFILE_PHOTO_DRAFT) {
+  if (photoDraft?.remove) return '';
+  const draftPreview = String(photoDraft?.previewUrl || '').trim();
+  if (draftPreview) return draftPreview;
+  return String(profilePhotoUrl || '').trim();
+}
+
+export function hasPendingProfilePhotoChanges(photoDraft = EMPTY_PROFILE_PHOTO_DRAFT) {
+  return Boolean(photoDraft?.remove || photoDraft?.pendingFile);
+}
+
+export function revokeProfilePhotoPreviewUrl(url) {
+  const value = String(url || '').trim();
+  if (value.startsWith('blob:')) {
+    URL.revokeObjectURL(value);
+  }
+}
+
+export async function commitProfilePhotoDraft(photoDraft = EMPTY_PROFILE_PHOTO_DRAFT) {
+  if (!hasPendingProfilePhotoChanges(photoDraft)) {
+    return { changed: false, profilePhotoUrl: null };
+  }
+
+  const token = localStorage.getItem('token');
+  if (!token) {
+    throw new Error('You are not signed in. Please log in and try again.');
+  }
+
+  if (photoDraft.remove) {
+    const response = await fetch(getApiUrl('/api/profile/photo'), {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.status !== 'success') {
+      throw new Error(data.message || 'Failed to remove profile photo');
+    }
+    return { changed: true, profilePhotoUrl: '' };
+  }
+
+  if (photoDraft.pendingFile) {
+    const formData = new FormData();
+    formData.append('file', photoDraft.pendingFile);
+    const response = await fetch(getApiUrl('/api/profile/photo'), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.status !== 'success') {
+      throw new Error(data.message || 'Failed to upload profile photo');
+    }
+    return { changed: true, profilePhotoUrl: String(data.profilePhotoUrl || '').trim() };
+  }
+
+  return { changed: false, profilePhotoUrl: null };
 }

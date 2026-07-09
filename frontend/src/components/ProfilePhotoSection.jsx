@@ -1,39 +1,41 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Camera, ImagePlus, Loader2, Trash2, User, X } from 'lucide-react';
-import { getApiUrl } from '@/config/api';
 import {
-  cacheProfilePhotoUrl,
+  EMPTY_PROFILE_PHOTO_DRAFT,
   getProfileInitials,
   PROFILE_PHOTO_MAX_BYTES,
-  PROFILE_PHOTO_MAX_SIZE_LABEL
+  PROFILE_PHOTO_MAX_SIZE_LABEL,
+  resolveProfilePhotoDisplayUrl,
+  revokeProfilePhotoPreviewUrl
 } from '@/utils/profilePhoto';
 import ProfileCameraCapture from './ProfileCameraCapture';
 import './ProfilePhotoSection.css';
 
-export default function ProfilePhotoSection({ profile, editing = false }) {
+export default function ProfilePhotoSection({
+  profile,
+  editing = false,
+  photoDraft = EMPTY_PROFILE_PHOTO_DRAFT,
+  onPhotoDraftChange
+}) {
   const galleryInputRef = useRef(null);
   const cameraFallbackInputRef = useRef(null);
-  const [uploading, setUploading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [cameraOpen, setCameraOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const [photoUrl, setPhotoUrl] = useState(() => String(profile?.profilePhotoUrl || '').trim());
   const closePreviewRef = useRef(null);
-
-  useEffect(() => {
-    setPhotoUrl(String(profile?.profilePhotoUrl || '').trim());
-  }, [profile?.profilePhotoUrl]);
 
   useEffect(() => {
     if (!editing) {
       setCameraOpen(false);
+      setError('');
     }
   }, [editing]);
 
   const displayName = profile?.contactPerson || profile?.companyName || 'User';
   const initials = getProfileInitials(displayName);
-  const resolvedPhoto = photoUrl || String(profile?.profilePhotoUrl || '').trim();
+  const resolvedPhoto = resolveProfilePhotoDisplayUrl(profile?.profilePhotoUrl, photoDraft);
 
   const closePreview = useCallback(() => setPreviewOpen(false), []);
 
@@ -57,11 +59,16 @@ export default function ProfilePhotoSection({ profile, editing = false }) {
   }, [previewOpen, closePreview]);
 
   const handleOpenPreview = () => {
-    if (!resolvedPhoto || uploading) return;
+    if (!resolvedPhoto || busy) return;
     setPreviewOpen(true);
   };
 
-  const uploadFile = async (file) => {
+  const updateDraft = (nextDraft) => {
+    if (typeof onPhotoDraftChange !== 'function') return;
+    onPhotoDraftChange(nextDraft);
+  };
+
+  const stageFile = (file) => {
     if (!editing) return;
     if (!file.type.startsWith('image/')) {
       setError('Please choose an image file (JPEG, PNG, WebP, or GIF).');
@@ -72,34 +79,24 @@ export default function ProfilePhotoSection({ profile, editing = false }) {
       return;
     }
 
-    setUploading(true);
+    setBusy(true);
     setError('');
     try {
-      const token = localStorage.getItem('token');
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const response = await fetch(getApiUrl('/api/profile/photo'), {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}` },
-        body: formData
+      revokeProfilePhotoPreviewUrl(photoDraft.previewUrl);
+      const previewUrl = URL.createObjectURL(file);
+      updateDraft({
+        previewUrl,
+        pendingFile: file,
+        remove: false
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.status !== 'success') {
-        throw new Error(data.message || 'Failed to upload photo');
-      }
-
-      const nextUrl = String(data.profilePhotoUrl || '').trim();
-      setPhotoUrl(nextUrl);
-      cacheProfilePhotoUrl(nextUrl);
-    } catch (uploadError) {
-      setError(uploadError?.message || 'Failed to upload photo. Please try again.');
+    } catch (stageError) {
+      setError(stageError?.message || 'Could not prepare photo preview.');
     } finally {
-      setUploading(false);
+      setBusy(false);
     }
   };
 
-  const canEditPhoto = editing && !uploading;
+  const canEditPhoto = editing && !busy;
 
   const handlePickGallery = () => {
     if (!editing) return;
@@ -117,7 +114,7 @@ export default function ProfilePhotoSection({ profile, editing = false }) {
     cameraFallbackInputRef.current?.click();
   };
 
-  const handleFileChange = async (event) => {
+  const handleFileChange = (event) => {
     if (!editing) {
       event.target.value = '';
       return;
@@ -125,29 +122,24 @@ export default function ProfilePhotoSection({ profile, editing = false }) {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    await uploadFile(file);
+    stageFile(file);
   };
 
-  const handleRemove = async () => {
+  const handleRemove = () => {
     if (!editing) return;
-    setUploading(true);
+    setBusy(true);
     setError('');
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/profile/photo'), {
-        method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
+      revokeProfilePhotoPreviewUrl(photoDraft.previewUrl);
+      updateDraft({
+        previewUrl: null,
+        pendingFile: null,
+        remove: true
       });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.status !== 'success') {
-        throw new Error(data.message || 'Failed to remove photo');
-      }
-      setPhotoUrl('');
-      cacheProfilePhotoUrl('');
     } catch (removeError) {
-      setError(removeError?.message || 'Failed to remove photo.');
+      setError(removeError?.message || 'Failed to remove photo preview.');
     } finally {
-      setUploading(false);
+      setBusy(false);
     }
   };
 
@@ -160,12 +152,12 @@ export default function ProfilePhotoSection({ profile, editing = false }) {
               type="button"
               className="profile-photo-section__avatar profile-photo-section__avatar--clickable"
               onClick={handleOpenPreview}
-              disabled={uploading}
+              disabled={busy}
               aria-label={`View profile photo for ${displayName}`}
               title="View full photo"
             >
               <img src={resolvedPhoto} alt="" className="profile-photo-section__img" />
-              {uploading ? (
+              {busy ? (
                 <div className="profile-photo-section__overlay">
                   <Loader2 className="profile-photo-section__spinner" />
                 </div>
@@ -174,7 +166,7 @@ export default function ProfilePhotoSection({ profile, editing = false }) {
           ) : (
             <div className="profile-photo-section__avatar" aria-hidden>
               <span className="profile-photo-section__initials">{initials}</span>
-              {uploading ? (
+              {busy ? (
                 <div className="profile-photo-section__overlay">
                   <Loader2 className="profile-photo-section__spinner" />
                 </div>
@@ -206,7 +198,7 @@ export default function ProfilePhotoSection({ profile, editing = false }) {
           <p className="profile-photo-section__hint">
             <User size={14} aria-hidden />
             {editing
-              ? 'Use the camera icon to take a photo, or choose one from your device.'
+              ? 'Use the camera icon to take a photo, or choose one from your device. Click Save Changes to keep it.'
               : 'Click Edit Profile to update your photo or company details.'}
           </p>
           {editing ? (
@@ -250,7 +242,7 @@ export default function ProfilePhotoSection({ profile, editing = false }) {
       <ProfileCameraCapture
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
-        onCapture={uploadFile}
+        onCapture={stageFile}
       />
 
       {previewOpen && resolvedPhoto

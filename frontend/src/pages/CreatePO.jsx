@@ -90,10 +90,6 @@ const normalizeAddress = (address = {}) => ({
   country: String(address?.country || '').trim()
 });
 
-const addressPreview = (address = {}) =>
-  [address.line1, address.city, address.state, address.pincode, address.country]
-    .filter(Boolean)
-    .join(', ');
 
 const isUsableShippingAddress = (address = {}) => {
   const normalized = normalizeAddress(address);
@@ -252,9 +248,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   const [platformQrDataUrl, setPlatformQrDataUrl] = useState('');
   const [serviceProviderGstin, setServiceProviderGstin] = useState('');
   const [shippingAddress, setShippingAddress] = useState(blankAddress);
-  const [billingAddress, setBillingAddress] = useState(blankAddress);
   const [checkoutShippingProjectName, setCheckoutShippingProjectName] = useState('');
-  const [deliveryDestination, setDeliveryDestination] = useState('shipping');
   const [createdTransportOrders, setCreatedTransportOrders] = useState([]);
   const [selectedTransport, setSelectedTransport] = useState(null);
   const [expandedItemSpecs, setExpandedItemSpecs] = useState({});
@@ -596,11 +590,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         if (profileResponse.ok) {
           profileData = await profileResponse.json();
           if (profileData?.profile) {
-            const profileAddress = normalizeAddress(profileData.profile.address || {});
             const gstin = String(profileData.profile.gstin || profileData.profile.mainGstin || '').trim();
             setServiceProviderGstin(gstin);
-            setBillingAddress(profileAddress);
-            setDeliveryDestination('shipping');
           }
         }
 
@@ -618,8 +609,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         }
 
         setCheckoutShippingProjectName('');
-        if (profileData?.profile) {
-          setShippingAddress(normalizeAddress(profileData.profile.address || {}));
+        const profileShippingList = Array.isArray(profileData?.profile?.shippingAddresses)
+          ? profileData.profile.shippingAddresses
+          : [];
+        if (profileShippingList.length > 0) {
+          setShippingAddress(normalizeAddress(profileShippingList[0]));
         }
       } catch (profileError) {
         console.warn('Failed to preload checkout addresses for Create PO:', profileError);
@@ -632,7 +626,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     };
   }, [cartContextReady, boqProject, workflowItems, voiceCart]);
 
-  const hasGstin = Boolean(serviceProviderGstin);
   const toggleItemSpecs = (groupVendorId, item, idx) => {
     const key = `${groupVendorId || 'vendor'}::${item?.supplierProductId || item?.productId || item?.name || idx}`;
     setExpandedItemSpecs((prev) => ({
@@ -640,13 +633,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       [key]: !prev[key]
     }));
   };
-
-  useEffect(() => {
-    if (!hasGstin) {
-      setDeliveryDestination('shipping');
-      setBillingAddress(shippingAddress);
-    }
-  }, [hasGstin, shippingAddress]);
 
   useEffect(() => {
     const routeState = location.state || {};
@@ -902,9 +888,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         requiredDate,
         paymentMethod: poPaymentMethod,
         paymentDetails: Object.keys(paymentDetails).length > 0 ? paymentDetails : undefined,
-        deliveryDestination,
+        deliveryDestination: 'shipping',
         shippingAddress,
-        billingAddress: hasGstin ? billingAddress : shippingAddress,
+        billingAddress: shippingAddress,
         gstin: serviceProviderGstin || null
       })
     });
@@ -1150,16 +1136,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       return;
     }
 
-    if (hasGstin) {
-      const missingBilling = ['line1', 'city', 'state', 'pincode', 'country'].find(
-        (key) => !String(billingAddress?.[key] || '').trim()
-      );
-      if (missingBilling) {
-        alert('GSTIN detected. Please complete the billing (GST) address.');
-        return;
-      }
-    }
-
     if (poPaymentMethod === 'credit') {
       if (creditCheckLoading || creditCheckFailed) {
         alert(PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE);
@@ -1220,15 +1196,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       alert('Delivery address is missing. Go back to your cart and set a shipping address before transport suggestions.');
       return;
     }
-    if (hasGstin) {
-      const missingBilling = ['line1', 'city', 'state', 'pincode', 'country'].find(
-        (key) => !String(billingAddress?.[key] || '').trim()
-      );
-      if (missingBilling) {
-        alert('Please complete the billing address before transport suggestions.');
-        return;
-      }
-    }
 
     const logisticsUi = String(import.meta.env.VITE_LOGISTICS_UI_BASE_URL || '').trim();
     if (logisticsUi) {
@@ -1243,9 +1210,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           body: JSON.stringify({
             poGroups: scopedGroups,
             shippingAddress,
-            billingAddress,
-            deliveryDestination,
-            hasGstin
+            billingAddress: shippingAddress,
+            deliveryDestination: 'shipping',
+            hasGstin: false
           })
         });
         const data = await res.json().catch(() => ({}));
@@ -1279,10 +1246,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         existingTransportSelection: baseTransport,
         grandTotalAllPos: group ? Number(group.total) || 0 : grandTotalAllPos,
         requiredDate,
-        hasGstin,
-        deliveryDestination,
+        hasGstin: false,
+        deliveryDestination: 'shipping',
         shippingAddress,
-        billingAddress,
+        billingAddress: shippingAddress,
         createdOrders: createdTransportOrders
       }
     });
@@ -1699,50 +1666,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           ) : null}
           <p className="checkout-address-preview checkout-address-preview--locked">
             {formatShippingAddressPreview(shippingAddress) || 'No delivery address found. Go back to cart and set a shipping address.'}
-          </p>
-        </div>
-        <div className="checkout-address-card checkout-address-card--billing">
-          <div className="checkout-address-card__head">
-            <h3>Billing & Delivery Preference</h3>
-          </div>
-          {!hasGstin ? (
-            <p className="checkout-address-note">
-              No GSTIN found in your profile. Billing address will default to shipping address and delivery will go to shipping address.
-            </p>
-          ) : (
-            <>
-              <p className="checkout-address-note">
-                GSTIN: <strong>{serviceProviderGstin}</strong>. Billing uses your registered company address from profile (used for GST tax). You can choose where material should be delivered.
-              </p>
-              <p className="checkout-address-preview" style={{ marginBottom: '0.75rem' }}>
-                Registered billing address: {addressPreview(billingAddress) || 'Not set in profile — update your profile billing address.'}
-              </p>
-              <div className="checkout-delivery-choice">
-                <label>
-                  <input
-                    type="radio"
-                    name="deliveryDestination"
-                    value="shipping"
-                    checked={deliveryDestination === 'shipping'}
-                    onChange={(e) => setDeliveryDestination(e.target.value)}
-                  />
-                  Deliver to shipping address
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="deliveryDestination"
-                    value="billing"
-                    checked={deliveryDestination === 'billing'}
-                    onChange={(e) => setDeliveryDestination(e.target.value)}
-                  />
-                  Deliver to billing address
-                </label>
-              </div>
-            </>
-          )}
-          <p className="checkout-address-preview">
-            Delivery selected: {deliveryDestination === 'billing' && hasGstin ? addressPreview(billingAddress) || 'Billing address not complete' : addressPreview(shippingAddress) || 'Shipping address not complete'}
           </p>
         </div>
       </div>
