@@ -107,11 +107,12 @@ export default function SupplierSelectYourself() {
       setSelectedAssignmentId('');
       return;
     }
-    if (selectedAssignmentId && supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId)) {
-      return;
+    if (
+      selectedAssignmentId &&
+      !supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId)
+    ) {
+      setSelectedAssignmentId('');
     }
-    const profileBrandRow = supplyChainSummaryRows.find((row) => !String(row.id || '').startsWith('catalog-'));
-    setSelectedAssignmentId(profileBrandRow?.id || '');
   }, [supplyChainSummaryRows, selectedAssignmentId]);
 
   const selectedAssignmentChainState = useMemo(() => {
@@ -695,7 +696,7 @@ export default function SupplierSelectYourself() {
                 value={selectedAssignmentId}
                 onChange={handleAssignmentBrandChange}
               >
-                <option value="">Select brand…</option>
+                <option value="">Select brand</option>
                 {supplyChainSummaryRows.map((row) => (
                   <option key={row.id} value={row.id}>
                     {row.brand}
@@ -807,7 +808,7 @@ export default function SupplierSelectYourself() {
           <div className="supplier-select-section__head">
             <h2>
               <span className="supplier-select-section__label">Step 1</span>
-              Brand you are dealing with
+              Add a New Brand for Approval
             </h2>
             <div className="supplier-select-section__head-actions">
               <button
@@ -849,7 +850,7 @@ export default function SupplierSelectYourself() {
         >
           <h2>
             <span className="supplier-select-section__label">Step 2</span>
-            Supply-chain role for your brand
+            Select a Supply-Chain Role for an Existing Brand
           </h2>
           <p className="supplier-select-section__intro">
             Select a brand above, then choose your role from the admin-defined supply chain and upload documents.
