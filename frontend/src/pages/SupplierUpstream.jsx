@@ -1317,7 +1317,7 @@ const SupplierUpstream = ({ user }) => {
                     <div className="item-info upstream-offer-item-info">
                       <h4 className="upstream-offer-product-title">{mine?.name || 'Product'}</h4>
                       <p className="upstream-offer-product-meta">
-                        Brand: <strong>{it.brandModel || mine?.brandModel || 'N/A'}</strong> • Qty: <strong>{mineSelectedQty}</strong>
+                        Brand: <strong>{it.chainRouting?.brand || it.brandModel || mine?.brand || mine?.brandModel || 'N/A'}</strong> • Qty: <strong>{mineSelectedQty}</strong>
                       </p>
                       {mine ? <UpstreamProductDisplay product={mine} imageHeight={88} maxSpecs={10} /> : null}
                       {it.chainRouting?.requiredUpstreamRole ? (

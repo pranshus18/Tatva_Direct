@@ -126,6 +126,11 @@ export { mapSupplyChainPartner } from '../../services/supplierPartnerMapperServi
 export {
   buildSupplyChainPartnerGroups,
   buildRegisteredUpstreamPartnerIdsByBrandKey,
+  buildNoUpstreamOffersMessage,
+  buildUpstreamChainContextForMineOffer,
+  collectRequiredUpstreamRolesFromContexts,
+  formatUpstreamRoleLabel,
+  formatUpstreamRoleLabels,
   getAllowedUpstreamRolesForBrand,
   getImmediateUpstreamRoleForBrand,
   getUpstreamRolesForBuyerOnBrand,

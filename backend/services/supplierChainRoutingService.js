@@ -227,6 +227,9 @@ export function buildAllowedUpstreamRolesSet({
   parentRolesUnion,
   buyerRoleHint
 }) {
+  const chainRoles = normalizeChainRolesFromStages(chainRow?.stages);
+  const hasAdminChain = chainRoles.length >= 2;
+
   const chainRouting = resolveRequiredUpstreamRoleFromAdminChain({
     profile,
     brandKey,
@@ -241,10 +244,9 @@ export function buildAllowedUpstreamRolesSet({
     sortRolesByChainDepthDesc(getMySupplierRoles(profile, ''))[0] ||
     null;
 
-  if (!required && chainRow) {
-    const chainRoles = normalizeChainRolesFromStages(chainRow?.stages);
+  if (!required && hasAdminChain) {
     const buyerRole = resolvedBuyerRole;
-    if (buyerRole && chainRoles.length > 0) {
+    if (buyerRole) {
       required = findUpstreamRoleWalkback(buyerRole, chainRoles);
       if (required) {
         chainRouting.source = 'admin_chain_walkback';
@@ -255,7 +257,8 @@ export function buildAllowedUpstreamRolesSet({
     }
   }
 
-  if (!required) {
+  // Only use the generic role ladder when admin has not defined a brand chain.
+  if (!required && !hasAdminChain) {
     const buyerRole = resolvedBuyerRole;
     required = buyerRole ? findUpstreamRoleWalkback(buyerRole, SUPPLY_CHAIN_ROLES_IN_ORDER) : null;
     if (required) {
@@ -265,23 +268,24 @@ export function buildAllowedUpstreamRolesSet({
     }
   }
 
-  const chainRoles = normalizeChainRolesFromStages(chainRow?.stages);
   let allowedRolesSet = null;
-  if (resolvedBuyerRole && chainRoles.length >= 2 && chainRoles.includes(resolvedBuyerRole)) {
-    const buyerDepth = ROLE_DEPTH[resolvedBuyerRole] ?? 99;
-    const upstreamOnChain = chainRoles.filter((r) => (ROLE_DEPTH[r] ?? 99) < buyerDepth);
-    if (upstreamOnChain.length > 0) {
-      allowedRolesSet = new Set(upstreamOnChain);
+  if (hasAdminChain) {
+    // Admin chain is authoritative: only the tier directly above the buyer on that chain.
+    if (required && SUPPLIER_ROLE_SET.has(required)) {
+      allowedRolesSet = new Set([required]);
+    } else {
+      allowedRolesSet = new Set();
     }
+  } else if (required && SUPPLIER_ROLE_SET.has(required)) {
+    allowedRolesSet = new Set([required]);
+  } else if (parentRolesUnion && parentRolesUnion.size > 0) {
+    allowedRolesSet = parentRolesUnion;
+  } else {
+    allowedRolesSet = new Set();
   }
 
-  if (!allowedRolesSet || allowedRolesSet.size === 0) {
-    allowedRolesSet =
-      required && SUPPLIER_ROLE_SET.has(required)
-        ? new Set([required])
-        : parentRolesUnion && parentRolesUnion.size > 0
-          ? parentRolesUnion
-          : new Set();
+  if (!chainRouting.chainRoles?.length && chainRoles.length > 0) {
+    chainRouting.chainRoles = chainRoles;
   }
 
   return { allowedRolesSet, chainRouting };

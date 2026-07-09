@@ -10,6 +10,7 @@ import {
   loadAdminBrandChainsByName,
   PARENT_ROLE_BY_MY_ROLE,
   pickDisplayRoleFromAllowedSet,
+  resolveBuyerRoleForBrand,
   ROLE_DEPTH,
   sortRolesByChainDepthDesc,
   userHasSupplierRole
@@ -21,6 +22,10 @@ import {
   normalizeChainRolesFromStages,
   SUPPLY_CHAIN_ROLES_IN_ORDER
 } from './supplyChainSharedService.js';
+import {
+  normalizeBrandKeyFromAttributes,
+  resolveUpstreamBrandLabel
+} from './supplierBrandGuardService.js';
 
 /**
  * All supply-chain tiers above the buyer for this brand (from admin chain, or standard ladder).
@@ -51,9 +56,11 @@ export function getImmediateUpstreamRoleForBrand({
   buyerRole,
   parentRolesUnion
 }) {
+  const chainRoles = normalizeChainRolesFromStages(chainRow?.stages);
+  const hasAdminChain = chainRoles.length >= 2;
   const role =
     buyerRole || sortRolesByChainDepthDesc(getMySupplierRoles(profile, ''))[0] || null;
-  const { allowedRolesSet, chainRouting } = buildAllowedUpstreamRolesSet({
+  const { chainRouting } = buildAllowedUpstreamRolesSet({
     profile,
     brandKey,
     chainRow,
@@ -61,9 +68,84 @@ export function getImmediateUpstreamRoleForBrand({
     buyerRoleHint: role
   });
   if (chainRouting?.requiredUpstreamRole) return chainRouting.requiredUpstreamRole;
-  const fromSet = pickDisplayRoleFromAllowedSet(allowedRolesSet);
-  if (fromSet) return fromSet;
+  if (hasAdminChain) return null;
   return role ? PARENT_ROLE_BY_MY_ROLE[role] || null : null;
+}
+
+export function formatUpstreamRoleLabel(role) {
+  if (!role) return null;
+  return SUPPLY_CHAIN_ROLE_LABELS[role] || role;
+}
+
+export function formatUpstreamRoleLabels(roles = []) {
+  return [...new Set((roles || []).filter(Boolean))]
+    .sort((a, b) => (ROLE_DEPTH[a] ?? 99) - (ROLE_DEPTH[b] ?? 99))
+    .map((role) => formatUpstreamRoleLabel(role))
+    .filter(Boolean)
+    .join(', ');
+}
+
+/** Admin-chain context for one of the buyer's selected offers (upstream suggestions / inventory). */
+export function buildUpstreamChainContextForMineOffer({
+  profile,
+  mineOffer,
+  adminBrandChainMap,
+  parentRolesUnion
+}) {
+  const brandLabel = resolveUpstreamBrandLabel(mineOffer?.attributes, mineOffer?.product?.brand);
+  const brandKey = normalizeBrandKeyFromAttributes(brandLabel);
+  const chainRow = adminBrandChainMap?.get?.(brandKey) || null;
+  const buyerRole = resolveBuyerRoleForBrand(profile, brandLabel || brandKey);
+  const { allowedRolesSet, chainRouting } = buildAllowedUpstreamRolesSet({
+    profile,
+    brandKey,
+    chainRow,
+    parentRolesUnion,
+    buyerRoleHint: buyerRole
+  });
+  const requiredUpstreamRole = chainRouting.requiredUpstreamRole || null;
+
+  return {
+    brandLabel,
+    brandKey,
+    chainRow,
+    buyerRole,
+    allowedRolesSet,
+    requiredUpstreamRole,
+    requiredUpstreamRoleLabel: formatUpstreamRoleLabel(requiredUpstreamRole),
+    chainRouting: {
+      source: chainRouting.source,
+      brand: chainRow?.category_name || brandLabel || null,
+      buyerRole: chainRouting.buyerRole || buyerRole || null,
+      requiredUpstreamRole: requiredUpstreamRole || chainRouting.requiredUpstreamRole || null,
+      chainRoles: chainRouting.chainRoles || normalizeChainRolesFromStages(chainRow?.stages)
+    }
+  };
+}
+
+export function buildNoUpstreamOffersMessage(ctx = {}) {
+  const brandLabel = String(ctx.brandLabel || ctx.chainRouting?.brand || '').trim();
+  const brandText = brandLabel ? `"${brandLabel}"` : 'this brand';
+
+  if (ctx.requiredUpstreamRoleLabel) {
+    return `No upstream offers found from ${ctx.requiredUpstreamRoleLabel} for ${brandText}. That is the supply-chain layer directly above you for this brand — ask that partner to list this product with stock.`;
+  }
+
+  if (Array.isArray(ctx.chainRouting?.chainRoles) && ctx.chainRouting.chainRoles.length >= 2) {
+    return `No upstream offers found for ${brandText}. Your admin supply chain is defined, but your role could not be matched to it — check Who are you.`;
+  }
+
+  return `No upstream offers found for ${brandText}. Ask admin to define the supply chain in Admin → Supply Chain, then ensure your upstream partner registers at the correct layer.`;
+}
+
+export function collectRequiredUpstreamRolesFromContexts(contexts = []) {
+  return [
+    ...new Set(
+      (contexts || [])
+        .map((ctx) => ctx?.requiredUpstreamRole || ctx?.chainRouting?.requiredUpstreamRole)
+        .filter(Boolean)
+    )
+  ].sort((a, b) => (ROLE_DEPTH[a] ?? 99) - (ROLE_DEPTH[b] ?? 99));
 }
 
 export function getAllowedUpstreamRolesForBrand(opts) {

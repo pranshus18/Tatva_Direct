@@ -180,7 +180,31 @@ test('buildAllowedUpstreamRolesSet: uses brand-specific buyer role for multi-rol
   assert.equal(allowedRolesSet.has('local_distributor'), false);
 });
 
-test('buildAllowedUpstreamRolesSet: includes all upstream tiers on admin chain for retailer', () => {
+test('buildAllowedUpstreamRolesSet: retailer on manufacturer-only admin chain resolves manufacturer, never dealer', () => {
+  const chainRow = {
+    category_name: 'nyka',
+    stages: [{ role: 'manufacturer' }, { role: 'retailer' }]
+  };
+  const profile = {
+    companyInfoEntries: [{ role: 'retailer', brands: 'nyka' }]
+  };
+  const parentRolesUnion = new Set(['dealer']);
+
+  const { allowedRolesSet, chainRouting } = buildAllowedUpstreamRolesSet({
+    profile,
+    brandKey: 'nyka',
+    chainRow,
+    parentRolesUnion,
+    buyerRoleHint: 'retailer'
+  });
+
+  assert.equal(chainRouting.requiredUpstreamRole, 'manufacturer');
+  assert.equal(allowedRolesSet.size, 1);
+  assert.equal(allowedRolesSet.has('manufacturer'), true);
+  assert.equal(allowedRolesSet.has('dealer'), false);
+});
+
+test('buildAllowedUpstreamRolesSet: only immediate upstream tier is allowed when admin chain exists', () => {
   const chainRow = {
     category_name: 'apple',
     stages: [
@@ -204,9 +228,10 @@ test('buildAllowedUpstreamRolesSet: includes all upstream tiers on admin chain f
   });
 
   assert.equal(chainRouting.requiredUpstreamRole, 'local_distributor');
+  assert.equal(allowedRolesSet.size, 1);
   assert.equal(allowedRolesSet.has('local_distributor'), true);
-  assert.equal(allowedRolesSet.has('regional_distributor'), true);
-  assert.equal(allowedRolesSet.has('manufacturer'), true);
+  assert.equal(allowedRolesSet.has('regional_distributor'), false);
+  assert.equal(allowedRolesSet.has('manufacturer'), false);
   assert.equal(allowedRolesSet.has('dealer'), false);
 });
 

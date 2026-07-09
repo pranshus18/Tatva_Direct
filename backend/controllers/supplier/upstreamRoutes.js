@@ -26,6 +26,11 @@ import {
   parseWithSchema,
   getAllowedUpstreamRolesForBrand,
   buildRegisteredUpstreamPartnerIdsByBrandKey,
+  buildNoUpstreamOffersMessage,
+  buildUpstreamChainContextForMineOffer,
+  collectRequiredUpstreamRolesFromContexts,
+  formatUpstreamRoleLabel,
+  formatUpstreamRoleLabels,
   pickMatchingUpstreamRoleForSeller,
   pickAnyUpstreamSellerRoleOnChain,
   pickUpstreamSellerRoleForBrand,
@@ -636,18 +641,38 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
     ].filter((id) => id !== req.userId);
 
     if (upstreamSupplierIds.length === 0) {
-      const label = parentRolesSorted.map((r) => SUPPLY_CHAIN_ROLE_LABELS[r] || r).join(', ');
+      const emptyItemContexts = myOffers.map((mine) =>
+        buildUpstreamChainContextForMineOffer({
+          profile: req.user.profile || {},
+          mineOffer: mine,
+          adminBrandChainMap,
+          parentRolesUnion
+        })
+      );
+      const requiredRoles = collectRequiredUpstreamRolesFromContexts(emptyItemContexts);
+      const responseParentRoles =
+        requiredRoles.length > 0 ? requiredRoles : [];
+      const responseParentRole = responseParentRoles[0] || null;
+
       return res.json({
         status: 'success',
-        parentRole,
-        parentRoles: parentRolesSorted,
-        items: myOffers.map((r) => ({
-          mineSupplierProductId: r.id,
-          productId: r.product_id,
-          brandModel: r?.attributes?.brandModel || null,
-          upstreamOffers: [],
-          message: `No upstream offers found (${label}) for your selected product(s).`
-        }))
+        parentRole: responseParentRole,
+        parentRoles: responseParentRoles,
+        items: myOffers.map((mine, index) => {
+          const ctx = emptyItemContexts[index];
+          return {
+            mineSupplierProductId: mine.id,
+            productId: mine.product_id,
+            mineVariantKey: String(mine?.variant_key || '').trim() || null,
+            mineVariantAsin: String(mine?.variant_asin || '').trim() || null,
+            brandModel: ctx.brandLabel || mine?.attributes?.brandModel || null,
+            upstreamRole: ctx.requiredUpstreamRole || responseParentRole,
+            upstreamRoles: ctx.requiredUpstreamRole ? [ctx.requiredUpstreamRole] : responseParentRoles,
+            chainRouting: ctx.chainRouting,
+            upstreamOffers: [],
+            message: buildNoUpstreamOffersMessage(ctx)
+          };
+        })
       });
     }
 
@@ -845,25 +870,19 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
     const items = myOffers.map((mine) => {
       const mineVariantKey = String(mine?.variant_key || '').trim();
       const mineVariantAsin = String(mine?.variant_asin || '').trim();
-      const brandLabel = resolveUpstreamBrandLabel(mine?.attributes, mine?.product?.brand);
-      const desiredBrand = String(brandLabel || '').trim().toLowerCase();
-      const brandKey = normalizeBrandKeyFromAttributes(brandLabel);
-      const chainRow = adminBrandChainMap.get(brandKey) || null;
-      const buyerRole = resolveBuyerRoleForBrand(req.user.profile || {}, brandLabel || brandKey);
-      const allowedRolesSet = getAllowedUpstreamRolesForBrand({
+      const chainContext = buildUpstreamChainContextForMineOffer({
         profile: req.user.profile || {},
-        brandKey,
-        chainRow,
-        buyerRole,
+        mineOffer: mine,
+        adminBrandChainMap,
         parentRolesUnion
       });
-      const { chainRouting } = buildAllowedUpstreamRolesSet({
-        profile: req.user.profile || {},
-        brandKey,
-        chainRow,
-        parentRolesUnion,
-        buyerRoleHint: buyerRole
-      });
+      const brandLabel = chainContext.brandLabel;
+      const desiredBrand = String(brandLabel || '').trim().toLowerCase();
+      const brandKey = chainContext.brandKey;
+      const chainRow = chainContext.chainRow;
+      const buyerRole = chainContext.buyerRole;
+      const allowedRolesSet = chainContext.allowedRolesSet;
+      const { chainRouting } = chainContext;
 
       const upstreamEligiblePool = (upstreamOffers || []).filter((offer) => {
         if (!offer) return false;
@@ -1017,8 +1036,11 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
           getUpstreamOfferMatchType(mine, offer) === 'exact_variant'
         );
         if (upstreamEligiblePool.length === 0) {
-          itemMessage =
-            'No upstream partners list this product with stock right now. Ask your local distributor to add it.';
+          const upstreamLabel =
+            chainContext.requiredUpstreamRoleLabel ||
+            formatUpstreamRoleLabel(chainRouting.requiredUpstreamRole) ||
+            'your upstream supply-chain partner';
+          itemMessage = `No upstream partners list this product with stock right now. Ask your ${upstreamLabel} to add it.`;
         } else if (exactVariantPool.length === 0 && registeredPartnerIds.size > 0) {
           const registeredNames = [...registeredPartnerIds]
             .map((id) => upstreamUserMap[id]?.name || upstreamUserMap[id]?.company)
@@ -1027,16 +1049,10 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
         } else if (brandMatchedPool.length === 0) {
           itemMessage = `No upstream listings matched brand "${brandLabel || desiredBrand}".`;
         } else if (candidates.length === 0 && allowedRolesSet.size > 0) {
-          const tierLabels = [...allowedRolesSet]
-            .sort((a, b) => (ROLE_DEPTH[a] ?? 99) - (ROLE_DEPTH[b] ?? 99))
-            .map((r) => SUPPLY_CHAIN_ROLE_LABELS[r] || r)
-            .join(', ');
           const preferredTier =
-            chainRouting.requiredUpstreamRole || parentRole
-              ? SUPPLY_CHAIN_ROLE_LABELS[chainRouting.requiredUpstreamRole || parentRole] ||
-                chainRouting.requiredUpstreamRole ||
-                parentRole
-              : tierLabels;
+            chainContext.requiredUpstreamRoleLabel ||
+            formatUpstreamRoleLabel(chainRouting.requiredUpstreamRole) ||
+            'your upstream supply-chain partner';
           const registeredNames = [...registeredPartnerIds]
             .map((id) => upstreamUserMap[id]?.name || upstreamUserMap[id]?.company)
             .filter(Boolean);
@@ -1044,7 +1060,7 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             registeredNames.length > 0
               ? ` Your registered upstream partner(s) for this brand (${registeredNames.join(', ')}) do not list this exact variant with stock — ask them to add it, or check their supply-chain role and brand on Who are you.`
               : '';
-          itemMessage = `Listings exist for this product, but none match your upstream supply chain for brand "${brandLabel || desiredBrand}". Preferred seller layer: ${preferredTier}. Also accepted: ${tierLabels}.${registeredHint}`;
+          itemMessage = `Listings exist for this product, but none from ${preferredTier} for brand "${brandLabel || desiredBrand}". Only the layer directly above you on the admin supply chain is accepted.${registeredHint}`;
         } else if (candidates.length === 0) {
           itemMessage =
             'Partners exist for this product, but none match your allowed upstream supply-chain layer.';
@@ -1059,24 +1075,26 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
         mineVariantKey: mineVariantKey || null,
         mineVariantAsin: mineVariantAsin || null,
         brandModel: brandLabel || mine?.attributes?.brandModel || null,
-        upstreamRole: chainRouting.requiredUpstreamRole || parentRole,
-        upstreamRoles: parentRolesSorted,
-        chainRouting: {
-          source: chainRouting.source,
-          brand: chainRow?.category_name || brandLabel || null,
-          buyerRole: chainRouting.buyerRole,
-          requiredUpstreamRole: chainRouting.requiredUpstreamRole,
-          chainRoles: chainRouting.chainRoles || normalizeChainRolesFromStages(chainRow?.stages)
-        },
+        upstreamRole: chainContext.requiredUpstreamRole || chainRouting.requiredUpstreamRole || null,
+        upstreamRoles: chainContext.requiredUpstreamRole ? [chainContext.requiredUpstreamRole] : [],
+        chainRouting: chainContext.chainRouting,
         upstreamOffers: top,
         message: itemMessage
       };
     });
 
+    const itemContexts = items.map((item) => ({
+      requiredUpstreamRole: item?.chainRouting?.requiredUpstreamRole || item?.upstreamRole || null,
+      chainRouting: item.chainRouting
+    }));
+    const responseParentRoles = collectRequiredUpstreamRolesFromContexts(itemContexts);
+    const resolvedParentRoles =
+      responseParentRoles.length > 0 ? responseParentRoles : [];
+
     return res.json({
       status: 'success',
-      parentRole,
-      parentRoles: parentRolesSorted,
+      parentRole: resolvedParentRoles[0] || null,
+      parentRoles: resolvedParentRoles,
       rankPriority: UPSTREAM_RANK_PRIORITY,
       limit: limitPerItem,
       distanceAvailable: buyerOutletGeos.length > 0,
