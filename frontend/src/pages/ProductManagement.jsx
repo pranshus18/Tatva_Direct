@@ -264,76 +264,6 @@ const ProductManagement = ({ user }) => {
     }
   };
 
-  const handleSaveSpecifications = async (product, specificationValues) => {
-    const productId = getSupplierOfferRowId(product) || product?.id || product?._id;
-    if (!productId) {
-      alert('Unable to save: missing product id.');
-      return { ok: false };
-    }
-
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl(`/api/supplier/products/${productId}`), {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ specifications: specificationValues })
-      });
-      const data = await response.json();
-
-      if (!response.ok || data.status !== 'success') {
-        alert(data.message || 'Failed to save specifications');
-        return { ok: false };
-      }
-
-      const updatedProduct = {
-        ...product,
-        ...(data.product || {}),
-        specifications:
-          data.product?.specifications ||
-          mergeSpecificationObjects(product?.specifications || {}, specificationValues)
-      };
-
-      setProducts((prev) =>
-        prev.map((p) =>
-          matchSupplierOfferRow(p, productId)
-            ? {
-                ...p,
-                ...updatedProduct,
-                supplier_product_id: getSupplierOfferRowId(p) || getSupplierOfferRowId(updatedProduct) || productId
-              }
-            : p
-        )
-      );
-
-      setViewingItem((prev) => {
-        if (!prev) return prev;
-        return matchSupplierOfferRow(prev, productId)
-          ? {
-              ...prev,
-              ...updatedProduct,
-              supplier_product_id: getSupplierOfferRowId(prev) || getSupplierOfferRowId(updatedProduct) || productId
-            }
-          : prev;
-      });
-
-      if (String(updatedProduct.status || '').toLowerCase() === 'pending') {
-        alert(
-          data.message ||
-            'Specifications saved. This product is pending admin review again because specifications changed.'
-        );
-      }
-
-      return { ok: true, product: updatedProduct };
-    } catch (error) {
-      console.error('Failed to save specifications:', error);
-      alert('Failed to save specifications. Please try again.');
-      return { ok: false };
-    }
-  };
-
   const buildInventoryUpdatePayload = (item, data) => {
     const stock = parseSupplierStockQuantity(data.stock);
     if (stock === null) return null;
@@ -908,9 +838,8 @@ const ProductManagement = ({ user }) => {
         <ProductDetailsModal
           product={viewingItem}
           canEditInventory={isInventoryView}
-          specificationsReadOnly={isInventoryView}
+          specificationsReadOnly
           onClose={() => setViewingItem(null)}
-          onSaveSpecifications={!isInventoryView ? handleSaveSpecifications : undefined}
           onEdit={
             isInventoryView
               ? (item) => {
@@ -1277,10 +1206,9 @@ const ProductDetailsModal = ({
                   </div>
                 ) : null}
               </div>
-              {specificationsReadOnly ? (
+              {specificationsReadOnly || !onSaveSpecifications ? (
                 <p className="pm-details-spec-readonly-hint">
-                  View only on this page. To change specifications, open the product under{' '}
-                  <strong>Manage Products</strong>.
+                  Specifications cannot be changed after the product is saved.
                 </p>
               ) : null}
               {isEditingSpecs ? (
@@ -1441,7 +1369,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
     return {}; // Start with empty object for new products
   });
-  const [isEditingSpecValues, setIsEditingSpecValues] = useState(false);
+  const canEditSpecificationValues = !product;
   const [isSaving, setIsSaving] = useState(false);
 
   const MIN_AI_PRODUCT_IMAGES = 3;
@@ -3891,19 +3819,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                         <label style={{ marginBottom: 0, fontWeight: '600', color: '#1e293b', fontSize: '0.875rem' }}>
-                          {isEditingSpecValues
-                            ? 'Specifications - edit keys and values'
-                            : 'Specifications - edit keys (values are read-only)'}
+                          {canEditSpecificationValues
+                            ? 'Specifications — enter keys and values'
+                            : 'Specifications'}
                         </label>
                         <div style={{ display: 'flex', gap: '0.45rem' }}>
-                          <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={() => setIsEditingSpecValues((prev) => !prev)}
-                            style={{ padding: '0.35rem 0.65rem', fontSize: '0.8rem' }}
-                          >
-                            {isEditingSpecValues ? 'Lock values' : 'Edit values'}
-                          </button>
+                          {canEditSpecificationValues ? (
                           <button
                             type="button"
                             className="btn-secondary"
@@ -3912,6 +3833,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                           >
                             + Add key
                           </button>
+                          ) : null}
                         </div>
                       </div>
                       <div style={{
@@ -3957,7 +3879,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                                 background: 'white'
                               }}
                             />
-                            {isEditingSpecValues ? (
+                            {canEditSpecificationValues ? (
                               <input
                                 type="text"
                                 value={specValueToInput(specifications[key])}

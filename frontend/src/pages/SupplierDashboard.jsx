@@ -25,6 +25,11 @@ import {
 } from '../utils/orderReturnUi';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
+import {
+  getBrandRejectionReason,
+  getSupplierNotificationMessage,
+  getSupplierNotificationTargetPath
+} from '../utils/supplierNotificationDisplay';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import SpPageLayout from '../components/sp/SpPageLayout';
@@ -629,12 +634,20 @@ const SupplierDashboard = ({ user }) => {
                     const notification = normalizeNotification(rawNotification);
                     const receiptPdfUrl = notification.metadata?.receiptPdfUrl || null;
                     const invoicePdfUrl = notification.metadata?.invoicePdfUrl || null;
+                    const rejectionReason = getBrandRejectionReason(notification);
+                    const displayMessage = getSupplierNotificationMessage(notification);
                     return (
                     <div
                       key={notification.id}
                       onClick={() => {
                         if (!notification.isRead) {
                           markNotificationAsRead(notification.id);
+                        }
+                        const targetPath = getSupplierNotificationTargetPath(notification);
+                        if (targetPath) {
+                          setShowNotifications(false);
+                          navigate(targetPath);
+                          return;
                         }
                         if (notification.relatedOrderNumber) {
                           setSelectedOrder(notification.relatedOrderNumber);
@@ -687,8 +700,13 @@ const SupplierDashboard = ({ user }) => {
                             {notification.title}
                           </div>
                           <div className="supplier-dashboard-notification-message">
-                            {notification.message}
+                            {displayMessage}
                           </div>
+                          {rejectionReason && !String(displayMessage).includes(rejectionReason) ? (
+                            <div className="supplier-dashboard-notification-message" style={{ color: '#b91c1c', fontWeight: 600 }}>
+                              Reason: {rejectionReason}
+                            </div>
+                          ) : null}
                           {(receiptPdfUrl || invoicePdfUrl) && (
                             <div className="supplier-dashboard-notification-links">
                               {receiptPdfUrl && (

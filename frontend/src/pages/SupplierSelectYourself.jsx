@@ -622,17 +622,6 @@ export default function SupplierSelectYourself() {
     }
   };
 
-  const handleRemoveEntry = (entryId) => {
-    if (!profile) return;
-    const entries = getCompanyInfoEntriesForSave(profile).filter((entry) => entry.id !== entryId);
-    setProfile(
-      buildSupplierChainSavePayload(
-        profile,
-        entries.length > 0 ? entries : ensureAtLeastOneCompanyInfoEntry({ companyInfoEntries: [] })
-      )
-    );
-  };
-
   const handleDiscard = async () => {
     if (discarding || saving || !hasUnsavedChanges) return;
 
@@ -879,7 +868,6 @@ export default function SupplierSelectYourself() {
               allowEntryManagement
               showAddEntry={false}
               approvedBaselineEntries={approvedBaselineEntries}
-              onRemoveEntry={handleRemoveEntry}
               onBrandPickedWithoutRole={handleBrandPickedWithoutRole}
             />
           ) : null}

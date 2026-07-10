@@ -1432,7 +1432,9 @@ export default function SupplierSupplyChainEntriesEditor({
             onSaveEntry={onSaveEntry}
             savingThisEntry={savingEntryId === entry.id}
             allowEntrySave={allowEntryManagement || !!onSaveEntry}
-            allowEntryRemove={sectionView === 'all' || allowEntryManagement || !!onRemoveEntry}
+            allowEntryRemove={
+              sectionView !== 'brand' && (sectionView === 'all' || allowEntryManagement || !!onRemoveEntry)
+            }
             catalogBrandNames={usesBrandCatalogFields ? catalogBrandNames : []}
             useBrandNameTextInput={usesBrandCatalogFields}
             excludeBrands={reservedBrandsForEntry(displayEntries, entry.id)}

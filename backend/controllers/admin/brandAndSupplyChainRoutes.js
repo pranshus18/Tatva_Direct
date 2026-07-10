@@ -14,6 +14,7 @@ import {
   getCanonicalBrandNormalizedName,
   pickCanonicalBrandDisplayName
 } from '../../services/brandDedupService.js';
+import { notifySupplierBrandRejected } from '../../services/brandApprovalService.js';
 import { insertNotification } from '../../repositories/notificationsRepository.js';
 import {
   adminBrandApproveSchema,
@@ -122,6 +123,18 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
         if (rejectError) throw rejectError;
 
+        if (rejectedDuplicate?.requested_by) {
+          try {
+            await notifySupplierBrandRejected({
+              supabase,
+              brand: rejectedDuplicate,
+              reason: rejectedDuplicate.rejection_reason
+            });
+          } catch (notifErr) {
+            console.error('[Admin] duplicate brand reject notification:', notifErr);
+          }
+        }
+
         return res.json({
           status: 'success',
           message: `Brand already exists as "${canonicalName}". Duplicate request was rejected.`,
@@ -200,6 +213,14 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       if (error || !brand) {
         return res.status(404).json({ status: 'error', message: 'Brand request not found' });
+      }
+
+      if (brand.requested_by) {
+        try {
+          await notifySupplierBrandRejected({ supabase, brand, reason });
+        } catch (notifErr) {
+          console.error('[Admin] brand reject notification:', notifErr);
+        }
       }
 
       res.json({ status: 'success', message: 'Brand rejected', brand });

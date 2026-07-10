@@ -3,6 +3,12 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Bell } from 'lucide-react';
 import { authFetch, getApiUrl } from '@/config/api';
 import { formatDateIST } from '@/utils/dateTime';
+import {
+  getBrandRejectionReason,
+  getSupplierNotificationMessage,
+  getSupplierNotificationTargetPath,
+  isBrandRejectedNotification
+} from '@/utils/supplierNotificationDisplay';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
@@ -149,6 +155,17 @@ export default function SpNotificationsBell() {
     const isRead = notification.is_read || notification.isRead;
     if (!isRead && notificationId) markNotificationAsRead(notificationId);
 
+    const targetPath = getSupplierNotificationTargetPath(notification);
+    if (targetPath) {
+      setShowDropdown(false);
+      setDashboardPanelOpen(false);
+      window.dispatchEvent(
+        new CustomEvent('sp-notifications-panel-toggle', { detail: { visible: false } })
+      );
+      navigate(targetPath);
+      return;
+    }
+
     const orderRef = getOrderRef(notification);
     if (orderRef) {
       setShowDropdown(false);
@@ -225,6 +242,8 @@ export default function SpNotificationsBell() {
                     : {};
                 const receiptPdfUrl = meta.receiptPdfUrl || null;
                 const invoicePdfUrl = meta.invoicePdfUrl || null;
+                const rejectionReason = getBrandRejectionReason(notification);
+                const displayMessage = getSupplierNotificationMessage(notification);
 
                 return (
                   <button
@@ -232,12 +251,18 @@ export default function SpNotificationsBell() {
                     type="button"
                     className={cn(
                       'block w-full border-b px-4 py-3 text-left transition-colors hover:bg-muted/50',
-                      isRead ? 'bg-background' : 'bg-primary/5'
+                      isRead ? 'bg-background' : 'bg-primary/5',
+                      isBrandRejectedNotification(notification) ? 'border-l-2 border-l-destructive' : ''
                     )}
                     onClick={() => handleNotificationClick(notification)}
                   >
                     <div className="text-sm font-medium text-foreground">{notification.title}</div>
-                    <div className="mt-0.5 text-xs text-muted-foreground">{notification.message}</div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">{displayMessage}</div>
+                    {rejectionReason && !String(displayMessage).includes(rejectionReason) ? (
+                      <div className="mt-1 text-xs font-medium text-destructive">
+                        Reason: {rejectionReason}
+                      </div>
+                    ) : null}
                     <div className="mt-1 text-[11px] text-muted-foreground/80">
                       {formatNotificationDate(notification.created_at || notification.createdAt)}
                     </div>

@@ -9,6 +9,37 @@ import {
   findBrandByNormalizedName,
   updateBrandById
 } from '../repositories/brandsRepository.js';
+import { insertNotification } from '../repositories/notificationsRepository.js';
+
+export async function notifySupplierBrandRejected({ supabase, brand, reason }) {
+  const brandName = String(brand?.name || '').trim() || 'Brand';
+  const rejectionReason =
+    String(reason || brand?.rejection_reason || '').trim() || 'Rejected by admin';
+  const userId = String(brand?.requested_by || '').trim();
+  if (!userId) {
+    return { notified: false, reason: 'missing_requester' };
+  }
+
+  await insertNotification(
+    {
+      user_id: userId,
+      type: 'system',
+      title: `Brand request rejected: ${brandName}`,
+      message: `Your brand request "${brandName}" was rejected by admin. Reason: ${rejectionReason}`,
+      related_supplier_id: userId,
+      is_read: false,
+      metadata: {
+        event: 'brand_rejected',
+        brandId: brand?.id || null,
+        brandName,
+        rejectionReason
+      }
+    },
+    supabase
+  );
+
+  return { notified: true };
+}
 
 export async function ensureBrandApprovedOrRequest({ supabase, brandName, requesterUserId }) {
   const name = String(brandName || '').trim();
