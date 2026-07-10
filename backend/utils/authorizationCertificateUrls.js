@@ -93,3 +93,20 @@ export function removeBrandApprovalDocumentUrl(entry, urlToRemove) {
   const next = resolveBrandApprovalDocumentUrls(entry).filter((u) => u !== value);
   return setBrandApprovalDocumentUrls(entry, next);
 }
+
+/** Role verification docs only — excludes URLs stored for Step 1 brand approval. */
+export function resolveRoleVerificationDocumentUrls(entry) {
+  const brandUrls = new Set(resolveBrandApprovalDocumentUrls(entry));
+  return resolveAuthorizationCertificateUrls(entry).filter((url) => !brandUrls.has(url));
+}
+
+/** Remove brand-approval URLs mistakenly stored on supply-chain role document fields. */
+export function stripBrandDocumentsFromRoleFields(entry) {
+  const brandUrls = new Set(resolveBrandApprovalDocumentUrls(entry));
+  if (brandUrls.size === 0) return entry;
+  const roleUrls = resolveAuthorizationCertificateUrls(entry).filter((url) => !brandUrls.has(url));
+  return {
+    ...(entry || {}),
+    ...setAuthorizationCertificateUrls({}, roleUrls)
+  };
+}

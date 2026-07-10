@@ -4,7 +4,7 @@ import { getApiUrl } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
 import BrandSelect from './BrandSelect';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
-import { validateCompanyInfoEntriesList, brandKeyForDuplicateCheck } from '../utils/supplierChainEntryValidation';
+import { brandKeyForDuplicateCheck } from '../utils/supplierChainEntryValidation';
 import {
   formatSupplyChainRoleLabel,
   getApprovedRoleForEntry,
@@ -16,9 +16,11 @@ import {
   removeBrandApprovalDocumentUrl,
   removeAuthorizationCertificateUrl,
   resolveBrandApprovalDocumentUrls,
-  setBrandApprovalDocumentUrls,
   resolveAuthorizationCertificateUrls,
-  setAuthorizationCertificateUrls
+  resolveRoleVerificationDocumentUrls,
+  setAuthorizationCertificateUrls,
+  setBrandApprovalDocumentUrls,
+  stripBrandDocumentsFromRoleFields
 } from '../utils/authorizationCertificateUrls';
 import './SupplierSupplyChainEntriesEditor.css';
 
@@ -106,7 +108,7 @@ function genEntryId() {
 function isEntryCompletedForCompact(entry) {
   const brand = normalizeSingleBrand(entry?.brands);
   const role = String(entry?.role || '').trim();
-  const roleDocs = resolveAuthorizationCertificateUrls(entry);
+  const roleDocs = resolveRoleVerificationDocumentUrls(entry);
   return !!(brand && role && roleDocs.length > 0);
 }
 
@@ -196,7 +198,7 @@ const CompanyInfoEntryCard = ({
   const brandNameEditable = editing && (!useBrandNameTextInput || !catalogBrandSelected);
   const roleLabel = SUPPLY_CHAIN_ROLE_OPTIONS.find((o) => o.value === entry.role)?.label || null;
   const brandDocUrls = resolveBrandApprovalDocumentUrls(entry);
-  const roleDocUrls = resolveAuthorizationCertificateUrls(entry);
+  const roleDocUrls = resolveRoleVerificationDocumentUrls(entry);
   const resolvedBrandName =
     String(brandMeta?.brand || '').trim() || String(brandMeta?.normalizedBrand || '').trim() || selectedBrand;
   const isUnifiedRegistration = sectionView === 'all';
@@ -605,6 +607,7 @@ const CompanyInfoEntryCard = ({
                   removingUrl={removingRoleDocumentUrl}
                   onUpload={(files) => onRoleDocumentUpload?.(entry.id, files)}
                   onRemove={(url) => onRoleDocumentRemove?.(entry.id, url)}
+                  resolveUrls={resolveRoleVerificationDocumentUrls}
                 />
               </div>
             </div>
@@ -705,15 +708,20 @@ export default function SupplierSupplyChainEntriesEditor({
       documentType === 'brand_approval' ? removeBrandApprovalDocumentUrl : removeAuthorizationCertificateUrl;
 
     if (entryId === 'legacy') {
-      const certificateFields =
+      let certificateFields =
         mode === 'remove'
           ? removeDocument(profile, url)
           : appendDocument(profile, url);
+      if (documentType === 'brand_approval' && mode !== 'remove') {
+        certificateFields = stripBrandDocumentsFromRoleFields(certificateFields);
+      }
       if (documentType === 'brand_approval') {
         setProfile({
-          ...profile,
-          brandApprovalDocumentUrls: certificateFields.brandApprovalDocumentUrls,
-          brandApprovalDocumentUrl: certificateFields.brandApprovalDocumentUrl,
+          ...stripBrandDocumentsFromRoleFields({
+            ...profile,
+            brandApprovalDocumentUrls: certificateFields.brandApprovalDocumentUrls,
+            brandApprovalDocumentUrl: certificateFields.brandApprovalDocumentUrl
+          }),
           brandApprovalDocumentPath:
             certificateFields.brandApprovalDocumentUrl ? profile?.brandApprovalDocumentPath : ''
         });
@@ -742,7 +750,11 @@ export default function SupplierSupplyChainEntriesEditor({
       if (updatedOne) return entry;
       if (!matchCompanyInfoEntry(entry, { entryId, brand: targetBrand })) return entry;
       updatedOne = true;
-      return mode === 'remove' ? removeDocument(entry, url) : appendDocument(entry, url);
+      const updated =
+        mode === 'remove' ? removeDocument(entry, url) : appendDocument(entry, url);
+      return documentType === 'brand_approval' && mode !== 'remove'
+        ? stripBrandDocumentsFromRoleFields(updated)
+        : updated;
     });
     setProfile(syncProfileFromEntries(profile, entries));
   };

@@ -5,9 +5,9 @@ import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainE
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
 import {
   brandKeyForDuplicateCheck,
-  validateCompanyInfoEntriesList,
   validateUniqueBrandsAcrossEntries
 } from '../utils/supplierChainEntryValidation';
+import { validateSelectYourselfChainEntries } from '../utils/supplierSelectYourselfValidation';
 import {
   buildApprovedBaselineSnapshot,
   buildSupplierChainSavePayload,
@@ -398,7 +398,7 @@ export default function SupplierSelectYourself() {
     const entries = allEntries.filter((entry) => String(entry?.brands || '').trim());
     const validation =
       entries.length > 0
-        ? validateCompanyInfoEntriesList(entries)
+        ? validateSelectYourselfChainEntries(entries)
         : { ok: false, message: 'Add at least one brand registration below.' };
     const roleChanges = detectEntryRoleChanges(baseline, profile);
     if (roleChanges.length > 0 && !validation.ok) {
@@ -488,7 +488,7 @@ export default function SupplierSelectYourself() {
       (change) => String(change.entryId || '') === String(selectedEntry.id || '')
     );
 
-    const entryValidation = validateCompanyInfoEntriesList([selectedEntry]);
+    const entryValidation = validateSelectYourselfChainEntries([selectedEntry]);
     if (!entryValidation.ok) {
       if (roleChanges.length > 0) {
         alert(

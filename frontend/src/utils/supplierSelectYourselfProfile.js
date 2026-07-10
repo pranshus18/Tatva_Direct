@@ -1,8 +1,10 @@
 import {
   resolveAuthorizationCertificateUrls,
   resolveBrandApprovalDocumentUrls,
+  resolveRoleVerificationDocumentUrls,
   setAuthorizationCertificateUrls,
-  setBrandApprovalDocumentUrls
+  setBrandApprovalDocumentUrls,
+  stripBrandDocumentsFromRoleFields
 } from './authorizationCertificateUrls';
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
 
@@ -148,9 +150,10 @@ function normalizeProfileForEditorSnapshot(profileData) {
 }
 
 /**
- * Summary rows for "Your supply chain by brand": all admin-approved catalog brands,
+ * Summary rows for "Your supply chain by brand": only admin-approved catalog brands,
  * merged with this supplier's saved role/documents where they exist.
- * @param {Array<string | { name?: string, normalizedName?: string }>} catalogBrands
+ * Pending or rejected brand requests stay in Step 1 only — they must not appear here.
+ * @param {Array<string | { name?: string, normalizedName?: string, status?: string, hasAdminSupplyChain?: boolean }>} catalogBrands
  */
 export function buildSupplyChainSummaryRows(catalogBrands = [], entries = [], baselineEntries = []) {
   const mergedEntries = deduplicateCompanyInfoEntriesByBrand(
@@ -168,13 +171,22 @@ export function buildSupplyChainSummaryRows(catalogBrands = [], entries = [], ba
   for (const item of Array.isArray(catalogBrands) ? catalogBrands : []) {
     const brand = String(typeof item === 'string' ? item : item?.name || '').trim();
     if (!brand) continue;
+    const status =
+      typeof item === 'object' ? String(item?.status || 'approved').trim().toLowerCase() : 'approved';
+    if (status && status !== 'approved') continue;
+
     const catalogKey = brandKeyForDuplicateCheck(brand);
     if (!catalogKey || seenCatalogKeys.has(catalogKey)) continue;
     seenCatalogKeys.add(catalogKey);
 
-    const assignment = assignmentByKey.get(brandKeyForDuplicateCheck(brand));
+    const catalogHasAdminSupplyChain =
+      typeof item === 'object' && item?.hasAdminSupplyChain === true;
+    const assignment = assignmentByKey.get(catalogKey);
     if (assignment) {
-      rows.push(assignment);
+      rows.push({
+        ...assignment,
+        hasAdminSupplyChain: assignment.hasAdminSupplyChain === true || catalogHasAdminSupplyChain
+      });
       continue;
     }
 
@@ -186,17 +198,8 @@ export function buildSupplyChainSummaryRows(catalogBrands = [], entries = [], ba
       hasRole: false,
       hasRoleDocuments: false,
       registrationStarted: false,
-      hasAdminSupplyChain:
-        typeof item === 'object' && item?.hasAdminSupplyChain === true
+      hasAdminSupplyChain: catalogHasAdminSupplyChain
     });
-  }
-
-  const seenSummaryKeys = new Set(rows.map((row) => brandKeyForDuplicateCheck(row.brand)));
-  for (const assignment of assignments) {
-    const key = brandKeyForDuplicateCheck(assignment.brand);
-    if (!key || seenSummaryKeys.has(key)) continue;
-    seenSummaryKeys.add(key);
-    rows.push(assignment);
   }
 
   return rows.sort((a, b) => a.brand.localeCompare(b.brand, 'en', { sensitivity: 'base' }));
@@ -209,7 +212,7 @@ export function getSupplyChainAssignmentRows(entries = []) {
       const brand = String(entry?.brands || '').trim();
       if (!brand) return null;
       const role = String(entry?.role || '').trim();
-      const roleDocs = resolveAuthorizationCertificateUrls(entry);
+      const roleDocs = resolveRoleVerificationDocumentUrls(entry);
       return {
         id: entry?.id || `entry-${index}`,
         brand,
@@ -389,7 +392,7 @@ export function buildSupplyChainFormProfile(profile, baselineEntries = []) {
     deduplicateCompanyInfoEntriesByBrand(
       mergeCompanyInfoEntriesById(getCompanyInfoEntriesForSave(profile), baselineEntries)
     )
-  );
+  ).map(stripBrandDocumentsFromRoleFields);
   return {
     ...profile,
     companyInfoEntries: brandedEntries
@@ -427,11 +430,11 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
     const formId = String(formEntry?.id || '').trim();
     if (formId) matchedFormIds.add(formId);
     if (brandKey) matchedBrandKeys.add(brandKey);
-    merged.push({
+    merged.push(stripBrandDocumentsFromRoleFields({
       ...(entry || {}),
       ...formEntry,
       id: id || formId
-    });
+    }));
   }
 
   for (const entry of formEntries) {

@@ -17,7 +17,8 @@ import {
   resolveBrandApprovalDocumentUrls,
   resolveAuthorizationCertificateUrls,
   setBrandApprovalDocumentUrls,
-  setAuthorizationCertificateUrls
+  setAuthorizationCertificateUrls,
+  stripBrandDocumentsFromRoleFields
 } from '../../../utils/authorizationCertificateUrls.js';
 
 const CERTIFICATE_MAX_BYTES = 15 * 1024 * 1024;
@@ -181,7 +182,12 @@ async function clearCertificateFromProfile(userId, currentProfile, entryId, urlT
 }
 
 function parseCertificateRequestBody(req) {
-  const raw = req.body && Object.keys(req.body).length > 0 ? req.body : req.query || {};
+  const raw =
+    req.body && Object.keys(req.body).length > 0
+      ? req.body
+      : req.query && Object.keys(req.query).length > 0
+        ? req.query
+        : {};
   return parseWithSchema(profileUploadCertificateBodySchema, raw);
 }
 
@@ -191,9 +197,13 @@ function resolveDocumentType(rawType) {
 }
 
 function appendEntryDocument(entry, url, documentType) {
+  const updated =
+    documentType === 'brand_approval'
+      ? appendBrandApprovalDocumentUrl(entry, url)
+      : appendAuthorizationCertificateUrl(entry, url);
   return documentType === 'brand_approval'
-    ? appendBrandApprovalDocumentUrl(entry, url)
-    : appendAuthorizationCertificateUrl(entry, url);
+    ? stripBrandDocumentsFromRoleFields(updated)
+    : updated;
 }
 
 function removeEntryDocument(entry, urlToRemove, documentType) {
