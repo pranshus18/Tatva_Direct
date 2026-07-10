@@ -245,7 +245,10 @@ const CompanyInfoEntryCard = ({
               ? 'Rejected by admin'
               : 'Not requested yet';
   const brandApprovalReadyForRole =
-    hasBrandValue && brandStatus === 'approved' && chainDefined && hasResolvedChainRoles;
+    hasBrandValue &&
+    chainDefined &&
+    hasResolvedChainRoles &&
+    (isSupplyChainOnlyStep || brandStatus === 'approved');
   const roleSelectionEnabled = editing && brandApprovalReadyForRole && !roleOptionsLoading;
   const approvedRoleLabel = approvedRole ? formatSupplyChainRoleLabel(approvedRole) : '';
   const pendingRoleChange =
@@ -525,7 +528,7 @@ const CompanyInfoEntryCard = ({
                 <span>{resolvedBrandName}</span>
               </div>
               ) : null}
-              {roleOptionsMessage && !approvedRole ? (
+              {roleOptionsMessage && !approvedRole && !hasResolvedChainRoles ? (
                 <p className="chain-callout chain-callout--warning">{roleOptionsMessage}</p>
               ) : adminChainPathText ? (
                 <p className="chain-callout chain-callout--info">{adminChainPathText}</p>
@@ -749,25 +752,36 @@ export default function SupplierSupplyChainEntriesEditor({
   const shouldShowAddEntry = showAddEntry ?? allowEntryManagement;
   const indexedEntries = displayEntries.map((entry, index) => ({ entry, index }));
   const entryIdsSignature = JSON.stringify(displayEntries.map((entry) => entry.id));
-  const defaultEntryId = displayEntries[0]?.id || '';
+  const firstEmptyBrandEntryId =
+    displayEntries.find((entry) => !normalizeSingleBrand(entry?.brands))?.id || '';
+  const defaultEntryId = isBrandStepPicker
+    ? firstEmptyBrandEntryId
+    : displayEntries[0]?.id || '';
   const resolvedSelectedEntryId =
     selectionMode === 'dropdown'
-      ? displayEntries.some((entry) => entry.id === selectedEntryId)
+      ? selectedEntryId && displayEntries.some((entry) => entry.id === selectedEntryId)
         ? selectedEntryId
         : defaultEntryId
       : '';
 
+  const activeEntryForBrandPicker = displayEntries.find((entry) => entry.id === resolvedSelectedEntryId) || null;
+  const activeEntryBrandValue = normalizeSingleBrand(activeEntryForBrandPicker?.brands);
+  const brandStepHasActiveDraft =
+    isBrandStepPicker && (brandStepOtherMode || brandStepOtherExplicit || !!activeEntryBrandValue);
+
   useEffect(() => {
     if (selectionMode !== 'dropdown') return;
-    if (!defaultEntryId) return;
-    if (!displayEntries.some((entry) => entry.id === selectedEntryId)) {
-      setSelectedEntryId(defaultEntryId);
-    }
+    if (selectedEntryId && displayEntries.some((entry) => entry.id === selectedEntryId)) return;
+    setSelectedEntryId(defaultEntryId);
   }, [selectionMode, entryIdsSignature, defaultEntryId, selectedEntryId, displayEntries]);
 
   const entriesToRender =
     selectionMode === 'dropdown'
-      ? indexedEntries.filter((item) => item.entry.id === resolvedSelectedEntryId)
+      ? indexedEntries.filter((item) => {
+          if (item.entry.id !== resolvedSelectedEntryId) return false;
+          if (isBrandStepPicker && !brandStepHasActiveDraft) return false;
+          return true;
+        })
       : indexedEntries;
 
   const activeBrandFilterKey = brandKeyForDuplicateCheck(filterBrandName);
@@ -825,14 +839,19 @@ export default function SupplierSupplyChainEntriesEditor({
             const entryKey = brandKeyForDuplicateCheck(brandsValue);
             return stateKey && entryKey && stateKey === entryKey;
           });
+          const perBrandChainRoles = Array.isArray(selectedBrandState?.roles)
+            ? selectedBrandState.roles
+            : [];
           const effectiveRoles =
             Array.isArray(data?.roles) && data.roles.length > 0
               ? data.roles
-              : String(selectedBrandState?.status || '').toLowerCase() === 'approved' &&
-                  selectedBrandState?.hasSupplyChainDefinition &&
-                  Array.isArray(selectedBrandState?.roles)
-                ? selectedBrandState.roles
-                : [];
+              : selectedBrandState?.hasSupplyChainDefinition && perBrandChainRoles.length > 0
+                ? perBrandChainRoles
+                : String(selectedBrandState?.status || '').toLowerCase() === 'approved' &&
+                    selectedBrandState?.hasSupplyChainDefinition &&
+                    perBrandChainRoles.length > 0
+                  ? perBrandChainRoles
+                  : [];
           const roleSet = new Set(effectiveRoles);
           const options = SUPPLY_CHAIN_ROLE_OPTIONS.filter((opt) => roleSet.has(opt.value));
           const brandStatusText = Array.isArray(data?.brands)
@@ -860,10 +879,7 @@ export default function SupplierSupplyChainEntriesEditor({
             loading: false,
             options,
             brandMeta: selectedBrandState || null,
-            adminChainReady:
-              options.length > 0 &&
-              String(selectedBrandState?.status || '').toLowerCase() === 'approved' &&
-              !!selectedBrandState?.hasSupplyChainDefinition,
+            adminChainReady: options.length > 0 && !!selectedBrandState?.hasSupplyChainDefinition,
             adminChainStatusText: brandStatusText,
             adminChainPathText: selectedBrandChainPath
               ? `Admin-defined chain for this brand: ${selectedBrandChainPath}`
@@ -1162,6 +1178,7 @@ export default function SupplierSupplyChainEntriesEditor({
     if (!brand) return;
 
     setBrandStepOtherMode(false);
+    setBrandStepOtherExplicit(false);
 
     const currentEntries = getDisplayEntries();
     const matchKey = brandKeyForDuplicateCheck(brand);
@@ -1225,8 +1242,6 @@ export default function SupplierSupplyChainEntriesEditor({
     notifyIfRoleMissing(newEntry);
   };
 
-  const activeEntryForBrandPicker = displayEntries.find((entry) => entry.id === resolvedSelectedEntryId) || null;
-  const activeEntryBrandValue = normalizeSingleBrand(activeEntryForBrandPicker?.brands);
   const activeEntryUsesCustomBrand =
     !!activeEntryBrandValue &&
     !catalogBrandNames.some((name) => name.toLowerCase() === activeEntryBrandValue.toLowerCase());
@@ -1290,7 +1305,7 @@ export default function SupplierSupplyChainEntriesEditor({
             <BrandSelect
               id={`entry-selector-${sectionView}`}
               name={`entry-selector-${sectionView}`}
-              value={activeEntryBrandValue}
+              value={brandStepHasActiveDraft ? activeEntryBrandValue : ''}
               onChange={handleBrandStepCatalogPick}
               onSelectionModeChange={(mode) => {
                 if (mode === 'other') {
@@ -1301,6 +1316,10 @@ export default function SupplierSupplyChainEntriesEditor({
                 } else if (mode === 'empty') {
                   setBrandStepOtherMode(false);
                   setBrandStepOtherExplicit(false);
+                  setSelectedEntryId(firstEmptyBrandEntryId || '');
+                  setExpandedEntryIds((prev) =>
+                    firstEmptyBrandEntryId ? prev.filter((id) => id !== firstEmptyBrandEntryId) : prev
+                  );
                 }
               }}
               disabled={!editing}
@@ -1408,7 +1427,7 @@ export default function SupplierSupplyChainEntriesEditor({
             brandMeta={roleUiState.brandMeta || null}
             sectionView={sectionView}
             allowEntryManagement={allowEntryManagement}
-            forceExpanded={false}
+            forceExpanded={sectionView === 'brand' || sectionView === 'form'}
             expanded={expanded}
             onSaveEntry={onSaveEntry}
             savingThisEntry={savingEntryId === entry.id}

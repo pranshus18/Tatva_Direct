@@ -181,15 +181,14 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
       }
     }
 
-    if (brandStatus !== 'approved') {
-      blockedReason = 'brand_not_approved';
+    if (roles.length > 0) {
+      roleLists.push(roles);
+    } else if (brandStatus !== 'approved') {
+      if (!blockedReason) blockedReason = 'brand_not_approved';
       notApprovedBrands.push(displayBrandName);
-    }
-    if (roles.length === 0) {
+    } else {
       if (!blockedReason) blockedReason = 'supply_chain_not_defined';
       missingChainBrands.push(displayBrandName);
-    } else {
-      roleLists.push(roles);
     }
     rolesByBrand[b.normalized] = roles;
 
