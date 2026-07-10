@@ -672,14 +672,14 @@ export default function SupplierSelectYourself() {
         <div className="supplier-select-flow-card" aria-label="Select yourself steps">
           <div className="supplier-select-flow-card__step">
             <span className="supplier-select-flow-card__badge">Step 1</span>
-            <span>Brand</span>
+            <span>Add a New Brand for Approval</span>
           </div>
           <div className="supplier-select-flow-card__arrow" aria-hidden>
             →
           </div>
           <div className="supplier-select-flow-card__step">
             <span className="supplier-select-flow-card__badge">Step 2</span>
-            <span>Supply-chain role</span>
+            <span>Select a Supply-Chain Role for an Existing Brand</span>
           </div>
         </div>
 
