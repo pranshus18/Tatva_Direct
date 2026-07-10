@@ -877,7 +877,7 @@ export default function SupplierSelectYourself() {
               sectionView="brand"
               selectionMode="dropdown"
               allowEntryManagement
-              showAddEntry
+              showAddEntry={false}
               approvedBaselineEntries={approvedBaselineEntries}
               onRemoveEntry={handleRemoveEntry}
               onBrandPickedWithoutRole={handleBrandPickedWithoutRole}
