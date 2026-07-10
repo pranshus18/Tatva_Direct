@@ -79,12 +79,25 @@ export default function SupplierSelectYourself() {
 
   const { brands: catalogBrands } = useSupplierBrands({ source: 'catalog' });
 
-  const supplyChainSummaryRows = useMemo(
-    () => buildSupplyChainSummaryRows(catalogBrands, getCompanyInfoEntriesForSave(profile || {})),
-    [catalogBrands, profile]
+  const approvedBaselineEntries = useMemo(
+    () => getApprovedBaselineEntries(baseline || profile || {}),
+    [baseline, profile]
   );
 
-  const supplyChainFormProfile = useMemo(() => buildSupplyChainFormProfile(profile), [profile]);
+  const supplyChainSummaryRows = useMemo(
+    () =>
+      buildSupplyChainSummaryRows(
+        catalogBrands,
+        getCompanyInfoEntriesForSave(profile || {}),
+        approvedBaselineEntries
+      ),
+    [catalogBrands, profile, approvedBaselineEntries]
+  );
+
+  const supplyChainFormProfile = useMemo(
+    () => buildSupplyChainFormProfile(profile, approvedBaselineEntries),
+    [profile, approvedBaselineEntries]
+  );
 
   const hasSavedBrandEntries = useMemo(
     () =>
@@ -126,6 +139,18 @@ export default function SupplierSelectYourself() {
       ) || null
     );
   }, [assignmentChainInfo.data, selectedAssignment?.brand]);
+
+  const selectedAssignmentHasAdminChain = useMemo(() => {
+    if (selectedAssignmentChainState?.hasSupplyChainDefinition) return true;
+    if (selectedAssignment?.hasAdminSupplyChain) return true;
+    const brandKey = brandKeyForDuplicateCheck(selectedAssignment?.brand || '');
+    if (!brandKey) return false;
+    return catalogBrands.some(
+      (item) =>
+        brandKeyForDuplicateCheck(typeof item === 'string' ? item : item?.name) === brandKey &&
+        item?.hasAdminSupplyChain === true
+    );
+  }, [catalogBrands, selectedAssignment?.brand, selectedAssignment?.hasAdminSupplyChain, selectedAssignmentChainState]);
 
   useEffect(() => {
     const brand = String(selectedAssignment?.brand || '').trim();
@@ -225,11 +250,6 @@ export default function SupplierSelectYourself() {
     fetchDiscountInsights();
   }, []);
 
-  const approvedBaselineEntries = useMemo(
-    () => getApprovedBaselineEntries(baseline || profile || {}),
-    [baseline, profile]
-  );
-
   const findProfileEntryIdForBrand = useCallback(
     (brandName) => {
       const brandKey = brandKeyForDuplicateCheck(brandName);
@@ -242,13 +262,33 @@ export default function SupplierSelectYourself() {
     [profile]
   );
 
-  const promptAddRoleForBrand = useCallback((brandLabel) => {
-    const label = String(brandLabel || '').trim();
-    if (!label) return false;
-    return window.confirm(
-      `${label} does not have a supply-chain role yet.\n\nDo you want to add a role?`
-    );
-  }, []);
+  const hasEffectiveRoleForBrand = useCallback(
+    (brandName) => {
+      const brandKey = brandKeyForDuplicateCheck(brandName);
+      if (!brandKey) return false;
+      const currentEntry = getCompanyInfoEntriesForSave(profile || {}).find(
+        (row) => brandKeyForDuplicateCheck(row?.brands) === brandKey
+      );
+      if (String(currentEntry?.role || '').trim()) return true;
+      const baselineEntry = approvedBaselineEntries.find(
+        (row) => brandKeyForDuplicateCheck(row?.brands) === brandKey
+      );
+      return !!String(baselineEntry?.role || '').trim();
+    },
+    [approvedBaselineEntries, profile]
+  );
+
+  const promptAddRoleForBrand = useCallback(
+    (brandLabel) => {
+      const label = String(brandLabel || '').trim();
+      if (!label) return false;
+      if (hasEffectiveRoleForBrand(label)) return false;
+      return window.confirm(
+        `${label} does not have a supply-chain role yet.\n\nDo you want to add a role?`
+      );
+    },
+    [hasEffectiveRoleForBrand]
+  );
 
   const ensureBrandEntryForSupplyChain = useCallback(
     (brandLabel) => {
@@ -725,11 +765,11 @@ export default function SupplierSelectYourself() {
                   <span className="supplier-select-assignments__detail-label">Admin supply chain</span>
                   {assignmentChainInfo.loading ? (
                     <span className="supplier-select-assignments__chain-hint">Loading…</span>
-                  ) : selectedAssignmentChainState?.hasSupplyChainDefinition ? (
+                  ) : selectedAssignmentHasAdminChain ? (
                     <span className="supplier-select-assignments__chain-value">
-                      {(selectedAssignmentChainState.roles || [])
+                      {(selectedAssignmentChainState?.roles || [])
                         .map((role) => formatSupplyChainRoleLabel(role))
-                        .join(' → ')}
+                        .join(' → ') || 'Defined by admin'}
                     </span>
                   ) : (
                     <span className="supplier-select-assignments__chain-hint supplier-select-assignments__chain-hint--missing">
@@ -756,7 +796,7 @@ export default function SupplierSelectYourself() {
                 {!selectedAssignment.hasRole ? (
                   <div className="supplier-select-assignments__role-prompt">
                     <p>
-                      {selectedAssignmentChainState?.hasSupplyChainDefinition
+                      {selectedAssignmentHasAdminChain
                         ? 'Admin has defined the supply chain for this brand. Pick your role in Step 2 below.'
                         : 'This brand does not have a supply-chain role yet.'}
                     </p>
@@ -765,7 +805,7 @@ export default function SupplierSelectYourself() {
                       className="btn-primary supplier-select-assignments__role-prompt-btn"
                       onClick={() => navigateToAddRole(selectedAssignment)}
                     >
-                      {selectedAssignmentChainState?.hasSupplyChainDefinition ? 'Select role' : 'Add role'}
+                      {selectedAssignmentHasAdminChain ? 'Select role' : 'Add role'}
                     </button>
                   </div>
                 ) : null}
@@ -838,6 +878,7 @@ export default function SupplierSelectYourself() {
               selectionMode="dropdown"
               allowEntryManagement
               showAddEntry
+              approvedBaselineEntries={approvedBaselineEntries}
               onRemoveEntry={handleRemoveEntry}
               onBrandPickedWithoutRole={handleBrandPickedWithoutRole}
             />

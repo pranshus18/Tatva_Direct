@@ -638,13 +638,14 @@ export async function createProfileResponse(user) {
       topPurchasedBrand: purchaseSummary.topPurchasedBrand,
       totalOrdersReceived,
       totalRevenueReceived,
-      approvedChainProfile: pending
-        ? {
-            supplierRole: approvedChain.supplierRole,
-            brands: approvedChain.brands,
-            companyInfoEntries: approvedChain.companyInfoEntries
-          }
-        : null,
+      approvedChainProfile:
+        pending || draftHasValues
+          ? {
+              supplierRole: approvedChain.supplierRole,
+              brands: approvedChain.brands,
+              companyInfoEntries: approvedChain.companyInfoEntries
+            }
+          : null,
       chainProfileLastRejection,
       supplierPortalTheme,
       adminApprovedBrands: approvedBrands.map((row) => ({

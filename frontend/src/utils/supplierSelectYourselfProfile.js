@@ -152,8 +152,11 @@ function normalizeProfileForEditorSnapshot(profileData) {
  * merged with this supplier's saved role/documents where they exist.
  * @param {Array<string | { name?: string, normalizedName?: string }>} catalogBrands
  */
-export function buildSupplyChainSummaryRows(catalogBrands = [], entries = []) {
-  const assignments = getSupplyChainAssignmentRows(entries);
+export function buildSupplyChainSummaryRows(catalogBrands = [], entries = [], baselineEntries = []) {
+  const mergedEntries = deduplicateCompanyInfoEntriesByBrand(
+    mergeCompanyInfoEntriesById(entries, baselineEntries)
+  );
+  const assignments = getSupplyChainAssignmentRows(mergedEntries);
   const assignmentByKey = new Map();
   for (const row of assignments) {
     assignmentByKey.set(brandKeyForDuplicateCheck(row.brand), row);
@@ -380,9 +383,13 @@ export function syncBrandEntriesForSupplyChainStep(entries = []) {
   });
 }
 
-export function buildSupplyChainFormProfile(profile) {
+export function buildSupplyChainFormProfile(profile, baselineEntries = []) {
   if (!profile) return null;
-  const brandedEntries = getEntriesWithBrands(getCompanyInfoEntriesForSave(profile));
+  const brandedEntries = getEntriesWithBrands(
+    deduplicateCompanyInfoEntriesByBrand(
+      mergeCompanyInfoEntriesById(getCompanyInfoEntriesForSave(profile), baselineEntries)
+    )
+  );
   return {
     ...profile,
     companyInfoEntries: brandedEntries

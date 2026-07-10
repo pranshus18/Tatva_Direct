@@ -80,7 +80,9 @@ export function dedupeBrandCatalogRows(brands = []) {
       ...existing,
       ...brand,
       name: nextName,
-      normalizedName: String(brand?.normalizedName || existing?.normalizedName || nextName).trim()
+      normalizedName: String(brand?.normalizedName || existing?.normalizedName || nextName).trim(),
+      hasAdminSupplyChain:
+        existing?.hasAdminSupplyChain === true || brand?.hasAdminSupplyChain === true
     };
   }
   return deduped;
