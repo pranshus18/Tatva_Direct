@@ -1,6 +1,10 @@
 import express from 'express';
 import { requireAuthentication as authenticateToken } from '../middleware/authMiddleware.js';
 import { supabase } from '../config/supabase.js';
+import {
+  generateGeminiJsonText,
+  parseJsonFromAiText
+} from '../services/geminiGenerateService.js';
 import { requireAdminPrivileges } from '../middleware/adminMiddleware.js';
 import {
   createCategorySupplyChain,
@@ -55,11 +59,7 @@ function stripMarkdownCodeFences(raw) {
   }
   return t.trim();
 }
-function geminiResponseText(data) {
-  const parts = data?.candidates?.[0]?.content?.parts;
-  if (!Array.isArray(parts) || parts.length === 0) return '';
-  return parts.map((p) => (typeof p?.text === 'string' ? p.text : '')).join('');
-}
+
 function extractBalancedJsonObject(s) {
   const str = String(s);
   const start = str.indexOf('{');
@@ -286,10 +286,6 @@ router.post('/suggest-gemini', authenticateToken, requireAdminPrivileges, async 
       });
     }
 
-    const geminiModel = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-    const base = 'https://generativelanguage.googleapis.com';
-    const geminiUrl = `${base}/v1beta/models/${geminiModel}:generateContent?key=${geminiApiKey}`;
-
     const prompt = `You are a B2B supply chain expert for India (construction materials, industrial goods, FMCG where relevant).
 
 Brand: "${brand}"
@@ -324,62 +320,35 @@ Rules:
 - Confidence is 0.0–1.0. If confidence < 0.6, do NOT include that stage at all.
 - Typical stage count is 2–4. Use 5–6 only if this brand genuinely uses every intermediary.`;
 
-    const response = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.35,
-          maxOutputTokens: 2048,
-          responseMimeType: 'application/json'
-        }
-      })
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error('Gemini suggest supply chain error:', errText);
+    let aiText;
+    let usedModel;
+    try {
+      ({ text: aiText, model: usedModel } = await generateGeminiJsonText({
+        geminiApiKey,
+        userPrompt: prompt,
+        temperature: 0.35,
+        maxOutputTokens: 4096
+      }));
+    } catch (geminiError) {
+      console.error('Gemini suggest supply chain error:', geminiError);
       return res.status(502).json({
         status: 'error',
-        message: 'Gemini API request failed. Check GEMINI_API_KEY and model name.'
+        message: geminiError.message || 'Gemini API request failed. Check GEMINI_API_KEY and GEMINI_MODEL.'
       });
     }
 
-    const data = await response.json();
-    if (data.promptFeedback?.blockReason) {
-      console.error('Gemini prompt blocked:', data.promptFeedback);
-      return res.status(502).json({
-        status: 'error',
-        message: `Gemini blocked this prompt (${data.promptFeedback.blockReason}). Try shortening brand/context text.`
-      });
-    }
-
-    let text = geminiResponseText(data);
-    text = String(text).trim();
-    if (!text) {
-      const finish = data.candidates?.[0]?.finishReason;
-      const safety = data.candidates?.[0]?.safetyRatings;
-      console.error('Gemini empty text:', { finish, safety, raw: JSON.stringify(data).slice(0, 1200) });
+    const parsedResult = parseGeminiSupplyChainJson(aiText);
+    const parsed =
+      parseJsonFromAiText(aiText) ??
+      (parsedResult.ok ? parsedResult.value : null);
+    if (!parsed || typeof parsed !== 'object') {
+      console.error('Gemini JSON parse failed:', parsedResult.preview || aiText.slice(0, 400), 'model:', usedModel);
       return res.status(502).json({
         status: 'error',
         message:
-          finish === 'MAX_TOKENS'
-            ? 'Gemini response was cut off (MAX_TOKENS). Retry or set GEMINI_MODEL to a model with higher output limits.'
-            : 'Gemini returned no text. Check GEMINI_MODEL matches an available v1beta model name, or try again.'
+          'Could not parse AI response as JSON. Please try again — if it persists, set GEMINI_JSON_MODEL=gemini-2.5-flash in backend .env for structured tasks.'
       });
     }
-
-    const parsedResult = parseGeminiSupplyChainJson(text);
-    if (!parsedResult.ok) {
-      console.error('Gemini JSON parse failed:', parsedResult.preview || text.slice(0, 400));
-      return res.status(502).json({
-        status: 'error',
-        message:
-          'Could not parse AI response as JSON. The model returned text that was not valid JSON — this is fixed server-side for most cases; if it persists, try again or switch GEMINI_MODEL (e.g. gemini-2.0-flash or gemini-2.5-pro).'
-      });
-    }
-    const parsed = parsedResult.value;
     const stagesIn = Array.isArray(parsed.stages) ? parsed.stages : [];
     const normalized = stagesIn
       .map((s) => ({

@@ -1,5 +1,6 @@
 import logger from '../utils/logger.js';
 import { parseSpecificationsObject, sanitizeSpecifications } from './supplierCatalogHelpersService.js';
+import { generateGeminiJsonText, parseJsonFromAiText } from './geminiGenerateService.js';
 
 const CATEGORY_KEYWORDS = {
   cement: ['cement', 'concrete', 'portland', 'opc', 'ppc', 'pcc'],
@@ -73,54 +74,14 @@ function detectCategoryMismatch(category, description) {
   return null;
 }
 
-function parseJsonFromAiText(rawText) {
-  if (!rawText) return null;
-  try {
-    const cleaned = String(rawText).replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    return JSON.parse(match ? match[0] : cleaned);
-  } catch {
-    return null;
-  }
-}
-
-function parseGeminiText(data) {
-  if (!data?.candidates || !Array.isArray(data.candidates)) return '';
-  for (const candidate of data.candidates) {
-    const parts = candidate?.content?.parts;
-    if (!Array.isArray(parts)) continue;
-    const text = parts.map((part) => part?.text || '').join('\n').trim();
-    if (text) return text;
-  }
-  return '';
-}
-
 async function callGemini({ systemPrompt, userPrompt, geminiApiKey }) {
-  const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-  const fetch = await getFetch();
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${geminiApiKey}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt }] },
-        contents: [{ parts: [{ text: userPrompt }] }],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: 1200,
-          responseMimeType: 'application/json'
-        }
-      })
-    }
-  );
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Gemini API error (${response.status}): ${errorText}`);
-  }
-  const data = await response.json();
-  const text = parseGeminiText(data);
-  if (!text) throw new Error('Gemini returned empty content');
+  const { text } = await generateGeminiJsonText({
+    geminiApiKey,
+    systemInstruction: systemPrompt,
+    userPrompt,
+    temperature: 0.2,
+    maxOutputTokens: 4096
+  });
   return text;
 }
 
