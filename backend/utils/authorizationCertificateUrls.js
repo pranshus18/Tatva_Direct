@@ -79,10 +79,11 @@ export function setBrandApprovalDocumentUrls(entry, urls) {
 export function appendBrandApprovalDocumentUrl(entry, url) {
   const next = resolveBrandApprovalDocumentUrls(entry);
   const value = String(url || '').trim();
-  if (!value || next.includes(value)) {
-    return setBrandApprovalDocumentUrls(entry, next);
-  }
-  return setBrandApprovalDocumentUrls(entry, [...next, value]);
+  const withBrand =
+    !value || next.includes(value)
+      ? setBrandApprovalDocumentUrls(entry, next)
+      : setBrandApprovalDocumentUrls(entry, [...next, value]);
+  return stripBrandDocumentsFromRoleFields({ ...(entry || {}), ...withBrand });
 }
 
 export function removeBrandApprovalDocumentUrl(entry, urlToRemove) {
@@ -94,10 +95,16 @@ export function removeBrandApprovalDocumentUrl(entry, urlToRemove) {
   return setBrandApprovalDocumentUrls(entry, next);
 }
 
+function isBrandApprovalStorageUrl(url) {
+  return /\/brand-approval-documents\//i.test(String(url || '').trim());
+}
+
 /** Role verification docs only — excludes URLs stored for Step 1 brand approval. */
 export function resolveRoleVerificationDocumentUrls(entry) {
   const brandUrls = new Set(resolveBrandApprovalDocumentUrls(entry));
-  return resolveAuthorizationCertificateUrls(entry).filter((url) => !brandUrls.has(url));
+  return resolveAuthorizationCertificateUrls(entry).filter(
+    (url) => !brandUrls.has(url) && !isBrandApprovalStorageUrl(url)
+  );
 }
 
 /** Remove brand-approval URLs mistakenly stored on supply-chain role document fields. */
@@ -109,4 +116,10 @@ export function stripBrandDocumentsFromRoleFields(entry) {
     ...(entry || {}),
     ...setAuthorizationCertificateUrls({}, roleUrls)
   };
+}
+
+/** Normalize brand vs role document fields after merges or profile loads. */
+export function normalizeEntryDocumentFields(entry) {
+  const brandFields = setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(entry));
+  return stripBrandDocumentsFromRoleFields({ ...(entry || {}), ...brandFields });
 }

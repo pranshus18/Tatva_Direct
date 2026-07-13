@@ -174,6 +174,7 @@ export function filterSupplyChainFormEntries(entries = []) {
 
 /** True when Step 2 supply-chain fields were started for this entry (not brand-only Step 1). */
 export function entryRequiresSupplyChainCompletion(entry = {}) {
+  if (entry?.supplyChainRegistrationStarted === true) return true;
   const role = String(entry?.role || '').trim();
   const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
   const mov = entry?.minimumOrderValue;

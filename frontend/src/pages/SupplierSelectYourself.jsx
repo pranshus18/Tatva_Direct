@@ -22,7 +22,9 @@ import {
   mergeCompanyInfoEntriesById,
   mergeFormStepProfile,
   normalizeProfileForEditor,
-  syncBrandEntriesForSupplyChainStep
+  syncBrandEntriesForSupplyChainStep,
+  isBrandApprovedForSupplyChainStep,
+  BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
 import { formatDateTimeIST } from '../utils/dateTime';
 import './Profile.css';
@@ -89,7 +91,9 @@ export default function SupplierSelectYourself() {
       buildSupplyChainSummaryRows(
         catalogBrands,
         getCompanyInfoEntriesForSave(profile || {}),
-        approvedBaselineEntries
+        approvedBaselineEntries,
+        profile?.adminApprovedBrands || [],
+        profile?.supplierBrandRequests || []
       ),
     [catalogBrands, profile, approvedBaselineEntries]
   );
@@ -362,15 +366,13 @@ export default function SupplierSelectYourself() {
     const nextId = event.target.value;
     setSelectedAssignmentId(nextId);
     const nextRow = supplyChainSummaryRows.find((row) => row.id === nextId);
-    if (!nextRow?.brand) return;
+    if (!nextRow?.brand) {
+      setFocusSupplyChainEntryId('');
+      return;
+    }
 
     const entryId = ensureBrandEntryForSupplyChain(nextRow.brand);
-    if (entryId) {
-      setFocusSupplyChainEntryId(entryId);
-      window.requestAnimationFrame(() => {
-        supplyChainSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
-    }
+    setFocusSupplyChainEntryId(entryId || '');
   };
 
   const handleBrandPickedWithoutRole = useCallback(
@@ -483,6 +485,25 @@ export default function SupplierSelectYourself() {
       formEntries.find((entry) => String(entry?.id || '') === String(entryId || '')) || null;
     const selectedEntry = formEntry || entries[entryIndex] || null;
     if (!selectedEntry) return;
+
+    const selectedBrand = String(selectedEntry.brands || '').trim();
+    const selectedBrandState = assignmentChainInfo.data?.brands?.find(
+      (row) =>
+        brandKeyForDuplicateCheck(row?.brand || row?.normalizedBrand) ===
+        brandKeyForDuplicateCheck(selectedBrand)
+    );
+    if (
+      selectedBrand &&
+      !isBrandApprovedForSupplyChainStep(
+        selectedBrand,
+        profile?.adminApprovedBrands || [],
+        selectedBrandState || null,
+        profile?.supplierBrandRequests || []
+      )
+    ) {
+      alert(BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE);
+      return;
+    }
 
     const roleChanges = detectEntryRoleChanges(baseline, profile).filter(
       (change) => String(change.entryId || '') === String(selectedEntry.id || '')
@@ -782,22 +803,6 @@ export default function SupplierSelectYourself() {
                     </span>
                   )}
                 </div>
-                {!selectedAssignment.hasRole ? (
-                  <div className="supplier-select-assignments__role-prompt">
-                    <p>
-                      {selectedAssignmentHasAdminChain
-                        ? 'Admin has defined the supply chain for this brand. Pick your role in Step 2 below.'
-                        : 'This brand does not have a supply-chain role yet.'}
-                    </p>
-                    <button
-                      type="button"
-                      className="btn-primary supplier-select-assignments__role-prompt-btn"
-                      onClick={() => navigateToAddRole(selectedAssignment)}
-                    >
-                      {selectedAssignmentHasAdminChain ? 'Select role' : 'Add role'}
-                    </button>
-                  </div>
-                ) : null}
               </div>
             ) : null}
           </div>
@@ -869,6 +874,7 @@ export default function SupplierSelectYourself() {
               showAddEntry={false}
               approvedBaselineEntries={approvedBaselineEntries}
               onBrandPickedWithoutRole={handleBrandPickedWithoutRole}
+              startInNewBrandMode
             />
           ) : null}
         </div>
@@ -922,6 +928,8 @@ export default function SupplierSelectYourself() {
               focusEntryId={focusSupplyChainEntryId}
               onFocusEntryHandled={handleFocusEntryHandled}
               filterBrandName={selectedAssignment?.brand || ''}
+              supplierApprovedBrands={profile?.adminApprovedBrands || []}
+              supplierBrandRequests={profile?.supplierBrandRequests || []}
             />
           ) : null}
         </div>

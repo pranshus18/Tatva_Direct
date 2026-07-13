@@ -10,6 +10,7 @@ import {
   fetchLatestChainRequest,
   fetchPendingChainRequest,
   fetchSupplierApprovedBrands,
+  fetchSupplierBrandRequests,
   mergeChainEntriesForDisplay,
   normalizeCompanyInfoEntries,
   syncApprovedBrandsIntoUserProfile
@@ -157,8 +158,8 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
     let brandStatus = String(brandRow?.status || 'missing');
     let displayBrandName = brandRow?.name || b.original;
 
-    // Supplier spelling may differ from the admin chain row. If admin defined a chain
-    // for this brand, unlock role options even when the brands table is out of sync.
+    // Supplier spelling may differ from the admin chain row. Only treat the brand as approved
+    // when the brands table has an approved row — never unlock Step 2 for pending requests.
     if (brandStatus !== 'approved' && roles.length > 0 && chainRow?.category_name) {
       const chainBrandKey = catalogBrandDedupKey(chainRow.category_name);
       const supplierMatchesChain =
@@ -174,18 +175,15 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
           brandRow = approvedChainBrand;
           brandStatus = 'approved';
           displayBrandName = approvedChainBrand?.name || displayBrandName;
-        } else {
-          brandStatus = 'approved';
-          displayBrandName = chainRow.category_name;
         }
       }
     }
 
-    if (roles.length > 0) {
-      roleLists.push(roles);
-    } else if (brandStatus !== 'approved') {
+    if (brandStatus !== 'approved') {
       if (!blockedReason) blockedReason = 'brand_not_approved';
       notApprovedBrands.push(displayBrandName);
+    } else if (roles.length > 0) {
+      roleLists.push(roles);
     } else {
       if (!blockedReason) blockedReason = 'supply_chain_not_defined';
       missingChainBrands.push(displayBrandName);
@@ -220,7 +218,7 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
       missingChainBrands,
       message:
         blockedReason === 'brand_not_approved'
-          ? `One or more selected brands are not approved by admin yet: ${notApprovedBrands.join(', ')}.`
+          ? 'This brand has not yet been approved by the admin. Please wait until the approval is complete before proceeding.'
           : `Supply chain is not defined by admin for: ${missingChainBrands.join(', ')}.`
     };
   }
@@ -534,6 +532,7 @@ export async function createProfileResponse(user) {
       ]
     };
     const approvedBrands = await fetchSupplierApprovedBrands(user.id, profileContext);
+    const supplierBrandRequests = await fetchSupplierBrandRequests(user.id, profileContext);
 
     const approvedChain = baselineChainFromProfile(base);
     const draftChain = {
@@ -651,6 +650,12 @@ export async function createProfileResponse(user) {
         name: row.name,
         normalizedName: row.normalized_name || normalizeBrandKey(row.name),
         status: 'approved'
+      })),
+      supplierBrandRequests: supplierBrandRequests.map((row) => ({
+        name: row.name,
+        normalizedName: row.normalized_name || normalizeBrandKey(row.name),
+        status: row.status || 'pending',
+        rejectionReason: row.rejectionReason || ''
       }))
     };
   }

@@ -4,7 +4,8 @@ import {
   resolveRoleVerificationDocumentUrls,
   setAuthorizationCertificateUrls,
   setBrandApprovalDocumentUrls,
-  stripBrandDocumentsFromRoleFields
+  stripBrandDocumentsFromRoleFields,
+  normalizeEntryDocumentFields
 } from './authorizationCertificateUrls';
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
 
@@ -134,10 +135,11 @@ export function buildApprovedBaselineSnapshot(profileData) {
 function normalizeProfileForEditorSnapshot(profileData) {
   if (!profileData) return null;
   const snapshot = JSON.parse(JSON.stringify(profileData));
+  // Approved rows fill gaps; current/draft entries must win so pending role edits are not wiped.
   const mergedEntries = deduplicateCompanyInfoEntriesByBrand(
     mergeCompanyInfoEntriesById(
-      snapshot.companyInfoEntries || [],
-      snapshot.approvedChainProfile?.companyInfoEntries || []
+      snapshot.approvedChainProfile?.companyInfoEntries || [],
+      snapshot.companyInfoEntries || []
     )
   );
   snapshot.companyInfoEntries = ensureCompanyInfoEntryIds(
@@ -145,25 +147,91 @@ function normalizeProfileForEditorSnapshot(profileData) {
       ...snapshot,
       companyInfoEntries: mergedEntries
     })
-  );
+  ).map(normalizeEntryDocumentFields);
   return snapshot;
 }
 
+export const BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE =
+  'This brand has not yet been approved by the admin. Please wait until the approval is complete before proceeding.';
+
+function buildSupplierApprovedBrandKeys(supplierApprovedBrands = []) {
+  const keys = new Set();
+  for (const item of Array.isArray(supplierApprovedBrands) ? supplierApprovedBrands : []) {
+    const name = String(typeof item === 'string' ? item : item?.name || '').trim();
+    const status =
+      typeof item === 'object' ? String(item?.status || 'approved').trim().toLowerCase() : 'approved';
+    if (!name || (status && status !== 'approved')) continue;
+    const key = brandKeyForDuplicateCheck(name);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+function buildSupplierRejectedBrandKeys(supplierBrandRequests = []) {
+  const keys = new Set();
+  for (const item of Array.isArray(supplierBrandRequests) ? supplierBrandRequests : []) {
+    const name = String(typeof item === 'string' ? item : item?.name || '').trim();
+    const status =
+      typeof item === 'object' ? String(item?.status || '').trim().toLowerCase() : '';
+    if (!name || status !== 'rejected') continue;
+    const key = brandKeyForDuplicateCheck(name);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+/** Whether Step 2 (supply-chain role + docs) may proceed for this brand. */
+export function isBrandApprovedForSupplyChainStep(
+  brandName,
+  supplierApprovedBrands = [],
+  brandMeta = null,
+  supplierBrandRequests = []
+) {
+  const brand = String(brandName || '').trim();
+  if (!brand) return false;
+
+  const brandKey = brandKeyForDuplicateCheck(brand);
+  if (brandKey && buildSupplierRejectedBrandKeys(supplierBrandRequests).has(brandKey)) {
+    return false;
+  }
+
+  const metaStatus = String(brandMeta?.status || '').trim().toLowerCase();
+  if (metaStatus === 'approved') return true;
+  if (metaStatus === 'pending' || metaStatus === 'rejected') return false;
+
+  if (!brandKey) return false;
+  return buildSupplierApprovedBrandKeys(supplierApprovedBrands).has(brandKey);
+}
+
 /**
- * Summary rows for "Your supply chain by brand": only admin-approved catalog brands,
- * merged with this supplier's saved role/documents where they exist.
- * Pending or rejected brand requests stay in Step 1 only — they must not appear here.
+ * Summary rows for "Your supply chain by brand": only brands that are ready for Step 2 —
+ * admin-defined supply chains (platform-wide) or brands this supplier has had approved by admin.
+ * Pending/rejected brand requests stay in Step 1 only.
  * @param {Array<string | { name?: string, normalizedName?: string, status?: string, hasAdminSupplyChain?: boolean }>} catalogBrands
+ * @param {Array<object>} entries
+ * @param {Array<object>} baselineEntries
+ * @param {Array<string | { name?: string, normalizedName?: string, status?: string }>} supplierApprovedBrands
+ * @param {Array<string | { name?: string, normalizedName?: string, status?: string }>} supplierBrandRequests
  */
-export function buildSupplyChainSummaryRows(catalogBrands = [], entries = [], baselineEntries = []) {
+export function buildSupplyChainSummaryRows(
+  catalogBrands = [],
+  entries = [],
+  baselineEntries = [],
+  supplierApprovedBrands = [],
+  supplierBrandRequests = []
+) {
+  // Baseline first, current entries last — draft role selections must not be overwritten by empty approved roles.
   const mergedEntries = deduplicateCompanyInfoEntriesByBrand(
-    mergeCompanyInfoEntriesById(entries, baselineEntries)
+    mergeCompanyInfoEntriesById(baselineEntries, entries)
   );
   const assignments = getSupplyChainAssignmentRows(mergedEntries);
   const assignmentByKey = new Map();
   for (const row of assignments) {
     assignmentByKey.set(brandKeyForDuplicateCheck(row.brand), row);
   }
+
+  const supplierApprovedBrandKeys = buildSupplierApprovedBrandKeys(supplierApprovedBrands);
+  const supplierRejectedBrandKeys = buildSupplierRejectedBrandKeys(supplierBrandRequests);
 
   const rows = [];
   const seenCatalogKeys = new Set();
@@ -177,10 +245,16 @@ export function buildSupplyChainSummaryRows(catalogBrands = [], entries = [], ba
 
     const catalogKey = brandKeyForDuplicateCheck(brand);
     if (!catalogKey || seenCatalogKeys.has(catalogKey)) continue;
+    if (supplierRejectedBrandKeys.has(catalogKey)) continue;
     seenCatalogKeys.add(catalogKey);
 
     const catalogHasAdminSupplyChain =
       typeof item === 'object' && item?.hasAdminSupplyChain === true;
+    const supplierApproved = supplierApprovedBrandKeys.has(catalogKey);
+    // Step 2 dropdown: hide globally listed brands until admin approved this supplier's
+    // request or admin has defined the brand's supply chain for the platform.
+    if (!catalogHasAdminSupplyChain && !supplierApproved) continue;
+
     const assignment = assignmentByKey.get(catalogKey);
     if (assignment) {
       rows.push({
@@ -285,7 +359,7 @@ export function deduplicateCompanyInfoEntriesByBrand(entries = []) {
     if (indexByBrandKey.has(brandKey)) {
       const idx = indexByBrandKey.get(brandKey);
       const existing = merged[idx] || {};
-      merged[idx] = {
+      merged[idx] = normalizeEntryDocumentFields({
         ...existing,
         ...rawEntry,
         id: existing.id || rawEntry.id,
@@ -303,12 +377,12 @@ export function deduplicateCompanyInfoEntriesByBrand(entries = []) {
             ...(Array.isArray(rawEntry.authorizationCertificateUrls) ? rawEntry.authorizationCertificateUrls : [])
           ])
         ]
-      };
+      });
       continue;
     }
 
     const idx = merged.length;
-    merged.push({ ...rawEntry });
+    merged.push(normalizeEntryDocumentFields({ ...rawEntry }));
     indexByBrandKey.set(brandKey, idx);
   }
 
@@ -388,11 +462,14 @@ export function syncBrandEntriesForSupplyChainStep(entries = []) {
 
 export function buildSupplyChainFormProfile(profile, baselineEntries = []) {
   if (!profile) return null;
+  // Merge approved baseline first, then current profile so Step 2 draft edits (role, docs, MOV)
+  // win over empty/stale approved fields. Reversing this caused the role dropdown to reset to
+  // "Select your role" immediately after picking a value.
   const brandedEntries = getEntriesWithBrands(
     deduplicateCompanyInfoEntriesByBrand(
-      mergeCompanyInfoEntriesById(getCompanyInfoEntriesForSave(profile), baselineEntries)
+      mergeCompanyInfoEntriesById(baselineEntries, getCompanyInfoEntriesForSave(profile))
     )
-  ).map(stripBrandDocumentsFromRoleFields);
+  ).map(normalizeEntryDocumentFields);
   return {
     ...profile,
     companyInfoEntries: brandedEntries
@@ -430,7 +507,7 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
     const formId = String(formEntry?.id || '').trim();
     if (formId) matchedFormIds.add(formId);
     if (brandKey) matchedBrandKeys.add(brandKey);
-    merged.push(stripBrandDocumentsFromRoleFields({
+    merged.push(normalizeEntryDocumentFields({
       ...(entry || {}),
       ...formEntry,
       id: id || formId
@@ -443,7 +520,7 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
     const alreadyMerged =
       (id && matchedFormIds.has(id)) || (brandKey && matchedBrandKeys.has(brandKey));
     if (!alreadyMerged) {
-      merged.push({ ...(entry || {}) });
+      merged.push(normalizeEntryDocumentFields({ ...(entry || {}) }));
     }
   }
 
@@ -455,7 +532,9 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
 
 /** Build PUT payload that keeps every brand entry while syncing legacy top-level fields. */
 export function buildSupplierChainSavePayload(profile, entries = null, options = {}) {
-  const nextEntries = deduplicateCompanyInfoEntriesByBrand(entries || getCompanyInfoEntriesForSave(profile));
+  const nextEntries = deduplicateCompanyInfoEntriesByBrand(
+    entries || getCompanyInfoEntriesForSave(profile)
+  ).map(normalizeEntryDocumentFields);
   const first = nextEntries[0] || {};
   const chainFields = {
     companyInfoEntries: nextEntries,

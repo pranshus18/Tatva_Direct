@@ -85,12 +85,16 @@ export function resolveCompanyInfoEntriesForValidation(profileData) {
 }
 
 export function entryRequiresSupplyChainCompletion(entry = {}) {
+  if (entry?.supplyChainRegistrationStarted === true) return true;
   const role = String(entry?.role || '').trim();
   const roleCertificateUrls = resolveAuthorizationCertificateUrls(entry);
   const mov = entry?.minimumOrderValue;
   const hasMov = mov !== '' && mov !== null && mov !== undefined;
   return !!(role || roleCertificateUrls.length > 0 || hasMov);
 }
+
+export const SELECT_YOURSELF_ROLE_AND_DOCS_REQUIRED_MESSAGE =
+  'Please select your role and upload the required document before saving.';
 
 export function validateCompanyInfoEntriesList(entries) {
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -128,10 +132,10 @@ export function validateCompanyInfoEntriesList(entries) {
         message: `Entry ${entryNum}: Only one brand is allowed per entry. Add another block for a second brand.`
       };
     }
-    if (roleCertificateUrls.length === 0) {
+    if (!role || roleCertificateUrls.length === 0) {
       return {
         ok: false,
-        message: `Entry ${entryNum}: Upload at least one supply-chain role document.`
+        message: SELECT_YOURSELF_ROLE_AND_DOCS_REQUIRED_MESSAGE
       };
     }
 

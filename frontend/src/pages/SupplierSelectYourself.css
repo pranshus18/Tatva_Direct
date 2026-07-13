@@ -279,31 +279,6 @@
   color: #475569;
 }
 
-.supplier-select-assignments__role-prompt {
-  margin-top: 0.85rem;
-  padding-top: 0.85rem;
-  border-top: 1px dashed #e2e8f0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.65rem;
-}
-
-.supplier-select-assignments__role-prompt p {
-  margin: 0;
-  font-size: 0.86rem;
-  color: #64748b;
-}
-
-.supplier-select-assignments__role-prompt-btn {
-  min-height: 2rem;
-  height: 2rem;
-  padding: 0.35rem 0.75rem;
-  font-size: 0.82rem;
-  border-radius: 10px;
-}
-
 .supplier-select-brands-summary {
   display: flex;
   flex-direction: column;

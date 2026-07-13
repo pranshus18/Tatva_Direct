@@ -5,7 +5,8 @@ import {
   resolveBrandApprovalDocumentUrls,
   setBrandApprovalDocumentUrls,
   resolveAuthorizationCertificateUrls,
-  setAuthorizationCertificateUrls
+  setAuthorizationCertificateUrls,
+  normalizeEntryDocumentFields
 } from '../utils/authorizationCertificateUrls.js';
 
 const ROLE_SET = new Set([
@@ -60,20 +61,22 @@ export function normalizeCompanyInfoEntries(rawEntries) {
     const baseId = e?.id || uuidv4();
 
     brandsForRows.forEach((brand, index) => {
-      normalized.push({
-        id: index === 0 ? baseId : uuidv4(),
-        role,
-        brands: brand,
-        gstin: e?.gstin != null && e.gstin !== '' ? String(e.gstin).trim() : '',
-        companyName: e?.companyName != null && e.companyName !== '' ? String(e.companyName).trim() : '',
-        ownershipDetails:
-          e?.ownershipDetails != null && e.ownershipDetails !== '' ? String(e.ownershipDetails).trim() : '',
-        brandApprovalDocumentUrls: brandDocumentFields.brandApprovalDocumentUrls,
-        brandApprovalDocumentUrl: brandDocumentFields.brandApprovalDocumentUrl,
-        authorizationCertificateUrls: certificateFields.authorizationCertificateUrls,
-        authorizationCertificateUrl: certificateFields.authorizationCertificateUrl,
-        ...(minimumOrderValue != null ? { minimumOrderValue } : {})
-      });
+      normalized.push(
+        normalizeEntryDocumentFields({
+          id: index === 0 ? baseId : uuidv4(),
+          role,
+          brands: brand,
+          gstin: e?.gstin != null && e.gstin !== '' ? String(e.gstin).trim() : '',
+          companyName: e?.companyName != null && e.companyName !== '' ? String(e.companyName).trim() : '',
+          ownershipDetails:
+            e?.ownershipDetails != null && e.ownershipDetails !== '' ? String(e.ownershipDetails).trim() : '',
+          brandApprovalDocumentUrls: brandDocumentFields.brandApprovalDocumentUrls,
+          brandApprovalDocumentUrl: brandDocumentFields.brandApprovalDocumentUrl,
+          authorizationCertificateUrls: certificateFields.authorizationCertificateUrls,
+          authorizationCertificateUrl: certificateFields.authorizationCertificateUrl,
+          ...(minimumOrderValue != null ? { minimumOrderValue } : {})
+        })
+      );
     });
   }
 
@@ -93,12 +96,12 @@ function mergeChainEntryDocuments(existing = {}, incoming = {}) {
       ...resolveBrandApprovalDocumentUrls(incoming)
     ])
   ];
-  return {
+  return normalizeEntryDocumentFields({
     ...existing,
     ...incoming,
     ...setAuthorizationCertificateUrls({}, roleUrls),
     ...setBrandApprovalDocumentUrls({}, brandUrls)
-  };
+  });
 }
 
 export function buildChainPayloadFromProfileData(profileData) {
@@ -260,8 +263,65 @@ export function collectDeclaredBrandNamesFromProfiles(...profiles) {
 }
 
 /**
+ * Brand requests submitted by this supplier (any status).
+ * Used to hide rejected brands from Step 2 dropdown and block false "approved" matches.
+ */
+export async function fetchSupplierBrandRequests(userId, profileContext = null) {
+  if (!userId) return [];
+  const byKey = new Map();
+
+  const upsert = (row) => {
+    const name = String(row?.name || '').trim();
+    const key = normalizeBrandKey(row?.normalized_name || name);
+    if (!name || !key) return;
+    const status = String(row?.status || 'pending').trim().toLowerCase();
+    byKey.set(key, {
+      name,
+      normalized_name: key,
+      status,
+      rejectionReason: String(row?.rejection_reason || '').trim()
+    });
+  };
+
+  try {
+    const { data: requestedRows, error: requestedError } = await supabase
+      .from('brands')
+      .select('name, normalized_name, status, rejection_reason, requested_by')
+      .eq('requested_by', userId);
+    if (requestedError) throw requestedError;
+    for (const row of requestedRows || []) {
+      upsert(row);
+    }
+
+    const declaredNames = collectDeclaredBrandNamesFromProfiles(profileContext);
+    const declaredKeys = [...new Set(declaredNames.map((name) => normalizeBrandKey(name)).filter(Boolean))];
+    if (declaredKeys.length > 0) {
+      const { data: declaredRows, error: declaredError } = await supabase
+        .from('brands')
+        .select('name, normalized_name, status, rejection_reason, requested_by')
+        .in('normalized_name', declaredKeys);
+      if (declaredError) throw declaredError;
+      for (const row of declaredRows || []) {
+        const key = normalizeBrandKey(row?.normalized_name || row?.name);
+        if (!key) continue;
+        if (String(row?.requested_by || '').trim() === String(userId)) {
+          upsert(row);
+        } else if (!byKey.has(key) && String(row?.status || '').toLowerCase() === 'rejected') {
+          upsert(row);
+        }
+      }
+    }
+
+    return [...byKey.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  } catch (e) {
+    console.error('[supplierChainProfile] fetchSupplierBrandRequests:', e?.message || e);
+    return [];
+  }
+}
+
+/**
  * Admin-approved brands for this supplier.
- * Includes brands they requested plus any declared brand name that is globally approved.
+ * Includes brands they requested and were approved — never brands they requested that were rejected.
  */
 export async function fetchSupplierApprovedBrands(userId, profileContext = null) {
   if (!userId) return [];
@@ -277,6 +337,14 @@ export async function fetchSupplierApprovedBrands(userId, profileContext = null)
   };
 
   try {
+    const brandRequests = await fetchSupplierBrandRequests(userId, profileContext);
+    const rejectedKeys = new Set(
+      brandRequests
+        .filter((row) => String(row?.status || '').toLowerCase() === 'rejected')
+        .map((row) => normalizeBrandKey(row?.normalized_name || row?.name))
+        .filter(Boolean)
+    );
+
     const { data: requestedRows, error: requestedError } = await supabase
       .from('brands')
       .select('name, normalized_name, status')
@@ -294,7 +362,11 @@ export async function fetchSupplierApprovedBrands(userId, profileContext = null)
         .eq('status', 'approved')
         .in('normalized_name', declaredKeys);
       if (declaredError) throw declaredError;
-      addRows(declaredRows);
+      const eligibleDeclaredRows = (declaredRows || []).filter((row) => {
+        const key = normalizeBrandKey(row?.normalized_name || row?.name);
+        return key && !rejectedKeys.has(key);
+      });
+      addRows(eligibleDeclaredRows);
     }
 
     return [...byKey.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));

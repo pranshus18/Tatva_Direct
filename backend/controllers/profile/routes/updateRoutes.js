@@ -23,7 +23,8 @@ import {
   resolveCompanyInfoEntriesForValidation,
   supplierProfileIncludesChainDraft,
   validateCompanyInfoEntriesList,
-  validateUniqueBrandsAcrossEntries
+  validateUniqueBrandsAcrossEntries,
+  SELECT_YOURSELF_ROLE_AND_DOCS_REQUIRED_MESSAGE
 } from '../../../utils/supplierChainEntryValidation.js';
 import {
   createProfileResponse,
@@ -483,8 +484,7 @@ export function registerProfileUpdateRoutes(router) {
               return res.status(403).json({
                 status: 'error',
                 code: 'role_required_after_chain_defined',
-                message:
-                  'Supply chain is now defined by admin for the selected brand. Please select your supply-chain role before saving.',
+                message: SELECT_YOURSELF_ROLE_AND_DOCS_REQUIRED_MESSAGE,
                 details: {
                   brands: resolved.brands || []
                 }
@@ -503,12 +503,15 @@ export function registerProfileUpdateRoutes(router) {
 
             const resolved = await resolveChainRoleOptionsForBrands(selection.brands);
             if (!resolved.eligible) {
+              const isBrandNotApproved = resolved.reason === 'brand_not_approved';
               return res.status(403).json({
                 status: 'error',
-                code: 'supply_chain_not_defined_for_selected_brand',
+                code: isBrandNotApproved ? 'brand_not_approved_for_supply_chain' : 'supply_chain_not_defined_for_selected_brand',
                 message:
                   resolved.message ||
-                  'Admin has not defined a valid supply chain for selected brand(s), so role selection is not allowed.',
+                  (isBrandNotApproved
+                    ? 'This brand has not yet been approved by the admin. Please wait until the approval is complete before proceeding.'
+                    : 'Admin has not defined a valid supply chain for selected brand(s), so role selection is not allowed.'),
                 details: {
                   role: selection.role,
                   brands: resolved.brands || []

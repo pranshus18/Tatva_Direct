@@ -6,6 +6,7 @@ import {
   fetchPendingChainRequest,
   normalizeCompanyInfoEntries
 } from '../../../services/supplierChainProfileService.js';
+import { resolveChainRoleOptionsForBrands } from '../profileHelpers.js';
 import { profileUploadCertificateBodySchema } from '../../../contracts/profileContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../../utils/contractValidation.js';
 import { clientErrorMessage } from '../../../utils/clientErrorMessage.js';
@@ -224,6 +225,44 @@ function setLegacyDocumentUrls(profile, urls, documentType) {
     : setAuthorizationCertificateUrls(profile || {}, urls);
 }
 
+function resolveEntryBrandName(profile, entryId) {
+  const entries = normalizeCompanyInfoEntries(profile?.companyInfoEntries || []);
+  const entry = entries.find((row) => String(row?.id || '').trim() === String(entryId || '').trim());
+  return String(entry?.brands || '').trim();
+}
+
+function parseBrandsFromEntryField(raw) {
+  if (raw == null || raw === '') return [];
+  if (Array.isArray(raw)) {
+    return [...new Set(raw.map(String).map((s) => s.trim()).filter(Boolean))];
+  }
+  return [
+    ...new Set(
+      String(raw)
+        .split(/[,;\n]/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  ];
+}
+
+async function assertBrandApprovedForRoleDocuments(profile, entryId) {
+  const brandField = resolveEntryBrandName(profile, entryId);
+  const brands = parseBrandsFromEntryField(brandField);
+  if (brands.length === 0) return { ok: true };
+
+  const resolved = await resolveChainRoleOptionsForBrands(brands);
+  if (resolved.reason === 'brand_not_approved') {
+    return {
+      ok: false,
+      message:
+        resolved.message ||
+        'This brand has not yet been approved by the admin. Please wait until the approval is complete before proceeding.'
+    };
+  }
+  return { ok: true };
+}
+
 export function registerProfileCertificateRoutes(router) {
   router.post(
     '/supplier/authorization-certificate',
@@ -253,15 +292,7 @@ export function registerProfileCertificateRoutes(router) {
           documentType === 'brand_approval' ? 'brand-approval-documents' : 'authorization-certificates';
         const storagePath = `${req.userId}/${storageFolder}/${Date.now()}-${safeName}`;
 
-        const { url, path } = await uploadFile(
-          SUPPLIER_DOCUMENTS_BUCKET,
-          storagePath,
-          req.file.buffer,
-          {
-            contentType,
-            upsert: false
-          }
-        );
+        const entryId = uploadBody.entryId ? String(uploadBody.entryId).trim() : null;
 
         const { data: currentUser, error: fetchError } = await supabase
           .from('users')
@@ -276,7 +307,26 @@ export function registerProfileCertificateRoutes(router) {
           });
         }
 
-        const entryId = uploadBody.entryId ? String(uploadBody.entryId).trim() : null;
+        if (documentType === 'role_authorization' && entryId) {
+          const approvalCheck = await assertBrandApprovedForRoleDocuments(currentUser.profile, entryId);
+          if (!approvalCheck.ok) {
+            return res.status(403).json({
+              status: 'error',
+              code: 'brand_not_approved_for_supply_chain',
+              message: approvalCheck.message
+            });
+          }
+        }
+
+        const { url, path } = await uploadFile(
+          SUPPLIER_DOCUMENTS_BUCKET,
+          storagePath,
+          req.file.buffer,
+          {
+            contentType,
+            upsert: false
+          }
+        );
 
         if (entryId) {
           let savedToProfile = false;

@@ -17,7 +17,19 @@ test('validateCompanyInfoEntriesList requires role documents when Step 2 started
     }
   ]);
   assert.equal(result.ok, false);
-  assert.match(result.message, /supply-chain role document/i);
+  assert.match(result.message, /upload the required document/i);
+});
+
+test('validateCompanyInfoEntriesList requires role and docs when registration started without role', () => {
+  const result = validateCompanyInfoEntriesList([
+    {
+      id: 'e1',
+      brands: 'Titan',
+      supplyChainRegistrationStarted: true
+    }
+  ]);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /select your role and upload the required document/i);
 });
 
 test('retailer entry does not require minimum order value', () => {

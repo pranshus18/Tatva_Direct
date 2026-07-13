@@ -4,8 +4,12 @@ import {
   validateUniqueBrandsAcrossEntries
 } from './supplierChainEntryValidation';
 
+export const SELECT_YOURSELF_ROLE_AND_DOCS_REQUIRED_MESSAGE =
+  'Please select your role and upload the required document before saving.';
+
 /** True when Step 2 supply-chain fields were started (Select yourself only). */
 function entryRequiresSupplyChainCompletion(entry = {}) {
+  if (entry?.supplyChainRegistrationStarted === true) return true;
   const role = String(entry?.role || '').trim();
   const roleCertificateUrls = resolveRoleVerificationDocumentUrls(entry);
   const mov = entry?.minimumOrderValue;
@@ -65,12 +69,12 @@ export function validateSelectYourselfChainEntries(entries) {
         field: 'brands'
       };
     }
-    if (roleCertificateUrls.length === 0) {
+    if (!role || roleCertificateUrls.length === 0) {
       return {
         ok: false,
-        message: `Entry ${entryNum}: Upload at least one supply-chain role document.`,
+        message: SELECT_YOURSELF_ROLE_AND_DOCS_REQUIRED_MESSAGE,
         entryIndex: i,
-        field: 'authorizationCertificateUrls'
+        field: !role ? 'role' : 'authorizationCertificateUrls'
       };
     }
 
