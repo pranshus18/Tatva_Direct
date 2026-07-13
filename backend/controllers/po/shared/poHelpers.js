@@ -259,7 +259,10 @@ export function poCartDraftNeedsPersistAfterPrune(rawDraft = {}, normalizedDraft
     (sum, group) => sum + (Array.isArray(group?.items) ? group.items.length : 0),
     0
   );
-  return rawLineCount !== nextLineCount;
+  if (rawLineCount !== nextLineCount) return true;
+  const rawFlatCount = Array.isArray(rawDraft?.items) ? rawDraft.items.length : 0;
+  const nextFlatCount = Array.isArray(normalizedDraft?.items) ? normalizedDraft.items.length : 0;
+  return rawFlatCount !== nextFlatCount;
 }
 
 /**
@@ -403,7 +406,7 @@ export function normalizePoCartDraft(raw) {
       transportSelection: null
     };
   }
-  const hasGroups = Array.isArray(raw.boqGroups) && raw.boqGroups.length > 0;
+  const hasGroups = Array.isArray(raw.boqGroups);
   if (hasGroups) {
     const boqGroups = prunePoCartGroups(
       raw.boqGroups.map((g) => ({

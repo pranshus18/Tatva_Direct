@@ -568,7 +568,8 @@ router.delete('/cart/items/:itemId', authenticateToken, isServiceProvider, async
     return res.json({
       status: 'success',
       message: 'Cart item removed',
-      itemId
+      itemId,
+      draft: nextDraftPayload
     });
   } catch (error) {
     console.error('Delete PO cart item error:', error);

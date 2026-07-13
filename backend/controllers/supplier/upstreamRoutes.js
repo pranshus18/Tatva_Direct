@@ -436,7 +436,7 @@ export function registerSupplierUpstreamRoutes(ctx) {
   const normalizeUpstreamCartDraft = (rawDraft = {}) => {
     const raw = rawDraft && typeof rawDraft === 'object' ? rawDraft : {};
     let projects = [];
-    if (Array.isArray(raw.projects) && raw.projects.length > 0) {
+    if (Array.isArray(raw.projects)) {
       projects = raw.projects
         .map((p) => buildUpstreamProject(p))
         .filter(hasUpstreamProjectLines);

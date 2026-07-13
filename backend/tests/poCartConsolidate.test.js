@@ -6,6 +6,7 @@ import {
   mergeOrAppendCartGroupItem,
   mergeUpstreamSelectedMineQuantity,
   normalizePoCartDraft,
+  poCartDraftNeedsPersistAfterPrune,
   prunePoCartGroups
 } from '../controllers/po/shared/poHelpers.js';
 
@@ -112,4 +113,24 @@ test('normalizePoCartDraft keeps separate lines for the same productId', () => {
   assert.equal(draft.items.length, 2);
   assert.equal(draft.items[0].quantity, 1);
   assert.equal(draft.items[1].quantity, 2);
+});
+
+test('normalizePoCartDraft clears stale flat items when boqGroups is empty after delete', () => {
+  const draft = normalizePoCartDraft({
+    boqGroups: [],
+    items: [{ id: 'a', productId: 'p1', quantity: 1 }],
+    selectedVendors: { a: 'vendor-1' }
+  });
+  assert.equal(draft.boqGroups.length, 0);
+  assert.equal(draft.items.length, 0);
+});
+
+test('poCartDraftNeedsPersistAfterPrune detects stale flat items after group delete', () => {
+  const rawDraft = {
+    boqGroups: [],
+    items: [{ id: 'a', productId: 'p1', quantity: 1 }]
+  };
+  const normalizedDraft = normalizePoCartDraft(rawDraft);
+  assert.equal(normalizedDraft.items.length, 0);
+  assert.equal(poCartDraftNeedsPersistAfterPrune(rawDraft, normalizedDraft), true);
 });

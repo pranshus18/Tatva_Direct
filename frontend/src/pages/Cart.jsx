@@ -580,7 +580,15 @@ const Cart = ({ onLoadCart }) => {
         throw new Error(data.message || 'Failed to remove item');
       }
       const prev = cartRef.current;
-      if (prev?.draft) {
+      const serverDraft =
+        data?.draft && typeof data.draft === 'object' ? data.draft : null;
+      if (serverDraft) {
+        setCart({ ...(prev || {}), draft: serverDraft });
+        emitServiceProviderCartCount(serverDraft);
+        if (typeof onLoadCart === 'function') {
+          onLoadCart(serverDraft);
+        }
+      } else if (prev?.draft) {
         const nextDraft = mergeRemoveItemFromDraft(prev.draft, normalizedItemId);
         setCart({ ...prev, draft: nextDraft });
         emitServiceProviderCartCount(nextDraft);
