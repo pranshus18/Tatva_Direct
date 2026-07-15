@@ -24,6 +24,7 @@ import {
 } from '@/components/ui/dialog';
 import { refreshServiceProviderCartCount } from '../utils/spCartBadge';
 import { formatRupeePerUnit } from '../utils/formatRupee';
+import { isCustomerFacingSpecKey } from '../utils/specifications';
 import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
@@ -33,6 +34,7 @@ import {
   normalizeShippingAddressBookEntry
 } from '../utils/shippingAddressLabel';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
+import { openProductDetailInNewTab } from '../utils/discoveryNavigation';
 import './ProductDiscovery.css';
 
 const blankShippingAddress = {
@@ -80,7 +82,11 @@ function RatingStars({ rating, reviews }) {
 function SpecBadges({ specifications }) {
   if (!specifications || typeof specifications !== 'object') return null;
   const entries = Object.entries(specifications).filter(
-    ([, v]) => v !== null && v !== undefined && String(v).trim()
+    ([key, value]) =>
+      isCustomerFacingSpecKey(key) &&
+      value !== null &&
+      value !== undefined &&
+      String(value).trim()
   );
   if (!entries.length) return null;
   return (
@@ -117,7 +123,6 @@ const ProductDiscovery = () => {
   const [categoryOptions, setCategoryOptions] = useState([]);
   const [products, setProducts] = useState([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [recommendationMode, setRecommendationMode] = useState('');
@@ -135,6 +140,24 @@ const ProductDiscovery = () => {
   const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
   const pageSize = 24;
 
+  const page = useMemo(() => {
+    const parsed = Number.parseInt(String(searchParams.get('page') || ''), 10);
+    return Number.isFinite(parsed) && parsed >= 1 ? parsed : 1;
+  }, [searchParams]);
+
+  const goToPage = (nextPage) => {
+    const safe = Math.max(1, nextPage);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        if (safe <= 1) next.delete('page');
+        else next.set('page', String(safe));
+        return next;
+      },
+      { replace: true }
+    );
+  };
+
   const updateSearchQuery = (value) => {
     setSearchParams(
       (prev) => {
@@ -147,7 +170,6 @@ const ProductDiscovery = () => {
       },
       { replace: true }
     );
-    setPage(1);
   };
 
   const updateSelectedCategory = (value) => {
@@ -162,7 +184,6 @@ const ProductDiscovery = () => {
       },
       { replace: true }
     );
-    setPage(1);
   };
 
   const categories = useMemo(() => {
@@ -199,6 +220,8 @@ const ProductDiscovery = () => {
       return undefined;
     }
 
+    const controller = new AbortController();
+
     const timeoutId = setTimeout(async () => {
       setLoading(true);
       setError('');
@@ -212,9 +235,11 @@ const ProductDiscovery = () => {
         const response = await fetch(getApiUrl(`/api/supplier/products/search?${params.toString()}`), {
           headers: {
             Authorization: `Bearer ${token}`
-          }
+          },
+          signal: controller.signal
         });
         const data = await response.json();
+        if (controller.signal.aborted) return;
         if (!response.ok || data.status !== 'success') {
           throw new Error(data.message || 'Failed to fetch products');
         }
@@ -229,7 +254,6 @@ const ProductDiscovery = () => {
           .filter(Boolean);
         if (discoveredCategories.length > 0) {
           setCategoryOptions((prev) => {
-            // Preserve current list while category is selected, but also merge any newly discovered category.
             if (selectedCategory.trim() && prev.length > 0) {
               const merged = new Map(prev.map((entry) => [entry.value, entry.label]));
               discoveredCategories.forEach((entry) => {
@@ -245,28 +269,23 @@ const ProductDiscovery = () => {
           });
         }
       } catch (fetchError) {
+        if (controller.signal.aborted || fetchError?.name === 'AbortError') return;
         setProducts([]);
         setTotal(0);
         setRecommendationMode('');
         setError(fetchError.message || 'Failed to fetch products');
       } finally {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       }
     }, 300);
 
-    return () => clearTimeout(timeoutId);
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
   }, [searchQuery, selectedCategory, page]);
-
-  useEffect(() => {
-    setPage(1);
-  }, [searchQuery, selectedCategory]);
-
-  useEffect(() => {
-    const pageFromUrl = Number.parseInt(String(searchParams.get('page') || ''), 10);
-    if (Number.isFinite(pageFromUrl) && pageFromUrl >= 1) {
-      setPage(pageFromUrl);
-    }
-  }, [searchParams]);
 
   const pageCount = useMemo(() => {
     if (!total || total < 1) return 1;
@@ -559,14 +578,16 @@ const ProductDiscovery = () => {
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div className="text-sm text-muted-foreground">
           <strong className="text-foreground">{Number.isFinite(total) ? total : 0}</strong> product{total === 1 ? '' : 's'}
-          {recommendationMode ? <Badge className="ml-2" variant="secondary">Personalized</Badge> : null}
+          {recommendationMode === 'search-relevance' ? (
+            <Badge className="ml-2" variant="secondary">Search relevance</Badge>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" disabled={loading || safePage <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>
+          <Button variant="outline" size="sm" disabled={loading || safePage <= 1} onClick={() => goToPage(safePage - 1)}>
             <ChevronLeft className="h-4 w-4" /> Prev
           </Button>
           <span className="text-sm text-muted-foreground">{safePage} / {pageCount}</span>
-          <Button variant="outline" size="sm" disabled={loading || safePage >= pageCount} onClick={() => setPage((p) => p + 1)}>
+          <Button variant="outline" size="sm" disabled={loading || safePage >= pageCount} onClick={() => goToPage(safePage + 1)}>
             Next <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
@@ -601,11 +622,31 @@ const ProductDiscovery = () => {
             const hasEligibleSupplier = Number(product?.supplierCount || 0) > 0;
             const moq = Number(product?.min_order_quantity);
 
+            const hasVariants = Boolean(product?.hasVariants) || Number(product?.variantCount || 0) > 1;
+            const canViewDetails = Boolean(product?.id);
+
             return (
-              <article className="pd-card flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md" key={product.id || `${product.name}-${product.category}`}>
+              <article
+                className={`pd-card flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${canViewDetails ? 'pd-card--clickable' : ''}`}
+                key={product.id || `${product.name}-${product.category}`}
+                onClick={canViewDetails ? () => openProductDetailInNewTab(product.id) : undefined}
+                onKeyDown={
+                  canViewDetails
+                    ? (event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          openProductDetailInNewTab(product.id);
+                        }
+                      }
+                    : undefined
+                }
+                role={canViewDetails ? 'link' : undefined}
+                tabIndex={canViewDetails ? 0 : undefined}
+                title={canViewDetails ? 'View full product details in a new tab' : undefined}
+              >
                 <div className="pd-card__image">
                   {imgs.length > 0 ? (
-                    <ProductImageCarousel images={imgs} alt={product.name} height={180} rounded={10} stopPropagation />
+                    <ProductImageCarousel images={imgs} alt={product.name} height={180} rounded={10} />
                   ) : (
                     <div className="pd-card__no-image">
                       <ImageOff size={36} />
@@ -615,6 +656,11 @@ const ProductDiscovery = () => {
                   {product.category && (
                     <span className="pd-card__category-badge">{product.category}</span>
                   )}
+                  {hasVariants ? (
+                    <span className="pd-card__variant-badge">
+                      {Number(product.variantCount || 0)} variants
+                    </span>
+                  ) : null}
                 </div>
 
                 <div className="pd-card__body">
@@ -656,6 +702,9 @@ const ProductDiscovery = () => {
 
                 <div className="pd-card__footer">
                   <div className="pd-card__suppliers">
+                    {canViewDetails ? (
+                      <span className="pd-card__view-hint">View details</span>
+                    ) : null}
                     {Number.isFinite(Number(product?.supplierCount)) && (
                       <>
                         <Users size={14} />
@@ -666,7 +715,10 @@ const ProductDiscovery = () => {
                   <button
                     type="button"
                     className="pd-card__cart-btn"
-                    onClick={() => openProjectPicker(product)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openProjectPicker(product);
+                    }}
                     disabled={Boolean(cartBusyByProductId[pid]) || !hasEligibleSupplier}
                     title={!hasEligibleSupplier ? 'No eligible supplier is currently listing this product' : undefined}
                   >

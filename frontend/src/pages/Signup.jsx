@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Eye, EyeOff, Mail, Lock, User, Building, UserPlus, Briefcase, Truck } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { getApiUrl } from '../config/api';
+import { normalizeUser } from '../utils/userType';
+import { getPostAuthRedirectPath } from '../utils/authRedirect';
 import './Auth.css';
 
 const Signup = ({ onLogin }) => {
@@ -18,7 +20,6 @@ const Signup = ({ onLogin }) => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const navigate = useNavigate();
 
   const handleChange = (e) => {
     setFormData({
@@ -63,17 +64,11 @@ const Signup = ({ onLogin }) => {
       const data = await response.json();
 
       if (response.ok && data.status === 'success') {
+        const normalizedUser = normalizeUser(data.user);
         localStorage.setItem('token', data.token);
-        localStorage.setItem('user', JSON.stringify(data.user));
-        onLogin(data.user);
-        
-        // Redirect based on user type
-        if (data.user.userType === 'supplier') {
-          // Go directly to supplier dashboard; skip any setup form
-          navigate('/supplier-dashboard');
-        } else {
-          navigate('/boq-normalize');
-        }
+        localStorage.setItem('user', JSON.stringify(normalizedUser));
+        await onLogin(normalizedUser);
+        window.location.replace(getPostAuthRedirectPath(normalizedUser.userType));
       } else {
         setError(data.message || 'Signup failed');
       }

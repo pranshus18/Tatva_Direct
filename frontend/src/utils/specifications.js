@@ -160,6 +160,104 @@ export const specificationEntriesForDetails = (specifications) => {
     }));
 };
 
+const CUSTOMER_SPEC_EXCLUDE_KEYS = new Set([
+  'brand',
+  'brandmodel',
+  'category',
+  'unit',
+  'gtin',
+  'barcode',
+  'mpn',
+  'hsncode',
+  'hsn_code',
+  'hsn',
+  'lsa',
+  'asin',
+  'variantasin',
+  'variantkey',
+  'listingname',
+  'description',
+  'name',
+  'specification',
+  'specifications',
+  'specs',
+  'moq',
+  'min_order_quantity',
+  'stock',
+  'location',
+  'cgst',
+  'igst',
+  'sgst',
+  'gst',
+  'cgst_rate',
+  'igst_rate',
+  'sgst_rate',
+  'cgstrate',
+  'igstrate',
+  'sgstrate',
+  'gstrate',
+  'bcov',
+  'about',
+  'about_this_item',
+  'product_description',
+  'productdetails',
+  'product_details',
+  'details',
+  'overview',
+  'features',
+  'highlights',
+  'key_features',
+  'keyfeatures'
+]);
+
+const CUSTOMER_SPEC_EXCLUDE_PATTERN = /(cgst|igst|sgst|gst|hsn|cess|vat|tax|bcov)/;
+
+export const normalizeSpecFieldKey = (key) =>
+  String(key || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_');
+
+/** Hide internal catalog, identity, and tax fields from buyer-facing spec lists. */
+export const isCustomerFacingSpecKey = (key) => {
+  if (!isDisplayableSpecKey(key)) return false;
+  const normalized = normalizeSpecFieldKey(key);
+  const compact = normalized.replace(/_/g, '');
+  if (CUSTOMER_SPEC_EXCLUDE_KEYS.has(normalized) || CUSTOMER_SPEC_EXCLUDE_KEYS.has(compact)) {
+    return false;
+  }
+  return !CUSTOMER_SPEC_EXCLUDE_PATTERN.test(compact);
+};
+
+function looksLikeMisplacedDescriptionValue(displayValue) {
+  const value = String(displayValue || '').trim();
+  if (!value || value === '(Not set)') return false;
+  if (value.length > 180 && /[.!?]/.test(value) && value.split(/\s+/).length > 25) {
+    return true;
+  }
+  return looksLikeSpecificationDump(value);
+}
+
+function looksLikeSpecificationDump(text) {
+  const lines = String(text || '')
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length < 2) return false;
+  const specLikeLines = lines.filter((line) => /^[\w\s/&().-]+\s*:\s*.+/.test(line));
+  return specLikeLines.length >= Math.max(2, Math.ceil(lines.length * 0.5));
+}
+
+function isCustomerFacingSpecEntry(entry) {
+  if (!isCustomerFacingSpecKey(entry?.key)) return false;
+  return !looksLikeMisplacedDescriptionValue(entry?.displayValue);
+}
+
+export const specificationEntriesForCustomerDisplay = (specifications) =>
+  specificationEntriesForDetails(specifications).filter((entry) =>
+    isCustomerFacingSpecEntry(entry)
+  );
+
 /** Format a spec value for a text input. */
 export const specValueToInput = (value) => {
   if (value === null || value === undefined) return '';
@@ -229,5 +327,24 @@ export const mergeSpecificationObjects = (templateSpecs = {}, storedSpecs = {}) 
       merged[normalizedKey] = value;
     }
   });
+  return merged;
+};
+
+/** Union template field keys with variant specs; variant values win (including empty). */
+export const mergeVariantSpecificationTemplate = (templateSpecs = {}, variantSpecs = {}) => {
+  const template = parseSpecificationsObject(templateSpecs) || {};
+  const variant = parseSpecificationsObject(variantSpecs) || {};
+  const merged = {};
+
+  Object.keys(template).forEach((key) => {
+    merged[key] = Object.prototype.hasOwnProperty.call(variant, key) ? variant[key] : '';
+  });
+
+  Object.keys(variant).forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(merged, key)) {
+      merged[key] = variant[key];
+    }
+  });
+
   return merged;
 };

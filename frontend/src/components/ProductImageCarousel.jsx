@@ -19,14 +19,20 @@ const ProductImageCarousel = ({
   if (visibleImages.length === 0) return null;
   const safeIndex = Math.max(0, Math.min(index, visibleImages.length - 1));
 
-  const eatEvent = (e) => {
-    if (!stopPropagation) return;
+  const eatNavEvent = (e) => {
     e.preventDefault();
     e.stopPropagation();
   };
 
+  const wrapperProps = stopPropagation
+    ? {
+        onClick: (e) => e.stopPropagation(),
+        onMouseDown: (e) => e.stopPropagation()
+      }
+    : {};
+
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative' }} {...wrapperProps}>
       <img
         src={visibleImages[safeIndex]}
         alt={alt}
@@ -55,9 +61,9 @@ const ProductImageCarousel = ({
         <>
           <button
             type="button"
-            onMouseDown={eatEvent}
+            onMouseDown={eatNavEvent}
             onClick={(e) => {
-              eatEvent(e);
+              eatNavEvent(e);
               setIndex((prev) => (prev - 1 + visibleImages.length) % visibleImages.length);
             }}
             style={{
@@ -79,9 +85,9 @@ const ProductImageCarousel = ({
           </button>
           <button
             type="button"
-            onMouseDown={eatEvent}
+            onMouseDown={eatNavEvent}
             onClick={(e) => {
-              eatEvent(e);
+              eatNavEvent(e);
               setIndex((prev) => (prev + 1) % visibleImages.length);
             }}
             style={{

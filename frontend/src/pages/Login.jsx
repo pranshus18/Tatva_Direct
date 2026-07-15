@@ -4,6 +4,7 @@ import { Eye, EyeOff, Mail, Lock, LogIn } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { getApiUrl } from '../config/api';
 import { normalizeUser } from '../utils/userType';
+import { getPostAuthRedirectPath } from '../utils/authRedirect';
 import './Auth.css';
 
 const Login = ({ onLogin }) => {
@@ -44,7 +45,7 @@ const Login = ({ onLogin }) => {
         const normalizedUser = normalizeUser(data.user);
         localStorage.setItem('token', data.token);
         localStorage.setItem('user', JSON.stringify(normalizedUser));
-        onLogin(normalizedUser);
+        await onLogin(normalizedUser);
 
         // If user came from a shared cart link, apply it now.
         const pendingSharedCartToken = localStorage.getItem('pendingSharedCartToken');
@@ -69,16 +70,7 @@ const Login = ({ onLogin }) => {
           }
         }
         
-        // Redirect based on user type
-        if (normalizedUser.userType === 'admin') {
-          navigate('/admin-dashboard');
-        } else if (normalizedUser.userType === 'service_provider') {
-          navigate('/dashboard');
-        } else if (normalizedUser.userType === 'supplier') {
-          navigate('/supplier-dashboard');
-        } else {
-          navigate('/boq-normalize');
-        }
+        navigate(getPostAuthRedirectPath(normalizedUser.userType));
       } else {
         setError(data.message || 'Login failed');
       }

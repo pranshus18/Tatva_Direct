@@ -4,7 +4,8 @@ import {
   parseSpecificationsObject,
   countMeaningfulSpecValues,
   mergeSpecificationMaps,
-  buildSpecificationTemplateFromFields
+  buildSpecificationTemplateFromFields,
+  mergeVariantSpecificationTemplate
 } from '../../services/supplierCatalogHelpersService.js';
 import { normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 
@@ -241,4 +242,23 @@ export async function enrichProductSpecificationsForDisplay(supabase, {
     excludeProductId: productId
   });
   return mergeSpecificationMaps(adminTemplate, storedSpecs);
+}
+
+/** Discovery detail: all template fields for the variant, preserving empty supplier values. */
+export async function enrichVariantSpecificationsForDiscovery(supabase, {
+  category,
+  name,
+  brand,
+  existingSpecs,
+  productId = null
+}) {
+  const storedSpecs = parseSpecificationsObject(existingSpecs) || {};
+  const brandHint = String(brand || name || '').trim();
+  const adminTemplate = await resolveAdminSpecificationTemplate(supabase, {
+    categoryName: category,
+    modelRaw: name,
+    brandRaw: brandHint,
+    excludeProductId: productId
+  });
+  return mergeVariantSpecificationTemplate(adminTemplate, storedSpecs);
 }

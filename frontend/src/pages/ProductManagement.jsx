@@ -3714,7 +3714,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   transition: 'opacity 0.2s ease'
                 }}>
                   <label>
-                    <span>Description</span>
+                    <span>Product description</span>
                   </label>
                   <textarea
                     value={formData.description}

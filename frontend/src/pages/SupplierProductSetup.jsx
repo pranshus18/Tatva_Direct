@@ -739,7 +739,7 @@ const SupplierProductSetup = ({ user }) => {
           </div>
 
           <div className="form-group">
-            <label htmlFor="description">Description (Optional)</label>
+            <label htmlFor="description">Product description (optional)</label>
             <div className="input-wrapper">
               <textarea
                 id="description"

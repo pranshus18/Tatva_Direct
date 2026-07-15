@@ -18,6 +18,30 @@ import {
   syncCatalogProductSnapshotFromOffers
 } from './catalogOfferSnapshotService.js';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
+import { enrichDiscoverySuggestionsWithVariantCounts } from './productDiscoveryDetailService.js';
+
+/** Stable discovery ordering: relevance when searching, otherwise alphabetical by name. */
+export function sortDiscoverySuggestions(products = [], { query = '' } = {}) {
+  const hasQuery = Boolean(String(query || '').trim());
+  return [...products].sort((a, b) => {
+    if (hasQuery) {
+      const matchDiff = (b.matchScore || 0) - (a.matchScore || 0);
+      if (
+        matchDiff !== 0 &&
+        (b.matchScore >= FUZZY_MATCH_MIN_SCORE || a.matchScore >= FUZZY_MATCH_MIN_SCORE)
+      ) {
+        return matchDiff;
+      }
+    }
+
+    const nameDiff = String(a?.name || '').localeCompare(String(b?.name || ''), undefined, {
+      sensitivity: 'base'
+    });
+    if (nameDiff !== 0) return nameDiff;
+
+    return String(a?.id || '').localeCompare(String(b?.id || ''));
+  });
+}
 
 /**
  * PostgREST `.or('a.ilike.%x%,b.ilike.%x%')` treats commas as delimiters; commas/parens in the
@@ -70,6 +94,9 @@ function buildListedProductsQuery(supabase, categoryOpts) {
           status,
           is_active,
           updated_at,
+          family_id,
+          variant_id,
+          asin,
           supplier_products(count)
         `,
       { count: 'exact' }
@@ -295,7 +322,12 @@ export async function searchProductDiscoveryForUser(
     })
     .filter((p) => Number(p?.supplierCount || 0) > 0);
 
-  for (const suggestion of suggestions) {
+  const suggestionsWithVariants = await enrichDiscoverySuggestionsWithVariantCounts(
+    supabase,
+    suggestions
+  );
+
+  for (const suggestion of suggestionsWithVariants) {
     const catalogStock = parseSupplierStockQuantity(
       productById.get(suggestion?.id)?.stock
     ) ?? 0;
@@ -307,46 +339,24 @@ export async function searchProductDiscoveryForUser(
     }
   }
 
-  suggestions.sort((a, b) => {
-    if (query) {
-      const matchDiff = (b.matchScore || 0) - (a.matchScore || 0);
-      if (
-        matchDiff !== 0 &&
-        (b.matchScore >= FUZZY_MATCH_MIN_SCORE || a.matchScore >= FUZZY_MATCH_MIN_SCORE)
-      ) {
-        return matchDiff;
-      }
-    }
-
-    const scoreDiff = (b.recommendationScore || 0) - (a.recommendationScore || 0);
-    if (scoreDiff !== 0) return scoreDiff;
-
-    const supplierDiff = (Number(b.supplierCount) || 0) - (Number(a.supplierCount) || 0);
-    if (supplierDiff !== 0) return supplierDiff;
-
-    const aUpdated = Date.parse(a?.updated_at || 0) || 0;
-    const bUpdated = Date.parse(b?.updated_at || 0) || 0;
-    if (bUpdated !== aUpdated) return bUpdated - aUpdated;
-
-    return String(a?.name || '').localeCompare(String(b?.name || ''));
-  });
+  const sortedSuggestions = sortDiscoverySuggestions(suggestionsWithVariants, { query });
 
   const categories = Array.from(
     new Set(
-      suggestions
+      sortedSuggestions
         .map((product) => String(product?.category || '').trim())
         .filter(Boolean)
     )
   ).sort((a, b) => a.localeCompare(b));
 
-  const paginatedSuggestions = suggestions.slice(offset, offset + safeLimit);
+  const paginatedSuggestions = sortedSuggestions.slice(offset, offset + safeLimit);
 
   return {
     suggestions: paginatedSuggestions,
     categories,
-    total: suggestions.length,
+    total: sortedSuggestions.length,
     limit: safeLimit,
     offset,
-    recommendationMode: 'personalized-order-affinity'
+    recommendationMode: query ? 'search-relevance' : 'name-asc'
   };
 }

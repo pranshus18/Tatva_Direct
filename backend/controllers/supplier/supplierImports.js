@@ -36,6 +36,7 @@ export {
   listedSupplierProductsFilterOptions
 } from '../../utils/platformListedSupplierProductsFilter.js';
 export { searchProductDiscoveryForUser } from '../../services/productDiscoverySearchService.js';
+export { getProductDiscoveryDetail } from '../../services/productDiscoveryDetailService.js';
 export { generateAndAttachReceiptPdf } from '../../services/receiptPdfService.js';
 export {
   buildIdentityBundle,

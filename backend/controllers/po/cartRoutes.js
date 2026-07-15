@@ -198,6 +198,7 @@ router.put('/cart', authenticateToken, isServiceProvider, async (req, res) => {
 router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const productId = String(req.body?.productId || '').trim();
+    const variantKey = String(req.body?.variantKey || '').trim();
     const rawQty = Number(req.body?.quantity);
     const quantity = Number.isFinite(rawQty) ? Math.max(1, Math.floor(rawQty)) : 1;
     const targetGroupId = String(req.body?.groupId || '').trim();
@@ -303,6 +304,9 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
       brand: product.brand || undefined,
       specifications: product.specifications || undefined
     };
+    if (variantKey) {
+      discoveryItem.variantKey = variantKey;
+    }
 
     let nextGroups = Array.isArray(currentDraft.boqGroups) ? [...currentDraft.boqGroups] : [];
     let resultGroupId = '';

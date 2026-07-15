@@ -320,6 +320,47 @@
   z-index: 2;
 }
 
+.pd-card__variant-badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 0.2rem 0.55rem;
+  border-radius: 6px;
+  background: rgba(79, 70, 229, 0.92);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  z-index: 2;
+}
+
+.pd-card__image--clickable {
+  cursor: pointer;
+}
+
+.pd-card--clickable {
+  cursor: pointer;
+}
+
+.pd-card--clickable:hover {
+  border-color: rgba(79, 70, 229, 0.35);
+}
+
+.pd-card--clickable .pd-card__name:hover {
+  color: #4f46e5;
+}
+
+.pd-card--clickable .pd-card__cart-btn {
+  position: relative;
+  z-index: 3;
+}
+
+.pd-card__view-hint {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #4f46e5;
+}
+
 /* Card body */
 .pd-card__body {
   padding: 1rem 1.1rem 0.5rem;
@@ -537,10 +578,16 @@
 
 .pd-card__suppliers {
   display: flex;
-  align-items: center;
-  gap: 0.35rem;
+  flex-direction: column;
+  gap: 0.2rem;
   font-size: 0.8rem;
   color: #64748b;
+}
+
+.pd-card__suppliers > span:not(.pd-card__view-hint) {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .pd-card__cart-btn {

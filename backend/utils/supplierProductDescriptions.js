@@ -15,6 +15,13 @@ export function getPublishedCatalogDescription(product = {}) {
   return String(product?.description || '').trim();
 }
 
+/** Buyer-facing description: admin-published catalog copy, else supplier submission. */
+export function resolveBuyerFacingProductDescription({ product = {}, offerAttributes = {} } = {}) {
+  const published = getPublishedCatalogDescription(product);
+  if (published) return published;
+  return getSupplierSubmittedDescription(offerAttributes);
+}
+
 export function buildSupplierDescriptionAttributes(existingAttributes = {}, supplierText = '') {
   const next = { ...(existingAttributes || {}) };
   const trimmed = String(supplierText || '').trim();

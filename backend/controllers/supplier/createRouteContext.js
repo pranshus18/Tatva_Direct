@@ -3,6 +3,7 @@ import { supabase } from '../../config/supabase.js';
 import {
   upsertModelSpecProfile as upsertModelSpecProfileBase,
   enrichProductSpecificationsForDisplay as enrichProductSpecificationsForDisplayBase,
+  enrichVariantSpecificationsForDiscovery as enrichVariantSpecificationsForDiscoveryBase,
   resolveAdminSpecificationTemplate as resolveAdminSpecificationTemplateBase,
   loadSpecTemplateForCategory as loadSpecTemplateForCategoryBase
 } from './specificationHelpers.js';
@@ -44,6 +45,8 @@ export function createSupplierRouteContext(router, authenticateToken) {
     upsertModelSpecProfile: (params) => upsertModelSpecProfileBase(supabase, params),
     enrichProductSpecificationsForDisplay: (params) =>
       enrichProductSpecificationsForDisplayBase(supabase, params),
+    enrichVariantSpecificationsForDiscovery: (params) =>
+      enrichVariantSpecificationsForDiscoveryBase(supabase, params),
     resolveAdminSpecificationTemplate: (params) =>
       resolveAdminSpecificationTemplateBase(supabase, params),
     loadSpecTemplateForCategory: (category, familyId) =>

@@ -6,6 +6,7 @@ import SupplierRoute from './components/SupplierRoute';
 import AdminRoute from './components/AdminRoute';
 import { getApiUrl } from './config/api';
 import { normalizeUser, normalizeUserType } from './utils/userType';
+import { getPostAuthRedirectPath } from './utils/authRedirect';
 import {
   clearSpWorkflowStorage,
   ensureSpWorkflowOwner,
@@ -96,6 +97,10 @@ const ServiceProviderReturns = safeLazy(
   'Service Provider Returns page'
 );
 const ProductDiscovery = safeLazy(() => import('./pages/ProductDiscovery'), 'Product Discovery page');
+const ProductDiscoveryDetail = safeLazy(
+  () => import('./pages/ProductDiscoveryDetail'),
+  'Product Discovery detail page'
+);
 const VoiceCommerce = safeLazy(() => import('./pages/VoiceCommerce'), 'Voice Commerce page');
 const SupplierPortalThemeSettings = safeLazy(
   () => import('./pages/SupplierPortalThemeSettings'),
@@ -404,6 +409,8 @@ function App() {
     );
   };
 
+  const authRedirectElement = () => <Navigate to={getPostAuthRedirectPath(user?.userType)} replace />;
+
   return (
     <BrowserRouter>
       <Suspense fallback={routeLoader}>
@@ -448,10 +455,7 @@ function App() {
           path="/login" 
           element={
             isAuthenticated ? 
-            (normalizeUserType(user?.userType) === 'admin' ? <Navigate to="/admin-dashboard" replace /> :
-             normalizeUserType(user?.userType) === 'service_provider' ? <Navigate to="/dashboard" replace /> :
-             normalizeUserType(user?.userType) === 'supplier' ? <Navigate to="/supplier-dashboard" replace /> :
-             <Navigate to="/dashboard" replace />) : 
+            authRedirectElement() : 
             <Login onLogin={handleLogin} />
           } 
         />
@@ -469,10 +473,7 @@ function App() {
           path="/signup" 
           element={
             isAuthenticated ? 
-            (normalizeUserType(user?.userType) === 'admin' ? <Navigate to="/admin-dashboard" replace /> :
-             normalizeUserType(user?.userType) === 'service_provider' ? <Navigate to="/dashboard" replace /> :
-             normalizeUserType(user?.userType) === 'supplier' ? <Navigate to="/supplier-dashboard" replace /> :
-             <Navigate to="/dashboard" replace />) : 
+            authRedirectElement() : 
             <Signup onLogin={handleLogin} />
           } 
         />
@@ -489,13 +490,7 @@ function App() {
           <Route 
             index 
             element={
-              normalizeUserType(user?.userType) === 'admin' ?
-              <Navigate to="/admin-dashboard" replace /> :
-              normalizeUserType(user?.userType) === 'service_provider' ? 
-              <Navigate to="/dashboard" replace /> : 
-              normalizeUserType(user?.userType) === 'supplier' ?
-                <Navigate to="/supplier-dashboard" replace /> :
-              <Navigate to="/boq-normalize" replace />
+              <Navigate to={getPostAuthRedirectPath(user?.userType)} replace />
             } 
           />
           <Route 
@@ -653,6 +648,14 @@ function App() {
             element={
               <ServiceProviderRoute user={user}>
                 <ServiceProviderThemeSettings />
+              </ServiceProviderRoute>
+            }
+          />
+          <Route
+            path="product-discovery/:productId"
+            element={
+              <ServiceProviderRoute user={user}>
+                <ProductDiscoveryDetail />
               </ServiceProviderRoute>
             }
           />

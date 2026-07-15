@@ -171,6 +171,25 @@ export const mergeSpecificationMaps = (...sources) => {
   return merged;
 };
 
+/** Union template field keys with variant specs; variant values win (including empty). */
+export const mergeVariantSpecificationTemplate = (templateSpecs = {}, variantSpecs = {}) => {
+  const template = parseSpecificationsObject(templateSpecs) || {};
+  const variant = parseSpecificationsObject(variantSpecs) || {};
+  const merged = {};
+
+  Object.keys(template).forEach((key) => {
+    merged[key] = Object.prototype.hasOwnProperty.call(variant, key) ? variant[key] : '';
+  });
+
+  Object.keys(variant).forEach((key) => {
+    if (!Object.prototype.hasOwnProperty.call(merged, key)) {
+      merged[key] = variant[key];
+    }
+  });
+
+  return merged;
+};
+
 export const buildSpecificationTemplateFromFields = (fields = []) => {
   const template = {};
   for (const field of fields) {

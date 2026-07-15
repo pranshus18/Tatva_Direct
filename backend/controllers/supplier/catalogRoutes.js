@@ -7,6 +7,7 @@ import {
   parseWithSchema,
   resolveUpstreamBrandLabel,
   searchProductDiscoveryForUser,
+  getProductDiscoveryDetail,
   supplierCanAccessBrandStrict,
   supplierCategoryCreateSchema,
   supplierUnitCreateSchema
@@ -69,6 +70,37 @@ router.get('/products/search', authenticateToken, async (req, res) => {
   } catch (error) {
     console.error('Search products error:', error);
     res.status(500).json({
+      status: 'error',
+      message: 'Internal server error'
+    });
+  }
+});
+
+router.get('/products/:productId/detail', authenticateToken, async (req, res) => {
+  try {
+    const productId = String(req.params.productId || '').trim();
+    const result = await getProductDiscoveryDetail(supabase, {
+      productId
+    });
+    if (!result.ok) {
+      return res.status(result.status || 404).json({
+        status: 'error',
+        message: result.message || 'Product not found'
+      });
+    }
+
+    return res.json({
+      status: 'success',
+      product: result.product,
+      family: result.family,
+      hasVariants: result.hasVariants,
+      variantCount: result.variantCount,
+      variantOptions: result.variantOptions,
+      variants: result.variants
+    });
+  } catch (error) {
+    console.error('Product discovery detail error:', error);
+    return res.status(500).json({
       status: 'error',
       message: 'Internal server error'
     });
