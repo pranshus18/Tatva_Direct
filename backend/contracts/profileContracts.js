@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const profileUpdateSchema = z.object({
   companyName: z.string().optional(),
+  contactPerson: z.string().optional(),
+  email: z.string().email().optional(),
   phone: z.string().optional(),
   website: z.string().optional(),
   description: z.string().optional(),
@@ -23,7 +25,15 @@ export const profileUpdateSchema = z.object({
   companyInfoEntries: z.array(z.record(z.string(), z.any())).optional(),
   saveAsDraft: z.boolean().optional(),
   saveBrandApprovalOnly: z.boolean().optional(),
-  saveSupplyChainEntryId: z.string().optional()
+  saveSupplyChainEntryId: z.string().optional(),
+  pmCustomerAccount: z
+    .object({
+      fullName: z.string().optional(),
+      userName: z.string().optional(),
+      email: z.string().email().optional(),
+      phoneNumber: z.string().optional()
+    })
+    .optional()
 });
 
 const profileShippingAddressFieldsSchema = z.object({

@@ -74,7 +74,7 @@ const SharedCart = () => {
   const handleLoginToLoad = () => {
     if (!token) return;
     localStorage.setItem('pendingSharedCartToken', String(token));
-    navigate('/login');
+    navigate('/pm-auth');
   };
 
   const handleApplyToMyCart = async () => {

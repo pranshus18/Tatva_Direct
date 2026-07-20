@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getApiUrl, authFetch } from '../config/api';
+import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
 import { 
   FileText,
   BarChart3,
@@ -159,7 +160,7 @@ const ServiceProviderDashboard = ({ user }) => {
           setDashboardError('Your session expired or access is denied. Please log in again.');
           localStorage.removeItem('token');
           localStorage.removeItem('user');
-          navigate('/login');
+          navigate('/pm-auth');
           return;
         }
 
@@ -616,13 +617,8 @@ const ServiceProviderDashboard = ({ user }) => {
       setLoadingWalletBalance(true);
       const token = localStorage.getItem('token');
       if (!token) return;
-      const response = await fetch(getApiUrl('/api/wallet/balance'), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && data.status === 'success') {
-        setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
-      }
+      const balance = await getVaultBalanceForUi();
+      setWalletBalance(balance);
     } catch (_e) {
       // Non-blocking in modal.
     } finally {
@@ -636,45 +632,36 @@ const ServiceProviderDashboard = ({ user }) => {
     if (orderAmount > Number(walletBalance || 0)) {
       const shortage = Math.max(0, orderAmount - Number(walletBalance || 0));
       alert(
-        `Insufficient wallet balance. Please add ₹${shortage.toLocaleString('en-IN', {
+        `Insufficient vault balance. Please add ₹${shortage.toLocaleString('en-IN', {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
-        })} in wallet first.`
+        })} to vault first.`
       );
       return;
     }
 
     const confirmed = window.confirm(
-      `Pay for Order ${orderDetails?.orderNumber} from your wallet?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
+      `Pay for Order ${orderDetails?.orderNumber} from your vault?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
     );
     if (!confirmed) return;
 
     setUpdatingPayment(true);
     try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl(`/api/wallet/orders/${orderDetails.id}/pay`), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          idempotencyKey: `sp-dashboard-wallet-pay-${orderDetails.id}-${Date.now()}`
-        })
+      const data = await payOrderFromVault(orderDetails.id, {
+        idempotencyKey: `sp-dashboard-vault-pay-${orderDetails.id}-${Date.now()}`
       });
 
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.status !== 'success') {
-        alert(data.message || 'Failed to complete wallet payment.');
+      if (data.status !== 'success') {
+        alert(data.message || 'Failed to complete vault payment.');
         return;
       }
 
-      alert('Payment successful via wallet.');
+      alert('Payment successful via vault.');
       await fetchOrderDetails(selectedOrder, true);
       fetchDashboardData();
     } catch (error) {
       console.error('Failed to pay order from wallet:', error);
-      alert('Failed to pay order from wallet. Please try again.');
+      alert('Failed to pay order from vault. Please try again.');
     } finally {
       setUpdatingPayment(false);
     }
@@ -742,6 +729,17 @@ const ServiceProviderDashboard = ({ user }) => {
           </>
         }
       />
+
+      {user?.profileIncomplete ? (
+        <Alert className="mb-4">
+          <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
+            <span>Complete your profile with shipping addresses to get the most out of Tatva Direct.</span>
+            <Button variant="outline" size="sm" onClick={() => navigate('/profile')}>
+              Complete profile
+            </Button>
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {dashboardError ? (
         <Alert variant="destructive" className="mb-4">
@@ -1255,7 +1253,7 @@ const ServiceProviderDashboard = ({ user }) => {
                   )}
                 </div>
 
-                {/* Wallet payment card */}
+                {/* Vault payment card */}
                 {orderDetails.paymentStatus !== 'paid' && (
                   <div className="order-info-section" style={{
                     textAlign: 'center',
@@ -1265,14 +1263,14 @@ const ServiceProviderDashboard = ({ user }) => {
                     border: '2px solid #e2e8f0'
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                      <h3 style={{ margin: 0, color: '#1e293b' }}>Wallet Payment</h3>
+                      <h3 style={{ margin: 0, color: '#1e293b' }}>Vault Payment</h3>
                     </div>
                     <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                      Complete this payment from your wallet. The platform will hold funds in escrow and release supplier payout after delivery.
+                      Complete this payment from your vault. The platform will hold funds in escrow and release supplier payout after delivery.
                     </p>
                     <div style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: '#334155' }}>
                       <p style={{ margin: '0.25rem 0' }}>
-                        <strong>Wallet balance:</strong>{' '}
+                        <strong>Vault balance:</strong>{' '}
                         {loadingWalletBalance
                           ? 'Checking...'
                           : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
@@ -1315,7 +1313,7 @@ const ServiceProviderDashboard = ({ user }) => {
                         fontWeight: '600'
                       }}
                     >
-                      {updatingPayment ? 'Processing...' : 'Pay from Wallet'}
+                      {updatingPayment ? 'Processing...' : 'Pay from Vault'}
                     </button>
                     <button
                       className="btn-secondary"
@@ -1323,7 +1321,7 @@ const ServiceProviderDashboard = ({ user }) => {
                       onClick={() => navigate('/wallet')}
                       style={{ width: '100%', marginTop: '0.5rem' }}
                     >
-                      Add money to wallet
+                      Add money to vault
                     </button>
                   </div>
                 )}

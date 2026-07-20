@@ -106,7 +106,7 @@ const SupplierDashboard = ({ user }) => {
 
   useEffect(() => {
     if (!loading && !user) {
-      navigate('/login', { replace: true });
+      navigate('/pm-auth', { replace: true });
     }
   }, [loading, user, navigate]);
 

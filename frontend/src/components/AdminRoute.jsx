@@ -5,7 +5,7 @@ import { normalizeUserType } from '../utils/userType';
 const AdminRoute = ({ children, user, isAuthenticated }) => {
   // Check if user is authenticated
   if (!isAuthenticated) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/admin-login" replace />;
   }
 
   // Check if user is admin

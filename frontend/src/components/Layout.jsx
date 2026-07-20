@@ -5,12 +5,14 @@ import SpAppShell from './sp/SpAppShell';
 import SupplierAppShell from './supplier/SupplierAppShell';
 import AdminAppShell from './admin/AdminAppShell';
 
-const Layout = ({ user, onLogout, children }) => {
+const Layout = ({ user, onLogout, onPortalChange, children }) => {
   const userType = normalizeUserType(user?.userType);
   const layoutToken = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
 
   if (userType === 'service_provider') {
-    const spBody = <SpAppShell user={user} onLogout={onLogout} children={children} />;
+    const spBody = (
+      <SpAppShell user={user} onLogout={onLogout} onPortalChange={onPortalChange} children={children} />
+    );
     if (layoutToken) {
       return <VoiceSessionProvider token={layoutToken}>{spBody}</VoiceSessionProvider>;
     }
@@ -18,7 +20,9 @@ const Layout = ({ user, onLogout, children }) => {
   }
 
   if (userType === 'supplier') {
-    return <SupplierAppShell user={user} onLogout={onLogout} children={children} />;
+    return (
+      <SupplierAppShell user={user} onLogout={onLogout} onPortalChange={onPortalChange} children={children} />
+    );
   }
 
   if (userType === 'admin') {

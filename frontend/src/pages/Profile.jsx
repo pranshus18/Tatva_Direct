@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { getApiUrl } from '../config/api';
-import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Users } from 'lucide-react';
+import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Users, CheckCircle2 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
+import { Alert, AlertDescription } from '@/components/ui/alert';
 import ProfilePhotoSection from '../components/ProfilePhotoSection';
 import {
   cacheProfilePhotoUrl,
@@ -75,16 +76,20 @@ function buildProfileSavePayload(profile) {
   if (profile.userType === 'service_provider') {
     return {
       userType: profile.userType,
-      companyName: profile.companyName,
-      contactPerson: profile.contactPerson,
-      phone: profile.phone,
-      email: profile.email,
-      website: profile.website,
-      description: profile.description,
       profilePhotoUrl: profile.profilePhotoUrl,
       projects: profile.projects,
       shippingAddresses: profile.shippingAddresses,
-      serviceProviderPortalTheme: profile.serviceProviderPortalTheme
+      serviceProviderPortalTheme: profile.serviceProviderPortalTheme,
+      ...(profile.pmCustomerAccount
+        ? {
+            pmCustomerAccount: {
+              fullName: profile.pmCustomerAccount.fullName || profile.contactPerson || '',
+              userName: profile.pmCustomerAccount.userName || '',
+              email: profile.pmCustomerAccount.email || profile.email || '',
+              phoneNumber: profile.pmCustomerAccount.phoneNumber || profile.phone || ''
+            }
+          }
+        : {})
     };
   }
   return profile;
@@ -136,6 +141,26 @@ const Profile = ({ user }) => {
   const handleSave = async () => {
     try {
       if (profile?.userType === 'service_provider') {
+        const customerAccount = profile?.pmCustomerAccount || {};
+        const fullName = String(customerAccount.fullName || profile.contactPerson || '').trim();
+        const email = String(customerAccount.email || profile.email || '').trim();
+        const phone = String(customerAccount.phoneNumber || profile.phone || '').replace(/\D/g, '').slice(-10);
+
+        if (editing && profile?.pmCustomerAccount) {
+          if (!fullName) {
+            alert('Please enter your full name.');
+            return;
+          }
+          if (!email || email.includes('@phone.tatvadirect.local')) {
+            alert('Please enter a valid email address for your PM customer account.');
+            return;
+          }
+          if (!phone || phone.length !== 10) {
+            alert('Please enter a valid 10-digit phone number.');
+            return;
+          }
+        }
+
         const requiredAddressFields = [
           { key: 'line1', label: 'Address' },
           { key: 'city', label: 'City' },
@@ -220,6 +245,25 @@ const Profile = ({ user }) => {
           : data.profile;
         setProfile(mergedProfile);
         cacheProfilePhotoUrl(mergedProfile?.profilePhotoUrl || '');
+
+        try {
+          const savedUser = JSON.parse(localStorage.getItem('user') || '{}');
+          if (savedUser && typeof savedUser === 'object') {
+            const nextUser = {
+              ...savedUser,
+              profileIncomplete: mergedProfile.profileIncomplete === true
+            };
+            if (mergedProfile.userType !== 'service_provider') {
+              nextUser.name = mergedProfile.contactPerson || savedUser.name;
+              nextUser.email = mergedProfile.email || savedUser.email;
+              nextUser.company = mergedProfile.companyName || savedUser.company;
+              nextUser.phone = mergedProfile.phone || savedUser.phone;
+            }
+            localStorage.setItem('user', JSON.stringify(nextUser));
+          }
+        } catch {
+          // Ignore local user sync issues.
+        }
       } else {
         await fetchProfile();
       }
@@ -308,8 +352,8 @@ const Profile = ({ user }) => {
     return (
       <SpPageLayout showStepper={false}>
         <SpPageHeader
-          title="Company Profile"
-          description="Manage your company details, projects, and shipping addresses."
+          title="Customer Account"
+          description="Your customer details sync with the PM platform. Changes here update PM, and PM profile changes appear here after refresh."
           icon={User}
           actions={
             <div className="profile-page-header-actions">
@@ -333,6 +377,13 @@ const Profile = ({ user }) => {
             </div>
           }
         />
+        {profile?.profileIncomplete ? (
+          <Alert className="mb-4">
+            <AlertDescription>
+              Add at least one shipping address below so you can create purchase orders.
+            </AlertDescription>
+          </Alert>
+        ) : null}
         {profileBody}
       </SpPageLayout>
     );
@@ -457,8 +508,122 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
     }
   };
 
+  const updatePmCustomerAccount = (field, value) => {
+    setProfile((prev) => ({
+      ...prev,
+      pmCustomerAccount: {
+        ...(prev?.pmCustomerAccount || {}),
+        [field]: value
+      },
+      ...(field === 'fullName' ? { contactPerson: value } : {}),
+      ...(field === 'email' ? { email: value } : {}),
+      ...(field === 'phoneNumber' ? { phone: value } : {})
+    }));
+  };
+
   return (
     <div className="profile-content">
+      {!isAdmin ? (
+        <div className="profile-section">
+          <div className="section-header">
+            <h2>
+              <User size={20} />
+              Customer Account
+            </h2>
+          </div>
+          <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
+            Linked to your PM platform profile using the same verified phone number. Edits sync both ways with PM.
+          </p>
+          {profile?.pmCustomerAccount ? (
+            <div className="form-grid">
+              <div className="form-group">
+                <label>Full Name</label>
+                <input
+                  type="text"
+                  value={profile.pmCustomerAccount.fullName || ''}
+                  onChange={(e) => updatePmCustomerAccount('fullName', e.target.value)}
+                  readOnly={!editing}
+                />
+              </div>
+              <div className="form-group">
+                <label>Username</label>
+                <input
+                  type="text"
+                  value={profile.pmCustomerAccount.userName || ''}
+                  onChange={(e) => updatePmCustomerAccount('userName', e.target.value)}
+                  readOnly={!editing}
+                  placeholder="Not set on PM"
+                />
+              </div>
+              <div className="form-group">
+                <label>Email</label>
+                <input
+                  type="email"
+                  value={profile.pmCustomerAccount.email || ''}
+                  onChange={(e) => updatePmCustomerAccount('email', e.target.value)}
+                  readOnly={!editing}
+                  placeholder="Not set on PM"
+                />
+                {profile.pmCustomerAccount.email && !profile.pmCustomerAccount.isEmailVerified ? (
+                  <span style={{ fontSize: '0.82rem', color: '#64748b', marginTop: '0.35rem' }}>
+                    Email verification is managed on the PM platform.
+                  </span>
+                ) : null}
+              </div>
+              <div className="form-group">
+                <label style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                  Phone Number
+                  {profile.pmCustomerAccount.phoneNumber ? (
+                    <CheckCircle2 size={16} style={{ color: '#16a34a' }} aria-label="Verified phone" />
+                  ) : null}
+                </label>
+                <input
+                  type="tel"
+                  value={profile.pmCustomerAccount.phoneNumber || profile?.phone || ''}
+                  onChange={(e) => updatePmCustomerAccount('phoneNumber', e.target.value)}
+                  readOnly={!editing}
+                />
+              </div>
+              <div className="form-group">
+                <label>Account Status</label>
+                <div>
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      padding: '0.25rem 0.65rem',
+                      borderRadius: '999px',
+                      background: '#dcfce7',
+                      color: '#166534',
+                      fontSize: '0.85rem',
+                      fontWeight: 600,
+                      textTransform: 'capitalize'
+                    }}
+                  >
+                    {profile.pmCustomerAccount.status || 'active'}
+                  </span>
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Portal Flag (PM)</label>
+                <input
+                  type="text"
+                  value={
+                    profile.pmCustomerAccount.flag ||
+                    (profile.userType === 'supplier' ? 'supplier' : 'service_provider')
+                  }
+                  readOnly
+                />
+              </div>
+            </div>
+          ) : (
+            <p style={{ color: '#64748b', fontSize: '0.9rem' }}>
+              PM profile not found yet for phone {profile?.phone || '—'}. Use the same number on PM OTP login,
+              then refresh this page.
+            </p>
+          )}
+        </div>
+      ) : null}
+
       <div className="profile-section">
         <h2>
           <FileText size={20} />

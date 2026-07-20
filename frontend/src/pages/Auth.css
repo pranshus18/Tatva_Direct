@@ -711,3 +711,43 @@
 .input-wrapper input:focus-visible {
   outline: none;
 }
+
+.otp-hint {
+  color: #64748b;
+  font-size: 0.9rem;
+  text-align: center;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.otp-hint strong {
+  color: #334155;
+}
+
+.otp-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: -0.25rem;
+}
+
+.otp-link-button {
+  background: none;
+  border: none;
+  color: #4f46e5;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0.25rem 0;
+  transition: color 0.2s ease;
+}
+
+.otp-link-button:hover:not(:disabled) {
+  color: #7c3aed;
+}
+
+.otp-link-button:disabled {
+  color: #94a3b8;
+  cursor: not-allowed;
+}

@@ -4,7 +4,8 @@ import { Check, Package, X } from 'lucide-react';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { useLocation, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
-import { API_BASE_URL, getApiUrl, resolveApiPath } from '../config/api';
+import { API_BASE_URL, getApiUrl, resolveApiPath, buildAuthHeaders } from '../config/api';
+import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
@@ -825,13 +826,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     (async () => {
       try {
         setLoadingWalletBalance(true);
-        const resp = await fetch(getApiUrl('/api/wallet/balance'), {
-          headers: { Authorization: `Bearer ${token}` }
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!cancelled && resp.ok && data.status === 'success') {
-          setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
-        }
+        const balance = await getVaultBalanceForUi();
+        if (!cancelled) setWalletBalance(balance);
       } catch {
         if (!cancelled) setWalletBalance(0);
       } finally {
@@ -1148,14 +1144,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     }
     if (poPaymentMethod === 'wallet') {
       if (loadingWalletBalance) {
-        alert('Checking wallet balance. Please wait and try again.');
+        alert('Checking vault balance. Please wait and try again.');
         return;
       }
       if (!hasSufficientWalletBalance) {
         alert(
-          `Insufficient wallet balance. You need ₹${walletShortage.toLocaleString(
+          `Insufficient vault balance. You need ₹${walletShortage.toLocaleString(
             'en-IN'
-          )} more. Please credit wallet first.`
+          )} more. Please credit vault first.`
         );
         return;
       }
@@ -1441,14 +1437,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
               color: '#334155'
             }}
           >
-            <option value="wallet">Wallet only (platform escrow model)</option>
+            <option value="wallet">Vault balance only (platform escrow model)</option>
             <option value="credit" disabled={creditCheckLoading || !payLaterOptionAvailable}>
               Pay later (credit account)
             </option>
           </select>
           {poPaymentMethod === 'wallet' ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
-              Orders are created with wallet payment mode. Customer funds wallet first, then platform escrow settles supplier payout.
+              Orders are created with vault payment mode. Customer funds vault first, then platform escrow settles supplier payout.
             </p>
           ) : poPaymentMethod === 'credit' ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
@@ -1470,11 +1466,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
               onClick={() => navigate('/wallet')}
               style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem' }}
             >
-              Credit wallet
+              Credit vault
             </button>
             <span style={{ fontSize: '0.76rem', color: '#64748b' }}>
               {poPaymentMethod === 'wallet'
-                ? 'Tip: Add enough wallet balance before paying these orders in `Your orders`.'
+                ? 'Tip: Add enough vault balance before paying these orders in `Your orders`.'
                 : 'Tip: Configure credit limit with supplier to use pay later without failures.'}
             </span>
           </div>
@@ -1491,13 +1487,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
               }}
             >
               <p style={{ margin: '0 0 0.4rem', fontSize: '0.8rem', fontWeight: 600, color: '#334155' }}>
-                Wallet balance check
+                Vault balance check
               </p>
               <p style={{ margin: 0, fontSize: '0.8rem', color: '#475569' }}>
                 Order total: <strong>₹{Number(grandTotalAllPos || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
-                Wallet balance:{' '}
+                Vault balance:{' '}
                 <strong>
                   {loadingWalletBalance
                     ? 'Checking...'

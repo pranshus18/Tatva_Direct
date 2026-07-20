@@ -37,6 +37,7 @@ import {
   shippingAddressEntryFromBranch,
   validateShippingAddressEntries
 } from '../profileHelpers.js';
+import { syncPmCustomerProfileForUser, resolvePmPortalFlag } from '../../../services/pmUserService.js';
 import { isAddressComplete, normalizeAddress } from '../../po/shared/poHelpers.js';
 
 export function registerProfileUpdateRoutes(router) {
@@ -57,10 +58,42 @@ export function registerProfileUpdateRoutes(router) {
         });
       }
 
-      const updateData = {
-        company: profileData.companyName,
-        phone: profileData.phone
-      };
+      const isServiceProviderUpdate =
+        profileData.userType === 'service_provider' || currentUser.user_type === 'service_provider';
+
+      const updateData = {};
+
+      if (!isServiceProviderUpdate) {
+        updateData.company = profileData.companyName;
+        updateData.phone = profileData.phone;
+
+        if (profileData.contactPerson !== undefined) {
+          const nextName = String(profileData.contactPerson || '').trim();
+          if (nextName) {
+            updateData.name = nextName;
+          }
+        }
+
+        if (profileData.email !== undefined) {
+          const nextEmail = String(profileData.email || '').trim().toLowerCase();
+          if (nextEmail && nextEmail !== String(currentUser.email || '').trim().toLowerCase()) {
+            const { data: existingEmailUser } = await supabase
+              .from('users')
+              .select('id')
+              .eq('email', nextEmail)
+              .maybeSingle();
+
+            if (existingEmailUser && existingEmailUser.id !== currentUser.id) {
+              return res.status(400).json({
+                status: 'error',
+                message: 'This email is already registered to another account'
+              });
+            }
+
+            updateData.email = nextEmail;
+          }
+        }
+      }
 
       // Service providers may optionally update users.address when sent; suppliers below.
       if (profileData.address && profileData.userType === 'service_provider') {
@@ -72,16 +105,20 @@ export function registerProfileUpdateRoutes(router) {
 
       const currentProfile = currentUser.profile || {};
       const profileUpdate = {
-        ...currentProfile,
-        website: profileData.website,
-        description: profileData.description
+        ...currentProfile
       };
+
+      if (!isServiceProviderUpdate) {
+        profileUpdate.website = profileData.website;
+        profileUpdate.description = profileData.description;
+      }
 
       let chainApprovalPending = false;
       let chainDraftSaved = false;
       let brandApprovalRequested = false;
       let brandApprovalFailures = [];
       let brandAlreadyApproved = false;
+      let pmSyncWarning = null;
 
       if (profileData.userType === 'service_provider') {
         const shippingAddresses = Array.isArray(profileData.shippingAddresses)
@@ -111,6 +148,56 @@ export function registerProfileUpdateRoutes(router) {
           id: project.id || uuidv4()
         }));
         profileUpdate.projects = projects;
+
+        if (profileData.pmCustomerAccount) {
+          const acct = profileData.pmCustomerAccount;
+          const fullName = String(acct.fullName || '').trim();
+          const userName = String(acct.userName || '').trim();
+          const email = String(acct.email || '').trim().toLowerCase();
+          const phoneNumber = String(acct.phoneNumber || currentUser.phone || '')
+            .replace(/\D/g, '')
+            .slice(-10);
+
+          if (email && email !== String(currentUser.email || '').trim().toLowerCase()) {
+            const { data: existingEmailUser } = await supabase
+              .from('users')
+              .select('id')
+              .eq('email', email)
+              .maybeSingle();
+
+            if (existingEmailUser && existingEmailUser.id !== currentUser.id) {
+              return res.status(400).json({
+                status: 'error',
+                message: 'This email is already registered to another account'
+              });
+            }
+          }
+
+          if (fullName) {
+            updateData.name = fullName;
+          }
+          if (phoneNumber && phoneNumber.length === 10) {
+            updateData.phone = phoneNumber;
+          }
+          if (email) {
+            updateData.email = email;
+          }
+
+          profileUpdate.pmCustomerProfile = {
+            ...(currentProfile.pmCustomerProfile || {}),
+            pmUserId:
+              currentProfile.pmCustomerProfile?.pmUserId ||
+              currentProfile.pmCustomerAuth?.pmUserId ||
+              null,
+            fullName: fullName || currentProfile.pmCustomerProfile?.fullName || '',
+            userName: userName || currentProfile.pmCustomerProfile?.userName || '',
+            email: email || currentProfile.pmCustomerProfile?.email || '',
+            phoneNumber: phoneNumber || currentProfile.pmCustomerProfile?.phoneNumber || '',
+            status: currentProfile.pmCustomerProfile?.status || 'active',
+            isEmailVerified: currentProfile.pmCustomerProfile?.isEmailVerified === true,
+            flag: resolvePmPortalFlag(currentUser) || currentProfile.pmCustomerProfile?.flag || ''
+          };
+        }
       } else if (profileData.userType === 'supplier') {
         const updatingBranches = profileData.branches !== undefined;
         const updatingBillingAddress = profileData.address !== undefined;
@@ -620,6 +707,24 @@ export function registerProfileUpdateRoutes(router) {
         }
       }
 
+      const nextName = String(updateData.name || currentUser.name || '').trim();
+      const nextEmail = String(updateData.email || currentUser.email || '').trim().toLowerCase();
+      const nextCompany = String(updateData.company ?? currentUser.company ?? '').trim();
+      const hasRealEmail = nextEmail && !/@phone\.tatvadirect\.local$/i.test(nextEmail);
+      if (currentProfile.profileIncomplete === true) {
+        if (isServiceProviderUpdate) {
+          const pmCustomer = currentProfile.pmCustomerProfile || {};
+          const spName = String(pmCustomer.fullName || nextName || '').trim();
+          const spEmail = String(pmCustomer.email || nextEmail || '').trim().toLowerCase();
+          const spHasRealEmail = spEmail && !/@phone\.tatvadirect\.local$/i.test(spEmail);
+          if (spName && spName !== 'User' && spHasRealEmail) {
+            profileUpdate.profileIncomplete = false;
+          }
+        } else if (nextName && nextName !== 'User' && hasRealEmail && nextCompany) {
+          profileUpdate.profileIncomplete = false;
+        }
+      }
+
       updateData.profile = profileUpdate;
 
       Object.keys(updateData).forEach((key) => {
@@ -645,7 +750,22 @@ export function registerProfileUpdateRoutes(router) {
 
       delete updatedUser.password;
 
-      if (!chainApprovalPending && updatedUser.user_type === 'supplier') {
+      let finalUser = updatedUser;
+      if (isServiceProviderUpdate) {
+        try {
+          finalUser = await syncPmCustomerProfileForUser(updatedUser, {
+            localCustomerFields: profileData.pmCustomerAccount || null,
+            pushLocalFirst: Boolean(profileData.pmCustomerAccount),
+            pushIfEstablished: false,
+            syncIdentityFromPm: true
+          });
+        } catch (pmSyncError) {
+          console.warn('[Profile] PM customer sync failed:', pmSyncError?.message || pmSyncError);
+          pmSyncWarning = pmSyncError?.message || 'Could not sync customer profile with PM platform.';
+        }
+      }
+
+      if (!chainApprovalPending && finalUser.user_type === 'supplier') {
         const entries = updatedUser.profile?.companyInfoEntries || [];
         const prevEntries = currentProfile.companyInfoEntries || [];
         const prevRole = String(currentProfile.supplierRole || '').trim();
@@ -736,7 +856,7 @@ export function registerProfileUpdateRoutes(router) {
         }
       }
 
-      const profile = await createProfileResponse(updatedUser);
+      const profile = await createProfileResponse(finalUser);
       const payload = {
         status: 'success',
         message: brandApprovalRequested
@@ -747,6 +867,8 @@ export function registerProfileUpdateRoutes(router) {
             ? 'Your supply-chain role and brand assignment was submitted for admin approval. Until it is approved, your previous approved assignment stays active.'
             : chainDraftSaved
               ? 'Draft saved. You can return later to complete remaining fields and submit.'
+              : pmSyncWarning
+                ? `Profile saved locally. ${pmSyncWarning}`
               : 'Profile updated successfully',
         profile
       };

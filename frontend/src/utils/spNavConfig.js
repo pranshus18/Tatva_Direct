@@ -23,7 +23,7 @@ export const SP_NAV_ITEMS = [
   { path: '/create-po', label: 'Create PO', shortLabel: 'Create PO', icon: Package },
   { path: '/transport-suggestion', label: 'Transport', shortLabel: 'Transport', icon: Truck },
   { path: '/your-orders', label: 'Your Orders', shortLabel: 'Orders', icon: ShoppingCart },
-  { path: '/wallet', label: 'Wallet', shortLabel: 'Wallet', icon: Wallet },
+  { path: '/wallet', label: 'Vault balance', shortLabel: 'Vault', icon: Wallet },
   { path: '/returns', label: 'Returns', shortLabel: 'Returns', icon: RefreshCw },
   { path: '/portal-theme', label: 'Portal Theme', shortLabel: 'Theme', icon: Paintbrush }
 ];
@@ -78,7 +78,7 @@ const ROUTE_META = {
   '/create-po': { group: 'Procure', title: 'Create PO' },
   '/transport-suggestion': { group: 'Procure', title: 'Transport' },
   '/your-orders': { group: 'Orders', title: 'Your Orders' },
-  '/wallet': { group: 'Orders', title: 'Wallet' },
+  '/wallet': { group: 'Orders', title: 'Vault balance' },
   '/returns': { group: 'Orders', title: 'Returns' },
   '/portal-theme': { group: 'Account', title: 'Portal Theme' },
   '/profile': { group: 'Account', title: 'Profile' }

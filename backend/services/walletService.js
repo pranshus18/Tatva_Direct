@@ -212,7 +212,7 @@ async function mutateWallet({
   const delta = isDebit ? -txnAmount : txnAmount;
   const after = roundMoney(before + delta);
   if (isDebit && after < 0) {
-    const err = new Error('Insufficient wallet balance');
+    const err = new Error('Insufficient vault balance');
     err.code = 'INSUFFICIENT_WALLET_BALANCE';
     throw err;
   }
@@ -759,13 +759,81 @@ async function resolveOrderBuyerWalletType(order) {
   return String(buyer?.user_type || '').toLowerCase() === 'supplier' ? 'supplier' : 'customer';
 }
 
+export async function mirrorPmTopupToLocalWallet({
+  userId,
+  amountInRupees,
+  razorpayOrderId,
+  razorpayPaymentId
+}) {
+  const amount = roundMoney(amountInRupees);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  const customerWallet = await getOrCreateWallet({
+    userId,
+    walletType: 'customer'
+  });
+
+  return creditWallet({
+    walletId: customerWallet.id,
+    amount,
+    transactionType: 'topup',
+    referenceType: 'pm_vault_topup',
+    referenceId: String(razorpayPaymentId || razorpayOrderId || userId),
+      description: 'PM vault top-up mirrored to Tatva vault ledger',
+    metadata: {
+      source: 'pm_vault',
+      razorpayOrderId,
+      razorpayPaymentId
+    },
+    idempotencyKey: `pm-vault-topup-mirror:${razorpayPaymentId || razorpayOrderId}`,
+    createdBy: userId
+  });
+}
+
+export async function syncLocalWalletFromPmBalance({
+  userId,
+  pmBalance,
+  requiredAmount = 0
+}) {
+  const required = roundMoney(requiredAmount);
+  const pmAvailable = roundMoney(pmBalance);
+  if (required > 0 && pmAvailable + 0.0001 < required) {
+    const err = new Error(
+      `Insufficient vault balance. Available INR ${pmAvailable}, required INR ${required}.`
+    );
+    err.code = 'INSUFFICIENT_WALLET_BALANCE';
+    throw err;
+  }
+
+  const local = await getWalletBalance({ userId, walletType: 'customer' });
+  const targetBalance = required > 0 ? Math.max(required, pmAvailable) : pmAvailable;
+  const delta = roundMoney(targetBalance - Number(local.balance || 0));
+
+  if (delta > 0.0001) {
+    await creditWallet({
+      walletId: local.wallet.id,
+      amount: delta,
+      transactionType: 'adjustment',
+      referenceType: 'pm_vault_sync',
+      referenceId: String(userId),
+      description: 'PM vault balance sync for Tatva checkout',
+      metadata: { source: 'pm_vault', pmBalance: pmAvailable },
+      idempotencyKey: `pm-vault-sync:${userId}:${Math.floor(pmAvailable * 100)}`,
+      createdBy: userId
+    });
+  }
+
+  return getWalletBalance({ userId, walletType: 'customer' });
+}
+
 export async function payOrderFromWallet({
   orderId,
   actorUserId,
   actorRole = null,
   requestId = null,
   ipAddress = null,
-  idempotencyKey = null
+  idempotencyKey = null,
+  pmCredentials = null
 }) {
   const order = await loadOrderForWalletPay(orderId);
   if (actorRole !== 'admin' && order.service_provider_id !== actorUserId) {
@@ -789,6 +857,43 @@ export async function payOrderFromWallet({
   const platformFeeAmount = Math.min(grossAmount, roundMoney(feeResult.feeAmount));
   const supplierPayoutAmount = roundMoney(grossAmount - platformFeeAmount);
 
+  const { data: actorUser, error: actorUserError } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', actorUserId)
+    .maybeSingle();
+  if (actorUserError) throw actorUserError;
+
+  let pmPaymentMode = null;
+  if (actorUser) {
+    const pmVault = await import('./pmVaultService.js');
+    if (pmVault.usesPlatformVault(actorUser)) {
+      const pmWallet = await pmVault.assertPmVaultBalanceSufficient(
+        actorUser,
+        grossAmount,
+        pmCredentials || {}
+      );
+      const pmPayment = await pmVault.payOrderFromPmVault({
+        user: actorUser,
+        orderId: order.id,
+        orderNumber: order.order_number,
+        amountInRupees: grossAmount,
+        description: `Order payment for ${order.order_number || order.id}`,
+        credentials: pmCredentials || {}
+      });
+      if (pmPayment) {
+        pmPaymentMode = 'pm_vault_debit';
+      } else {
+        await syncLocalWalletFromPmBalance({
+          userId: actorUserId,
+          pmBalance: pmWallet.balance,
+          requiredAmount: grossAmount
+        });
+        pmPaymentMode = 'local_mirror';
+      }
+    }
+  }
+
   const buyerWalletType = await resolveOrderBuyerWalletType(order);
   const customerWallet = await getOrCreateWallet({
     userId: order.service_provider_id,
@@ -804,12 +909,13 @@ export async function payOrderFromWallet({
     transactionTypeCredit: 'order_hold',
     referenceType: 'order',
     referenceId: order.id,
-    description: `Wallet payment for order ${order.order_number || order.id}`,
+    description: `Vault payment for order ${order.order_number || order.id}`,
     metadata: {
       orderId: order.id,
       orderNumber: order.order_number,
       platformFeeAmount,
-      supplierPayoutAmount
+      supplierPayoutAmount,
+      pmPaymentMode
     },
     idempotencyKey: idempotencyKey || `wallet-order-pay:${order.id}`,
     createdBy: actorUserId
@@ -821,7 +927,7 @@ export async function payOrderFromWallet({
     .update({
       payment_status: 'paid',
       payment_method: 'wallet',
-      payment_provider: 'wallet',
+      payment_provider: pmPaymentMode === 'pm_vault_debit' ? 'pm_vault' : 'wallet',
       payment_provider_payment_id: `wallet-${order.id}`,
       payment_verified_at: new Date().toISOString(),
       wallet_payment_status: 'held',
@@ -844,7 +950,8 @@ export async function payOrderFromWallet({
       net_amount: supplierPayoutAmount,
       status: 'pending',
       metadata: {
-        feeBreakdown: feeResult.breakdown
+        feeBreakdown: feeResult.breakdown,
+        pmPaymentMode
       },
       updated_at: new Date().toISOString()
     },
@@ -856,7 +963,7 @@ export async function payOrderFromWallet({
     order: updatedOrder,
     method: 'wallet',
     paymentReference: `wallet-${order.id}`,
-    provider: 'wallet',
+    provider: pmPaymentMode === 'pm_vault_debit' ? 'pm_vault' : 'wallet',
     status: 'captured',
     actorUserId
   });
@@ -890,7 +997,8 @@ export async function payOrderFromWallet({
       orderId: order.id,
       grossAmount,
       platformFeeAmount,
-      supplierPayoutAmount
+      supplierPayoutAmount,
+      pmPaymentMode
     }
   });
 
@@ -900,6 +1008,7 @@ export async function payOrderFromWallet({
     platformFeeAmount,
     supplierPayoutAmount,
     receiptDelivery,
-    invoiceSummary
+    invoiceSummary,
+    pmPaymentMode
   };
 }

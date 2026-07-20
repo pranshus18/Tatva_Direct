@@ -23,6 +23,7 @@ import {
   normalizeBrandKey,
   normalizeChainRolesFromStages
 } from '../../services/supplyChainSharedService.js';
+import { resolveServiceProviderDisplayFromPm } from '../../services/pmUserService.js';
 
 const SERVICE_PROVIDER_THEME_IDS = new Set([
   'default',
@@ -497,6 +498,7 @@ export async function createProfileResponse(user) {
 
   if (user.user_type === 'service_provider') {
     const purchaseSummary = await computePurchaseSummary(user.id);
+    const pmDisplay = resolveServiceProviderDisplayFromPm(user);
     let serviceProviderPortalTheme = { themeId: 'default', customImageDataUrl: '' };
     try {
       serviceProviderPortalTheme = sanitizeServiceProviderThemePrefs(
@@ -506,8 +508,16 @@ export async function createProfileResponse(user) {
       serviceProviderPortalTheme = { themeId: 'default', customImageDataUrl: '' };
     }
 
+    const { companyName: _companyName, website: _website, description: _description, ...serviceProviderBase } =
+      baseProfile;
+
     return {
-      ...baseProfile,
+      ...serviceProviderBase,
+      contactPerson: pmDisplay.contactPerson || baseProfile.contactPerson,
+      email: pmDisplay.email || baseProfile.email,
+      phone: pmDisplay.phone || baseProfile.phone,
+      pmCustomerAccount: pmDisplay.pmCustomerAccount,
+      profileIncomplete: user.profile?.profileIncomplete === true,
       projects: user.profile?.projects || [],
       shippingAddresses: deriveShippingAddressesFromProfile(user),
       totalOrdersPlaced: purchaseSummary.totalOrdersPlaced,

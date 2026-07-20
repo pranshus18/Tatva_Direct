@@ -135,8 +135,8 @@ const AdminLogin = ({ onLogin }) => {
         <div className="auth-footer">
           <p>
             Not an admin?{' '}
-            <Link to="/login" className="auth-link">
-              Regular login
+            <Link to="/pm-auth" className="auth-link">
+              Phone sign-in
             </Link>
           </p>
         </div>

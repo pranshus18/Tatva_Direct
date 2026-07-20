@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getApiUrl, authFetch } from '../config/api';
+import { getApiUrl, authFetch, buildAuthHeaders } from '../config/api';
+import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
 import {
   Eye,
   ShoppingCart,
@@ -76,7 +77,7 @@ const formatAddress = (address) =>
 
 const paymentMethodLabel = (order) => {
   const pm = String(order?.paymentMethod || order?.payment_method || '').toLowerCase();
-  if (pm === 'wallet') return 'Wallet (platform escrow)';
+  if (pm === 'wallet') return 'Vault balance (platform escrow)';
   if (pm === 'cash') return 'Cash on delivery';
   if (pm === 'online') return 'Pay online';
   if (pm === 'upi') return 'UPI';
@@ -267,7 +268,7 @@ const YourOrders = () => {
     if (orderAmount > Number(walletBalance || 0)) {
       const shortage = Math.max(0, orderAmount - Number(walletBalance || 0));
       setPaymentNotice(
-        `Insufficient wallet balance. Add ${shortage.toLocaleString('en-IN', {
+        `Insufficient vault balance. Add ${shortage.toLocaleString('en-IN', {
           minimumFractionDigits: 2,
           maximumFractionDigits: 2
         })} INR to continue payment.`
@@ -277,30 +278,22 @@ const YourOrders = () => {
     setProcessingPayment(true);
     setPaymentNotice('');
     try {
-      const token = localStorage.getItem('token');
-      if (!token) throw new Error('Please login again');
-      const payResp = await fetch(getApiUrl(`/api/wallet/orders/${orderDetails.id}/pay`), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ idempotencyKey: `ui-${orderDetails.id}-${Date.now()}` })
+      const payData = await payOrderFromVault(orderDetails.id, {
+        idempotencyKey: `ui-${orderDetails.id}-${Date.now()}`
       });
-      const payData = await payResp.json().catch(() => ({}));
-      if (!payResp.ok || payData.status !== 'success') {
+      if (payData.status !== 'success') {
         if (payData?.code === 'INSUFFICIENT_WALLET_BALANCE') {
-          throw new Error('Insufficient wallet balance. Please credit wallet and try again.');
+          throw new Error('Insufficient vault balance. Please credit vault and try again.');
         }
-        throw new Error(payData?.message || 'Failed to pay order from wallet');
+        throw new Error(payData?.message || 'Failed to pay order from vault');
       }
-      setPaymentNotice('Payment successful via wallet.');
+      setPaymentNotice('Payment successful via vault.');
       await Promise.allSettled([
         fetchDashboard(),
         fetchOrderDetails(orderDetails.orderNumber || orderDetails.id)
       ]);
     } catch (err) {
-      setPaymentNotice(err.message || 'Failed to complete wallet payment');
+      setPaymentNotice(err.message || 'Failed to complete vault payment');
     } finally {
       setProcessingPayment(false);
     }
@@ -311,13 +304,8 @@ const YourOrders = () => {
     try {
       const token = localStorage.getItem('token');
       if (!token) return;
-      const resp = await fetch(getApiUrl('/api/wallet/balance'), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await resp.json().catch(() => ({}));
-      if (resp.ok && data.status === 'success') {
-        setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
-      }
+      const balance = await getVaultBalanceForUi();
+      setWalletBalance(balance);
     } catch (_e) {
       // Non-blocking for order view.
     } finally {
@@ -960,17 +948,17 @@ const YourOrders = () => {
                           Due date: <strong>{formatDateOnly(payLaterDueAt)}</strong>
                         </div>
                         <div className="mt-1">
-                          Settle from customer wallet before due date to complete supplier payout.
+                          Settle from customer vault before due date to complete supplier payout.
                         </div>
                       </div>
                     )}
                     <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                      <div className="font-medium text-slate-800">Wallet payment readiness</div>
+                      <div className="font-medium text-slate-800">Vault payment readiness</div>
                       <div className="mt-1 text-slate-700">
                         Order amount: <strong>₹{orderAmount.toLocaleString('en-IN')}</strong>
                       </div>
                       <div className="text-slate-700">
-                        Wallet balance:{' '}
+                        Vault balance:{' '}
                         <strong>
                           {loadingWalletBalance
                             ? 'Checking...'
@@ -986,7 +974,7 @@ const YourOrders = () => {
                     <div className="space-y-3">
                       {nonWalletPending ? (
                         <p className="yo-payment-hint yo-payment-hint--credit">
-                          This order uses legacy payment mode `{orderPm}`. You can still complete it via wallet payment.
+                          This order uses legacy payment mode `{orderPm}`. You can still complete it via vault payment.
                         </p>
                       ) : null}
                       {showWalletPayForOrder && (
@@ -997,7 +985,7 @@ const YourOrders = () => {
                             onClick={handlePayFromWallet}
                             disabled={processingPayment || loadingWalletBalance || !hasEnoughWalletBalance}
                           >
-                            {processingPayment ? 'Processing…' : 'Pay from wallet'}
+                            {processingPayment ? 'Processing…' : 'Pay from vault'}
                           </button>
                           <button
                             type="button"
@@ -1005,7 +993,7 @@ const YourOrders = () => {
                             onClick={() => navigate('/wallet')}
                             disabled={processingPayment}
                           >
-                            Credit wallet
+                            Credit vault
                           </button>
                         </div>
                       )}
@@ -1228,7 +1216,7 @@ const YourOrders = () => {
                           }
                       >
                         <option value="">Select payment method</option>
-                        <option value="wallet">Wallet</option>
+                        <option value="wallet">Vault balance</option>
                       </select>
                       </div>
                       <div className="space-y-2 sm:col-span-2">

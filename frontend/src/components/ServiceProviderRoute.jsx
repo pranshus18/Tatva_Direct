@@ -5,7 +5,7 @@ import { normalizeUserType } from '../utils/userType';
 const ServiceProviderRoute = ({ children, user }) => {
   // If user is not a service provider, redirect to their dashboard
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/pm-auth" replace />;
   }
 
   const userType = normalizeUserType(user.userType);

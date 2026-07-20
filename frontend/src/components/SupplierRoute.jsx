@@ -4,7 +4,7 @@ import { normalizeUserType } from '../utils/userType';
 
 const SupplierRoute = ({ children, user }) => {
   if (!user) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/pm-auth" replace />;
   }
 
   const userType = normalizeUserType(user.userType);
@@ -15,7 +15,7 @@ const SupplierRoute = ({ children, user }) => {
     if (userType === 'admin') {
       return <Navigate to="/admin-dashboard" replace />;
     }
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/pm-auth" replace />;
   }
 
   return children;

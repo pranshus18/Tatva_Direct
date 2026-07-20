@@ -1,6 +1,5 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { resolveApiPath } from '../config/api';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { Truck } from 'lucide-react';
@@ -8,6 +7,10 @@ import { useVoiceSessionContext } from '../voice/VoiceSessionContext';
 import { isVoiceGuidedActive } from '../voice/voiceCartBridge';
 import { mergeTransportSelections, getVendorTransportDetail, getTransportGroupKey } from '../utils/poTransportSelection';
 import { saveCartTransportSelection } from '../utils/poCartTransportApi';
+import {
+  buildTransportQuoteCacheKey,
+  fetchTransportQuotes
+} from '../utils/logisticsQuoteApi';
 
 const SELF_SHIP_PROVIDER_NAME = 'Self ship';
 
@@ -254,6 +257,18 @@ const TransportSuggestion = () => {
   const [deliveryPincode, setDeliveryPincode] = React.useState('');
   const [deliveryAddressUsed, setDeliveryAddressUsed] = React.useState(null);
 
+  const quoteRequestKey = React.useMemo(
+    () =>
+      buildTransportQuoteCacheKey({
+        poGroups,
+        shippingAddress,
+        billingAddress,
+        deliveryDestination,
+        hasGstin
+      }),
+    [poGroups, shippingAddress, billingAddress, deliveryDestination, hasGstin]
+  );
+
   React.useEffect(() => {
     if (poGroups.length === 0) return;
     if (transportModeChoice === 'self_ship') {
@@ -282,30 +297,16 @@ const TransportSuggestion = () => {
       setLogisticsLoading(true);
       setLogisticsError('');
       try {
-        const token = localStorage.getItem('token');
-        const res = await fetch(resolveApiPath('/api/logistics/quote-transport-groups'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {})
-          },
-          body: JSON.stringify({
-            poGroups,
-            shippingAddress,
-            billingAddress,
-            deliveryDestination,
-            hasGstin
-          }),
-          signal: ac.signal
+        const data = await fetchTransportQuotes({
+          poGroups,
+          shippingAddress,
+          billingAddress,
+          deliveryDestination,
+          hasGstin,
+          signal: ac.signal,
+          cacheKey: quoteRequestKey
         });
-        const data = await res.json().catch(() => ({}));
         if (cancelled) return;
-        if (!res.ok) {
-          setLogisticsError(data.message || data.error || 'Failed to load transport options.');
-          setShipments([]);
-          setDeliveryAddressUsed(null);
-          return;
-        }
         const deliverForm =
           hasGstin && deliveryDestination === 'billing' ? billingAddress : shippingAddress;
         setDeliveryAddressUsed(
@@ -339,18 +340,16 @@ const TransportSuggestion = () => {
       }
     };
 
-    // Defer start to the next task so React 18 StrictMode's mount→cleanup→remount in DEV
-    // clears this timer on the "throwaway" pass — avoids one canceled fetch + duplicate load.
     const scheduleId = setTimeout(() => {
       if (!cancelled) void load();
-    }, 0);
+    }, 400);
 
     return () => {
       cancelled = true;
       clearTimeout(scheduleId);
       ac.abort();
     };
-  }, [poGroups, shippingAddress, billingAddress, deliveryDestination, hasGstin, transportModeChoice]);
+  }, [poGroups, quoteRequestKey, transportModeChoice, returnNoun]);
 
   /** Vendors that returned at least one transport option (must pick per vendor). */
   const vendorIdsRequiringTransport = React.useMemo(() => {

@@ -1,6 +1,8 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { Menu, User, LogOut } from 'lucide-react';
+import { ServiceProviderPortalMenuItem } from '@/components/PortalSwitchMenuItems';
+import { isServiceProviderRegistered } from '@/utils/portalRoles';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -21,8 +23,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import UserAvatar from '@/components/UserAvatar';
 import { getSupplierBreadcrumb } from '@/utils/supplierNavConfig';
+import VaultBalancePill from '@/components/VaultBalancePill';
 
-export default function SupplierTopBar({ user, pathname, onMenuClick, onLogout }) {
+export default function SupplierTopBar({ user, pathname, onMenuClick, onLogout, onPortalChange }) {
   const crumbs = getSupplierBreadcrumb(pathname);
   return (
     <header className="supplier-topbar portal-shell-topbar sticky top-3 z-40">
@@ -50,7 +53,9 @@ export default function SupplierTopBar({ user, pathname, onMenuClick, onLogout }
           </BreadcrumbList>
         </Breadcrumb>
 
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex items-center gap-2">
+          <VaultBalancePill user={user} />
+
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" className="gap-2 px-2">
@@ -76,6 +81,9 @@ export default function SupplierTopBar({ user, pathname, onMenuClick, onLogout }
                   Profile
                 </Link>
               </DropdownMenuItem>
+              {isServiceProviderRegistered(user) ? (
+                <ServiceProviderPortalMenuItem user={user} onPortalChange={onPortalChange} />
+              ) : null}
               <DropdownMenuItem onClick={onLogout} className="text-destructive focus:text-destructive">
                 <LogOut className="mr-2 h-4 w-4" />
                 Logout

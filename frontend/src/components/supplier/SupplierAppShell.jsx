@@ -43,7 +43,7 @@ function prefetchRoute(path) {
   loader().catch(() => prefetchedRoutes.delete(path));
 }
 
-export default function SupplierAppShell({ user, onLogout, children }) {
+export default function SupplierAppShell({ user, onLogout, onPortalChange, children }) {
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [themePrefs, setThemePrefs] = useState(() => getSupplierPortalThemePrefs());
@@ -125,6 +125,7 @@ export default function SupplierAppShell({ user, onLogout, children }) {
           pathname={location.pathname}
           onMenuClick={() => setMobileNavOpen(true)}
           onLogout={onLogout}
+          onPortalChange={onPortalChange}
         />
         <main className="portal-shell-content flex-1 overflow-auto">{children || <Outlet />}</main>
       </div>

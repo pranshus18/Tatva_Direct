@@ -33,7 +33,8 @@ export default function ProfilePhotoSection({
     }
   }, [editing]);
 
-  const displayName = profile?.contactPerson || profile?.companyName || 'User';
+  const displayName =
+    profile?.pmCustomerAccount?.fullName || profile?.contactPerson || profile?.companyName || 'User';
   const initials = getProfileInitials(displayName);
   const resolvedPhoto = resolveProfilePhotoDisplayUrl(profile?.profilePhotoUrl, photoDraft);
 
@@ -192,14 +193,14 @@ export default function ProfilePhotoSection({
 
         <div className="profile-photo-section__meta">
           <h2 className="profile-photo-section__name">{displayName}</h2>
-          {profile?.companyName && profile?.contactPerson ? (
+          {profile?.userType === 'supplier' && profile?.companyName && profile?.contactPerson ? (
             <p className="profile-photo-section__company">{profile.companyName}</p>
           ) : null}
           <p className="profile-photo-section__hint">
             <User size={14} aria-hidden />
             {editing
               ? 'Use the camera icon to take a photo, or choose one from your device. Click Save Changes to keep it.'
-              : 'Click Edit Profile to update your photo or company details.'}
+              : 'Click Edit Profile to update your photo.'}
           </p>
           {editing ? (
             <div className="profile-photo-section__actions">

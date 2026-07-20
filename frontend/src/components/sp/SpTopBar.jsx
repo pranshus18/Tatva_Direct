@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Menu, Search, ShoppingCart, User, LogOut } from 'lucide-react';
+import { SupplierPortalMenuItem } from '@/components/PortalSwitchMenuItems';
+import { normalizeUserType } from '@/utils/userType';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,8 +27,9 @@ import UserAvatar from '@/components/UserAvatar';
 import { getSpBreadcrumb } from '@/utils/spNavConfig';
 import { useServiceProviderCartCount } from '@/hooks/useServiceProviderCartCount';
 import SpNotificationsBell from './SpNotificationsBell';
+import VaultBalancePill from '@/components/VaultBalancePill';
 
-export default function SpTopBar({ user, pathname, onMenuClick, onLogout }) {
+export default function SpTopBar({ user, pathname, onMenuClick, onLogout, onPortalChange }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -141,6 +144,8 @@ export default function SpTopBar({ user, pathname, onMenuClick, onLogout }) {
 
           <SpNotificationsBell />
 
+          <VaultBalancePill user={user} />
+
           <Button variant="ghost" size="icon" className="relative" asChild>
             <Link to="/cart" aria-label="Cart">
               <ShoppingCart className="h-5 w-5" />
@@ -177,6 +182,9 @@ export default function SpTopBar({ user, pathname, onMenuClick, onLogout }) {
                   Profile
                 </Link>
               </DropdownMenuItem>
+              {normalizeUserType(user?.userType) === 'service_provider' ? (
+                <SupplierPortalMenuItem user={user} onPortalChange={onPortalChange} />
+              ) : null}
               <DropdownMenuItem onClick={onLogout} className="text-destructive focus:text-destructive">
                 <LogOut className="mr-2 h-4 w-4" />
                 Logout

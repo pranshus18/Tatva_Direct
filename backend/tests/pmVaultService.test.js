@@ -1,0 +1,90 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  mapPmVaultToWalletView,
+  mapPmVaultTransactions,
+  summarizePmVaultLedger,
+  usesPlatformVault
+} from '../services/pmVaultService.js';
+
+test('mapPmVaultToWalletView maps nested vault object', () => {
+  const view = mapPmVaultToWalletView({
+    success: true,
+    data: {
+      vault: {
+        _id: 'vault123',
+        balanceInPaise: 25000,
+        currency: 'INR',
+        transactions: [{ id: 't1', type: 'credit', amount: 25000, description: 'Top-up' }]
+      }
+    }
+  });
+
+  assert.equal(view.balance, 250);
+  assert.equal(view.wallet.id, 'vault123');
+  assert.equal(view.transactions.length, 1);
+});
+
+test('mapPmVaultToWalletView maps rupee balance and transactions', () => {
+  const view = mapPmVaultToWalletView({
+    success: true,
+    data: {
+      balance: 500,
+      currency: 'INR',
+      transactions: [
+        {
+          _id: 'txn1',
+          description: 'Vault top-up',
+          type: 'credit',
+          amount: 500,
+          createdAt: '2026-07-17T10:00:00.000Z'
+        }
+      ]
+    }
+  });
+
+  assert.equal(view.balance, 500);
+  assert.equal(view.wallet.source, 'pm_vault');
+  assert.equal(view.transactions.length, 1);
+  assert.equal(view.transactions[0].direction, 'credit');
+  assert.equal(view.summary.totalCredit, 500);
+});
+
+test('mapPmVaultToWalletView converts paise balance when flagged', () => {
+  const view = mapPmVaultToWalletView({
+    data: {
+      balanceInPaise: 50000,
+      transactions: []
+    }
+  });
+  assert.equal(view.balance, 500);
+});
+
+test('usesPlatformVault applies to service providers and suppliers with phone', () => {
+  assert.equal(
+    usesPlatformVault({ user_type: 'service_provider', phone: '9876543210' }),
+    true
+  );
+  assert.equal(usesPlatformVault({ user_type: 'supplier', phone: '9876543210' }), true);
+  assert.equal(usesPlatformVault({ user_type: 'service_provider', phone: '' }), false);
+});
+
+test('summarizePmVaultLedger totals credits and debits', () => {
+  const summary = summarizePmVaultLedger([
+    { direction: 'credit', amount: 100 },
+    { direction: 'debit', amount: 40 }
+  ]);
+  assert.equal(summary.totalCredit, 100);
+  assert.equal(summary.totalDebit, 40);
+  assert.equal(summary.netFlow, 60);
+  assert.equal(summary.transactionCount, 2);
+});
+
+test('mapPmVaultTransactions supports ledger alias', () => {
+  const rows = mapPmVaultTransactions({
+    ledger: [{ id: 'l1', type: 'debit', amount: 250, description: 'Order payment' }]
+  });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].direction, 'debit');
+  assert.equal(rows[0].amount, 250);
+});

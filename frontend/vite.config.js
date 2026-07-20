@@ -28,6 +28,31 @@ export default defineConfig({
         secure: false,
         timeout: 150000,
         proxyTimeout: 150000
+      },
+      // PM platform vault (dev CORS bypass — browser calls same-origin /pm-users/*)
+      '/pm-users': {
+        target: 'https://devopsapi.withtatva.ai/users',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (p) => p.replace(/^\/pm-users/, '')
+      },
+      '/pm-payment-initiate': {
+        target: 'https://devopsapi.withtatva.ai/payment',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (p) => p.replace(/^\/pm-payment-initiate/, '')
+      },
+      '/pm-payment-complete': {
+        target: 'https://api.withtatva.ai/payment',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (p) => p.replace(/^\/pm-payment-complete/, '')
+      },
+      '/pm-users-offline': {
+        target: 'https://api.withtatva.ai/users',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (p) => p.replace(/^\/pm-users-offline/, '')
       }
     }
   },

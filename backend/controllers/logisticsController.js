@@ -63,9 +63,11 @@ const LOGISTICS_UPSTREAM_MAX_RETRIES = Math.min(
   5,
   Math.max(1, Number.parseInt(String(process.env.LOGISTICS_UPSTREAM_MAX_RETRIES || '3'), 10) || 3)
 );
-const RETRYABLE_UPSTREAM_HTTP = new Set([502, 503, 504]);
+const RETRYABLE_UPSTREAM_HTTP = new Set([429, 502, 503, 504]);
+const UPSTREAM_RETRY_DELAYS_MS = [1000, 2000, 4000];
 
 const logisticsQuoteCache = new Map();
+const transportQuoteResultCache = new Map();
 let loggedServiceProvidersApiVersion = false;
 
 function delay(ms) {
@@ -170,6 +172,43 @@ function logisticsQuoteCacheSet(cacheKey, logistics) {
   logisticsQuoteCache.set(cacheKey, {
     expiresAt: Date.now() + LOGISTICS_QUOTE_CACHE_TTL_MS,
     value: cloneLogistics(logistics)
+  });
+}
+
+function buildTransportQuoteRequestCacheKey(upstreamGroups, deliveryPincode) {
+  return (upstreamGroups || [])
+    .map((g) => {
+      const tgId = String(g.transportGroupId || g.vendorId || '').trim();
+      const pickup = String(g.pickupPincode || '').replace(/\D/g, '').slice(0, 6);
+      const delivery = String(g.shippingAddress?.pincode || deliveryPincode || '')
+        .replace(/\D/g, '')
+        .slice(0, 6);
+      const weight = g.weight_kg ?? '';
+      return `${tgId}|${pickup}|${delivery}|${weight}`;
+    })
+    .sort()
+    .join('\n');
+}
+
+function transportQuoteResultCacheGet(cacheKey) {
+  const row = transportQuoteResultCache.get(cacheKey);
+  if (!row) return null;
+  if (row.expiresAt <= Date.now()) {
+    transportQuoteResultCache.delete(cacheKey);
+    return null;
+  }
+  return row.value;
+}
+
+function transportQuoteResultCacheSet(cacheKey, upstreamResults) {
+  if (!cacheKey || !Array.isArray(upstreamResults) || upstreamResults.length === 0) return;
+  if (transportQuoteResultCache.size >= LOGISTICS_QUOTE_CACHE_MAX) {
+    const oldest = transportQuoteResultCache.keys().next().value;
+    if (oldest) transportQuoteResultCache.delete(oldest);
+  }
+  transportQuoteResultCache.set(cacheKey, {
+    expiresAt: Date.now() + LOGISTICS_QUOTE_CACHE_TTL_MS,
+    value: upstreamResults
   });
 }
 
@@ -895,8 +934,10 @@ function pickStr(...vals) {
   return null;
 }
 
-async function postQuoteTransportGroupsUpstream(groups) {
-  const url = quoteTransportGroupsUrl();
+async function postLogisticsQuoteUpstream({ singleBody = null, groups = null }) {
+  const isSingle = singleBody != null;
+  const url = isSingle ? quoteTransportGroupUrl() : quoteTransportGroupsUrl();
+  const requestBody = isSingle ? singleBody : { groups };
   let r = null;
   let raw = '';
   let json = {};
@@ -905,7 +946,7 @@ async function postQuoteTransportGroupsUpstream(groups) {
     const fetchOpts = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ groups })
+      body: JSON.stringify(requestBody)
     };
     if (LOGISTICS_UPSTREAM_TIMEOUT_MS > 0) {
       fetchOpts.signal = AbortSignal.timeout(LOGISTICS_UPSTREAM_TIMEOUT_MS);
@@ -917,15 +958,28 @@ async function postQuoteTransportGroupsUpstream(groups) {
 
     const retryable = !r.ok && RETRYABLE_UPSTREAM_HTTP.has(r.status);
     if (!retryable || attempt >= LOGISTICS_UPSTREAM_MAX_RETRIES) break;
-    await delay(450 * attempt);
+    const delayMs = UPSTREAM_RETRY_DELAYS_MS[attempt - 1] ?? 4000;
+    await delay(delayMs);
   }
 
-  return { r, raw, json, url };
+  return { r, raw, json, url, endpointLabel: isSingle ? 'quote-transport-group' : 'quote-transport-groups' };
+}
+
+function extractUpstreamQuoteResults(json, isSingle) {
+  if (isSingle) {
+    if (json && typeof json === 'object' && !Array.isArray(json)) return [json];
+    if (Array.isArray(json)) return json;
+    return [];
+  }
+  if (Array.isArray(json?.results)) return json.results;
+  if (Array.isArray(json?.groups)) return json.groups;
+  if (Array.isArray(json)) return json;
+  return [];
 }
 
 /**
- * Quote transport for each PO group via logistics module quote-transport-groups.
- * Sends groups[] objects as-is (camelCase) with geocoded lat/lng when available.
+ * Quote transport for PO groups via logistics module.
+ * Single group → POST quote-transport-group; multiple → POST quote-transport-groups (one batch).
  */
 async function fetchQuoteTransportGroups({ poGroups, deliveryPincode, deliveryAddr }) {
   const fallbackMetaByVendor = await loadFallbackSupplierPickupMeta(poGroups);
@@ -1026,36 +1080,47 @@ async function fetchQuoteTransportGroups({ poGroups, deliveryPincode, deliveryAd
 
   let upstreamResults = [];
   if (upstreamGroups.length > 0) {
-    try {
-      const { r, raw, json, url } = await postQuoteTransportGroupsUpstream(upstreamGroups);
-      if (!r.ok) {
-        const upstreamMsg =
-          pickStr(json.message, json.error, json.detail) ||
-          (raw.length > 0 && raw.length < 500 && !raw.trimStart().startsWith('<')
-            ? `Logistics API HTTP ${r.status}: ${raw.trim().slice(0, 400)}`
-            : `Logistics quote-transport-groups returned HTTP ${r.status}.`);
-        const errDetail = `URL: ${url} · ${upstreamMsg}`;
-        console.error('[logistics] quote-transport-groups upstream error:', errDetail);
-        for (const meta of groupMetas) {
-          if (!meta.quoteError) meta.quoteError = errDetail;
+    const quoteCacheKey =
+      LOGISTICS_QUOTE_CACHE_TTL_MS > 0
+        ? buildTransportQuoteRequestCacheKey(upstreamGroups, deliveryPincode)
+        : '';
+    const cachedUpstream = quoteCacheKey ? transportQuoteResultCacheGet(quoteCacheKey) : null;
+
+    if (cachedUpstream) {
+      upstreamResults = cachedUpstream;
+    } else {
+      const useSingularUpstream = upstreamGroups.length === 1;
+      try {
+        const { r, raw, json, url, endpointLabel } = await postLogisticsQuoteUpstream(
+          useSingularUpstream
+            ? { singleBody: upstreamGroups[0] }
+            : { groups: upstreamGroups }
+        );
+
+        if (!r.ok) {
+          const upstreamMsg =
+            pickStr(json.message, json.error, json.detail) ||
+            (raw.length > 0 && raw.length < 500 && !raw.trimStart().startsWith('<')
+              ? `Logistics API HTTP ${r.status}: ${raw.trim().slice(0, 400)}`
+              : `Logistics ${endpointLabel} returned HTTP ${r.status}.`);
+          const errDetail = `URL: ${url} · ${upstreamMsg}`;
+          console.error(`[logistics] ${endpointLabel} upstream error:`, errDetail);
+          for (const meta of groupMetas) {
+            if (!meta.quoteError) meta.quoteError = errDetail;
+          }
+        } else {
+          upstreamResults = extractUpstreamQuoteResults(json, useSingularUpstream);
+          if (quoteCacheKey) transportQuoteResultCacheSet(quoteCacheKey, upstreamResults);
         }
-      } else {
-        upstreamResults = Array.isArray(json.results)
-          ? json.results
-          : Array.isArray(json.groups)
-            ? json.groups
-            : Array.isArray(json)
-              ? json
-              : [];
-      }
-    } catch (e) {
-      const name = String(e?.name || '');
-      const errMsg =
-        name === 'TimeoutError' || name === 'AbortError'
-          ? 'Transport quote timed out. Retry, or raise LOGISTICS_UPSTREAM_TIMEOUT_MS on the server.'
-          : `${e?.message || 'Logistics service unreachable'}. Is LOGISTICS_MODULE_URL correct?`;
-      for (const meta of groupMetas) {
-        if (!meta.quoteError) meta.quoteError = errMsg;
+      } catch (e) {
+        const name = String(e?.name || '');
+        const errMsg =
+          name === 'TimeoutError' || name === 'AbortError'
+            ? 'Transport quote timed out. Retry, or raise LOGISTICS_UPSTREAM_TIMEOUT_MS on the server.'
+            : `${e?.message || 'Logistics service unreachable'}. Is LOGISTICS_MODULE_URL correct?`;
+        for (const meta of groupMetas) {
+          if (!meta.quoteError) meta.quoteError = errMsg;
+        }
       }
     }
   }
@@ -1150,7 +1215,7 @@ router.post(
         });
       }
 
-      const result = await fetchCourierQuotes({ deliveryPincode, deliveryAddr, poGroups });
+      const result = await fetchQuoteTransportGroups({ poGroups, deliveryPincode, deliveryAddr });
       const id = randomBytes(24).toString('hex');
       bridgeSessions.set(id, {
         expiresAt: Date.now() + BRIDGE_TTL_MS,
@@ -1175,32 +1240,60 @@ router.post(
   }
 );
 
+async function handleQuoteTransportRequest(req, res, { requireSingleGroup = false } = {}) {
+  const body = req.body || {};
+  const { poGroups } = body;
+  if (!Array.isArray(poGroups) || poGroups.length === 0) {
+    return res.status(400).json({ status: 'error', message: 'poGroups array is required' });
+  }
+  if (requireSingleGroup && poGroups.length !== 1) {
+    return res.status(400).json({
+      status: 'error',
+      message:
+        'quote-transport-group accepts exactly one transport group. Use quote-transport-groups for multiple groups.'
+    });
+  }
+
+  const { deliveryAddr, deliveryPincode } = resolveDeliveryPincode(body);
+  if (!isAddressComplete(deliveryAddr) || !deliveryPincode) {
+    return res.status(400).json({
+      status: 'error',
+      message: 'Complete delivery address with a valid 6-digit pincode is required for logistics quotes.'
+    });
+  }
+
+  const result = await fetchQuoteTransportGroups({ poGroups, deliveryPincode, deliveryAddr });
+  return res.json({
+    deliveryPincode,
+    deliveryAddress: result.deliveryAddressUsed,
+    shipments: result.shipments
+  });
+}
+
+router.post(
+  '/quote-transport-group',
+  authenticateToken,
+  isServiceProviderOrSupplier,
+  async (req, res) => {
+    try {
+      await handleQuoteTransportRequest(req, res, { requireSingleGroup: true });
+    } catch (error) {
+      console.error('[logistics] quote-transport-group error:', error);
+      res.status(500).json({
+        status: 'error',
+        message: error?.message || 'Failed to load transport group quote'
+      });
+    }
+  }
+);
+
 router.post(
   '/quote-transport-groups',
   authenticateToken,
   isServiceProviderOrSupplier,
   async (req, res) => {
     try {
-      const body = req.body || {};
-      const { poGroups } = body;
-      if (!Array.isArray(poGroups) || poGroups.length === 0) {
-        return res.status(400).json({ status: 'error', message: 'poGroups array is required' });
-      }
-
-      const { deliveryAddr, deliveryPincode } = resolveDeliveryPincode(body);
-      if (!isAddressComplete(deliveryAddr) || !deliveryPincode) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Complete delivery address with a valid 6-digit pincode is required for logistics quotes.'
-        });
-      }
-
-      const result = await fetchQuoteTransportGroups({ poGroups, deliveryPincode, deliveryAddr });
-      res.json({
-        deliveryPincode,
-        deliveryAddress: result.deliveryAddressUsed,
-        shipments: result.shipments
-      });
+      await handleQuoteTransportRequest(req, res);
     } catch (error) {
       console.error('[logistics] quote-transport-groups error:', error);
       res.status(500).json({

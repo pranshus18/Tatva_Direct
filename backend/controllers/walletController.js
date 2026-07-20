@@ -1,7 +1,8 @@
 import express from 'express';
 import {
   requireAuthentication as authenticateToken,
-  requireServiceProvider
+  requireServiceProvider,
+  requirePlatformVaultUser
 } from '../middleware/authMiddleware.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
 import {
@@ -16,25 +17,30 @@ import {
 import {
   createWalletBankAccount,
   createWalletWithdrawalRequest,
-  completeWalletTopup,
-  createWalletTopupRecord,
   getOrCreateWallet,
   listWalletBankAccounts,
   listWalletWithdrawalRequests,
-  summarizeWalletLedger,
   getWalletBalance,
-  listWalletTransactions,
   payOrderFromWallet
 } from '../services/walletService.js';
-import { enrichWalletTransactions } from '../services/walletHistoryService.js';
-import {
-  createRazorpayOrder,
-  fetchRazorpayPayment,
-  getRazorpayPublicConfig,
-  isRazorpayConfigured,
-  verifyRazorpayPaymentSignature
-} from '../services/razorpayService.js';
+import { getRazorpayPublicConfig } from '../services/razorpayService.js';
 import { httpStatusForUpstreamError } from '../utils/paymentNormalize.js';
+import {
+  completePmVaultTopup,
+  ensurePmVaultAuth,
+  getPmVaultWalletView,
+  initiatePmVaultTopup,
+  readPmCredentialsFromRequest,
+  usesPlatformVault
+} from '../services/pmVaultService.js';
+
+function normalizeUserType(value) {
+  return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function vaultPagePath(userType) {
+  return normalizeUserType(userType) === 'supplier' ? '/supplier-wallet' : '/wallet';
+}
 
 const walletRouter = express.Router();
 
@@ -48,72 +54,147 @@ function normalizeLimit(raw) {
   return Math.max(1, Math.min(parsed, 200));
 }
 
-walletRouter.get('/config', authenticateToken, (_req, res) => {
+function pmAuthErrorResponse(res, error) {
+  if (error?.code === 'PM_AUTH_REQUIRED') {
+    return res.status(401).json({ status: 'error', code: error.code, message: error.message });
+  }
+  return null;
+}
+
+walletRouter.get('/config', authenticateToken, requirePlatformVaultUser, (req, res) => {
+  const platformVault = usesPlatformVault(req.user);
+  const razorpay = getRazorpayPublicConfig();
+
   res.json({
     status: 'success',
     config: {
-      razorpay: getRazorpayPublicConfig(),
+      razorpay: {
+        ...razorpay,
+        enabled: platformVault || razorpay.isConfigured,
+        isConfigured: platformVault || razorpay.isConfigured
+      },
+      pmVault: {
+        enabled: platformVault,
+        source: platformVault ? 'pm_platform' : null
+      },
       minTopupInr: topupMinAmount()
     }
   });
 });
 
-walletRouter.get('/balance', authenticateToken, requireServiceProvider, async (req, res) => {
+/** Header pill balance — service provider + supplier portals (PM vault when linked). */
+walletRouter.get('/header-balance', authenticateToken, async (req, res) => {
   try {
-    const result = await getWalletBalance({
-      userId: req.userId,
-      walletType: 'customer'
-    });
-    return res.json({
-      status: 'success',
-      wallet: result.wallet,
-      balance: result.balance
-    });
+    const userType = normalizeUserType(req.user?.user_type);
+    const credentials = readPmCredentialsFromRequest(req);
+
+    if (usesPlatformVault(req.user)) {
+      try {
+        const pmWallet = await getPmVaultWalletView(req.user, credentials);
+        return res.json({
+          status: 'success',
+          visible: true,
+          source: 'pm_vault',
+          linked: true,
+          balance: pmWallet.balance,
+          vault: pmWallet.wallet,
+          vaultPath: vaultPagePath(userType)
+        });
+      } catch (e) {
+        if (e?.code === 'PM_AUTH_REQUIRED') {
+          return res.json({
+            status: 'success',
+            visible: true,
+            source: 'pm_vault',
+            linked: false,
+            balance: null,
+            vaultPath: vaultPagePath(userType),
+            message: e.message
+          });
+        }
+        throw e;
+      }
+    }
+
+    return res.json({ status: 'success', visible: false });
   } catch (e) {
-    console.error('[Wallet] balance error:', e);
-    return res.status(500).json({ status: 'error', message: 'Failed to load wallet balance' });
+    console.error('[Vault] header balance error:', e);
+    const authResp = pmAuthErrorResponse(res, e);
+    if (authResp) return authResp;
+    const status = httpStatusForUpstreamError(e);
+    return res.status(status).json({
+      status: 'error',
+      message: e.message || 'Failed to load vault balance'
+    });
   }
 });
 
-walletRouter.get('/transactions', authenticateToken, requireServiceProvider, async (req, res) => {
+walletRouter.get('/balance', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
-    const payload = parseWithSchema(walletTransactionsListSchema, req.query || {});
-    const wallet = await getOrCreateWallet({ userId: req.userId, walletType: 'customer' });
-    const { rows, pageInfo } = await listWalletTransactions({
-      walletId: wallet.id,
-      limit: normalizeLimit(payload.limit),
-      cursor: payload.cursor || null,
-      from: payload.from || null,
-      to: payload.to || null,
-      search: payload.search || null
-    });
-    const history = await enrichWalletTransactions({ wallet, transactions: rows });
+    const credentials = readPmCredentialsFromRequest(req);
+    const pmWallet = await getPmVaultWalletView(req.user, credentials);
     return res.json({
       status: 'success',
-      transactions: history,
-      pageInfo
+      vault: pmWallet.vault || pmWallet.wallet,
+      balance: pmWallet.balance,
+      holdingAmount: pmWallet.holdingAmount ?? 0,
+      transactions: pmWallet.transactions || [],
+      summary: pmWallet.summary,
+      source: 'pm_vault'
     });
   } catch (e) {
-    console.error('[Wallet] transactions error:', e);
+    console.error('[Vault] balance error:', e);
+    const authResp = pmAuthErrorResponse(res, e);
+    if (authResp) return authResp;
+    const status = httpStatusForUpstreamError(e);
+    return res.status(status).json({ status: 'error', message: e.message || 'Failed to load vault balance' });
+  }
+});
+
+walletRouter.get('/transactions', authenticateToken, requirePlatformVaultUser, async (req, res) => {
+  try {
+    const credentials = readPmCredentialsFromRequest(req);
+    const pmWallet = await getPmVaultWalletView(req.user, credentials);
+    return res.json({
+      status: 'success',
+      transactions: pmWallet.transactions || [],
+      pageInfo: {
+        hasMore: false,
+        nextCursor: null
+      },
+      source: 'pm_vault'
+    });
+  } catch (e) {
+    console.error('[Vault] transactions error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
-    return res.status(500).json({ status: 'error', message: 'Failed to load wallet transactions' });
+    const authResp = pmAuthErrorResponse(res, e);
+    if (authResp) return authResp;
+    const status = httpStatusForUpstreamError(e);
+    return res.status(status).json({ status: 'error', message: e.message || 'Failed to load vault transactions' });
   }
 });
 
-walletRouter.get('/ledger-summary', authenticateToken, requireServiceProvider, async (req, res) => {
+walletRouter.get('/ledger-summary', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
-    const wallet = await getOrCreateWallet({ userId: req.userId, walletType: 'customer' });
-    const summary = await summarizeWalletLedger({ walletId: wallet.id });
-    return res.json({ status: 'success', summary });
+    const credentials = readPmCredentialsFromRequest(req);
+    const pmWallet = await getPmVaultWalletView(req.user, credentials);
+    return res.json({
+      status: 'success',
+      summary: pmWallet.summary,
+      source: 'pm_vault'
+    });
   } catch (e) {
-    console.error('[Wallet] ledger summary error:', e);
-    return res.status(500).json({ status: 'error', message: 'Failed to load wallet ledger summary' });
+    console.error('[Vault] ledger summary error:', e);
+    const authResp = pmAuthErrorResponse(res, e);
+    if (authResp) return authResp;
+    const status = httpStatusForUpstreamError(e);
+    return res.status(status).json({ status: 'error', message: e.message || 'Failed to load vault ledger summary' });
   }
 });
 
-walletRouter.post('/topup/create', authenticateToken, requireServiceProvider, async (req, res) => {
+walletRouter.post('/topup/create', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
     const payload = parseWithSchema(walletTopupCreateSchema, req.body || {});
     const amount = Number.parseFloat(String(payload.amount || '0'));
@@ -124,141 +205,104 @@ walletRouter.post('/topup/create', authenticateToken, requireServiceProvider, as
     if (amount < minTopup) {
       return res.status(400).json({
         status: 'error',
-        message: `Minimum wallet credit amount is INR ${minTopup}`
+        message: `Minimum vault credit amount is INR ${minTopup}`
       });
     }
 
-    const customerWallet = await getOrCreateWallet({
-      userId: req.userId,
-      walletType: 'customer'
-    });
-
-    if (!isRazorpayConfigured()) {
-      return res.status(503).json({
-        status: 'error',
-        code: 'RAZORPAY_NOT_CONFIGURED',
-        message: 'Online payment gateway is not configured. Wallet credit cannot be completed.'
-      });
-    }
-
-    const rpOrder = await createRazorpayOrder({
+    const credentials = readPmCredentialsFromRequest(req);
+    const { pmUserId, accessToken } = await ensurePmVaultAuth(req.user, credentials);
+    const paymentIntent = await initiatePmVaultTopup({
+      pmUserId,
       amountInRupees: amount,
-      receipt: `WTOP-${Date.now()}`,
-      notes: {
-        purpose: 'wallet_topup',
-        userId: req.userId,
-        walletId: customerWallet.id
-      }
-    });
-
-    const topup = await createWalletTopupRecord({
-      walletId: customerWallet.id,
-      userId: req.userId,
-      amount,
-      idempotencyKey: payload.idempotencyKey || null,
-      razorpayOrderId: rpOrder.id,
-      metadata: {
-        createdByRoute: 'POST /api/wallet/topup/create'
-      }
+      description: 'Vault top-up',
+      accessToken
     });
 
     return res.json({
       status: 'success',
-      walletTopup: {
-        id: topup.id,
-        amount: topup.amount,
-        status: topup.status
+      vaultTopup: {
+        id: paymentIntent.orderId,
+        amount,
+        status: 'pending',
+        source: 'pm_vault'
       },
       paymentIntent: {
-        provider: 'razorpay',
-        orderId: rpOrder.id,
-        amount: rpOrder.amount,
-        currency: rpOrder.currency,
-        keyId: getRazorpayPublicConfig().keyId
-      }
+        provider: paymentIntent.provider,
+        orderId: paymentIntent.orderId,
+        amount: paymentIntent.amount,
+        currency: paymentIntent.currency,
+        keyId: paymentIntent.keyId
+      },
+      source: 'pm_vault'
     });
   } catch (e) {
-    console.error('[Wallet] topup create error:', e);
+    console.error('[Vault] topup create error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
+    const authResp = pmAuthErrorResponse(res, e);
+    if (authResp) return authResp;
     const status = httpStatusForUpstreamError(e);
     return res.status(status).json({
       status: 'error',
-      message: e.message || 'Failed to create wallet credit'
+      message: e.message || 'Failed to create vault credit'
     });
   }
 });
 
-walletRouter.post('/topup/confirm', authenticateToken, requireServiceProvider, async (req, res) => {
+walletRouter.post('/topup/confirm', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
-    if (!isRazorpayConfigured()) {
-      return res.status(503).json({
-        status: 'error',
-        code: 'RAZORPAY_NOT_CONFIGURED',
-        message: 'Wallet credit verification is unavailable.'
-      });
-    }
-
     const payload = parseWithSchema(walletTopupConfirmSchema, req.body || {});
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = payload;
-    const isValid = verifyRazorpayPaymentSignature({
-      orderId: razorpayOrderId,
-      paymentId: razorpayPaymentId,
-      signature: razorpaySignature
-    });
-    if (!isValid) {
-      return res.status(400).json({ status: 'error', message: 'Invalid payment signature' });
-    }
+    const credentials = readPmCredentialsFromRequest(req);
+    const { accessToken } = await ensurePmVaultAuth(req.user, credentials);
 
-    const payment = await fetchRazorpayPayment(razorpayPaymentId);
-    if (!payment || payment.order_id !== razorpayOrderId) {
-      return res.status(400).json({ status: 'error', message: 'Payment does not match wallet credit order' });
-    }
-    if (payment.status !== 'captured') {
-      return res.status(400).json({ status: 'error', message: 'Wallet credit payment is not captured yet' });
-    }
-
-    const topup = await completeWalletTopup({
+    const completion = await completePmVaultTopup({
       razorpayOrderId,
       razorpayPaymentId,
       razorpaySignature,
-      actorUserId: req.userId,
-      expectedUserId: req.userId
+      accessToken
     });
+    const pmWallet = await getPmVaultWalletView(req.user, credentials);
 
-    const balance = await getWalletBalance({ userId: req.userId, walletType: 'customer' });
     return res.json({
       status: 'success',
-      walletTopup: topup,
-      wallet: balance.wallet,
-      balance: balance.balance
+      vaultTopup: {
+        id: razorpayOrderId,
+        status: 'completed',
+        razorpayOrderId,
+        razorpayPaymentId,
+        source: 'pm_vault',
+        completion
+      },
+      vault: pmWallet.wallet,
+      balance: pmWallet.balance,
+      source: 'pm_vault'
     });
   } catch (e) {
-    console.error('[Wallet] topup confirm error:', e);
+    console.error('[Vault] topup confirm error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
-    if (e?.code === 'WALLET_TOPUP_NOT_FOUND') {
-      return res.status(404).json({ status: 'error', message: e.message });
-    }
-    if (e?.code === 'WALLET_TOPUP_FORBIDDEN') {
-      return res.status(403).json({ status: 'error', message: e.message });
-    }
-    return res.status(500).json({ status: 'error', message: e.message || 'Failed to confirm wallet credit' });
+    const authResp = pmAuthErrorResponse(res, e);
+    if (authResp) return authResp;
+    const status = httpStatusForUpstreamError(e);
+    return res.status(status).json({ status: 'error', message: e.message || 'Failed to confirm vault credit' });
   }
 });
 
 walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProvider, async (req, res) => {
   try {
     const payload = parseWithSchema(walletPayOrderSchema, req.body || {});
+    const credentials = readPmCredentialsFromRequest(req);
     const result = await payOrderFromWallet({
       orderId: req.params.id,
       actorUserId: req.userId,
       actorRole: req.user?.user_type || null,
       requestId: req.requestId || null,
       ipAddress: req.ip || null,
-      idempotencyKey: payload.idempotencyKey || null
+      idempotencyKey: payload.idempotencyKey || null,
+      pmCredentials: credentials
     });
     return res.json({
       status: 'success',
@@ -270,10 +314,12 @@ walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProvider, 
       invoiceSummary: result.invoiceSummary || null
     });
   } catch (e) {
-    console.error('[Wallet] order pay error:', e);
+    console.error('[Vault] order pay error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
+    const authResp = pmAuthErrorResponse(res, e);
+    if (authResp) return authResp;
     if (e?.code === 'ORDER_NOT_FOUND') {
       return res.status(404).json({ status: 'error', message: e.message });
     }
@@ -289,7 +335,7 @@ walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProvider, 
     if (e?.code === 'WALLET_BALANCE_CONFLICT') {
       return res.status(409).json({ status: 'error', code: e.code, message: e.message });
     }
-    return res.status(500).json({ status: 'error', message: e.message || 'Failed to pay order from wallet' });
+    return res.status(500).json({ status: 'error', message: e.message || 'Failed to pay order from vault' });
   }
 });
 
@@ -305,7 +351,7 @@ walletRouter.get('/withdrawals', authenticateToken, requireServiceProvider, asyn
     });
     return res.json({ status: 'success', withdrawals: result.rows, pageInfo: result.pageInfo });
   } catch (e) {
-    console.error('[Wallet] withdrawals list error:', e);
+    console.error('[Vault] withdrawals list error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
@@ -318,7 +364,7 @@ walletRouter.get('/withdraw/bank-accounts', authenticateToken, requireServicePro
     const rows = await listWalletBankAccounts({ userId: req.userId });
     return res.json({ status: 'success', bankAccounts: rows });
   } catch (e) {
-    console.error('[Wallet] list bank accounts error:', e);
+    console.error('[Vault] list bank accounts error:', e);
     return res.status(500).json({ status: 'error', message: 'Failed to load bank accounts' });
   }
 });
@@ -338,7 +384,7 @@ walletRouter.post('/withdraw/bank-accounts', authenticateToken, requireServicePr
     });
     return res.json({ status: 'success', bankAccount });
   } catch (e) {
-    console.error('[Wallet] create bank account error:', e);
+    console.error('[Vault] create bank account error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
@@ -371,7 +417,7 @@ walletRouter.post('/withdraw', authenticateToken, requireServiceProvider, async 
       balance: balance.balance
     });
   } catch (e) {
-    console.error('[Wallet] withdrawal error:', e);
+    console.error('[Vault] withdrawal error:', e);
     if (String(e?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
     }
@@ -384,7 +430,7 @@ walletRouter.post('/withdraw', authenticateToken, requireServiceProvider, async 
     if (e?.code === 'WALLET_BALANCE_CONFLICT') {
       return res.status(409).json({ status: 'error', code: e.code, message: e.message });
     }
-    return res.status(500).json({ status: 'error', message: e.message || 'Failed to withdraw from wallet' });
+    return res.status(500).json({ status: 'error', message: e.message || 'Failed to withdraw from vault' });
   }
 });
 

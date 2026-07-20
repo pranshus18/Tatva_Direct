@@ -1,12 +1,15 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
+import { clearPmAuthSession } from './utils/pmAuthSession';
 import ServiceProviderRoute from './components/ServiceProviderRoute';
 import SupplierRoute from './components/SupplierRoute';
 import AdminRoute from './components/AdminRoute';
 import { getApiUrl } from './config/api';
-import { normalizeUser, normalizeUserType } from './utils/userType';
 import { getPostAuthRedirectPath } from './utils/authRedirect';
+import { fetchPortalStatus, syncPortalUser } from './services/portalService';
+import { isSupplierRegistered, isServiceProviderRegistered } from './utils/portalRoles';
+import { normalizeUser, normalizeUserType } from './utils/userType';
 import {
   clearSpWorkflowStorage,
   ensureSpWorkflowOwner,
@@ -47,8 +50,9 @@ const Layout = safeLazy(() => import('./components/Layout'), 'Layout shell');
 const Toaster = safeLazyNamed(() => import('sonner'), 'Toaster', 'Toast notifications');
 
 const Login = safeLazy(() => import('./pages/Login'), 'Login page');
+const PmOtpAuth = safeLazy(() => import('./pages/PmOtpAuth'), 'PM OTP auth page');
+const RegisterAsSupplier = safeLazy(() => import('./pages/RegisterAsSupplier'), 'Register as Supplier page');
 const AdminLogin = safeLazy(() => import('./pages/AdminLogin'), 'Admin Login page');
-const Signup = safeLazy(() => import('./pages/Signup'), 'Signup page');
 const Profile = safeLazy(() => import('./pages/Profile'), 'Profile page');
 const ServiceProviderDashboard = safeLazy(
   () => import('./pages/ServiceProviderDashboard'),
@@ -138,7 +142,7 @@ const Substitution = safeLazy(() => import('./pages/Substitution'), 'Substitutio
 const CreatePO = safeLazy(() => import('./pages/CreatePO'), 'Create PO page');
 const TransportSuggestion = safeLazy(() => import('./pages/TransportSuggestion'), 'Transport Suggestion page');
 const YourOrders = safeLazy(() => import('./pages/YourOrders'), 'Your Orders page');
-const Wallet = safeLazy(() => import('./pages/Wallet'), 'Wallet page');
+const Wallet = safeLazy(() => import('./pages/Wallet'), 'Vault balance page');
 const Cart = safeLazy(() => import('./pages/Cart'), 'Cart page');
 const SharedCart = safeLazy(() => import('./pages/SharedCart'), 'Shared Cart page');
 
@@ -200,6 +204,20 @@ function App() {
         if (normalizeUserType(parsedUser.userType) === 'supplier') {
           checkSupplierSetupStatus(token);
         }
+
+        fetchPortalStatus()
+          .then((status) => {
+            const syncedUser = normalizeUser({
+              ...parsedUser,
+              registeredRoles: status.registeredRoles,
+              supplierRegistered: status.supplierRegistered,
+              serviceProviderRegistered: status.serviceProviderRegistered,
+              activePortal: status.activePortal
+            });
+            localStorage.setItem('user', JSON.stringify(syncedUser));
+            setUser(syncedUser);
+          })
+          .catch(() => {});
       } catch (error) {
         console.error('Error parsing saved user:', error);
         localStorage.removeItem('token');
@@ -269,7 +287,18 @@ function App() {
   };
 
   const handleLogin = async (userData) => {
-    const normalizedUser = normalizeUser(userData);
+    let normalizedUser = normalizeUser(userData);
+    const token = localStorage.getItem('token');
+
+    if (token) {
+      try {
+        normalizedUser = await syncPortalUser(normalizedUser);
+        localStorage.setItem('user', JSON.stringify(normalizedUser));
+      } catch {
+        // Keep login response if portal status sync fails.
+      }
+    }
+
     const ownerChanged = ensureSpWorkflowOwner(normalizedUser?.id);
     if (ownerChanged) {
       resetWorkflow();
@@ -279,21 +308,36 @@ function App() {
     
     // Check supplier setup status if user is a supplier
     if (normalizeUserType(normalizedUser.userType) === 'supplier') {
-      const token = localStorage.getItem('token');
       if (token) {
         await checkSupplierSetupStatus(token);
       }
     }
   };
 
+  const handlePortalChange = async (userData) => {
+    const normalizedUser = normalizeUser(userData);
+    setUser(normalizedUser);
+    localStorage.setItem('user', JSON.stringify(normalizedUser));
+
+    if (normalizeUserType(normalizedUser.userType) === 'supplier') {
+      const token = localStorage.getItem('token');
+      if (token) {
+        await checkSupplierSetupStatus(token);
+      }
+    }
+
+    window.location.assign(getPostAuthRedirectPath(normalizedUser.userType));
+  };
+
   const handleLogout = () => {
+    const wasAdmin = normalizeUserType(user?.userType) === 'admin';
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    clearPmAuthSession();
     setUser(null);
     setIsAuthenticated(false);
     resetWorkflow();
-    // Full navigation so supplier (and other) pages never render with user=null
-    window.location.replace('/login');
+    window.location.replace(wasAdmin ? '/admin-login' : '/pm-auth');
   };
 
   // Reset state when starting over
@@ -343,7 +387,10 @@ function App() {
     const userType = normalizeUserType(user?.userType);
 
     if (!isAuthenticated) {
-      return idlePrefetch([() => import('./pages/Login'), () => import('./pages/Signup')]);
+      return idlePrefetch([
+        () => import('./pages/PmOtpAuth'),
+        () => import('./pages/Login')
+      ]);
     }
 
     if (userType === 'service_provider') {
@@ -398,11 +445,11 @@ function App() {
 
   const supplierPortal = (page) => {
     if (!isAuthenticated) {
-      return <Navigate to="/login" replace />;
+      return <Navigate to="/pm-auth" replace />;
     }
     return (
       <SupplierRoute user={user}>
-        <Layout user={user} onLogout={handleLogout}>
+        <Layout user={user} onLogout={handleLogout} onPortalChange={handlePortalChange}>
           {page}
         </Layout>
       </SupplierRoute>
@@ -451,13 +498,14 @@ function App() {
         />
         <Route path="/supplier-purchase-total" element={supplierPortal(<SupplierPurchaseTotal />)} />
         <Route path="/supplier-bcov" element={supplierPortal(<SupplierBCOV user={user} />)} />
-        <Route 
-          path="/login" 
+        <Route path="/pm-auth" element={<PmOtpAuth onLogin={handleLogin} />} />
+        <Route
+          path="/login"
           element={
-            isAuthenticated ? 
-            authRedirectElement() : 
-            <Login onLogin={handleLogin} />
-          } 
+            isAuthenticated ?
+            authRedirectElement() :
+            <Navigate to="/pm-auth" replace />
+          }
         />
         <Route 
           path="/admin-login" 
@@ -469,13 +517,28 @@ function App() {
             <AdminLogin onLogin={handleLogin} />
           } 
         />
-        <Route 
-          path="/signup" 
+        <Route
+          path="/signup"
           element={
-            isAuthenticated ? 
-            authRedirectElement() : 
-            <Signup onLogin={handleLogin} />
-          } 
+            isAuthenticated ?
+            authRedirectElement() :
+            <Navigate to="/pm-auth" replace />
+          }
+        />
+
+        <Route
+          path="/register-supplier"
+          element={
+            !isAuthenticated ? (
+              <Navigate to="/pm-auth" replace />
+            ) : isSupplierRegistered(user) ? (
+              <Navigate to="/supplier-dashboard" replace />
+            ) : !isServiceProviderRegistered(user) ? (
+              <Navigate to={getPostAuthRedirectPath(user?.userType)} replace />
+            ) : (
+              <RegisterAsSupplier user={user} onPortalChange={handlePortalChange} />
+            )
+          }
         />
         
         {/* Protected Routes */}
@@ -483,7 +546,7 @@ function App() {
           path="/" 
           element={
             <ProtectedRoute isAuthenticated={isAuthenticated}>
-              <Layout user={user} onLogout={handleLogout} />
+              <Layout user={user} onLogout={handleLogout} onPortalChange={handlePortalChange} />
             </ProtectedRoute>
           }
         >
@@ -757,8 +820,11 @@ function App() {
           />
         </Route>
         
-        {/* Redirect to login if not authenticated */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        {/* Redirect to PM SSO or login if not authenticated */}
+        <Route
+          path="*"
+          element={<Navigate to="/pm-auth" replace />}
+        />
       </Routes>
       </Suspense>
       <Suspense fallback={null}>

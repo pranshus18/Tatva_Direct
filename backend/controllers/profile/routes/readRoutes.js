@@ -5,17 +5,22 @@ import {
   parseBrandTokens,
   resolveChainRoleOptionsForBrands
 } from '../profileHelpers.js';
+import { syncPmCustomerProfileForUser } from '../../../services/pmUserService.js';
 
 export function registerProfileReadRoutes(router) {
   router.get('/', authenticateToken, async (req, res) => {
     try {
-      const { data: user, error } = await supabase.from('users').select('*').eq('id', req.userId).single();
+      let { data: user, error } = await supabase.from('users').select('*').eq('id', req.userId).single();
 
       if (error || !user) {
         return res.status(404).json({
           status: 'error',
           message: 'User not found'
         });
+      }
+
+      if (user.user_type === 'service_provider' && user.phone) {
+        user = await syncPmCustomerProfileForUser(user);
       }
 
       delete user.password;

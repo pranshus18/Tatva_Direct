@@ -15,7 +15,7 @@ const VoiceCommerce = ({ user }) => {
   const session = useVoiceSessionContext();
 
   if (!token) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/pm-auth" replace />;
   }
 
   if (userType && userType !== 'service_provider') {

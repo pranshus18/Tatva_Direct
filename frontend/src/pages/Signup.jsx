@@ -1,25 +1,28 @@
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Eye, EyeOff, Mail, Lock, User, Building, UserPlus, Briefcase, Truck } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { User, Building, UserPlus, Briefcase, Truck, Mail, Phone } from 'lucide-react';
 import tatvaLogo from '../images/tatva_d.png';
 import { getApiUrl } from '../config/api';
 import { normalizeUser } from '../utils/userType';
 import { getPostAuthRedirectPath } from '../utils/authRedirect';
+import { getPmAuthSession, isPmAuthenticated, getPmCustomerCredentials } from '../utils/pmAuthSession';
 import './Auth.css';
 
 const Signup = ({ onLogin }) => {
+  const pmSession = getPmAuthSession();
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     company: '',
-    userType: '', // No default selection
-    password: '',
-    confirmPassword: ''
+    userType: ''
   });
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!isPmAuthenticated()) {
+      window.location.replace('/pm-auth');
+    }
+  }, []);
 
   const handleChange = (e) => {
     setFormData({
@@ -34,20 +37,15 @@ const Signup = ({ onLogin }) => {
     setLoading(true);
     setError('');
 
-    if (formData.password !== formData.confirmPassword) {
-      setError('Passwords do not match');
-      setLoading(false);
-      return;
-    }
-
-    if (formData.password.length < 6) {
-      setError('Password must be at least 6 characters long');
+    if (!formData.userType) {
+      setError('Please select whether you are a Service Provider or Supplier');
       setLoading(false);
       return;
     }
 
     try {
-      const response = await fetch(getApiUrl('/api/auth/signup'), {
+      const pmCredentials = getPmCustomerCredentials();
+      const response = await fetch(getApiUrl('/api/auth/pm-signup'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -57,7 +55,15 @@ const Signup = ({ onLogin }) => {
           email: formData.email,
           company: formData.company,
           userType: formData.userType,
-          password: formData.password
+          phoneNumber: pmSession?.phoneNumber,
+          pmAccessToken: pmCredentials.accessToken || undefined,
+          pmRefreshToken: pmCredentials.refreshToken || undefined,
+          pmProfile: pmCredentials.pmUserId
+            ? {
+                pmUserId: pmCredentials.pmUserId,
+                phoneNumber: pmSession?.phoneNumber
+              }
+            : undefined
         })
       });
 
@@ -72,7 +78,7 @@ const Signup = ({ onLogin }) => {
       } else {
         setError(data.message || 'Signup failed');
       }
-    } catch (error) {
+    } catch (err) {
       setError('Network error. Please try again.');
     } finally {
       setLoading(false);
@@ -84,14 +90,30 @@ const Signup = ({ onLogin }) => {
       <div className="auth-card">
         <div className="auth-header">
           <img src={tatvaLogo} alt="Tatva Direct" className="auth-logo" />
-          <h1>Create Account</h1>
-          <p>Join Tatva Direct for smart procurement</p>
+          <h1>Complete Your Profile</h1>
+          <p>Tell us who you are to finish setting up your account</p>
         </div>
 
         <form onSubmit={handleSubmit} className="auth-form">
           {error && (
             <div className="error-message">
               {error}
+            </div>
+          )}
+
+          {pmSession?.phoneNumber && (
+            <div className="form-group">
+              <label htmlFor="verifiedPhone">Verified Phone</label>
+              <div className="input-wrapper">
+                <Phone size={20} className="input-icon" />
+                <input
+                  type="tel"
+                  id="verifiedPhone"
+                  name="verifiedPhone"
+                  value={`+91 ${pmSession.phoneNumber}`}
+                  readOnly
+                />
+              </div>
             </div>
           )}
 
@@ -144,11 +166,11 @@ const Signup = ({ onLogin }) => {
           </div>
 
           <div className="form-group">
-            <label>Account Type (Optional)</label>
+            <label>I am a *</label>
             <div className="user-type-selection">
-              <div 
+              <div
                 className={`user-type-option ${formData.userType === 'service_provider' ? 'selected' : ''}`}
-                onClick={() => setFormData({...formData, userType: 'service_provider'})}
+                onClick={() => setFormData({ ...formData, userType: 'service_provider' })}
               >
                 <div className="user-type-icon">
                   <Briefcase size={24} />
@@ -167,9 +189,9 @@ const Signup = ({ onLogin }) => {
                 />
               </div>
 
-              <div 
+              <div
                 className={`user-type-option ${formData.userType === 'supplier' ? 'selected' : ''}`}
-                onClick={() => setFormData({...formData, userType: 'supplier'})}
+                onClick={() => setFormData({ ...formData, userType: 'supplier' })}
               >
                 <div className="user-type-icon">
                   <Truck size={24} />
@@ -188,55 +210,6 @@ const Signup = ({ onLogin }) => {
                 />
               </div>
             </div>
-            <p style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '0.5rem' }}>
-              You can skip this and select your role later from your profile
-            </p>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Password</label>
-            <div className="input-wrapper">
-              <Lock size={20} className="input-icon" />
-              <input
-                type={showPassword ? 'text' : 'password'}
-                id="password"
-                name="password"
-                value={formData.password}
-                onChange={handleChange}
-                placeholder="Create a password"
-                required
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowPassword(!showPassword)}
-              >
-                {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-              </button>
-            </div>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="confirmPassword">Confirm Password</label>
-            <div className="input-wrapper">
-              <Lock size={20} className="input-icon" />
-              <input
-                type={showConfirmPassword ? 'text' : 'password'}
-                id="confirmPassword"
-                name="confirmPassword"
-                value={formData.confirmPassword}
-                onChange={handleChange}
-                placeholder="Confirm your password"
-                required
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-              >
-                {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
-              </button>
-            </div>
           </div>
 
           <button type="submit" className="auth-button" disabled={loading}>
@@ -250,15 +223,6 @@ const Signup = ({ onLogin }) => {
             )}
           </button>
         </form>
-
-        <div className="auth-footer">
-          <p>
-            Already have an account?{' '}
-            <Link to="/login" className="auth-link">
-              Sign in here
-            </Link>
-          </p>
-        </div>
       </div>
     </div>
   );

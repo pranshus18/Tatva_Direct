@@ -26,7 +26,7 @@ export const SUPPLIER_NAV_ITEMS = [
   { path: '/supplier-pos', label: 'POS Sales', shortLabel: 'POS', icon: ShoppingCart },
   { path: '/supplier-returns', label: 'Returns', shortLabel: 'Returns', icon: RefreshCw },
   { path: '/supplier-select-yourself', label: 'Select Yourself', shortLabel: 'Select', icon: UserCheck },
-  { path: '/supplier-wallet', label: 'Wallet', shortLabel: 'Wallet', icon: Wallet },
+  { path: '/supplier-wallet', label: 'Vault balance', shortLabel: 'Vault', icon: Wallet },
   { path: '/supplier-discount-insights', label: 'Brand Level COV', shortLabel: 'Brand COV', icon: TrendingUp },
   { path: '/supplier-buyer-purchases', label: 'Sales', shortLabel: 'Sales', icon: Users },
   { path: '/supplier-credit-accounts', label: 'Credit on Account', shortLabel: 'Credit', icon: CreditCard },

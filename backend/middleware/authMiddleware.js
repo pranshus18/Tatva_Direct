@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import { supabase } from '../config/supabase.js';
 import { shouldUpdateLastLogin } from '../utils/lastLoginThrottle.js';
+import { usesPlatformVault } from '../services/pmVaultService.js';
 
 const LAST_LOGIN_UPDATE_INTERVAL_MS =
   Number.parseInt(String(process.env.LAST_LOGIN_UPDATE_INTERVAL_MS || '600000'), 10) || 600000;
@@ -202,6 +203,25 @@ export const requireAdminRole = async (req, res, next) => {
     res.status(500).json({
       status: 'error',
       message: 'Error checking user permissions'
+    });
+  }
+};
+
+export const requirePlatformVaultUser = async (req, res, next) => {
+  try {
+    if (usesPlatformVault(req.user)) {
+      return next();
+    }
+    return res.status(403).json({
+      status: 'error',
+      code: 'VAULT_NOT_AVAILABLE',
+      message:
+        'Vault is available for phone-verified service providers and suppliers. Sign in with phone OTP to link your PM vault.'
+    });
+  } catch (_error) {
+    return res.status(500).json({
+      status: 'error',
+      message: 'Error checking vault access'
     });
   }
 };

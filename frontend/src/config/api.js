@@ -1,4 +1,5 @@
 // API Base URL - automatically detects local development vs production.
+import { getPmCustomerCredentials } from '../utils/pmAuthSession';
 // Priority: 1. Valid environment variable, 2. Local development (localhost), 3. Production URL fallback.
 const DEFAULT_PRODUCTION_API_URL = 'https://tatvadirect.onrender.com';
 const envApiUrl = import.meta.env.VITE_API_BASE_URL;
@@ -72,16 +73,32 @@ export const resolveApiPath = (endpoint) => {
   return getApiUrl(endpoint);
 };
 
+/** Attach PM platform tokens so every customer uses their own shared vault session. */
+export function withPmAuthHeaders(headers = {}) {
+  const { accessToken, refreshToken } = getPmCustomerCredentials();
+  return {
+    ...headers,
+    ...(accessToken ? { 'X-PM-Access-Token': accessToken } : {}),
+    ...(refreshToken ? { 'X-PM-Refresh-Token': refreshToken } : {})
+  };
+}
+
+export function buildAuthHeaders(extra = {}) {
+  const token = localStorage.getItem('token');
+  return withPmAuthHeaders({
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...extra
+  });
+}
+
 // Helper function for fetch calls with authentication
 export const apiFetch = async (endpoint, options = {}) => {
-  const token = localStorage.getItem('token');
   const url = getApiUrl(endpoint);
   
-  const headers = {
+  const headers = buildAuthHeaders({
     'Content-Type': 'application/json',
-    ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     ...(options.headers || {})
-  };
+  });
 
   const response = await fetch(url, {
     ...options,
@@ -111,10 +128,7 @@ export const authFetch = async (endpoint, options = {}) => {
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const signal = externalSignal || controller.signal;
 
-  const headers = {
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...(options.headers || {})
-  };
+  const headers = buildAuthHeaders(options.headers || {});
 
   const targetUrl = /^https?:\/\//i.test(String(endpoint || ''))
     ? String(endpoint)
@@ -131,7 +145,7 @@ export const authFetch = async (endpoint, options = {}) => {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       if (typeof window !== 'undefined') {
-        window.location.replace('/login');
+        window.location.replace('/pm-auth');
       }
       const authError = new Error('Session expired. Please log in again.');
       authError.status = response.status;

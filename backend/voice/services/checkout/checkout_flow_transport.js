@@ -59,11 +59,16 @@ export async function loadTransportQuotes(toolCtx, memory) {
 
   beginTransportLoadingFeedback(toolCtx);
   let logisticsRes;
+  const poGroups = checkout.poGroups;
+  const quotePath =
+    Array.isArray(poGroups) && poGroups.length === 1
+      ? '/api/logistics/quote-transport-group'
+      : '/api/logistics/quote-transport-groups';
   try {
     logisticsRes = await client.post(
-    '/api/logistics/quote-transport-groups',
+    quotePath,
     {
-      poGroups: checkout.poGroups,
+      poGroups,
       shippingAddress: checkout.shippingAddress,
       billingAddress: checkout.billingAddress || checkout.shippingAddress,
       deliveryDestination: checkout.deliveryDestination || 'shipping',

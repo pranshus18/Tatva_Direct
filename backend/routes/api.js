@@ -44,6 +44,7 @@ apiRouter.use('/pos', posRouter);
 apiRouter.use('/core-phase2', corePhase2Router);
 apiRouter.use('/payments', paymentsRouter);
 apiRouter.use('/wallet', walletRouter);
+apiRouter.use('/vault', walletRouter);
 apiRouter.use('/substitutions', substitutionRouter);
 apiRouter.use('/cart-share', cartShareRouter);
 apiRouter.use('/voice', voiceRouter);
