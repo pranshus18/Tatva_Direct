@@ -43,7 +43,7 @@ const blankShippingAddress = {
   city: '',
   state: '',
   pincode: '',
-  country: 'India'
+  country: ''
 };
 
 const todayDateMin = getTodayDateInputValue();
@@ -152,20 +152,6 @@ const ProductDiscovery = () => {
         const next = new URLSearchParams(prev);
         if (safe <= 1) next.delete('page');
         else next.set('page', String(safe));
-        return next;
-      },
-      { replace: true }
-    );
-  };
-
-  const updateSearchQuery = (value) => {
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        const trimmed = String(value || '').trim();
-        if (trimmed) next.set('q', trimmed);
-        else next.delete('q');
-        next.delete('page');
         return next;
       },
       { replace: true }
@@ -549,20 +535,12 @@ const ProductDiscovery = () => {
         }
       />
 
-      <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center gap-3 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur">
-        <div className="relative min-w-[200px] flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            className="pl-9"
-            placeholder="Search by name, brand, category, or description..."
-            value={searchQuery}
-            onChange={(event) => updateSearchQuery(event.target.value)}
-          />
-        </div>
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <select
-          className="h-10 rounded-md border border-input bg-background px-3 text-sm"
+          className="h-10 min-w-[200px] rounded-md border border-input bg-background px-3 text-sm"
           value={selectedCategory}
           onChange={(event) => updateSelectedCategory(event.target.value)}
+          aria-label="Filter by category"
         >
           <option value="">All categories</option>
           {categories.map((category) => (
@@ -609,7 +587,11 @@ const ProductDiscovery = () => {
         <SpEmptyState
           icon={Package}
           title="No products found"
-          description="Try a different search or category, or start from a BOQ upload."
+          description={
+            searchQuery.trim()
+              ? 'Try a different search or category, or start from a BOQ upload.'
+              : 'Try a different category, or start from a BOQ upload.'
+          }
           action={<Button onClick={() => navigate('/boq-normalize')}>Upload BOQ</Button>}
         />
       ) : (
@@ -870,6 +852,7 @@ const ProductDiscovery = () => {
                     <div className="space-y-1">
                       <label className="text-sm font-medium">City</label>
                       <Input
+                        placeholder="e.g. Pune"
                         value={newShippingAddress.city}
                         onChange={(event) =>
                           setNewShippingAddress((prev) => ({ ...prev, city: event.target.value }))
@@ -879,6 +862,7 @@ const ProductDiscovery = () => {
                     <div className="space-y-1">
                       <label className="text-sm font-medium">State</label>
                       <Input
+                        placeholder="e.g. Maharashtra"
                         value={newShippingAddress.state}
                         onChange={(event) =>
                           setNewShippingAddress((prev) => ({ ...prev, state: event.target.value }))
@@ -890,6 +874,7 @@ const ProductDiscovery = () => {
                     <div className="space-y-1">
                       <label className="text-sm font-medium">PIN code</label>
                       <Input
+                        placeholder="e.g. 411026"
                         value={newShippingAddress.pincode}
                         onChange={(event) =>
                           setNewShippingAddress((prev) => ({ ...prev, pincode: event.target.value }))
@@ -899,6 +884,7 @@ const ProductDiscovery = () => {
                     <div className="space-y-1">
                       <label className="text-sm font-medium">Country</label>
                       <Input
+                        placeholder="e.g. India"
                         value={newShippingAddress.country}
                         onChange={(event) =>
                           setNewShippingAddress((prev) => ({ ...prev, country: event.target.value }))

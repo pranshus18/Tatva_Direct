@@ -153,6 +153,8 @@ const ServiceProviderDashboard = ({ user }) => {
           setDashboardError('Your session expired or access is denied. Please log in again.');
           localStorage.removeItem('token');
           localStorage.removeItem('user');
+          localStorage.removeItem('profilePhotoUrl');
+          localStorage.removeItem('profilePhotoUserId');
           navigate('/pm-auth');
           return;
         }

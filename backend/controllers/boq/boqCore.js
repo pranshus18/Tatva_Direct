@@ -62,39 +62,48 @@ export const parseCSV = async (filePath) => {
 // Helper function to parse Excel file
 export const parseExcel = async (filePath) => {
   try {
-    const workbook = xlsx.readFile(filePath);
-    
+    const workbook = xlsx.readFile(filePath, { cellDates: true });
+
     if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
       throw new Error('Excel file contains no sheets');
     }
-    
+
     const keywordRegex = /(description|item|material|product|qty|quantity|unit|uom|rate|price)/i;
-    const sheetCandidates = workbook.SheetNames.map((name) => {
+
+    const scoreSheet = (name) => {
       const worksheet = workbook.Sheets[name];
-      if (!worksheet) return { name, rows: [], score: -1 };
+      if (!worksheet || !worksheet['!ref']) return { name, score: -1 };
 
-      const rows = xlsx.utils.sheet_to_json(worksheet, {
-        defval: '',
-        blankrows: false
-      });
+      const range = xlsx.utils.decode_range(worksheet['!ref']);
+      const rowCount = Math.max(0, range.e.r - range.s.r + 1);
+      const headers = [];
+      for (let col = range.s.c; col <= range.e.c; col += 1) {
+        const cell = worksheet[xlsx.utils.encode_cell({ r: range.s.r, c: col })];
+        if (cell != null && cell.v != null) headers.push(String(cell.v));
+      }
+      const keywordMatches = headers.filter((header) => keywordRegex.test(header)).length;
+      return { name, score: rowCount * 10 + keywordMatches * 100 };
+    };
 
-      const firstRowKeys = rows[0] ? Object.keys(rows[0]) : [];
-      const keywordMatches = firstRowKeys.filter((k) => keywordRegex.test(String(k))).length;
-      // Prefer sheets with more row data and with BOQ-like headers.
-      const score = rows.length * 10 + keywordMatches * 100;
-      return { name, rows, score };
-    });
-
-    const bestSheet = sheetCandidates
-      .filter((s) => Array.isArray(s.rows) && s.rows.length > 0)
+    const bestSheetMeta = workbook.SheetNames.map(scoreSheet)
+      .filter((entry) => entry.score >= 0)
       .sort((a, b) => b.score - a.score)[0];
 
-    if (!bestSheet || !bestSheet.rows || bestSheet.rows.length === 0) {
+    if (!bestSheetMeta) {
       throw new Error('Excel file appears to be empty or contains no data');
     }
 
-    console.log(`[BOQ Parse] Selected Excel sheet: ${bestSheet.name} (rows: ${bestSheet.rows.length})`);
-    return bestSheet.rows;
+    const rows = xlsx.utils.sheet_to_json(workbook.Sheets[bestSheetMeta.name], {
+      defval: '',
+      blankrows: false
+    });
+
+    if (!rows.length) {
+      throw new Error('Excel file appears to be empty or contains no data');
+    }
+
+    console.log(`[BOQ Parse] Selected Excel sheet: ${bestSheetMeta.name} (rows: ${rows.length})`);
+    return rows;
   } catch (error) {
     console.error('Excel parsing error:', error);
     throw new Error(`Failed to parse Excel file: ${error.message}. Please ensure the file is a valid Excel format (.xlsx or .xls) and contains data.`);
@@ -483,7 +492,7 @@ export async function buildSupplyChainInfoForProducts(productIds, siteGeo) {
 }
 
 // Helper function to normalize product name by matching with database products
-export const normalizeProductName = async (rawName) => {
+export const normalizeProductName = async (rawName, options = {}) => {
   const normalizedInput = normalizeText(String(rawName || ''));
   if (!normalizedInput) {
     return {
@@ -521,54 +530,92 @@ export const normalizeProductName = async (rawName) => {
   // Build expanded search query - search in multiple ways for better matching
   // 1. Search in product names and descriptions
   // 2. Use multiple search patterns (exact, contains, word-based)
-  const searchTerms = extractTokens(normalizedInput).filter(term => term.length > 2);
+  // PostgREST `.or()` treats commas as delimiters; spaces in values are safer as `%`.
+  const sanitizeOrIlikePattern = (value) =>
+    `%${String(value || '')
+      .replace(/[,()]/g, ' ')
+      .replace(/[%_]/g, ' ')
+      .replace(/\s+/g, '%')
+      .replace(/%+/g, '%')
+      .replace(/^%|%$/g, '')}%`;
+
+  const searchTerms = extractTokens(normalizedInput).filter((term) => term.length > 2);
   const searchPatterns = [
-    `%${itemNameLower}%`,  // Full text contains
-    ...searchTerms.map(term => `%${term}%`)  // Individual words
-  ];
-  const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, []);
-  
-  // Build query - first try with supplier_products join, fallback to products only
-  let query = supabase
-    .from('products')
-    .select(`
-      *,
-      supplier_products(
-        id,
-        price,
-        stock,
-        location,
-        attributes,
-        status,
-        is_active,
-        supplier_id,
-        supplier:users!supplier_products_supplier_id_fkey (id, name, company, email, phone, address, profile)
-      )
-    `);
-  
-  // Add category filter if detected (but don't restrict too much)
-  if (itemCategory !== 'other') {
-    query = query.eq('category', itemCategory);
-  }
-  
-  // Use OR condition for flexible matching
-  const orConditions = searchPatterns.map(pattern => 
-    `name.ilike.${pattern},description.ilike.${pattern}`
-  ).join(',');
-  
-  query = query.or(orConditions);
-  
-  // Get more results to score them all
-  query = query.limit(100);
-  
-  const { data: products, error } = await query;
-  
+    sanitizeOrIlikePattern(itemNameLower),
+    ...searchTerms.map((term) => sanitizeOrIlikePattern(term))
+  ].filter((pattern, index, all) => pattern.length > 2 && all.indexOf(pattern) === index);
+
+  const terminalRoleByBrandMap =
+    options.terminalRoleByBrandMap ||
+    (await loadAdminBrandTerminalRoleMap(supabase, []));
+
+  const PRODUCT_MATCH_SELECT = `
+    *,
+    supplier_products(
+      id,
+      price,
+      stock,
+      location,
+      attributes,
+      status,
+      is_active,
+      supplier_id,
+      supplier:users!supplier_products_supplier_id_fkey (id, name, company, email, phone, address, profile)
+    )
+  `;
+
+  const runProductQuery = async (withCategory) => {
+    // Keep the same select shape as the original matcher — slim field lists can
+    // break PostgREST embeds and silently return zero product matches.
+    let query = supabase.from('products').select(PRODUCT_MATCH_SELECT);
+
+    if (withCategory && itemCategory !== 'other') {
+      query = query.eq('category', itemCategory);
+    }
+
+    if (searchPatterns.length === 0) {
+      return query.ilike('name', `%${itemNameLower}%`).limit(100);
+    }
+
+    const orConditions = searchPatterns
+      .map((pattern) => `name.ilike.${pattern},description.ilike.${pattern}`)
+      .join(',');
+
+    return query.or(orConditions).limit(100);
+  };
+
+  let { data: products, error } = await runProductQuery(true);
+
   if (error) {
     console.error('Product search error:', error);
   }
+
+  // If category filter was too strict, retry without it once.
+  if ((error || !products || products.length === 0) && itemCategory !== 'other') {
+    const retry = await runProductQuery(false);
+    if (retry.error) {
+      console.error('Product search retry error:', retry.error);
+    } else {
+      products = retry.data;
+      error = null;
+    }
+  }
+
+  // Last resort: simple name contains search (handles spaced queries reliably).
+  if (error || !products || products.length === 0) {
+    const fallback = await supabase
+      .from('products')
+      .select(PRODUCT_MATCH_SELECT)
+      .ilike('name', `%${itemNameLower}%`)
+      .limit(100);
+    if (fallback.error) {
+      console.error('Product search fallback error:', fallback.error);
+    } else {
+      products = fallback.data;
+    }
+  }
   
   const productsList = products || [];
-  console.log(`BOQ Normalize - Searching for "${normalizedInput}" (category: ${itemCategory}): Found ${productsList.length} products`);
 
   if (productsList.length > 0) {
     // Score all products and find the best match
@@ -620,7 +667,7 @@ export const normalizeProductName = async (rawName) => {
 
             if (stockB !== stockA) return stockB - stockA;
             return priceA - priceB;
-          })[0] || supplierProducts[0];
+          })[0] || candidateSupplierProducts[0] || supplierProducts[0];
       } else {
         // Fallback to product-level data for backward compatibility
         bestSupplierProduct = {
@@ -637,7 +684,8 @@ export const normalizeProductName = async (rawName) => {
         product,
         confidence,
         supplierProduct: bestSupplierProduct,
-        supplierCount: candidateSupplierProducts.length
+        supplierCount: candidateSupplierProducts.length,
+        candidateSupplierProducts
       };
     });
     
@@ -647,28 +695,41 @@ export const normalizeProductName = async (rawName) => {
     const bestMatch = scoredProducts[0];
     const bestProduct = bestMatch.product;
     const bestSupplierProduct = bestMatch.supplierProduct;
-    
-    // Count unique suppliers eligible for the brand's terminal chain role
+
+    // Count suppliers for the matched product (not every fuzzy search hit).
     const uniqueSupplierIds = new Set();
-    productsList.forEach(prod => {
-      const supplierProducts = Array.isArray(prod.supplier_products) 
-        ? prod.supplier_products 
-        : [prod.supplier_products].filter(Boolean);
-      supplierProducts.forEach(sp => {
+    const bestSupplierProducts = Array.isArray(bestProduct.supplier_products)
+      ? bestProduct.supplier_products
+      : [bestProduct.supplier_products].filter(Boolean);
+    bestSupplierProducts.forEach((sp) => {
+      const stock = parseInt(sp?.stock, 10) || 0;
+      if (
+        sp?.supplier &&
+        sp.supplier.id &&
+        supplierMatchesBrandTerminalRole(
+          sp.supplier.profile || {},
+          sp?.attributes?.brand ||
+            sp?.attributes?.brandModel ||
+            bestProduct?.brand ||
+            bestProduct?.specifications?.brandModel ||
+            bestProduct?.specifications?.brand ||
+            null,
+          terminalRoleByBrandMap
+        ) &&
+        sp.is_active !== false &&
+        sp.status !== 'rejected' &&
+        stock > 0
+      ) {
+        uniqueSupplierIds.add(sp.supplier.id);
+      }
+    });
+
+    // If terminal-role filtering wiped everyone but offers exist, still surface stocked offers.
+    if (uniqueSupplierIds.size === 0) {
+      bestSupplierProducts.forEach((sp) => {
         const stock = parseInt(sp?.stock, 10) || 0;
         if (
-          sp?.supplier &&
-          sp.supplier.id &&
-          supplierMatchesBrandTerminalRole(
-            sp.supplier.profile || {},
-            sp?.attributes?.brand ||
-              sp?.attributes?.brandModel ||
-              prod?.brand ||
-              prod?.specifications?.brandModel ||
-              prod?.specifications?.brand ||
-              null,
-            terminalRoleByBrandMap
-          ) &&
+          sp?.supplier?.id &&
           sp.is_active !== false &&
           sp.status !== 'rejected' &&
           stock > 0
@@ -676,13 +737,21 @@ export const normalizeProductName = async (rawName) => {
           uniqueSupplierIds.add(sp.supplier.id);
         }
       });
-    });
+    }
     
-    const availableSuppliers = uniqueSupplierIds.size;
-    console.log(`BOQ Normalize - Product "${normalizedInput}": Found ${availableSuppliers} unique suppliers, best match confidence: ${bestMatch.confidence.toFixed(2)}`);
+    const availableSuppliers = uniqueSupplierIds.size || bestMatch.supplierCount || 0;
     
     // Get supplier info from best supplier product
-    const supplier = bestSupplierProduct?.supplier;
+    let supplier = bestSupplierProduct?.supplier;
+    if (!supplier && bestMatch.candidateSupplierProducts?.length) {
+      supplier = bestMatch.candidateSupplierProducts[0]?.supplier || null;
+    }
+    if (!supplier) {
+      const stockedOffer = bestSupplierProducts.find(
+        (sp) => sp?.supplier && (parseInt(sp.stock, 10) || 0) > 0 && sp.is_active !== false && sp.status !== 'rejected'
+      );
+      supplier = stockedOffer?.supplier || null;
+    }
     
     // Get location
     const supplierLocation = resolveSupplierLocationText(bestSupplierProduct?.location, supplier);
@@ -694,6 +763,7 @@ export const normalizeProductName = async (rawName) => {
     } : null;
 
     const roundedConfidence = Math.round(bestMatch.confidence * 100) / 100;
+    const stockValue = parseInt(bestSupplierProduct?.stock, 10) || 0;
 
     return {
       normalizedName: bestProduct.name,
@@ -701,7 +771,7 @@ export const normalizeProductName = async (rawName) => {
       confidence: roundedConfidence,
       availableSuppliers: availableSuppliers,
       supplierInfo: supplierInfo,
-      isAvailable: (parseInt(bestSupplierProduct?.stock, 10) || 0) > 0,
+      isAvailable: availableSuppliers > 0 || stockValue > 0,
       price: bestSupplierProduct?.price,
       stock: bestSupplierProduct?.stock
     };
@@ -722,3 +792,54 @@ export const normalizeProductName = async (rawName) => {
     isAvailable: false
   };
 };
+
+async function mapWithConcurrency(items, concurrency, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      results[current] = await mapper(items[current], current);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * Normalize many BOQ line descriptions efficiently:
+ * - loads brand terminal-role map once
+ * - deduplicates identical descriptions
+ * - matches unique lines with bounded concurrency
+ */
+export async function normalizeProductNamesBatch(rawNames = [], options = {}) {
+  const list = Array.isArray(rawNames) ? rawNames : [];
+  if (list.length === 0) return [];
+
+  const concurrency = Math.max(1, Math.min(Number(options.concurrency) || 8, 12));
+  const terminalRoleByBrandMap =
+    options.terminalRoleByBrandMap ||
+    (await loadAdminBrandTerminalRoleMap(supabase, []));
+
+  const keyByIndex = list.map((name) => normalizeText(String(name || '')) || '__empty__');
+  const uniqueRawByKey = new Map();
+  keyByIndex.forEach((key, index) => {
+    if (!uniqueRawByKey.has(key)) {
+      uniqueRawByKey.set(key, list[index]);
+    }
+  });
+
+  const uniqueEntries = Array.from(uniqueRawByKey.entries());
+  const uniqueResults = new Map();
+
+  await mapWithConcurrency(uniqueEntries, concurrency, async ([key, rawName]) => {
+    const result = await normalizeProductName(rawName, { terminalRoleByBrandMap });
+    uniqueResults.set(key, result);
+    return result;
+  });
+
+  return keyByIndex.map((key) => uniqueResults.get(key));
+}

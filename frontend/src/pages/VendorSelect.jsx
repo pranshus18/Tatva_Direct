@@ -107,6 +107,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const [selections, setSelections] = useState({});
   const [expandedSpecifications, setExpandedSpecifications] = useState({});
   const [loading, setLoading] = useState(false);
+  const [vendorsReady, setVendorsReady] = useState(false);
   const [effectiveItems, setEffectiveItems] = useState(() =>
     items?.length ? dedupeSupplierSelectItems(items) : workflowSeed.items
   );
@@ -186,6 +187,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   useEffect(() => {
     shouldAutoSelectNearestRef.current = true;
     setSelections({});
+    setVendorsReady(false);
   }, [rankCacheKey]);
 
   useEffect(() => {
@@ -496,6 +498,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       const cached = getVendorRankCache(cacheKey);
       if (cached) {
         applyRankResults(cached, null);
+        setVendorsReady(true);
         setLoading(false);
         return;
       }
@@ -504,6 +507,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     const token = localStorage.getItem('token');
     if (!token) {
       alert('You are not logged in. Please log in again.');
+      setVendorsReady(true);
       setLoading(false);
       return;
     }
@@ -589,6 +593,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       if (rankFetchAbortRef.current === abortController) {
         rankFetchAbortRef.current = null;
       }
+      setVendorsReady(true);
       setLoading(false);
     }
   };
@@ -599,6 +604,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     const cached = getVendorRankCache(rankCacheKey);
     if (cached) {
       applyRankResults(cached, null);
+      setVendorsReady(true);
       return;
     }
 
@@ -1100,6 +1106,23 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                   </div>
                     );
                   })
+              ) : loading || !vendorsReady ? (
+                <div className="no-vendors" style={{
+                  padding: '2rem',
+                  textAlign: 'center',
+                  backgroundColor: '#eff6ff',
+                  borderRadius: '8px',
+                  border: '1px solid #bfdbfe'
+                }}>
+                  <p style={{
+                    color: '#1e3a5f',
+                    fontSize: '1rem',
+                    margin: 0,
+                    fontWeight: '500'
+                  }}>
+                    Loading suppliers for this item…
+                  </p>
+                </div>
               ) : (
                 <div className="no-vendors" style={{
                   padding: '2rem',

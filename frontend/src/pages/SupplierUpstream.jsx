@@ -67,7 +67,7 @@ const blankShippingAddress = {
   city: '',
   state: '',
   pincode: '',
-  country: 'India'
+  country: ''
 };
 
 const todayDateMin = getTodayDateInputValue();
@@ -1646,6 +1646,7 @@ const SupplierUpstream = ({ user }) => {
                     <div className="space-y-1">
                       <label className="text-sm font-medium">City</label>
                       <Input
+                        placeholder="e.g. Pune"
                         value={newShippingAddress.city}
                         onChange={(event) =>
                           setNewShippingAddress((prev) => ({ ...prev, city: event.target.value }))
@@ -1655,6 +1656,7 @@ const SupplierUpstream = ({ user }) => {
                     <div className="space-y-1">
                       <label className="text-sm font-medium">State</label>
                       <Input
+                        placeholder="e.g. Maharashtra"
                         value={newShippingAddress.state}
                         onChange={(event) =>
                           setNewShippingAddress((prev) => ({ ...prev, state: event.target.value }))
@@ -1666,6 +1668,7 @@ const SupplierUpstream = ({ user }) => {
                     <div className="space-y-1">
                       <label className="text-sm font-medium">PIN code</label>
                       <Input
+                        placeholder="e.g. 411026"
                         value={newShippingAddress.pincode}
                         onChange={(event) =>
                           setNewShippingAddress((prev) => ({ ...prev, pincode: event.target.value }))
@@ -1675,6 +1678,7 @@ const SupplierUpstream = ({ user }) => {
                     <div className="space-y-1">
                       <label className="text-sm font-medium">Country</label>
                       <Input
+                        placeholder="e.g. India"
                         value={newShippingAddress.country}
                         onChange={(event) =>
                           setNewShippingAddress((prev) => ({ ...prev, country: event.target.value }))

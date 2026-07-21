@@ -1,5 +1,9 @@
 import { normalizeChainRolesFromStages as normalizeChainRolesFromStagesCanonical } from '../services/supplyChainSharedService.js';
 
+const FULL_BRAND_MAP_TTL_MS = 5 * 60 * 1000;
+let cachedFullBrandMap = null;
+let cachedFullBrandMapAt = 0;
+
 export function normalizeBrandChainKey(value) {
   return String(value || '')
     .trim()
@@ -18,10 +22,11 @@ export function getTerminalRoleFromStages(stages) {
   return roles.length > 0 ? roles[roles.length - 1] : null;
 }
 
-export async function loadAdminBrandTerminalRoleMap(supabase, brandNames) {
-  const requestedKeys = new Set(
-    (brandNames || []).map((n) => normalizeBrandChainKey(n)).filter(Boolean)
-  );
+async function loadFullAdminBrandTerminalRoleMap(supabase) {
+  const now = Date.now();
+  if (cachedFullBrandMap && now - cachedFullBrandMapAt < FULL_BRAND_MAP_TTL_MS) {
+    return cachedFullBrandMap;
+  }
 
   const { data, error } = await supabase
     .from('category_supply_chains')
@@ -32,11 +37,35 @@ export async function loadAdminBrandTerminalRoleMap(supabase, brandNames) {
   for (const row of data || []) {
     const key = normalizeBrandChainKey(row?.category_name);
     if (!key) continue;
-    if (requestedKeys.size > 0 && !requestedKeys.has(key)) continue;
     const terminalRole = getTerminalRoleFromStages(row?.stages);
     if (terminalRole) map.set(key, terminalRole);
   }
+
+  cachedFullBrandMap = map;
+  cachedFullBrandMapAt = now;
   return map;
+}
+
+export async function loadAdminBrandTerminalRoleMap(supabase, brandNames) {
+  const requestedKeys = new Set(
+    (brandNames || []).map((n) => normalizeBrandChainKey(n)).filter(Boolean)
+  );
+
+  const fullMap = await loadFullAdminBrandTerminalRoleMap(supabase);
+  if (requestedKeys.size === 0) return fullMap;
+
+  const filtered = new Map();
+  for (const key of requestedKeys) {
+    const role = fullMap.get(key);
+    if (role) filtered.set(key, role);
+  }
+  return filtered;
+}
+
+/** Test helper / manual cache bust after admin supply-chain edits. */
+export function clearAdminBrandTerminalRoleMapCache() {
+  cachedFullBrandMap = null;
+  cachedFullBrandMapAt = 0;
 }
 
 export function getAllowedSellerRoleForBrand(brandName, terminalRoleByBrandMap) {

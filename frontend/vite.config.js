@@ -26,8 +26,8 @@ export default defineConfig({
         target: 'http://127.0.0.1:8081',
         changeOrigin: true,
         secure: false,
-        timeout: 150000,
-        proxyTimeout: 150000
+        timeout: 300000,
+        proxyTimeout: 300000
       },
       // PM platform vault (dev CORS bypass — browser calls same-origin /pm-users/*)
       '/pm-users': {

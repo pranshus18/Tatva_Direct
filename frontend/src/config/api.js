@@ -144,6 +144,12 @@ export const authFetch = async (endpoint, options = {}) => {
     if (response.status === 401 || response.status === 403) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
+      try {
+        localStorage.removeItem('profilePhotoUrl');
+        localStorage.removeItem('profilePhotoUserId');
+      } catch {
+        // ignore storage errors
+      }
       if (typeof window !== 'undefined') {
         window.location.replace('/pm-auth');
       }

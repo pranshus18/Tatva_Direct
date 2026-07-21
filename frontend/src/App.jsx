@@ -2,6 +2,7 @@ import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import { clearPmAuthSession } from './utils/pmAuthSession';
+import { clearCachedProfilePhotoUrl } from './utils/profilePhoto';
 import ServiceProviderRoute from './components/ServiceProviderRoute';
 import SupplierRoute from './components/SupplierRoute';
 import AdminRoute from './components/AdminRoute';
@@ -222,6 +223,7 @@ function App() {
         console.error('Error parsing saved user:', error);
         localStorage.removeItem('token');
         localStorage.removeItem('user');
+        clearCachedProfilePhotoUrl();
       }
     }
     setLoading(false);
@@ -290,6 +292,9 @@ function App() {
     let normalizedUser = normalizeUser(userData);
     const token = localStorage.getItem('token');
 
+    // Drop any previous account's cached avatar before hydrating the new session.
+    clearCachedProfilePhotoUrl();
+
     if (token) {
       try {
         normalizedUser = await syncPortalUser(normalizedUser);
@@ -333,6 +338,7 @@ function App() {
     const wasAdmin = normalizeUserType(user?.userType) === 'admin';
     localStorage.removeItem('token');
     localStorage.removeItem('user');
+    clearCachedProfilePhotoUrl();
     clearPmAuthSession();
     setUser(null);
     setIsAuthenticated(false);

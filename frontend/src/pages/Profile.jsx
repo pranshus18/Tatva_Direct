@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { toast } from 'sonner';
 import { getApiUrl } from '../config/api';
 import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Users, CheckCircle2 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
@@ -130,7 +131,7 @@ const Profile = ({ user }) => {
           }
         : null;
       setProfile(profileData);
-      cacheProfilePhotoUrl(profileData?.profilePhotoUrl || '');
+      cacheProfilePhotoUrl(profileData?.profilePhotoUrl || '', user?.id);
     } catch (error) {
       console.error('Failed to fetch profile:', error);
     } finally {
@@ -219,7 +220,7 @@ const Profile = ({ user }) => {
 
       const photoResult = await commitProfilePhotoDraft(photoDraft);
       if (photoResult.changed) {
-        cacheProfilePhotoUrl(photoResult.profilePhotoUrl || '');
+        cacheProfilePhotoUrl(photoResult.profilePhotoUrl || '', user?.id);
       }
 
       const token = localStorage.getItem('token');
@@ -236,15 +237,12 @@ const Profile = ({ user }) => {
         alert(data.message || 'Failed to save profile. Please try again.');
         return;
       }
-      if (data.chainApprovalPending) {
-        alert(data.message || 'Submitted for admin approval.');
-      }
       if (data.profile) {
         const mergedProfile = photoResult.changed
           ? { ...data.profile, profilePhotoUrl: photoResult.profilePhotoUrl || '' }
           : data.profile;
         setProfile(mergedProfile);
-        cacheProfilePhotoUrl(mergedProfile?.profilePhotoUrl || '');
+        cacheProfilePhotoUrl(mergedProfile?.profilePhotoUrl || '', user?.id);
 
         try {
           const savedUser = JSON.parse(localStorage.getItem('user') || '{}');
@@ -269,6 +267,11 @@ const Profile = ({ user }) => {
       }
       resetPhotoDraft();
       setEditing(false);
+      if (data.chainApprovalPending) {
+        toast.success(data.message || 'Submitted for admin approval.');
+      } else {
+        toast.success(data.message || 'Profile saved successfully.');
+      }
     } catch (error) {
       console.error('Failed to save profile:', error);
       alert('Failed to save profile. Please try again.');
@@ -313,17 +316,17 @@ const Profile = ({ user }) => {
           {editing ? (
             <>
               <button type="button" className="btn-secondary" onClick={handleCancel}>
-                <X size={18} strokeWidth={2} aria-hidden />
+                <X size={16} strokeWidth={2} aria-hidden />
                 Cancel
               </button>
               <button type="button" className="btn-primary" onClick={handleSave}>
-                <Save size={18} strokeWidth={2} aria-hidden />
+                <Save size={16} strokeWidth={2} aria-hidden />
                 Save Changes
               </button>
             </>
           ) : (
             <button type="button" className="btn-primary" onClick={() => setEditing(true)}>
-              <Edit size={18} strokeWidth={2} aria-hidden />
+              <Edit size={16} strokeWidth={2} aria-hidden />
               Edit Profile
             </button>
           )}
@@ -360,17 +363,17 @@ const Profile = ({ user }) => {
               {editing ? (
                 <>
                   <button type="button" className="btn-secondary" onClick={handleCancel}>
-                    <X size={18} strokeWidth={2} aria-hidden />
+                    <X size={16} strokeWidth={2} aria-hidden />
                     Cancel
                   </button>
                   <button type="button" className="btn-primary" onClick={handleSave}>
-                    <Save size={18} strokeWidth={2} aria-hidden />
+                    <Save size={16} strokeWidth={2} aria-hidden />
                     Save Changes
                   </button>
                 </>
               ) : (
                 <button type="button" className="btn-primary" onClick={() => setEditing(true)}>
-                  <Edit size={18} strokeWidth={2} aria-hidden />
+                  <Edit size={16} strokeWidth={2} aria-hidden />
                   Edit Profile
                 </button>
               )}
@@ -751,6 +754,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
                             updateShippingAddress(selectedShippingAddress.id, 'line1', e.target.value)
                           }
                           disabled={!editing}
+                          placeholder="Building / street / area"
                         />
                       </div>
                       <div className="form-group">
@@ -762,6 +766,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
                             updateShippingAddress(selectedShippingAddress.id, 'city', e.target.value)
                           }
                           disabled={!editing}
+                          placeholder="e.g. Pune"
                         />
                       </div>
                       <div className="form-group">
@@ -773,6 +778,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
                             updateShippingAddress(selectedShippingAddress.id, 'state', e.target.value)
                           }
                           disabled={!editing}
+                          placeholder="e.g. Maharashtra"
                         />
                       </div>
                       <div className="form-group">
@@ -784,6 +790,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
                             updateShippingAddress(selectedShippingAddress.id, 'pincode', e.target.value)
                           }
                           disabled={!editing}
+                          placeholder="e.g. 411026"
                         />
                       </div>
                       <div className="form-group">
@@ -795,6 +802,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
                             updateShippingAddress(selectedShippingAddress.id, 'country', e.target.value)
                           }
                           disabled={!editing}
+                          placeholder="e.g. India"
                         />
                       </div>
                     </div>
@@ -1323,6 +1331,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
                         onChange={(e) => updateBranch(selectedBranch.id, 'address', e.target.value)}
                         disabled={!editing}
                         rows="2"
+                        placeholder="Building / street / area"
                       />
                     </div>
                     <div className="form-group">

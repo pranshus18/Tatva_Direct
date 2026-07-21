@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { toast } from 'sonner';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import { clearSupplierSelectScopeSession } from '../constants/supplierSelectSession';
 import {
@@ -7,7 +8,7 @@ import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
-import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, Search, PlusCircle, MapPin, Calendar, FileText } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, PlusCircle, MapPin, Calendar, FileText } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
@@ -45,8 +46,6 @@ const BOQNormalize = ({ onComplete }) => {
   const [boqId, setBoqId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [savingCart, setSavingCart] = useState(false);
-  const [suggestionsByItemId, setSuggestionsByItemId] = useState({});
-  const [loadingSuggestionsForId, setLoadingSuggestionsForId] = useState(null);
   const [requestSubmitting, setRequestSubmitting] = useState(false);
   const [submittedProductRequestKeys, setSubmittedProductRequestKeys] = useState(() => new Set());
   const [savedProjectMeta, setSavedProjectMeta] = useState(null);
@@ -64,7 +63,7 @@ const BOQNormalize = ({ onComplete }) => {
     if (!item?.id) return;
     const requestKey = buildProductRequestKey(item, boqId);
     if (submittedProductRequestKeys.has(requestKey)) {
-      alert('You have already made a request for this product.');
+      toast.info('You have already made a request for this product.');
       return;
     }
     setSearchParams(
@@ -208,60 +207,19 @@ const BOQNormalize = ({ onComplete }) => {
     }
   };
 
-  // Fetch alternative catalog products for a given BOQ item when there are
-  // no available suppliers. This uses the global product search endpoint,
-  // which looks across all approved & active products from all suppliers.
-  const fetchSuggestionsForItem = async (item) => {
-    if (!item || !item.id) return;
-    // Prevent duplicate fetches
-    if (suggestionsByItemId[item.id] && suggestionsByItemId[item.id].length > 0) {
-      return;
-    }
-
-    const token = localStorage.getItem('token');
-    if (!token) {
-      alert('Please log in again to see alternative products.');
-      return;
-    }
-
-    setLoadingSuggestionsForId(item.id);
-    try {
-      const query = encodeURIComponent(item.normalizedName || item.rawName || '');
-      const res = await fetch(getApiUrl(`/api/supplier/products/search?q=${query}`), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const data = await res.json();
-      if (data.status === 'success') {
-        setSuggestionsByItemId(prev => ({
-          ...prev,
-          [item.id]: data.suggestions || []
-        }));
-      } else {
-        alert(data.message || 'Failed to fetch alternative products.');
-      }
-    } catch (error) {
-      console.error('Failed to fetch alternative products:', error);
-      alert('Failed to fetch alternative products. Please try again.');
-    } finally {
-      setLoadingSuggestionsForId(null);
-    }
-  };
-
   // Notify terminal suppliers that a customer is looking for an unavailable BOQ item.
   const submitProductRequest = async (item) => {
     if (!item) return;
     const requestKey = buildProductRequestKey(item, boqId);
     if (submittedProductRequestKeys.has(requestKey)) {
-      alert('You have already made a request for this product.');
+      toast.info('You have already made a request for this product.');
       closeRequestProductModal();
       return;
     }
 
     const token = localStorage.getItem('token');
     if (!token) {
-      alert('Please log in again to request a new product.');
+      toast.error('Please log in again to request a new product.');
       return;
     }
 
@@ -286,23 +244,25 @@ const BOQNormalize = ({ onComplete }) => {
         body: JSON.stringify(body)
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.status === 409 || data.alreadyRequested) {
         setSubmittedProductRequestKeys((prev) => new Set(prev).add(requestKey));
         closeRequestProductModal();
-        alert(data.message || 'You have already made a request for this product.');
+        toast.info(data.message || 'You have already made a request for this product.');
         return;
       }
       if (res.ok && data.status === 'success') {
         setSubmittedProductRequestKeys((prev) => new Set(prev).add(requestKey));
         closeRequestProductModal();
-        alert(data.message || 'Suppliers were notified that a customer is looking for this product.');
-      } else {
-        alert(data.message || 'Failed to submit product request. Please try again.');
+        toast.success(
+          data.message || 'Product request submitted. Suppliers have been notified.'
+        );
+        return;
       }
+      toast.error(data.message || 'Failed to submit product request. Please try again.');
     } catch (error) {
       console.error('Failed to submit product request:', error);
-      alert('Failed to submit product request. Please try again.');
+      toast.error('Failed to submit product request. Please try again.');
     } finally {
       setRequestSubmitting(false);
     }
@@ -600,7 +560,9 @@ const BOQNormalize = ({ onComplete }) => {
       ) : (
         <div className="results">
           {loading ? (
-            <div className="loading">Processing...</div>
+            <div className="loading">
+              Processing BOQ… matching products in bulk. Large files may take a minute.
+            </div>
           ) : (
             <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start' }}>
               {/* Main Content Area */}
@@ -609,7 +571,6 @@ const BOQNormalize = ({ onComplete }) => {
                 {items.map((item) => {
                   const hasSuppliers = (item.availableSuppliers || 0) > 0;
                   const isAvailable = item.isAvailable ?? hasSuppliers;
-                  const suggestions = suggestionsByItemId[item.id] || [];
                   const productRequestKey = buildProductRequestKey(item, boqId);
                   const alreadyRequestedProduct = submittedProductRequestKeys.has(productRequestKey);
 
@@ -682,8 +643,7 @@ const BOQNormalize = ({ onComplete }) => {
                       </div>
                     )}
 
-                    {/* When there are no available suppliers, help the user with
-                        alternative suggestions and option to request a new product */}
+                    {/* When there are no available suppliers, allow requesting a new product */}
                     {(!hasSuppliers || !isAvailable) && (
                       <div style={{ 
                         marginTop: '0.5rem', 
@@ -714,187 +674,47 @@ const BOQNormalize = ({ onComplete }) => {
                           </div>
                         </div>
                         
-                        <div style={{ 
-                          display: 'flex', 
-                          flexDirection: 'column', 
-                          gap: '0.25rem',
-                          width: '100%',
-                          boxSizing: 'border-box'
-                        }}>
-                          <button
-                            type="button"
-                            onClick={() => fetchSuggestionsForItem(item)}
-                            disabled={loadingSuggestionsForId === item.id}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: '0.25rem',
-                              fontSize: '0.65rem',
-                              fontWeight: 500,
-                              padding: '0.25rem 0.4rem',
-                              backgroundColor: '#f3f4f6',
-                              border: '1px solid #d1d5db',
-                              borderRadius: '4px',
-                              color: '#111827',
-                              cursor: loadingSuggestionsForId === item.id ? 'not-allowed' : 'pointer',
-                              transition: 'all 0.2s',
-                              opacity: loadingSuggestionsForId === item.id ? 0.6 : 1,
-                              width: '100%',
-                              boxSizing: 'border-box',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis'
-                            }}
-                            onMouseEnter={(e) => {
-                              if (loadingSuggestionsForId !== item.id) {
-                                e.currentTarget.style.backgroundColor = '#e5e7eb';
-                                e.currentTarget.style.borderColor = '#9ca3af';
-                              }
-                            }}
-                            onMouseLeave={(e) => {
-                              if (loadingSuggestionsForId !== item.id) {
-                                e.currentTarget.style.backgroundColor = '#f3f4f6';
-                                e.currentTarget.style.borderColor = '#d1d5db';
-                              }
-                            }}
-                          >
-                            <Search size={10} style={{ flexShrink: 0, color: '#4b5563' }} />
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {loadingSuggestionsForId === item.id ? 'Finding...' : 'Suggest Products'}
-                            </span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => openRequestProductModal(item)}
-                            disabled={alreadyRequestedProduct}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: '0.25rem',
-                              fontSize: '0.65rem',
-                              fontWeight: 500,
-                              padding: '0.25rem 0.4rem',
-                              backgroundColor: alreadyRequestedProduct ? '#9ca3af' : '#4f46e5',
-                              border: `1px solid ${alreadyRequestedProduct ? '#9ca3af' : '#4f46e5'}`,
-                              borderRadius: '4px',
-                              color: '#ffffff',
-                              cursor: alreadyRequestedProduct ? 'not-allowed' : 'pointer',
-                              transition: 'all 0.2s',
-                              width: '100%',
-                              boxSizing: 'border-box',
-                              whiteSpace: 'nowrap',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              opacity: alreadyRequestedProduct ? 0.85 : 1
-                            }}
-                            onMouseEnter={(e) => {
-                              if (alreadyRequestedProduct) return;
-                              e.currentTarget.style.backgroundColor = '#4338ca';
-                              e.currentTarget.style.borderColor = '#4338ca';
-                            }}
-                            onMouseLeave={(e) => {
-                              if (alreadyRequestedProduct) return;
-                              e.currentTarget.style.backgroundColor = '#4f46e5';
-                              e.currentTarget.style.borderColor = '#4f46e5';
-                            }}
-                          >
-                            <PlusCircle size={10} style={{ flexShrink: 0, color: '#ffffff' }} />
-                            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {alreadyRequestedProduct ? 'Request sent' : 'Request New Product'}
-                            </span>
-                          </button>
-                        </div>
-
-                        {suggestions.length > 0 && (
-                          <div style={{ 
-                            marginTop: '0.5rem', 
-                            paddingTop: '0.5rem',
-                            borderTop: '1px solid #fecaca',
+                        <button
+                          type="button"
+                          onClick={() => openRequestProductModal(item)}
+                          disabled={alreadyRequestedProduct}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: '0.25rem',
+                            fontSize: '0.65rem',
+                            fontWeight: 500,
+                            padding: '0.25rem 0.4rem',
+                            backgroundColor: alreadyRequestedProduct ? '#9ca3af' : '#4f46e5',
+                            border: `1px solid ${alreadyRequestedProduct ? '#9ca3af' : '#4f46e5'}`,
+                            borderRadius: '4px',
+                            color: '#ffffff',
+                            cursor: alreadyRequestedProduct ? 'not-allowed' : 'pointer',
+                            transition: 'all 0.2s',
                             width: '100%',
-                            boxSizing: 'border-box'
-                          }}>
-                            <div style={{ 
-                              fontSize: '0.7rem', 
-                              fontWeight: 600, 
-                              color: '#1f2937', 
-                              marginBottom: '0.25rem',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: '0.25rem'
-                            }}>
-                              <Package size={11} style={{ flexShrink: 0 }} />
-                              <span>Suggestions</span>
-                            </div>
-                            <div style={{ 
-                              backgroundColor: '#ffffff',
-                              borderRadius: '4px',
-                              padding: '0.375rem',
-                              border: '1px solid #e5e7eb',
-                              width: '100%',
-                              boxSizing: 'border-box',
-                              maxHeight: '100px',
-                              overflowY: 'auto'
-                            }}>
-                              <ul style={{ 
-                                listStyle: 'none', 
-                                padding: 0, 
-                                margin: 0, 
-                                fontSize: '0.65rem',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '0.25rem',
-                                width: '100%'
-                              }}>
-                                {suggestions.map((sugg, idx) => (
-                                  <li 
-                                    key={`${item.id}-sugg-${idx}`} 
-                                    style={{ 
-                                      padding: '0.25rem',
-                                      backgroundColor: '#f9fafb',
-                                      borderRadius: '3px',
-                                      borderLeft: '2px solid #3b82f6',
-                                      width: '100%',
-                                      boxSizing: 'border-box',
-                                      wordWrap: 'break-word'
-                                    }}
-                                  >
-                                    <div style={{ fontWeight: 600, color: '#1e293b', wordBreak: 'break-word', fontSize: '0.65rem', lineHeight: '1.2' }}>
-                                      {sugg.name}
-                                    </div>
-                                    <div style={{ display: 'flex', gap: '0.25rem', flexWrap: 'wrap', fontSize: '0.6rem', color: '#6b7280', marginTop: '0.125rem' }}>
-                                      {sugg.category && (
-                                        <span style={{ 
-                                          backgroundColor: '#e0e7ff',
-                                          color: '#4338ca',
-                                          padding: '0.05rem 0.25rem',
-                                          borderRadius: '2px',
-                                          fontWeight: 500,
-                                          whiteSpace: 'nowrap'
-                                        }}>
-                                          {sugg.category}
-                                        </span>
-                                      )}
-                                      {sugg.unit && (
-                                        <span style={{ 
-                                          backgroundColor: '#f3f4f6',
-                                          color: '#4b5563',
-                                          padding: '0.05rem 0.25rem',
-                                          borderRadius: '2px',
-                                          whiteSpace: 'nowrap'
-                                        }}>
-                                          {sugg.unit}
-                                        </span>
-                                      )}
-                                    </div>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          </div>
-                        )}
+                            boxSizing: 'border-box',
+                            whiteSpace: 'nowrap',
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            opacity: alreadyRequestedProduct ? 0.85 : 1
+                          }}
+                          onMouseEnter={(e) => {
+                            if (alreadyRequestedProduct) return;
+                            e.currentTarget.style.backgroundColor = '#4338ca';
+                            e.currentTarget.style.borderColor = '#4338ca';
+                          }}
+                          onMouseLeave={(e) => {
+                            if (alreadyRequestedProduct) return;
+                            e.currentTarget.style.backgroundColor = '#4f46e5';
+                            e.currentTarget.style.borderColor = '#4f46e5';
+                          }}
+                        >
+                          <PlusCircle size={10} style={{ flexShrink: 0, color: '#ffffff' }} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {alreadyRequestedProduct ? 'Request sent' : 'Request New Product'}
+                          </span>
+                        </button>
                       </div>
                     )}
                   </div>

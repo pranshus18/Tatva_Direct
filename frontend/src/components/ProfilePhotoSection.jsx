@@ -204,10 +204,6 @@ export default function ProfilePhotoSection({
           </p>
           {editing ? (
             <div className="profile-photo-section__actions">
-              <button type="button" className="btn-primary" onClick={handleOpenCamera} disabled={!canEditPhoto}>
-                <Camera size={16} aria-hidden />
-                Take photo
-              </button>
               <button type="button" className="btn-secondary" onClick={handlePickGallery} disabled={!canEditPhoto}>
                 <ImagePlus size={16} aria-hidden />
                 {resolvedPhoto ? 'Choose from gallery' : 'Upload from device'}

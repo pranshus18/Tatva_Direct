@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs-extra';
 import {
   buildSupplyChainInfoForProducts,
-  normalizeProductName,
+  normalizeProductNamesBatch,
   parseCSV,
   parseExcel,
   parsePDF
@@ -15,6 +15,73 @@ import { inferUnitAndCategory } from '../../services/materialClassificationServi
 import { geocodeAddressNominatim, parseOptionalGeo } from '../../utils/geoUtils.js';
 import { validateRequiredDateNotPast } from '../../utils/dateTime.js';
 import { extractBoqQuantity, isBoqQuantityColumn, normalizeBoqColumnKey } from '../../utils/boqRowParsing.js';
+
+const MAX_BOQ_NORMALIZE_ROWS = 2000;
+
+function extractBoqRowFields(rawItem, rowIndex) {
+  const keys = Object.keys(rawItem || {});
+
+  let description = '';
+  let quantity = 0;
+  let unit = 'nos';
+
+  const descKeys = [
+    'description',
+    'item',
+    'name',
+    'product',
+    'item description',
+    'item name',
+    'material',
+    'product name'
+  ];
+  for (const key of descKeys) {
+    const foundKey = keys.find((k) => normalizeBoqColumnKey(k) === key.toLowerCase());
+    if (foundKey && rawItem[foundKey] && String(rawItem[foundKey]).trim()) {
+      description = String(rawItem[foundKey]).trim();
+      break;
+    }
+  }
+
+  if (!description) {
+    for (const key of keys) {
+      if (isBoqQuantityColumn(key)) continue;
+
+      const value = rawItem[key];
+      const str = String(value ?? '').trim();
+      if (!str) continue;
+
+      const isPureNumber = /^[0-9.,]+$/.test(str);
+      const isNumberWithUnit =
+        /^[0-9.,]+\s*[a-zA-Z]+$/.test(str) && !/[a-zA-Z]/.test(str.replace(/^[0-9.,\s]+/, ''));
+      if (isPureNumber || isNumberWithUnit) continue;
+
+      if (/[a-zA-Z]/.test(str)) {
+        description = str;
+        break;
+      }
+    }
+  }
+
+  if (!description) {
+    description = `Item ${rowIndex + 1}`;
+  }
+
+  quantity = extractBoqQuantity(rawItem);
+
+  const unitKeys = ['unit', 'uom', 'unit of measure', 'uom.'];
+  for (const key of unitKeys) {
+    const foundKey = keys.find((k) => k.toLowerCase() === key.toLowerCase());
+    if (foundKey && rawItem[foundKey]) {
+      unit = String(rawItem[foundKey]).trim().toLowerCase();
+      break;
+    }
+  }
+
+  if (quantity <= 0) quantity = 1;
+
+  return { description, quantity, unit };
+}
 
 export function registerBoqNormalizeRoutes(ctx) {
   const {
@@ -140,113 +207,52 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
       });
     }
 
-    console.log('Raw items sample (first 3 rows):', JSON.stringify(rawItems.slice(0, 3), null, 2));
-    console.log('Total raw items:', rawItems.length);
+    if (rawItems.length > MAX_BOQ_NORMALIZE_ROWS) {
+      return res.status(400).json({
+        status: 'error',
+        message: `This BOQ has ${rawItems.length} rows. Please upload files with at most ${MAX_BOQ_NORMALIZE_ROWS} rows, or split the file into smaller parts.`
+      });
+    }
 
-    // Normalize items - map raw data to structured format
-    const normalizedItems = [];
-    for (let i = 0; i < rawItems.length; i++) {
-      const rawItem = rawItems[i];
-      
-      const keys = Object.keys(rawItem);
-      const lowerKeys = keys.map(k => k.toLowerCase());
-      
-      let description = '';
-      let quantity = 0;
-      let unit = 'nos';
-      let rate = 0;
-      
-      // Find description
-      const descKeys = ['description', 'item', 'name', 'product', 'item description', 'item name', 'material', 'product name'];
-      for (const key of descKeys) {
-        const foundKey = keys.find((k) => normalizeBoqColumnKey(k) === key.toLowerCase());
-        if (foundKey && rawItem[foundKey] && String(rawItem[foundKey]).trim()) {
-          description = String(rawItem[foundKey]).trim();
-          break;
-        }
-      }
-      
-      // If no description found, use first non-empty TEXT column
-      if (!description) {
-        for (const key of keys) {
-          if (isBoqQuantityColumn(key)) continue;
+    console.log(`[BOQ Normalize] Parsed ${rawItems.length} rows from ${req.file.originalname}`);
 
-          const value = rawItem[key];
-          const str = String(value ?? '').trim();
-          
-          if (!str) continue;
-          
-          const isPureNumber = /^[0-9.,]+$/.test(str);
-          const isNumberWithUnit = /^[0-9.,]+\s*[a-zA-Z]+$/.test(str) && !/[a-zA-Z]/.test(str.replace(/^[0-9.,\s]+/, ''));
-          
-          if (isPureNumber || isNumberWithUnit) {
-            continue;
-          }
+    const parsedRows = rawItems.map((rawItem, index) => extractBoqRowFields(rawItem, index));
+    const matchStartedAt = Date.now();
+    const matchResults = await normalizeProductNamesBatch(
+      parsedRows.map((row) => row.description),
+      { concurrency: 8 }
+    );
+    console.log(
+      `[BOQ Normalize] Matched ${parsedRows.length} rows ` +
+        `(${new Set(parsedRows.map((row) => String(row.description || '').trim().toLowerCase())).size} unique) ` +
+        `in ${Date.now() - matchStartedAt}ms`
+    );
 
-          if (/[a-zA-Z]/.test(str)) {
-            description = str;
-            break;
-          }
-        }
-      }
-      
-      if (!description || description.length === 0) {
-        description = `Item ${i + 1}`;
-        console.log(`Row ${i + 1}: Using fallback description`, rawItem);
-      }
-      
-      quantity = extractBoqQuantity(rawItem);
-      
-      // Find unit
-      const unitKeys = ['unit', 'uom', 'unit of measure', 'uom.'];
-      for (const key of unitKeys) {
-        const foundKey = keys.find(k => k.toLowerCase() === key.toLowerCase());
-        if (foundKey && rawItem[foundKey]) {
-          unit = String(rawItem[foundKey]).trim().toLowerCase();
-          break;
-        }
-      }
-      
-      // Find rate/price
-      const rateKeys = ['rate', 'price', 'unit price', 'rate per unit', 'unit rate'];
-      for (const key of rateKeys) {
-        const foundKey = keys.find(k => k.toLowerCase() === key.toLowerCase());
-        if (foundKey) {
-          const rateValue = parseFloat(rawItem[foundKey]);
-          if (!isNaN(rateValue)) {
-            rate = rateValue;
-            break;
-          }
-        }
-      }
-
-      console.log(`Row ${i + 1}: description="${description}", quantity=${quantity}, keys=${keys.join(', ')}`);
-      
-      if (quantity <= 0) {
-        quantity = 1;
-        console.log(`Row ${i + 1}: No quantity found, defaulting to 1`, rawItem);
-      }
-
-      // Normalize product name by matching with database
-      const normalized = await normalizeProductName(description);
+    const normalizedItems = parsedRows.map((row, index) => {
+      const normalized = matchResults[index] || {
+        normalizedName: row.description,
+        productId: null,
+        confidence: 0,
+        availableSuppliers: 0,
+        supplierInfo: null,
+        isAvailable: false
+      };
       const { unit: inferredUnit, category } = inferUnitAndCategory(normalized.normalizedName);
 
-      normalizedItems.push({
-        id: i + 1,
-        rawName: description,
+      return {
+        id: index + 1,
+        rawName: row.description,
         normalizedName: normalized.normalizedName,
-        quantity: quantity,
-        unit: unit || inferredUnit,
+        quantity: row.quantity,
+        unit: row.unit || inferredUnit,
         confidence: normalized.confidence,
         productId: normalized.productId,
         supplierInfo: normalized.supplierInfo,
         availableSuppliers: normalized.availableSuppliers || 0,
         isAvailable: normalized.isAvailable || false,
-        category: category
-      });
-    }
-
-    console.log(`Total normalized items: ${normalizedItems.length} out of ${rawItems.length} raw items`);
+        category
+      };
+    });
     
     if (normalizedItems.length === 0) {
       const sampleKeys = rawItems.length > 0 ? Object.keys(rawItems[0]) : [];
@@ -268,18 +274,14 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
     // Map normalized items to BOQ items format (DB row shape only)
     // Note: supply-chain info is returned to frontend but not stored in `boq_items`
     // to avoid schema changes.
-    const boqItems = normalizedItems.map((item) => {
-      const { unit: inferredUnit, category } = inferUnitAndCategory(item.normalizedName);
-
-      return {
-        description: item.normalizedName,
-        quantity: item.quantity,
-        unit: item.unit || inferredUnit,
-        category: category,
-        normalized_product_id: item.productId,
-        specifications: `Confidence: ${Math.round(item.confidence * 100)}%`
-      };
-    });
+    const boqItems = normalizedItems.map((item) => ({
+      description: item.normalizedName,
+      quantity: item.quantity,
+      unit: item.unit,
+      category: item.category,
+      normalized_product_id: item.productId,
+      specifications: `Confidence: ${Math.round(item.confidence * 100)}%`
+    }));
 
     // Calculate total value
     const totalValue = boqItems.reduce((sum, item) => {

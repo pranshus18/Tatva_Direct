@@ -14,7 +14,12 @@ import { registerBoqRequestProductRoutes } from './boq/requestProductRoutes.js';
 import { registerBoqCrudRoutes } from './boq/boqCrudRoutes.js';
 
 const router = express.Router();
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({
+  dest: 'uploads/',
+  limits: {
+    fileSize: 25 * 1024 * 1024 // 25MB BOQ uploads
+  }
+});
 
 const ctx = {
   router,

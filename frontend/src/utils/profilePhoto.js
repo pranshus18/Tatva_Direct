@@ -1,6 +1,7 @@
 import { getApiUrl } from '@/config/api';
 
 export const PROFILE_PHOTO_CACHE_KEY = 'profilePhotoUrl';
+export const PROFILE_PHOTO_USER_KEY = 'profilePhotoUserId';
 export const PROFILE_PHOTO_MAX_BYTES = 20 * 1024 * 1024;
 export const PROFILE_PHOTO_MAX_SIZE_LABEL = '20MB';
 
@@ -19,26 +20,49 @@ export function getProfileInitials(name) {
     .toUpperCase();
 }
 
-export function getCachedProfilePhotoUrl() {
+export function getCachedProfilePhotoUrl(userId) {
   try {
+    const cachedUserId = String(localStorage.getItem(PROFILE_PHOTO_USER_KEY) || '').trim();
+    const requestedUserId = String(userId || '').trim();
+    if (requestedUserId && cachedUserId && cachedUserId !== requestedUserId) {
+      return '';
+    }
     return String(localStorage.getItem(PROFILE_PHOTO_CACHE_KEY) || '').trim();
   } catch {
     return '';
   }
 }
 
-export function cacheProfilePhotoUrl(url) {
+export function cacheProfilePhotoUrl(url, userId) {
   const next = String(url || '').trim();
+  const nextUserId = String(userId || '').trim();
   try {
     if (next) {
       localStorage.setItem(PROFILE_PHOTO_CACHE_KEY, next);
     } else {
       localStorage.removeItem(PROFILE_PHOTO_CACHE_KEY);
     }
+    if (nextUserId) {
+      localStorage.setItem(PROFILE_PHOTO_USER_KEY, nextUserId);
+    } else if (!next) {
+      localStorage.removeItem(PROFILE_PHOTO_USER_KEY);
+    }
   } catch {
     // ignore quota errors
   }
-  window.dispatchEvent(new CustomEvent('profile-photo-updated', { detail: { url: next } }));
+  window.dispatchEvent(
+    new CustomEvent('profile-photo-updated', { detail: { url: next, userId: nextUserId } })
+  );
+}
+
+export function clearCachedProfilePhotoUrl() {
+  try {
+    localStorage.removeItem(PROFILE_PHOTO_CACHE_KEY);
+    localStorage.removeItem(PROFILE_PHOTO_USER_KEY);
+  } catch {
+    // ignore storage errors
+  }
+  window.dispatchEvent(new CustomEvent('profile-photo-updated', { detail: { url: '', userId: '' } }));
 }
 
 export function resolveProfilePhotoDisplayUrl(profilePhotoUrl, photoDraft = EMPTY_PROFILE_PHOTO_DRAFT) {

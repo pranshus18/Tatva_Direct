@@ -296,6 +296,42 @@ body.sp-portal-active .bg-primary\/10.text-primary,
   border-radius: 12px;
 }
 
+/* Profile header Cancel / Save — keep equal height despite Dashboard.css padding mismatch */
+body.sp-portal-active .profile-page-header-actions,
+.sp-portal .profile-page-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+body.sp-portal-active .profile-page-header-actions .btn-primary,
+body.sp-portal-active .profile-page-header-actions .btn-secondary,
+.sp-portal .profile-page-header-actions .btn-primary,
+.sp-portal .profile-page-header-actions .btn-secondary {
+  box-sizing: border-box !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  gap: 0.5rem !important;
+  height: 2.5rem !important;
+  min-height: 2.5rem !important;
+  max-height: 2.5rem !important;
+  margin: 0 !important;
+  padding: 0 1rem !important;
+  line-height: 1 !important;
+  transform: none !important;
+}
+
+body.sp-portal-active .profile-page-header-actions .btn-primary,
+.sp-portal .profile-page-header-actions .btn-primary {
+  border: 1px solid transparent !important;
+}
+
+body.sp-portal-active .profile-page-header-actions .btn-secondary,
+.sp-portal .profile-page-header-actions .btn-secondary {
+  border: 1px solid #d8e5f3 !important;
+}
+
 .sp-portal .status.pending {
   background: #fffbeb;
   color: #b45309;
