@@ -52,6 +52,14 @@ export function createCorsOptions() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma', 'X-Request-ID']
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Cache-Control',
+      'Pragma',
+      'X-Request-ID',
+      'X-PM-Access-Token',
+      'X-PM-Refresh-Token'
+    ]
   };
 }

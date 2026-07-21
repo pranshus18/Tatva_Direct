@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { getApiUrl, authFetch } from '../config/api';
+import { getApiUrl, resolveApiPath, authFetch } from '../config/api';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
 import { 
   FileText,
@@ -123,25 +123,18 @@ const ServiceProviderDashboard = ({ user }) => {
         return;
       }
       
-      // Add cache-busting parameters to ensure fresh data
-      const timestamp = Date.now();
-      
-      // Use proxy in development, full URL in production
-      const isDevelopment = import.meta.env.DEV || window.location.hostname === 'localhost';
-      const apiUrl = isDevelopment 
-        ? `/api/dashboard/service-provider`
-        : getApiUrl('/api/dashboard/service-provider');
-      
-      const fullUrl = `${apiUrl}?_t=${timestamp}`;
+      const endpoint = `/api/dashboard/service-provider?_t=${Date.now()}`;
+      const fullUrl = resolveApiPath(endpoint);
       console.log('[Dashboard] Fetching dashboard data from:', fullUrl);
-      
-      const response = await authFetch(fullUrl, {
+
+      const response = await authFetch(endpoint, {
+        timeoutMs: 30000,
         headers: {
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           Pragma: 'no-cache'
         }
       });
-      
+
       if (!response.ok) {
         console.error('[Dashboard] Response not OK:', response.status, response.statusText);
         const errorText = await response.text();
@@ -164,16 +157,20 @@ const ServiceProviderDashboard = ({ user }) => {
           return;
         }
 
+        if (response.status === 502 || response.status === 503 || response.status === 504) {
+          setDashboardError(
+            'Backend is unavailable right now. Start the local API on port 8081 (or wait for the deployed API to wake up), then refresh.'
+          );
+          return;
+        }
+
         setDashboardError(backendMessage);
         return;
       }
-      
+
       const data = await response.json();
       console.log('[Dashboard] Received data:', data);
-      console.log('[Dashboard] Stats:', data.stats);
-      console.log('[Dashboard] Recent BOQs:', data.recentBOQs);
-      console.log('[Dashboard] Recent BOQs count:', data.recentBOQs?.length || 0);
-      
+
       if (data.stats) {
         const nextStats = {
           totalBOQs: data.stats.totalBOQs || 0,
@@ -200,11 +197,18 @@ const ServiceProviderDashboard = ({ user }) => {
       setRecentPOs(data.recentPOs || []);
     } catch (error) {
       console.error('[Dashboard] Failed to fetch dashboard data:', error);
-      console.error('[Dashboard] Error details:', {
-        message: error.message,
-        stack: error.stack
-      });
-      setDashboardError('Network error while loading dashboard data. Please check your connection and try again.');
+      const message = String(error?.message || '').toLowerCase();
+      if (error?.name === 'AbortError' || message.includes('aborted')) {
+        setDashboardError('Dashboard request timed out. Please refresh and try again.');
+        return;
+      }
+      if (message.includes('failed to fetch') || message.includes('network')) {
+        setDashboardError(
+          'Cannot reach the API. For local use, keep the backend running on port 8081 and refresh. If this is the deployed site, the API may be waking up — wait a minute and retry.'
+        );
+        return;
+      }
+      setDashboardError(error?.message || 'Network error while loading dashboard data. Please try again.');
     }
   };
 
