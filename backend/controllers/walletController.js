@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import {
   requireAuthentication as authenticateToken,
   requireServiceProvider,
@@ -26,6 +27,7 @@ import {
 import { getRazorpayPublicConfig } from '../services/razorpayService.js';
 import { httpStatusForUpstreamError } from '../utils/paymentNormalize.js';
 import {
+  addPmVaultOfflineMoney,
   completePmVaultTopup,
   ensurePmVaultAuth,
   getPmVaultWalletView,
@@ -43,6 +45,10 @@ function vaultPagePath(userType) {
 }
 
 const walletRouter = express.Router();
+const vaultOfflineUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }
+});
 
 function topupMinAmount() {
   return Number.parseFloat(process.env.WALLET_MIN_TOPUP_INR || '100') || 100;
@@ -249,6 +255,62 @@ walletRouter.post('/topup/create', authenticateToken, requirePlatformVaultUser, 
     });
   }
 });
+
+walletRouter.post(
+  '/offline/add-money',
+  authenticateToken,
+  requirePlatformVaultUser,
+  vaultOfflineUpload.array('documents', 10),
+  async (req, res) => {
+    try {
+      const amount = Number.parseFloat(String(req.body?.amount || '0'));
+      const minTopup = topupMinAmount();
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ status: 'error', message: 'Amount must be greater than zero' });
+      }
+      if (amount < minTopup) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Minimum vault credit amount is INR ${minTopup}`
+        });
+      }
+
+      const credentials = readPmCredentialsFromRequest(req);
+      const { pmUserId, accessToken } = await ensurePmVaultAuth(req.user, credentials);
+      const result = await addPmVaultOfflineMoney({
+        pmUserId,
+        accessToken,
+        amountInRupees: amount,
+        subPaymentMethod: req.body?.subPaymentMethod,
+        receiptNumber: req.body?.receiptNumber,
+        chequeNumber: req.body?.chequeNumber,
+        utrNumber: req.body?.utrNumber,
+        details: req.body?.details,
+        documents: req.files || []
+      });
+      const pmWallet = await getPmVaultWalletView(req.user, credentials);
+
+      return res.json({
+        status: 'success',
+        source: 'pm_vault',
+        offline: true,
+        result,
+        vault: pmWallet.vault || pmWallet.wallet,
+        balance: pmWallet.balance
+      });
+    } catch (e) {
+      console.error('[Vault] offline add-money error:', e);
+      const authResp = pmAuthErrorResponse(res, e);
+      if (authResp) return authResp;
+      const status = httpStatusForUpstreamError(e);
+      return res.status(status).json({
+        status: 'error',
+        code: e.code || 'PM_VAULT_OFFLINE_FAILED',
+        message: e.message || 'Failed to add offline vault payment'
+      });
+    }
+  }
+);
 
 walletRouter.post('/topup/confirm', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {

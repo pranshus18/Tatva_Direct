@@ -4,7 +4,6 @@
  */
 import { getApiUrl, buildAuthHeaders, authFetch } from '../config/api';
 import { restorePmVaultSession } from './pmAuthService';
-import { addPmVaultOfflineMoney } from './pmVaultService';
 
 const DEFAULT_VAULT_CONFIG = {
   minTopupInr: Number(import.meta.env.VITE_VAULT_MIN_TOPUP_INR || 100) || 100,
@@ -116,11 +115,7 @@ export async function confirmVaultTopup({
   });
 }
 
-/**
- * Offline add-money still hits PM from the browser (multipart).
- * Prefer Online (Razorpay) on deployed sites until PM whitelists the Vercel origin
- * or we add a backend multipart proxy.
- */
+/** Proxied: POST /api/vault/offline/add-money → PM add-money API (multipart, no browser CORS). */
 export async function addVaultOfflineMoney({
   amount,
   subPaymentMethod,
@@ -130,24 +125,35 @@ export async function addVaultOfflineMoney({
   details,
   documents
 }) {
-  const result = await addPmVaultOfflineMoney({
-    amountInRupees: amount,
-    subPaymentMethod,
-    receiptNumber,
-    chequeNumber,
-    utrNumber,
-    details,
-    documents
+  await restorePmVaultSession();
+  const form = new FormData();
+  form.append('amount', String(amount));
+  form.append('subPaymentMethod', String(subPaymentMethod || 'cash_on_hand'));
+  if (receiptNumber) form.append('receiptNumber', String(receiptNumber));
+  if (chequeNumber) form.append('chequeNumber', String(chequeNumber));
+  if (utrNumber) form.append('utrNumber', String(utrNumber));
+  if (details) form.append('details', String(details));
+
+  const fileList = Array.isArray(documents) ? documents : documents ? [documents] : [];
+  fileList.forEach((file) => {
+    if (file instanceof File) {
+      form.append('documents', file);
+    }
   });
-  const balanceData = await fetchVaultBalance().catch(() => ({}));
-  return {
-    status: 'success',
-    source: 'pm_vault',
-    offline: true,
-    result,
-    vault: balanceData.vault,
-    balance: balanceData.balance
-  };
+
+  const response = await authFetch('/api/vault/offline/add-money', {
+    method: 'POST',
+    headers: buildAuthHeaders({ Accept: 'application/json' }),
+    body: form
+  });
+  const data = await parseJson(response);
+  if (!response.ok || data.status === 'error') {
+    const error = new Error(data.message || 'Failed to add offline vault payment');
+    error.status = response.status;
+    error.code = data.code || (response.status === 401 ? 'PM_AUTH_REQUIRED' : 'PM_VAULT_OFFLINE_FAILED');
+    throw error;
+  }
+  return data;
 }
 
 /** Tatva backend — order checkout escrow. */

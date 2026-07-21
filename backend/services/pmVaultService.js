@@ -1,5 +1,6 @@
 import {
   PM_PAYMENT_API_BASE_URL,
+  PM_VAULT_ADD_MONEY_URL,
   PM_VAULT_TOPUP_COMPLETE_URL,
   PM_VAULT_TOPUP_INITIATE_URL,
   PM_VAULT_URL
@@ -572,4 +573,96 @@ export async function getPmVaultWalletView(user, credentials = {}) {
   const { accessToken } = await ensurePmVaultAuth(user, credentials);
   const vaultPayload = await fetchPmVault({ accessToken });
   return mapPmVaultToWalletView(vaultPayload);
+}
+
+function appendOfflineVaultFile(form, file) {
+  if (!file?.buffer?.length) return;
+  const blob = new Blob([file.buffer], { type: file.mimetype || 'application/octet-stream' });
+  form.append('documents', blob, file.originalname || 'document');
+}
+
+/**
+ * POST PM offline vault credit (cash on hand / cheque / bank transfer).
+ * Proxied server-side to avoid browser CORS on api.withtatva.ai.
+ */
+export async function addPmVaultOfflineMoney({
+  pmUserId,
+  accessToken,
+  amountInRupees,
+  subPaymentMethod = 'cash_on_hand',
+  receiptNumber,
+  chequeNumber,
+  utrNumber,
+  details = '',
+  documents = []
+}) {
+  const token = String(accessToken || '').trim();
+  const userId = String(pmUserId || '').trim();
+  if (!userId || !token) {
+    const error = new Error('PM vault session is missing. Sign in again with phone OTP.');
+    error.code = 'PM_AUTH_REQUIRED';
+    throw error;
+  }
+
+  const amount = Number(amountInRupees);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new Error('Enter a valid amount');
+  }
+
+  const method = String(subPaymentMethod || 'cash_on_hand').trim();
+  const allowed = ['cash_on_hand', 'cheque', 'bank_to_bank'];
+  if (!allowed.includes(method)) {
+    throw new Error('Invalid offline payment method');
+  }
+
+  const form = new FormData();
+  form.append('userId', userId);
+  form.append('amount', String(amount));
+  form.append('paymentMode', 'offline');
+  form.append('subPaymentMethod', method);
+
+  if (method === 'cash_on_hand') {
+    const receipt = String(receiptNumber || '').trim();
+    if (!receipt) {
+      throw new Error('Receipt number is required for cash on hand payment');
+    }
+    form.append('receiptNumber', receipt);
+    form.append('details', String(details || 'Cash collected at office').trim());
+  } else if (method === 'cheque') {
+    const cheque = String(chequeNumber || '').trim();
+    if (!cheque) {
+      throw new Error('Cheque number is required for cheque payment');
+    }
+    form.append('chequeNumber', cheque);
+    form.append('details', String(details || 'Cheque deposit').trim());
+  } else {
+    const utr = String(utrNumber || '').trim();
+    if (!utr) {
+      throw new Error('UTR number is required for bank transfer');
+    }
+    form.append('utrNumber', utr);
+    form.append('details', String(details || 'NEFT transfer').trim());
+  }
+
+  (Array.isArray(documents) ? documents : []).forEach((file) => {
+    appendOfflineVaultFile(form, file);
+  });
+
+  const response = await fetch(PM_VAULT_ADD_MONEY_URL, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`
+    },
+    body: form
+  });
+
+  const payload = await parseJsonResponse(response);
+  if (!response.ok || payload.success === false) {
+    const error = pmRequestFailed(response, payload, 'Failed to add offline vault payment on PM platform');
+    error.code = payload?.code || 'PM_VAULT_OFFLINE_FAILED';
+    throw error;
+  }
+
+  return unwrapPmPayload(payload) || payload;
 }

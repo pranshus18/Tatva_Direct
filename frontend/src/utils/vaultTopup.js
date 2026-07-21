@@ -34,6 +34,10 @@ export async function startVaultTopup({
     idempotencyKey: `vault-topup-${Date.now()}`
   });
   const paymentIntent = createData.paymentIntent || {};
+  const checkoutAmountPaise =
+    Number(paymentIntent.amount) >= numericAmount * 100
+      ? Number(paymentIntent.amount)
+      : Math.round(numericAmount * 100);
   const scriptLoaded = await loadRazorpayScript();
   if (!scriptLoaded) {
     throw new Error('Unable to load Razorpay checkout');
@@ -45,7 +49,7 @@ export async function startVaultTopup({
       order_id: paymentIntent.orderId,
       name: 'Tatva Direct',
       description: 'Vault top-up',
-      amount: paymentIntent.amount,
+      amount: checkoutAmountPaise,
       currency: paymentIntent.currency || 'INR',
       handler: async (response) => {
         try {

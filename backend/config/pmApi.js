@@ -36,3 +36,9 @@ export const PM_PAYMENT_COMPLETE_API_BASE_URL = normalizeUrl(
 export const PM_VAULT_URL = `${PM_API_BASE_URL}/api/vault`;
 export const PM_VAULT_TOPUP_INITIATE_URL = `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/topup/initiate`;
 export const PM_VAULT_TOPUP_COMPLETE_URL = `${PM_PAYMENT_COMPLETE_API_BASE_URL}/api/v1/payments/vault/topup/complete`;
+
+/** Offline vault credit (cash / cheque / bank) — separate PM users host. */
+export const PM_VAULT_OFFLINE_API_BASE_URL = normalizeUrl(
+  process.env.PM_VAULT_OFFLINE_API_BASE_URL || 'https://api.withtatva.ai/users'
+);
+export const PM_VAULT_ADD_MONEY_URL = `${PM_VAULT_OFFLINE_API_BASE_URL}/api/vault/add-money`;

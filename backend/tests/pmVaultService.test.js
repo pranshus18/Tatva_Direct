@@ -1,11 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  convertInrToPaise,
   mapPmVaultToWalletView,
   mapPmVaultTransactions,
   summarizePmVaultLedger,
   usesPlatformVault
 } from '../services/pmVaultService.js';
+
+test('convertInrToPaise converts rupee input to paise for Razorpay/PM APIs', () => {
+  assert.equal(convertInrToPaise(100), 10000);
+  assert.equal(convertInrToPaise(10), 1000);
+  assert.equal(convertInrToPaise(1.5), 150);
+});
+
+test('convertInrToPaise rejects invalid amounts', () => {
+  assert.throws(() => convertInrToPaise(0), /greater than zero/);
+  assert.throws(() => convertInrToPaise('abc'), /greater than zero/);
+});
 
 test('mapPmVaultToWalletView maps nested vault object', () => {
   const view = mapPmVaultToWalletView({
