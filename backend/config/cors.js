@@ -14,6 +14,7 @@ export function createCorsOptions() {
 
       const defaultOrigins = [
         'https://project-frontend-git-main-pranshus-projects-2ecfd5c2.vercel.app',
+        'https://tatva-direct-frontend-five.vercel.app',
         'https://tatvadirect.onrender.com',
         'https://tatva-direct.vercel.app',
         'https://tatva-direct.netlify.app',
