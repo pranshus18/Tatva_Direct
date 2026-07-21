@@ -1,15 +1,10 @@
 /**
- * Vault UI service — reads/writes PM platform vault APIs directly.
- * Tatva backend (/api/vault/*) is only used for order payment (checkout escrow).
+ * Vault UI service — calls Tatva backend (/api/vault/*), which proxies to PM server-side.
+ * Avoids browser CORS against devopsapi.withtatva.ai / api.withtatva.ai.
  */
-import { getApiUrl, buildAuthHeaders } from '../config/api';
+import { getApiUrl, buildAuthHeaders, authFetch } from '../config/api';
 import { restorePmVaultSession } from './pmAuthService';
-import {
-  addPmVaultOfflineMoney,
-  completePmVaultTopup,
-  fetchPmVaultView,
-  initiatePmVaultTopup
-} from './pmVaultService';
+import { addPmVaultOfflineMoney } from './pmVaultService';
 
 const DEFAULT_VAULT_CONFIG = {
   minTopupInr: Number(import.meta.env.VITE_VAULT_MIN_TOPUP_INR || 100) || 100,
@@ -17,24 +12,44 @@ const DEFAULT_VAULT_CONFIG = {
   pmVault: { enabled: true, source: 'pm_platform' }
 };
 
+async function parseJson(response) {
+  try {
+    return await response.json();
+  } catch {
+    return {};
+  }
+}
+
+async function vaultFetch(endpoint, options = {}) {
+  await restorePmVaultSession();
+  const response = await authFetch(endpoint, {
+    ...options,
+    headers: buildAuthHeaders({
+      Accept: 'application/json',
+      ...(options.body && !(options.body instanceof FormData)
+        ? { 'Content-Type': 'application/json' }
+        : {}),
+      ...(options.headers || {})
+    })
+  });
+  const data = await parseJson(response);
+  if (!response.ok || data.status === 'error') {
+    const error = new Error(data.message || 'Vault request failed');
+    error.status = response.status;
+    error.code = data.code || (response.status === 401 ? 'PM_AUTH_REQUIRED' : 'VAULT_REQUEST_FAILED');
+    throw error;
+  }
+  return data;
+}
+
 export function resolveVaultBalance(data = {}) {
   const numeric = Number(data.balance ?? data.vault?.balance ?? 0);
   return Number.isFinite(numeric) ? numeric : 0;
 }
 
 export async function fetchVaultHeaderBalance() {
-  await restorePmVaultSession();
   try {
-    const view = await fetchPmVaultView();
-    return {
-      status: 'success',
-      visible: true,
-      linked: true,
-      source: 'pm_vault',
-      balance: view.balance,
-      vault: view.vault,
-      vaultPath: '/wallet'
-    };
+    return await vaultFetch('/api/vault/header-balance');
   } catch (error) {
     if (error.code === 'PM_AUTH_REQUIRED') {
       return {
@@ -51,76 +66,61 @@ export async function fetchVaultHeaderBalance() {
   }
 }
 
-/** PM GET .../users/api/vault */
 export async function fetchVaultBalance() {
-  const view = await fetchPmVaultView();
-  return {
-    status: 'success',
-    source: 'pm_vault',
-    balance: view.balance,
-    holdingAmount: view.holdingAmount,
-    vault: view.vault,
-    transactions: view.transactions,
-    summary: view.summary
-  };
+  return vaultFetch('/api/vault/balance');
 }
 
 export async function fetchVaultTransactions() {
-  const view = await fetchPmVaultView();
-  return {
-    status: 'success',
-    source: 'pm_vault',
-    transactions: view.transactions,
-    pageInfo: { hasMore: false, nextCursor: null }
-  };
+  return vaultFetch('/api/vault/transactions');
 }
 
 export async function fetchVaultLedgerSummary() {
-  const view = await fetchPmVaultView();
-  return {
-    status: 'success',
-    source: 'pm_vault',
-    summary: view.summary
-  };
+  return vaultFetch('/api/vault/ledger-summary');
 }
 
 export async function fetchVaultConfig() {
-  return {
-    status: 'success',
-    config: DEFAULT_VAULT_CONFIG
-  };
+  try {
+    return await vaultFetch('/api/vault/config');
+  } catch {
+    return {
+      status: 'success',
+      config: DEFAULT_VAULT_CONFIG
+    };
+  }
 }
 
-/** PM POST .../vault/topup/initiate */
-export async function createVaultTopup({ amount }) {
-  const paymentIntent = await initiatePmVaultTopup({
-    amountInRupees: amount,
-    description: 'Vault top-up'
+/** Proxied: POST /api/vault/topup/create → PM payment initiate (no browser CORS). */
+export async function createVaultTopup({ amount, idempotencyKey }) {
+  return vaultFetch('/api/vault/topup/create', {
+    method: 'POST',
+    body: JSON.stringify({
+      amount,
+      ...(idempotencyKey ? { idempotencyKey } : {})
+    })
   });
-  return {
-    status: 'success',
-    source: 'pm_vault',
-    paymentIntent
-  };
 }
 
-/** PM POST .../vault/topup/complete */
+/** Proxied: POST /api/vault/topup/confirm → PM payment complete. */
 export async function confirmVaultTopup({
   razorpayOrderId,
   razorpayPaymentId,
   razorpaySignature
 }) {
-  await completePmVaultTopup({ razorpayOrderId, razorpayPaymentId, razorpaySignature });
-  const view = await fetchPmVaultView();
-  return {
-    status: 'success',
-    source: 'pm_vault',
-    vault: view.vault,
-    balance: view.balance
-  };
+  return vaultFetch('/api/vault/topup/confirm', {
+    method: 'POST',
+    body: JSON.stringify({
+      razorpayOrderId,
+      razorpayPaymentId,
+      razorpaySignature
+    })
+  });
 }
 
-/** PM POST api.withtatva.ai/users/api/vault/add-money (offline) */
+/**
+ * Offline add-money still hits PM from the browser (multipart).
+ * Prefer Online (Razorpay) on deployed sites until PM whitelists the Vercel origin
+ * or we add a backend multipart proxy.
+ */
 export async function addVaultOfflineMoney({
   amount,
   subPaymentMethod,
@@ -139,18 +139,18 @@ export async function addVaultOfflineMoney({
     details,
     documents
   });
-  const view = await fetchPmVaultView();
+  const balanceData = await fetchVaultBalance().catch(() => ({}));
   return {
     status: 'success',
     source: 'pm_vault',
     offline: true,
     result,
-    vault: view.vault,
-    balance: view.balance
+    vault: balanceData.vault,
+    balance: balanceData.balance
   };
 }
 
-/** Tatva backend — order checkout still uses local escrow flow. */
+/** Tatva backend — order checkout escrow. */
 export async function payOrderFromVault(orderId, { idempotencyKey } = {}) {
   await restorePmVaultSession();
   const response = await fetch(getApiUrl(`/api/vault/orders/${orderId}/pay`), {
@@ -159,32 +159,34 @@ export async function payOrderFromVault(orderId, { idempotencyKey } = {}) {
       Accept: 'application/json',
       'Content-Type': 'application/json'
     }),
-    body: JSON.stringify({ idempotencyKey })
+    body: JSON.stringify({
+      ...(idempotencyKey ? { idempotencyKey } : {})
+    })
   });
-  const data = await response.json().catch(() => ({}));
+  const data = await parseJson(response);
   if (!response.ok || data.status === 'error') {
     const error = new Error(data.message || 'Failed to pay order from vault');
-    error.code = data.code;
     error.status = response.status;
+    error.code = data.code;
     throw error;
   }
   return data;
 }
 
 export async function loadVaultSnapshot() {
-  const view = await fetchPmVaultView();
+  const data = await fetchVaultBalance();
   return {
-    balance: view.balance,
-    holdingAmount: view.holdingAmount,
-    vault: view.vault,
-    transactions: view.transactions,
-    summary: view.summary,
+    balance: data.balance,
+    holdingAmount: data.holdingAmount,
+    vault: data.vault,
+    transactions: data.transactions,
+    summary: data.summary,
     config: DEFAULT_VAULT_CONFIG,
     source: 'pm_vault'
   };
 }
 
 export async function getVaultBalanceForUi() {
-  const view = await fetchPmVaultView();
-  return view.balance;
+  const data = await fetchVaultHeaderBalance();
+  return resolveVaultBalance(data);
 }

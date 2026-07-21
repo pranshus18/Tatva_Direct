@@ -34,10 +34,11 @@ export function createCorsOptions() {
         }
 
         if (allowedOrigin.includes('*')) {
+          // Escape regex specials except `*`, then turn `*` into `.*`
           const wildcardRegex = new RegExp(
             `^${allowedOrigin
               .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
-              .replace(/\\\*/g, '.*')}$`
+              .replace(/\*/g, '.*')}$`
           );
           return wildcardRegex.test(normalizedOrigin);
         }
