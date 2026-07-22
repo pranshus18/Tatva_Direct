@@ -46,6 +46,12 @@ import {
   DialogTitle
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import {
+  formatVaultPaymentMethodLabel,
+  isVaultPaymentMethod,
+  VAULT_PAGE_PATH,
+  VAULT_PAYMENT_METHOD
+} from '../utils/vaultPaymentMethod';
 import './Dashboard.css';
 import './YourOrders.css';
 
@@ -77,7 +83,7 @@ const formatAddress = (address) =>
 
 const paymentMethodLabel = (order) => {
   const pm = String(order?.paymentMethod || order?.payment_method || '').toLowerCase();
-  if (pm === 'wallet') return 'Vault balance (platform escrow)';
+  if (isVaultPaymentMethod(pm)) return formatVaultPaymentMethodLabel(pm);
   if (pm === 'cash') return 'Cash on delivery';
   if (pm === 'online') return 'Pay online';
   if (pm === 'upi') return 'UPI';
@@ -118,8 +124,8 @@ const YourOrders = () => {
   const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
   const [processingPayment, setProcessingPayment] = useState(false);
   const [paymentNotice, setPaymentNotice] = useState('');
-  const [walletBalance, setWalletBalance] = useState(0);
-  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
+  const [vaultBalance, setVaultBalance] = useState(0);
+  const [loadingVaultBalance, setLoadingVaultBalance] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [editingOrder, setEditingOrder] = useState(null);
   const [savingOrderEdit, setSavingOrderEdit] = useState(false);
@@ -262,11 +268,11 @@ const YourOrders = () => {
     }
   };
 
-  const handlePayFromWallet = async () => {
+  const handlePayFromVault = async () => {
     if (!orderDetails?.id || processingPayment) return;
     const orderAmount = Number(orderDetails?.totalAmount || 0);
-    if (orderAmount > Number(walletBalance || 0)) {
-      const shortage = Math.max(0, orderAmount - Number(walletBalance || 0));
+    if (orderAmount > Number(vaultBalance || 0)) {
+      const shortage = Math.max(0, orderAmount - Number(vaultBalance || 0));
       setPaymentNotice(
         `Insufficient vault balance. Add ${shortage.toLocaleString('en-IN', {
           minimumFractionDigits: 2,
@@ -282,7 +288,7 @@ const YourOrders = () => {
         idempotencyKey: `ui-${orderDetails.id}-${Date.now()}`
       });
       if (payData.status !== 'success') {
-        if (payData?.code === 'INSUFFICIENT_WALLET_BALANCE') {
+        if (payData?.code === 'INSUFFICIENT_WALLET_BALANCE' || payData?.code === 'INSUFFICIENT_VAULT_BALANCE') {
           throw new Error('Insufficient vault balance. Please credit vault and try again.');
         }
         throw new Error(payData?.message || 'Failed to pay order from vault');
@@ -299,17 +305,17 @@ const YourOrders = () => {
     }
   };
 
-  const fetchWalletBalance = async () => {
-    setLoadingWalletBalance(true);
+  const fetchVaultBalance = async () => {
+    setLoadingVaultBalance(true);
     try {
       const token = localStorage.getItem('token');
       if (!token) return;
       const balance = await getVaultBalanceForUi();
-      setWalletBalance(balance);
+      setVaultBalance(balance);
     } catch (_e) {
       // Non-blocking for order view.
     } finally {
-      setLoadingWalletBalance(false);
+      setLoadingVaultBalance(false);
     }
   };
 
@@ -598,11 +604,11 @@ const YourOrders = () => {
   const selfServeLockReason = orderDetails ? getSelfServeLockReason(orderDetails) : '';
   const canRateOrder = orderStatus === 'delivered' && String(orderDetails?.paymentStatus || '').toLowerCase() === 'paid';
   const orderPm = String(orderDetails?.paymentMethod || orderDetails?.payment_method || '').toLowerCase();
-  const showWalletPayForOrder = orderPaymentPending;
-  const nonWalletPending = orderPaymentPending && orderPm && orderPm !== 'wallet';
+  const showVaultPayForOrder = orderPaymentPending;
+  const nonVaultPending = orderPaymentPending && orderPm && !isVaultPaymentMethod(orderPm);
   const orderAmount = Number(orderDetails?.totalAmount || 0);
-  const walletShortage = Math.max(0, orderAmount - Number(walletBalance || 0));
-  const hasEnoughWalletBalance = walletShortage <= 0;
+  const vaultShortage = Math.max(0, orderAmount - Number(vaultBalance || 0));
+  const hasEnoughVaultBalance = vaultShortage <= 0;
   const payLaterMeta =
     orderDetails?.deliveryAddress && typeof orderDetails.deliveryAddress === 'object'
       ? orderDetails.deliveryAddress.payLater
@@ -612,7 +618,7 @@ const YourOrders = () => {
   useEffect(() => {
     if (!selectedOrderId) return;
     if (orderPaymentPending) {
-      fetchWalletBalance();
+      fetchVaultBalance();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrderId, orderPaymentPending]);
@@ -960,37 +966,37 @@ const YourOrders = () => {
                       <div className="text-slate-700">
                         Vault balance:{' '}
                         <strong>
-                          {loadingWalletBalance
+                          {loadingVaultBalance
                             ? 'Checking...'
-                            : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
+                            : `₹${Number(vaultBalance || 0).toLocaleString('en-IN')}`}
                         </strong>
                       </div>
-                      {!loadingWalletBalance && !hasEnoughWalletBalance ? (
+                      {!loadingVaultBalance && !hasEnoughVaultBalance ? (
                         <div className="mt-1 text-rose-700">
-                          Additional credit needed: <strong>₹{walletShortage.toLocaleString('en-IN')}</strong>
+                          Additional credit needed: <strong>₹{vaultShortage.toLocaleString('en-IN')}</strong>
                         </div>
                       ) : null}
                     </div>
                     <div className="space-y-3">
-                      {nonWalletPending ? (
+                      {nonVaultPending ? (
                         <p className="yo-payment-hint yo-payment-hint--credit">
                           This order uses legacy payment mode `{orderPm}`. You can still complete it via vault payment.
                         </p>
                       ) : null}
-                      {showWalletPayForOrder && (
+                      {showVaultPayForOrder && (
                         <div className="yo-dialog-actions">
                           <button
                             type="button"
                             className="btn-primary"
-                            onClick={handlePayFromWallet}
-                            disabled={processingPayment || loadingWalletBalance || !hasEnoughWalletBalance}
+                            onClick={handlePayFromVault}
+                            disabled={processingPayment || loadingVaultBalance || !hasEnoughVaultBalance}
                           >
                             {processingPayment ? 'Processing…' : 'Pay from vault'}
                           </button>
                           <button
                             type="button"
                             className="btn-secondary"
-                            onClick={() => navigate('/wallet')}
+                            onClick={() => navigate(VAULT_PAGE_PATH)}
                             disabled={processingPayment}
                           >
                             Credit vault
@@ -1216,7 +1222,7 @@ const YourOrders = () => {
                           }
                       >
                         <option value="">Select payment method</option>
-                        <option value="wallet">Vault balance</option>
+                        <option value={VAULT_PAYMENT_METHOD}>Vault balance</option>
                       </select>
                       </div>
                       <div className="space-y-2 sm:col-span-2">

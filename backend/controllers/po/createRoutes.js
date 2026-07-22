@@ -10,7 +10,6 @@ import {
   extractUserState,
   getAllowedSellerRoleForBrand,
   getContractErrorMessage,
-  getWalletBalance,
   insertNotification,
   isAddressComplete,
   isOrderNumberConflictError,
@@ -30,9 +29,15 @@ import {
   toLifecycleStateFromStatus
 } from './poImports.js';
 import {
+  assertPmVaultBalanceSufficient,
+  readPmCredentialsFromRequest,
+  usesPlatformVault
+} from '../../services/pmVaultService.js';
+import {
   maybeNotifySupplierCreditAlert,
   validateCreditForOrder
 } from '../../services/creditAccountService.js';
+import { isVaultPaymentMethod, toApiVaultPaymentMethod } from '../../utils/vaultPaymentMethod.js';
 import { loadSupplierProductForPoCreate } from './groupRoutes.js';
 import {
   CHECKOUT_SOURCES,
@@ -63,7 +68,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       ])
       .filter(Boolean);
     const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, itemBrandCandidates);
-    const requestedPaymentMethod = String(payload?.paymentMethod || payload?.payment_method || 'wallet')
+    const requestedPaymentMethod = String(payload?.paymentMethod || payload?.payment_method || 'vault')
       .toLowerCase()
       .trim();
     const payLaterRequested =
@@ -73,6 +78,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     const { payment_method: resolvedPaymentMethod, payment_status: poPaymentStatus } =
       resolveB2bPaymentFromBody(payload);
     const poPaymentMethod = payLaterRequested ? 'credit' : resolvedPaymentMethod;
+    const isVaultCheckout = !payLaterRequested && isVaultPaymentMethod(poPaymentMethod);
     const paymentDetails = payload.paymentDetails && typeof payload.paymentDetails === 'object'
       ? payload.paymentDetails
       : null;
@@ -202,34 +208,67 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     }
 
     let walletRemainingBalance = null;
-    if (poPaymentMethod === 'wallet') {
-      const groupedTotal = toMoney(
+    if (isVaultCheckout) {
+      const productsTotal = toMoney(
         (Array.isArray(poGroups) ? poGroups : []).reduce((sum, group) => sum + (Number(group?.total) || 0), 0)
       );
-      const walletBalanceResult = await getWalletBalance({
-        userId: req.userId,
-        walletType: 'customer'
-      });
-      const currentWalletBalance = toMoney(walletBalanceResult?.balance || 0);
-      walletRemainingBalance = currentWalletBalance;
-      if (groupedTotal > currentWalletBalance) {
-        const shortage = toMoney(groupedTotal - currentWalletBalance);
-        return res.status(400).json({
-          status: 'error',
-          code: 'INSUFFICIENT_WALLET_BALANCE',
-          message: `Insufficient wallet balance. Available ₹${currentWalletBalance.toLocaleString(
-            'en-IN'
-          )}, required ₹${groupedTotal.toLocaleString('en-IN')}. Please credit wallet before placing this order.`,
-          wallet: {
-            balance: currentWalletBalance,
-            required: groupedTotal,
-            shortage
-          }
-        });
+      const quotedTransportTotal = toMoney(payload?.quotedTransportTotal || 0);
+      const groupedTotal = toMoney(productsTotal + quotedTransportTotal);
+
+      let currentVaultBalance = 0;
+      try {
+        if (!usesPlatformVault(req.user)) {
+          return res.status(400).json({
+            status: 'error',
+            code: 'PM_VAULT_REQUIRED',
+            message:
+              'Vault payment uses the PM platform vault only. Sign in with phone OTP so vault balance can be checked on PM.'
+          });
+        }
+        const pmCredentials = readPmCredentialsFromRequest(req);
+        const pmWallet = await assertPmVaultBalanceSufficient(
+          req.user,
+          groupedTotal,
+          pmCredentials
+        );
+        currentVaultBalance = toMoney(pmWallet?.balance || 0);
+      } catch (vaultError) {
+        if (vaultError?.code === 'PM_AUTH_REQUIRED') {
+          return res.status(401).json({
+            status: 'error',
+            code: vaultError.code,
+            message: vaultError.message || 'Sign in with phone OTP to use vault balance.'
+          });
+        }
+        if (vaultError?.code === 'INSUFFICIENT_WALLET_BALANCE' || vaultError?.code === 'INSUFFICIENT_VAULT_BALANCE') {
+          const availableMatch = String(vaultError.message || '').match(/Available INR\s+([0-9.]+)/i);
+          const available = toMoney(availableMatch?.[1] || 0);
+          const shortage = toMoney(Math.max(0, groupedTotal - available));
+          return res.status(400).json({
+            status: 'error',
+            code: 'INSUFFICIENT_VAULT_BALANCE',
+            message: `Insufficient vault balance. Available ₹${available.toLocaleString(
+              'en-IN'
+            )}, required ₹${groupedTotal.toLocaleString(
+              'en-IN'
+            )} (products + transport). Please credit vault before placing this order.`,
+            vault: {
+              balance: available,
+              required: groupedTotal,
+              productsTotal,
+              transportTotal: quotedTransportTotal,
+              shortage
+            }
+          });
+        }
+        throw vaultError;
       }
+
+      // Track remaining PM vault headroom across sequential PO creates.
+      walletRemainingBalance = currentVaultBalance;
     }
     const resolveBcov = buildBcovResolver(supabase);
-    const GROUP_CREATE_CONCURRENCY = poPaymentMethod === 'wallet' ? 1 : 3;
+    const GROUP_CREATE_CONCURRENCY = isVaultCheckout ? 1 : 3;
     const createHttpError = (statusCode, message) => {
       const err = new Error(message);
       err.statusCode = statusCode;
@@ -515,7 +554,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             supplier: group.vendorName,
             totalAmount: existingAmount,
             requiredDate: expectedDeliveryDate,
-            paymentMethod: poPaymentMethod,
+            paymentMethod: toApiVaultPaymentMethod(poPaymentMethod),
             paymentStatus: poPaymentStatus,
             deliveryDestination,
             shippingAddress: mapToDeliveryAddress(shippingAddress),
@@ -526,12 +565,12 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           };
         }
       }
-      if (poPaymentMethod === 'wallet' && walletRemainingBalance !== null) {
+      if (isVaultCheckout && walletRemainingBalance !== null) {
         if (roundedOrderAmount > walletRemainingBalance) {
           const shortage = toMoney(roundedOrderAmount - walletRemainingBalance);
           throw createHttpError(
             400,
-            `Insufficient wallet balance for "${group.vendorName || 'selected supplier'}". Available ₹${walletRemainingBalance.toLocaleString(
+            `Insufficient vault balance for "${group.vendorName || 'selected supplier'}". Available ₹${walletRemainingBalance.toLocaleString(
               'en-IN'
             )}, required ₹${roundedOrderAmount.toLocaleString('en-IN')}, shortage ₹${shortage.toLocaleString(
               'en-IN'
@@ -613,6 +652,14 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
       if (orderError || !order) {
         logger.error('Order creation error:', orderError);
+        const constraintMsg = String(orderError?.message || '');
+        if (/orders_payment_method_check|payment_method/i.test(constraintMsg)) {
+          const err = new Error(
+            'Database is missing vault payment_method support. Run backend/sql/migration_payment_method_wallet_to_vault.sql in Supabase SQL Editor, then retry.'
+          );
+          err.statusCode = 500;
+          throw err;
+        }
         const err = new Error(orderError?.message || 'Failed to create order');
         err.statusCode = 500;
         throw err;
@@ -715,7 +762,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         supplier: group.vendorName,
         totalAmount: totalAmount,
         requiredDate: expectedDeliveryDate,
-        paymentMethod: poPaymentMethod,
+        paymentMethod: toApiVaultPaymentMethod(poPaymentMethod),
         paymentStatus: poPaymentStatus,
         deliveryDestination,
         shippingAddress: mapToDeliveryAddress(shippingAddress),

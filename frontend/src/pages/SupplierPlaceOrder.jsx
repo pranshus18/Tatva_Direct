@@ -147,7 +147,7 @@ const SupplierPlaceOrder = () => {
 
   const [draft, setDraft] = useState(null);
   const [requiredDate, setRequiredDate] = useState('');
-  const [paymentMethod] = useState('wallet');
+  const [paymentMethod] = useState('vault');
   const [placing, setPlacing] = useState(false);
   const [loadingDraft, setLoadingDraft] = useState(true);
   const [walletBalance, setWalletBalance] = useState(0);

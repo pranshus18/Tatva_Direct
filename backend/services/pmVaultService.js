@@ -1,6 +1,7 @@
 import {
   PM_PAYMENT_API_BASE_URL,
   PM_VAULT_ADD_MONEY_URL,
+  PM_VAULT_PAY_ORDER_URL,
   PM_VAULT_TOPUP_COMPLETE_URL,
   PM_VAULT_TOPUP_INITIATE_URL,
   PM_VAULT_URL
@@ -12,7 +13,6 @@ import {
   persistPmAuthCredentials
 } from './pmUserService.js';
 
-const PM_VAULT_PAY_ORDER_URL = String(process.env.PM_VAULT_PAY_ORDER_URL || '').trim();
 const PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL = `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/topup/complete`;
 
 const PM_VAULT_BALANCE_IN_PAISE =
@@ -523,7 +523,7 @@ export async function assertPmVaultBalanceSufficient(user, amountInRupees, crede
     const err = new Error(
       `Insufficient vault balance. Available INR ${pmWallet.balance}, required INR ${required}.`
     );
-    err.code = 'INSUFFICIENT_WALLET_BALANCE';
+    err.code = 'INSUFFICIENT_VAULT_BALANCE';
     throw err;
   }
   return pmWallet;
@@ -541,7 +541,11 @@ export async function payOrderFromPmVault({
   await assertPmVaultBalanceSufficient(user, amountInRupees, credentials);
 
   if (!PM_VAULT_PAY_ORDER_URL) {
-    return null;
+    const err = new Error(
+      'PM vault pay URL is not configured. Set PM_VAULT_PAY_ORDER_URL to the PM order-debit endpoint.'
+    );
+    err.code = 'PM_VAULT_PAY_NOT_CONFIGURED';
+    throw err;
   }
 
   const amountPaise = toPaise(amountInRupees);

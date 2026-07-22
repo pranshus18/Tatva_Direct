@@ -29,10 +29,10 @@ test('buildReconciliationStatementDownload returns a PDF file', async () => {
         status: 'matched',
         serviceProvider: 'SP Demo',
         supplier: 'Supplier Demo',
-        paymentMethod: 'wallet',
+        paymentMethod: 'vault',
         orderTotal: 1200,
         receipt: { present: true, number: 'R-1', amount: 1200, paidAt: '2026-06-05T10:30:00.000Z', paymentReference: 'PAY-1' },
-        transaction: { present: true, status: 'captured', method: 'wallet', amount: 1200, providerPaymentId: 'TXN-1' },
+        transaction: { present: true, status: 'captured', method: 'vault', amount: 1200, providerPaymentId: 'TXN-1' },
         ledger: { present: true, amount: 1200 },
         varianceOrderReceipt: 0,
         issueTypes: []
@@ -46,7 +46,7 @@ test('buildReconciliationStatementDownload returns a PDF file', async () => {
     filter: 'all'
   }, {
     loadStatement: async () => baseStatement,
-    loadSettlement: async () => ({ transactionCount: 1, totalCaptured: 1200, byMethod: { wallet: 1200 } })
+    loadSettlement: async () => ({ transactionCount: 1, totalCaptured: 1200, byMethod: { vault: 1200 } })
   });
 
   assert.equal(download.contentType, 'application/pdf');

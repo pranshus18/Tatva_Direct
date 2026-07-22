@@ -46,6 +46,11 @@ import {
   SP_CHECKOUT_CART_PATH
 } from '../utils/checkoutReservation';
 import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
+import {
+  isVaultPaymentMethod,
+  VAULT_PAGE_PATH,
+  VAULT_PAYMENT_METHOD
+} from '../utils/vaultPaymentMethod';
 import './CreatePO.css';
 
 const todayDateMin = getTodayDateInputValue();
@@ -240,8 +245,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   }, [boqProject?.requiredDate, navVoiceCart?.requiredDate]);
   const [requiredDate, setRequiredDate] = useState(initialRequiredDateFromContext);
   const [creatingOrders, setCreatingOrders] = useState(false);
-  /** Wallet-only checkout model: all orders are paid via customer wallet. */
-  const [poPaymentMethod, setPoPaymentMethod] = useState('wallet');
+  /** Vault-only checkout: orders are paid from PM vault (products + transport). */
+  const [poPaymentMethod, setPoPaymentMethod] = useState(VAULT_PAYMENT_METHOD);
   /** Payment details collected based on selected method (card number, UTR, etc.) */
   const [paymentDetails, setPaymentDetails] = useState({});
   /** Online flow: show platform test QR before calling create API. */
@@ -258,8 +263,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   const [creditCheckLoading, setCreditCheckLoading] = useState(false);
   const [creditCheckFailed, setCreditCheckFailed] = useState(false);
   const [payLaterEligibility, setPayLaterEligibility] = useState([]);
-  const [walletBalance, setWalletBalance] = useState(0);
-  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
+  const [vaultBalance, setVaultBalance] = useState(0);
+  const [loadingVaultBalance, setLoadingVaultBalance] = useState(false);
   const [checkoutSessionId, setCheckoutSessionId] = useState('');
   const [reservationExpiresAt, setReservationExpiresAt] = useState('');
   const [reservationSecondsLeft, setReservationSecondsLeft] = useState(0);
@@ -401,11 +406,40 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     () => poGroups.reduce((sum, g) => sum + (Number(g.total) || 0), 0),
     [poGroups]
   );
-  const walletShortage = useMemo(
-    () => Math.max(0, Number(grandTotalAllPos || 0) - Number(walletBalance || 0)),
-    [grandTotalAllPos, walletBalance]
+  const transportTotalAllPos = useMemo(() => {
+    const st = selectedTransport;
+    if (!st || typeof st !== 'object') return 0;
+    const parseQuote = (raw) => {
+      if (raw === null || raw === undefined || raw === '') return null;
+      const n = Number(String(raw).replace(/,/g, ''));
+      return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+    };
+    const byVendor = st.byVendorId && typeof st.byVendorId === 'object' ? st.byVendorId : null;
+    const details =
+      st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object'
+        ? st.byVendorCourierDetail
+        : null;
+    if (byVendor && details) {
+      let sum = 0;
+      for (const key of Object.keys(byVendor)) {
+        if (!String(byVendor[key] || '').trim()) continue;
+        const det = details[key];
+        const quoted = parseQuote(det?.fareValue) ?? parseQuote(det?.rate);
+        if (quoted != null) sum += quoted;
+      }
+      return Math.round(sum * 100) / 100;
+    }
+    return 0;
+  }, [selectedTransport]);
+  const checkoutTotalDue = useMemo(
+    () => Math.round((Number(grandTotalAllPos || 0) + Number(transportTotalAllPos || 0)) * 100) / 100,
+    [grandTotalAllPos, transportTotalAllPos]
   );
-  const hasSufficientWalletBalance = walletShortage <= 0;
+  const vaultShortage = useMemo(
+    () => Math.max(0, Number(checkoutTotalDue || 0) - Number(vaultBalance || 0)),
+    [checkoutTotalDue, vaultBalance]
+  );
+  const hasSufficientVaultBalance = vaultShortage <= 0;
 
   const workflowItems = voiceCart?.items?.length ? voiceCart.items : items;
   const workflowVendors =
@@ -819,19 +853,19 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   }, [poGroups]);
 
   useEffect(() => {
-    if (poPaymentMethod !== 'wallet') return;
+    if (!isVaultPaymentMethod(poPaymentMethod)) return;
     const token = localStorage.getItem('token');
     if (!token) return;
     let cancelled = false;
     (async () => {
       try {
-        setLoadingWalletBalance(true);
+        setLoadingVaultBalance(true);
         const balance = await getVaultBalanceForUi();
-        if (!cancelled) setWalletBalance(balance);
+        if (!cancelled) setVaultBalance(balance);
       } catch {
-        if (!cancelled) setWalletBalance(0);
+        if (!cancelled) setVaultBalance(0);
       } finally {
-        if (!cancelled) setLoadingWalletBalance(false);
+        if (!cancelled) setLoadingVaultBalance(false);
       }
     })();
     return () => {
@@ -858,7 +892,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   }, [poPaymentMethod, creditChecks, creditCheckFailed]);
 
   const createPurchaseOrders = async () => {
-    const token = localStorage.getItem('token');
     const sessionId =
       String(checkoutSessionId || sessionStorage.getItem(SP_PO_CHECKOUT_SESSION_KEY) || '').trim();
     if (!sessionId) {
@@ -873,10 +906,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
 
     const res = await fetch(getApiUrl('/api/po/create'), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      },
+      headers: buildAuthHeaders({
+        'Content-Type': 'application/json'
+      }),
       body: JSON.stringify({
         poGroups,
         checkoutSessionId: sessionId,
@@ -887,7 +919,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         deliveryDestination: 'shipping',
         shippingAddress,
         billingAddress: shippingAddress,
-        gstin: serviceProviderGstin || null
+        gstin: serviceProviderGstin || null,
+        quotedTransportTotal: transportTotalAllPos
       })
     });
 
@@ -921,7 +954,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   };
 
   const finalizeTransportDetails = async (ordersToConfirm = createdTransportOrders) => {
-    const token = localStorage.getItem('token');
     const orderList = Array.isArray(ordersToConfirm) ? ordersToConfirm : [];
     const orderIds = orderList.map((order) => order?.id).filter(Boolean);
     if (orderIds.length === 0) {
@@ -1056,10 +1088,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
 
     const res = await fetch(getApiUrl('/api/po/transport/confirm'), {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {})
-      },
+      headers: buildAuthHeaders({
+        'Content-Type': 'application/json'
+      }),
       body: JSON.stringify(confirmBody)
     });
 
@@ -1087,6 +1118,22 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         setCreatedTransportOrders(activeOrders);
       }
       await finalizeTransportDetails(activeOrders);
+
+      if (isVaultPaymentMethod(poPaymentMethod)) {
+        const unpaid = activeOrders.filter((order) => order?.id);
+        for (const order of unpaid) {
+          const payData = await payOrderFromVault(order.id, {
+            idempotencyKey: `create-po-vault-${order.id}`
+          });
+          if (payData?.status && payData.status !== 'success') {
+            throw new Error(
+              payData.message ||
+                `Failed to debit vault for order ${order.orderNumber || order.id}. Products + transport were not fully paid.`
+            );
+          }
+        }
+      }
+
       await clearCartTransportSelection();
       setSelectedTransport(null);
       reservationSignatureRef.current = '';
@@ -1142,14 +1189,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         return;
       }
     }
-    if (poPaymentMethod === 'wallet') {
-      if (loadingWalletBalance) {
+    if (isVaultPaymentMethod(poPaymentMethod)) {
+      if (loadingVaultBalance) {
         alert('Checking vault balance. Please wait and try again.');
         return;
       }
-      if (!hasSufficientWalletBalance) {
+      if (!hasSufficientVaultBalance) {
         alert(
-          `Insufficient vault balance. You need ₹${walletShortage.toLocaleString(
+          `Insufficient vault balance. You need ₹${vaultShortage.toLocaleString(
             'en-IN'
           )} more. Please credit vault first.`
         );
@@ -1437,14 +1484,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
               color: '#334155'
             }}
           >
-            <option value="wallet">Vault balance only (platform escrow model)</option>
+            <option value={VAULT_PAYMENT_METHOD}>Vault balance only (platform escrow model)</option>
             <option value="credit" disabled={creditCheckLoading || !payLaterOptionAvailable}>
               Pay later (credit account)
             </option>
           </select>
-          {poPaymentMethod === 'wallet' ? (
+          {isVaultPaymentMethod(poPaymentMethod) ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
-              Orders are created with vault payment mode. Customer funds vault first, then platform escrow settles supplier payout.
+              On confirm, vault is debited for product total plus selected transport charges. Platform escrow then settles supplier payout.
             </p>
           ) : poPaymentMethod === 'credit' ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
@@ -1463,25 +1510,25 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             <button
               type="button"
               className="btn-secondary"
-              onClick={() => navigate('/wallet')}
+              onClick={() => navigate(VAULT_PAGE_PATH)}
               style={{ padding: '0.35rem 0.7rem', fontSize: '0.78rem' }}
             >
               Credit vault
             </button>
             <span style={{ fontSize: '0.76rem', color: '#64748b' }}>
-              {poPaymentMethod === 'wallet'
-                ? 'Tip: Add enough vault balance before paying these orders in `Your orders`.'
+              {isVaultPaymentMethod(poPaymentMethod)
+                ? 'Tip: Keep enough vault balance for products + transport before confirming.'
                 : 'Tip: Configure credit limit with supplier to use pay later without failures.'}
             </span>
           </div>
 
-          {poPaymentMethod === 'wallet' && (
+          {isVaultPaymentMethod(poPaymentMethod) && (
             <div
               style={{
                 marginTop: '0.75rem',
                 padding: '0.75rem',
-                background: hasSufficientWalletBalance ? '#f0fdf4' : '#fef2f2',
-                border: `1px solid ${hasSufficientWalletBalance ? '#86efac' : '#fecaca'}`,
+                background: hasSufficientVaultBalance ? '#f0fdf4' : '#fef2f2',
+                border: `1px solid ${hasSufficientVaultBalance ? '#86efac' : '#fecaca'}`,
                 borderRadius: '8px',
                 maxWidth: '520px'
               }}
@@ -1490,19 +1537,26 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                 Vault balance check
               </p>
               <p style={{ margin: 0, fontSize: '0.8rem', color: '#475569' }}>
-                Order total: <strong>₹{Number(grandTotalAllPos || 0).toLocaleString('en-IN')}</strong>
+                Products: <strong>₹{Number(grandTotalAllPos || 0).toLocaleString('en-IN')}</strong>
+              </p>
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
+                Transport: <strong>₹{Number(transportTotalAllPos || 0).toLocaleString('en-IN')}</strong>
+              </p>
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
+                Amount to debit:{' '}
+                <strong>₹{Number(checkoutTotalDue || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
                 Vault balance:{' '}
                 <strong>
-                  {loadingWalletBalance
+                  {loadingVaultBalance
                     ? 'Checking...'
-                    : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
+                    : `₹${Number(vaultBalance || 0).toLocaleString('en-IN')}`}
                 </strong>
               </p>
-              {!loadingWalletBalance && !hasSufficientWalletBalance ? (
+              {!loadingVaultBalance && !hasSufficientVaultBalance ? (
                 <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#b91c1c' }}>
-                  Additional credit required: <strong>₹{walletShortage.toLocaleString('en-IN')}</strong>
+                  Additional credit required: <strong>₹{vaultShortage.toLocaleString('en-IN')}</strong>
                 </p>
               ) : null}
             </div>
@@ -1906,7 +1960,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                     let sum = 0;
                     let any = false;
                     for (const vid of Object.keys(selectedTransport.byVendorId || {})) {
-                      const r = det[vid]?.rate;
+                      const r = det[vid]?.fareValue ?? det[vid]?.rate;
                       const n = Number(String(r ?? '').replace(/,/g, ''));
                       if (Number.isFinite(n)) {
                         sum += n;
@@ -1951,7 +2005,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                 reservationExpired ||
                 reservationSecondsLeft <= 0 ||
                 !isTransportSelectionReady(selectedTransport, poGroups) ||
-                (poPaymentMethod === 'wallet' && (loadingWalletBalance || !hasSufficientWalletBalance))
+                (isVaultPaymentMethod(poPaymentMethod) &&
+                  (loadingVaultBalance || !hasSufficientVaultBalance))
               }
             >
               {creatingOrders ? 'Finalizing...' : 'Confirm & Create All POs'}

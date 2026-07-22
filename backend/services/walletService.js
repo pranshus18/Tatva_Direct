@@ -864,36 +864,114 @@ export async function payOrderFromWallet({
     .maybeSingle();
   if (actorUserError) throw actorUserError;
 
-  let pmPaymentMode = null;
-  if (actorUser) {
-    const pmVault = await import('./pmVaultService.js');
-    if (pmVault.usesPlatformVault(actorUser)) {
-      const pmWallet = await pmVault.assertPmVaultBalanceSufficient(
-        actorUser,
-        grossAmount,
-        pmCredentials || {}
-      );
-      const pmPayment = await pmVault.payOrderFromPmVault({
-        user: actorUser,
-        orderId: order.id,
-        orderNumber: order.order_number,
-        amountInRupees: grossAmount,
-        description: `Order payment for ${order.order_number || order.id}`,
-        credentials: pmCredentials || {}
-      });
-      if (pmPayment) {
-        pmPaymentMode = 'pm_vault_debit';
-      } else {
-        await syncLocalWalletFromPmBalance({
-          userId: actorUserId,
-          pmBalance: pmWallet.balance,
-          requiredAmount: grossAmount
-        });
-        pmPaymentMode = 'local_mirror';
-      }
+  const pmVault = await import('./pmVaultService.js');
+  const usesPmVault = Boolean(actorUser && pmVault.usesPlatformVault(actorUser));
+
+  // SP / supplier vault lives on PM only — never read/write Tatva wallets tables.
+  if (usesPmVault) {
+    await pmVault.payOrderFromPmVault({
+      user: actorUser,
+      orderId: order.id,
+      orderNumber: order.order_number,
+      amountInRupees: grossAmount,
+      description: `Order payment for ${order.order_number || order.id} (products + transport)`,
+      credentials: pmCredentials || {}
+    });
+
+    const inferredRole =
+      feeResult.breakdown.find((line) => line.supplyChainRole)?.supplyChainRole || null;
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from('orders')
+      .update({
+        payment_status: 'paid',
+        payment_method: 'vault',
+        payment_provider: 'pm_vault',
+        payment_provider_payment_id: `pm-vault-${order.id}`,
+        payment_verified_at: new Date().toISOString(),
+        wallet_payment_status: 'held',
+        platform_fee_amount: platformFeeAmount,
+        supplier_payout_amount: supplierPayoutAmount,
+        supply_chain_role_at_payment: inferredRole,
+        platform_fee_breakdown: feeResult.breakdown
+      })
+      .eq('id', order.id)
+      .select('*')
+      .single();
+    if (updateError) throw updateError;
+
+    const { error: payoutError } = await supabase.from('supplier_payouts').upsert(
+      {
+        order_id: order.id,
+        supplier_id: order.supplier_id,
+        gross_amount: grossAmount,
+        platform_fee_amount: platformFeeAmount,
+        net_amount: supplierPayoutAmount,
+        status: 'pending',
+        metadata: {
+          feeBreakdown: feeResult.breakdown,
+          pmPaymentMode: 'pm_vault_debit',
+          source: 'pm_vault'
+        },
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: 'order_id' }
+    );
+    if (payoutError) throw payoutError;
+
+    await ensurePaymentTransactionForPaidOrder({
+      order: updatedOrder,
+      method: 'vault',
+      paymentReference: `pm-vault-${order.id}`,
+      provider: 'pm_vault',
+      status: 'captured',
+      actorUserId
+    });
+
+    const receiptDelivery = await createReceiptAndDeliver({
+      order: updatedOrder,
+      paymentMethod: 'vault',
+      paymentReference: `pm-vault-${order.id}`,
+      actorUserId
+    });
+
+    let invoiceSummary = null;
+    try {
+      const { invoice } = await createInvoiceForOrder(updatedOrder);
+      invoiceSummary = { invoiceNumber: invoice?.invoice_number || null };
+    } catch (invoiceErr) {
+      console.error('[Vault] Invoice generation failed after PM vault pay:', invoiceErr);
     }
+
+    await writeAuditLog({
+      actorUserId,
+      actorRole,
+      action: 'pm_vault_order_payment_captured',
+      resourceType: 'order',
+      resourceId: order.id,
+      ipAddress,
+      requestId,
+      metadata: {
+        orderId: order.id,
+        grossAmount,
+        platformFeeAmount,
+        supplierPayoutAmount,
+        pmPaymentMode: 'pm_vault_debit',
+        idempotencyKey: idempotencyKey || null
+      }
+    });
+
+    return {
+      order: updatedOrder,
+      feeBreakdown: feeResult.breakdown,
+      platformFeeAmount,
+      supplierPayoutAmount,
+      receiptDelivery,
+      invoiceSummary,
+      pmPaymentMode: 'pm_vault_debit'
+    };
   }
 
+  // Legacy local-ledger path (non-PM buyers only).
   const buyerWalletType = await resolveOrderBuyerWalletType(order);
   const customerWallet = await getOrCreateWallet({
     userId: order.service_provider_id,
@@ -915,7 +993,7 @@ export async function payOrderFromWallet({
       orderNumber: order.order_number,
       platformFeeAmount,
       supplierPayoutAmount,
-      pmPaymentMode
+      pmPaymentMode: null
     },
     idempotencyKey: idempotencyKey || `wallet-order-pay:${order.id}`,
     createdBy: actorUserId
@@ -926,9 +1004,9 @@ export async function payOrderFromWallet({
     .from('orders')
     .update({
       payment_status: 'paid',
-      payment_method: 'wallet',
-      payment_provider: pmPaymentMode === 'pm_vault_debit' ? 'pm_vault' : 'wallet',
-      payment_provider_payment_id: `wallet-${order.id}`,
+      payment_method: 'vault',
+      payment_provider: 'vault',
+      payment_provider_payment_id: `vault-${order.id}`,
       payment_verified_at: new Date().toISOString(),
       wallet_payment_status: 'held',
       platform_fee_amount: platformFeeAmount,
@@ -951,7 +1029,7 @@ export async function payOrderFromWallet({
       status: 'pending',
       metadata: {
         feeBreakdown: feeResult.breakdown,
-        pmPaymentMode
+        pmPaymentMode: null
       },
       updated_at: new Date().toISOString()
     },
@@ -961,17 +1039,17 @@ export async function payOrderFromWallet({
 
   await ensurePaymentTransactionForPaidOrder({
     order: updatedOrder,
-    method: 'wallet',
-    paymentReference: `wallet-${order.id}`,
-    provider: pmPaymentMode === 'pm_vault_debit' ? 'pm_vault' : 'wallet',
+    method: 'vault',
+    paymentReference: `vault-${order.id}`,
+    provider: 'vault',
     status: 'captured',
     actorUserId
   });
 
   const receiptDelivery = await createReceiptAndDeliver({
     order: updatedOrder,
-    paymentMethod: 'wallet',
-    paymentReference: `wallet-${order.id}`,
+    paymentMethod: 'vault',
+    paymentReference: `vault-${order.id}`,
     actorUserId
   });
 
@@ -982,13 +1060,13 @@ export async function payOrderFromWallet({
       invoiceNumber: invoice?.invoice_number || null
     };
   } catch (invoiceErr) {
-    console.error('[Wallet] Invoice generation failed after wallet pay:', invoiceErr);
+    console.error('[Vault] Invoice generation failed after local pay:', invoiceErr);
   }
 
   await writeAuditLog({
     actorUserId,
     actorRole,
-    action: 'wallet_order_payment_captured',
+    action: 'vault_order_payment_captured',
     resourceType: 'order',
     resourceId: order.id,
     ipAddress,
@@ -998,7 +1076,7 @@ export async function payOrderFromWallet({
       grossAmount,
       platformFeeAmount,
       supplierPayoutAmount,
-      pmPaymentMode
+      pmPaymentMode: null
     }
   });
 
@@ -1009,6 +1087,6 @@ export async function payOrderFromWallet({
     supplierPayoutAmount,
     receiptDelivery,
     invoiceSummary,
-    pmPaymentMode
+    pmPaymentMode: null
   };
 }

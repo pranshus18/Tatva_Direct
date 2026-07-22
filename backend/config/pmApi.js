@@ -37,6 +37,14 @@ export const PM_VAULT_URL = `${PM_API_BASE_URL}/api/vault`;
 export const PM_VAULT_TOPUP_INITIATE_URL = `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/topup/initiate`;
 export const PM_VAULT_TOPUP_COMPLETE_URL = `${PM_PAYMENT_COMPLETE_API_BASE_URL}/api/v1/payments/vault/topup/complete`;
 
+/**
+ * Debit PM vault for Tatva order payment.
+ * Override with PM_VAULT_PAY_ORDER_URL if PM gives a different path.
+ */
+export const PM_VAULT_PAY_ORDER_URL = normalizeUrl(
+  process.env.PM_VAULT_PAY_ORDER_URL || `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/pay`
+);
+
 /** Offline vault credit (cash / cheque / bank) — separate PM users host. */
 export const PM_VAULT_OFFLINE_API_BASE_URL = normalizeUrl(
   process.env.PM_VAULT_OFFLINE_API_BASE_URL || 'https://api.withtatva.ai/users'

@@ -15,6 +15,10 @@ import {
   restockInventoryForCancelledOrder,
   toLifecycleStateFromStatus
 } from './poImports.js';
+import {
+  coerceInboundPaymentMethod,
+  toDbVaultPaymentMethod
+} from '../../utils/vaultPaymentMethod.js';
 
 export function registerPoOrderActionRoutes(ctx) {
   const {
@@ -214,14 +218,14 @@ router.patch('/:id/self-serve', authenticateToken, isServiceProvider, async (req
     }
 
     if (typeof paymentMethod !== 'undefined') {
-      const normalized = String(paymentMethod || '').trim().toLowerCase();
+      const normalized = coerceInboundPaymentMethod(paymentMethod);
       if (!PAYMENT_METHODS_ALLOWED.has(normalized)) {
         return res.status(400).json({
           status: 'error',
-          message: `Invalid paymentMethod. Allowed values: ${Array.from(PAYMENT_METHODS_ALLOWED).join(', ')}`
+          message: `Invalid paymentMethod. Allowed value: vault`
         });
       }
-      updateData.payment_method = normalized;
+      updateData.payment_method = toDbVaultPaymentMethod();
     }
 
     if (typeof notes !== 'undefined') {

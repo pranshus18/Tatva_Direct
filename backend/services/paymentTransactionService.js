@@ -2,7 +2,7 @@ import { supabase } from '../config/supabase.js';
 
 export function mapOrderMethodToTxnMethod(paymentMethod) {
   const method = String(paymentMethod || '').toLowerCase();
-  if (method === 'wallet') return 'wallet';
+  if (method === 'vault' || method === 'wallet') return 'vault';
   if (method === 'upi') return 'upi';
   if (method === 'card') return 'card';
   if (method === 'netbanking' || method === 'online') return 'netbanking';

@@ -6,6 +6,7 @@
     "dev": "node --watch server.js",
     "start": "node server.js",
     "test": "node --test tests/**/*.test.js",
+    "migrate:vault-payment": "node scripts/applyVaultPaymentMethodMigration.mjs",
     "test:i18n": "node voice/scripts/i18n-key-parity.mjs",
     "check:production": "node scripts/productionReadinessCheck.mjs && node scripts/verifyModularControllers.mjs",
     "test-server": "node test-server.js",

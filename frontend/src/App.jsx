@@ -809,13 +809,14 @@ function App() {
             }
           />
           <Route
-            path="wallet"
+            path="vault"
             element={
               <ServiceProviderRoute user={user}>
                 <Wallet />
               </ServiceProviderRoute>
             }
           />
+          <Route path="wallet" element={<Navigate to="/vault" replace />} />
           <Route
             path="returns"
             element={

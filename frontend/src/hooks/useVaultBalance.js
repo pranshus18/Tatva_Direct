@@ -9,7 +9,7 @@ export function useVaultBalance(user) {
     loading: true,
     balance: null,
     linked: true,
-    walletPath: userType === 'supplier' ? '/supplier-wallet' : '/wallet',
+    walletPath: userType === 'supplier' ? '/supplier-wallet' : '/vault',
     message: ''
   });
   const mountedRef = useRef(true);
@@ -36,7 +36,7 @@ export function useVaultBalance(user) {
         loading: false,
         balance: data.balance ?? null,
         linked: data.linked !== false,
-        walletPath: data.vaultPath || data.walletPath || (userType === 'supplier' ? '/supplier-wallet' : '/wallet'),
+        walletPath: data.vaultPath || data.walletPath || (userType === 'supplier' ? '/supplier-wallet' : '/vault'),
         message: data.message || ''
       });
     } catch {

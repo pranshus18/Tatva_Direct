@@ -175,7 +175,7 @@ EXCEPTION WHEN duplicate_object THEN
 END $$;
 
 -- ------------------------------------------------------------
--- payment method constraints now include wallet
+-- payment method constraints include vault (PM vault checkout)
 -- ------------------------------------------------------------
 DO $$
 BEGIN
@@ -183,7 +183,7 @@ BEGIN
     DROP CONSTRAINT IF EXISTS orders_payment_method_check;
   ALTER TABLE orders
     ADD CONSTRAINT orders_payment_method_check
-    CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit', 'upi', 'card', 'wallet'));
+    CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit', 'upi', 'card', 'vault'));
 END $$;
 
 DO $$
@@ -192,7 +192,7 @@ BEGIN
     DROP CONSTRAINT IF EXISTS payment_receipts_payment_method_check;
   ALTER TABLE payment_receipts
     ADD CONSTRAINT payment_receipts_payment_method_check
-    CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit', 'upi', 'card', 'wallet'));
+    CHECK (payment_method IN ('cash', 'bank_transfer', 'online', 'credit', 'upi', 'card', 'vault'));
 EXCEPTION WHEN undefined_table THEN
   NULL;
 END $$;
@@ -203,7 +203,7 @@ BEGIN
     DROP CONSTRAINT IF EXISTS payment_transactions_method_check;
   ALTER TABLE payment_transactions
     ADD CONSTRAINT payment_transactions_method_check
-    CHECK (method IN ('upi', 'bank_transfer', 'card', 'netbanking', 'credit_line', 'wallet'));
+    CHECK (method IN ('upi', 'bank_transfer', 'card', 'netbanking', 'credit_line', 'vault'));
 EXCEPTION WHEN undefined_table THEN
   NULL;
 END $$;

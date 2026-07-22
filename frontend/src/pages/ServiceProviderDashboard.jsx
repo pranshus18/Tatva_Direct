@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getApiUrl, resolveApiPath, authFetch } from '../config/api';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
+import { formatVaultPaymentMethodLabel, isVaultPaymentMethod } from '../utils/vaultPaymentMethod';
 import { 
   FileText,
   BarChart3,
@@ -54,8 +55,8 @@ const ServiceProviderDashboard = ({ user }) => {
   const [orderDetails, setOrderDetails] = useState(null);
   const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState(false);
-  const [walletBalance, setWalletBalance] = useState(0);
-  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
+  const [vaultBalance, setVaultBalance] = useState(0);
+  const [loadingVaultBalance, setLoadingVaultBalance] = useState(false);
   const [deletingOrder, setDeletingOrder] = useState(false);
   const orderPollIntervalRef = useRef(null);
   const [notifications, setNotifications] = useState([]);
@@ -392,7 +393,7 @@ const ServiceProviderDashboard = ({ user }) => {
     
     setSelectedOrder(orderId);
     fetchOrderDetails(orderId);
-    fetchWalletBalance();
+    fetchVaultBalance();
     
   };
 
@@ -618,25 +619,25 @@ const ServiceProviderDashboard = ({ user }) => {
     order?.deliveryAddress?.gstSummary ||
     null;
 
-  const fetchWalletBalance = async () => {
+  const fetchVaultBalance = async () => {
     try {
-      setLoadingWalletBalance(true);
+      setLoadingVaultBalance(true);
       const token = localStorage.getItem('token');
       if (!token) return;
       const balance = await getVaultBalanceForUi();
-      setWalletBalance(balance);
+      setVaultBalance(balance);
     } catch (_e) {
       // Non-blocking in modal.
     } finally {
-      setLoadingWalletBalance(false);
+      setLoadingVaultBalance(false);
     }
   };
 
   const handleMarkAsPaid = async () => {
     if (!orderDetails?.id) return;
     const orderAmount = Number(orderDetails?.totalAmount || 0);
-    if (orderAmount > Number(walletBalance || 0)) {
-      const shortage = Math.max(0, orderAmount - Number(walletBalance || 0));
+    if (orderAmount > Number(vaultBalance || 0)) {
+      const shortage = Math.max(0, orderAmount - Number(vaultBalance || 0));
       alert(
         `Insufficient vault balance. Please add ₹${shortage.toLocaleString('en-IN', {
           minimumFractionDigits: 2,
@@ -666,7 +667,7 @@ const ServiceProviderDashboard = ({ user }) => {
       await fetchOrderDetails(selectedOrder, true);
       fetchDashboardData();
     } catch (error) {
-      console.error('Failed to pay order from wallet:', error);
+      console.error('Failed to pay order from vault:', error);
       alert('Failed to pay order from vault. Please try again.');
     } finally {
       setUpdatingPayment(false);
@@ -1227,7 +1228,12 @@ const ServiceProviderDashboard = ({ user }) => {
                   <p><strong>Status:</strong> {orderDetails.status || 'pending'}</p>
                   <p><strong>Payment Status:</strong> {orderDetails.paymentStatus || 'pending'}</p>
                   {orderDetails.paymentMethod && (
-                    <p><strong>Payment Method:</strong> {orderDetails.paymentMethod.replace('_', ' ').toUpperCase()}</p>
+                    <p>
+                      <strong>Payment Method:</strong>{' '}
+                      {isVaultPaymentMethod(orderDetails.paymentMethod)
+                        ? formatVaultPaymentMethodLabel(orderDetails.paymentMethod)
+                        : String(orderDetails.paymentMethod).replace(/_/g, ' ')}
+                    </p>
                   )}
                   {orderDetails.invoicePdfUrl && (
                     <div style={{ marginTop: '0.75rem' }}>
@@ -1277,18 +1283,18 @@ const ServiceProviderDashboard = ({ user }) => {
                     <div style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: '#334155' }}>
                       <p style={{ margin: '0.25rem 0' }}>
                         <strong>Vault balance:</strong>{' '}
-                        {loadingWalletBalance
+                        {loadingVaultBalance
                           ? 'Checking...'
-                          : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
+                          : `₹${Number(vaultBalance || 0).toLocaleString('en-IN')}`}
                       </p>
-                      {!loadingWalletBalance &&
-                      Number(orderDetails.totalAmount || 0) > Number(walletBalance || 0) ? (
+                      {!loadingVaultBalance &&
+                      Number(orderDetails.totalAmount || 0) > Number(vaultBalance || 0) ? (
                         <p style={{ margin: '0.25rem 0', color: '#b91c1c' }}>
                           <strong>Additional credit needed:</strong>{' '}
                           ₹
                           {Math.max(
                             0,
-                            Number(orderDetails.totalAmount || 0) - Number(walletBalance || 0)
+                            Number(orderDetails.totalAmount || 0) - Number(vaultBalance || 0)
                           ).toLocaleString('en-IN')}
                         </p>
                       ) : null}
@@ -1308,8 +1314,8 @@ const ServiceProviderDashboard = ({ user }) => {
                       onClick={handleMarkAsPaid}
                       disabled={
                         updatingPayment ||
-                        loadingWalletBalance ||
-                        Number(orderDetails.totalAmount || 0) > Number(walletBalance || 0)
+                        loadingVaultBalance ||
+                        Number(orderDetails.totalAmount || 0) > Number(vaultBalance || 0)
                       }
                       style={{
                         width: '100%',
@@ -1324,7 +1330,7 @@ const ServiceProviderDashboard = ({ user }) => {
                     <button
                       className="btn-secondary"
                       type="button"
-                      onClick={() => navigate('/wallet')}
+                      onClick={() => navigate('/vault')}
                       style={{ width: '100%', marginTop: '0.5rem' }}
                     >
                       Add money to vault

@@ -1,24 +1,25 @@
 import { randomUUID } from 'node:crypto';
 import { supabase } from '../../../config/supabase.js';
 import { recordInventoryMovement } from '../../../services/inventoryService.js';
+import {
+  coerceInboundPaymentMethod,
+  isVaultPaymentMethod,
+  toDbVaultPaymentMethod
+} from '../../../utils/vaultPaymentMethod.js';
 
 export const LEGACY_PO_CART_GROUP_PREFIX = 'legacy';
 export const ORDER_INSERT_MAX_RETRIES = 3;
 export const ADDRESS_REQUIRED_FIELDS = ['line1', 'city', 'state', 'pincode', 'country'];
 export const MAX_CART_ITEM_QUANTITY = 1000000000;
-export const PAYMENT_METHODS_ALLOWED = new Set([
-  'wallet'
-]);
+export const PAYMENT_METHODS_ALLOWED = new Set(['vault']);
 
 /** Map service-provider PO checkout choice to DB columns (aligns with POS / invoices). */
 export function resolveB2bPaymentFromBody(body) {
-  const raw = String(body?.paymentMethod || body?.payment_method || 'wallet')
-    .toLowerCase()
-    .trim();
-  if (raw !== 'wallet') {
-    return { payment_method: 'wallet', payment_status: 'pending' };
+  const raw = coerceInboundPaymentMethod(body?.paymentMethod || body?.payment_method || 'vault');
+  if (isVaultPaymentMethod(raw) || !raw) {
+    return { payment_method: toDbVaultPaymentMethod(), payment_status: 'pending' };
   }
-  return { payment_method: 'wallet', payment_status: 'pending' };
+  return { payment_method: toDbVaultPaymentMethod(), payment_status: 'pending' };
 }
 
 export function normalizeAddress(address = {}) {

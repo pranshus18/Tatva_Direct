@@ -94,11 +94,16 @@ export const poCreateRequestSchema = z.object({
   ).min(1),
   boqId: z.preprocess((v) => (v === '' ? null : v), z.string().uuid().optional().nullable()),
   requiredDate: z.string().optional().nullable(),
-  paymentMethod: z.enum(['cod', 'online', 'bank_transfer', 'credit', 'wallet']).optional(),
+  paymentMethod: z.preprocess(
+    (v) => (String(v || '').toLowerCase().trim() === 'wallet' ? 'vault' : v),
+    z.enum(['cod', 'online', 'bank_transfer', 'credit', 'vault']).optional()
+  ),
   deliveryDestination: z.enum(['shipping', 'billing']).optional(),
   shippingAddress: addressSchema.optional(),
   billingAddress: addressSchema.optional(),
-  gstin: z.string().optional().nullable()
+  gstin: z.string().optional().nullable(),
+  /** Sum of selected logistics quotes (INR) — included in vault sufficiency check with product totals. */
+  quotedTransportTotal: z.union([z.number(), z.string()]).optional().nullable()
 });
 
 const perOrderTransportRowSchema = z.object({
@@ -239,7 +244,10 @@ export const poCartSaveSchema = z
     boqId: z.string().uuid().optional().nullable(),
     boqProject: z.record(z.string(), z.any()).optional().nullable(),
     requiredDate: z.string().optional().nullable(),
-    paymentMethod: z.enum(['cod', 'online', 'bank_transfer', 'credit', 'wallet']).optional().nullable(),
+    paymentMethod: z.preprocess(
+      (v) => (String(v || '').toLowerCase().trim() === 'wallet' ? 'vault' : v),
+      z.enum(['cod', 'online', 'bank_transfer', 'credit', 'vault']).optional().nullable()
+    ),
     deliveryDestination: z.enum(['shipping', 'billing']).optional().nullable(),
     shippingAddress: addressSchema.optional(),
     billingAddress: addressSchema.optional(),
@@ -268,7 +276,10 @@ export const poCartTransportPatchSchema = z.object({
 
 export const poSelfServePatchSchema = z.object({
   expectedDeliveryDate: z.string().optional().nullable(),
-  paymentMethod: z.enum(['cash', 'bank_transfer', 'online', 'credit', 'upi', 'card']).optional(),
+  paymentMethod: z.preprocess(
+    (v) => (String(v || '').toLowerCase().trim() === 'wallet' ? 'vault' : v),
+    z.enum(['cash', 'bank_transfer', 'online', 'credit', 'upi', 'card', 'vault']).optional()
+  ),
   notes: z.string().max(4000).optional(),
   deliveryAddress: z.record(z.string(), z.any()).optional()
 });

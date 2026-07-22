@@ -58,7 +58,7 @@ router.patch('/service-provider/orders/:id/payment', authenticateToken, async (r
       return res.status(403).json({
         status: 'error',
         code: 'DIRECT_PAYMENT_DISABLED',
-        message: 'Direct payment status updates are disabled. Please use wallet payment flow.'
+        message: 'Direct payment status updates are disabled. Please use vault payment flow.'
       });
     }
     

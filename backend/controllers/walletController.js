@@ -41,7 +41,7 @@ function normalizeUserType(value) {
 }
 
 function vaultPagePath(userType) {
-  return normalizeUserType(userType) === 'supplier' ? '/supplier-wallet' : '/wallet';
+  return normalizeUserType(userType) === 'supplier' ? '/supplier-wallet' : '/vault';
 }
 
 const walletRouter = express.Router();
@@ -391,8 +391,19 @@ walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProvider, 
     if (e?.code === 'ORDER_ALREADY_PAID') {
       return res.status(400).json({ status: 'error', message: e.message });
     }
-    if (e?.code === 'INSUFFICIENT_WALLET_BALANCE') {
-      return res.status(400).json({ status: 'error', code: e.code, message: e.message });
+    if (e?.code === 'INSUFFICIENT_WALLET_BALANCE' || e?.code === 'INSUFFICIENT_VAULT_BALANCE') {
+      return res.status(400).json({
+        status: 'error',
+        code: 'INSUFFICIENT_VAULT_BALANCE',
+        message: e.message || 'Insufficient vault balance'
+      });
+    }
+    if (e?.code === 'PM_VAULT_PAY_NOT_CONFIGURED' || e?.code === 'PM_VAULT_REQUEST_FAILED') {
+      return res.status(502).json({
+        status: 'error',
+        code: e.code,
+        message: e.message || 'PM vault payment failed'
+      });
     }
     if (e?.code === 'WALLET_BALANCE_CONFLICT') {
       return res.status(409).json({ status: 'error', code: e.code, message: e.message });
@@ -402,6 +413,14 @@ walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProvider, 
 });
 
 walletRouter.get('/withdrawals', authenticateToken, requireServiceProvider, async (req, res) => {
+  if (usesPlatformVault(req.user)) {
+    return res.json({
+      status: 'success',
+      withdrawals: [],
+      pageInfo: { nextCursor: null },
+      message: 'Withdrawals are managed on the PM platform vault, not in Tatva Direct.'
+    });
+  }
   try {
     const payload = parseWithSchema(walletWithdrawalListSchema, req.query || {});
     const wallet = await getOrCreateWallet({ userId: req.userId, walletType: 'customer' });
@@ -422,6 +441,13 @@ walletRouter.get('/withdrawals', authenticateToken, requireServiceProvider, asyn
 });
 
 walletRouter.get('/withdraw/bank-accounts', authenticateToken, requireServiceProvider, async (req, res) => {
+  if (usesPlatformVault(req.user)) {
+    return res.json({
+      status: 'success',
+      bankAccounts: [],
+      message: 'Bank accounts for vault withdrawals are managed on the PM platform.'
+    });
+  }
   try {
     const rows = await listWalletBankAccounts({ userId: req.userId });
     return res.json({ status: 'success', bankAccounts: rows });
@@ -432,6 +458,13 @@ walletRouter.get('/withdraw/bank-accounts', authenticateToken, requireServicePro
 });
 
 walletRouter.post('/withdraw/bank-accounts', authenticateToken, requireServiceProvider, async (req, res) => {
+  if (usesPlatformVault(req.user)) {
+    return res.status(400).json({
+      status: 'error',
+      code: 'PM_VAULT_MANAGED',
+      message: 'Vault bank details are managed on the PM platform, not in Tatva Direct.'
+    });
+  }
   try {
     const payload = parseWithSchema(walletBankAccountSchema, req.body || {});
     const bankAccount = await createWalletBankAccount({
@@ -455,6 +488,13 @@ walletRouter.post('/withdraw/bank-accounts', authenticateToken, requireServicePr
 });
 
 walletRouter.post('/withdraw', authenticateToken, requireServiceProvider, async (req, res) => {
+  if (usesPlatformVault(req.user)) {
+    return res.status(400).json({
+      status: 'error',
+      code: 'PM_VAULT_MANAGED',
+      message: 'Vault withdrawals are managed on the PM platform, not via Tatva Direct wallet tables.'
+    });
+  }
   try {
     const payload = parseWithSchema(walletWithdrawSchema, req.body || {});
     const amount = Number.parseFloat(String(payload.amount || '0'));

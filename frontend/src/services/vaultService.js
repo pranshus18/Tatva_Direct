@@ -57,7 +57,7 @@ export async function fetchVaultHeaderBalance() {
         linked: false,
         source: 'pm_vault',
         balance: null,
-        vaultPath: '/wallet',
+        vaultPath: '/vault',
         message: error.message
       };
     }
