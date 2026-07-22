@@ -123,7 +123,10 @@ const perOrderTransportRowSchema = z.object({
   carrier: z.string().max(80).optional().nullable(),
   matter: z.string().max(500).optional().nullable(),
   trackingNumber: z.string().max(120).optional().nullable(),
-  trackingUrl: z.string().url().optional().nullable(),
+  trackingUrl: z.preprocess(
+    (v) => (v === '' || v === undefined ? null : v),
+    z.string().url().optional().nullable()
+  ),
   transportNotes: z.string().max(1000).optional().nullable(),
   /** Quoted courier charge (INR) from logistics — stored on the order for receipts/invoices. */
   quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable(),
@@ -151,7 +154,10 @@ export const poTransportConfirmSchema = z
     carrier: z.string().max(80).optional().nullable(),
     matter: z.string().max(500).optional().nullable(),
     trackingNumber: z.string().max(120).optional().nullable(),
-    trackingUrl: z.string().url().optional().nullable(),
+    trackingUrl: z.preprocess(
+      (v) => (v === '' || v === undefined ? null : v),
+      z.string().url().optional().nullable()
+    ),
     transportNotes: z.string().max(1000).optional().nullable(),
     transitDays: z.coerce.number().int().nonnegative().optional().nullable(),
     transportGroupId: z.string().max(240).optional().nullable(),

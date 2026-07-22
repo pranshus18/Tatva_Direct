@@ -276,6 +276,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
     }
 
     // Book courier or trucking in parallel (multi-vendor PO confirm).
+    const bookingWarnings = [];
     await Promise.all(
       rowContexts.map(async (ctx) => {
         const {
@@ -435,16 +436,37 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
           }
         } catch (bookErr) {
           logger.error('Logistics booking error:', bookErr);
+          const strictBook =
+            String(process.env.LOGISTICS_BOOK_STRICT || '').toLowerCase() === 'true';
           const statusCode =
             bookErr?.code === 'LOGISTICS_VALIDATION'
               ? 400
               : Number(bookErr?.statusCode) >= 400 && Number(bookErr?.statusCode) < 600
                 ? Number(bookErr.statusCode)
                 : 502;
-          const err = new Error(bookErr?.message || 'Transport booking failed');
-          err.statusCode = statusCode;
-          err.orderId = row.id;
-          throw err;
+          const bookMessage = bookErr?.message || 'Transport booking failed';
+          // Soft-fail by default: still save chosen carrier / quote on the order so
+          // "Confirm & Create All POs" completes when logistics is misconfigured.
+          if (strictBook || bookErr?.code === 'LOGISTICS_VALIDATION') {
+            const err = new Error(bookMessage);
+            err.statusCode = statusCode === 404 ? 502 : statusCode;
+            err.orderId = row.id;
+            throw err;
+          }
+          const pending = `[Booking pending] ${bookMessage}`;
+          ctx.logisticsBookingMeta = {
+            mode: willBookCourier ? 'courier' : 'trucking',
+            bookingFailed: true,
+            pendingReason: pending,
+            httpStatus: statusCode,
+            logisticsUrl: bookErr?.logisticsUrl || null
+          };
+          ctx.orderNotes = ctx.orderNotes ? `${ctx.orderNotes} | ${pending}` : pending;
+          bookingWarnings.push({
+            orderId: row.id,
+            orderNumber: row.order_number || null,
+            message: bookMessage
+          });
         }
       })
     );
@@ -526,14 +548,25 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       status: 'success',
       message: `Transport details updated for ${updatedOrders.length} order(s)`,
       ...(transportBookDebug ? { transportDebugEnabled: true } : {}),
-      orders: updatedOrders
+      orders: updatedOrders,
+      ...(bookingWarnings.length > 0
+        ? {
+            warnings: bookingWarnings,
+            message: `Transport details saved for ${updatedOrders.length} order(s). Carrier booking is pending for ${bookingWarnings.length} shipment(s) — tracking can be updated later.`
+          }
+        : {})
     });
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
-    const httpStatus = Number(error?.statusCode);
-    if (Number.isFinite(httpStatus) && httpStatus >= 400 && httpStatus < 600) {
+    let httpStatus = Number(error?.statusCode);
+    if (!Number.isFinite(httpStatus) || httpStatus < 400 || httpStatus >= 600) {
+      httpStatus = 500;
+    }
+    // Avoid leaking upstream FastAPI 404 as "Not Found" on this API route.
+    if (httpStatus === 404) httpStatus = 502;
+    if (httpStatus >= 400 && httpStatus < 600 && httpStatus !== 500) {
       return res.status(httpStatus).json({
         status: 'error',
         message: error.message || 'Transport booking failed',

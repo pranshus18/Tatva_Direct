@@ -1100,8 +1100,16 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       try {
         const errorData = JSON.parse(errorText);
         errorMessage = errorData.message || errorData.error || errorMessage;
+        if (/^not found$/i.test(String(errorMessage).trim())) {
+          errorMessage =
+            'Transport confirmation failed (carrier booking endpoint not found on the logistics service). Check server LOGISTICS_MODULE_URL / LOGISTICS_BOOK_COURIER_CHECKOUT_URL, then retry.';
+        }
       } catch (e) {
-        errorMessage = errorText || errorMessage;
+        const raw = String(errorText || '').trim();
+        errorMessage =
+          !raw || /^not found$/i.test(raw)
+            ? `Transport confirmation failed (HTTP ${res.status}). Please retry or contact support.`
+            : raw;
       }
       throw new Error(errorMessage);
     }
@@ -1117,7 +1125,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         activeOrders = Array.isArray(data.orders) ? data.orders : [];
         setCreatedTransportOrders(activeOrders);
       }
-      await finalizeTransportDetails(activeOrders);
+      const transportResult = await finalizeTransportDetails(activeOrders);
 
       if (isVaultPaymentMethod(poPaymentMethod)) {
         const unpaid = activeOrders.filter((order) => order?.id);
@@ -1142,6 +1150,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       setCheckoutSessionId('');
       setReservationExpiresAt('');
       setConfirmed(true);
+      const warnings = Array.isArray(transportResult?.warnings) ? transportResult.warnings : [];
+      if (warnings.length > 0) {
+        alert(
+          transportResult?.message ||
+            `POs created. Carrier booking is pending for ${warnings.length} shipment(s); tracking can be updated later.`
+        );
+      }
     } catch (err) {
       console.error('Failed to finalize transport flow:', err);
       alert(err.message || 'Failed to finalize purchase orders. Please try again.');

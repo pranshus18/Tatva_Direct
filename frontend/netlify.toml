@@ -4,7 +4,7 @@
 
 [[redirects]]
   from = "/api/*"
-  to = "https://tatvadirect.onrender.com/api/:splat"
+  to = "https://tatva-direct.onrender.com/api/:splat"
   status = 200
 
 [[redirects]]

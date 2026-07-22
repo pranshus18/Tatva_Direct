@@ -14,7 +14,7 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 }
 
 if (import.meta.env.DEV) {
-  const apiUrl = import.meta.env.VITE_API_BASE_URL || 'https://tatvadirect.onrender.com (default)';
+  const apiUrl = import.meta.env.VITE_API_BASE_URL || 'https://tatva-direct.onrender.com (default)';
   console.log('API Base URL:', apiUrl);
   console.log('Environment:', import.meta.env.MODE);
 }

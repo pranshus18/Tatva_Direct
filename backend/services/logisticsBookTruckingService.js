@@ -171,13 +171,21 @@ export async function bookTrucking({
   }
 
   if (!res.ok) {
+    const attemptedUrl = truckingBookUrl();
     const msg =
       res.json?.message ||
       formatUpstreamError(res.json?.detail) ||
       res.raw?.slice(0, 500) ||
       `Trucking booking HTTP ${res.status}`;
-    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-    err.statusCode = res.status >= 400 && res.status < 600 ? res.status : 502;
+    const raw = typeof msg === 'string' ? msg : JSON.stringify(msg);
+    const clarified =
+      Number(res.status) === 404 || /^not found$/i.test(String(raw).trim())
+        ? `Logistics trucking booking endpoint was not found at ${attemptedUrl}. Verify LOGISTICS_MODULE_URL and LOGISTICS_BOOK_TRUCKING_URL (expected path: /carrier/trucking-book).`
+        : raw;
+    const err = new Error(clarified);
+    err.statusCode =
+      res.status === 404 ? 502 : res.status >= 400 && res.status < 600 ? res.status : 502;
+    err.logisticsUrl = attemptedUrl;
     throw err;
   }
 

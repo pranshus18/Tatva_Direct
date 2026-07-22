@@ -1,13 +1,16 @@
 // API Base URL - automatically detects local development vs production.
 import { getPmCustomerCredentials } from '../utils/pmAuthSession';
 // Priority: 1. Valid environment variable, 2. Local development (localhost), 3. Production URL fallback.
-const DEFAULT_PRODUCTION_API_URL = 'https://tatvadirect.onrender.com';
+// Canonical Render service for this repo is tatva-direct (hyphen). The older tatvadirect host
+// is missing newer routes such as POST /api/po/transport/confirm.
+const DEFAULT_PRODUCTION_API_URL = 'https://tatva-direct.onrender.com';
+const STALE_PRODUCTION_API_HOSTS = new Set(['https://tatvadirect.onrender.com']);
 const envApiUrl = import.meta.env.VITE_API_BASE_URL;
 const isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
 const isLocalhost = typeof window !== 'undefined' &&
   (window.location.hostname === 'localhost' ||
    window.location.hostname === '127.0.0.1' ||
-   window.location.hostname === '');
+    window.location.hostname === '');
 
 const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
 const isLocalApiUrl = (url) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(normalizeUrl(url));
@@ -21,6 +24,13 @@ if (envApiUrl && envApiUrl.trim() !== '') {
     apiBaseUrl = DEFAULT_PRODUCTION_API_URL;
     console.warn(
       '[API] Ignoring localhost VITE_API_BASE_URL in production. Falling back to',
+      DEFAULT_PRODUCTION_API_URL
+    );
+  } else if (STALE_PRODUCTION_API_HOSTS.has(normalizedEnvApiUrl)) {
+    // Older Render hostname is missing routes such as POST /api/po/transport/confirm.
+    apiBaseUrl = DEFAULT_PRODUCTION_API_URL;
+    console.warn(
+      '[API] Remapping stale VITE_API_BASE_URL host to',
       DEFAULT_PRODUCTION_API_URL
     );
   } else {

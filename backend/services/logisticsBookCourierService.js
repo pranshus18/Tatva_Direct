@@ -242,6 +242,21 @@ function formatUpstreamBookError(detail) {
   return String(detail);
 }
 
+/** Rewrite opaque FastAPI/Render "Not Found" into an actionable booking error. */
+export function clarifyLogisticsHttpError(status, rawMessage, attemptedUrl, kind = 'courier') {
+  const raw = String(rawMessage || '').trim() || `HTTP ${status}`;
+  const url = String(attemptedUrl || '').trim();
+  if (Number(status) === 404 || /^not found$/i.test(raw)) {
+    return (
+      `Logistics ${kind} booking endpoint was not found` +
+      (url ? ` at ${url}` : '') +
+      '. Verify LOGISTICS_MODULE_URL and LOGISTICS_BOOK_COURIER_CHECKOUT_URL on the Tatva Direct server ' +
+      '(expected path: /api/logistics/book-courier-checkout).'
+    );
+  }
+  return raw;
+}
+
 function safeJsonPreview(obj, max = 1500) {
   try {
     const s = JSON.stringify(obj);
@@ -387,13 +402,19 @@ export async function bookCourierCheckout({
   }
 
   if (!res.ok) {
+    const attemptedUrl = usedLegacyCarrierBook ? BOOK_CARRIER_URL() : bookCourierCheckoutUrl();
     const msg =
       res.json?.message ||
       formatUpstreamBookError(res.json?.detail) ||
       res.raw?.slice(0, 500) ||
       `Logistics booking HTTP ${res.status}`;
-    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-    err.statusCode = res.status >= 400 && res.status < 600 ? res.status : 502;
+    const err = new Error(
+      clarifyLogisticsHttpError(res.status, msg, attemptedUrl, 'courier checkout')
+    );
+    // Never surface upstream FastAPI 404 as our route 404 — clients show a useless "Not Found".
+    err.statusCode =
+      res.status === 404 ? 502 : res.status >= 400 && res.status < 600 ? res.status : 502;
+    err.logisticsUrl = attemptedUrl;
     throw err;
   }
 
@@ -508,13 +529,18 @@ export async function scheduleCourier({
   }
 
   if (!res.ok) {
+    const attemptedUrl = scheduleCourierUrl();
     const msg =
       res.json?.message ||
       formatUpstreamBookError(res.json?.detail) ||
       res.raw?.slice(0, 500) ||
       `Schedule courier HTTP ${res.status}`;
-    const err = new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
-    err.statusCode = res.status >= 400 && res.status < 600 ? res.status : 502;
+    const err = new Error(
+      clarifyLogisticsHttpError(res.status, msg, attemptedUrl, 'schedule-courier')
+    );
+    err.statusCode =
+      res.status === 404 ? 502 : res.status >= 400 && res.status < 600 ? res.status : 502;
+    err.logisticsUrl = attemptedUrl;
     throw err;
   }
 
