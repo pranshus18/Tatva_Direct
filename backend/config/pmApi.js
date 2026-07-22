@@ -11,7 +11,7 @@ export const PM_VENDOR_LEAD_VENDOR_FLAG =
   String(process.env.PM_VENDOR_LEAD_VENDOR_FLAG || 'supplier').trim() || 'supplier';
 
 export const PM_VENDOR_LEAD_FLAG =
-  String(process.env.PM_VENDOR_LEAD_FLAG || 'tatvaopsdirect').trim() || 'tatvaopsdirect';
+  String(process.env.PM_VENDOR_LEAD_FLAG || 'tatvadirect').trim() || 'tatvadirect';
 
 export const PM_USERS_URL = `${PM_API_BASE_URL}/api/users/`;
 export const PM_USERS_ME_URL = `${PM_API_BASE_URL}/api/users/me`;
@@ -40,11 +40,15 @@ export const PM_VAULT_TOPUP_COMPLETE_URL = `${PM_PAYMENT_COMPLETE_API_BASE_URL}/
 /**
  * Debit buyer PM vault for a Tatva order (service provider or supplier).
  * POST body: { orderId, userId } — userId is the PM platform user id.
+ * Remaps a stale guessed debit URL if still set in env from an earlier draft.
  */
-export const PM_VAULT_PAY_ORDER_URL = normalizeUrl(
+const rawPmVaultPayOrderUrl = normalizeUrl(
   process.env.PM_VAULT_PAY_ORDER_URL ||
     `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay`
 );
+export const PM_VAULT_PAY_ORDER_URL = /\/api\/vault\/debit\/?$/i.test(rawPmVaultPayOrderUrl)
+  ? normalizeUrl(`${PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay`)
+  : rawPmVaultPayOrderUrl;
 
 /** Offline vault credit (cash / cheque / bank) — separate PM users host. */
 export const PM_VAULT_OFFLINE_API_BASE_URL = normalizeUrl(

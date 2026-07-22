@@ -12,6 +12,7 @@ import {
   getPmAuthFromUser,
   persistPmAuthCredentials
 } from './pmUserService.js';
+import logger from '../utils/logger.js';
 
 const PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL = `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/topup/complete`;
 
@@ -50,18 +51,124 @@ function resolveVaultRecord(vaultPayload) {
   return unwrapped;
 }
 
+function collectPmFieldErrors(payload) {
+  const buckets = [
+    payload?.errors,
+    payload?.data?.errors,
+    payload?.details?.errors,
+    payload?.data?.details?.errors
+  ];
+  const out = [];
+  for (const bucket of buckets) {
+    if (!Array.isArray(bucket)) continue;
+    for (const item of bucket) {
+      if (item == null) continue;
+      out.push(item);
+    }
+  }
+  return out;
+}
+
+function formatPmFieldError(item) {
+  if (item == null) return '';
+  if (typeof item !== 'object') return String(item);
+  const path = Array.isArray(item.path)
+    ? item.path.join('.')
+    : item.param || item.field || item.path || '';
+  const msg = item.message || item.msg || '';
+  if (path && msg) return `${path}: ${msg}`;
+  return msg || JSON.stringify(item);
+}
+
 function pmRequestFailed(response, payload, fallbackMessage) {
-  const message =
+  const fieldErrors = collectPmFieldErrors(payload);
+  const fieldSummary = fieldErrors.map(formatPmFieldError).filter(Boolean).join('; ');
+
+  const topMessage =
     payload?.message ||
-    payload?.error ||
-    payload?.errors?.[0]?.message ||
+    (typeof payload?.error === 'string' ? payload.error : null) ||
+    fieldErrors[0]?.message ||
+    fieldErrors[0]?.msg ||
+    null;
+
+  const detailParts = [];
+  if (topMessage) detailParts.push(String(topMessage));
+  // Avoid duplicating the same generic "Validation failed" when field details exist.
+  if (fieldSummary) {
+    const topIsGeneric =
+      !topMessage || /^validation failed$/i.test(String(topMessage).trim());
+    if (topIsGeneric) {
+      detailParts.length = 0;
+      detailParts.push(fieldSummary);
+    } else if (!detailParts.includes(fieldSummary)) {
+      detailParts.push(fieldSummary);
+    }
+  }
+
+  if (payload?.details && typeof payload.details === 'string' && !detailParts.includes(payload.details)) {
+    detailParts.push(payload.details);
+  }
+
+  const message =
+    detailParts.filter(Boolean).join(' — ') ||
     fallbackMessage ||
     `PM request failed (${response.status})`;
   const error = new Error(message);
   error.status = response.status;
-  error.code = payload?.code || 'PM_VAULT_REQUEST_FAILED';
+  const pmCode = payload?.code || payload?.error || null;
+  error.code =
+    pmCode === 'VALIDATION_ERROR' || /validation failed/i.test(String(topMessage || ''))
+      ? 'PM_VAULT_VALIDATION_FAILED'
+      : pmCode || 'PM_VAULT_REQUEST_FAILED';
   error.payload = payload;
+  error.fieldErrors = fieldErrors;
   return error;
+}
+
+function normalizePmObjectId(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'object') {
+    if (value.$oid) return String(value.$oid).trim();
+    if (value._id != null && value._id !== value) return normalizePmObjectId(value._id);
+    if (value.id != null && value.id !== value) return normalizePmObjectId(value.id);
+    if (typeof value.toHexString === 'function') {
+      try {
+        return String(value.toHexString()).trim();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (typeof value.toString === 'function' && value.toString !== Object.prototype.toString) {
+      const asString = String(value.toString()).trim();
+      if (asString && asString !== '[object Object]') return asString;
+    }
+  }
+  const fallback = String(value || '').trim();
+  return fallback === '[object Object]' ? '' : fallback;
+}
+
+function validationNeedsAmount(error) {
+  const fieldErrors = Array.isArray(error?.fieldErrors)
+    ? error.fieldErrors
+    : collectPmFieldErrors(error?.payload);
+  const blob = `${error?.message || ''} ${JSON.stringify(fieldErrors || [])}`.toLowerCase();
+  if (blob.includes('amount') || blob.includes('body.amount')) return true;
+  // Generic Validation failed with no field breakdown — amount is the most common missing field.
+  if (!fieldErrors.length && /validation failed/i.test(String(error?.message || ''))) return true;
+  return false;
+}
+
+function validationRejectsUnknownKeys(error) {
+  const blob = `${error?.message || ''} ${JSON.stringify(error?.fieldErrors || error?.payload || {})}`.toLowerCase();
+  return (
+    blob.includes('unrecognized') ||
+    blob.includes('unexpected') ||
+    blob.includes('not allowed') ||
+    blob.includes('invalid enum') ||
+    blob.includes('strict')
+  );
 }
 
 function toInr(value, { assumePaise = false } = {}) {
@@ -140,13 +247,13 @@ export async function ensurePmVaultAuth(user, credentials = {}) {
     !pmUserFromToken && phone ? await fetchPmUserByPhone(phone) : null;
   const pmUser = pmUserFromToken || pmUserFromPhone;
 
-  const pmUserId = String(
+  const pmUserId = normalizePmObjectId(
     pmUser?._id ||
       pmUser?.id ||
       user?.profile?.pmCustomerProfile?.pmUserId ||
       stored.pmUserId ||
       ''
-  ).trim();
+  );
 
   if (!pmUserId) {
     const error = new Error(
@@ -563,19 +670,30 @@ export async function assertPmVaultBalanceSufficient(user, amountInRupees, crede
 
 /**
  * Debit PM vault for a Tatva order (service provider or supplier buyer).
- * PM contract:
+ * PM contract (official):
  *   POST {PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay
- *   { orderId, userId }  // userId = PM platform user id
+ *   { orderId, userId }
+ * Retries with amount if PM validation requires it (same pattern as other payment APIs).
  * @returns {Promise<{ paymentId: string|null }>}
  */
 export async function payOrderFromPmVault({
   user,
   orderId,
+  orderNumber = null,
   amountInRupees,
+  description = 'Order payment from PM vault',
   credentials = {}
 }) {
   const { accessToken, pmUserId } = await ensurePmVaultAuth(user, credentials);
-  await assertPmVaultBalanceSufficient(user, amountInRupees, credentials);
+
+  // Balance pre-check is best-effort: if PM vault GET is down, still attempt vault-pay
+  // so PM can return a precise validation/balance error.
+  try {
+    await assertPmVaultBalanceSufficient(user, amountInRupees, credentials);
+  } catch (balanceErr) {
+    if (balanceErr?.code === 'INSUFFICIENT_VAULT_BALANCE') throw balanceErr;
+    logger.warn('[PM vault-pay] balance pre-check skipped:', balanceErr?.message || balanceErr);
+  }
 
   if (!PM_VAULT_PAY_ORDER_URL) {
     const err = new Error(
@@ -591,24 +709,101 @@ export async function payOrderFromPmVault({
     err.code = 'PM_VAULT_REQUEST_FAILED';
     throw err;
   }
-
-  const response = await fetch(PM_VAULT_PAY_ORDER_URL, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${accessToken}`
-    },
-    body: JSON.stringify({
-      orderId: tatvaOrderId,
-      userId: pmUserId
-    })
-  });
-
-  const payload = await parseJsonResponse(response);
-  if (!response.ok || payload.success === false) {
-    throw pmRequestFailed(response, payload, 'Failed to pay order from PM vault');
+  if (!pmUserId) {
+    const err = new Error('PM userId is required for vault payment. Sign in again with phone OTP.');
+    err.code = 'PM_AUTH_REQUIRED';
+    throw err;
   }
+
+  const amountRupees = Number(amountInRupees);
+  if (!Number.isFinite(amountRupees) || amountRupees <= 0) {
+    const err = new Error('Order amount must be greater than zero for vault payment');
+    err.code = 'PM_VAULT_REQUEST_FAILED';
+    throw err;
+  }
+  const amountInr = Math.round(amountRupees * 100) / 100;
+  const amountPaise = Math.round(amountInr * 100);
+  const payAmountInPaise =
+    String(process.env.PM_VAULT_PAY_AMOUNT_IN_PAISE || 'true').trim().toLowerCase() !== 'false';
+  const amountForPm = payAmountInPaise ? amountPaise : amountInr;
+  const orderNo = String(orderNumber || '').trim() || null;
+  const desc = String(description || 'Order payment from PM vault').trim();
+
+  // Official PM body first. Some payment validators also require amount — retry if needed.
+  const attemptBodies = [
+    { orderId: tatvaOrderId, userId: pmUserId },
+    {
+      orderId: tatvaOrderId,
+      userId: pmUserId,
+      amount: amountForPm
+    },
+    {
+      orderId: tatvaOrderId,
+      userId: pmUserId,
+      amount: amountForPm,
+      ...(orderNo ? { orderNumber: orderNo } : {}),
+      description: desc
+    }
+  ];
+
+  async function postVaultPay(body) {
+    logger.info('[PM vault-pay] requesting debit', {
+      url: PM_VAULT_PAY_ORDER_URL,
+      orderId: tatvaOrderId,
+      userId: pmUserId,
+      keys: Object.keys(body)
+    });
+
+    const response = await fetch(PM_VAULT_PAY_ORDER_URL, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    const payload = await parseJsonResponse(response);
+    if (!response.ok || payload.success === false) {
+      logger.warn('[PM vault-pay] rejected', {
+        status: response.status,
+        payload,
+        orderId: tatvaOrderId,
+        userId: pmUserId,
+        keys: Object.keys(body)
+      });
+      throw pmRequestFailed(response, payload, 'Failed to pay order from PM vault');
+    }
+    return payload;
+  }
+
+  let payload = null;
+  let lastError = null;
+  for (let i = 0; i < attemptBodies.length; i += 1) {
+    try {
+      payload = await postVaultPay(attemptBodies[i]);
+      lastError = null;
+      break;
+    } catch (err) {
+      lastError = err;
+      const isValidation =
+        err?.code === 'PM_VAULT_VALIDATION_FAILED' ||
+        /validation failed/i.test(String(err?.message || ''));
+      const canRetry =
+        isValidation &&
+        i < attemptBodies.length - 1 &&
+        // If PM rejected unknown keys on a richer body, do not keep adding fields.
+        !(i > 0 && validationRejectsUnknownKeys(err)) &&
+        validationNeedsAmount(err);
+      if (!canRetry) throw err;
+      logger.warn('[PM vault-pay] retrying with expanded body after validation error', {
+        attempt: i + 1,
+        message: err.message
+      });
+    }
+  }
+  if (lastError) throw lastError;
 
   const data = unwrapPmPayload(payload) || payload || {};
   const paymentId = String(

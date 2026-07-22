@@ -668,7 +668,7 @@ const ServiceProviderDashboard = ({ user }) => {
       fetchDashboardData();
     } catch (error) {
       console.error('Failed to pay order from vault:', error);
-      alert('Failed to pay order from vault. Please try again.');
+      alert(error?.message || 'Failed to pay order from vault. Please try again.');
     } finally {
       setUpdatingPayment(false);
     }

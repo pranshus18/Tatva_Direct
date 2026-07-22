@@ -872,7 +872,9 @@ export async function payOrderFromWallet({
     const pmPayment = await pmVault.payOrderFromPmVault({
       user: actorUser,
       orderId: order.id,
+      orderNumber: order.order_number || null,
       amountInRupees: grossAmount,
+      description: `Order payment for ${order.order_number || order.id}`,
       credentials: pmCredentials || {}
     });
 

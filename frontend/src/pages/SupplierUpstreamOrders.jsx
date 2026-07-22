@@ -234,7 +234,21 @@ export default function SupplierUpstreamOrders() {
         await fetchOrderDetails(orderModalId);
         await fetchOrders();
       } else {
-        alert(data.message || 'Failed to pay from vault. Please try again.');
+        const detailErrors = Array.isArray(data?.details?.data?.errors)
+          ? data.details.data.errors
+          : Array.isArray(data?.details?.errors)
+            ? data.details.errors
+            : [];
+        const detailSummary = detailErrors
+          .map((item) => {
+            if (!item || typeof item !== 'object') return String(item || '');
+            const field = item.field || item.param || '';
+            const msg = item.message || item.msg || '';
+            return field && msg ? `${field}: ${msg}` : msg;
+          })
+          .filter(Boolean)
+          .join('; ');
+        alert(detailSummary || data.message || 'Failed to pay from vault. Please try again.');
       }
     } catch (error) {
       console.error('Failed to pay from vault:', error);

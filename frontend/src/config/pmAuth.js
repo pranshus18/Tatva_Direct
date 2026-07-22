@@ -16,7 +16,7 @@ export const PM_VENDOR_LEADS_URL = `${PM_AUTH_BASE_URL}/api/users/vendor-leads`;
 export const PM_VERIFY_GST_URL = `${PM_AUTH_BASE_URL}/api/users/verify-gst`;
 
 export const PM_VENDOR_LEAD_VENDOR_FLAG = 'supplier';
-export const PM_VENDOR_LEAD_FLAG = 'tatvaopsdirect';
+export const PM_VENDOR_LEAD_FLAG = 'tatvadirect';
 
 export const PM_SAMPLE_PHONE = String(
   import.meta.env.VITE_PM_SAMPLE_PHONE || ''

@@ -304,11 +304,18 @@ export function registerSupplierWalletRoutes(ctx) {
           message: e.message || 'Insufficient vault balance'
         });
       }
-      if (e?.code === 'PM_VAULT_PAY_NOT_CONFIGURED' || e?.code === 'PM_VAULT_REQUEST_FAILED') {
-        return res.status(502).json({
+      if (
+        e?.code === 'PM_VAULT_PAY_NOT_CONFIGURED' ||
+        e?.code === 'PM_VAULT_REQUEST_FAILED' ||
+        e?.code === 'PM_VAULT_VALIDATION_FAILED' ||
+        e?.code === 'VALIDATION_ERROR'
+      ) {
+        const status = e?.code === 'PM_VAULT_VALIDATION_FAILED' || e?.code === 'VALIDATION_ERROR' ? 400 : 502;
+        return res.status(status).json({
           status: 'error',
-          code: e.code,
-          message: e.message || 'PM vault payment failed'
+          code: e.code === 'VALIDATION_ERROR' ? 'PM_VAULT_VALIDATION_FAILED' : e.code,
+          message: e.message || 'PM vault payment failed',
+          details: e.payload || undefined
         });
       }
       if (e?.code === 'WALLET_BALANCE_CONFLICT') {
