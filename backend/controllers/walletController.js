@@ -3,6 +3,7 @@ import multer from 'multer';
 import {
   requireAuthentication as authenticateToken,
   requireServiceProvider,
+  requireServiceProviderOrSupplier,
   requirePlatformVaultUser
 } from '../middleware/authMiddleware.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
@@ -235,7 +236,11 @@ walletRouter.post('/topup/create', authenticateToken, requirePlatformVaultUser, 
       paymentIntent: {
         provider: paymentIntent.provider,
         orderId: paymentIntent.orderId,
-        amount: paymentIntent.amount,
+        /** Always INR rupees for Tatva UI / clients */
+        amount: paymentIntent.amountInRupees ?? paymentIntent.amount,
+        amountInRupees: paymentIntent.amountInRupees ?? paymentIntent.amount,
+        /** Razorpay checkout only (1 INR = 100 paise) */
+        amountPaise: paymentIntent.amountPaise,
         currency: paymentIntent.currency,
         keyId: paymentIntent.keyId
       },
@@ -353,7 +358,7 @@ walletRouter.post('/topup/confirm', authenticateToken, requirePlatformVaultUser,
   }
 });
 
-walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProvider, async (req, res) => {
+walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProviderOrSupplier, async (req, res) => {
   try {
     const payload = parseWithSchema(walletPayOrderSchema, req.body || {});
     const credentials = readPmCredentialsFromRequest(req);

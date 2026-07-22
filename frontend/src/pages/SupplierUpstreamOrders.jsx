@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { getApiUrl, authFetch } from '../config/api';
+import { getApiUrl, authFetch, buildAuthHeaders } from '../config/api';
 import './Dashboard.css';
 import './SupplierUpstream.css';
 import './SupplierUpstreamOrders.css';
@@ -216,30 +216,29 @@ export default function SupplierUpstreamOrders() {
 
     setUpdatingPayment(true);
     try {
-      const token = localStorage.getItem('token');
       const encodedOrderId = encodeURIComponent(orderDetails?.id || orderModalId);
       const response = await fetch(getApiUrl(`/api/supplier/wallet/orders/${encodedOrderId}/pay`), {
         method: 'POST',
-        headers: {
+        headers: buildAuthHeaders({
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
+          Accept: 'application/json'
+        }),
         body: JSON.stringify({
-          idempotencyKey: `supplier-wallet-order-pay-${encodedOrderId}-${Date.now()}`
+          idempotencyKey: `supplier-wallet-order-pay-${orderDetails?.id || orderModalId}-${Date.now()}`
         })
       });
 
-      const data = await response.json();
-      if (data.status === 'success') {
-        alert('Order payment completed from wallet successfully.');
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data.status === 'success') {
+        alert('Order payment completed from vault successfully.');
         await fetchOrderDetails(orderModalId);
         await fetchOrders();
       } else {
-        alert(data.message || 'Failed to pay from wallet. Please try again.');
+        alert(data.message || 'Failed to pay from vault. Please try again.');
       }
     } catch (error) {
-      console.error('Failed to pay from wallet:', error);
-      alert('Failed to pay from wallet. Please check your connection and try again.');
+      console.error('Failed to pay from vault:', error);
+      alert('Failed to pay from vault. Please check your connection and try again.');
     } finally {
       setUpdatingPayment(false);
     }

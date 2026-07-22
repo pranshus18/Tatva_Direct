@@ -869,14 +869,14 @@ export async function payOrderFromWallet({
 
   // SP / supplier vault lives on PM only — never read/write Tatva wallets tables.
   if (usesPmVault) {
-    await pmVault.payOrderFromPmVault({
+    const pmPayment = await pmVault.payOrderFromPmVault({
       user: actorUser,
       orderId: order.id,
-      orderNumber: order.order_number,
       amountInRupees: grossAmount,
-      description: `Order payment for ${order.order_number || order.id} (products + transport)`,
       credentials: pmCredentials || {}
     });
+
+    const pmPaymentRef = pmPayment?.paymentId || `pm-vault-${order.id}`;
 
     const inferredRole =
       feeResult.breakdown.find((line) => line.supplyChainRole)?.supplyChainRole || null;
@@ -886,7 +886,7 @@ export async function payOrderFromWallet({
         payment_status: 'paid',
         payment_method: 'vault',
         payment_provider: 'pm_vault',
-        payment_provider_payment_id: `pm-vault-${order.id}`,
+        payment_provider_payment_id: pmPaymentRef,
         payment_verified_at: new Date().toISOString(),
         wallet_payment_status: 'held',
         platform_fee_amount: platformFeeAmount,
@@ -907,11 +907,7 @@ export async function payOrderFromWallet({
         platform_fee_amount: platformFeeAmount,
         net_amount: supplierPayoutAmount,
         status: 'pending',
-        metadata: {
-          feeBreakdown: feeResult.breakdown,
-          pmPaymentMode: 'pm_vault_debit',
-          source: 'pm_vault'
-        },
+        metadata: {},
         updated_at: new Date().toISOString()
       },
       { onConflict: 'order_id' }
@@ -921,7 +917,7 @@ export async function payOrderFromWallet({
     await ensurePaymentTransactionForPaidOrder({
       order: updatedOrder,
       method: 'vault',
-      paymentReference: `pm-vault-${order.id}`,
+      paymentReference: pmPaymentRef,
       provider: 'pm_vault',
       status: 'captured',
       actorUserId
@@ -930,7 +926,7 @@ export async function payOrderFromWallet({
     const receiptDelivery = await createReceiptAndDeliver({
       order: updatedOrder,
       paymentMethod: 'vault',
-      paymentReference: `pm-vault-${order.id}`,
+      paymentReference: pmPaymentRef,
       actorUserId
     });
 
@@ -954,9 +950,7 @@ export async function payOrderFromWallet({
         orderId: order.id,
         grossAmount,
         platformFeeAmount,
-        supplierPayoutAmount,
-        pmPaymentMode: 'pm_vault_debit',
-        idempotencyKey: idempotencyKey || null
+        supplierPayoutAmount
       }
     });
 
@@ -966,8 +960,7 @@ export async function payOrderFromWallet({
       platformFeeAmount,
       supplierPayoutAmount,
       receiptDelivery,
-      invoiceSummary,
-      pmPaymentMode: 'pm_vault_debit'
+      invoiceSummary
     };
   }
 
@@ -992,8 +985,7 @@ export async function payOrderFromWallet({
       orderId: order.id,
       orderNumber: order.order_number,
       platformFeeAmount,
-      supplierPayoutAmount,
-      pmPaymentMode: null
+      supplierPayoutAmount
     },
     idempotencyKey: idempotencyKey || `wallet-order-pay:${order.id}`,
     createdBy: actorUserId
@@ -1027,10 +1019,7 @@ export async function payOrderFromWallet({
       platform_fee_amount: platformFeeAmount,
       net_amount: supplierPayoutAmount,
       status: 'pending',
-      metadata: {
-        feeBreakdown: feeResult.breakdown,
-        pmPaymentMode: null
-      },
+      metadata: {},
       updated_at: new Date().toISOString()
     },
     { onConflict: 'order_id' }
@@ -1075,8 +1064,7 @@ export async function payOrderFromWallet({
       orderId: order.id,
       grossAmount,
       platformFeeAmount,
-      supplierPayoutAmount,
-      pmPaymentMode: null
+      supplierPayoutAmount
     }
   });
 
@@ -1086,7 +1074,6 @@ export async function payOrderFromWallet({
     platformFeeAmount,
     supplierPayoutAmount,
     receiptDelivery,
-    invoiceSummary,
-    pmPaymentMode: null
+    invoiceSummary
   };
 }

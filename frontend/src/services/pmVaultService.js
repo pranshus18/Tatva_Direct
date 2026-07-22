@@ -65,12 +65,18 @@ export async function initiatePmVaultTopup({ amountInRupees, description = 'Vaul
     throw error;
   }
 
+  const amountInr = Math.round(Number(amountInRupees || 0) * 100) / 100;
+  if (!Number.isFinite(amountInr) || amountInr <= 0) {
+    throw new Error('Enter a valid amount in Indian rupees');
+  }
+
   const response = await fetch(PM_VAULT_TOPUP_INITIATE_URL, {
     method: 'POST',
     headers: pmAuthHeaders(accessToken, true),
     body: JSON.stringify({
       userId: pmUserId,
-      amount: Math.round(Number(amountInRupees || 0) * 100),
+      // PM initiate expects paise; UI/app always uses INR rupees.
+      amount: Math.round(amountInr * 100),
       description
     })
   });
@@ -78,7 +84,7 @@ export async function initiatePmVaultTopup({ amountInRupees, description = 'Vaul
   if (!response.ok || data.success === false) {
     throw new Error(data.message || 'Failed to initiate vault top-up on PM platform');
   }
-  return mapPmTopupInitiatePayload(data);
+  return mapPmTopupInitiatePayload(data, amountInr);
 }
 
 /** POST api.withtatva.ai/payment/api/v1/payments/vault/topup/complete */

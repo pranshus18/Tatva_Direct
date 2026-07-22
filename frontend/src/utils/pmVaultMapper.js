@@ -33,6 +33,7 @@ function resolveVaultBalanceInr(vault) {
     return toInr(paiseCandidate, { assumePaise: true });
   }
 
+  // PM vault balances are stored in paise unless explicitly labeled otherwise.
   return toInr(
     vault.balance ??
       vault.availableBalance ??
@@ -41,7 +42,8 @@ function resolveVaultBalanceInr(vault) {
       vault.totalBalance ??
       vault.availableAmount ??
       vault.amount ??
-      0
+      0,
+    { assumePaise: true }
   );
 }
 
@@ -65,10 +67,10 @@ function resolveVaultHoldingInr(vault) {
     vault.escrowBalance ??
     null;
   if (holdingCandidate !== null && holdingCandidate !== undefined) {
-    return toInr(holdingCandidate);
+    return toInr(holdingCandidate, { assumePaise: true });
   }
 
-  const total = toInr(vault.totalBalance ?? vault.balance ?? 0);
+  const total = toInr(vault.totalBalance ?? vault.balance ?? 0, { assumePaise: true });
   const available = resolveVaultBalanceInr(vault);
   return total > available + 0.0001 ? total - available : 0;
 }
@@ -88,7 +90,9 @@ function mapPmVaultTransactions(vault) {
     ).toLowerCase();
     const direction =
       rawDir.includes('credit') || rawDir === 'cr' || rawDir === 'in' ? 'credit' : 'debit';
-    const amount = toInr(Math.abs(Number(entry?.amount ?? entry?.value ?? 0)));
+    const amount = toInr(Math.abs(Number(entry?.amount ?? entry?.value ?? 0)), {
+      assumePaise: true
+    });
 
     return {
       id: String(entry?._id || entry?.id || entry?.transactionId || `pm-txn-${index}`),
@@ -102,7 +106,10 @@ function mapPmVaultTransactions(vault) {
       transaction_type: String(entry?.transactionType || entry?.type || 'vault'),
       direction,
       amount,
-      balance_after: toInr(entry?.balanceAfter ?? entry?.balance_after ?? entry?.closingBalance ?? 0),
+      balance_after: toInr(
+        entry?.balanceAfter ?? entry?.balance_after ?? entry?.closingBalance ?? 0,
+        { assumePaise: true }
+      ),
       orderId: entry?.orderId || entry?.order_id || null,
       orderNumber: entry?.orderNumber || entry?.order_number || null,
       source: 'pm_vault'
@@ -150,7 +157,7 @@ export function mapPmVaultPayload(vaultPayload) {
   };
 }
 
-export function mapPmTopupInitiatePayload(payload) {
+export function mapPmTopupInitiatePayload(payload, amountInRupees = null) {
   const data = unwrapPmPayload(payload) || {};
   const razorpay = data.razorpay || data.checkout || data.paymentIntent || data.payment || {};
   const orderId =
@@ -171,17 +178,27 @@ export function mapPmTopupInitiatePayload(payload) {
     data.keyId ||
     data.key_id ||
     null;
-  const orderAmount = data.amount ?? data.orderAmount ?? razorpay.amount ?? null;
 
   if (!orderId || !keyId) {
     throw new Error('Vault top-up did not return Razorpay checkout details from PM.');
   }
 
+  const requestedInr = Number(amountInRupees);
+  const amountInr = Number.isFinite(requestedInr) && requestedInr > 0
+    ? Math.round(requestedInr * 100) / 100
+    : null;
+  const amountPaise =
+    amountInr != null
+      ? Math.round(amountInr * 100)
+      : Math.round(Number(data.amount ?? data.orderAmount ?? razorpay.amount ?? 0));
+
   return {
     provider: 'razorpay',
     orderId,
     keyId,
-    amount: Number(orderAmount),
+    amount: amountInr ?? amountPaise / 100,
+    amountInRupees: amountInr ?? amountPaise / 100,
+    amountPaise,
     currency: String(data.currency || 'INR')
   };
 }

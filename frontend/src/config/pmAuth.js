@@ -45,6 +45,13 @@ export const PM_VAULT_TOPUP_INITIATE_URL = `${PM_PAYMENT_BASE_URL}/api/v1/paymen
 /** POST complete vault top-up after Razorpay. */
 export const PM_VAULT_TOPUP_COMPLETE_URL = `${PM_PAYMENT_COMPLETE_BASE_URL}/api/v1/payments/vault/topup/complete`;
 
+/**
+ * Order debit is proxied by Tatva backend (not called from the browser):
+ * POST /api/vault/orders/:id/pay
+ *   → PM POST .../payment/api/v1/payments/order-payment/vault-pay
+ *   body: { orderId, userId }  // userId = PM user id for SP or supplier
+ */
+
 /** PM users API (api.withtatva.ai) — offline vault add-money. */
 export const PM_VAULT_OFFLINE_BASE_URL = isDevProxy
   ? '/pm-users-offline'

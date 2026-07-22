@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
+
+// Balance fields from PM are treated as paise by default (1 INR = 100 paise).
+process.env.PM_VAULT_BALANCE_IN_PAISE = 'true';
+
+const {
   convertInrToPaise,
   mapPmVaultToWalletView,
   mapPmVaultTransactions,
   summarizePmVaultLedger,
   usesPlatformVault
-} from '../services/pmVaultService.js';
+} = await import('../services/pmVaultService.js');
 
 test('convertInrToPaise converts rupee input to paise for Razorpay/PM APIs', () => {
   assert.equal(convertInrToPaise(100), 10000);
@@ -35,20 +39,21 @@ test('mapPmVaultToWalletView maps nested vault object', () => {
   assert.equal(view.balance, 250);
   assert.equal(view.wallet.id, 'vault123');
   assert.equal(view.transactions.length, 1);
+  assert.equal(view.transactions[0].amount, 250);
 });
 
-test('mapPmVaultToWalletView maps rupee balance and transactions', () => {
+test('mapPmVaultToWalletView converts plain balance from paise to INR', () => {
   const view = mapPmVaultToWalletView({
     success: true,
     data: {
-      balance: 500,
+      balance: 50000,
       currency: 'INR',
       transactions: [
         {
           _id: 'txn1',
           description: 'Vault top-up',
           type: 'credit',
-          amount: 500,
+          amount: 50000,
           createdAt: '2026-07-17T10:00:00.000Z'
         }
       ]
@@ -59,7 +64,7 @@ test('mapPmVaultToWalletView maps rupee balance and transactions', () => {
   assert.equal(view.wallet.source, 'pm_vault');
   assert.equal(view.transactions.length, 1);
   assert.equal(view.transactions[0].direction, 'credit');
-  assert.equal(view.summary.totalCredit, 500);
+  assert.equal(view.transactions[0].amount, 500);
 });
 
 test('mapPmVaultToWalletView converts paise balance when flagged', () => {
@@ -92,9 +97,9 @@ test('summarizePmVaultLedger totals credits and debits', () => {
   assert.equal(summary.transactionCount, 2);
 });
 
-test('mapPmVaultTransactions supports ledger alias', () => {
+test('mapPmVaultTransactions converts ledger amounts from paise to INR', () => {
   const rows = mapPmVaultTransactions({
-    ledger: [{ id: 'l1', type: 'debit', amount: 250, description: 'Order payment' }]
+    ledger: [{ id: 'l1', type: 'debit', amount: 25000, description: 'Order payment' }]
   });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].direction, 'debit');

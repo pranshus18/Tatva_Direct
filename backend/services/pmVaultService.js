@@ -16,7 +16,11 @@ import {
 const PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL = `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/topup/complete`;
 
 const PM_VAULT_BALANCE_IN_PAISE =
-  String(process.env.PM_VAULT_BALANCE_IN_PAISE || 'false').trim().toLowerCase() === 'true';
+  String(process.env.PM_VAULT_BALANCE_IN_PAISE || 'true').trim().toLowerCase() === 'true';
+
+/** PM top-up initiate historically expects paise; Tatva APIs always use INR rupees. */
+const PM_VAULT_TOPUP_AMOUNT_IN_PAISE =
+  String(process.env.PM_VAULT_TOPUP_AMOUNT_IN_PAISE || 'true').trim().toLowerCase() === 'true';
 
 async function parseJsonResponse(response) {
   try {
@@ -73,6 +77,11 @@ function toPaise(amountInRupees) {
     throw new Error('Amount must be greater than zero');
   }
   return Math.round(numeric * 100);
+}
+
+/** Alias used by tests / callers that need INR → paise for PM payment APIs. */
+export function convertInrToPaise(amountInRupees) {
+  return toPaise(amountInRupees);
 }
 
 function normalizeIndianMobile(phone) {
@@ -263,11 +272,10 @@ function normalizePmTransactionAmount(entry) {
   const numeric = Math.abs(Number(raw || 0));
   if (!Number.isFinite(numeric)) return 0;
 
-  const looksLikePaise =
-    entry?.amountInPaise !== undefined ||
-    entry?.amount_in_paise !== undefined ||
-    (Number.isInteger(numeric) && numeric >= 10000);
-  return toInr(numeric, { assumePaise: looksLikePaise && numeric >= 100 });
+  const explicitPaise =
+    entry?.amountInPaise !== undefined || entry?.amount_in_paise !== undefined;
+  const assumePaise = explicitPaise || PM_VAULT_BALANCE_IN_PAISE;
+  return toInr(numeric, { assumePaise });
 }
 
 export function mapPmVaultTransactions(vault) {
@@ -305,11 +313,13 @@ export function mapPmVaultTransactions(vault) {
         {
           assumePaise:
             entry?.balanceAfterInPaise !== undefined ||
-            entry?.balance_after_in_paise !== undefined
+            entry?.balance_after_in_paise !== undefined ||
+            PM_VAULT_BALANCE_IN_PAISE
         }
       ),
       balance_before: toInr(entry?.balanceBefore ?? entry?.balance_before ?? 0, {
-        assumePaise: entry?.balanceBeforeInPaise !== undefined
+        assumePaise:
+          entry?.balanceBeforeInPaise !== undefined || PM_VAULT_BALANCE_IN_PAISE
       }),
       orderId: entry?.orderId || entry?.order_id || null,
       orderNumber: entry?.orderNumber || entry?.order_number || null,
@@ -399,7 +409,15 @@ export async function initiatePmVaultTopup({ pmUserId, amountInRupees, descripti
     throw error;
   }
 
-  const amount = toPaise(amountInRupees);
+  const amountRupees = Number(amountInRupees);
+  if (!Number.isFinite(amountRupees) || amountRupees <= 0) {
+    throw new Error('Amount must be greater than zero');
+  }
+  // Round to 2 dp (paise precision) while keeping rupees as the app unit.
+  const amountInr = Math.round(amountRupees * 100) / 100;
+  const amountPaise = Math.round(amountInr * 100);
+  const pmAmount = PM_VAULT_TOPUP_AMOUNT_IN_PAISE ? amountPaise : amountInr;
+
   const response = await fetch(PM_VAULT_TOPUP_INITIATE_URL, {
     method: 'POST',
     headers: {
@@ -409,7 +427,7 @@ export async function initiatePmVaultTopup({ pmUserId, amountInRupees, descripti
     },
     body: JSON.stringify({
       userId,
-      amount,
+      amount: pmAmount,
       description: String(description || 'Vault top-up').trim() || 'Vault top-up'
     })
   });
@@ -439,12 +457,23 @@ export async function initiatePmVaultTopup({ pmUserId, amountInRupees, descripti
     data.keyId ||
     data.key_id ||
     null;
-  const orderAmount =
-    data.amount ??
-    data.orderAmount ??
-    data.order_amount ??
-    razorpay.amount ??
-    amount;
+
+  // Razorpay checkout always needs paise; prefer PM-returned amount when it is already paise.
+  const upstreamAmount = Number(
+    data.amount ?? data.orderAmount ?? data.order_amount ?? razorpay.amount ?? NaN
+  );
+  let checkoutPaise = amountPaise;
+  if (Number.isFinite(upstreamAmount) && upstreamAmount > 0) {
+    // If PM echoes rupees, convert; if it echoes paise (~100x), keep as paise.
+    checkoutPaise =
+      Math.abs(upstreamAmount - amountInr) < 0.011
+        ? amountPaise
+        : Math.abs(upstreamAmount - amountPaise) < 1
+          ? Math.round(upstreamAmount)
+          : upstreamAmount >= amountInr * 50
+            ? Math.round(upstreamAmount)
+            : Math.round(upstreamAmount * 100);
+  }
 
   if (!orderId || !keyId) {
     const error = new Error('Vault top-up did not return Razorpay checkout details.');
@@ -455,10 +484,13 @@ export async function initiatePmVaultTopup({ pmUserId, amountInRupees, descripti
   return {
     provider: 'razorpay',
     orderId,
-    amount: Number(orderAmount),
+    /** App-facing unit: Indian rupees */
+    amount: amountInr,
+    amountInRupees: amountInr,
+    /** Razorpay checkout unit only */
+    amountPaise: checkoutPaise,
     currency: String(data.currency || 'INR'),
-    keyId,
-    raw: data
+    keyId
   };
 }
 
@@ -529,12 +561,17 @@ export async function assertPmVaultBalanceSufficient(user, amountInRupees, crede
   return pmWallet;
 }
 
+/**
+ * Debit PM vault for a Tatva order (service provider or supplier buyer).
+ * PM contract:
+ *   POST {PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay
+ *   { orderId, userId }  // userId = PM platform user id
+ * @returns {Promise<{ paymentId: string|null }>}
+ */
 export async function payOrderFromPmVault({
   user,
   orderId,
-  orderNumber,
   amountInRupees,
-  description = 'Order payment from PM vault',
   credentials = {}
 }) {
   const { accessToken, pmUserId } = await ensurePmVaultAuth(user, credentials);
@@ -542,13 +579,19 @@ export async function payOrderFromPmVault({
 
   if (!PM_VAULT_PAY_ORDER_URL) {
     const err = new Error(
-      'PM vault pay URL is not configured. Set PM_VAULT_PAY_ORDER_URL to the PM order-debit endpoint.'
+      'PM vault pay URL is not configured. Set PM_VAULT_PAY_ORDER_URL to the PM order-payment vault-pay endpoint.'
     );
     err.code = 'PM_VAULT_PAY_NOT_CONFIGURED';
     throw err;
   }
 
-  const amountPaise = toPaise(amountInRupees);
+  const tatvaOrderId = String(orderId || '').trim();
+  if (!tatvaOrderId) {
+    const err = new Error('orderId is required for PM vault payment');
+    err.code = 'PM_VAULT_REQUEST_FAILED';
+    throw err;
+  }
+
   const response = await fetch(PM_VAULT_PAY_ORDER_URL, {
     method: 'POST',
     headers: {
@@ -557,11 +600,8 @@ export async function payOrderFromPmVault({
       Authorization: `Bearer ${accessToken}`
     },
     body: JSON.stringify({
-      userId: pmUserId,
-      amount: amountPaise,
-      orderId: String(orderId || ''),
-      orderNumber: String(orderNumber || ''),
-      description
+      orderId: tatvaOrderId,
+      userId: pmUserId
     })
   });
 
@@ -570,7 +610,18 @@ export async function payOrderFromPmVault({
     throw pmRequestFailed(response, payload, 'Failed to pay order from PM vault');
   }
 
-  return unwrapPmPayload(payload) || payload;
+  const data = unwrapPmPayload(payload) || payload || {};
+  const paymentId = String(
+    data.paymentId ||
+      data.payment_id ||
+      data.transactionId ||
+      data.transaction_id ||
+      data.id ||
+      payload.paymentId ||
+      ''
+  ).trim();
+
+  return { paymentId: paymentId || null };
 }
 
 export async function getPmVaultWalletView(user, credentials = {}) {

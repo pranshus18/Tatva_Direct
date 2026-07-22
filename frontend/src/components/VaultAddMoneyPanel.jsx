@@ -235,7 +235,7 @@ export default function VaultAddMoneyPanel({
 
       <p className={isModal ? 'vault-modal__subtext' : 'text-xs text-slate-600'}>
         {paymentMode === 'online'
-          ? 'Top-up via PM platform Razorpay checkout.'
+          ? 'Enter amount in ₹ (Indian rupees). 1 ₹ = 100 paise — paise is only used for Razorpay checkout.'
           : offlineDescription}
       </p>
 
@@ -248,7 +248,7 @@ export default function VaultAddMoneyPanel({
             step={1}
             value={amount}
             onChange={(event) => onAmountChange(event.target.value)}
-            placeholder="Enter amount"
+            placeholder="Enter amount in ₹"
             className={inputClass}
             disabled={processing || disabled}
           />
@@ -261,7 +261,7 @@ export default function VaultAddMoneyPanel({
           value={amount}
           onChange={(event) => onAmountChange(event.target.value)}
           className={inputClass}
-          placeholder="Amount in INR"
+          placeholder="Amount in ₹"
           disabled={processing || disabled}
         />
       )}

@@ -29,6 +29,7 @@ import {
   verifyRazorpayPaymentSignature
 } from '../../services/razorpayService.js';
 import { httpStatusForUpstreamError } from '../../utils/paymentNormalize.js';
+import { readPmCredentialsFromRequest } from '../../services/pmVaultService.js';
 
 function normalizeLimit(raw, fallback = 20) {
   const parsed = Number.parseInt(String(raw || fallback), 10);
@@ -267,7 +268,8 @@ export function registerSupplierWalletRoutes(ctx) {
         actorRole: req.user?.user_type || null,
         requestId: req.requestId || null,
         ipAddress: req.ip || null,
-        idempotencyKey: payload.idempotencyKey || null
+        idempotencyKey: payload.idempotencyKey || null,
+        pmCredentials: readPmCredentialsFromRequest(req)
       });
       return res.json({
         status: 'success',
@@ -283,6 +285,9 @@ export function registerSupplierWalletRoutes(ctx) {
       if (String(e?.name || '') === 'ZodError') {
         return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
       }
+      if (e?.code === 'PM_AUTH_REQUIRED') {
+        return res.status(401).json({ status: 'error', code: e.code, message: e.message });
+      }
       if (e?.code === 'ORDER_NOT_FOUND') {
         return res.status(404).json({ status: 'error', message: e.message });
       }
@@ -292,8 +297,19 @@ export function registerSupplierWalletRoutes(ctx) {
       if (e?.code === 'ORDER_ALREADY_PAID') {
         return res.status(400).json({ status: 'error', message: e.message });
       }
-      if (e?.code === 'INSUFFICIENT_WALLET_BALANCE') {
-        return res.status(400).json({ status: 'error', code: e.code, message: e.message });
+      if (e?.code === 'INSUFFICIENT_WALLET_BALANCE' || e?.code === 'INSUFFICIENT_VAULT_BALANCE') {
+        return res.status(400).json({
+          status: 'error',
+          code: 'INSUFFICIENT_VAULT_BALANCE',
+          message: e.message || 'Insufficient vault balance'
+        });
+      }
+      if (e?.code === 'PM_VAULT_PAY_NOT_CONFIGURED' || e?.code === 'PM_VAULT_REQUEST_FAILED') {
+        return res.status(502).json({
+          status: 'error',
+          code: e.code,
+          message: e.message || 'PM vault payment failed'
+        });
       }
       if (e?.code === 'WALLET_BALANCE_CONFLICT') {
         return res.status(409).json({ status: 'error', code: e.code, message: e.message });
