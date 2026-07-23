@@ -8,6 +8,7 @@ import {
   mergeSpecificationObjects,
   specificationEntriesForDetails
 } from '../utils/specifications';
+import { isMeaningfulProductDescription } from '../utils/productDisplay';
 import {
   SUPPLIER_CURRENT_STOCK_LABEL,
   SUPPLIER_MRP_LABEL
@@ -181,7 +182,7 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
             ) : null}
           </div>
 
-          {product.description ? (
+          {isMeaningfulProductDescription(product.description) ? (
             <section className="us-details-section">
               <h3>Description</h3>
               <p className="us-details-description">{product.description}</p>

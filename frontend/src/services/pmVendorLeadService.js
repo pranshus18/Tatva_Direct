@@ -25,6 +25,38 @@ function normalizePhone(value) {
   return String(value || '').replace(/\D/g, '').slice(-10);
 }
 
+/** PM vendor phone uniqueness = SP login identity, not a block on supplier signup. */
+export function isExistingPmServiceProviderPhoneConflict(message) {
+  const text = String(message || '').toLowerCase();
+  if (!text.includes('phone')) return false;
+  return (
+    text.includes('only be used once') ||
+    text.includes('onboarding request') ||
+    text.includes('vendor onboarding') ||
+    (text.includes('already exists') && text.includes('phone'))
+  );
+}
+
+export function buildSupplierLeadFromExistingServiceProvider({
+  formData,
+  verifiedPhone = ''
+}) {
+  const phoneNumber =
+    normalizePhone(verifiedPhone) || normalizePhone(formData.get('phoneNumber'));
+
+  return {
+    success: true,
+    reusedExistingPmServiceProvider: true,
+    data: {
+      phoneNumber,
+      email: String(formData.get('email') || '').trim().toLowerCase(),
+      gstNo: String(formData.get('gstNo') || '').trim().toUpperCase(),
+      companyName: String(formData.get('companyName') || '').trim(),
+      source: 'existing_service_provider_phone'
+    }
+  };
+}
+
 export async function submitPmVendorLead(formData, options = {}) {
   const pmFormData = new FormData();
   const verifiedPhone = normalizePhone(options.verifiedPhone || formData.get('phoneNumber'));
@@ -65,6 +97,15 @@ export async function submitPmVendorLead(formData, options = {}) {
       data.message ||
       (Array.isArray(data.errors) && data.errors.map((entry) => entry.message).filter(Boolean).join(', ')) ||
       'PM vendor registration failed';
+
+    // Same phone already used for Service Provider login in PM — continue supplier signup.
+    if (options.allowExistingServiceProviderPhone !== false && isExistingPmServiceProviderPhoneConflict(message)) {
+      return buildSupplierLeadFromExistingServiceProvider({
+        formData,
+        verifiedPhone
+      });
+    }
+
     throw new Error(message);
   }
 

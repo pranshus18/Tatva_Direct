@@ -25,6 +25,10 @@ import {
 import './AdminProductStatus.css';
 import { polishSupplierListingWithAi } from '../utils/adminPolishListingApi';
 import { formatDateTimeIST } from '../utils/dateTime';
+import {
+  isMeaningfulProductDescription,
+  looksLikeAiInstructions
+} from '../utils/productDisplay';
 
 const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
 const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
@@ -47,16 +51,9 @@ const getProductIdentification = (product = {}) => {
   return parts.join('');
 };
 
-/** Hide legacy AI-instruction text that was saved in the description field. */
-const looksLikeAiInstructions = (text) => {
-  if (!text || !String(text).trim()) return false;
-  const lower = String(text).toLowerCase();
-  return /\b(give me|generate all|extract|list all|supplier can fill|specification keys?|ai fetch)\b/i.test(lower);
-};
-
 const getDisplayDescription = (product) => {
   const desc = product?.description;
-  if (!desc || !String(desc).trim() || looksLikeAiInstructions(desc)) return '';
+  if (!isMeaningfulProductDescription(desc, { allowInlineSpecs: true })) return '';
   return String(desc).trim();
 };
 

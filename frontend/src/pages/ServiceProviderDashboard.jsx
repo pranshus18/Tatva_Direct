@@ -27,6 +27,7 @@ import {
   labelReturnStatus
 } from '../utils/orderReturnUi';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
+import { isMeaningfulProductDescription } from '../utils/productDisplay';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import SpPageLayout from '../components/sp/SpPageLayout';
@@ -1099,7 +1100,7 @@ const ServiceProviderDashboard = ({ user }) => {
                                   <span className="product-category"> ({item.product.category})</span>
                                 )}
                               </div>
-                              {item.product?.description && (
+                              {isMeaningfulProductDescription(item.product?.description) && (
                                 <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.25rem' }}>
                                   {item.product.description}
                                 </div>

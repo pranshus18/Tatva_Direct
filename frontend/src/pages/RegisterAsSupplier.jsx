@@ -301,7 +301,10 @@ const RegisterAsSupplier = ({ user, onPortalChange }) => {
         <div className="vendor-register-header">
           <img src={tatvaLogo} alt="Tatva Direct" className="auth-logo" />
           <h1>Register as a Supplier</h1>
-          <p>Welcome to Tatva</p>
+          <p>
+            Complete your supplier business details here. Your phone is already verified for Service
+            Provider login — use the same number to finish supplier registration on Tatva Direct.
+          </p>
         </div>
 
         <form onSubmit={handleSubmit}>

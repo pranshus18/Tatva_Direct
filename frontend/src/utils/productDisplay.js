@@ -24,11 +24,20 @@ function looksLikeSpecificationDump(text) {
   return specLikeLines.length >= Math.max(2, Math.ceil(lines.length * 0.5));
 }
 
-/** True only for buyer-facing prose descriptions, not placeholders or spec dumps. */
+/** Hide legacy AI-instruction text that was saved in the description field. */
+export function looksLikeAiInstructions(text) {
+  if (!text || !String(text).trim()) return false;
+  return /\b(give me|generate all|extract|list all|supplier can fill|specification keys?|ai fetch|from a customer point of view)\b/i.test(
+    String(text)
+  );
+}
+
+/** True only for buyer-facing prose descriptions, not placeholders, prompts, or spec dumps. */
 export function isMeaningfulProductDescription(text, { allowInlineSpecs = false } = {}) {
   const trimmed = String(text || '').trim();
   if (!trimmed) return false;
   if (PLACEHOLDER_DESCRIPTIONS.has(trimmed.toLowerCase())) return false;
+  if (looksLikeAiInstructions(trimmed)) return false;
   if (trimmed.startsWith('{') && trimmed.endsWith('}')) return false;
   if (!allowInlineSpecs && looksLikeSpecificationDump(trimmed)) return false;
   return true;

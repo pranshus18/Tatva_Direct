@@ -1,6 +1,7 @@
 import React from 'react';
 import ProductImageCarousel from './ProductImageCarousel';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
+import { isMeaningfulProductDescription } from '../utils/productDisplay';
 import { getProductImageList } from '../utils/productImages';
 
 export const collectProductImages = (product) => getProductImageList(product);
@@ -49,7 +50,9 @@ const UpstreamProductDisplay = ({
 
   const images = collectProductImages(product);
   const specEntries = parseSpecificationsForDisplay(product.specifications, { maxEntries: maxSpecs });
-  const description = String(product.description || '').trim();
+  const description = isMeaningfulProductDescription(product.description)
+    ? String(product.description).trim()
+    : '';
   const hasBody = (showDescription && description) || (showSpecifications && specEntries.length > 0);
   const hasMedia = showImage && images.length > 0;
 

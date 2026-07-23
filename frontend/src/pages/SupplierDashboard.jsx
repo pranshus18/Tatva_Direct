@@ -25,6 +25,7 @@ import {
 } from '../utils/orderReturnUi';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
+import { isMeaningfulProductDescription } from '../utils/productDisplay';
 import {
   getBrandRejectionReason,
   getSupplierNotificationMessage,
@@ -1060,7 +1061,7 @@ const SupplierDashboard = ({ user }) => {
                                   <span className="product-category"> ({item.product.category})</span>
                                 )}
                               </div>
-                              {item.product?.description && (
+                              {isMeaningfulProductDescription(item.product?.description) && (
                                 <div className="supplier-dashboard-item-description">
                                   {item.product.description}
                                 </div>

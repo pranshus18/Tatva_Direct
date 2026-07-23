@@ -26,7 +26,7 @@ import {
   mergeRegisteredRoles,
   normalizePortalRole
 } from '../utils/portalRoles.js';
-import { submitPmVendorLead } from '../services/pmVendorLeadService.js';
+import { submitPmVendorLeadForSupplierUpgrade } from '../services/pmVendorLeadService.js';
 import {
   getPmAuthFromUser,
   persistPmAuthAndSyncCustomerProfile,
@@ -941,10 +941,13 @@ router.post(
 
     let pmResponse;
     try {
-      pmResponse = await submitPmVendorLead({
+      // PM "vendor" phone = service provider login identity. If that phone already
+      // exists in PM, continue Tatva supplier registration with the same number.
+      pmResponse = await submitPmVendorLeadForSupplierUpgrade({
         fields: registration,
         files: req.files,
-        accessToken: user.profile?.pmCustomerAuth?.accessToken || null
+        accessToken: user.profile?.pmCustomerAuth?.accessToken || null,
+        user
       });
     } catch (pmError) {
       console.error('PM vendor-leads error:', pmError);
@@ -1000,14 +1003,27 @@ router.post('/complete-supplier-registration', authenticateToken, async (req, re
     }
 
     const payload = parseWithSchema(completeSupplierRegistrationSchema, req.body || {});
-    if (!payload.pmVendorLead) {
+    // Prefer PM vendor-leads payload when present; otherwise reuse SP phone identity.
+    const pmVendorLead =
+      payload.pmVendorLead ||
+      (payload.phoneNumber
+        ? {
+            phoneNumber: payload.phoneNumber,
+            email: payload.email,
+            gstNo: payload.gstNo,
+            companyName: payload.companyName,
+            source: 'tatva_supplier_registration'
+          }
+        : null);
+
+    if (!pmVendorLead) {
       return res.status(400).json({
         status: 'error',
-        message: 'PM vendor registration response is required. Submit vendor-leads first.'
+        message: 'Supplier registration details are required.'
       });
     }
 
-    return finalizeSupplierRegistration(user, payload, payload.pmVendorLead, res);
+    return finalizeSupplierRegistration(user, payload, pmVendorLead, res);
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });

@@ -1,10 +1,6 @@
 import { getApiUrl } from '../config/api';
 import { normalizeUser } from '../utils/userType';
 import { getVerifiedServiceProviderPhone } from '../utils/pmAuthSession';
-import {
-  buildRegistrationPayloadFromFormData,
-  submitPmVendorLead
-} from './pmVendorLeadService';
 
 async function parseJson(response) {
   try {
@@ -26,6 +22,13 @@ export async function fetchPortalStatus() {
   return data;
 }
 
+/**
+ * Complete supplier registration for an existing Service Provider.
+ *
+ * PM already owns this phone as the SP/vendor login identity — supplier signup
+ * is a Tatva Direct form using that same phone (not a second PM onboarding).
+ * Backend handles PM sync and treats "phone already exists" as expected.
+ */
 export async function registerAsSupplier(formData, options = {}) {
   const storedUser = (() => {
     try {
@@ -46,21 +49,13 @@ export async function registerAsSupplier(formData, options = {}) {
 
   formData.set('phoneNumber', verifiedPhone);
 
-  const pmResponse = await submitPmVendorLead(formData, {
-    verifiedPhone,
-    pmAccessToken: options.pmAccessToken || null
-  });
-
   const token = localStorage.getItem('token');
-  const response = await fetch(getApiUrl('/api/auth/complete-supplier-registration'), {
+  const response = await fetch(getApiUrl('/api/auth/register-supplier'), {
     method: 'POST',
     headers: {
-      'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {})
     },
-    body: JSON.stringify(
-      buildRegistrationPayloadFromFormData(formData, pmResponse, verifiedPhone)
-    )
+    body: formData
   });
   const data = await parseJson(response);
   if (!response.ok || data.status === 'error') {
