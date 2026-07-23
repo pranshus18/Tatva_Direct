@@ -28,20 +28,14 @@ test('paymentsRouter exposes all expected payment endpoints', () => {
     'GET /audit/logs',
     'GET /metrics',
     'GET /razorpay/config',
-    'GET /reconciliation/issues',
-    'GET /reconciliation/runs',
-    'GET /reconciliation/statement',
-    'GET /reconciliation/statement/download',
     'GET /risk/signals',
     'GET /settlement/report',
-    'PATCH /reconciliation/issues/:id/resolve',
     'PATCH /risk/signals/:id/review',
     'POST /orders/:id/bank-transfer/mark',
     'POST /orders/:id/bank-transfer/request',
     'POST /orders/:id/credit-line/approve',
     'POST /orders/:id/razorpay/confirm',
-    'POST /orders/:id/razorpay/create',
-    'POST /reconciliation/run'
+    'POST /orders/:id/razorpay/create'
   ].sort();
 
   assert.deepEqual(routes, expected);

@@ -1,4 +1,8 @@
-import { PM_SEND_OTP_URL, PM_VERIFY_OTP_URL } from '../config/pmAuth';
+import {
+  PM_PLATFORM_FLAG,
+  PM_SEND_OTP_URL,
+  PM_VERIFY_OTP_URL
+} from '../config/pmAuth';
 import { getApiUrl } from '../config/api';
 import {
   getPmCustomerCredentials,
@@ -21,10 +25,19 @@ export async function sendPmOtp(phoneNumber) {
     throw new Error('Enter a valid 10-digit phone number');
   }
 
-  const response = await fetch(PM_SEND_OTP_URL, {
+  const response = await fetch(`${PM_SEND_OTP_URL}?flag=${encodeURIComponent(PM_PLATFORM_FLAG)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phoneNumber: normalizedPhone })
+    headers: {
+      'Content-Type': 'application/json',
+      flag: PM_PLATFORM_FLAG,
+      'x-flag': PM_PLATFORM_FLAG,
+      'x-platform-flag': PM_PLATFORM_FLAG
+    },
+    body: JSON.stringify({
+      phoneNumber: normalizedPhone,
+      flag: PM_PLATFORM_FLAG,
+      platformFlag: PM_PLATFORM_FLAG
+    })
   });
 
   const data = await parseJsonResponse(response);
@@ -47,10 +60,20 @@ export async function verifyPmOtp(phoneNumber, otp) {
     throw new Error('Enter the OTP sent to your phone');
   }
 
-  const response = await fetch(PM_VERIFY_OTP_URL, {
+  const response = await fetch(`${PM_VERIFY_OTP_URL}?flag=${encodeURIComponent(PM_PLATFORM_FLAG)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ phoneNumber: normalizedPhone, otp: normalizedOtp })
+    headers: {
+      'Content-Type': 'application/json',
+      flag: PM_PLATFORM_FLAG,
+      'x-flag': PM_PLATFORM_FLAG,
+      'x-platform-flag': PM_PLATFORM_FLAG
+    },
+    body: JSON.stringify({
+      phoneNumber: normalizedPhone,
+      otp: normalizedOtp,
+      flag: PM_PLATFORM_FLAG,
+      platformFlag: PM_PLATFORM_FLAG
+    })
   });
 
   const data = await parseJsonResponse(response);

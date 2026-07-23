@@ -4,11 +4,13 @@ import { Wallet as VaultIcon, RefreshCw } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import { Button } from '@/components/ui/button';
-import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
+import { formatDateTimeIST, parseServerDate } from '../utils/dateTime';
 import {
   loadVaultSnapshot
 } from '../services/vaultService';
 import VaultAddMoneyPanel from '../components/VaultAddMoneyPanel';
+
+const STATEMENT_HEADER_BG = '#7a2433';
 
 const formatInr = (value) =>
   `₹${Number(value || 0).toLocaleString('en-IN', {
@@ -19,8 +21,19 @@ const formatInr = (value) =>
 const directionLabel = (direction) =>
   String(direction || '').toLowerCase() === 'credit' ? 'Credit' : 'Debit';
 
-const signedAmount = (row) =>
-  `${String(row?.direction || '').toLowerCase() === 'credit' ? '+' : '-'}${formatInr(row?.amount || 0)}`;
+/** Match PM reconciliation statement date style: 22 Jul '26 */
+function formatStatementDate(value, fallback = '—') {
+  const date = parseServerDate(value);
+  if (!date) return fallback;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata',
+    day: 'numeric',
+    month: 'short',
+    year: '2-digit'
+  }).formatToParts(date);
+  const map = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${Number(map.day)} ${map.month} '${map.year}`;
+}
 
 function filterTransactions(rows, filters) {
   let next = [...rows];
@@ -28,13 +41,18 @@ function filterTransactions(rows, filters) {
   if (search) {
     next = next.filter((row) =>
       [
+        row.details,
         row.description,
         row.transaction_type,
+        row.payment_method,
+        row.paymentMethod,
+        row.flag,
+        row.project_id,
+        row.projectId,
         row.orderNumber,
         row.orderId,
-        row.id,
-        row.paidBy?.label,
-        row.paidTo?.label
+        row.transaction_id,
+        row.id
       ]
         .filter(Boolean)
         .join(' ')
@@ -44,11 +62,11 @@ function filterTransactions(rows, filters) {
   }
   if (filters.from) {
     const fromTs = new Date(`${filters.from}T00:00:00.000Z`).getTime();
-    next = next.filter((row) => new Date(row.created_at).getTime() >= fromTs);
+    next = next.filter((row) => new Date(row.created_at || row.date).getTime() >= fromTs);
   }
   if (filters.to) {
     const toTs = new Date(`${filters.to}T23:59:59.999Z`).getTime();
-    next = next.filter((row) => new Date(row.created_at).getTime() <= toTs);
+    next = next.filter((row) => new Date(row.created_at || row.date).getTime() <= toTs);
   }
   return next;
 }
@@ -115,27 +133,43 @@ export default function VaultPage({ variant = 'service_provider' }) {
   const sortedTransactions = useMemo(() => {
     const rows = [...filteredTransactions];
     if (sortBy === 'created_at_asc') {
-      rows.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      rows.sort(
+        (a, b) =>
+          new Date(a.created_at || a.date).getTime() - new Date(b.created_at || b.date).getTime()
+      );
     } else if (sortBy === 'amount_asc') {
       rows.sort((a, b) => Number(a.amount || 0) - Number(b.amount || 0));
     } else if (sortBy === 'amount_desc') {
       rows.sort((a, b) => Number(b.amount || 0) - Number(a.amount || 0));
     } else {
-      rows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      rows.sort(
+        (a, b) =>
+          new Date(b.created_at || b.date).getTime() - new Date(a.created_at || a.date).getTime()
+      );
     }
     return rows;
   }, [filteredTransactions, sortBy]);
 
   const downloadCsv = () => {
-    const header = ['Date', 'Details', 'Amount', 'Type', 'Order', 'Balance After', 'Transaction ID'];
+    const header = [
+      'Date',
+      'Transaction details',
+      'Amount',
+      'Debit / Credit',
+      'Payment Method',
+      'Platform',
+      'Project ID',
+      'Transaction ID'
+    ];
     const lines = sortedTransactions.map((row) => [
-      new Date(row.created_at).toISOString(),
-      row.description || row.transaction_type || '',
+      formatStatementDate(row.created_at || row.date, ''),
+      row.details || row.description || row.transaction_type || '',
       Number(row.amount || 0).toFixed(2),
-      directionLabel(row.direction),
-      row.orderNumber || row.orderId || '-',
-      Number(row.balance_after || 0).toFixed(2),
-      row.id || ''
+      row.debit_credit || directionLabel(row.direction),
+      row.payment_method || row.paymentMethod || 'Wallet',
+      row.flag || '',
+      row.project_id || row.projectId || '',
+      row.transaction_id || row.id || ''
     ]);
     const csv = [header, ...lines]
       .map((cols) =>
@@ -146,7 +180,7 @@ export default function VaultPage({ variant = 'service_provider' }) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `vault-history-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `reconciliation-statement-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -214,99 +248,127 @@ export default function VaultPage({ variant = 'service_provider' }) {
         </div>
       ) : null}
 
-      <div className="rounded-lg border bg-white p-4">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <div className="text-sm font-medium text-slate-700">Vault transactions</div>
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
+      <div className="overflow-hidden rounded-lg border bg-white">
+        <div className="border-b px-4 py-4 sm:px-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold tracking-tight text-slate-900 sm:text-2xl">
+                Reconciliation statement
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Transactions for your Customer profile
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value)}
+                className="h-9 rounded-md border px-2 text-sm"
+              >
+                <option value="created_at_desc">Newest first</option>
+                <option value="created_at_asc">Oldest first</option>
+                <option value="amount_desc">Amount high to low</option>
+                <option value="amount_asc">Amount low to high</option>
+              </select>
+              <Button variant="outline" onClick={downloadCsv} disabled={!sortedTransactions.length}>
+                Download CSV
+              </Button>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-4">
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search transactions"
               className="h-9 rounded-md border px-2 text-sm"
+            />
+            <input
+              type="date"
+              value={fromInput}
+              onChange={(e) => setFromInput(e.target.value)}
+              className="h-9 rounded-md border px-2 text-sm"
+            />
+            <input
+              type="date"
+              value={toInput}
+              onChange={(e) => setToInput(e.target.value)}
+              className="h-9 rounded-md border px-2 text-sm"
+            />
+            <Button
+              variant="outline"
+              onClick={() =>
+                setFilters({
+                  search: searchInput.trim(),
+                  from: fromInput,
+                  to: toInput
+                })
+              }
             >
-              <option value="created_at_desc">Newest first</option>
-              <option value="created_at_asc">Oldest first</option>
-              <option value="amount_desc">Amount high to low</option>
-              <option value="amount_asc">Amount low to high</option>
-            </select>
-            <Button variant="outline" onClick={downloadCsv} disabled={!sortedTransactions.length}>
-              Download CSV
+              Apply filters
             </Button>
           </div>
         </div>
-        <div className="mb-3 grid gap-2 md:grid-cols-4">
-          <input
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search transactions"
-            className="h-9 rounded-md border px-2 text-sm"
-          />
-          <input
-            type="date"
-            value={fromInput}
-            onChange={(e) => setFromInput(e.target.value)}
-            className="h-9 rounded-md border px-2 text-sm"
-          />
-          <input
-            type="date"
-            value={toInput}
-            onChange={(e) => setToInput(e.target.value)}
-            className="h-9 rounded-md border px-2 text-sm"
-          />
-          <Button
-            variant="outline"
-            onClick={() =>
-              setFilters({
-                search: searchInput.trim(),
-                from: fromInput,
-                to: toInput
-              })
-            }
-          >
-            Apply filters
-          </Button>
+
+        <div
+          className="px-4 py-2.5 text-sm font-semibold text-white sm:px-5"
+          style={{ backgroundColor: STATEMENT_HEADER_BG }}
+        >
+          Transaction Summary
         </div>
+
         {loading ? (
-          <p className="text-sm text-slate-500">Loading vault transactions…</p>
+          <p className="px-4 py-6 text-sm text-slate-500 sm:px-5">Loading reconciliation statement…</p>
         ) : sortedTransactions.length === 0 ? (
-          <p className="text-sm text-slate-500">No vault transactions yet.</p>
+          <p className="px-4 py-6 text-sm text-slate-500 sm:px-5">No vault transactions yet.</p>
         ) : (
-          <div className="overflow-x-auto rounded-md border">
+          <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
-                <tr className="border-b bg-slate-100 text-left text-slate-700">
-                  <th className="px-2 py-2">Date</th>
-                  <th className="px-2 py-2">Details</th>
-                  <th className="px-2 py-2 text-right">Amount</th>
-                  <th className="px-2 py-2">Type</th>
-                  <th className="px-2 py-2">Order</th>
-                  <th className="px-2 py-2 text-right">Balance after</th>
+                <tr className="border-b text-left text-slate-600">
+                  <th className="px-4 py-3 font-medium sm:px-5">Date</th>
+                  <th className="px-4 py-3 font-medium sm:px-5">Transaction details</th>
+                  <th className="px-4 py-3 text-right font-medium sm:px-5">Amount</th>
+                  <th className="px-4 py-3 font-medium sm:px-5">Debit / Credit</th>
+                  <th className="px-4 py-3 font-medium sm:px-5">Payment Method</th>
+                  <th className="px-4 py-3 font-medium sm:px-5">Platform</th>
+                  <th className="px-4 py-3 font-medium sm:px-5">Project ID</th>
+                  <th className="px-4 py-3 font-medium sm:px-5">Transaction ID</th>
                 </tr>
               </thead>
               <tbody>
-                {sortedTransactions.map((row) => (
-                  <tr
-                    key={row.id}
-                    className="cursor-pointer border-b last:border-b-0 hover:bg-slate-50"
-                    onClick={() => setSelectedTransaction(row)}
-                  >
-                    <td className="px-2 py-2 text-slate-600">{formatDateIST(row.created_at, '—')}</td>
-                    <td className="px-2 py-2 font-medium text-slate-900">
-                      {row.description || row.transaction_type || '-'}
-                    </td>
-                    <td
-                      className={`px-2 py-2 text-right font-semibold ${
-                        row.direction === 'credit' ? 'text-green-600' : 'text-red-600'
-                      }`}
+                {sortedTransactions.map((row) => {
+                  const projectId = row.project_id || row.projectId;
+                  return (
+                    <tr
+                      key={row.transaction_id || row.id}
+                      className="cursor-pointer border-b border-slate-200 last:border-b-0 hover:bg-slate-50"
+                      onClick={() => setSelectedTransaction(row)}
                     >
-                      {signedAmount(row)}
-                    </td>
-                    <td className="px-2 py-2 text-slate-700">{directionLabel(row.direction)}</td>
-                    <td className="px-2 py-2 text-slate-600">{row.orderNumber || row.orderId || '-'}</td>
-                    <td className="px-2 py-2 text-right font-medium text-slate-900">
-                      {formatInr(row.balance_after)}
-                    </td>
-                  </tr>
-                ))}
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-700 sm:px-5">
+                        {formatStatementDate(row.created_at || row.date)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-900 sm:px-5">
+                        {row.details || row.description || row.transaction_type || '—'}
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right font-medium text-slate-900 sm:px-5">
+                        {formatInr(row.amount)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700 sm:px-5">
+                        {row.debit_credit || directionLabel(row.direction)}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700 sm:px-5">
+                        {row.payment_method || row.paymentMethod || 'Wallet'}
+                      </td>
+                      <td className="px-4 py-3 text-slate-700 sm:px-5">{row.flag || '—'}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-700 sm:px-5">
+                        {projectId || '—'}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-xs text-slate-600 sm:px-5">
+                        {row.transaction_id || row.id || '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -344,7 +406,7 @@ export default function VaultPage({ variant = 'service_provider' }) {
     <SpPageLayout showStepper={false}>
       <SpPageHeader
         title="Vault balance"
-        description="PM platform vault — credit, view history, and pay for orders."
+        description="PM platform vault — credit, view reconciliation statement, and pay for orders."
         icon={VaultIcon}
         actions={
           <Button variant="outline" onClick={loadVaultData} disabled={loading}>
@@ -369,12 +431,17 @@ function TransactionDetailModal({ row, onClose }) {
           </Button>
         </div>
         <div className="modal-body space-y-2 text-sm">
-          <Detail label="When" value={formatDateTimeIST(row.created_at, '—')} />
-          <Detail label="Type" value={row.transaction_type} />
-          <Detail label="Description" value={row.description} />
-          <Detail label="Order" value={row.orderNumber || row.orderId || '-'} />
-          <Detail label="Direction" value={row.direction} />
-          <Detail label="Amount" value={signedAmount(row)} />
+          <Detail label="When" value={formatDateTimeIST(row.created_at || row.date, '—')} />
+          <Detail label="Details" value={row.details || row.description} />
+          <Detail label="Debit / Credit" value={row.debit_credit || directionLabel(row.direction)} />
+          <Detail label="Amount" value={formatInr(row.amount)} />
+          <Detail label="Payment Method" value={row.payment_method || row.paymentMethod || 'Wallet'} />
+          <Detail label="Platform" value={row.flag || '—'} />
+          <Detail label="Project ID" value={row.project_id || row.projectId || '—'} />
+          <Detail label="Transaction ID" value={row.transaction_id || row.id} />
+          <Detail label="Reference" value={row.reference || row.transactionId || '—'} />
+          <Detail label="Order" value={row.orderNumber || row.orderId || '—'} />
+          <Detail label="Payment ID" value={row.paymentId || '—'} />
           <Detail label="Balance after" value={formatInr(row.balance_after)} />
         </div>
       </div>
@@ -389,7 +456,7 @@ function Detail({ label, value }) {
   return (
     <div className="flex items-start justify-between gap-2 border-b pb-1">
       <div className="text-slate-500">{label}</div>
-      <div className="text-right font-medium text-slate-900">{value || '-'}</div>
+      <div className="text-right font-medium text-slate-900">{value || '—'}</div>
     </div>
   );
 }

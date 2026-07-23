@@ -1,10 +1,15 @@
 import {
   PM_PAYMENT_API_BASE_URL,
+  PM_PLATFORM_FLAG,
   PM_VAULT_ADD_MONEY_URL,
   PM_VAULT_PAY_ORDER_URL,
   PM_VAULT_TOPUP_COMPLETE_URL,
   PM_VAULT_TOPUP_INITIATE_URL,
-  PM_VAULT_URL
+  PM_VAULT_TRANSACTIONS_URL,
+  PM_VAULT_URL,
+  buildPmPlatformHeaders,
+  withPmPlatformFlagBody,
+  withPmPlatformFlagQuery
 } from '../config/pmApi.js';
 import {
   fetchPmCurrentUser,
@@ -12,6 +17,11 @@ import {
   getPmAuthFromUser,
   persistPmAuthCredentials
 } from './pmUserService.js';
+import {
+  applyPmVaultPlatformAttribution,
+  extractAttributionKeysFromPmPayload,
+  rememberPmVaultPlatformAttribution
+} from './pmVaultPlatformAttribution.js';
 import logger from '../utils/logger.js';
 
 const PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL = `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/topup/complete`;
@@ -359,8 +369,16 @@ function resolveVaultBalanceInr(vault) {
 }
 
 function normalizePmTransactionDirection(entry) {
+  const credit = Number(entry?.credit ?? entry?.creditAmount ?? entry?.credit_amount ?? 0);
+  const debit = Number(entry?.debit ?? entry?.debitAmount ?? entry?.debit_amount ?? 0);
+  if (Number.isFinite(credit) && credit > 0 && !(Number.isFinite(debit) && debit > 0)) return 'credit';
+  if (Number.isFinite(debit) && debit > 0 && !(Number.isFinite(credit) && credit > 0)) return 'debit';
+
   const raw =
     entry?.direction ||
+    entry?.debitCredit ||
+    entry?.debit_credit ||
+    entry?.['Debit / Credit'] ||
     entry?.type ||
     entry?.transactionType ||
     entry?.txnType ||
@@ -374,43 +392,276 @@ function normalizePmTransactionDirection(entry) {
   return 'credit';
 }
 
+/**
+ * PM vault transaction amounts live on `credit` / `debit` (paise), not a generic `amount`.
+ * Example: { credit: 5000, debit: 0, type: 'credit' } → ₹50.00
+ */
 function normalizePmTransactionAmount(entry) {
-  const raw = entry?.amount ?? entry?.value ?? entry?.amountInPaise ?? entry?.amount_in_paise ?? 0;
-  const numeric = Math.abs(Number(raw || 0));
-  if (!Number.isFinite(numeric)) return 0;
+  const credit = Number(entry?.credit ?? entry?.creditAmount ?? entry?.credit_amount ?? 0);
+  const debit = Number(entry?.debit ?? entry?.debitAmount ?? entry?.debit_amount ?? 0);
+  const creditPaise = Number.isFinite(credit) ? Math.abs(credit) : 0;
+  const debitPaise = Number.isFinite(debit) ? Math.abs(debit) : 0;
 
-  const explicitPaise =
-    entry?.amountInPaise !== undefined || entry?.amount_in_paise !== undefined;
-  const assumePaise = explicitPaise || PM_VAULT_BALANCE_IN_PAISE;
-  return toInr(numeric, { assumePaise });
+  if (creditPaise > 0 || debitPaise > 0) {
+    return toInr(Math.max(creditPaise, debitPaise), { assumePaise: true });
+  }
+
+  if (entry?.amountInPaise !== undefined || entry?.amount_in_paise !== undefined) {
+    return toInr(entry?.amountInPaise ?? entry?.amount_in_paise, { assumePaise: true });
+  }
+
+  if (
+    entry?.amountInRupees !== undefined ||
+    entry?.amount_in_rupees !== undefined ||
+    entry?.amountInr !== undefined ||
+    entry?.amountINR !== undefined
+  ) {
+    return toInr(
+      entry?.amountInRupees ?? entry?.amount_in_rupees ?? entry?.amountInr ?? entry?.amountINR,
+      { assumePaise: false }
+    );
+  }
+
+  const raw = entry?.amount ?? entry?.value ?? 0;
+  const numeric = Math.abs(Number(raw || 0));
+  if (!Number.isFinite(numeric) || numeric === 0) return 0;
+
+  // Same platform vault stores money in paise unless explicitly labeled INR.
+  const unit = String(entry?.amountUnit || entry?.unit || '').toLowerCase();
+  if (unit === 'inr' || unit === 'rupees') return numeric;
+  if (unit === 'paise') return toInr(numeric, { assumePaise: true });
+  if (!Number.isInteger(numeric)) return numeric;
+  return toInr(numeric, { assumePaise: PM_VAULT_BALANCE_IN_PAISE });
 }
 
-export function mapPmVaultTransactions(vault) {
-  const rows = Array.isArray(vault?.transactions)
-    ? vault.transactions
-    : Array.isArray(vault?.ledger)
-      ? vault.ledger
-      : Array.isArray(vault?.history)
-        ? vault.history
-        : [];
+function normalizePmPaymentMethod(entry) {
+  const raw =
+    entry?.paymentMode ||
+    entry?.payment_mode ||
+    entry?.paymentMethod ||
+    entry?.payment_method ||
+    entry?.subPaymentMethod ||
+    entry?.sub_payment_method ||
+    entry?.method ||
+    entry?.mode ||
+    '';
+  const normalized = String(raw || '').trim();
+  if (!normalized) return 'Wallet';
+  if (/^wallet$/i.test(normalized) || /^vault$/i.test(normalized)) return 'Wallet';
+  if (/^online$/i.test(normalized)) return 'Online';
+  return normalized.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function normalizePmProjectId(entry) {
+  const raw =
+    entry?.projectId ||
+    entry?.project_id ||
+    entry?.projectCode ||
+    entry?.project_code ||
+    entry?.project?.id ||
+    entry?.project?._id ||
+    entry?.project?.code ||
+    null;
+  const value = normalizePmObjectId(raw);
+  if (!value || value === '-' || value === '—') return null;
+  return value;
+}
+
+/** Pull transaction arrays from vault payload or dedicated /vault/transactions responses. */
+export function extractPmTransactionRows(payload) {
+  if (Array.isArray(payload)) return payload;
+
+  const queue = [];
+  const seen = new Set();
+  const push = (value) => {
+    if (value == null || typeof value !== 'object') return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    queue.push(value);
+  };
+
+  push(payload);
+  push(unwrapPmPayload(payload));
+  push(resolveVaultRecord(payload));
+
+  const arrayKeys = [
+    'transactions',
+    'transaction',
+    'ledger',
+    'history',
+    'items',
+    'rows',
+    'docs',
+    'results',
+    'records',
+    'entries',
+    'list',
+    'lines',
+    'data',
+    'vaultTransactions',
+    'vault_transactions',
+    'transactionList',
+    'transaction_list',
+    'statementTransactions',
+    'statement_transactions'
+  ];
+
+  const scored = [];
+
+  while (queue.length) {
+    const node = queue.shift();
+    if (Array.isArray(node)) {
+      scored.push(node);
+      continue;
+    }
+
+    for (const key of arrayKeys) {
+      const value = node?.[key];
+      if (Array.isArray(value)) scored.push(value);
+      else if (value && typeof value === 'object') {
+        // Some PM endpoints return an id→row map instead of an array.
+        const values = Object.values(value);
+        if (values.length && values.every((item) => item && typeof item === 'object' && !Array.isArray(item))) {
+          scored.push(values);
+        }
+        push(value);
+      }
+    }
+
+    // Nested statement / pagination containers
+    for (const key of ['statement', 'reconciliation', 'reconciliationStatement', 'page', 'pagination', 'vault', 'wallet']) {
+      const value = node?.[key];
+      if (value && typeof value === 'object') push(value);
+    }
+  }
+
+  const looksLikeTxn = (row) => {
+    if (!row || typeof row !== 'object' || Array.isArray(row)) return false;
+    return (
+      row.amount != null ||
+      row.credit != null ||
+      row.debit != null ||
+      row.amountInPaise != null ||
+      row.value != null ||
+      row.details != null ||
+      row.description != null ||
+      row.transactionId != null ||
+      row.transaction_id != null ||
+      row.debitCredit != null ||
+      row.debit_credit != null ||
+      row.direction != null ||
+      row.type != null ||
+      row.paymentMethod != null ||
+      row.payment_method != null ||
+      row.paymentMode != null ||
+      row.projectId != null ||
+      row.project_id != null ||
+      row.createdAt != null ||
+      row.created_at != null ||
+      row.transactionDate != null ||
+      row.date != null ||
+      row._id != null ||
+      row.id != null
+    );
+  };
+
+  // Prefer non-empty arrays that look like transaction rows.
+  const ranked = scored
+    .filter((arr) => Array.isArray(arr) && arr.length > 0)
+    .sort((a, b) => {
+      const aScore = a.filter(looksLikeTxn).length;
+      const bScore = b.filter(looksLikeTxn).length;
+      if (bScore !== aScore) return bScore - aScore;
+      return b.length - a.length;
+    });
+
+  if (ranked.length) return ranked[0];
+
+  // Empty but explicit transactions array still wins over unrelated empties.
+  for (const arr of scored) {
+    if (Array.isArray(arr)) return arr;
+  }
+  return [];
+}
+
+function summarizePayloadShape(payload, depth = 0, maxDepth = 3) {
+  if (payload == null) return null;
+  if (Array.isArray(payload)) {
+    return {
+      type: 'array',
+      length: payload.length,
+      sampleKeys:
+        payload[0] && typeof payload[0] === 'object' ? Object.keys(payload[0]).slice(0, 20) : []
+    };
+  }
+  if (typeof payload !== 'object') return { type: typeof payload };
+  if (depth >= maxDepth) return { type: 'object', keys: Object.keys(payload).slice(0, 30) };
+
+  const out = { type: 'object', keys: Object.keys(payload).slice(0, 40), children: {} };
+  for (const key of Object.keys(payload).slice(0, 20)) {
+    out.children[key] = summarizePayloadShape(payload[key], depth + 1, maxDepth);
+  }
+  return out;
+}
+
+export function mapPmVaultTransactions(vaultOrPayload) {
+  const rows = extractPmTransactionRows(vaultOrPayload);
 
   return rows.map((entry, index) => {
     const direction = normalizePmTransactionDirection(entry);
     const amount = normalizePmTransactionAmount(entry);
     const createdAt =
+      entry?.transactionDate ||
+      entry?.transaction_date ||
       entry?.createdAt ||
       entry?.created_at ||
       entry?.timestamp ||
       entry?.date ||
+      entry?.txnDate ||
       new Date().toISOString();
+    const description = String(
+      entry?.details ||
+        entry?.description ||
+        entry?.note ||
+        entry?.purpose ||
+        entry?.title ||
+        entry?.narrative ||
+        'Vault transaction'
+    );
+    // PM UI Transaction ID column uses the mongo `id`; `transactionId` is the VTX reference.
+    const recordId = String(entry?.id || entry?._id || `pm-txn-${index}`);
+    const vtxReference = String(entry?.transactionId || entry?.transaction_id || '').trim() || null;
+    const transactionId = recordId;
+    const projectId = normalizePmProjectId(entry);
+    const paymentMethod = normalizePmPaymentMethod(entry);
+    const creditPaise = Number(entry?.credit ?? entry?.creditAmount ?? 0) || 0;
+    const debitPaise = Number(entry?.debit ?? entry?.debitAmount ?? 0) || 0;
 
     return {
-      id: String(entry?._id || entry?.id || entry?.transactionId || `pm-txn-${index}`),
+      id: transactionId,
+      transaction_id: transactionId,
+      transactionId: vtxReference || transactionId,
+      reference: vtxReference,
       created_at: createdAt,
-      description: String(entry?.description || entry?.note || entry?.purpose || 'Vault transaction'),
-      transaction_type: String(entry?.transactionType || entry?.type || entry?.category || 'wallet'),
+      date: createdAt,
+      details: description,
+      description,
+      transaction_type: String(
+        entry?.transactionType || entry?.type || entry?.category || entry?.details || 'wallet'
+      ),
       direction,
+      debit_credit: direction === 'credit' ? 'Credit' : 'Debit',
       amount,
+      credit: toInr(Math.abs(creditPaise), { assumePaise: true }),
+      debit: toInr(Math.abs(debitPaise), { assumePaise: true }),
+      payment_method: paymentMethod,
+      paymentMethod,
+      payment_mode: entry?.paymentMode || entry?.payment_mode || null,
+      sub_payment_method: entry?.subPaymentMethod || entry?.sub_payment_method || null,
+      project_id: projectId,
+      projectId,
+      milestone_sequence:
+        entry?.milestoneSequence ?? entry?.milestone_sequence ?? entry?.milestone ?? null,
       balance_after: toInr(
         entry?.balanceAfter ??
           entry?.balance_after ??
@@ -421,15 +672,26 @@ export function mapPmVaultTransactions(vault) {
           assumePaise:
             entry?.balanceAfterInPaise !== undefined ||
             entry?.balance_after_in_paise !== undefined ||
+            entry?.balanceAfter !== undefined ||
+            entry?.balance_after !== undefined ||
             PM_VAULT_BALANCE_IN_PAISE
         }
       ),
       balance_before: toInr(entry?.balanceBefore ?? entry?.balance_before ?? 0, {
         assumePaise:
-          entry?.balanceBeforeInPaise !== undefined || PM_VAULT_BALANCE_IN_PAISE
+          entry?.balanceBeforeInPaise !== undefined ||
+          entry?.balanceBefore !== undefined ||
+          PM_VAULT_BALANCE_IN_PAISE
       }),
       orderId: entry?.orderId || entry?.order_id || null,
       orderNumber: entry?.orderNumber || entry?.order_number || null,
+      paymentId: entry?.paymentId || entry?.payment_id || null,
+      vaultId: entry?.vaultId || entry?.vault_id || null,
+      flag: entry?.flag || null,
+      chequeNumber: entry?.chequeNumber || entry?.cheque_number || null,
+      utrNumber: entry?.utrNumber || entry?.utr_number || null,
+      receiptNumber: entry?.receiptNumber || entry?.receipt_number || null,
+      proofDocuments: Array.isArray(entry?.proofDocuments) ? entry.proofDocuments : [],
       source: 'pm_vault'
     };
   });
@@ -457,8 +719,8 @@ export function mapPmVaultToWalletView(vaultPayload) {
   const vault = resolveVaultRecord(vaultPayload) || {};
   const balance = resolveVaultBalanceInr(vault);
   const holdingAmount = resolveVaultHoldingInr(vault);
-  const transactions = mapPmVaultTransactions(vault);
 
+  // Balance-only view from GET /api/vault — never use this for reconciliation.
   return {
     vault: {
       id: String(vault?._id || vault?.id || vault?.vaultId || 'pm-vault'),
@@ -478,13 +740,11 @@ export function mapPmVaultToWalletView(vaultPayload) {
     },
     balance,
     holdingAmount,
-    transactions,
-    summary: summarizePmVaultLedger(transactions),
     raw: vault
   };
 }
 
-export async function fetchPmVault({ accessToken }) {
+export async function fetchPmVault({ accessToken, flag = null } = {}) {
   const token = String(accessToken || '').trim();
   if (!token) {
     const error = new Error('PM session expired. Sign in again with phone OTP.');
@@ -492,7 +752,13 @@ export async function fetchPmVault({ accessToken }) {
     throw error;
   }
 
-  const response = await fetch(PM_VAULT_URL, {
+  // Balance reads are user-scoped via Bearer token. Do not filter by platform flag
+  // so the shared vault balance includes activity from every Tatva app.
+  const resolvedFlag = flag == null ? '' : String(flag).trim();
+  const url = resolvedFlag ? withPmPlatformFlagQuery(PM_VAULT_URL, resolvedFlag) : PM_VAULT_URL;
+  logger.info('[PM vault] GET balance', { url });
+
+  const response = await fetch(url, {
     headers: {
       Accept: 'application/json',
       Authorization: `Bearer ${token}`
@@ -505,6 +771,105 @@ export async function fetchPmVault({ accessToken }) {
   }
 
   return payload;
+}
+
+/**
+ * GET PM vault reconciliation ledger:
+ * https://devopsapi.withtatva.ai/users/api/vault/transactions
+ *
+ * Reads return ALL platforms' transactions for the signed-in user (Bearer-scoped).
+ * Do not pass ?flag=… on this GET — that filters the ledger down to one tenant and
+ * hides cross-platform activity. Writes still send flag=tatvadirect.
+ */
+export async function fetchPmVaultTransactions({
+  accessToken,
+  flag = null,
+  query = {}
+} = {}) {
+  const token = String(accessToken || '').trim();
+  if (!token) {
+    const error = new Error('PM session expired. Sign in again with phone OTP.');
+    error.code = 'PM_AUTH_REQUIRED';
+    throw error;
+  }
+
+  const params = new URLSearchParams();
+  const resolvedFlag = flag == null ? '' : String(flag).trim();
+  // Only attach flag when explicitly requested (not the default reconciliation path).
+  if (resolvedFlag) params.set('flag', resolvedFlag);
+
+  for (const [key, value] of Object.entries(query || {})) {
+    if (value == null || value === '') continue;
+    if (key === 'flag') continue;
+    params.set(key, String(value));
+  }
+
+  const url = params.toString()
+    ? `${PM_VAULT_TRANSACTIONS_URL}?${params.toString()}`
+    : PM_VAULT_TRANSACTIONS_URL;
+
+  logger.info('[PM vault transactions] GET', { url, flag: resolvedFlag || null });
+
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`
+    }
+  });
+
+  const payload = await parseJsonResponse(response);
+  if (!response.ok || payload.success === false) {
+    throw pmRequestFailed(response, payload, 'Failed to load vault transactions');
+  }
+
+  return payload;
+}
+
+/**
+ * Reconciliation statement — full cross-platform ledger for the user.
+ * PM GET /api/vault/transactions (no flag filter).
+ */
+export async function getPmVaultTransactions(user, credentials = {}, options = {}) {
+  const { accessToken } = await ensurePmVaultAuth(user, credentials);
+  // Default null = all platforms. Pass options.flag only when a caller wants a filter.
+  const flag =
+    options.flag === undefined || options.flag === null || String(options.flag).trim() === ''
+      ? null
+      : String(options.flag).trim();
+  const query = {
+    from: options.from || options.fromDate || undefined,
+    to: options.to || options.toDate || undefined,
+    limit: options.limit || undefined,
+    cursor: options.cursor || undefined,
+    search: options.search || undefined
+  };
+
+  const payload = await fetchPmVaultTransactions({
+    accessToken,
+    flag,
+    query
+  });
+  // PM payment writes currently stamp row.flag as "tatvaops" even for Tatva Direct.
+  // Overlay the correct platform for writes we initiated (and details markers).
+  const transactions = applyPmVaultPlatformAttribution(mapPmVaultTransactions(payload));
+
+  logger.info('[PM vault transactions] mapped rows', {
+    count: transactions.length,
+    flag,
+    sampleAmount: transactions[0]?.amount,
+    sampleDetails: transactions[0]?.details,
+    sampleFlag: transactions[0]?.flag
+  });
+
+  return {
+    transactions,
+    summary: summarizePmVaultLedger(transactions),
+    raw: payload,
+    source: 'pm_vault_transactions',
+    upstream: PM_VAULT_TRANSACTIONS_URL,
+    flag
+  };
 }
 
 export async function initiatePmVaultTopup({ pmUserId, amountInRupees, description, accessToken }) {
@@ -525,18 +890,30 @@ export async function initiatePmVaultTopup({ pmUserId, amountInRupees, descripti
   const amountPaise = Math.round(amountInr * 100);
   const pmAmount = PM_VAULT_TOPUP_AMOUNT_IN_PAISE ? amountPaise : amountInr;
 
-  const response = await fetch(PM_VAULT_TOPUP_INITIATE_URL, {
+  const baseDescription = String(description || 'Vault top-up').trim() || 'Vault top-up';
+  // Embed platform in details so reconciliation can recover tatvadirect if PM ignores body.flag.
+  const taggedDescription = /\btatvadirect\b/i.test(baseDescription)
+    ? baseDescription
+    : `${baseDescription} (${PM_PLATFORM_FLAG})`;
+
+  const topupBody = withPmPlatformFlagBody({
+    userId,
+    amount: pmAmount,
+    description: taggedDescription
+  });
+  const topupUrl = withPmPlatformFlagQuery(PM_VAULT_TOPUP_INITIATE_URL);
+
+  logger.info('[PM vault topup initiate] requesting', {
+    url: topupUrl,
+    flag: topupBody.flag,
+    userId,
+    amount: pmAmount
+  });
+
+  const response = await fetch(topupUrl, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify({
-      userId,
-      amount: pmAmount,
-      description: String(description || 'Vault top-up').trim() || 'Vault top-up'
-    })
+    headers: buildPmPlatformHeaders({ accessToken: token, json: true }),
+    body: JSON.stringify(topupBody)
   });
 
   const payload = await parseJsonResponse(response);
@@ -555,6 +932,10 @@ export async function initiatePmVaultTopup({ pmUserId, amountInRupees, descripti
     data.orderId ||
     data.order_id ||
     null;
+
+  if (orderId) {
+    rememberPmVaultPlatformAttribution({ razorpayOrderId: orderId });
+  }
   const keyId =
     data.razorpay_key_id ||
     data.razorpayKeyId ||
@@ -602,14 +983,25 @@ export async function initiatePmVaultTopup({ pmUserId, amountInRupees, descripti
 }
 
 async function postPmVaultTopupComplete(url, token, body) {
-  const response = await fetch(url, {
+  const completeBody = withPmPlatformFlagBody(body);
+  const completeUrl = withPmPlatformFlagQuery(url);
+  logger.info('[PM vault topup complete] requesting', {
+    url: completeUrl,
+    flag: completeBody.flag,
+    platformFlag: completeBody.platformFlag,
+    keys: Object.keys(completeBody),
+    body: {
+      razorpay_order_id: completeBody.razorpay_order_id,
+      razorpay_payment_id: completeBody.razorpay_payment_id,
+      flag: completeBody.flag,
+      platformFlag: completeBody.platformFlag,
+      details: completeBody.details
+    }
+  });
+  const response = await fetch(completeUrl, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`
-    },
-    body: JSON.stringify(body)
+    headers: buildPmPlatformHeaders({ accessToken: token, json: true }),
+    body: JSON.stringify(completeBody)
   });
   const payload = await parseJsonResponse(response);
   return { response, payload };
@@ -628,11 +1020,15 @@ export async function completePmVaultTopup({
     throw error;
   }
 
-  const body = {
+  // Always stamp tatvadirect so PM tenant routing / ledger attribution can use it.
+  const body = withPmPlatformFlagBody({
     razorpay_order_id: String(razorpayOrderId || '').trim(),
     razorpay_payment_id: String(razorpayPaymentId || '').trim(),
-    razorpay_signature: String(razorpaySignature || '').trim()
-  };
+    razorpay_signature: String(razorpaySignature || '').trim(),
+    flag: PM_PLATFORM_FLAG,
+    platformFlag: PM_PLATFORM_FLAG,
+    details: `Vault top-up via Razorpay (${PM_PLATFORM_FLAG})`
+  });
 
   let result;
   try {
@@ -646,13 +1042,25 @@ export async function completePmVaultTopup({
     if (PM_VAULT_TOPUP_COMPLETE_URL !== PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL) {
       const fallback = await postPmVaultTopupComplete(PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL, token, body);
       if (fallback.response.ok && fallback.payload.success !== false) {
-        return unwrapPmPayload(fallback.payload) || fallback.payload;
+        const completed = unwrapPmPayload(fallback.payload) || fallback.payload;
+        rememberPmVaultPlatformAttribution({
+          razorpayOrderId,
+          razorpayPaymentId,
+          ...extractAttributionKeysFromPmPayload(completed)
+        });
+        return completed;
       }
     }
     throw pmRequestFailed(response, payload, 'Failed to complete vault top-up');
   }
 
-  return unwrapPmPayload(payload) || payload;
+  const completed = unwrapPmPayload(payload) || payload;
+  rememberPmVaultPlatformAttribution({
+    razorpayOrderId,
+    razorpayPaymentId,
+    ...extractAttributionKeysFromPmPayload(completed)
+  });
+  return completed;
 }
 
 export async function assertPmVaultBalanceSufficient(user, amountInRupees, credentials = {}) {
@@ -730,37 +1138,36 @@ export async function payOrderFromPmVault({
   const desc = String(description || 'Order payment from PM vault').trim();
 
   // Official PM body first. Some payment validators also require amount — retry if needed.
+  // Always include platform flag so PM routes the debit to the Tatva Direct DB.
   const attemptBodies = [
-    { orderId: tatvaOrderId, userId: pmUserId },
-    {
+    withPmPlatformFlagBody({ orderId: tatvaOrderId, userId: pmUserId }),
+    withPmPlatformFlagBody({
       orderId: tatvaOrderId,
       userId: pmUserId,
       amount: amountForPm
-    },
-    {
+    }),
+    withPmPlatformFlagBody({
       orderId: tatvaOrderId,
       userId: pmUserId,
       amount: amountForPm,
       ...(orderNo ? { orderNumber: orderNo } : {}),
       description: desc
-    }
+    })
   ];
 
   async function postVaultPay(body) {
+    const payUrl = withPmPlatformFlagQuery(PM_VAULT_PAY_ORDER_URL);
     logger.info('[PM vault-pay] requesting debit', {
-      url: PM_VAULT_PAY_ORDER_URL,
+      url: payUrl,
       orderId: tatvaOrderId,
       userId: pmUserId,
+      flag: body.flag || PM_PLATFORM_FLAG,
       keys: Object.keys(body)
     });
 
-    const response = await fetch(PM_VAULT_PAY_ORDER_URL, {
+    const response = await fetch(payUrl, {
       method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`
-      },
+      headers: buildPmPlatformHeaders({ accessToken, json: true }),
       body: JSON.stringify(body)
     });
 
@@ -816,6 +1223,13 @@ export async function payOrderFromPmVault({
       ''
   ).trim();
 
+  rememberPmVaultPlatformAttribution({
+    orderId: tatvaOrderId,
+    orderNumber: orderNo,
+    paymentId: paymentId || null,
+    ...extractAttributionKeysFromPmPayload(data)
+  });
+
   return { paymentId: paymentId || null };
 }
 
@@ -870,6 +1284,8 @@ export async function addPmVaultOfflineMoney({
   form.append('amount', String(amount));
   form.append('paymentMode', 'offline');
   form.append('subPaymentMethod', method);
+  form.append('flag', PM_PLATFORM_FLAG);
+  form.append('platformFlag', PM_PLATFORM_FLAG);
 
   if (method === 'cash_on_hand') {
     const receipt = String(receiptNumber || '').trim();
@@ -877,33 +1293,42 @@ export async function addPmVaultOfflineMoney({
       throw new Error('Receipt number is required for cash on hand payment');
     }
     form.append('receiptNumber', receipt);
-    form.append('details', String(details || 'Cash collected at office').trim());
+    form.append(
+      'details',
+      tagOfflineDetails(details || 'Cash collected at office')
+    );
   } else if (method === 'cheque') {
     const cheque = String(chequeNumber || '').trim();
     if (!cheque) {
       throw new Error('Cheque number is required for cheque payment');
     }
     form.append('chequeNumber', cheque);
-    form.append('details', String(details || 'Cheque deposit').trim());
+    form.append('details', tagOfflineDetails(details || 'Cheque deposit'));
   } else {
     const utr = String(utrNumber || '').trim();
     if (!utr) {
       throw new Error('UTR number is required for bank transfer');
     }
     form.append('utrNumber', utr);
-    form.append('details', String(details || 'NEFT transfer').trim());
+    form.append('details', tagOfflineDetails(details || 'NEFT transfer'));
   }
 
   (Array.isArray(documents) ? documents : []).forEach((file) => {
     appendOfflineVaultFile(form, file);
   });
 
-  const response = await fetch(PM_VAULT_ADD_MONEY_URL, {
+  const addMoneyUrl = withPmPlatformFlagQuery(PM_VAULT_ADD_MONEY_URL);
+  logger.info('[PM vault offline add-money] requesting', {
+    url: addMoneyUrl,
+    flag: PM_PLATFORM_FLAG,
+    userId,
+    amount,
+    method
+  });
+
+  const response = await fetch(addMoneyUrl, {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`
-    },
+    headers: buildPmPlatformHeaders({ accessToken: token, json: false }),
     body: form
   });
 
@@ -914,5 +1339,16 @@ export async function addPmVaultOfflineMoney({
     throw error;
   }
 
-  return unwrapPmPayload(payload) || payload;
+  const completed = unwrapPmPayload(payload) || payload;
+  rememberPmVaultPlatformAttribution({
+    paymentId: receiptNumber || chequeNumber || utrNumber || null,
+    ...extractAttributionKeysFromPmPayload(completed),
+    extra: [receiptNumber, chequeNumber, utrNumber].filter(Boolean)
+  });
+  return completed;
+}
+
+function tagOfflineDetails(details) {
+  const text = String(details || '').trim() || 'Offline vault credit';
+  return /\btatvadirect\b/i.test(text) ? text : `${text} (${PM_PLATFORM_FLAG})`;
 }

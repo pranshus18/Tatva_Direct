@@ -3,7 +3,12 @@
  * Avoids browser CORS against devopsapi.withtatva.ai / api.withtatva.ai.
  */
 import { getApiUrl, buildAuthHeaders, authFetch } from '../config/api';
+import { PM_PLATFORM_FLAG } from '../config/pmAuth';
 import { restorePmVaultSession } from './pmAuthService';
+import {
+  getLocalVaultPlatformAttributionKeys,
+  rememberLocalVaultPlatformAttribution
+} from '../utils/vaultPlatformAttribution';
 
 const DEFAULT_VAULT_CONFIG = {
   minTopupInr: Number(import.meta.env.VITE_VAULT_MIN_TOPUP_INR || 100) || 100,
@@ -66,15 +71,34 @@ export async function fetchVaultHeaderBalance() {
 }
 
 export async function fetchVaultBalance() {
+  // Balance only — PM GET /api/vault via Tatva proxy.
   return vaultFetch('/api/vault/balance');
 }
 
-export async function fetchVaultTransactions() {
-  return vaultFetch('/api/vault/transactions');
+/** Reconciliation statement — all platforms via PM GET /api/vault/transactions */
+export async function fetchVaultTransactions(params = {}) {
+  const query = new URLSearchParams();
+  // Do not force flag — reconciliation must show every platform's activity.
+  if (params.flag) query.set('flag', String(params.flag));
+  if (params.from) query.set('from', params.from);
+  if (params.to) query.set('to', params.to);
+  if (params.search) query.set('search', params.search);
+  if (params.limit) query.set('limit', String(params.limit));
+  if (params.cursor) query.set('cursor', params.cursor);
+  const qs = query.toString();
+  const attributionKeys = getLocalVaultPlatformAttributionKeys();
+  return vaultFetch(qs ? `/api/vault/transactions?${qs}` : '/api/vault/transactions', {
+    headers: attributionKeys.length
+      ? { 'x-vault-attribution-keys': JSON.stringify(attributionKeys) }
+      : {}
+  });
 }
 
-export async function fetchVaultLedgerSummary() {
-  return vaultFetch('/api/vault/ledger-summary');
+export async function fetchVaultLedgerSummary(params = {}) {
+  const query = new URLSearchParams();
+  if (params.flag) query.set('flag', String(params.flag));
+  const qs = query.toString();
+  return vaultFetch(qs ? `/api/vault/ledger-summary?${qs}` : '/api/vault/ledger-summary');
 }
 
 export async function fetchVaultConfig() {
@@ -94,6 +118,7 @@ export async function createVaultTopup({ amount, idempotencyKey }) {
     method: 'POST',
     body: JSON.stringify({
       amount,
+      flag: PM_PLATFORM_FLAG,
       ...(idempotencyKey ? { idempotencyKey } : {})
     })
   });
@@ -105,14 +130,17 @@ export async function confirmVaultTopup({
   razorpayPaymentId,
   razorpaySignature
 }) {
-  return vaultFetch('/api/vault/topup/confirm', {
+  const data = await vaultFetch('/api/vault/topup/confirm', {
     method: 'POST',
     body: JSON.stringify({
       razorpayOrderId,
       razorpayPaymentId,
-      razorpaySignature
+      razorpaySignature,
+      flag: PM_PLATFORM_FLAG
     })
   });
+  rememberLocalVaultPlatformAttribution(razorpayPaymentId, razorpayOrderId);
+  return data;
 }
 
 /** Proxied: POST /api/vault/offline/add-money → PM add-money API (multipart, no browser CORS). */
@@ -195,15 +223,45 @@ export async function payOrderFromVault(orderId, { idempotencyKey } = {}) {
 }
 
 export async function loadVaultSnapshot() {
-  const data = await fetchVaultBalance();
+  const [balanceData, statementData] = await Promise.all([
+    // PM GET /api/vault — shared balance
+    fetchVaultBalance(),
+    // PM GET /api/vault/transactions — all platforms for this user
+    fetchVaultTransactions()
+  ]);
+
+  const transactions = Array.isArray(statementData?.transactions)
+    ? statementData.transactions.map((row) => {
+        const details = String(row?.details || row?.description || '');
+        const payMatch = details.match(/\b(pay_[A-Za-z0-9_]+)\b/);
+        const localKeys = new Set(getLocalVaultPlatformAttributionKeys());
+        const attributed =
+          localKeys.has(String(row?.id || '')) ||
+          localKeys.has(String(row?.reference || '')) ||
+          localKeys.has(String(row?.transactionId || '')) ||
+          (payMatch?.[1] && localKeys.has(payMatch[1]));
+        if (!attributed) return row;
+        return { ...row, flag: 'tatvadirect' };
+      })
+    : [];
+  const summary = statementData?.summary || {
+    totalCredit: 0,
+    totalDebit: 0,
+    netFlow: 0,
+    transactionCount: transactions.length
+  };
+
   return {
-    balance: data.balance,
-    holdingAmount: data.holdingAmount,
-    vault: data.vault,
-    transactions: data.transactions,
-    summary: data.summary,
+    balance: balanceData.balance,
+    holdingAmount: balanceData.holdingAmount,
+    vault: balanceData.vault,
+    transactions,
+    summary,
+    statementTitle: statementData?.title || 'Reconciliation statement',
+    statementSubtitle: statementData?.subtitle || 'Transactions for your Customer profile',
     config: DEFAULT_VAULT_CONFIG,
-    source: 'pm_vault'
+    source: 'pm_vault_transactions',
+    upstream: statementData?.upstream || null
   };
 }
 

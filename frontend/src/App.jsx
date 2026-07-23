@@ -133,7 +133,6 @@ const AdminProfileChainApprovals = safeLazy(
   () => import('./pages/AdminProfileChainApprovals'),
   'Admin Profile Chain Approvals page'
 );
-const AdminFinance = safeLazy(() => import('./pages/AdminFinance'), 'Admin Finance page');
 const AdminWallet = safeLazy(() => import('./pages/AdminWallet'), 'Admin Wallet page');
 const AdminSupplyChain = safeLazy(() => import('./pages/AdminSupplyChain'), 'Admin Supply Chain page');
 const BOQNormalize = safeLazy(() => import('./pages/BOQNormalize'), 'BOQ Normalize page');
@@ -583,14 +582,6 @@ function App() {
             element={
               <AdminRoute user={user} isAuthenticated={isAuthenticated}>
                 <AdminWallet user={user} />
-              </AdminRoute>
-            }
-          />
-          <Route
-            path="admin-finance"
-            element={
-              <AdminRoute user={user} isAuthenticated={isAuthenticated}>
-                <AdminFinance user={user} />
               </AdminRoute>
             }
           />

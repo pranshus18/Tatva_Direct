@@ -31,12 +31,14 @@ import {
   addPmVaultOfflineMoney,
   completePmVaultTopup,
   ensurePmVaultAuth,
+  getPmVaultTransactions,
   getPmVaultWalletView,
   initiatePmVaultTopup,
   readPmCredentialsFromRequest,
   usesPlatformVault
 } from '../services/pmVaultService.js';
-
+import { rememberPmVaultPlatformAttribution } from '../services/pmVaultPlatformAttribution.js';
+import { PM_PLATFORM_FLAG } from '../config/pmApi.js';
 function normalizeUserType(value) {
   return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 }
@@ -139,15 +141,15 @@ walletRouter.get('/header-balance', authenticateToken, async (req, res) => {
 walletRouter.get('/balance', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
     const credentials = readPmCredentialsFromRequest(req);
+    // Balance — PM GET /api/vault (full shared vault for the user).
     const pmWallet = await getPmVaultWalletView(req.user, credentials);
     return res.json({
       status: 'success',
       vault: pmWallet.vault || pmWallet.wallet,
       balance: pmWallet.balance,
       holdingAmount: pmWallet.holdingAmount ?? 0,
-      transactions: pmWallet.transactions || [],
-      summary: pmWallet.summary,
-      source: 'pm_vault'
+      source: 'pm_vault',
+      upstream: 'https://devopsapi.withtatva.ai/users/api/vault'
     });
   } catch (e) {
     console.error('[Vault] balance error:', e);
@@ -158,18 +160,53 @@ walletRouter.get('/balance', authenticateToken, requirePlatformVaultUser, async 
   }
 });
 
+/**
+ * Reconciliation statement — all platforms' vault transactions for this user.
+ * Proxies PM GET /api/vault/transactions (no flag filter on read).
+ */
 walletRouter.get('/transactions', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
+    const query = parseWithSchema(walletTransactionsListSchema, req.query || {});
     const credentials = readPmCredentialsFromRequest(req);
-    const pmWallet = await getPmVaultWalletView(req.user, credentials);
+    // Client may send payment ids from this browser's successful Tatva Direct top-ups
+    // so we can overlay platform even if confirm ran on another host.
+    const attributionHeader = String(req.headers['x-vault-attribution-keys'] || '').trim();
+    if (attributionHeader) {
+      try {
+        const keys = JSON.parse(attributionHeader);
+        if (Array.isArray(keys) && keys.length) {
+          rememberPmVaultPlatformAttribution({ extra: keys.filter(Boolean) });
+        }
+      } catch {
+        // ignore malformed header
+      }
+    }
+    // Only filter by flag when the client explicitly asks; default = all platforms.
+    const flag =
+      req.query?.flag === undefined || req.query?.flag === null || String(req.query.flag).trim() === ''
+        ? null
+        : String(req.query.flag).trim();
+    const ledger = await getPmVaultTransactions(req.user, credentials, {
+      flag,
+      from: query.from,
+      to: query.to,
+      limit: query.limit,
+      cursor: query.cursor,
+      search: query.search
+    });
     return res.json({
       status: 'success',
-      transactions: pmWallet.transactions || [],
+      title: 'Reconciliation statement',
+      subtitle: 'Transactions for your Customer profile',
+      transactions: ledger.transactions || [],
+      summary: ledger.summary,
       pageInfo: {
         hasMore: false,
         nextCursor: null
       },
-      source: 'pm_vault'
+      source: 'pm_vault_transactions',
+      upstream: ledger.upstream,
+      flag: ledger.flag
     });
   } catch (e) {
     console.error('[Vault] transactions error:', e);
@@ -183,14 +220,21 @@ walletRouter.get('/transactions', authenticateToken, requirePlatformVaultUser, a
   }
 });
 
+/** Ledger totals — same full cross-platform source as /transactions. */
 walletRouter.get('/ledger-summary', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
     const credentials = readPmCredentialsFromRequest(req);
-    const pmWallet = await getPmVaultWalletView(req.user, credentials);
+    const flag =
+      req.query?.flag === undefined || req.query?.flag === null || String(req.query.flag).trim() === ''
+        ? null
+        : String(req.query.flag).trim();
+    const ledger = await getPmVaultTransactions(req.user, credentials, { flag });
     return res.json({
       status: 'success',
-      summary: pmWallet.summary,
-      source: 'pm_vault'
+      summary: ledger.summary,
+      source: 'pm_vault_transactions',
+      upstream: ledger.upstream,
+      flag: ledger.flag
     });
   } catch (e) {
     console.error('[Vault] ledger summary error:', e);
@@ -330,6 +374,8 @@ walletRouter.post('/topup/confirm', authenticateToken, requirePlatformVaultUser,
       razorpaySignature,
       accessToken
     });
+    // Explicit attribution — PM stamps row.flag as tatvaops even for Tatva Direct writes.
+    rememberPmVaultPlatformAttribution({ razorpayOrderId, razorpayPaymentId });
     const pmWallet = await getPmVaultWalletView(req.user, credentials);
 
     return res.json({
@@ -340,6 +386,7 @@ walletRouter.post('/topup/confirm', authenticateToken, requirePlatformVaultUser,
         razorpayOrderId,
         razorpayPaymentId,
         source: 'pm_vault',
+        platform: PM_PLATFORM_FLAG,
         completion
       },
       vault: pmWallet.wallet,

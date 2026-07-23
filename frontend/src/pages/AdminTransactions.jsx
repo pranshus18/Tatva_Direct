@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
 import { authFetch } from '../config/api';
 import { 
   ShoppingCart, 
@@ -112,10 +111,7 @@ const AdminTransactions = ({ user }) => {
       <div className="admin-header">
         <div>
           <h1>Transactions</h1>
-          <p>
-            View and manage all platform transactions. For payment reconciliation and settlement reports, open{' '}
-            <Link to="/admin-finance">Reconciliation</Link>.
-          </p>
+          <p>View and manage all platform transactions.</p>
         </div>
         <div className="admin-actions">
           <AdminNotifications />

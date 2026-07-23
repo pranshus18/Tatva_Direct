@@ -10,8 +10,59 @@ export const PM_VERIFY_GST_URL = `${PM_API_BASE_URL}/api/users/verify-gst`;
 export const PM_VENDOR_LEAD_VENDOR_FLAG =
   String(process.env.PM_VENDOR_LEAD_VENDOR_FLAG || 'supplier').trim() || 'supplier';
 
-export const PM_VENDOR_LEAD_FLAG =
-  String(process.env.PM_VENDOR_LEAD_FLAG || 'tatvadirect').trim() || 'tatvadirect';
+/** Platform tenant flag sent on all PM API calls so PM can filter the correct DB. */
+export const PM_PLATFORM_FLAG =
+  String(process.env.PM_PLATFORM_FLAG || process.env.PM_VENDOR_LEAD_FLAG || 'tatvadirect').trim() ||
+  'tatvadirect';
+
+/** @deprecated use PM_PLATFORM_FLAG — same value for vendor leads and vault/payment APIs. */
+export const PM_VENDOR_LEAD_FLAG = PM_PLATFORM_FLAG;
+
+/**
+ * Append `flag=tatvadirect` (or configured PM_PLATFORM_FLAG) to a PM URL for DB filtering.
+ * Always forces the platform flag (overwrites a stale/wrong flag if already present).
+ */
+export function withPmPlatformFlagQuery(url, flag = PM_PLATFORM_FLAG) {
+  const base = String(url || '').trim();
+  const resolved = String(flag || PM_PLATFORM_FLAG || 'tatvadirect').trim() || 'tatvadirect';
+  if (!base) return base;
+  try {
+    const parsed = new URL(base);
+    parsed.searchParams.set('flag', resolved);
+    return parsed.toString();
+  } catch {
+    const withoutFlag = base.replace(/([?&])flag=[^&]*/gi, '$1').replace(/[?&]$/, '');
+    return `${withoutFlag}${withoutFlag.includes('?') ? '&' : '?'}flag=${encodeURIComponent(resolved)}`;
+  }
+}
+
+/**
+ * Merge platform flag into a JSON body for PM write APIs.
+ * Sends both `flag` and `platformFlag` — PM payment services accept either.
+ */
+export function withPmPlatformFlagBody(body = {}, flag = PM_PLATFORM_FLAG) {
+  const resolved = String(flag || PM_PLATFORM_FLAG || 'tatvadirect').trim() || 'tatvadirect';
+  return {
+    ...(body && typeof body === 'object' ? body : {}),
+    flag: resolved,
+    platformFlag: resolved
+  };
+}
+
+/** Headers so PM can resolve the Tatva Direct tenant even if body keys are stripped. */
+export function buildPmPlatformHeaders({ accessToken, json = false, flag = PM_PLATFORM_FLAG } = {}) {
+  const resolved = String(flag || PM_PLATFORM_FLAG || 'tatvadirect').trim() || 'tatvadirect';
+  const token = String(accessToken || '').trim();
+  return {
+    Accept: 'application/json',
+    ...(json ? { 'Content-Type': 'application/json' } : {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    flag: resolved,
+    'x-flag': resolved,
+    'x-platform-flag': resolved,
+    'X-App-Flag': resolved
+  };
+}
 
 export const PM_USERS_URL = `${PM_API_BASE_URL}/api/users/`;
 export const PM_USERS_ME_URL = `${PM_API_BASE_URL}/api/users/me`;
@@ -34,6 +85,8 @@ export const PM_PAYMENT_COMPLETE_API_BASE_URL = normalizeUrl(
 );
 
 export const PM_VAULT_URL = `${PM_API_BASE_URL}/api/vault`;
+/** PM vault reconciliation statement ledger — GET only (no balance fallback). */
+export const PM_VAULT_TRANSACTIONS_URL = `${PM_API_BASE_URL}/api/vault/transactions`;
 export const PM_VAULT_TOPUP_INITIATE_URL = `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/topup/initiate`;
 export const PM_VAULT_TOPUP_COMPLETE_URL = `${PM_PAYMENT_COMPLETE_API_BASE_URL}/api/v1/payments/vault/topup/complete`;
 

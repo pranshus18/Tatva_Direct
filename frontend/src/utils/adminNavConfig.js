@@ -28,7 +28,6 @@ export const ADMIN_NAV_ITEMS = [
   },
   { path: '/admin-analytics', label: 'Analytics', shortLabel: 'Analytics', icon: TrendingUp },
   { path: '/admin-wallet', label: 'Wallet', shortLabel: 'Wallet', icon: Wallet },
-  { path: '/admin-finance', label: 'Reconciliation', shortLabel: 'Finance', icon: Wallet },
   { path: '/admin-supply-chain', label: 'Supply chain', shortLabel: 'Chain', icon: Network }
 ];
 
@@ -71,7 +70,6 @@ export const ADMIN_NAV_GROUPS = [
     items: [
       navByPath['/admin-analytics'],
       navByPath['/admin-wallet'],
-      navByPath['/admin-finance'],
       navByPath['/admin-supply-chain']
     ]
   }
@@ -88,7 +86,6 @@ const ROUTE_META = {
   '/admin-profile-chain-approvals': { group: 'Approvals', title: 'Profile brand assignment' },
   '/admin-analytics': { group: 'Finance', title: 'Analytics' },
   '/admin-wallet': { group: 'Finance', title: 'Wallet' },
-  '/admin-finance': { group: 'Finance', title: 'Reconciliation' },
   '/admin-supply-chain': { group: 'Finance', title: 'Supply chain' },
   '/profile': { group: 'Account', title: 'Profile' }
 };

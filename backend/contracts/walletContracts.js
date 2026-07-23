@@ -2,14 +2,18 @@ import { z } from 'zod';
 
 export const walletTopupCreateSchema = z.object({
   amount: z.union([z.number(), z.string()]),
-  idempotencyKey: z.string().max(150).optional().nullable()
+  idempotencyKey: z.string().max(150).optional().nullable(),
+  /** Platform tenant for PM — always stamped server-side as tatvadirect when omitted. */
+  flag: z.string().max(64).optional().nullable()
 });
 
 export const walletTopupConfirmSchema = z.object({
   walletTopupId: z.string().uuid().optional().nullable(),
   razorpayOrderId: z.string().min(1),
   razorpayPaymentId: z.string().min(1),
-  razorpaySignature: z.string().min(1)
+  razorpaySignature: z.string().min(1),
+  /** Platform tenant for PM — always stamped server-side as tatvadirect when omitted. */
+  flag: z.string().max(64).optional().nullable()
 });
 
 export const walletTransactionsListSchema = z.object({

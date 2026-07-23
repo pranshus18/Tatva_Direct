@@ -8,13 +8,6 @@ import { generateAndUploadInvoicePdf, saveInvoicePdfUrlToInvoice } from '../serv
 import { writeAuditLog } from '../services/auditService.js';
 import { evaluatePaymentRisk } from '../services/riskService.js';
 import {
-  buildReconciliationStatement,
-  listReconciliationIssues,
-  listReconciliationRuns,
-  runPaymentReconciliation
-} from '../services/reconciliationService.js';
-import { buildReconciliationStatementDownload } from '../services/reconciliationStatementExportService.js';
-import {
   createRazorpayOrder,
   fetchRazorpayPayment,
   getRazorpayPublicConfig,
@@ -27,10 +20,6 @@ import {
   creditLineApproveSchema,
   paymentConfirmSchema,
   paymentCreateSchema,
-  reconciliationDateRangeSchema,
-  reconciliationDownloadSchema,
-  reconciliationIssueResolveSchema,
-  reconciliationRunSchema,
   riskSignalReviewSchema
 } from '../contracts/paymentContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
@@ -559,149 +548,6 @@ router.post('/orders/:id/bank-transfer/request', authenticateToken, async (req, 
   }
 });
 
-router.get('/reconciliation/statement', authenticateToken, requireFinanceRole, async (req, res) => {
-  try {
-    const payload = parseWithSchema(reconciliationDownloadSchema, req.query || {});
-    const { fromDate = null, toDate = null, filter = 'all' } = payload;
-    const statement = await buildReconciliationStatement({ fromDate, toDate, filter });
-    return res.json({ status: 'success', statement });
-  } catch (e) {
-    console.error('[Payments] reconciliation statement error:', e);
-    if (String(e?.name || '') === 'ZodError') {
-      return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
-    }
-    return res.status(500).json({ status: 'error', message: e.message || 'Failed to build reconciliation statement' });
-  }
-});
-
-router.get('/reconciliation/statement/download', authenticateToken, requireFinanceRole, async (req, res) => {
-  try {
-    const payload = parseWithSchema(reconciliationDownloadSchema, req.query || {});
-    const { fromDate = null, toDate = null, filter = 'all' } = payload;
-    const download = await buildReconciliationStatementDownload({
-      fromDate,
-      toDate,
-      filter: filter || 'all'
-    });
-
-    await writeAuditLog({
-      actorUserId: req.userId,
-      actorRole: req.user?.user_type,
-      action: 'reconciliation_statement_downloaded',
-      resourceType: 'reconciliation_statement',
-      resourceId: null,
-      ipAddress: req.ip,
-      requestId: req.requestId,
-      metadata: { fromDate, toDate, filter, format: 'pdf' }
-    });
-
-    res.setHeader('Content-Type', download.contentType);
-    res.setHeader('Content-Disposition', `attachment; filename="${download.filename}"`);
-    return res.send(download.buffer);
-  } catch (e) {
-    console.error('[Payments] reconciliation statement download error:', e);
-    if (String(e?.name || '') === 'ZodError') {
-      return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
-    }
-    return res.status(500).json({ status: 'error', message: e.message || 'Failed to download reconciliation statement' });
-  }
-});
-
-router.get('/reconciliation/runs', authenticateToken, requireFinanceRole, async (req, res) => {
-  try {
-    const payload = parseWithSchema(reconciliationDateRangeSchema, req.query || {});
-    const runs = await listReconciliationRuns({ limit: payload.limit || 20 });
-    return res.json({ status: 'success', runs });
-  } catch (e) {
-    console.error('[Payments] reconciliation runs error:', e);
-    if (String(e?.name || '') === 'ZodError') {
-      return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
-    }
-    return res.status(500).json({ status: 'error', message: 'Failed to fetch reconciliation runs' });
-  }
-});
-
-router.post('/reconciliation/run', authenticateToken, requireFinanceRole, async (req, res) => {
-  try {
-    const payload = parseWithSchema(reconciliationRunSchema, req.body || {});
-    const { fromDate = null, toDate = null } = payload;
-    const result = await runPaymentReconciliation({
-      fromDate,
-      toDate,
-      actorUserId: req.userId
-    });
-    await writeAuditLog({
-      actorUserId: req.userId,
-      actorRole: req.user?.user_type,
-      action: 'reconciliation_run_triggered',
-      resourceType: 'reconciliation_run',
-      resourceId: result.runId,
-      ipAddress: req.ip,
-      requestId: req.requestId,
-      metadata: result
-    });
-    return res.json({ status: 'success', reconciliation: result });
-  } catch (e) {
-    console.error('[Payments] reconciliation run error:', e);
-    if (String(e?.name || '') === 'ZodError') {
-      return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
-    }
-    return res.status(500).json({ status: 'error', message: e.message || 'Reconciliation failed' });
-  }
-});
-
-router.get('/reconciliation/issues', authenticateToken, requireFinanceRole, async (req, res) => {
-  try {
-    const { status = 'open', limit = 200 } = req.query;
-    const issues = await listReconciliationIssues({ status, limit });
-    return res.json({ status: 'success', issues });
-  } catch (e) {
-    console.error('[Payments] fetch reconciliation issues error:', e);
-    return res.status(500).json({ status: 'error', message: 'Failed to fetch reconciliation issues' });
-  }
-});
-
-router.patch('/reconciliation/issues/:id/resolve', authenticateToken, requireFinanceRole, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const payload = parseWithSchema(reconciliationIssueResolveSchema, req.body || {});
-    const { status = 'resolved', notes = '' } = payload;
-    if (!['resolved', 'ignored'].includes(status)) {
-      return res.status(400).json({ status: 'error', message: 'status must be resolved or ignored' });
-    }
-    const { data, error } = await supabase
-      .from('reconciliation_issues')
-      .update({
-        status,
-        notes: notes || null,
-        resolved_by: req.userId,
-        resolved_at: new Date().toISOString()
-      })
-      .eq('id', id)
-      .select('*')
-      .single();
-    if (error) throw error;
-
-    await writeAuditLog({
-      actorUserId: req.userId,
-      actorRole: req.user?.user_type,
-      action: 'reconciliation_issue_updated',
-      resourceType: 'reconciliation_issue',
-      resourceId: id,
-      ipAddress: req.ip,
-      requestId: req.requestId,
-      metadata: { status, notes }
-    });
-    return res.json({ status: 'success', issue: data });
-  } catch (e) {
-    if (String(e?.name || '') === 'ZodError') {
-      return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
-    }
-    console.error('[Payments] resolve reconciliation issue error:', e);
-    return res.status(500).json({ status: 'error', message: 'Failed to update issue status' });
-  }
-});
-
 router.get('/risk/signals', authenticateToken, requireFinanceRole, async (req, res) => {
   try {
     const { status = 'open', limit = 200 } = req.query;
@@ -811,28 +657,20 @@ router.get('/audit/logs', authenticateToken, requireFinanceRole, async (req, res
 
 router.get('/metrics', authenticateToken, requireFinanceRole, async (_req, res) => {
   try {
-    const [{ data: txns }, { data: runs }, { data: issues }, { data: webhookEvents }] = await Promise.all([
+    const [{ data: txns }, { data: webhookEvents }] = await Promise.all([
       supabase.from('payment_transactions').select('status'),
-      supabase.from('reconciliation_runs').select('summary, created_at').order('created_at', { ascending: false }).limit(20),
-      supabase.from('reconciliation_issues').select('severity, status'),
       supabase.from('payment_webhook_events').select('processing_status')
     ]);
 
     const totalPayments = (txns || []).length;
     const successfulPayments = (txns || []).filter((t) => ['captured', 'settled'].includes(t.status)).length;
     const paymentSuccessRatePct = totalPayments ? Number(((successfulPayments / totalPayments) * 100).toFixed(2)) : 100;
-
-    const latestRecon = runs?.[0]?.summary || {};
-    const reconciliationSuccessRatePct = Number(latestRecon.successRatePct || 100);
-    const openHighIssues = (issues || []).filter((i) => i.status === 'open' && i.severity === 'high').length;
     const webhookFailures = (webhookEvents || []).filter((w) => w.processing_status === 'failed').length;
 
     return res.json({
       status: 'success',
       metrics: {
         paymentSuccessRatePct,
-        reconciliationSuccessRatePct,
-        openHighSeverityIssues: openHighIssues,
         webhookFailureCount: webhookFailures
       }
     });

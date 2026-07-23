@@ -1,5 +1,4 @@
 import { supabase } from '../config/supabase.js';
-import { runPaymentReconciliation } from '../services/reconciliationService.js';
 import { fetchRazorpayPayment } from '../services/razorpayService.js';
 
 async function retryStuckTransactions() {
@@ -43,18 +42,8 @@ async function retryStuckTransactions() {
 }
 
 async function main() {
-  const now = new Date();
-  const fromDate = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
-  const toDate = now.toISOString();
-
   const retried = await retryStuckTransactions();
-  const reconciliation = await runPaymentReconciliation({
-    fromDate,
-    toDate,
-    actorUserId: null
-  });
-
-  console.log('[Phase3 jobs] completed', { retried, reconciliation });
+  console.log('[Phase3 jobs] completed', { retried });
 }
 
 main().catch((e) => {

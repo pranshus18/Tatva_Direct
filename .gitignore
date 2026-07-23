@@ -38,3 +38,6 @@ uploads/
 # Temp files
 *.tmp
 .cache/
+
+# Local attribution overrides
+backend/data/*.local.json

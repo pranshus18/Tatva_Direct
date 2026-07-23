@@ -1,4 +1,5 @@
 import {
+  PM_PLATFORM_FLAG,
   PM_VAULT_ADD_MONEY_URL,
   PM_VAULT_TOPUP_COMPLETE_URL,
   PM_VAULT_TOPUP_INITIATE_URL,
@@ -100,7 +101,9 @@ export async function completePmVaultTopup({
     body: JSON.stringify({
       razorpay_order_id: String(razorpayOrderId || '').trim(),
       razorpay_payment_id: String(razorpayPaymentId || '').trim(),
-      razorpay_signature: String(razorpaySignature || '').trim()
+      razorpay_signature: String(razorpaySignature || '').trim(),
+      flag: PM_PLATFORM_FLAG,
+      platformFlag: PM_PLATFORM_FLAG
     })
   });
   const data = await parseJsonResponse(response);

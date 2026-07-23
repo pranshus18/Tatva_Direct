@@ -16,7 +16,9 @@ export const PM_VENDOR_LEADS_URL = `${PM_AUTH_BASE_URL}/api/users/vendor-leads`;
 export const PM_VERIFY_GST_URL = `${PM_AUTH_BASE_URL}/api/users/verify-gst`;
 
 export const PM_VENDOR_LEAD_VENDOR_FLAG = 'supplier';
-export const PM_VENDOR_LEAD_FLAG = 'tatvadirect';
+/** Platform tenant flag — sent on all PM vault/payment APIs for DB filtering. */
+export const PM_PLATFORM_FLAG = 'tatvadirect';
+export const PM_VENDOR_LEAD_FLAG = PM_PLATFORM_FLAG;
 
 export const PM_SAMPLE_PHONE = String(
   import.meta.env.VITE_PM_SAMPLE_PHONE || ''
@@ -38,6 +40,9 @@ export const PM_PAYMENT_COMPLETE_BASE_URL = isDevProxy
 
 /** GET vault balance + ledger — PM platform. */
 export const PM_VAULT_URL = `${PM_AUTH_BASE_URL}/api/vault`;
+
+/** GET vault reconciliation transactions — PM platform (`flag=tatvadirect`). */
+export const PM_VAULT_TRANSACTIONS_URL = `${PM_AUTH_BASE_URL}/api/vault/transactions`;
 
 /** POST initiate Razorpay vault top-up. */
 export const PM_VAULT_TOPUP_INITIATE_URL = `${PM_PAYMENT_BASE_URL}/api/v1/payments/vault/topup/initiate`;

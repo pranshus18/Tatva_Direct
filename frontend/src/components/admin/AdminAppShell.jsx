@@ -18,7 +18,6 @@ const routePrefetchers = {
   '/admin-profile-chain-approvals': () => import('@/pages/AdminProfileChainApprovals'),
   '/admin-analytics': () => import('@/pages/AdminAnalytics'),
   '/admin-wallet': () => import('@/pages/AdminWallet'),
-  '/admin-finance': () => import('@/pages/AdminFinance'),
   '/admin-supply-chain': () => import('@/pages/AdminSupplyChain'),
   '/profile': () => import('@/pages/Profile')
 };

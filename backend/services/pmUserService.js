@@ -4,7 +4,8 @@ import {
   PM_USER_FLAG_SERVICE_PROVIDER,
   PM_USER_FLAG_SUPPLIER,
   PM_USERS_ME_URL,
-  PM_USERS_URL
+  PM_USERS_URL,
+  withPmPlatformFlagQuery
 } from '../config/pmApi.js';
 
 function normalizeIndianMobile(phone) {
@@ -141,7 +142,7 @@ export async function fetchPmCurrentUser(accessToken) {
   const token = String(accessToken || '').trim();
   if (!token) return null;
 
-  const response = await fetch(PM_USERS_ME_URL, {
+  const response = await fetch(withPmPlatformFlagQuery(PM_USERS_ME_URL), {
     headers: {
       Accept: 'application/json',
       Authorization: `Bearer ${token}`
@@ -163,7 +164,7 @@ export async function fetchPmCurrentUser(accessToken) {
 }
 
 export async function fetchPmUserById(pmUserId, accessToken = null) {
-  const url = buildPmUserUrl(pmUserId);
+  const url = withPmPlatformFlagQuery(buildPmUserUrl(pmUserId));
   if (!url) return null;
 
   const headers = { Accept: 'application/json' };
@@ -199,7 +200,7 @@ export async function fetchPmUserByPhone(phoneNumber) {
   const limit = 100;
 
   while (page <= totalPages) {
-    const url = `${PM_USERS_URL}?page=${page}&limit=${limit}`;
+    const url = withPmPlatformFlagQuery(`${PM_USERS_URL}?page=${page}&limit=${limit}`);
     const response = await fetch(url, {
       headers: { Accept: 'application/json' }
     });
@@ -269,13 +270,15 @@ export async function updatePmCustomerProfileOnPlatform({ pmUserId, accessToken,
     throw new Error('No customer profile fields to sync with PM.');
   }
 
-  const response = await fetch(url, {
+  const response = await fetch(withPmPlatformFlagQuery(url), {
     method: 'PUT',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`
     },
+    // Body `flag` stays portal role (service_provider/supplier).
+    // Query `flag=tatvadirect` selects the PM tenant database.
     body: JSON.stringify(body)
   });
 

@@ -82,7 +82,9 @@ function mapPmVaultTransactions(vault) {
       ? vault.ledger
       : Array.isArray(vault?.history)
         ? vault.history
-        : [];
+        : Array.isArray(vault)
+          ? vault
+          : [];
 
   return rows.map((entry, index) => {
     const rawDir = String(
@@ -93,19 +95,41 @@ function mapPmVaultTransactions(vault) {
     const amount = toInr(Math.abs(Number(entry?.amount ?? entry?.value ?? 0)), {
       assumePaise: true
     });
+    const description = String(
+      entry?.details || entry?.description || entry?.note || entry?.purpose || 'Vault transaction'
+    );
+    const transactionId = String(
+      entry?.transactionId || entry?.transaction_id || entry?._id || entry?.id || `pm-txn-${index}`
+    );
+    const projectId =
+      entry?.projectId || entry?.project_id || entry?.projectCode || entry?.project_code || null;
+    const paymentMethodRaw = String(
+      entry?.paymentMethod || entry?.payment_method || entry?.method || 'Wallet'
+    ).trim();
+    const paymentMethod =
+      !paymentMethodRaw || /^(wallet|vault)$/i.test(paymentMethodRaw)
+        ? 'Wallet'
+        : paymentMethodRaw;
 
     return {
-      id: String(entry?._id || entry?.id || entry?.transactionId || `pm-txn-${index}`),
+      id: transactionId,
+      transaction_id: transactionId,
       created_at:
         entry?.createdAt ||
         entry?.created_at ||
         entry?.timestamp ||
         entry?.date ||
         new Date().toISOString(),
-      description: String(entry?.description || entry?.note || entry?.purpose || 'Vault transaction'),
+      details: description,
+      description,
       transaction_type: String(entry?.transactionType || entry?.type || 'vault'),
       direction,
+      debit_credit: direction === 'credit' ? 'Credit' : 'Debit',
       amount,
+      payment_method: paymentMethod,
+      paymentMethod,
+      project_id: projectId,
+      projectId,
       balance_after: toInr(
         entry?.balanceAfter ?? entry?.balance_after ?? entry?.closingBalance ?? 0,
         { assumePaise: true }
@@ -134,10 +158,8 @@ export function mapPmVaultPayload(vaultPayload) {
   const vault = resolveVaultRecord(vaultPayload) || {};
   const balance = resolveVaultBalanceInr(vault);
   const holdingAmount = resolveVaultHoldingInr(vault);
-  const transactions = mapPmVaultTransactions(vault);
-  const summary = summarizePmVaultLedger(transactions);
-  summary.netFlow = summary.totalCredit - summary.totalDebit;
 
+  // Balance-only — reconciliation uses GET /api/vault/transactions via Tatva proxy.
   const vaultView = {
     id: String(vault?._id || vault?.id || vault?.vaultId || 'pm-vault'),
     balance,
@@ -151,8 +173,6 @@ export function mapPmVaultPayload(vaultPayload) {
     vault: vaultView,
     balance,
     holdingAmount,
-    transactions,
-    summary,
     source: 'pm_vault'
   };
 }
