@@ -21,7 +21,7 @@ services:
       - key: JWT_EXPIRES_IN
         value: 7d
       - key: ALLOWED_ORIGINS
-        value: https://project-frontend-git-main-pranshus-projects-2ecfd5c2.vercel.app,https://*.vercel.app
+        value: https://project-frontend-git-main-pranshus-projects-2ecfd5c2.vercel.app,https://tatva-direct-frontend-five.vercel.app,https://tatva-direct.vercel.app,https://tatva-direct.netlify.app,https://*.vercel.app,https://*.netlify.app
       - key: PORT
         value: "10000"
       
