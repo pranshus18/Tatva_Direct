@@ -803,12 +803,12 @@ const SupplierPlaceOrder = () => {
     }
 
     if (loadingWalletBalance) {
-      alert('Checking your wallet balance. Please wait a moment.');
+      alert('Checking your vault balance. Please wait a moment.');
       return;
     }
     if (!hasSufficientWalletBalance) {
       alert(
-        `Insufficient wallet balance. Please add ${formatRupee(walletShortage)} to your supplier wallet and try again.`
+        `Insufficient vault balance. Please add ${formatRupee(walletShortage)} to your supplier vault and try again.`
       );
       return;
     }
@@ -1052,14 +1052,14 @@ const SupplierPlaceOrder = () => {
               </div>
               <div className="spo-field">
                 <label htmlFor="spo-payment-method">Payment method</label>
-                <input id="spo-payment-method" value="Wallet only" readOnly />
+                <input id="spo-payment-method" value="Vault only" readOnly />
                 <p className="spo-hint">
-                  Upstream purchases are wallet-only. Credit supplier wallet first, then place/pay orders.
+                  Upstream purchases are vault-only. Credit supplier vault first, then place/pay orders.
                 </p>
               </div>
             </div>
             <div className="spo-alert" style={{ marginTop: '0.75rem' }}>
-              <strong>Wallet readiness:</strong> Order total {formatRupee(grandTotalAllPos)} | Wallet balance{' '}
+              <strong>Vault readiness:</strong> Order total {formatRupee(grandTotalAllPos)} | Vault balance{' '}
               {loadingWalletBalance ? 'Loading…' : formatRupee(walletBalance)}.
               {!loadingWalletBalance && !hasSufficientWalletBalance ? (
                 <>
@@ -1071,7 +1071,7 @@ const SupplierPlaceOrder = () => {
                     style={{ marginLeft: '0.6rem' }}
                     onClick={() => navigate('/supplier-wallet')}
                   >
-                    Credit wallet
+                    Credit vault
                   </button>
                 </>
               ) : null}
@@ -1403,11 +1403,11 @@ const SupplierPlaceOrder = () => {
               {placing
                 ? 'Placing…'
                 : loadingWalletBalance
-                  ? 'Checking wallet…'
+                  ? 'Checking vault…'
                   : !isTransportSelectionReady(selectedTransport, poGroups)
                     ? 'Select transport for all suppliers'
                     : !hasSufficientWalletBalance
-                      ? 'Insufficient wallet balance'
+                      ? 'Insufficient vault balance'
                       : 'Place order'}
             </button>
           </footer>

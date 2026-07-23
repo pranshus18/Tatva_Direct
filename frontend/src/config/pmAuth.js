@@ -31,11 +31,13 @@ export const PM_PAYMENT_BASE_URL = isDevProxy
   ? '/pm-payment-initiate'
   : normalizeUrl(import.meta.env.VITE_PM_PAYMENT_BASE_URL || 'https://devopsapi.withtatva.ai/payment');
 
-/** PM payment API — top-up complete (api.withtatva.ai). */
+/** PM payment API — top-up complete (same devops payment host by default). */
 export const PM_PAYMENT_COMPLETE_BASE_URL = isDevProxy
   ? '/pm-payment-complete'
   : normalizeUrl(
-      import.meta.env.VITE_PM_PAYMENT_COMPLETE_BASE_URL || 'https://api.withtatva.ai/payment'
+      import.meta.env.VITE_PM_PAYMENT_COMPLETE_BASE_URL ||
+        import.meta.env.VITE_PM_PAYMENT_BASE_URL ||
+        'https://devopsapi.withtatva.ai/payment'
     );
 
 /** GET vault balance + ledger — PM platform. */
@@ -57,12 +59,14 @@ export const PM_VAULT_TOPUP_COMPLETE_URL = `${PM_PAYMENT_COMPLETE_BASE_URL}/api/
  *   body: { orderId, userId }  // userId = PM user id for SP or supplier
  */
 
-/** PM users API (api.withtatva.ai) — offline vault add-money. */
+/** PM users API — offline vault add-money (same host as vault balance). */
 export const PM_VAULT_OFFLINE_BASE_URL = isDevProxy
-  ? '/pm-users-offline'
+  ? '/pm-users'
   : normalizeUrl(
-      import.meta.env.VITE_PM_VAULT_OFFLINE_BASE_URL || 'https://api.withtatva.ai/users'
+      import.meta.env.VITE_PM_VAULT_OFFLINE_BASE_URL ||
+        import.meta.env.VITE_PM_AUTH_BASE_URL ||
+        'https://devopsapi.withtatva.ai/users'
     );
 
-/** POST offline vault credit (cash on hand) — form-data. */
+/** POST offline vault credit (cash on hand) — form-data. Creates a PM credit-request (approved on PM). */
 export const PM_VAULT_ADD_MONEY_URL = `${PM_VAULT_OFFLINE_BASE_URL}/api/vault/add-money`;

@@ -1,9 +1,5 @@
-import {
-  PM_PLATFORM_FLAG,
-  PM_SEND_OTP_URL,
-  PM_VERIFY_OTP_URL
-} from '../config/pmAuth';
-import { getApiUrl } from '../config/api';
+import { PM_PLATFORM_FLAG } from '../config/pmAuth';
+import { resolveApiPath } from '../config/api';
 import {
   getPmCustomerCredentials,
   setPmCustomerCredentials
@@ -19,19 +15,21 @@ async function parseJsonResponse(response) {
   }
 }
 
+/**
+ * Browser → Tatva `/api/auth/pm-send-otp` → PM send-otp.
+ * Avoids CORS / Failed to fetch against devopsapi.withtatva.ai from the browser.
+ */
 export async function sendPmOtp(phoneNumber) {
   const normalizedPhone = normalizePhone(phoneNumber);
   if (!normalizedPhone || normalizedPhone.length < 10) {
     throw new Error('Enter a valid 10-digit phone number');
   }
 
-  const response = await fetch(`${PM_SEND_OTP_URL}?flag=${encodeURIComponent(PM_PLATFORM_FLAG)}`, {
+  const response = await fetch(resolveApiPath('/api/auth/pm-send-otp'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      flag: PM_PLATFORM_FLAG,
-      'x-flag': PM_PLATFORM_FLAG,
-      'x-platform-flag': PM_PLATFORM_FLAG
+      Accept: 'application/json'
     },
     body: JSON.stringify({
       phoneNumber: normalizedPhone,
@@ -42,13 +40,16 @@ export async function sendPmOtp(phoneNumber) {
 
   const data = await parseJsonResponse(response);
 
-  if (!response.ok || data.success === false) {
+  if (!response.ok || data.success === false || data.status === 'error') {
     throw new Error(data.message || 'Failed to send OTP');
   }
 
   return { phoneNumber: normalizedPhone, ...data };
 }
 
+/**
+ * Browser → Tatva `/api/auth/pm-verify-otp` → PM verify-otp.
+ */
 export async function verifyPmOtp(phoneNumber, otp) {
   const normalizedPhone = normalizePhone(phoneNumber);
   const normalizedOtp = String(otp || '').replace(/\D/g, '');
@@ -60,13 +61,11 @@ export async function verifyPmOtp(phoneNumber, otp) {
     throw new Error('Enter the OTP sent to your phone');
   }
 
-  const response = await fetch(`${PM_VERIFY_OTP_URL}?flag=${encodeURIComponent(PM_PLATFORM_FLAG)}`, {
+  const response = await fetch(resolveApiPath('/api/auth/pm-verify-otp'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      flag: PM_PLATFORM_FLAG,
-      'x-flag': PM_PLATFORM_FLAG,
-      'x-platform-flag': PM_PLATFORM_FLAG
+      Accept: 'application/json'
     },
     body: JSON.stringify({
       phoneNumber: normalizedPhone,
@@ -78,7 +77,7 @@ export async function verifyPmOtp(phoneNumber, otp) {
 
   const data = await parseJsonResponse(response);
 
-  if (!response.ok || data.success === false) {
+  if (!response.ok || data.success === false || data.status === 'error') {
     throw new Error(data.message || 'Invalid or expired OTP');
   }
 
@@ -87,7 +86,7 @@ export async function verifyPmOtp(phoneNumber, otp) {
 
 export async function completePmAuth(phoneNumber, pmProfile = null, pmAccessToken = null, pmRefreshToken = null) {
   const normalizedPhone = normalizePhone(phoneNumber);
-  const response = await fetch(getApiUrl('/api/auth/pm-otp-login'), {
+  const response = await fetch(resolveApiPath('/api/auth/pm-otp-login'), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -115,7 +114,7 @@ export async function restorePmVaultSession() {
   const token = localStorage.getItem('token');
   if (!token) return existing;
 
-  const response = await fetch(getApiUrl('/api/auth/pm-vault-session'), {
+  const response = await fetch(resolveApiPath('/api/auth/pm-vault-session'), {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
   });
   const data = await parseJsonResponse(response);

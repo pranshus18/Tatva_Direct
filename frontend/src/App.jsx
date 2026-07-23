@@ -91,7 +91,7 @@ const SupplierCreditAccounts = safeLazy(
   () => import('./pages/SupplierCreditAccounts'),
   'Supplier Credit Accounts page'
 );
-const SupplierWallet = safeLazy(() => import('./pages/SupplierWallet'), 'Supplier Wallet page');
+const SupplierWallet = safeLazy(() => import('./pages/SupplierWallet'), 'Supplier Vault page');
 const SupplierTotalPurchasePlatformCov = safeLazy(
   () => import('./pages/SupplierTotalPurchasePlatformCov'),
   'Supplier Total Purchase Platform COV page'
@@ -133,7 +133,7 @@ const AdminProfileChainApprovals = safeLazy(
   () => import('./pages/AdminProfileChainApprovals'),
   'Admin Profile Chain Approvals page'
 );
-const AdminWallet = safeLazy(() => import('./pages/AdminWallet'), 'Admin Wallet page');
+const AdminWallet = safeLazy(() => import('./pages/AdminWallet'), 'Admin Vault page');
 const AdminSupplyChain = safeLazy(() => import('./pages/AdminSupplyChain'), 'Admin Supply Chain page');
 const BOQNormalize = safeLazy(() => import('./pages/BOQNormalize'), 'BOQ Normalize page');
 const BoqListing = safeLazy(() => import('./pages/BoqListing'), 'BOQ Listing page');

@@ -21,13 +21,13 @@ export function loadRazorpayScript() {
 
 export async function startVaultTopup({
   amount,
-  minTopupInr = 100,
+  minTopupInr = 1,
   onSuccess,
   onError,
   onDismiss
 }) {
   const numericAmount = Number(amount);
-  const minTopup = Number(minTopupInr || 100);
+  const minTopup = Number(minTopupInr || 1);
 
   if (!Number.isFinite(numericAmount) || numericAmount <= 0) {
     throw new Error('Enter a valid amount in Indian rupees');

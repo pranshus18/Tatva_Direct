@@ -11,7 +11,7 @@ import {
 } from '../utils/vaultPlatformAttribution';
 
 const DEFAULT_VAULT_CONFIG = {
-  minTopupInr: Number(import.meta.env.VITE_VAULT_MIN_TOPUP_INR || 100) || 100,
+  minTopupInr: Number(import.meta.env.VITE_VAULT_MIN_TOPUP_INR || 1) || 1,
   razorpay: { enabled: true, isConfigured: true },
   pmVault: { enabled: true, source: 'pm_platform' }
 };

@@ -40,6 +40,7 @@ const sortStatusHistory = (raw) =>
 
 const paymentMethodLabel = (method) => {
   const pm = String(method || '').toLowerCase();
+  if (pm === 'wallet' || pm === 'vault') return 'Vault';
   if (pm === 'cash') return 'Cash on delivery';
   if (pm === 'online') return 'Pay online';
   if (pm === 'upi') return 'UPI';
@@ -210,7 +211,7 @@ export default function SupplierUpstreamOrders() {
   const handleMarkAsPaid = async () => {
     if (!orderModalId) return;
     const confirmed = window.confirm(
-      `Pay this order from wallet?\nOrder: ${orderDetails?.orderNumber}\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
+      `Pay this order from vault?\nOrder: ${orderDetails?.orderNumber}\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
     );
     if (!confirmed) return;
 
@@ -635,13 +636,13 @@ export default function SupplierUpstreamOrders() {
                 </div>
                 {orderDetails.paymentStatus !== 'paid' ? (
                   <div className="order-info-section">
-                    <h3>Wallet payment readiness</h3>
+                    <h3>Vault payment readiness</h3>
                     <p>
                       <strong>Order amount:</strong> ₹
                       {Number(orderDetails?.totalAmount || 0).toLocaleString('en-IN')}
                     </p>
                     <p>
-                      <strong>Wallet balance:</strong>{' '}
+                      <strong>Vault balance:</strong>{' '}
                       {loadingWalletBalance
                         ? 'Loading...'
                         : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
@@ -654,7 +655,7 @@ export default function SupplierUpstreamOrders() {
                       </p>
                     ) : (
                       <p className="upstream-muted-meta" style={{ color: '#166534' }}>
-                        Wallet balance is sufficient for this payment.
+                        Vault balance is sufficient for this payment.
                       </p>
                     )}
                     <button
@@ -662,7 +663,7 @@ export default function SupplierUpstreamOrders() {
                       className="btn-secondary"
                       onClick={() => navigate('/supplier-wallet')}
                     >
-                      Credit wallet
+                      Credit vault
                     </button>
                   </div>
                 ) : null}
@@ -910,7 +911,7 @@ export default function SupplierUpstreamOrders() {
                         onClick={handleMarkAsPaid}
                         disabled={updatingPayment || loadingWalletBalance || Number(walletBalance || 0) < Number(orderDetails?.totalAmount || 0)}
                       >
-                        {updatingPayment ? 'Processing…' : 'Pay from wallet'}
+                        {updatingPayment ? 'Processing…' : 'Pay from vault'}
                       </button>
                     )}
                     {orderDetails.paymentStatus === 'paid' && (

@@ -70,13 +70,13 @@ export default function AdminWallet() {
       const userSummaryData = await userSummaryResp.json().catch(() => ({}));
       const withdrawalsData = await withdrawalsResp.json().catch(() => ({}));
       if (!overviewResp.ok || overviewData.status !== 'success') {
-        throw new Error(overviewData.message || 'Failed to load admin wallet overview');
+        throw new Error(overviewData.message || 'Failed to load admin vault overview');
       }
       if (!txResp.ok || txData.status !== 'success') {
-        throw new Error(txData.message || 'Failed to load admin wallet transactions');
+        throw new Error(txData.message || 'Failed to load admin vault transactions');
       }
       if (!userSummaryResp.ok || userSummaryData.status !== 'success') {
-        throw new Error(userSummaryData.message || 'Failed to load user wallet summary');
+        throw new Error(userSummaryData.message || 'Failed to load user vault summary');
       }
       if (!withdrawalsResp.ok || withdrawalsData.status !== 'success') {
         throw new Error(withdrawalsData.message || 'Failed to load withdrawal requests');
@@ -87,7 +87,7 @@ export default function AdminWallet() {
       setUserWalletSummary(userSummaryData.users || []);
       setWithdrawals(withdrawalsData.withdrawals || []);
     } catch (e) {
-      setNotice(e.message || 'Failed to load wallet tracking data');
+      setNotice(e.message || 'Failed to load vault tracking data');
     } finally {
       setLoading(false);
     }
@@ -138,7 +138,7 @@ export default function AdminWallet() {
       row.description || row.transaction_type || '',
       Number(row.amount || 0).toFixed(2),
       directionLabel(row.direction),
-      'Wallet',
+      'Vault',
       row.orderNumber || row.orderId || '-',
       row.id || '',
       row.paidBy?.label || '',
@@ -180,7 +180,7 @@ export default function AdminWallet() {
         );
         const data = await resp.json().catch(() => ({}));
         if (!resp.ok || data.status !== 'success') {
-          throw new Error(data.message || 'Failed to export all admin wallet rows');
+          throw new Error(data.message || 'Failed to export all admin vault rows');
         }
         allRows.push(...(data.transactions || []));
         nextCursor = data?.pageInfo?.hasMore ? data?.pageInfo?.nextCursor || null : null;
@@ -206,7 +206,7 @@ export default function AdminWallet() {
         row.description || row.transaction_type || '',
         Number(row.amount || 0).toFixed(2),
         directionLabel(row.direction),
-        'Wallet',
+        'Vault',
         row.orderNumber || row.orderId || '-',
         row.id || '',
         row.paidBy?.label || '',
@@ -263,10 +263,10 @@ export default function AdminWallet() {
         <div>
           <h1 className="flex items-center gap-2 text-2xl font-bold text-slate-900">
             <WalletIcon className="h-6 w-6" />
-            Admin Wallet Tracking
+            Admin Vault Tracking
           </h1>
           <p className="text-sm text-slate-500">
-            Monitor escrow, platform revenue, wallet credits, and supplier payout pipeline in one place.
+            Monitor escrow, platform revenue, vault credits, and supplier payout pipeline in one place.
           </p>
         </div>
         <Button variant="outline" onClick={() => loadData(walletType)} disabled={loading}>
@@ -293,7 +293,7 @@ export default function AdminWallet() {
       <div className="mb-4 rounded-lg border bg-white p-4">
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="text-sm font-semibold text-slate-700">Pending withdrawal requests</h2>
-          <span className="text-xs text-slate-500">Approve to debit wallet; reject to cancel request</span>
+          <span className="text-xs text-slate-500">Approve to debit vault; reject to cancel request</span>
         </div>
         {loading ? (
           <p className="text-sm text-slate-500">Loading...</p>
@@ -347,15 +347,15 @@ export default function AdminWallet() {
 
       <div className="mb-4 rounded-lg border bg-white p-4">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-slate-700">Individual user wallet balances and spend</h2>
+          <h2 className="text-sm font-semibold text-slate-700">Individual user vault balances and spend</h2>
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={userWalletType}
               onChange={(e) => setUserWalletType(e.target.value)}
               className="h-9 rounded-md border px-2 text-sm"
             >
-              <option value="customer">Service provider wallets</option>
-              <option value="supplier">Supplier wallets</option>
+              <option value="customer">Service provider vaults</option>
+              <option value="supplier">Supplier vaults</option>
             </select>
             <input
               value={userSearchInput}
@@ -371,7 +371,7 @@ export default function AdminWallet() {
         {loading ? (
           <p className="text-sm text-slate-500">Loading...</p>
         ) : userWalletSummary.length === 0 ? (
-          <p className="text-sm text-slate-500">No user wallets found.</p>
+          <p className="text-sm text-slate-500">No user vaults found.</p>
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -379,9 +379,9 @@ export default function AdminWallet() {
                 <tr className="border-b text-left text-slate-500">
                   <th className="px-2 py-2">User</th>
                   <th className="px-2 py-2">User ID</th>
-                  <th className="px-2 py-2">Wallet ID</th>
+                  <th className="px-2 py-2">Vault ID</th>
                   <th className="px-2 py-2">Type</th>
-                  <th className="px-2 py-2 text-right">Wallet Balance</th>
+                  <th className="px-2 py-2 text-right">Vault Balance</th>
                   <th className="px-2 py-2 text-right">Credit</th>
                   <th className="px-2 py-2 text-right">Debit</th>
                   <th className="px-2 py-2 text-right">Order Spend</th>
@@ -516,7 +516,7 @@ export default function AdminWallet() {
         {loading ? (
           <p className="text-sm text-slate-500">Loading...</p>
         ) : transactions.length === 0 ? (
-          <p className="text-sm text-slate-500">No wallet transactions found for this ledger.</p>
+          <p className="text-sm text-slate-500">No vault transactions found for this ledger.</p>
         ) : (
           <div className="overflow-x-auto rounded-md border">
             <div className="bg-[#6e1129] px-3 py-2 text-sm font-semibold text-white">Transaction Summary</div>
@@ -552,7 +552,7 @@ export default function AdminWallet() {
                       {signedAmount(row)}
                     </td>
                     <td className="px-2 py-2 text-slate-700">{directionLabel(row.direction)}</td>
-                    <td className="px-2 py-2 text-slate-700">Wallet</td>
+                    <td className="px-2 py-2 text-slate-700">Vault</td>
                     <td className="px-2 py-2 text-slate-600">{row.orderNumber || row.orderId || '-'}</td>
                     <td className="px-2 py-2 text-xs text-slate-600">{row.id || '-'}</td>
                     <td className="px-2 py-2 text-slate-700">{row.paidBy?.label || '-'}</td>

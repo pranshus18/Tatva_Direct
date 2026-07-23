@@ -1,6 +1,7 @@
 import {
   PM_PAYMENT_API_BASE_URL,
   PM_PLATFORM_FLAG,
+  PM_VAULT_ADD_MONEY_FALLBACK_URL,
   PM_VAULT_ADD_MONEY_URL,
   PM_VAULT_PAY_ORDER_URL,
   PM_VAULT_TOPUP_COMPLETE_URL,
@@ -1245,9 +1246,66 @@ function appendOfflineVaultFile(form, file) {
   form.append('documents', blob, file.originalname || 'document');
 }
 
+function isUpstreamNetworkError(err) {
+  const code = err?.cause?.code || err?.code || '';
+  const message = String(err?.message || '');
+  return (
+    /ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT/i.test(
+      String(code)
+    ) || /fetch failed|network/i.test(message)
+  );
+}
+
+function buildOfflineVaultAddMoneyForm({
+  userId,
+  amount,
+  method,
+  receiptNumber,
+  chequeNumber,
+  utrNumber,
+  details,
+  documents
+}) {
+  const form = new FormData();
+  form.append('userId', userId);
+  form.append('amount', String(amount));
+  form.append('paymentMode', 'offline');
+  form.append('subPaymentMethod', method);
+  form.append('flag', PM_PLATFORM_FLAG);
+  form.append('platformFlag', PM_PLATFORM_FLAG);
+
+  if (method === 'cash_on_hand') {
+    form.append('receiptNumber', String(receiptNumber || '').trim());
+    form.append('details', tagOfflineDetails(details || 'Cash collected at office'));
+  } else if (method === 'cheque') {
+    form.append('chequeNumber', String(chequeNumber || '').trim());
+    form.append('details', tagOfflineDetails(details || 'Cheque deposit'));
+  } else {
+    form.append('utrNumber', String(utrNumber || '').trim());
+    form.append('details', tagOfflineDetails(details || 'NEFT transfer'));
+  }
+
+  (Array.isArray(documents) ? documents : []).forEach((file) => {
+    appendOfflineVaultFile(form, file);
+  });
+
+  return form;
+}
+
+async function postPmVaultOfflineAddMoney(addMoneyUrl, token, form) {
+  const response = await fetch(addMoneyUrl, {
+    method: 'POST',
+    headers: buildPmPlatformHeaders({ accessToken: token, json: false }),
+    body: form
+  });
+  const payload = await parseJsonResponse(response);
+  return { response, payload };
+}
+
 /**
  * POST PM offline vault credit (cash on hand / cheque / bank transfer).
- * Proxied server-side to avoid browser CORS on api.withtatva.ai.
+ * Proxied server-side to avoid browser CORS. Uses devopsapi users host by default;
+ * falls back to PM_API_BASE_URL if a custom offline host fails DNS/network.
  */
 export async function addPmVaultOfflineMoney({
   pmUserId,
@@ -1279,60 +1337,63 @@ export async function addPmVaultOfflineMoney({
     throw new Error('Invalid offline payment method');
   }
 
-  const form = new FormData();
-  form.append('userId', userId);
-  form.append('amount', String(amount));
-  form.append('paymentMode', 'offline');
-  form.append('subPaymentMethod', method);
-  form.append('flag', PM_PLATFORM_FLAG);
-  form.append('platformFlag', PM_PLATFORM_FLAG);
-
-  if (method === 'cash_on_hand') {
-    const receipt = String(receiptNumber || '').trim();
-    if (!receipt) {
-      throw new Error('Receipt number is required for cash on hand payment');
-    }
-    form.append('receiptNumber', receipt);
-    form.append(
-      'details',
-      tagOfflineDetails(details || 'Cash collected at office')
-    );
-  } else if (method === 'cheque') {
-    const cheque = String(chequeNumber || '').trim();
-    if (!cheque) {
-      throw new Error('Cheque number is required for cheque payment');
-    }
-    form.append('chequeNumber', cheque);
-    form.append('details', tagOfflineDetails(details || 'Cheque deposit'));
-  } else {
-    const utr = String(utrNumber || '').trim();
-    if (!utr) {
-      throw new Error('UTR number is required for bank transfer');
-    }
-    form.append('utrNumber', utr);
-    form.append('details', tagOfflineDetails(details || 'NEFT transfer'));
+  if (method === 'cash_on_hand' && !String(receiptNumber || '').trim()) {
+    throw new Error('Receipt number is required for cash on hand payment');
+  }
+  if (method === 'cheque' && !String(chequeNumber || '').trim()) {
+    throw new Error('Cheque number is required for cheque payment');
+  }
+  if (method === 'bank_to_bank' && !String(utrNumber || '').trim()) {
+    throw new Error('UTR number is required for bank transfer');
   }
 
-  (Array.isArray(documents) ? documents : []).forEach((file) => {
-    appendOfflineVaultFile(form, file);
-  });
+  const formArgs = {
+    userId,
+    amount,
+    method,
+    receiptNumber,
+    chequeNumber,
+    utrNumber,
+    details,
+    documents
+  };
 
-  const addMoneyUrl = withPmPlatformFlagQuery(PM_VAULT_ADD_MONEY_URL);
+  const primaryUrl = withPmPlatformFlagQuery(PM_VAULT_ADD_MONEY_URL);
+  const fallbackUrl = withPmPlatformFlagQuery(PM_VAULT_ADD_MONEY_FALLBACK_URL);
+
   logger.info('[PM vault offline add-money] requesting', {
-    url: addMoneyUrl,
+    url: primaryUrl,
     flag: PM_PLATFORM_FLAG,
     userId,
     amount,
     method
   });
 
-  const response = await fetch(addMoneyUrl, {
-    method: 'POST',
-    headers: buildPmPlatformHeaders({ accessToken: token, json: false }),
-    body: form
-  });
+  let result;
+  try {
+    result = await postPmVaultOfflineAddMoney(
+      primaryUrl,
+      token,
+      buildOfflineVaultAddMoneyForm(formArgs)
+    );
+  } catch (primaryError) {
+    if (primaryUrl !== fallbackUrl && isUpstreamNetworkError(primaryError)) {
+      logger.warn('[PM vault offline add-money] primary host failed; retrying fallback', {
+        primaryUrl,
+        fallbackUrl,
+        error: primaryError?.cause?.code || primaryError?.code || primaryError?.message
+      });
+      result = await postPmVaultOfflineAddMoney(
+        fallbackUrl,
+        token,
+        buildOfflineVaultAddMoneyForm(formArgs)
+      );
+    } else {
+      throw primaryError;
+    }
+  }
 
-  const payload = await parseJsonResponse(response);
+  const { response, payload } = result;
   if (!response.ok || payload.success === false) {
     const error = pmRequestFailed(response, payload, 'Failed to add offline vault payment on PM platform');
     error.code = payload?.code || 'PM_VAULT_OFFLINE_FAILED';

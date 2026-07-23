@@ -42,7 +42,7 @@ function isSupplierUser(req) {
 }
 
 function topupMinAmount() {
-  return Number.parseFloat(process.env.WALLET_MIN_TOPUP_INR || '100') || 100;
+  return Number.parseFloat(process.env.WALLET_MIN_TOPUP_INR || '1') || 1;
 }
 
 export function registerSupplierWalletRoutes(ctx) {

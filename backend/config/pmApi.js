@@ -66,6 +66,8 @@ export function buildPmPlatformHeaders({ accessToken, json = false, flag = PM_PL
 
 export const PM_USERS_URL = `${PM_API_BASE_URL}/api/users/`;
 export const PM_USERS_ME_URL = `${PM_API_BASE_URL}/api/users/me`;
+export const PM_SEND_OTP_URL = `${PM_API_BASE_URL}/api/auth/send-otp`;
+export const PM_VERIFY_OTP_URL = `${PM_API_BASE_URL}/api/auth/verify-otp`;
 
 export const PM_USER_FLAG_SERVICE_PROVIDER = 'service_provider';
 export const PM_USER_FLAG_SUPPLIER = 'supplier';
@@ -81,7 +83,7 @@ export const PM_PAYMENT_API_BASE_URL = normalizeUrl(
 );
 
 export const PM_PAYMENT_COMPLETE_API_BASE_URL = normalizeUrl(
-  process.env.PM_PAYMENT_COMPLETE_API_BASE_URL || 'https://api.withtatva.ai/payment'
+  process.env.PM_PAYMENT_COMPLETE_API_BASE_URL || PM_PAYMENT_API_BASE_URL
 );
 
 export const PM_VAULT_URL = `${PM_API_BASE_URL}/api/vault`;
@@ -103,8 +105,14 @@ export const PM_VAULT_PAY_ORDER_URL = /\/api\/vault\/debit\/?$/i.test(rawPmVault
   ? normalizeUrl(`${PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay`)
   : rawPmVaultPayOrderUrl;
 
-/** Offline vault credit (cash / cheque / bank) — separate PM users host. */
+/**
+ * Offline vault credit (cash / cheque / bank).
+ * Defaults to the same PM users host as vault balance — `api.withtatva.ai`
+ * is not reliably resolvable and caused ENOTFOUND in local/dev.
+ */
 export const PM_VAULT_OFFLINE_API_BASE_URL = normalizeUrl(
-  process.env.PM_VAULT_OFFLINE_API_BASE_URL || 'https://api.withtatva.ai/users'
+  process.env.PM_VAULT_OFFLINE_API_BASE_URL || PM_API_BASE_URL
 );
 export const PM_VAULT_ADD_MONEY_URL = `${PM_VAULT_OFFLINE_API_BASE_URL}/api/vault/add-money`;
+/** Fallback when a custom offline host fails DNS / network. */
+export const PM_VAULT_ADD_MONEY_FALLBACK_URL = `${PM_API_BASE_URL}/api/vault/add-money`;

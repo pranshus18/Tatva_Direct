@@ -43,16 +43,12 @@ export default defineConfig({
         rewrite: (p) => p.replace(/^\/pm-payment-initiate/, '')
       },
       '/pm-payment-complete': {
-        target: 'https://api.withtatva.ai/payment',
+        // Prefer devops host — api.withtatva.ai often fails DNS (ENOTFOUND).
+        // Backend also falls back to devopsapi for topup/complete.
+        target: 'https://devopsapi.withtatva.ai/payment',
         changeOrigin: true,
         secure: true,
         rewrite: (p) => p.replace(/^\/pm-payment-complete/, '')
-      },
-      '/pm-users-offline': {
-        target: 'https://api.withtatva.ai/users',
-        changeOrigin: true,
-        secure: true,
-        rewrite: (p) => p.replace(/^\/pm-users-offline/, '')
       }
     }
   },

@@ -39,7 +39,7 @@ const OFFLINE_METHODS = {
 export default function VaultAddMoneyPanel({
   amount,
   onAmountChange,
-  minTopupInr = 100,
+  minTopupInr = 1,
   processing,
   onProcessingChange,
   disabled = false,
@@ -133,10 +133,17 @@ export default function VaultAddMoneyPanel({
         payload.utrNumber = referenceNumber.trim();
       }
 
-      await addVaultOfflineMoney(payload);
+      const result = await addVaultOfflineMoney(payload);
       onAmountChange('');
       resetOfflineFields();
-      if (onSuccess) await onSuccess();
+      if (onSuccess) {
+        await onSuccess({
+          ...result,
+          message:
+            result?.message ||
+            'Offline payment submitted. Approve it on the PM platform to credit the vault.'
+        });
+      }
     } catch (error) {
       if (onError) {
         onError(
@@ -173,7 +180,7 @@ export default function VaultAddMoneyPanel({
 
   const offlineDescription =
     paymentMode === 'offline'
-      ? `Record ${offlineConfig.label.toLowerCase()} payment — credits PM vault via add-money API.`
+      ? `Record ${offlineConfig.label.toLowerCase()} — submitted to PM; approval happens on the PM platform.`
       : '';
 
   return (

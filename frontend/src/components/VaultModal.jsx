@@ -22,7 +22,7 @@ export default function VaultModal({ open, onClose, onUpdated }) {
   const [holdingAmount, setHoldingAmount] = useState(0);
   const [showHolding, setShowHolding] = useState(false);
   const [amount, setAmount] = useState('');
-  const [minTopupInr, setMinTopupInr] = useState(100);
+  const [minTopupInr, setMinTopupInr] = useState(1);
   const [notice, setNotice] = useState('');
   const [noticeType, setNoticeType] = useState('');
 
@@ -44,7 +44,7 @@ export default function VaultModal({ open, onClose, onUpdated }) {
             0
         ) || 0
       );
-      setMinTopupInr(Number(configData.config?.minTopupInr || 100));
+      setMinTopupInr(Number(configData.config?.minTopupInr || 1));
     } catch (error) {
       setNotice(
         error.code === 'PM_AUTH_REQUIRED' || error.status === 401

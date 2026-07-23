@@ -83,7 +83,7 @@ export default function VaultPage({ variant = 'service_provider' }) {
   });
   const [transactions, setTransactions] = useState([]);
   const [vaultConfig, setVaultConfig] = useState({
-    minTopupInr: 100,
+    minTopupInr: 1,
     razorpay: { enabled: false },
     pmVault: { enabled: true }
   });
@@ -166,7 +166,7 @@ export default function VaultPage({ variant = 'service_provider' }) {
       row.details || row.description || row.transaction_type || '',
       Number(row.amount || 0).toFixed(2),
       row.debit_credit || directionLabel(row.direction),
-      row.payment_method || row.paymentMethod || 'Wallet',
+      row.payment_method || row.paymentMethod || 'Vault',
       row.flag || '',
       row.project_id || row.projectId || '',
       row.transaction_id || row.id || ''
@@ -230,7 +230,7 @@ export default function VaultPage({ variant = 'service_provider' }) {
           showPresets
           amount={topupAmount}
           onAmountChange={setTopupAmount}
-          minTopupInr={vaultConfig?.minTopupInr || 100}
+          minTopupInr={vaultConfig?.minTopupInr || 1}
           processing={processing}
           onProcessingChange={(value) => {
             setProcessing(value);
@@ -357,7 +357,7 @@ export default function VaultPage({ variant = 'service_provider' }) {
                         {row.debit_credit || directionLabel(row.direction)}
                       </td>
                       <td className="px-4 py-3 text-slate-700 sm:px-5">
-                        {row.payment_method || row.paymentMethod || 'Wallet'}
+                        {row.payment_method || row.paymentMethod || 'Vault'}
                       </td>
                       <td className="px-4 py-3 text-slate-700 sm:px-5">{row.flag || '—'}</td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-700 sm:px-5">
@@ -435,7 +435,7 @@ function TransactionDetailModal({ row, onClose }) {
           <Detail label="Details" value={row.details || row.description} />
           <Detail label="Debit / Credit" value={row.debit_credit || directionLabel(row.direction)} />
           <Detail label="Amount" value={formatInr(row.amount)} />
-          <Detail label="Payment Method" value={row.payment_method || row.paymentMethod || 'Wallet'} />
+          <Detail label="Payment Method" value={row.payment_method || row.paymentMethod || 'Vault'} />
           <Detail label="Platform" value={row.flag || '—'} />
           <Detail label="Project ID" value={row.project_id || row.projectId || '—'} />
           <Detail label="Transaction ID" value={row.transaction_id || row.id} />

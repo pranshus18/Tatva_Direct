@@ -114,8 +114,9 @@ export async function completePmVaultTopup({
 }
 
 /**
- * POST https://api.withtatva.ai/users/api/vault/add-money
+ * POST …/api/vault/add-money (PM users host — devopsapi by default).
  * Offline vault credit — multipart form-data.
+ * Prefer Tatva proxy: POST /api/vault/offline/add-money (vaultService).
  * subPaymentMethod: cash_on_hand | cheque | bank_to_bank
  */
 export async function addPmVaultOfflineMoney({

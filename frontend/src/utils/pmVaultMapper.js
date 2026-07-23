@@ -104,11 +104,11 @@ function mapPmVaultTransactions(vault) {
     const projectId =
       entry?.projectId || entry?.project_id || entry?.projectCode || entry?.project_code || null;
     const paymentMethodRaw = String(
-      entry?.paymentMethod || entry?.payment_method || entry?.method || 'Wallet'
+      entry?.paymentMethod || entry?.payment_method || entry?.method || 'Vault'
     ).trim();
     const paymentMethod =
       !paymentMethodRaw || /^(wallet|vault)$/i.test(paymentMethodRaw)
-        ? 'Wallet'
+        ? 'Vault'
         : paymentMethodRaw;
 
     return {

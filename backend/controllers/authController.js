@@ -32,6 +32,14 @@ import {
   persistPmAuthAndSyncCustomerProfile,
   syncPmCustomerProfileForUser
 } from '../services/pmUserService.js';
+import {
+  PM_PLATFORM_FLAG,
+  PM_SEND_OTP_URL,
+  PM_VERIFY_OTP_URL,
+  buildPmPlatformHeaders,
+  withPmPlatformFlagBody,
+  withPmPlatformFlagQuery
+} from '../config/pmApi.js';
 
 const router = express.Router();
 const vendorLeadUpload = multer({
@@ -449,6 +457,133 @@ router.post('/signup', async (_req, res) => {
     message:
       'Email/password registration is disabled. Service providers and suppliers must sign in with phone OTP.'
   });
+});
+
+/**
+ * Proxy PM send-otp through Tatva to avoid browser CORS against devopsapi.withtatva.ai.
+ * Frontend should call POST /api/auth/pm-send-otp (not PM directly).
+ */
+router.post('/pm-send-otp', async (req, res) => {
+  try {
+    const normalizedPhone = normalizeIndianMobile(req.body?.phoneNumber);
+    if (!normalizedPhone || normalizedPhone.length !== 10) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Enter a valid 10-digit phone number'
+      });
+    }
+
+    const url = withPmPlatformFlagQuery(PM_SEND_OTP_URL);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildPmPlatformHeaders({ json: true }),
+      body: JSON.stringify(
+        withPmPlatformFlagBody({
+          phoneNumber: normalizedPhone
+        })
+      )
+    });
+
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+
+    if (!response.ok || data.success === false) {
+      return res.status(response.status >= 400 ? response.status : 502).json({
+        status: 'error',
+        success: false,
+        message: data.message || 'Failed to send OTP'
+      });
+    }
+
+    return res.json({
+      status: 'success',
+      success: true,
+      phoneNumber: normalizedPhone,
+      ...data
+    });
+  } catch (error) {
+    console.error('PM send-otp proxy error:', error);
+    return res.status(502).json({
+      status: 'error',
+      success: false,
+      message:
+        error?.cause?.code === 'ENOTFOUND'
+          ? 'Could not reach PM auth service. Check network/DNS.'
+          : error.message || 'Failed to send OTP'
+    });
+  }
+});
+
+/**
+ * Proxy PM verify-otp through Tatva to avoid browser CORS.
+ * Frontend should call POST /api/auth/pm-verify-otp (not PM directly).
+ */
+router.post('/pm-verify-otp', async (req, res) => {
+  try {
+    const normalizedPhone = normalizeIndianMobile(req.body?.phoneNumber);
+    const normalizedOtp = String(req.body?.otp || '').replace(/\D/g, '');
+
+    if (!normalizedPhone || normalizedPhone.length !== 10) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Enter a valid 10-digit phone number'
+      });
+    }
+    if (!normalizedOtp || normalizedOtp.length < 4) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Enter the OTP sent to your phone'
+      });
+    }
+
+    const url = withPmPlatformFlagQuery(PM_VERIFY_OTP_URL);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildPmPlatformHeaders({ json: true }),
+      body: JSON.stringify(
+        withPmPlatformFlagBody({
+          phoneNumber: normalizedPhone,
+          otp: normalizedOtp
+        })
+      )
+    });
+
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+
+    if (!response.ok || data.success === false) {
+      return res.status(response.status >= 400 ? response.status : 502).json({
+        status: 'error',
+        success: false,
+        message: data.message || 'Invalid or expired OTP'
+      });
+    }
+
+    return res.json({
+      status: 'success',
+      success: true,
+      phoneNumber: normalizedPhone,
+      ...data
+    });
+  } catch (error) {
+    console.error('PM verify-otp proxy error:', error);
+    return res.status(502).json({
+      status: 'error',
+      success: false,
+      message:
+        error?.cause?.code === 'ENOTFOUND'
+          ? 'Could not reach PM auth service. Check network/DNS.'
+          : error.message || 'Failed to verify OTP'
+    });
+  }
 });
 
 // PM OTP login — phone verified on PM platform; issue Tatva session if user exists

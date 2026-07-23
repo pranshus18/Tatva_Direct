@@ -54,7 +54,7 @@ const vaultOfflineUpload = multer({
 });
 
 function topupMinAmount() {
-  return Number.parseFloat(process.env.WALLET_MIN_TOPUP_INR || '100') || 100;
+  return Number.parseFloat(process.env.WALLET_MIN_TOPUP_INR || '1') || 1;
 }
 
 function normalizeLimit(raw) {
@@ -338,14 +338,25 @@ walletRouter.post(
         documents: req.files || []
       });
       const pmWallet = await getPmVaultWalletView(req.user, credentials);
+      const creditRequestId =
+        result?.id ||
+        result?._id ||
+        result?.creditRequestId ||
+        result?.credit_request_id ||
+        result?.transactionId ||
+        null;
 
       return res.json({
         status: 'success',
         source: 'pm_vault',
         offline: true,
+        pendingApproval: true,
+        creditRequestId,
         result,
         vault: pmWallet.vault || pmWallet.wallet,
-        balance: pmWallet.balance
+        balance: pmWallet.balance,
+        message:
+          'Offline payment submitted. Approve the credit request on the PM platform to update vault balance.'
       });
     } catch (e) {
       console.error('[Vault] offline add-money error:', e);

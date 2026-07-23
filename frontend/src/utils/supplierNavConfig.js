@@ -100,7 +100,7 @@ const ROUTE_META = {
   '/supplier-returns': { group: 'Operations', title: 'Returns' },
   '/supplier-select-yourself': { group: 'Operations', title: 'Select Yourself' },
   '/supplier-discount-insights': { group: 'Insights', title: 'Brand Level COV' },
-  '/supplier-wallet': { group: 'Insights', title: 'Wallet' },
+  '/supplier-wallet': { group: 'Insights', title: 'Vault balance' },
   '/supplier-buyer-purchases': { group: 'Insights', title: 'Sales' },
   '/supplier-credit-accounts': { group: 'Insights', title: 'Credit on Account' },
   '/supplier-total-purchase-platform-cov': { group: 'Insights', title: 'Total Purchase Platform COV' },
