@@ -240,11 +240,11 @@ export default function VaultAddMoneyPanel({
         </div>
       ) : null}
 
-      <p className={isModal ? 'vault-modal__subtext' : 'text-xs text-slate-600'}>
-        {paymentMode === 'online'
-          ? 'Enter amount in ₹ (Indian rupees). 1 ₹ = 100 paise — paise is only used for Razorpay checkout.'
-          : offlineDescription}
-      </p>
+      {paymentMode === 'offline' && offlineDescription ? (
+        <p className={isModal ? 'vault-modal__subtext' : 'text-xs text-slate-600'}>
+          {offlineDescription}
+        </p>
+      ) : null}
 
       {isModal ? (
         <div className="vault-modal__input-wrap">
