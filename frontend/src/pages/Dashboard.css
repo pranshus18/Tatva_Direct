@@ -1086,6 +1086,7 @@ button.product-row-chevron:not(:disabled):hover {
   gap: 1.5rem;
   margin-bottom: 2rem;
   overflow: visible;
+  align-items: start;
 }
 
 .form-group {
@@ -1094,18 +1095,12 @@ button.product-row-chevron:not(:disabled):hover {
   gap: 0.5rem;
   position: relative;
   overflow: visible;
+  align-self: start;
 }
 
-/* Ensure suggestion dropdowns are fully visible */
+/* Suggestion menus must stay scrollable — do not force overflow:visible on them */
 .form-group[style*="position: relative"] {
   overflow: visible !important;
-  z-index: 1000;
-}
-
-.form-group[style*="position: relative"] > div[style*="position: absolute"] {
-  overflow: visible !important;
-  width: 100% !important;
-  max-width: 100% !important;
 }
 
 .form-group.span-2 {

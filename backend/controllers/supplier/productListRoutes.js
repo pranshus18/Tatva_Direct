@@ -81,21 +81,34 @@ router.get('/products', authenticateToken, async (req, res) => {
       .map((sp) => {
         if (!sp.product) return null;
 
+        const attributes =
+          typeof sp.attributes === 'string'
+            ? (() => {
+                try {
+                  return JSON.parse(sp.attributes);
+                } catch {
+                  return {};
+                }
+              })()
+            : sp.attributes && typeof sp.attributes === 'object'
+              ? sp.attributes
+              : {};
+
         const baseSpecs =
           sp.product?.specifications && typeof sp.product.specifications === 'object'
             ? sp.product.specifications
             : {};
         const offerSpecs =
-          sp.attributes?.specifications && typeof sp.attributes.specifications === 'object'
-            ? sp.attributes.specifications
+          attributes?.specifications && typeof attributes.specifications === 'object'
+            ? attributes.specifications
             : {};
         const storedSpecs = mergeSpecificationMaps(baseSpecs, offerSpecs);
         const listingName =
-          sp.attributes?.listingName != null && String(sp.attributes.listingName).trim() !== ''
-            ? String(sp.attributes.listingName).trim()
+          attributes?.listingName != null && String(attributes.listingName).trim() !== ''
+            ? String(attributes.listingName).trim()
             : sp.product.name;
-        const displayBrand = sp.attributes?.brand || sp.product.brand || '';
-        const offerImages = sanitizeImageUrls(sp.attributes?.images);
+        const displayBrand = attributes?.brand || sp.product.brand || '';
+        const offerImages = sanitizeImageUrls(attributes?.images);
         const baseImages = sanitizeImageUrls(sp.product?.images);
 
         const effective = resolveEffectiveSupplierOfferState(sp, sp.product);
@@ -105,25 +118,25 @@ router.get('/products', authenticateToken, async (req, res) => {
           // Per-variant display: offer overrides shared catalog (same merge as PUT response)
           name: listingName,
           supplierDescription:
-            sp.attributes?.supplierDescription ||
-            sp.attributes?.description ||
+            attributes?.supplierDescription ||
+            attributes?.description ||
             '',
           publishedDescription: sp.product?.description || '',
           description:
-            sp.attributes?.supplierDescription ||
-            sp.attributes?.description ||
+            attributes?.supplierDescription ||
+            attributes?.description ||
             sp.product?.description ||
             '',
           brand: displayBrand || sp.product.brand,
-          gtin: sp.attributes?.gtin || sp.product.gtin,
-          mpn: sp.attributes?.mpn || sp.product.mpn,
+          gtin: attributes?.gtin || sp.product.gtin,
+          mpn: attributes?.mpn || sp.product.mpn,
           specifications: storedSpecs,
           images: mergeProductImageLists(offerImages, baseImages),
           price: sp.price,
           stock: parseSupplierStockQuantity(sp.stock) ?? 0,
-          igst_rate: sp.igst_rate ?? sp.attributes?.igstRate ?? null,
-          cgst_rate: sp.cgst_rate ?? sp.attributes?.cgstRate ?? null,
-          sgst_rate: sp.sgst_rate ?? sp.attributes?.sgstRate ?? null,
+          igst_rate: sp.igst_rate ?? attributes?.igstRate ?? null,
+          cgst_rate: sp.cgst_rate ?? attributes?.cgstRate ?? null,
+          sgst_rate: sp.sgst_rate ?? attributes?.sgstRate ?? null,
           location: sp.location,
           min_order_quantity: sp.min_order_quantity,
           status: effective.effectiveStatus,
@@ -133,12 +146,13 @@ router.get('/products', authenticateToken, async (req, res) => {
           approved_at: sp.approved_at,
           supplier_id: sp.supplier_id,
           ...supplierOfferTsinFields(sp.product, sp),
-          brandModel: sp.attributes?.brandModel,
-          lsa: sp.attributes?.lsa,
-          hsnCode: sp.attributes?.hsnCode,
+          brandModel: attributes?.brandModel,
+          lsa: attributes?.lsa,
+          hsnCode: attributes?.hsnCode,
           supplier_product_id: sp.id,
           variantKey: sp.variant_key || null,
-          variantAsin: sp.variant_asin || null
+          variantAsin: sp.variant_asin || null,
+          attributes
         };
       })
       .filter(Boolean);

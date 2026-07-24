@@ -12,7 +12,23 @@ export function resolveParentTsin(parentAsin) {
 }
 
 export function sanitizeImageUrls(input) {
+  if (!input) return [];
+
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith('[')) {
+      try {
+        return sanitizeImageUrls(JSON.parse(trimmed));
+      } catch {
+        return /^https?:\/\//i.test(trimmed) ? [trimmed] : [];
+      }
+    }
+    return /^https?:\/\//i.test(trimmed) ? [trimmed] : [];
+  }
+
   if (!Array.isArray(input)) return [];
+
   const seen = new Set();
   const out = [];
   for (const raw of input) {

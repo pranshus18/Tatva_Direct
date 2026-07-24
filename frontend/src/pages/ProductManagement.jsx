@@ -287,6 +287,10 @@ const ProductManagement = ({ user }) => {
     if (price !== undefined && Number.isFinite(price)) {
       payload.price = price;
     }
+    // Persist product photos uploaded in the inventory edit modal.
+    if (Array.isArray(data.images)) {
+      payload.images = data.images;
+    }
     return payload;
   };
 
@@ -310,6 +314,11 @@ const ProductManagement = ({ user }) => {
         const updatedProduct = {
           ...data.product,
           specifications: data.product.specifications || {},
+          images: Array.isArray(data.product?.images)
+            ? data.product.images
+            : Array.isArray(productData.images)
+              ? productData.images
+              : [],
           ...(savedStock != null ? { stock: savedStock } : {})
         };
 
@@ -752,14 +761,24 @@ const ProductManagement = ({ user }) => {
                           </button>
                         </>
                       ) : (
-                        <button
-                          type="button"
-                          className="pm-card__action-btn"
-                          onClick={() => setViewingItem(product)}
-                          title="View"
-                        >
-                          <Eye size={15} />
-                        </button>
+                        <>
+                          <button
+                            type="button"
+                            className="pm-card__action-btn"
+                            onClick={() => setEditingItem(product)}
+                            title="Edit product & images"
+                          >
+                            <Edit size={15} />
+                          </button>
+                          <button
+                            type="button"
+                            className="pm-card__action-btn"
+                            onClick={() => setViewingItem(product)}
+                            title="View"
+                          >
+                            <Eye size={15} />
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -810,8 +829,8 @@ const ProductManagement = ({ user }) => {
         />
       )}
 
-      {/* Edit Product Modal */}
-      {isInventoryView && editingItem && (
+      {/* Edit Product Modal — inventory OR catalog (images / specs) */}
+      {editingItem && (
         <ProductModal
           product={editingItem}
           showInventoryFields={isInventoryView}
@@ -820,16 +839,31 @@ const ProductManagement = ({ user }) => {
             const productId = getSupplierOfferRowId(editingItem);
             if (!productId) {
               alert(
-                'Cannot save inventory: missing variant offer id. Refresh Manage Inventory and try again.'
+                isInventoryView
+                  ? 'Cannot save inventory: missing variant offer id. Refresh Manage Inventory and try again.'
+                  : 'Cannot save product: missing variant offer id. Refresh Manage Products and try again.'
               );
               return;
             }
-            const payload = buildInventoryUpdatePayload(editingItem, data);
-            if (!payload) {
-              alert('Enter a valid whole-number stock quantity (0 or greater).');
+            if (isInventoryView) {
+              const payload = buildInventoryUpdatePayload(editingItem, data);
+              if (!payload) {
+                alert('Enter a valid whole-number stock quantity (0 or greater).');
+                return;
+              }
+              handleUpdateProduct(productId, payload, { expectedStock: payload.stock });
               return;
             }
-            handleUpdateProduct(productId, payload, { expectedStock: payload.stock });
+            // Catalog edit: keep identity + images (and description/specs from the form).
+            handleUpdateProduct(productId, {
+              name: data.name,
+              description: data.description,
+              category: data.category,
+              brand: data.brand,
+              gtin: data.gtin,
+              images: Array.isArray(data.images) ? data.images : [],
+              specifications: data.specifications
+            });
           }}
         />
       )}
@@ -2935,91 +2969,45 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             )}
 
             {!showInventoryFields && (
-              <div className="form-group" style={{ position: 'relative', marginBottom: '1rem' }}>
+              <div className="form-group" style={{ marginBottom: '1rem' }}>
                 <label>Product Name</label>
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={formData.name}
-                  onChange={handleNameChange}
-                  placeholder='e.g. "Cement OPC", "TMT Steel Bar", "Red Clay Brick"'
-                  onFocus={() => {
-                    if (formData.name.trim().length > 0 && suggestions.length > 0) {
-                      setShowSuggestions(true);
-                    } else if (!product) {
-                      // Show dropdown with options even when no suggestions or when field is empty
-                      setShowSuggestions(true);
-                    }
-                  }}
-                  onBlur={(e) => {
-                    // Check if the blur is due to clicking on a suggestion
-                    if (suggestionsRef.current && suggestionsRef.current.contains(e.relatedTarget)) {
-                      return;
-                    }
-                    // Delay hiding suggestions to allow click on suggestion
-                    setTimeout(() => {
-                      if (!suggestionsRef.current || !suggestionsRef.current.contains(document.activeElement)) {
-                        setShowSuggestions(false);
-                      }
-                    }, 200);
-                  }}
-                  required
-                  autoComplete="off"
-                  style={{ width: '100%' }}
-                />
-
-                <div style={{ marginTop: '0.9rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.35rem' }}>
-                    Brand
-                  </label>
-                  <BrandSelect
-                    value={formData.brand}
-                    onChange={(brand) => setFormData((prev) => ({ ...prev, brand }))}
-                    disabled={!!product}
-                    required={!product}
-                    searchable
-                    allowOther={false}
-                  />
-                </div>
-
-                <div style={{ marginTop: '0.9rem' }}>
-                  <label style={{ display: 'block', marginBottom: '0.35rem' }}>
-                    GTIN / UPC / EAN
-                  </label>
+                <div className={`pm-suggest-anchor${showSuggestions ? ' is-open' : ''}`}>
                   <input
+                    ref={inputRef}
                     type="text"
-                    value={formData.gtin}
-                    onChange={(e) => setFormData({ ...formData, gtin: e.target.value.replace(/\s+/g, '') })}
-                    placeholder='8/12/13/14 digit code'
-                    inputMode="numeric"
+                    value={formData.name}
+                    onChange={handleNameChange}
+                    placeholder='e.g. "Cement OPC", "TMT Steel Bar", "Red Clay Brick"'
+                    onFocus={() => {
+                      if (formData.name.trim().length > 0 && suggestions.length > 0) {
+                        setShowSuggestions(true);
+                      } else if (!product) {
+                        // Show dropdown with options even when no suggestions or when field is empty
+                        setShowSuggestions(true);
+                      }
+                    }}
+                    onBlur={(e) => {
+                      // Check if the blur is due to clicking on a suggestion
+                      if (suggestionsRef.current && suggestionsRef.current.contains(e.relatedTarget)) {
+                        return;
+                      }
+                      // Delay hiding suggestions to allow click on suggestion
+                      setTimeout(() => {
+                        if (!suggestionsRef.current || !suggestionsRef.current.contains(document.activeElement)) {
+                          setShowSuggestions(false);
+                        }
+                      }, 200);
+                    }}
+                    required
                     autoComplete="off"
                     style={{ width: '100%' }}
                   />
-                </div>
 
                 {showSuggestions && !product && (
                 <div
                   ref={suggestionsRef}
-                  style={{
-                    position: 'absolute',
-                    top: '68px',
-                    left: 0,
-                    right: 0,
-                    background: 'white',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '8px',
-                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-                    zIndex: 10000,
-                    maxHeight: '400px',
-                    overflowY: 'auto',
-                    overflowX: 'visible',
-                    marginTop: '4px',
-                    padding: '4px 0',
-                    width: '100%',
-                    maxWidth: '100%',
-                    minWidth: '100%',
-                    boxSizing: 'border-box'
-                  }}
+                  className="pm-suggest-menu"
+                  style={{ maxHeight: '400px' }}
                   onMouseDown={(e) => {
                     // Prevent input blur when clicking on dropdown
                     e.preventDefault();
@@ -3199,26 +3187,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                 {showSuggestions && product && suggestions.length > 0 && (
                 <div
                   ref={suggestionsRef}
-                  style={{
-                    position: 'absolute',
-                    top: '68px',
-                    left: 0,
-                    right: 0,
-                    background: 'white',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '8px',
-                    boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-                    zIndex: 10000,
-                    maxHeight: '400px',
-                    overflowY: 'auto',
-                    overflowX: 'visible',
-                    marginTop: '4px',
-                    padding: '4px 0',
-                    width: '100%',
-                    maxWidth: '100%',
-                    minWidth: '100%',
-                    boxSizing: 'border-box'
-                  }}
+                  className="pm-suggest-menu"
+                  style={{ maxHeight: '400px' }}
                   onMouseDown={(e) => {
                     // Prevent input blur when clicking on dropdown
                     e.preventDefault();
@@ -3299,19 +3269,48 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   ))}
                 </div>
                 )}
+                </div>
+
+                <div style={{ marginTop: '0.9rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.35rem' }}>
+                    Brand
+                  </label>
+                  <BrandSelect
+                    value={formData.brand}
+                    onChange={(brand) => setFormData((prev) => ({ ...prev, brand }))}
+                    disabled={!!product}
+                    required={!product}
+                    searchable
+                    allowOther={false}
+                  />
+                </div>
+
+                <div style={{ marginTop: '0.9rem' }}>
+                  <label style={{ display: 'block', marginBottom: '0.35rem' }}>
+                    GTIN / UPC / EAN
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.gtin}
+                    onChange={(e) => setFormData({ ...formData, gtin: e.target.value.replace(/\s+/g, '') })}
+                    placeholder='8/12/13/14 digit code'
+                    inputMode="numeric"
+                    autoComplete="off"
+                    style={{ width: '100%' }}
+                  />
+                </div>
               </div>
             )}
 
             {!showInventoryFields && (
               <div className="form-group" style={{ 
-                position: 'relative',
                 opacity: showSuggestions && suggestions.length > 0 ? 0.3 : 1,
                 pointerEvents: showSuggestions && suggestions.length > 0 ? 'none' : 'auto',
                 transition: 'opacity 0.2s ease',
                 zIndex: showCategorySuggestions ? 1 : (showUnitSuggestions ? 1000 : 'auto')
               }}>
                 <label>Unit</label>
-                <div style={{ position: 'relative' }}>
+                <div className={`pm-suggest-anchor${showUnitSuggestions ? ' is-open' : ''}`}>
                   <input
                     ref={unitInputRef}
                     type="text"
@@ -3341,83 +3340,41 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   {showUnitSuggestions && (
                     <div
                       ref={unitSuggestionsRef}
-                      style={{
-                        position: 'absolute',
-                        top: '100%',
-                        left: 0,
-                        right: 0,
-                        background: 'white',
-                        border: '1px solid #d1d5db',
-                        borderRadius: '8px',
-                        boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-                        zIndex: 10002,
-                        maxHeight: '300px',
-                        overflowY: 'auto',
-                        marginTop: '4px',
-                        padding: '4px 0',
-                        width: '100%'
-                      }}
+                      className="pm-suggest-menu"
                       onMouseDown={(e) => e.preventDefault()}
                     >
-                    {unitSuggestions.length > 0 ? (
-                      unitSuggestions.map((unit, index) => (
+                      {unitSuggestions.length > 0 ? (
+                        unitSuggestions.map((unit, index) => (
+                          <div
+                            key={index}
+                            className="pm-suggest-menu__item"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleUnitSelect(unit);
+                            }}
+                          >
+                            {unit.displayName || unit.name}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="pm-suggest-menu__empty">
+                          No matching units
+                        </div>
+                      )}
+                      {formData.unit.trim() && !unitSuggestions.some(unit => unit.name.toLowerCase() === formData.unit.trim().toLowerCase()) && (
                         <div
-                          key={index}
+                          className="pm-suggest-menu__create"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            handleUnitSelect(unit);
-                          }}
-                          style={{
-                            padding: '0.875rem 1rem',
-                            cursor: 'pointer',
-                            borderBottom: index < unitSuggestions.length - 1 ? '1px solid #f3f4f6' : 'none',
-                            transition: 'background-color 0.15s ease'
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = '#f9fafb';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'white';
+                            handleUnitCreate();
                           }}
                         >
-                          {unit.displayName || unit.name}
+                          <Plus size={16} />
+                          Create "{formData.unit.trim()}"
                         </div>
-                      ))
-                    ) : (
-                      <div style={{ padding: '0.875rem 1rem', color: '#64748b' }}>
-                        No matching units
-                      </div>
-                    )}
-                    {formData.unit.trim() && !unitSuggestions.some(unit => unit.name.toLowerCase() === formData.unit.trim().toLowerCase()) && (
-                      <div
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleUnitCreate();
-                        }}
-                        style={{
-                          padding: '0.875rem 1rem',
-                          cursor: 'pointer',
-                          borderTop: '1px solid #e5e7eb',
-                          background: '#f0f9ff',
-                          color: '#0369a1',
-                          fontWeight: '500',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = '#e0f2fe';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = '#f0f9ff';
-                        }}
-                      >
-                        <Plus size={16} />
-                        Create "{formData.unit.trim()}"
-                      </div>
-                    )}
+                      )}
                     </div>
                   )}
                 </div>
@@ -3426,146 +3383,80 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             
             {!showInventoryFields && (
               <div className="form-group" style={{ 
-                position: 'relative',
                 opacity: showSuggestions && suggestions.length > 0 ? 0.3 : 1,
                 pointerEvents: showSuggestions && suggestions.length > 0 ? 'none' : 'auto',
                 transition: 'opacity 0.2s ease',
-                overflow: 'visible',
                 zIndex: showCategorySuggestions ? 1000 : 1
               }}>
                 <label>Category</label>
-                <input
-                  ref={categoryInputRef}
-                  type="text"
-                  value={formData.category}
-                  onChange={handleCategoryChange}
-                  onFocus={() => {
-                    if (categories.length > 0) {
-                      setCategorySuggestions(categories);
-                      setShowCategorySuggestions(true);
-                    }
-                  }}
-                  onBlur={(e) => {
-                    if (categorySuggestionsRef.current && categorySuggestionsRef.current.contains(e.relatedTarget)) {
-                      return;
-                    }
-                    setTimeout(() => {
-                      if (!categorySuggestionsRef.current || !categorySuggestionsRef.current.contains(document.activeElement)) {
-                        setShowCategorySuggestions(false);
+                <div className={`pm-suggest-anchor${showCategorySuggestions ? ' is-open' : ''}`}>
+                  <input
+                    ref={categoryInputRef}
+                    type="text"
+                    value={formData.category}
+                    onChange={handleCategoryChange}
+                    onFocus={() => {
+                      if (categories.length > 0) {
+                        setCategorySuggestions(categories);
+                        setShowCategorySuggestions(true);
                       }
-                    }, 200);
-                  }}
-                  placeholder="Select or type a new category"
-                  required
-                  autoComplete="off"
-                  style={{ width: '100%', boxSizing: 'border-box' }}
-                />
-                {showCategorySuggestions && (
-                  <div
-                    ref={categorySuggestionsRef}
-                    style={{
-                      position: 'absolute',
-                      top: '100%',
-                      left: 0,
-                      right: 0,
-                      background: 'white',
-                      border: '1px solid #d1d5db',
-                      borderRadius: '8px',
-                      boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
-                      zIndex: 10001,
-                      maxHeight: '300px',
-                      overflowY: 'auto',
-                      overflowX: 'visible',
-                      marginTop: '4px',
-                      padding: '4px 0',
-                      width: '100%',
-                      minWidth: '100%',
-                      boxSizing: 'border-box',
-                      wordWrap: 'break-word'
                     }}
-                    onMouseDown={(e) => e.preventDefault()}
-                  >
-                    {categorySuggestions.length > 0 ? (
-                      categorySuggestions.map((cat, index) => (
+                    onBlur={(e) => {
+                      if (categorySuggestionsRef.current && categorySuggestionsRef.current.contains(e.relatedTarget)) {
+                        return;
+                      }
+                      setTimeout(() => {
+                        if (!categorySuggestionsRef.current || !categorySuggestionsRef.current.contains(document.activeElement)) {
+                          setShowCategorySuggestions(false);
+                        }
+                      }, 200);
+                    }}
+                    placeholder="Select or type a new category"
+                    required
+                    autoComplete="off"
+                    style={{ width: '100%', boxSizing: 'border-box' }}
+                  />
+                  {showCategorySuggestions && (
+                    <div
+                      ref={categorySuggestionsRef}
+                      className="pm-suggest-menu"
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      {categorySuggestions.length > 0 ? (
+                        categorySuggestions.map((cat, index) => (
+                          <div
+                            key={index}
+                            className="pm-suggest-menu__item"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              handleCategorySelect(cat);
+                            }}
+                          >
+                            {cat.displayName || cat.name}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="pm-suggest-menu__empty">
+                          No matching categories
+                        </div>
+                      )}
+                      {formData.category.trim() && !categorySuggestions.some(cat => cat.name.toLowerCase() === formData.category.trim().toLowerCase()) && (
                         <div
-                          key={index}
+                          className="pm-suggest-menu__create"
                           onClick={(e) => {
                             e.preventDefault();
                             e.stopPropagation();
-                            handleCategorySelect(cat);
-                          }}
-                          style={{
-                            padding: '0.875rem 1rem',
-                            cursor: 'pointer',
-                            borderBottom: index < categorySuggestions.length - 1 ? '1px solid #f3f4f6' : 'none',
-                            transition: 'background-color 0.15s ease',
-                            overflow: 'visible',
-                            overflowWrap: 'break-word',
-                            wordBreak: 'break-word',
-                            whiteSpace: 'normal',
-                            textOverflow: 'clip',
-                            width: '100%',
-                            boxSizing: 'border-box',
-                            textAlign: 'left',
-                            display: 'flex',
-                            alignItems: 'center'
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.backgroundColor = '#f9fafb';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.backgroundColor = 'white';
+                            handleCategoryCreate();
                           }}
                         >
-                          <span style={{
-                            display: 'block',
-                            width: '100%',
-                            overflow: 'visible',
-                            wordWrap: 'break-word',
-                            whiteSpace: 'normal',
-                            textAlign: 'left',
-                            lineHeight: '1.5'
-                          }}>
-                            {cat.displayName || cat.name}
-                          </span>
+                          <Plus size={16} />
+                          Create "{formData.category.trim()}"
                         </div>
-                      ))
-                    ) : (
-                      <div style={{ padding: '0.875rem 1rem', color: '#64748b' }}>
-                        No matching categories
-                      </div>
-                    )}
-                    {formData.category.trim() && !categorySuggestions.some(cat => cat.name.toLowerCase() === formData.category.trim().toLowerCase()) && (
-                      <div
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleCategoryCreate();
-                        }}
-                        style={{
-                          padding: '0.875rem 1rem',
-                          cursor: 'pointer',
-                          borderTop: '1px solid #e5e7eb',
-                          background: '#f0f9ff',
-                          color: '#0369a1',
-                          fontWeight: '500',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem'
-                        }}
-                        onMouseEnter={(e) => {
-                          e.currentTarget.style.backgroundColor = '#e0f2fe';
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.style.backgroundColor = '#f0f9ff';
-                        }}
-                      >
-                        <Plus size={16} />
-                        Create "{formData.category.trim()}"
-                      </div>
-                    )}
-                  </div>
-                )}
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             
