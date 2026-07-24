@@ -112,7 +112,7 @@ const BOQNormalize = ({ onComplete }) => {
       return;
     }
     if (isDateBeforeToday(requiredDate)) {
-      alert('Required by date cannot be in the past.');
+      alert('Expected dispatch date cannot be in the past.');
       e.target.value = '';
       return;
     }
@@ -526,7 +526,7 @@ const BOQNormalize = ({ onComplete }) => {
               <label className="boq-site-label">
                 <span className="boq-site-label-text">
                   <Calendar size={16} />
-                  Required by
+                  Expected Dispatch
                 </span>
                 <input
                   type="date"

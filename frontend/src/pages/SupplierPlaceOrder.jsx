@@ -726,11 +726,11 @@ const SupplierPlaceOrder = () => {
     if (placing) return;
 
     if (!requiredDate) {
-      window.alert('Please select a "Required By Date" before getting transport suggestions.');
+      window.alert('Please select an "Expected Dispatch" date before getting transport suggestions.');
       return;
     }
     if (isDateBeforeToday(requiredDate)) {
-      window.alert('Required by date cannot be in the past.');
+      window.alert('Expected dispatch date cannot be in the past.');
       return;
     }
 
@@ -815,11 +815,11 @@ const SupplierPlaceOrder = () => {
 
     if (!requiredDate) {
       const proceed = window.confirm(
-        'You have not specified a "Required By" date.\n\nDo you want to continue without a required date?'
+        'You have not specified an "Expected Dispatch" date.\n\nDo you want to continue without an expected dispatch date?'
       );
       if (!proceed) return;
     } else if (isDateBeforeToday(requiredDate)) {
-      window.alert('Required by date cannot be in the past.');
+      window.alert('Expected dispatch date cannot be in the past.');
       return;
     }
 
@@ -1081,7 +1081,7 @@ const SupplierPlaceOrder = () => {
             <h2 className="spo-section-title">Delivery &amp; payment</h2>
             <div className="spo-two-col">
               <div className="spo-field">
-                <label htmlFor="spo-required-date">Required by date</label>
+                <label htmlFor="spo-required-date">Expected Dispatch</label>
                 <input
                   id="spo-required-date"
                   type="date"
@@ -1093,7 +1093,7 @@ const SupplierPlaceOrder = () => {
                   }}
                   min={todayDateInput}
                 />
-                <p className="spo-hint">Stored on each upstream order as the expected delivery date.</p>
+                <p className="spo-hint">Stored on each upstream order as the expected dispatch date.</p>
               </div>
               <div className="spo-field">
                 <label htmlFor="spo-payment-method">Payment method</label>

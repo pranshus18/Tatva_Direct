@@ -519,7 +519,7 @@ export default function SupplierUpstreamOrders() {
                     <th>Amount</th>
                     <th>Status</th>
                     <th>Payment</th>
-                    <th>Required by</th>
+                    <th>Expected Dispatch</th>
                     <th>Updated</th>
                     <th aria-label="Actions" />
                   </tr>
@@ -623,7 +623,7 @@ export default function SupplierUpstreamOrders() {
                     {paymentMethodLabel(orderDetails?.paymentMethod)}
                   </p>
                   <p>
-                    <strong>Required by:</strong>{' '}
+                    <strong>Expected Dispatch:</strong>{' '}
                     {orderDetails?.expectedDeliveryDate
                       ? formatDateIST(orderDetails.expectedDeliveryDate, 'N/A')
                       : '—'}

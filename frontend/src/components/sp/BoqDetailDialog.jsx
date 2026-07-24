@@ -93,7 +93,7 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
               {boqStatus ? <p className="capitalize">Status: {boqStatus}</p> : null}
               {projectLocation ? <p>Site: {projectLocation}</p> : null}
               {requiredDate ? (
-                <p>Required by: {formatDateIST(requiredDate, requiredDate)}</p>
+                <p>Expected Dispatch: {formatDateIST(requiredDate, requiredDate)}</p>
               ) : null}
             </div>
           </DialogDescription>

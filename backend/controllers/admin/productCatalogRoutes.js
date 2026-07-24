@@ -3,6 +3,8 @@ import { adminUpdateProductSchema } from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 import { normalizeModelIdentifier, sanitizeSpecifications } from '../../services/supplierCatalogHelpersService.js';
 import { buildProductIdentification, firstNonEmpty } from '../../services/procurementSharedService.js';
+import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
+import { buildSupplierDescriptionAttributes } from '../../utils/supplierProductDescriptions.js';
 
 export function registerAdminProductCatalogRoutes({ router, authenticateToken, isAdmin, supabase, console }) {
 router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
@@ -144,6 +146,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
               stock: best.stock,
               min_order_quantity: best.min_order_quantity ?? p.min_order_quantity,
               location: best.location ?? p.location,
+              supplier_id: p.supplier_id || best.supplier_id || null,
               igst_rate: best.igst_rate ?? best?.attributes?.igstRate ?? p.igst_rate ?? null,
               cgst_rate: best.cgst_rate ?? best?.attributes?.cgstRate ?? p.cgst_rate ?? null,
               sgst_rate: best.sgst_rate ?? best?.attributes?.sgstRate ?? p.sgst_rate ?? null,
@@ -210,6 +213,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
           const best = bestByProduct.get(p.id);
           return {
             ...p,
+            supplier_id: p.supplier_id || best?.supplier?.id || null,
             supplier: best?.supplier || null,
           };
         });
@@ -374,6 +378,7 @@ router.get('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
         product.stock = bestRowByScore.stock;
         product.min_order_quantity = bestRowByScore.min_order_quantity ?? product.min_order_quantity;
         product.location = bestRowByScore.location ?? product.location;
+        product.supplier_id = product.supplier_id || bestRowByScore.supplier_id || null;
         product.igst_rate = bestRowByScore.igst_rate ?? bestRowByScore?.attributes?.igstRate ?? product.igst_rate ?? null;
         product.cgst_rate = bestRowByScore.cgst_rate ?? bestRowByScore?.attributes?.cgstRate ?? product.cgst_rate ?? null;
         product.sgst_rate = bestRowByScore.sgst_rate ?? bestRowByScore?.attributes?.sgstRate ?? product.sgst_rate ?? null;
@@ -609,53 +614,98 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
     console.log('[ADMIN UPDATE] Product specs keys count:', Object.keys(productResponse.specifications).length);
     console.log('[ADMIN UPDATE] Product specs keys:', Object.keys(productResponse.specifications));
 
-    // Persist tax fields on supplier_products (per-offer inventory table), not on products.
-    if (requestedTaxUpdate || requestedHsnUpdate) {
+    // Supplier portal reads live offer values from supplier_products (price/stock/location/
+    // MOQ + attribute overrides). Admin UI still edits those fields, so mirror them here.
+    // Tax/HSN already lived on supplier_products; extend the same sync for inventory/copy.
+    const requestedOfferInventoryUpdate =
+      validatedBody.price !== undefined ||
+      validatedBody.stock !== undefined ||
+      validatedBody.location !== undefined ||
+      validatedBody.minOrderQuantity !== undefined ||
+      validatedBody.min_order_quantity !== undefined;
+    const requestedNameUpdate = validatedBody.name !== undefined;
+    const requestedDescriptionUpdate = validatedBody.description !== undefined;
+    const shouldSyncSupplierOffers =
+      requestedTaxUpdate ||
+      requestedHsnUpdate ||
+      requestedOfferInventoryUpdate ||
+      requestedNameUpdate ||
+      requestedDescriptionUpdate;
+
+    if (shouldSyncSupplierOffers) {
       try {
-        const taxUpdateData = {
+        const offerPatch = {
           updated_at: new Date().toISOString()
         };
         if (requestedTaxUpdate) {
-          taxUpdateData.igst_rate = normalizedTax.igst_rate;
-          taxUpdateData.cgst_rate = normalizedTax.cgst_rate;
-          taxUpdateData.sgst_rate = normalizedTax.sgst_rate;
+          offerPatch.igst_rate = normalizedTax.igst_rate;
+          offerPatch.cgst_rate = normalizedTax.cgst_rate;
+          offerPatch.sgst_rate = normalizedTax.sgst_rate;
+        }
+        if (updateData.price !== undefined) {
+          offerPatch.price = updateData.price;
+        }
+        if (updateData.stock !== undefined) {
+          offerPatch.stock = updateData.stock;
+        }
+        if (updateData.location !== undefined) {
+          offerPatch.location = updateData.location;
+        }
+        if (updateData.min_order_quantity !== undefined) {
+          offerPatch.min_order_quantity = updateData.min_order_quantity;
         }
 
         let spUpdateResult = null;
-        const primarySupplierId = validatedBody?.supplier_id || validatedBody?.supplier?.id || productResponse?.supplier_id || null;
+        const primarySupplierId =
+          validatedBody?.supplier_id ||
+          validatedBody?.supplier?.id ||
+          productResponse?.supplier_id ||
+          null;
 
+        // Prefer the product's primary supplier offer(s); fall back to all offers for this catalog product.
         if (primarySupplierId) {
           const { data } = await supabase
             .from('supplier_products')
-            .update(taxUpdateData)
+            .update(offerPatch)
             .eq('product_id', req.params.id)
             .eq('supplier_id', primarySupplierId)
-            .select('id, product_id, supplier_id, attributes')
-            .limit(1);
+            .select('id, product_id, supplier_id, attributes');
           spUpdateResult = data;
         }
 
         if (!spUpdateResult || spUpdateResult.length === 0) {
           const { data } = await supabase
             .from('supplier_products')
-            .update(taxUpdateData)
+            .update(offerPatch)
             .eq('product_id', req.params.id)
             .select('id, product_id, supplier_id, attributes');
           spUpdateResult = data;
         }
 
         if (spUpdateResult && spUpdateResult.length > 0) {
-          // Keep JSON attributes mirror for compatibility with older readers.
           for (const row of spUpdateResult) {
-            const mergedAttrs = {
-              ...(row.attributes || {}),
-              igstRate: normalizedTax.igst_rate,
-              cgstRate: normalizedTax.cgst_rate,
-              sgstRate: normalizedTax.sgst_rate
-            };
+            let mergedAttrs = { ...(row.attributes || {}) };
+
+            if (requestedTaxUpdate) {
+              mergedAttrs.igstRate = normalizedTax.igst_rate;
+              mergedAttrs.cgstRate = normalizedTax.cgst_rate;
+              mergedAttrs.sgstRate = normalizedTax.sgst_rate;
+            }
             if (requestedHsnUpdate) {
               mergedAttrs.hsnCode = normalizedHsnCode || null;
             }
+            if (requestedNameUpdate) {
+              // Supplier list prefers attributes.listingName over products.name.
+              mergedAttrs.listingName = String(validatedBody.name || '').trim();
+            }
+            if (requestedDescriptionUpdate) {
+              // Supplier list prefers attributes.supplierDescription over products.description.
+              mergedAttrs = buildSupplierDescriptionAttributes(
+                mergedAttrs,
+                validatedBody.description || ''
+              );
+            }
+
             await supabase
               .from('supplier_products')
               .update({
@@ -664,6 +714,7 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
               })
               .eq('id', row.id);
           }
+
           if (requestedTaxUpdate) {
             productResponse.igst_rate = normalizedTax.igst_rate;
             productResponse.cgst_rate = normalizedTax.cgst_rate;
@@ -672,12 +723,26 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
           if (requestedHsnUpdate) {
             productResponse.hsnCode = normalizedHsnCode || null;
           }
+          if (offerPatch.price !== undefined) productResponse.price = offerPatch.price;
+          if (offerPatch.stock !== undefined) productResponse.stock = offerPatch.stock;
+          if (offerPatch.location !== undefined) productResponse.location = offerPatch.location;
+          if (offerPatch.min_order_quantity !== undefined) {
+            productResponse.min_order_quantity = offerPatch.min_order_quantity;
+            productResponse.minOrderQuantity = offerPatch.min_order_quantity;
+          }
+
+          void syncCatalogProductSnapshotFromOffers(supabase, req.params.id).catch((syncError) => {
+            console.error('❌ [ADMIN UPDATE] Failed to refresh catalog snapshot from offers:', syncError);
+          });
         } else {
-          console.warn('⚠️ [ADMIN UPDATE] No supplier_products rows found for tax update on product:', req.params.id);
+          console.warn(
+            '⚠️ [ADMIN UPDATE] No supplier_products rows found to sync offer fields for product:',
+            req.params.id
+          );
         }
-      } catch (taxError) {
-        console.error('❌ [ADMIN UPDATE] Failed to persist tax rates on supplier_products:', taxError);
-        // Non-fatal: product update succeeded.
+      } catch (offerSyncError) {
+        console.error('❌ [ADMIN UPDATE] Failed to sync offer fields on supplier_products:', offerSyncError);
+        // Non-fatal: catalog product update succeeded.
       }
     }
 

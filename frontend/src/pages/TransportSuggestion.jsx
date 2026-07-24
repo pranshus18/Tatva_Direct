@@ -608,7 +608,7 @@ const TransportSuggestion = () => {
               Grand total: {formatCurrency(grandTotalAllPos)}
             </div>
             <div style={{ fontSize: '0.9rem', color: '#334155' }}>
-              Required by: {requiredDate || 'Not specified'}
+              Expected Dispatch: {requiredDate || 'Not specified'}
             </div>
             <div style={{ fontSize: '0.9rem', color: '#334155', marginTop: '0.2rem' }}>
               Delivery destination:{' '}

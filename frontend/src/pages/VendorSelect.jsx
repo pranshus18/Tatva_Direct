@@ -871,7 +871,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             {boqMeta?.requiredDate && (
               <>
                 {deliverySiteLabel ? ' · ' : ''}
-                <strong>Required by:</strong> {formatDateIST(boqMeta.requiredDate, '—')}
+                <strong>Expected Dispatch:</strong> {formatDateIST(boqMeta.requiredDate, '—')}
               </>
             )}
             {deliverySiteLabel && (

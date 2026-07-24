@@ -779,7 +779,9 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
         description: looksLikeAiInstructions(editedProduct.description) ? '' : (editedProduct.description || ''),
         specifications: editedProduct.specifications || {},
         // Ensure category is included (it's needed for syncing specs to category)
-        category: editedProduct.category || product.category
+        category: editedProduct.category || product.category,
+        // Target the correct supplier_products offer when mirroring price/stock/etc.
+        supplier_id: product?.supplier_id || product?.supplier?.id || undefined
       };
       
       console.log('💾 [ADMIN SAVE] Saving product with category:', productData.category);

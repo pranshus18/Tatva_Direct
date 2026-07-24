@@ -45,7 +45,10 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(editedProduct)
+        body: JSON.stringify({
+          ...editedProduct,
+          supplier_id: product?.supplier_id || supplier?.id || editedProduct?.supplier_id || undefined
+        })
       });
 
       if (response.ok) {

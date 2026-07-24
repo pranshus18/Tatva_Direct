@@ -1193,13 +1193,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
 
     if (!requiredDate) {
       const proceed = window.confirm(
-        'You have not specified a "Required by" date.\n\nDo you want to continue without a required date?'
+        'You have not specified an "Expected Dispatch" date.\n\nDo you want to continue without an expected dispatch date?'
       );
       if (!proceed) {
         return;
       }
     } else if (isDateBeforeToday(requiredDate)) {
-      alert('Required by date cannot be in the past.');
+      alert('Expected dispatch date cannot be in the past.');
       return;
     }
 
@@ -1464,7 +1464,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             textTransform: 'uppercase',
             letterSpacing: '0.05em'
           }}>
-            Required By Date
+            Expected Dispatch
           </label>
           <input
             type="date"
