@@ -42,31 +42,61 @@ function resolveRankBoqId({ boqId, effectiveItems, boqMeta, cartSupplierHandoff 
   return typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null;
 }
 
+function getItemRequestedQty(item) {
+  const qty = Number(item?.quantity);
+  return Number.isFinite(qty) && qty > 0 ? qty : 1;
+}
+
+function getVendorAvailableStock(vendor) {
+  const stock = Number(vendor?.availableStock ?? vendor?.stock ?? 0);
+  return Number.isFinite(stock) ? Math.max(0, stock) : 0;
+}
+
+function vendorHasSufficientStock(vendor, item) {
+  return getVendorAvailableStock(vendor) >= getItemRequestedQty(item);
+}
+
+function getVendorSelectionId(vendor) {
+  return String(vendor?.selectionId || vendor?.supplierProductId || vendor?.id || '');
+}
+
+function formatInsufficientStockMessage(item, vendor) {
+  const name = item?.normalizedName || item?.rawName || item?.name || 'this item';
+  const supplierName = vendor?.name ? ` from ${vendor.name}` : '';
+  const requested = getItemRequestedQty(item);
+  const available = getVendorAvailableStock(vendor);
+  const unit = vendor?.unit || item?.unit || 'units';
+  return `Insufficient stock for "${name}"${supplierName}. Available: ${available} ${unit}, requested: ${requested}.`;
+}
+
 /** Pick nearest supplier when distance is known; otherwise first ranked approved option. */
 function pickRecommendedVendor(vendors, item = null) {
   if (!Array.isArray(vendors) || vendors.length === 0) return null;
   const eligible = vendors.filter((v) => v && (v.selectionId || v.supplierProductId || v.id));
   if (!eligible.length) return null;
 
+  // Never auto-select a supplier that cannot fulfill the requested quantity.
+  const inStock = eligible.filter((v) => vendorHasSufficientStock(v, item));
+  if (!inStock.length) return null;
+
   const preferredSupplierId =
     String(item?.nearestSupplier?.supplierId || '').trim() ||
     String(item?.supplyChainLastSupplier?.supplierId || '').trim() ||
     '';
   if (preferredSupplierId) {
-    const preferred = eligible.filter((v) => String(v.id || '').trim() === preferredSupplierId);
-    const preferredInStock = preferred.filter((v) => Number(v?.stock || 0) > 0);
-    const preferredDistance = preferredInStock.filter((v) => typeof v.distanceKm === 'number');
+    const preferred = inStock.filter((v) => String(v.id || '').trim() === preferredSupplierId);
+    const preferredDistance = preferred.filter((v) => typeof v.distanceKm === 'number');
     if (preferredDistance.length) {
       return preferredDistance.reduce((best, vendor) =>
         vendor.distanceKm < best.distanceKm ? vendor : best
       );
     }
-    if (preferredInStock.length) {
-      return preferredInStock[0];
+    if (preferred.length) {
+      return preferred[0];
     }
   }
 
-  const nearestFlagged = eligible.filter((v) => v.isNearestRecommended);
+  const nearestFlagged = inStock.filter((v) => v.isNearestRecommended);
   if (nearestFlagged.length) {
     return nearestFlagged.reduce((best, vendor) => {
       const bestDist = typeof best.distanceKm === 'number' ? best.distanceKm : Infinity;
@@ -76,7 +106,7 @@ function pickRecommendedVendor(vendors, item = null) {
     });
   }
 
-  const withDistance = eligible.filter(
+  const withDistance = inStock.filter(
     (v) => typeof v.distanceKm === 'number' && !Number.isNaN(v.distanceKm)
   );
   if (withDistance.length) {
@@ -85,8 +115,8 @@ function pickRecommendedVendor(vendors, item = null) {
     );
   }
 
-  const approved = eligible.filter((v) => v.status === 'approved');
-  const pool = approved.length ? approved : eligible;
+  const approved = inStock.filter((v) => v.status === 'approved');
+  const pool = approved.length ? approved : inStock;
   return pool.find((v) => v.rank === 1 || v.isNearestRecommended) || pool[0];
 }
 
@@ -479,8 +509,30 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     }
   };
 
+  const pruneInsufficientSelections = (cleanedVendors) => {
+    setSelections((prev) => {
+      if (!prev || typeof prev !== 'object') return prev;
+      let changed = false;
+      const next = { ...prev };
+      (effectiveItems || []).forEach((item) => {
+        const selectionKey = getSelectionKey(item);
+        const selectedId = next[selectionKey];
+        if (!selectedId) return;
+        const itemId = item.id?.toString() || String(item.id);
+        const vendors = cleanedVendors[itemId] || cleanedVendors[item.id] || [];
+        const vendor = vendors.find((v) => getVendorSelectionId(v) === String(selectedId));
+        if (!vendor || !vendorHasSufficientStock(vendor, item)) {
+          delete next[selectionKey];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  };
+
   const applyRankResults = (cleanedVendors, cacheKey) => {
     setItemVendors(cleanedVendors);
+    pruneInsufficientSelections(cleanedVendors);
     autoSelectNearestVendors(cleanedVendors);
     if (cacheKey) {
       setVendorRankCache(cacheKey, cleanedVendors);
@@ -626,6 +678,13 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     return String(item?.id ?? '');
   };
 
+  const findVendorForItem = (item, vendorId) => {
+    const itemId = item?.id?.toString() || String(item?.id || '');
+    const vendors = itemVendors[itemId] || itemVendors[item?.id] || [];
+    const normalizedVendorId = String(vendorId || '');
+    return vendors.find((v) => getVendorSelectionId(v) === normalizedVendorId) || null;
+  };
+
   const handleSelect = (item, vendorId) => {
     const selectionKey = getSelectionKey(item);
     const normalizedVendorId = String(vendorId || '');
@@ -634,26 +693,27 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
     shouldAutoSelectNearestRef.current = false;
 
-    console.log('Selecting vendor:', {
-      selectionKey,
-      vendorId: normalizedVendorId,
-      currentSelections: selections
-    });
-
-    setSelections(prev => {
-      const currentVendorId = prev[selectionKey];
-
-      // Toggle selection off when user clicks the same card again.
-      if (currentVendorId === normalizedVendorId) {
+    const currentVendorId = selections[selectionKey];
+    // Allow deselecting even if stock later became insufficient.
+    if (currentVendorId === normalizedVendorId) {
+      setSelections((prev) => {
         const { [selectionKey]: _removed, ...remainingSelections } = prev;
-        console.log('Removed selection:', remainingSelections);
         return remainingSelections;
-      }
+      });
+      return;
+    }
 
-      const newSelections = { ...prev, [selectionKey]: normalizedVendorId };
-      console.log('Updated selections:', newSelections);
-      return newSelections;
-    });
+    const vendor = findVendorForItem(item, normalizedVendorId);
+    if (!vendor || !vendorHasSufficientStock(vendor, item)) {
+      alert(
+        vendor
+          ? formatInsufficientStockMessage(item, vendor)
+          : 'This supplier does not have enough stock for the requested quantity.'
+      );
+      return;
+    }
+
+    setSelections((prev) => ({ ...prev, [selectionKey]: normalizedVendorId }));
   };
   const toggleSpecifications = (item, vendorId) => {
     const itemKey = item?.id?.toString() || String(item?.id || '');
@@ -672,6 +732,37 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       const selectionKey = getSelectionKey(item);
       return selections[selectionKey];
     }).length;
+
+    // If no items have selections, show error
+    if (itemsWithSelections === 0) {
+      alert('Please select at least one supplier before proceeding.');
+      return;
+    }
+
+    const insufficientSelections = effectiveItems
+      .map((item) => {
+        const selectionKey = getSelectionKey(item);
+        const selectedVendorId = selections[selectionKey];
+        if (!selectedVendorId) return null;
+        const vendor = findVendorForItem(item, selectedVendorId);
+        if (vendor && vendorHasSufficientStock(vendor, item)) return null;
+        return { item, vendor };
+      })
+      .filter(Boolean);
+
+    if (insufficientSelections.length > 0) {
+      const details = insufficientSelections
+        .map(({ item, vendor }) =>
+          vendor
+            ? formatInsufficientStockMessage(item, vendor)
+            : `Insufficient stock for "${item?.normalizedName || item?.rawName || 'an item'}".`
+        )
+        .join('\n');
+      alert(
+        `Cannot proceed to Create Purchase Order — selected supplier(s) have insufficient stock:\n\n${details}`
+      );
+      return;
+    }
     
     // Warn if some items don't have suppliers, but allow proceeding
     if (itemsWithSelections < effectiveItems.length) {
@@ -684,12 +775,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       if (!proceed) {
         return;
       }
-    }
-    
-    // If no items have selections, show error
-    if (itemsWithSelections === 0) {
-      alert('Please select at least one supplier before proceeding.');
-      return;
     }
     
     onComplete({ ...selections }, [...effectiveItems]);
@@ -869,6 +954,10 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           return (
           <div key={item.id} className="vendor-section">
             <h3 className="item-title">{item.normalizedName || item.rawName}</h3>
+            <div style={{ marginTop: '-0.4rem', marginBottom: '0.75rem', fontSize: '0.82rem', color: '#334155' }}>
+              Requested quantity: <strong>{getItemRequestedQty(item)}</strong>
+              {item.unit ? ` ${item.unit}` : ''}
+            </div>
             {getProductIdentification(item) && (
               <div style={{ marginTop: '-0.4rem', marginBottom: '0.75rem', fontSize: '0.82rem', color: '#334155' }}>
                 <strong>Product Identification:</strong> {getProductIdentification(item)}
@@ -889,14 +978,18 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                       : specificationEntries.slice(0, 6);
                     const hasMoreSpecifications = specificationEntries.length > 6;
                     const isSelected = currentSelection === vendorIdStr;
+                    const availableStock = getVendorAvailableStock(vendor);
+                    const requestedQty = getItemRequestedQty(item);
+                    const hasEnoughStock = availableStock >= requestedQty;
+                    const isOutOfStock = availableStock <= 0;
                     return (
                   <div 
                     key={vendorIdStr}
-                    className={`vendor-card ${isSelected ? 'selected' : ''}`}
+                    className={`vendor-card ${isSelected ? 'selected' : ''} ${!hasEnoughStock ? 'insufficient-stock' : ''}`}
+                    aria-disabled={!hasEnoughStock}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
-                      console.log(`[VendorSelect] Clicked on vendor: ${vendor.name} (ID: ${vendor.id}) for item: ${itemId}`);
                       handleSelect(item, vendorIdStr);
                     }}
                     onMouseDown={(e) => {
@@ -906,12 +999,12 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     style={{ 
                       userSelect: 'none',
                       WebkitUserSelect: 'none',
-                      cursor: 'pointer',
+                      cursor: hasEnoughStock ? 'pointer' : 'not-allowed',
                       position: 'relative',
                       zIndex: 1
                     }}
                     role="button"
-                    tabIndex={0}
+                    tabIndex={hasEnoughStock || isSelected ? 0 : -1}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
@@ -1062,13 +1155,19 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                         <Clock size={16} />
                         <span>{vendor.leadTime} days delivery</span>
                       </div>
-                      {vendor.stock > 0 ? (
+                      {hasEnoughStock ? (
                         <div className="detail" style={{ color: '#059669' }}>
-                          <span>✓ Stock: {vendor.stock} {vendor.unit || 'units'}</span>
+                          <span>✓ Stock: {availableStock} {vendor.unit || 'units'}</span>
+                        </div>
+                      ) : isOutOfStock ? (
+                        <div className="detail" style={{ color: '#dc2626' }}>
+                          <span>✗ Out of stock</span>
                         </div>
                       ) : (
                         <div className="detail" style={{ color: '#dc2626' }}>
-                          <span>✗ Out of stock</span>
+                          <span>
+                            ✗ Insufficient stock (have {availableStock}, need {requestedQty})
+                          </span>
                         </div>
                       )}
                       {vendor.rating > 0 && (
@@ -1150,7 +1249,15 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       <button
         className="btn-primary btn-large"
         onClick={handleProceed}
-        disabled={!effectiveItems.some(item => !!selections[getSelectionKey(item)])}
+        disabled={
+          !effectiveItems.some((item) => {
+            const selectionKey = getSelectionKey(item);
+            const selectedId = selections[selectionKey];
+            if (!selectedId) return false;
+            const vendor = findVendorForItem(item, selectedId);
+            return vendor && vendorHasSufficientStock(vendor, item);
+          })
+        }
       >
         Continue to Substitutions
       </button>

@@ -1243,9 +1243,16 @@ router.post('/upstream/checkout-reservations', authenticateToken, async (req, re
     if (String(error?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
+    const rawMessage = String(error?.message || '');
+    const isDuplicateReservation =
+      String(error?.code || '') === '23505' ||
+      /inventory_reservations_idempotency_key/i.test(rawMessage) ||
+      /duplicate key value violates unique constraint/i.test(rawMessage);
     return res.status(400).json({
       status: 'error',
-      message: error?.message || 'Failed to reserve inventory for checkout'
+      message: isDuplicateReservation
+        ? 'Could not reserve inventory because a checkout hold is already in progress. Please retry checkout.'
+        : rawMessage || 'Failed to reserve inventory for checkout'
     });
   }
 });

@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isReservationRowStillHoldable } from '../services/phase2CoreService.js';
+import {
+  buildSupersededIdempotencyKey,
+  isIdempotencyKeyUniqueViolation,
+  isPgUniqueViolation,
+  isReservationRowStillHoldable
+} from '../services/phase2CoreService.js';
 
 test('active reservation with future expiry is still holdable (genuine idempotent replay)', () => {
   const row = {
@@ -8,6 +13,40 @@ test('active reservation with future expiry is still holdable (genuine idempoten
     expires_at: new Date(Date.now() + 60 * 1000).toISOString()
   };
   assert.equal(isReservationRowStillHoldable(row), true);
+});
+
+test('superseded idempotency key fits VARCHAR(120) even for long checkout keys', () => {
+  const reservationId = '3c7e2103-ca03-4964-8fa1-a7e2ea597786';
+  const superseded = buildSupersededIdempotencyKey(reservationId);
+  assert.equal(superseded, `done:${reservationId}`);
+  assert.ok(superseded.length <= 120);
+
+  // Old format overflowed VARCHAR(120) and left the unique key stuck on settled rows.
+  const checkoutKey = `sp_po_checkout:11111111-1111-1111-1111-111111111111:22222222-2222-2222-2222-222222222222`;
+  const legacySuperseded = `${checkoutKey}::superseded:${reservationId}`;
+  assert.ok(legacySuperseded.length > 120);
+  assert.ok(superseded.length < legacySuperseded.length);
+});
+
+test('detects Postgres unique violations by code or message', () => {
+  assert.equal(isPgUniqueViolation({ code: '23505', message: 'duplicate' }), true);
+  assert.equal(
+    isIdempotencyKeyUniqueViolation({
+      code: '23505',
+      message: 'duplicate key value violates unique constraint "inventory_reservations_idempotency_key_key"'
+    }),
+    true
+  );
+  assert.equal(
+    isIdempotencyKeyUniqueViolation({
+      message: 'duplicate key value violates unique constraint "inventory_reservations_idempotency_key_key"'
+    }),
+    true
+  );
+  assert.equal(
+    isIdempotencyKeyUniqueViolation({ code: '23505', message: 'duplicate key on order_number' }),
+    false
+  );
 });
 
 test('active reservation past its expiry is NOT holdable, even before the sweep settles it', () => {

@@ -68,6 +68,27 @@
   z-index: 0;
 }
 
+.vendor-card.insufficient-stock {
+  opacity: 0.62;
+  cursor: not-allowed;
+  background: #f8fafc;
+}
+
+.vendor-card.insufficient-stock:hover {
+  border-color: #e2e8f0;
+  box-shadow: none;
+}
+
+.vendor-card.insufficient-stock.selected {
+  border-color: #dc2626;
+  background: #fef2f2;
+  box-shadow: none;
+}
+
+.vendor-card.insufficient-stock.selected::before {
+  border-color: #dc2626;
+}
+
 .vendor-name {
   font-weight: 600;
   margin-bottom: 0.75rem;

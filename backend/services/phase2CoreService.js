@@ -196,18 +196,93 @@ export function isReservationRowStillHoldable(row) {
   return !expiresAt || expiresAt.getTime() > Date.now();
 }
 
+export function isPgUniqueViolation(err) {
+  if (!err) return false;
+  if (String(err.code || '') === '23505') return true;
+  return /duplicate key value violates unique constraint/i.test(String(err.message || ''));
+}
+
+export function isIdempotencyKeyUniqueViolation(err) {
+  if (!isPgUniqueViolation(err)) return false;
+  const haystack = `${err.message || ''} ${err.details || ''} ${err.hint || ''}`;
+  return /idempotency_key/i.test(haystack);
+}
+
 /**
  * Free a settled row's idempotency_key (unique) so a brand-new hold can be inserted with the
- * same key. The settled row itself is left untouched — it has already gone through its final
- * stock side effects and must not be mutated.
+ * same logical key. Must stay within VARCHAR(120): appending the original checkout key
+ * (`sp_po_checkout:<session>:<product>::superseded:<id>`) overflows and leaves the unique
+ * key stuck, which surfaces as a raw duplicate-key error on re-reserve.
  */
+export function buildSupersededIdempotencyKey(reservationId) {
+  return `done:${String(reservationId || '').trim()}`;
+}
+
 async function supersedeStaleIdempotencyKey(row) {
-  const supersededKey = `${row.idempotency_key}::superseded:${row.id}`;
-  await supabase
+  if (!row?.id) return;
+  const supersededKey = buildSupersededIdempotencyKey(row.id);
+  const { error } = await supabase
     .from('inventory_reservations')
-    .update({ idempotency_key: supersededKey })
-    .eq('id', row.id)
-    .eq('idempotency_key', row.idempotency_key);
+    .update({ idempotency_key: supersededKey, updated_at: nowIso() })
+    .eq('id', row.id);
+  // Another worker may have already freed or claimed the key — treat that as success.
+  if (error && !isIdempotencyKeyUniqueViolation(error)) throw error;
+}
+
+async function loadReservationByIdempotencyKey(idempotencyKey) {
+  const { data, error } = await supabase
+    .from('inventory_reservations')
+    .select('*')
+    .eq('idempotency_key', idempotencyKey)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+/**
+ * When two checkouts race on the same idempotency key, adopt the winner's active hold.
+ * If the conflicting row is already settled (or still holding a stuck key after a failed
+ * long supersede), free the key and retry the insert once so checkout can continue.
+ */
+async function resolveIdempotencyInsertConflict({
+  idempotencyKey,
+  insertRow,
+  actorUserId = null
+}) {
+  const racedRow = await loadReservationByIdempotencyKey(idempotencyKey);
+  if (racedRow && isReservationRowStillHoldable(racedRow)) {
+    return { row: racedRow, created: false };
+  }
+
+  if (racedRow) {
+    await supersedeStaleIdempotencyKey(racedRow);
+  }
+
+  const { data: retried, error: retryErr } = await supabase
+    .from('inventory_reservations')
+    .insert(insertRow)
+    .select('*')
+    .single();
+
+  if (!retryErr && retried) {
+    try {
+      await deductStockForReservation(retried, actorUserId);
+      return { row: retried, created: true };
+    } catch (deductErr) {
+      await supabase.from('inventory_reservations').delete().eq('id', retried.id);
+      throw deductErr;
+    }
+  }
+
+  if (retryErr && isIdempotencyKeyUniqueViolation(retryErr)) {
+    const winner = await loadReservationByIdempotencyKey(idempotencyKey);
+    if (winner && isReservationRowStillHoldable(winner)) {
+      return { row: winner, created: false };
+    }
+  }
+
+  if (retryErr) throw retryErr;
+  return null;
 }
 
 export async function reserveInventory({
@@ -227,11 +302,7 @@ export async function reserveInventory({
   }
 
   if (idempotencyKey) {
-    const { data: existing } = await supabase
-      .from('inventory_reservations')
-      .select('*')
-      .eq('idempotency_key', idempotencyKey)
-      .maybeSingle();
+    const existing = await loadReservationByIdempotencyKey(idempotencyKey);
     if (existing) {
       if (isReservationRowStillHoldable(existing)) return existing;
       // A prior hold under this exact key was already settled (e.g. released moments ago by a
@@ -289,13 +360,14 @@ export async function reserveInventory({
     // insert under the same idempotency key (common at high concurrency — e.g. a double-click
     // or duplicate network retry). Postgres's unique constraint lets exactly one insert win;
     // the loser should adopt that winner's hold instead of failing the whole checkout.
-    if (idempotencyKey && insertErr?.code === '23505') {
-      const { data: racedRow } = await supabase
-        .from('inventory_reservations')
-        .select('*')
-        .eq('idempotency_key', idempotencyKey)
-        .maybeSingle();
-      if (racedRow && isReservationRowStillHoldable(racedRow)) return racedRow;
+    // Also recovers when a settled row still holds the key (stuck after a too-long supersede).
+    if (idempotencyKey && isIdempotencyKeyUniqueViolation(insertErr)) {
+      const resolved = await resolveIdempotencyInsertConflict({
+        idempotencyKey,
+        insertRow,
+        actorUserId
+      });
+      if (resolved?.row) return resolved.row;
     }
     throw insertErr;
   }
@@ -324,10 +396,13 @@ export async function settleReservation({ reservationId, mode = 'consume', actor
 
   // Claim settlement before restock/consume side effects so concurrent expire sweeps
   // cannot double-restore stock for the same reservation.
+  // Clear idempotency_key so a later re-reserve in the same checkout session can insert
+  // under the same logical key without hitting the unique constraint.
   const { data: updated, error: updErr } = await supabase
     .from('inventory_reservations')
     .update({
       status: nextStatus,
+      idempotency_key: null,
       updated_at: nowIso(),
       metadata: { ...(row.metadata || {}), settledBy: actorUserId || null, settledAt: nowIso() }
     })
