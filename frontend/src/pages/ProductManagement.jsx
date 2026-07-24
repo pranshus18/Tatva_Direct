@@ -279,10 +279,7 @@ const ProductManagement = ({ user }) => {
       igst_rate: data.igst_rate,
       cgst_rate: data.cgst_rate,
       sgst_rate: data.sgst_rate,
-      hsnCode: data.hsnCode || data.hsn_code,
-      brandModel: item?.brandModel || item?.attributes?.brandModel,
-      mpn: item?.mpn,
-      gtin: item?.gtin
+      hsnCode: data.hsnCode || data.hsn_code
     };
     if (price !== undefined && Number.isFinite(price)) {
       payload.price = price;
@@ -291,6 +288,24 @@ const ProductManagement = ({ user }) => {
     if (Array.isArray(data.images)) {
       payload.images = data.images;
     }
+    // Only send brand fields when we have a real value. Sending "" triggers
+    // "Brand is required because you have selected brands in your profile."
+    const brandValue = String(
+      data.brand ||
+        item?.brand ||
+        item?.brandModel ||
+        item?.attributes?.brand ||
+        item?.attributes?.brandModel ||
+        ''
+    ).trim();
+    if (brandValue) {
+      payload.brand = brandValue;
+      payload.brandModel = brandValue;
+    }
+    const mpn = String(data.mpn || item?.mpn || '').trim();
+    if (mpn) payload.mpn = mpn;
+    const gtin = String(data.gtin || item?.gtin || '').trim();
+    if (gtin) payload.gtin = gtin;
     return payload;
   };
 
@@ -855,11 +870,18 @@ const ProductManagement = ({ user }) => {
               return;
             }
             // Catalog edit: keep identity + images (and description/specs from the form).
+            const brandValue = String(
+              data.brand ||
+                editingItem?.brand ||
+                editingItem?.brandModel ||
+                editingItem?.attributes?.brand ||
+                ''
+            ).trim();
             handleUpdateProduct(productId, {
               name: data.name,
               description: data.description,
               category: data.category,
-              brand: data.brand,
+              ...(brandValue ? { brand: brandValue } : {}),
               gtin: data.gtin,
               images: Array.isArray(data.images) ? data.images : [],
               specifications: data.specifications

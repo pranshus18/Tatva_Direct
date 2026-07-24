@@ -308,7 +308,11 @@ export function buildSupplierProductUpdatePayload({
     updatedAttributes.description = supplierText;
   }
   if (reqBody.name !== undefined) updatedAttributes.listingName = (reqBody.name || '').toString().trim();
-  if (reqBody.brand !== undefined) updatedAttributes.brand = (reqBody.brand || '').toString().trim();
+  if (reqBody.brand !== undefined) {
+    const nextBrand = (reqBody.brand || '').toString().trim();
+    // Do not wipe an existing brand during image/inventory-only updates.
+    if (nextBrand) updatedAttributes.brand = nextBrand;
+  }
   if (reqBody.gtin !== undefined) {
     const g = normalizeGtin(reqBody.gtin || '');
     if (g && !isValidGtin(g)) {
@@ -320,7 +324,10 @@ export function buildSupplierProductUpdatePayload({
   if (reqBody.specifications !== undefined) {
     updatedAttributes.specifications = reqBody.specifications || existingAttributes.specifications || {};
   }
-  if (reqBody.brandModel !== undefined) updatedAttributes.brandModel = (reqBody.brandModel || '').toString().trim();
+  if (reqBody.brandModel !== undefined) {
+    const nextBrandModel = (reqBody.brandModel || '').toString().trim();
+    if (nextBrandModel) updatedAttributes.brandModel = nextBrandModel;
+  }
   if (reqBody.lsa !== undefined) updatedAttributes.lsa = (reqBody.lsa || '').toString().trim();
   if (reqBody.hsnCode !== undefined || reqBody.hsn_code !== undefined) {
     const rawHsnCode = reqBody.hsnCode !== undefined ? reqBody.hsnCode : reqBody.hsn_code;

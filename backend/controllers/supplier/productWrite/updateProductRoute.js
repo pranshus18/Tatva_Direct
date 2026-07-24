@@ -89,17 +89,28 @@ export function registerSupplierProductUpdateRoute(ctx) {
         } = payload;
 
         if (req.body.brandModel !== undefined) {
-          const effectiveProfile = await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {});
-          const brandGuard = brandIsAllowedForSupplier(effectiveProfile, updatedAttributes.brandModel);
-          if (!brandGuard.allowed) {
-            return res.status(403).json({
-              status: 'error',
-              message:
-                brandGuard.reason === 'brand_required'
-                  ? 'Brand is required because you have selected brands in your profile.'
-                  : 'You can only update inventory for brands you selected in your profile.',
-              allowedBrands: brandGuard.declared || []
-            });
+          const brandToValidate = String(
+            updatedAttributes.brandModel ||
+              updatedAttributes.brand ||
+              req.body.brand ||
+              supplierProduct?.attributes?.brandModel ||
+              supplierProduct?.attributes?.brand ||
+              ''
+          ).trim();
+          // Image/inventory-only saves often omit brand. Do not fail those with brand_required.
+          if (brandToValidate) {
+            const effectiveProfile = await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {});
+            const brandGuard = brandIsAllowedForSupplier(effectiveProfile, brandToValidate);
+            if (!brandGuard.allowed) {
+              return res.status(403).json({
+                status: 'error',
+                message:
+                  brandGuard.reason === 'brand_required'
+                    ? 'Brand is required because you have selected brands in your profile.'
+                    : 'You can only update inventory for brands you selected in your profile.',
+                allowedBrands: brandGuard.declared || []
+              });
+            }
           }
         }
 
