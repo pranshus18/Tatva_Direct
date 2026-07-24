@@ -562,7 +562,7 @@ const TransportSuggestion = () => {
       description={
         focusGroup
           ? `Choose courier, trucking, or self ship for ${focusGroup.vendorName}. Items from the same supplier are shipped together.`
-          : 'Review courier (Shiprocket), trucking (Borzo), or Self ship — pick one option per supplier shipment.'
+          : undefined
       }
       icon={Truck}
     >

@@ -201,9 +201,6 @@ export default function VaultPage({ variant = 'service_provider' }) {
         <div className="text-2xl font-bold text-slate-900">
           {loading ? 'Loading…' : formatInr(balance)}
         </div>
-        <p className="mt-1 text-xs text-slate-500">
-          Shared PM platform vault — same balance on Tatva Direct and Tatva PM.
-        </p>
       </div>
 
       <div className="grid gap-3 md:grid-cols-3">
@@ -406,7 +403,6 @@ export default function VaultPage({ variant = 'service_provider' }) {
     <SpPageLayout showStepper={false}>
       <SpPageHeader
         title="Vault balance"
-        description="PM platform vault — credit, view reconciliation statement, and pay for orders."
         icon={VaultIcon}
         actions={
           <Button variant="outline" onClick={loadVaultData} disabled={loading}>

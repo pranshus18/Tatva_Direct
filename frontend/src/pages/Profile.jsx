@@ -356,7 +356,6 @@ const Profile = ({ user }) => {
       <SpPageLayout showStepper={false}>
         <SpPageHeader
           title="Customer Account"
-          description="Your customer details sync with the PM platform. Changes here update PM, and PM profile changes appear here after refresh."
           icon={User}
           actions={
             <div className="profile-page-header-actions">
@@ -534,9 +533,6 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
               Customer Account
             </h2>
           </div>
-          <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
-            Linked to your PM platform profile using the same verified phone number. Edits sync both ways with PM.
-          </p>
           {profile?.pmCustomerAccount ? (
             <div className="form-grid">
               <div className="form-group">
