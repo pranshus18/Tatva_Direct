@@ -917,8 +917,53 @@ const SupplierPlaceOrder = () => {
 
         const confirmData = await confirmRes.json().catch(() => ({}));
         if (!confirmRes.ok || confirmData?.status !== 'success') {
-          alert(confirmData?.message || 'Upstream order(s) created, but transport booking failed.');
-          // Still clear draft and go to upstream list.
+          alert(confirmData?.message || 'Upstream order(s) created, but transport selection failed.');
+          localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+          navigate('/supplier-upstream-orders');
+          return;
+        }
+
+        // Vault debit first — logistics book/tracking only after payment succeeds.
+        for (const order of createdOrders) {
+          if (!order?.id) continue;
+          const payRes = await fetch(getApiUrl(`/api/supplier/wallet/orders/${encodeURIComponent(order.id)}/pay`), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              idempotencyKey: `supplier-place-vault-${order.id}`
+            })
+          });
+          const payData = await payRes.json().catch(() => ({}));
+          const alreadyPaid =
+            payData?.code === 'ORDER_ALREADY_PAID' || /already paid/i.test(String(payData?.message || ''));
+          if ((!payRes.ok || payData?.status !== 'success') && !alreadyPaid) {
+            alert(
+              payData?.message ||
+                `Order(s) created and transport saved, but vault payment failed for ${order.orderNumber || order.id}. Tracking will not be booked until payment succeeds.`
+            );
+            localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+            navigate('/supplier-upstream-orders');
+            return;
+          }
+        }
+
+        const bookRes = await fetch(getApiUrl('/api/po/transport/confirm'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            orderIds: createdOrders.map((o) => o.id).filter(Boolean),
+            perOrderTransport
+          })
+        });
+        const bookData = await bookRes.json().catch(() => ({}));
+        if (!bookRes.ok || bookData?.status !== 'success') {
+          alert(bookData?.message || 'Paid, but carrier booking failed. Tracking can be retried later.');
           localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
           navigate('/supplier-upstream-orders');
           return;

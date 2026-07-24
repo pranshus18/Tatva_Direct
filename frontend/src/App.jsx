@@ -318,18 +318,11 @@ function App() {
     }
   };
 
-  const handlePortalChange = async (userData) => {
+  const handlePortalChange = (userData) => {
     const normalizedUser = normalizeUser(userData);
-    setUser(normalizedUser);
-    localStorage.setItem('user', JSON.stringify(normalizedUser));
-
-    if (normalizeUserType(normalizedUser.userType) === 'supplier') {
-      const token = localStorage.getItem('token');
-      if (token) {
-        await checkSupplierSetupStatus(token);
-      }
-    }
-
+    // Token/user are already persisted by persistPortalAuthResult.
+    // Hard-redirect immediately — do not update React state or await APIs first,
+    // or in-flight calls on the old portal can race and force OTP again.
     window.location.assign(getPostAuthRedirectPath(normalizedUser.userType));
   };
 

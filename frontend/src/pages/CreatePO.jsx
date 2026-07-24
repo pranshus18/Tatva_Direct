@@ -1125,22 +1125,35 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         activeOrders = Array.isArray(data.orders) ? data.orders : [];
         setCreatedTransportOrders(activeOrders);
       }
-      const transportResult = await finalizeTransportDetails(activeOrders);
 
+      // 1) Save carrier selection + transport amount (no logistics book / tracking yet).
+      await finalizeTransportDetails(activeOrders);
+
+      // 2) Vault debit must succeed before carrier book reveals AWB / tracking.
       if (isVaultPaymentMethod(poPaymentMethod)) {
         const unpaid = activeOrders.filter((order) => order?.id);
         for (const order of unpaid) {
-          const payData = await payOrderFromVault(order.id, {
-            idempotencyKey: `create-po-vault-${order.id}`
-          });
-          if (payData?.status && payData.status !== 'success') {
-            throw new Error(
-              payData.message ||
-                `Failed to debit vault for order ${order.orderNumber || order.id}. Products + transport were not fully paid.`
-            );
+          try {
+            const payData = await payOrderFromVault(order.id, {
+              idempotencyKey: `create-po-vault-${order.id}`
+            });
+            if (payData?.status && payData.status !== 'success') {
+              throw new Error(
+                payData.message ||
+                  `Failed to debit vault for order ${order.orderNumber || order.id}. Products + transport were not fully paid.`
+              );
+            }
+          } catch (payErr) {
+            const alreadyPaid =
+              payErr?.code === 'ORDER_ALREADY_PAID' ||
+              /already paid/i.test(String(payErr?.message || ''));
+            if (!alreadyPaid) throw payErr;
           }
         }
       }
+
+      // 3) After payment: book courier/trucking and persist tracking.
+      const transportResult = await finalizeTransportDetails(activeOrders);
 
       await clearCartTransportSelection();
       setSelectedTransport(null);
@@ -1150,11 +1163,15 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       setCheckoutSessionId('');
       setReservationExpiresAt('');
       setConfirmed(true);
-      const warnings = Array.isArray(transportResult?.warnings) ? transportResult.warnings : [];
+      const warnings = Array.isArray(transportResult?.warnings)
+        ? transportResult.warnings.filter(
+            (w) => !/deferred until vault payment/i.test(String(w?.message || ''))
+          )
+        : [];
       if (warnings.length > 0) {
         alert(
           transportResult?.message ||
-            `POs created. Carrier booking is pending for ${warnings.length} shipment(s); tracking can be updated later.`
+            `POs created and paid. Carrier booking is pending for ${warnings.length} shipment(s); tracking can be updated later.`
         );
       }
     } catch (err) {

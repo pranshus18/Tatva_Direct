@@ -1116,10 +1116,6 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
           <Building size={20} />
           Company Information
         </h2>
-        <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
-          Supply-chain role, brands per layer, and authorisation certificates are configured under{' '}
-          <strong>Select yourself</strong> in the sidebar (below Returns).
-        </p>
         <div className="form-grid">
           <div className="form-group">
             <label>Company Name</label>

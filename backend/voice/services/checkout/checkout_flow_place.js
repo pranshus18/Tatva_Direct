@@ -105,6 +105,42 @@ export async function placeOrderAndConfirmTransport(toolCtx, memory) {
         ''
       );
     }
+
+    // Vault debit before logistics book (Connect-aligned: no tracking until paid).
+    for (const order of orders) {
+      if (!order?.id) continue;
+      const payRes = await client.post(`/api/vault/orders/${order.id}/pay`, {
+        idempotencyKey: `voice-vault-${order.id}`
+      });
+      const alreadyPaid =
+        payRes?.data?.code === 'ORDER_ALREADY_PAID' ||
+        /already paid/i.test(String(payRes?.error || payRes?.data?.message || ''));
+      if (!payRes.ok && !alreadyPaid) {
+        const nums = orders.map((o) => o.order_number || o.id).join(', ');
+        const orderRef = nums ? ` (${nums})` : '';
+        return getVoiceText(
+          'checkout.orderCreatedTransportFailed',
+          lang,
+          { orderRef, error: payRes.error || 'Vault payment failed before carrier booking' },
+          ''
+        );
+      }
+    }
+
+    const bookRes = await client.post('/api/po/transport/confirm', {
+      orderIds,
+      perOrderTransport
+    });
+    if (!bookRes.ok) {
+      const nums = orders.map((o) => o.order_number || o.id).join(', ');
+      const orderRef = nums ? ` (${nums})` : '';
+      return getVoiceText(
+        'checkout.orderCreatedTransportFailed',
+        lang,
+        { orderRef, error: bookRes.error },
+        ''
+      );
+    }
   }
 
   memory.setPendingAction(null);

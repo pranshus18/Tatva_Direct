@@ -127,7 +127,9 @@ export const apiFetch = async (endpoint, options = {}) => {
  * Auth-aware fetch for portal pages:
  * - Adds bearer token automatically.
  * - Applies a timeout so loaders don't spin forever on stuck requests.
- * - Forces relogin on 401/403 by clearing stale auth state.
+ * - Forces relogin on 401 (expired/invalid session) only.
+ *   403 is role/permission denial and must not clear the session — otherwise
+ *   in-flight calls during portal switch kick the user back to OTP login.
  */
 export const authFetch = async (endpoint, options = {}) => {
   const token = localStorage.getItem('token');
@@ -151,7 +153,7 @@ export const authFetch = async (endpoint, options = {}) => {
       signal
     });
 
-    if (response.status === 401 || response.status === 403) {
+    if (response.status === 401) {
       localStorage.removeItem('token');
       localStorage.removeItem('user');
       try {

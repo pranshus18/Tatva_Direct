@@ -89,6 +89,10 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         supplier_id,
         service_provider_id,
         expected_delivery_date,
+        payment_status,
+        tracking_number,
+        tracking_url,
+        shipping_provider,
         order_items (
           id,
           product_id,
@@ -131,9 +135,17 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
     for (const row of orders || []) {
       const pick = transportByOrderId.get(row.id);
       const sp = pick?.shippingProvider || shippingProvider;
-      let tn = pick?.trackingNumber ?? trackingNumber;
-      let tu = pick?.trackingUrl ?? trackingUrl;
+      // Never accept / reveal carrier tracking until vault debit has succeeded.
+      const orderPaid = String(row.payment_status || '').toLowerCase() === 'paid';
+      const alreadyBooked = Boolean(String(row.tracking_number || '').trim());
+      let tn = null;
+      let tu = null;
+      if (orderPaid) {
+        tn = String(row.tracking_number || pick?.trackingNumber || trackingNumber || '').trim() || null;
+        tu = String(row.tracking_url || pick?.trackingUrl || trackingUrl || '').trim() || null;
+      }
       const tnotes = pick?.transportNotes ?? transportNotes;
+      const allowLogisticsBook = orderPaid && !alreadyBooked;
       if (!sp || !String(sp).trim()) {
         return res.status(400).json({
           status: 'error',
@@ -220,7 +232,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       const willBookCourier = bookingIntent.kind === TRANSPORT_KIND.COURIER;
       const willBookTrucking = bookingIntent.kind === TRANSPORT_KIND.TRUCKING;
 
-      if (willBookCourier && !isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
+      if (allowLogisticsBook && willBookCourier && !isLogisticsDeliveryAddressComplete(logisticsDelivery)) {
         return res.status(400).json({
           status: 'error',
           message: `Order ${row.id}: complete delivery address with a 6-digit pincode is required for courier booking.`
@@ -260,6 +272,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         truckingMatter,
         willBookCourier,
         willBookTrucking,
+        allowLogisticsBook,
+        orderPaid,
         bookingIntent,
         logisticsDelivery,
         lines: buildCourierLinesFromOrderItems(row.order_items),
@@ -276,6 +290,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
     }
 
     // Book courier or trucking in parallel (multi-vendor PO confirm).
+    // Upstream logistics book runs only after vault debit (payment_status=paid).
     const bookingWarnings = [];
     await Promise.all(
       rowContexts.map(async (ctx) => {
@@ -291,9 +306,29 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
           weightKg,
           truckingMatter,
           willBookCourier,
-          willBookTrucking
+          willBookTrucking,
+          allowLogisticsBook,
+          orderPaid
         } = ctx;
         if (!willBookCourier && !willBookTrucking) return;
+
+        if (!allowLogisticsBook) {
+          ctx.logisticsBookingMeta = {
+            mode: willBookCourier ? 'courier' : 'trucking',
+            deferredUntilPayment: !orderPaid,
+            alreadyBooked: orderPaid,
+            trackingNumber: null,
+            trackingUrl: null
+          };
+          if (!orderPaid) {
+            bookingWarnings.push({
+              orderId: row.id,
+              orderNumber: row.order_number || null,
+              message: 'Carrier booking deferred until vault payment succeeds'
+            });
+          }
+          return;
+        }
 
         try {
           if (willBookCourier) {

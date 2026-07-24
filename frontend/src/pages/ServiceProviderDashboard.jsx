@@ -151,13 +151,18 @@ const ServiceProviderDashboard = ({ user }) => {
           }
         }
 
-        if (response.status === 401 || response.status === 403) {
-          setDashboardError('Your session expired or access is denied. Please log in again.');
+        if (response.status === 401) {
+          setDashboardError('Your session expired. Please log in again.');
           localStorage.removeItem('token');
           localStorage.removeItem('user');
           localStorage.removeItem('profilePhotoUrl');
           localStorage.removeItem('profilePhotoUserId');
           navigate('/pm-auth');
+          return;
+        }
+
+        if (response.status === 403) {
+          setDashboardError(backendMessage || 'Access denied for this portal.');
           return;
         }
 
