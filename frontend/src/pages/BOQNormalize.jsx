@@ -8,7 +8,7 @@ import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
-import { Upload, CheckCircle, AlertCircle, Users, Package, PlusCircle, MapPin, Calendar, FileText, CircleCheck, CircleX } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Users, Package, PlusCircle, MapPin, Calendar, FileText, XCircle } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
@@ -832,7 +832,7 @@ const BOQNormalize = ({ onComplete }) => {
                     </div>
                     <div className="boq-coverage-split">
                       <div className="boq-coverage-chip boq-coverage-chip--ok">
-                        <CircleCheck size={16} aria-hidden />
+                        <CheckCircle size={16} aria-hidden />
                         <div>
                           <div className="boq-coverage-chip__label">With suppliers</div>
                           <div className="boq-coverage-chip__value">
@@ -848,7 +848,7 @@ const BOQNormalize = ({ onComplete }) => {
                             : 'boq-coverage-chip--idle'
                         }`}
                       >
-                        <CircleX size={16} aria-hidden />
+                        <XCircle size={16} aria-hidden />
                         <div>
                           <div className="boq-coverage-chip__label">Without suppliers</div>
                           <div className="boq-coverage-chip__value">

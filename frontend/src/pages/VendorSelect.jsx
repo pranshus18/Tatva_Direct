@@ -825,7 +825,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
   const requestUnavailableProduct = async (item) => {
     if (!item) return;
-    const itemKey = String(item.id ?? item.normalizedName || item.rawName || '');
+      const itemKey = String(item.id ?? item.normalizedName ?? item.rawName ?? '');
     if (!itemKey) return;
     if (requestedProductKeys.has(itemKey)) {
       toast.info('You have already made a request for this product.');
