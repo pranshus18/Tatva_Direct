@@ -220,30 +220,52 @@ function hydrateItemsFromWorkflow() {
 }
 
 const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete }) => {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const boqDetailHandoff = useMemo(() => {
+    const state = location?.state;
+    if (!state?.fromBoqDetail) return null;
+    const handoffBoqId = String(state.supplierSelectBoqId || '').trim();
+    if (!handoffBoqId) return null;
+    return {
+      boqId: handoffBoqId,
+      items: Array.isArray(state.supplierSelectItems) ? state.supplierSelectItems : [],
+      project:
+        state.supplierSelectBoqProject && typeof state.supplierSelectBoqProject === 'object'
+          ? state.supplierSelectBoqProject
+          : null
+    };
+  }, [location?.state]);
+
   const workflowSeed = useMemo(() => hydrateItemsFromWorkflow(), []);
   const [itemVendors, setItemVendors] = useState({});
   const [selections, setSelections] = useState({});
   const [expandedSpecifications, setExpandedSpecifications] = useState({});
   const [loading, setLoading] = useState(false);
   const [vendorsReady, setVendorsReady] = useState(false);
-  const [effectiveItems, setEffectiveItems] = useState(() =>
-    items?.length ? dedupeSupplierSelectItems(items) : workflowSeed.items
-  );
+  const [effectiveItems, setEffectiveItems] = useState(() => {
+    if (boqDetailHandoff?.items?.length) {
+      return dedupeSupplierSelectItems(boqDetailHandoff.items);
+    }
+    return items?.length ? dedupeSupplierSelectItems(items) : workflowSeed.items;
+  });
   const [loadingItems, setLoadingItems] = useState(false);
   const [itemsLoadError, setItemsLoadError] = useState('');
   const [rankNotice, setRankNotice] = useState('');
   const [boqMeta, setBoqMeta] = useState(() =>
-    enrichBoqProjectMeta(boqProject || workflowSeed.project || null)
+    enrichBoqProjectMeta(
+      boqDetailHandoff?.project || boqProject || workflowSeed.project || null
+    )
   );
   const [requestingProductKey, setRequestingProductKey] = useState('');
   const [requestedProductKeys, setRequestedProductKeys] = useState(() => new Set());
-  const navigate = useNavigate();
-  const location = useLocation();
   const itemsPropRef = useRef(items);
   const rankFetchAbortRef = useRef(null);
   const shouldAutoSelectNearestRef = useRef(true);
   /** When set, parent `items` is ignored until it matches these line ids (avoids stale full cart overwriting one-line selection). */
   const lockedLineIdsRef = useRef(null);
+  const activeBoqHandoffIdRef = useRef(boqDetailHandoff?.boqId || null);
 
   const seedItemVendorShell = (itemsList) => {
     const shell = {};
@@ -299,13 +321,13 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const rankCacheKey = useMemo(() => {
     if (!effectiveItems?.length) return '';
     const effectiveBoqId = resolveRankBoqId({
-      boqId,
+      boqId: boqDetailHandoff?.boqId || activeBoqHandoffIdRef.current || boqId,
       effectiveItems,
       boqMeta,
       cartSupplierHandoff
     });
     return buildVendorRankCacheKey(effectiveItems, effectiveBoqId, boqMeta);
-  }, [effectiveItems, boqId, boqMeta, cartSupplierHandoff]);
+  }, [effectiveItems, boqId, boqMeta, cartSupplierHandoff, boqDetailHandoff?.boqId]);
 
   const deliverySiteLabel = useMemo(() => {
     if (!boqMeta) return '';
@@ -469,13 +491,48 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         boqProject.siteGeo ||
         boqProject.shippingAddress)
     ) {
+      // Ignore stale parent project while a different BOQ handoff is active.
+      if (
+        activeBoqHandoffIdRef.current &&
+        boqId &&
+        String(boqId) !== String(activeBoqHandoffIdRef.current)
+      ) {
+        return;
+      }
       setBoqMeta(enrichBoqProjectMeta(boqProject));
     }
-  }, [boqProject]);
+  }, [boqProject, boqId]);
+
+  // Apply BOQ detail → supplier-select handoff so a newly opened BOQ replaces any prior BOQ.
+  useEffect(() => {
+    if (!boqDetailHandoff) return;
+    activeBoqHandoffIdRef.current = boqDetailHandoff.boqId;
+    shouldAutoSelectNearestRef.current = true;
+    setSelections({});
+    setRequestedProductKeys(new Set());
+    setItemVendors(seedItemVendorShell(boqDetailHandoff.items));
+    setEffectiveItems(dedupeSupplierSelectItems(boqDetailHandoff.items));
+    setBoqMeta(enrichBoqProjectMeta(boqDetailHandoff.project));
+    setLoadingItems(false);
+    setItemsLoadError('');
+    setVendorsReady(false);
+  }, [boqDetailHandoff]);
 
   // Keep local working copy of items so we can restore after refresh/navigation
   useEffect(() => {
     if (!items || !Array.isArray(items) || items.length === 0) return;
+    const handoffBoqId = activeBoqHandoffIdRef.current;
+    if (handoffBoqId) {
+      const incomingBoqId = String(boqId || items[0]?.boqId || '').trim();
+      // Parent still holding a previous BOQ — do not overwrite the newly selected one.
+      if (incomingBoqId && incomingBoqId !== String(handoffBoqId)) {
+        return;
+      }
+      // Parent caught up to the handoff BOQ.
+      if (incomingBoqId && incomingBoqId === String(handoffBoqId)) {
+        activeBoqHandoffIdRef.current = null;
+      }
+    }
     const lock = lockedLineIdsRef.current;
     if (lock && lock.size > 0) {
       const parentIds = new Set(items.map((it) => String(it?.id ?? '').trim()).filter(Boolean));
@@ -488,7 +545,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     setEffectiveItems(dedupeSupplierSelectItems(items));
     setLoadingItems(false);
     setItemsLoadError('');
-  }, [items]);
+  }, [items, boqId]);
 
   // If items are missing (sidebar revisit), use saved workflow first, then BOQ API — not when coming from cart.
   useEffect(() => {
@@ -498,11 +555,30 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       setItemsLoadError('');
 
       if (effectiveItems?.length > 0 || itemsPropRef.current?.length > 0) {
+        // If parent props are from a previous BOQ while handoff targets a new one, keep loading path open.
+        const handoffBoqId = activeBoqHandoffIdRef.current || boqDetailHandoff?.boqId;
+        if (handoffBoqId && itemsPropRef.current?.length > 0) {
+          const propBoqId = String(
+            boqId || itemsPropRef.current[0]?.boqId || ''
+          ).trim();
+          if (propBoqId && propBoqId !== String(handoffBoqId) && !(effectiveItems?.length > 0)) {
+            // continue to fetch the handoff BOQ
+          } else {
+            setLoadingItems(false);
+            return;
+          }
+        } else {
+          setLoadingItems(false);
+          return;
+        }
+      }
+
+      if (cartSupplierHandoff) {
         setLoadingItems(false);
         return;
       }
 
-      if (cartSupplierHandoff) {
+      if (boqDetailHandoff?.items?.length) {
         setLoadingItems(false);
         return;
       }
@@ -523,7 +599,11 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         return;
       }
 
-      const id = boqId || localStorage.getItem('lastBoqId');
+      const id =
+        boqDetailHandoff?.boqId ||
+        activeBoqHandoffIdRef.current ||
+        boqId ||
+        localStorage.getItem('lastBoqId');
       if (!id) {
         setLoadingItems(false);
         return;
@@ -568,7 +648,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [boqId, effectiveItems.length, cartSupplierHandoff]);
+  }, [boqId, effectiveItems.length, cartSupplierHandoff, boqDetailHandoff?.boqId]);
 
   const normalizeRankResponse = (data) => {
     if (!data?.itemVendors || typeof data.itemVendors !== 'object') {
@@ -1049,7 +1129,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           <span>
             {deliverySiteLabel && (
               <>
-                <strong>{boqMeta?.shippingAddress ? 'Delivery address:' : 'Project site:'}</strong>{' '}
+                <strong>{boqMeta?.shippingAddress ? 'Delivery address:' : 'Dispatch location:'}</strong>{' '}
                 {deliverySiteLabel}
               </>
             )}
@@ -1061,9 +1141,10 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             )}
             {deliverySiteLabel && (
               <span style={{ display: 'block', marginTop: '0.25rem', fontSize: '0.78rem', opacity: 0.9 }}>
-                Suppliers are ranked by distance to this address when outlet coordinates exist; otherwise city or
-                    state on the listing is used. The nearest <em>in-stock</em> supplier is pre-selected and marked{' '}
-                    <strong>Nearest · Recommended</strong>. Out-of-stock suppliers cannot be recommended or selected.
+                Suppliers are ranked by distance to this dispatch location when outlet coordinates exist; otherwise
+                city or state on the listing is used. The nearest <em>in-stock</em> supplier is pre-selected and
+                marked <strong>Nearest · Recommended</strong>. Out-of-stock suppliers cannot be recommended or
+                selected.
               </span>
             )}
           </span>
@@ -1308,7 +1389,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                             }}
                           >
                             ~{Math.round(vendor.distanceKm)} km from your{' '}
-                            {boqMeta?.shippingAddress ? 'delivery address' : 'project site'}
+                            {boqMeta?.shippingAddress ? 'delivery address' : 'dispatch location'}
                           </div>
                         )}
                       </div>

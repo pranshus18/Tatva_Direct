@@ -102,7 +102,9 @@ router.get('/products', authenticateToken, async (req, res) => {
           attributes?.specifications && typeof attributes.specifications === 'object'
             ? attributes.specifications
             : {};
-        const storedSpecs = mergeSpecificationMaps(baseSpecs, offerSpecs);
+        // Catalog/admin specs win over stale offer copies for the same keys.
+        // Offer-only keys that are not on the catalog product are still preserved.
+        const storedSpecs = { ...offerSpecs, ...baseSpecs };
         const listingName =
           attributes?.listingName != null && String(attributes.listingName).trim() !== ''
             ? String(attributes.listingName).trim()

@@ -604,167 +604,133 @@ const BOQNormalize = ({ onComplete }) => {
 
                   return (
                   <div key={item.id} className="item-card">
-                    <div className="item-header">
-                      <span className="item-raw">{item.rawName}</span>
-                      {item.confidence >= 0.8 ? (
-                        <CheckCircle size={20} className="icon-success" />
-                      ) : (
-                        <AlertCircle size={20} className="icon-warning" />
-                      )}
-                    </div>
-                    <div className="item-normalized">
-                      <strong>{item.normalizedName}</strong>
-                    </div>
-                    <div className="item-meta">
-                      <span>Qty: {item.quantity}</span>
-                      <div className="item-badges">
-                        {hasSuppliers && isAvailable && (
-                          <span className={`confidence ${item.confidence >= 0.8 ? 'high' : 'medium'}`}>
-                            {Math.round((item.confidence || 0) * 100)}% match
-                          </span>
-                        )}
-                        <span className={`confidence ${hasSuppliers && isAvailable ? 'high' : 'low'}`}>
-                          {hasSuppliers && isAvailable
-                            ? `${item.availableSuppliers || 0} supplier${(item.availableSuppliers || 0) === 1 ? '' : 's'}`
-                            : isListedOutOfStock
-                              ? 'Out of stock'
-                              : '0 suppliers'}
-                        </span>
-                      </div>
-                    </div>
-                    {hasListedSupplier && (
-                      <div className="item-supplier-info" style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid #e5e7eb' }}>
-                        {item.supplierInfo && (
-                          <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.25rem' }}>
-                            <strong style={{ color: '#1e293b' }}>
-                              {isAvailable ? 'Available from:' : 'Listed by:'}
-                            </strong>{' '}
-                            {item.supplierInfo.supplierName}
-                            {item.supplierInfo.supplierLocation && (
-                              <span style={{ marginLeft: '0.5rem' }}>📍 {item.supplierInfo.supplierLocation}</span>
-                            )}
-                          </div>
-                        )}
-                        {/* Intentionally not rendering supplyChainLastSupplier text per requirements */}
-                        {item.nearestSupplier && isAvailable && (
-                          <div style={{ fontSize: '0.8rem', color: '#1d4ed8', marginTop: '0.15rem' }}>
-                            <strong>Nearest to site:</strong>{' '}
-                            {item.nearestSupplier.supplierName}{' '}
-                            {item.nearestSupplier.roleLabel && (
-                              <span>({item.nearestSupplier.roleLabel})</span>
-                            )}
-                            {typeof item.nearestSupplier.distanceKm === 'number' && (
-                              <span> · {item.nearestSupplier.distanceKm} km</span>
-                            )}
-                          </div>
-                        )}
-                        {item.nearestSupplier && !isAvailable && !item.supplierInfo && (
-                          <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.25rem' }}>
-                            <strong style={{ color: '#1e293b' }}>Listed by:</strong>{' '}
-                            {item.nearestSupplier.supplierName}
-                            {typeof item.nearestSupplier.distanceKm === 'number' && (
-                              <span style={{ marginLeft: '0.5rem' }}>
-                                · {item.nearestSupplier.distanceKm} km from site
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        {item.availableSuppliers > 0 && isAvailable && (
-                          <div style={{ fontSize: '0.8rem', color: '#059669', marginTop: '0.25rem' }}>
-                            {item.availableSuppliers} supplier{item.availableSuppliers > 1 ? 's' : ''} available
-                          </div>
-                        )}
-                        {!isAvailable && (
-                          <div style={{ fontSize: '0.8rem', color: '#dc2626', marginTop: '0.25rem', fontWeight: 600 }}>
-                            Currently out of stock
-                          </div>
-                        )}
-                      </div>
-                    )}
-                    {!hasListedSupplier && (
-                      <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid #e5e7eb' }}>
-                        <div style={{ fontSize: '0.8rem', color: '#d97706' }}>
-                          No matching suppliers found
+                    <div className="item-card__body">
+                      <div className="item-card__content">
+                        <div className="item-header">
+                          <span className="item-raw">{item.rawName}</span>
+                          {item.confidence >= 0.8 ? (
+                            <CheckCircle size={18} className="icon-success" aria-hidden />
+                          ) : (
+                            <AlertCircle size={18} className="icon-warning" aria-hidden />
+                          )}
                         </div>
-                      </div>
-                    )}
 
-                    {/* When there are no available suppliers, allow requesting a new product */}
-                    {(!hasSuppliers || !isAvailable) && (
-                      <div style={{ 
-                        marginTop: '0.5rem', 
-                        padding: '0.5rem', 
-                        backgroundColor: '#fef2f2',
-                        border: '1px solid #fecaca',
-                        borderRadius: '6px',
-                        width: '280px',
-                        boxSizing: 'border-box',
-                        overflow: 'hidden',
-                        marginLeft: 'auto'
-                      }}>
-                        <div style={{ 
-                          display: 'flex', 
-                          alignItems: 'center', 
-                          gap: '0.25rem',
-                          marginBottom: '0.375rem'
-                        }}>
-                          <AlertCircle size={12} style={{ color: '#dc2626', flexShrink: 0 }} />
-                          <div style={{ 
-                            fontSize: '0.7rem', 
-                            color: '#dc2626', 
-                            fontWeight: 600,
-                            wordWrap: 'break-word',
-                            lineHeight: '1.2'
-                          }}>
-                            {isListedOutOfStock ? 'Currently out of stock' : 'No suppliers available'}
+                        <div className="item-normalized">
+                          <strong>{item.normalizedName}</strong>
+                        </div>
+
+                        <div className="item-meta">
+                          <span className="item-qty">
+                            Qty: <strong>{item.quantity}</strong>
+                            {item.unit ? ` ${item.unit}` : ''}
+                          </span>
+                          <div className="item-badges">
+                            {hasSuppliers && isAvailable ? (
+                              <span className={`confidence ${item.confidence >= 0.8 ? 'high' : 'medium'}`}>
+                                {Math.round((item.confidence || 0) * 100)}% match
+                              </span>
+                            ) : null}
+                            <span className={`confidence ${hasSuppliers && isAvailable ? 'high' : 'low'}`}>
+                              {hasSuppliers && isAvailable
+                                ? `${item.availableSuppliers || 0} supplier${(item.availableSuppliers || 0) === 1 ? '' : 's'}`
+                                : isListedOutOfStock
+                                  ? 'Out of stock'
+                                  : '0 suppliers'}
+                            </span>
                           </div>
                         </div>
-                        
-                        <button
-                          type="button"
-                          onClick={() => openRequestProductModal(item)}
-                          disabled={alreadyRequestedProduct}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: '0.25rem',
-                            fontSize: '0.65rem',
-                            fontWeight: 500,
-                            padding: '0.25rem 0.4rem',
-                            backgroundColor: alreadyRequestedProduct ? '#9ca3af' : '#4f46e5',
-                            border: `1px solid ${alreadyRequestedProduct ? '#9ca3af' : '#4f46e5'}`,
-                            borderRadius: '4px',
-                            color: '#ffffff',
-                            cursor: alreadyRequestedProduct ? 'not-allowed' : 'pointer',
-                            transition: 'all 0.2s',
-                            width: '100%',
-                            boxSizing: 'border-box',
-                            whiteSpace: 'nowrap',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            opacity: alreadyRequestedProduct ? 0.85 : 1
-                          }}
-                          onMouseEnter={(e) => {
-                            if (alreadyRequestedProduct) return;
-                            e.currentTarget.style.backgroundColor = '#4338ca';
-                            e.currentTarget.style.borderColor = '#4338ca';
-                          }}
-                          onMouseLeave={(e) => {
-                            if (alreadyRequestedProduct) return;
-                            e.currentTarget.style.backgroundColor = '#4f46e5';
-                            e.currentTarget.style.borderColor = '#4f46e5';
-                          }}
-                        >
-                          <PlusCircle size={10} style={{ flexShrink: 0, color: '#ffffff' }} />
-                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {alreadyRequestedProduct ? 'Request sent' : 'Request New Product'}
-                          </span>
-                        </button>
+
+                        {hasListedSupplier ? (
+                          <div className="item-supplier-info">
+                            {item.supplierInfo ? (
+                              <div className="item-supplier-line">
+                                <strong>
+                                  {isAvailable ? 'Available from:' : 'Listed by:'}
+                                </strong>{' '}
+                                <span>{item.supplierInfo.supplierName}</span>
+                                {item.supplierInfo.supplierLocation ? (
+                                  <span className="item-supplier-location">
+                                    <MapPin size={12} aria-hidden />
+                                    {item.supplierInfo.supplierLocation}
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+
+                            {item.nearestSupplier && isAvailable ? (
+                              <div className="item-supplier-line item-supplier-line--nearest">
+                                <strong>Nearest to site:</strong>{' '}
+                                {item.nearestSupplier.supplierName}
+                                {item.nearestSupplier.roleLabel ? (
+                                  <span> ({item.nearestSupplier.roleLabel})</span>
+                                ) : null}
+                                {typeof item.nearestSupplier.distanceKm === 'number' ? (
+                                  <span> · {item.nearestSupplier.distanceKm} km</span>
+                                ) : null}
+                              </div>
+                            ) : null}
+
+                            {item.nearestSupplier && !isAvailable && !item.supplierInfo ? (
+                              <div className="item-supplier-line">
+                                <strong>Listed by:</strong>{' '}
+                                {item.nearestSupplier.supplierName}
+                                {typeof item.nearestSupplier.distanceKm === 'number' ? (
+                                  <span className="item-supplier-location">
+                                    · {item.nearestSupplier.distanceKm} km from site
+                                  </span>
+                                ) : null}
+                              </div>
+                            ) : null}
+
+                            {item.availableSuppliers > 0 && isAvailable ? (
+                              <div className="item-supplier-status item-supplier-status--ok">
+                                {item.availableSuppliers} supplier
+                                {item.availableSuppliers > 1 ? 's' : ''} available
+                              </div>
+                            ) : null}
+
+                            {!isAvailable ? (
+                              <div className="item-supplier-status item-supplier-status--warn">
+                                Currently out of stock
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <div className="item-supplier-info item-supplier-info--empty">
+                            <div className="item-supplier-status item-supplier-status--empty">
+                              No matching suppliers found
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
+
+                      {(!hasSuppliers || !isAvailable) ? (
+                        <div className="item-card__actions">
+                          <div className="item-action-panel">
+                            <div className="item-action-status">
+                              <AlertCircle size={14} aria-hidden />
+                              <span>
+                                {isListedOutOfStock ? 'Currently out of stock' : 'No suppliers available'}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              className="item-action-btn"
+                              onClick={() => openRequestProductModal(item)}
+                              disabled={alreadyRequestedProduct}
+                            >
+                              <PlusCircle size={14} aria-hidden />
+                              <span>
+                                {alreadyRequestedProduct ? 'Request sent' : 'Request New Product'}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
                   </div>
-                );})}
+                  );
+                })}
                 </div>
                 <div style={{ display: 'flex', gap: '0.75rem', marginTop: '2rem' }}>
                   <button

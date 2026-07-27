@@ -54,6 +54,45 @@ export function readSpWorkflow() {
   }
 }
 
+/**
+ * Replace the active procurement workflow with a newly selected BOQ.
+ * Clears prior vendor/substitution selections so Supplier Selection cannot
+ * keep showing a previously opened BOQ.
+ */
+export function replaceSpWorkflowForSelectedBoq({ boqId, items, project } = {}) {
+  const nextBoqId = boqId != null && String(boqId).trim() !== '' ? String(boqId).trim() : null;
+  const nextItems = Array.isArray(items)
+    ? items.map((item) => ({
+        ...item,
+        boqId: item?.boqId || nextBoqId
+      }))
+    : [];
+  const payload = {
+    normalizedItems: nextItems,
+    selectedVendors: {},
+    substitutions: [],
+    boqId: nextBoqId,
+    boqProject: project && typeof project === 'object' ? project : null
+  };
+
+  try {
+    localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(payload));
+    if (nextBoqId) localStorage.setItem('lastBoqId', nextBoqId);
+    else localStorage.removeItem('lastBoqId');
+  } catch {
+    // Ignore storage errors; in-memory handoff still works via navigation state.
+  }
+
+  try {
+    window.dispatchEvent(new CustomEvent('sp-boq-workflow-replaced', { detail: payload }));
+    window.dispatchEvent(new Event('sp-workflow-updated'));
+  } catch {
+    // Ignore event errors in non-browser environments.
+  }
+
+  return payload;
+}
+
 export function getWorkflowStepStatus() {
   const wf = readSpWorkflow();
   const items = Array.isArray(wf?.normalizedItems) ? wf.normalizedItems : [];

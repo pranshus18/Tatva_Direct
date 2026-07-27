@@ -137,15 +137,33 @@ function mergeOfferSpecifications(productSpecs, offer) {
   const fromAttrs =
     parseSpecificationsObject(attrs.specifications) ||
     parseSpecificationsObject(attrs.specs) ||
-    parseSpecificationsObject(attrs);
+    {};
   const direct = {};
   for (const [key, value] of Object.entries(attrs)) {
-    if (['description', 'name', 'images', 'brandModel', 'lsa', 'hsnCode', 'hsn_code'].includes(key)) continue;
+    if (
+      [
+        'description',
+        'name',
+        'images',
+        'brandModel',
+        'lsa',
+        'hsnCode',
+        'hsn_code',
+        'specifications',
+        'specs',
+        'listingName',
+        'supplierDescription'
+      ].includes(key)
+    ) {
+      continue;
+    }
     if (value !== null && value !== undefined && String(value).trim() !== '') {
       direct[key] = value;
     }
   }
-  return { ...base, ...direct, ...fromAttrs };
+  // Catalog/admin product specs win over stale offer attribute copies for the same keys.
+  // Offer-only keys that are not on the catalog product are still preserved.
+  return { ...fromAttrs, ...direct, ...base };
 }
 
 function extractIdentityFields(product, specs = {}, offer = null) {

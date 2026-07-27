@@ -832,13 +832,10 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
           minOrderQuantity: savedProduct.min_order_quantity || savedProduct.minOrderQuantity || 1
         };
         
-        // Preserve all specifications, including null values (they represent keys that need to be filled)
-        const updatedSpecs = normalizedProduct.specifications || editedProduct.specifications || {};
-        
-        // Merge any new keys from editedProduct that might not be in savedProduct
+        // Prefer the saved API response as source of truth for displayed specs.
         const mergedSpecs = {
-          ...updatedSpecs,
-          ...(editedProduct.specifications || {})
+          ...(editedProduct.specifications || {}),
+          ...(normalizedProduct.specifications || {})
         };
         
         const updatedProduct = {

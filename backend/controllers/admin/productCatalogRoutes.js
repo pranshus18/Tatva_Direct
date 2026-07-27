@@ -614,9 +614,12 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
     console.log('[ADMIN UPDATE] Product specs keys count:', Object.keys(productResponse.specifications).length);
     console.log('[ADMIN UPDATE] Product specs keys:', Object.keys(productResponse.specifications));
 
+    const requestedSpecsUpdate = validatedBody.specifications !== undefined;
     // Supplier portal reads live offer values from supplier_products (price/stock/location/
     // MOQ + attribute overrides). Admin UI still edits those fields, so mirror them here.
     // Tax/HSN already lived on supplier_products; extend the same sync for inventory/copy.
+    // Specs must also sync: many customer/supplier UIs prefer or overwrite with
+    // supplier_products.attributes.specifications.
     const requestedOfferInventoryUpdate =
       validatedBody.price !== undefined ||
       validatedBody.stock !== undefined ||
@@ -630,7 +633,8 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
       requestedHsnUpdate ||
       requestedOfferInventoryUpdate ||
       requestedNameUpdate ||
-      requestedDescriptionUpdate;
+      requestedDescriptionUpdate ||
+      requestedSpecsUpdate;
 
     if (shouldSyncSupplierOffers) {
       try {
@@ -663,7 +667,14 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
           null;
 
         // Prefer the product's primary supplier offer(s); fall back to all offers for this catalog product.
-        if (primarySupplierId) {
+        // Specs sync always targets every linked offer so admin updates appear everywhere.
+        if (requestedSpecsUpdate) {
+          const { data } = await supabase
+            .from('supplier_products')
+            .select('id, product_id, supplier_id, attributes')
+            .eq('product_id', req.params.id);
+          spUpdateResult = data;
+        } else if (primarySupplierId) {
           const { data } = await supabase
             .from('supplier_products')
             .update(offerPatch)
@@ -676,13 +687,23 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
         if (!spUpdateResult || spUpdateResult.length === 0) {
           const { data } = await supabase
             .from('supplier_products')
-            .update(offerPatch)
+            .update(Object.keys(offerPatch).length > 1 ? offerPatch : { updated_at: offerPatch.updated_at })
             .eq('product_id', req.params.id)
             .select('id, product_id, supplier_id, attributes');
           spUpdateResult = data;
+        } else if (requestedSpecsUpdate && Object.keys(offerPatch).length > 1) {
+          // Apply non-spec column patches when we only selected rows for a full specs sync.
+          await supabase
+            .from('supplier_products')
+            .update(offerPatch)
+            .eq('product_id', req.params.id);
         }
 
         if (spUpdateResult && spUpdateResult.length > 0) {
+          const safeAdminSpecs = requestedSpecsUpdate
+            ? sanitizeSpecifications(productResponse.specifications || {})
+            : null;
+
           for (const row of spUpdateResult) {
             let mergedAttrs = { ...(row.attributes || {}) };
 
@@ -704,6 +725,11 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
                 mergedAttrs,
                 validatedBody.description || ''
               );
+            }
+            if (requestedSpecsUpdate) {
+              // Replace offer-level specs with the admin catalog specs so supplier portal,
+              // discovery, and PO grouping all show the latest values.
+              mergedAttrs.specifications = safeAdminSpecs || {};
             }
 
             await supabase
@@ -729,6 +755,12 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
           if (offerPatch.min_order_quantity !== undefined) {
             productResponse.min_order_quantity = offerPatch.min_order_quantity;
             productResponse.minOrderQuantity = offerPatch.min_order_quantity;
+          }
+          if (requestedSpecsUpdate) {
+            productResponse.specifications = safeAdminSpecs || {};
+            console.log(
+              `✅ [ADMIN UPDATE] Synced specifications to ${spUpdateResult.length} supplier offer(s)`
+            );
           }
 
           void syncCatalogProductSnapshotFromOffers(supabase, req.params.id).catch((syncError) => {

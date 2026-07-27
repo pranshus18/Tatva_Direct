@@ -333,9 +333,10 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
           ? attrs.specifications
           : {};
       const productSpecs = specs && typeof specs === 'object' && !Array.isArray(specs) ? specs : {};
+      // Catalog/admin product specs win over stale offer attribute copies.
       const mergedSpecifications = {
-        ...productSpecs,
-        ...supplierSpecs
+        ...supplierSpecs,
+        ...productSpecs
       };
 
       vendorGroups[transportGroupId].items.push({

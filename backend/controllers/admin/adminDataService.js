@@ -244,9 +244,14 @@ export async function generateAdminData({ supabase, console, isRevenueRecognized
       const normalizedSupplierProducts = supplierOffers.map((offer) => {
         const base = productsById.get(offer.product_id) || {};
         const attrs = offer.attributes || {};
-        const specs = (attrs.specifications && typeof attrs.specifications === 'object')
-          ? attrs.specifications
-          : (base.specifications || {});
+        const specs = {
+          ...((attrs.specifications && typeof attrs.specifications === 'object')
+            ? attrs.specifications
+            : {}),
+          ...(base.specifications && typeof base.specifications === 'object'
+            ? base.specifications
+            : {})
+        };
 
         return {
           ...base,

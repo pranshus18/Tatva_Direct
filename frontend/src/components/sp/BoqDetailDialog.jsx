@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { authFetch } from '../../config/api';
 import { formatDateIST } from '../../utils/dateTime';
+import { replaceSpWorkflowForSelectedBoq } from '../../utils/spWorkflow';
+import { clearSupplierSelectScopeSession } from '../../constants/supplierSelectSession';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -21,45 +23,71 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
   const [items, setItems] = useState([]);
   const [project, setProject] = useState(null);
   const navigate = useNavigate();
+  const requestSeqRef = useRef(0);
+  const activeBoqIdRef = useRef(null);
 
   useEffect(() => {
     if (!open || !boqId) {
+      requestSeqRef.current += 1;
+      activeBoqIdRef.current = null;
       setItems([]);
       setProject(null);
       setLoadError('');
+      setLoading(false);
       return;
     }
+
+    const requestedBoqId = String(boqId);
+    activeBoqIdRef.current = requestedBoqId;
+    const requestSeq = ++requestSeqRef.current;
+
+    // Always clear previous BOQ details immediately so a newly opened BOQ
+    // never briefly shows the previous BOQ's line items.
+    setItems([]);
+    setProject(null);
+    setLoadError('');
+    setLoading(true);
 
     let cancelled = false;
 
     const fetchItems = async () => {
-      setLoading(true);
-      setLoadError('');
       try {
-        const res = await authFetch(`/api/boq/${encodeURIComponent(boqId)}/items`, {
+        const res = await authFetch(`/api/boq/${encodeURIComponent(requestedBoqId)}/items`, {
           timeoutMs: 12000
         });
         const data = await res.json().catch(() => ({}));
-        if (cancelled) return;
+        if (cancelled || requestSeq !== requestSeqRef.current) return;
+        if (String(activeBoqIdRef.current || '') !== requestedBoqId) return;
 
         if (!res.ok || data.status !== 'success') {
           setLoadError(data.message || 'Could not load BOQ items.');
           setItems([]);
+          setProject(null);
           return;
         }
 
-        setItems(Array.isArray(data.items) ? data.items : []);
+        const nextItems = Array.isArray(data.items)
+          ? data.items.map((item) => ({
+              ...item,
+              boqId: data.boqId || requestedBoqId
+            }))
+          : [];
+        setItems(nextItems);
         setProject(data.project || null);
       } catch (error) {
-        if (cancelled) return;
+        if (cancelled || requestSeq !== requestSeqRef.current) return;
+        if (String(activeBoqIdRef.current || '') !== requestedBoqId) return;
         setLoadError(
           error?.name === 'AbortError'
             ? 'Loading BOQ items timed out. Please try again.'
             : error?.message || 'Could not load BOQ items.'
         );
         setItems([]);
+        setProject(null);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && requestSeq === requestSeqRef.current) {
+          setLoading(false);
+        }
       }
     };
 
@@ -70,10 +98,32 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
   }, [open, boqId]);
 
   const handleContinueToSuppliers = () => {
-    if (!boqId) return;
-    localStorage.setItem('lastBoqId', String(boqId));
+    if (!boqId || loading) return;
+
+    const selectedBoqId = String(boqId);
+    const selectedItems = (Array.isArray(items) ? items : []).map((item) => ({
+      ...item,
+      boqId: item?.boqId || selectedBoqId
+    }));
+
+    // Replace any previously active BOQ workflow before navigating.
+    replaceSpWorkflowForSelectedBoq({
+      boqId: selectedBoqId,
+      items: selectedItems,
+      project
+    });
+    clearSupplierSelectScopeSession();
+
     onOpenChange?.(false);
-    navigate('/supplier-select');
+    navigate('/supplier-select', {
+      replace: false,
+      state: {
+        fromBoqDetail: true,
+        supplierSelectBoqId: selectedBoqId,
+        supplierSelectItems: selectedItems,
+        supplierSelectBoqProject: project
+      }
+    });
   };
 
   const projectLocation =
@@ -85,14 +135,18 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex h-[min(90vh,720px)] w-[min(96vw,900px)] max-w-none flex-col gap-0 overflow-hidden rounded-lg border p-0 shadow-lg sm:left-1/2 sm:top-1/2 sm:h-auto sm:max-h-[90vh] sm:-translate-x-1/2 sm:-translate-y-1/2">
+      <DialogContent
+        key={boqId || 'boq-detail-closed'}
+        className="flex h-[min(90vh,720px)] w-[min(96vw,900px)] max-w-none flex-col gap-0 overflow-hidden rounded-lg border p-0 shadow-lg sm:left-1/2 sm:top-1/2 sm:h-auto sm:max-h-[90vh] sm:-translate-x-1/2 sm:-translate-y-1/2"
+      >
         <DialogHeader className="border-b px-6 py-4 text-left">
           <DialogTitle>{boqName || 'BOQ details'}</DialogTitle>
           <DialogDescription asChild>
             <div className="space-y-1 text-sm text-muted-foreground">
               {boqStatus ? <p className="capitalize">Status: {boqStatus}</p> : null}
-              {projectLocation ? <p>Site: {projectLocation}</p> : null}
-              {requiredDate ? (
+              {loading ? <p>Loading site and item details…</p> : null}
+              {!loading && projectLocation ? <p>Dispatch location: {projectLocation}</p> : null}
+              {!loading && requiredDate ? (
                 <p>Expected dispatch date: {formatDateIST(requiredDate, requiredDate)}</p>
               ) : null}
             </div>
@@ -137,7 +191,7 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
                       item.supplierInfo || item.supplyChainLastSupplier || item.nearestSupplier
                     );
                     return (
-                      <tr key={item.id || index} className="border-t">
+                      <tr key={`${boqId}-${item.id || index}`} className="border-t">
                         <td className="px-4 py-3 text-muted-foreground">{index + 1}</td>
                         <td className="px-4 py-3 font-medium">{label}</td>
                         <td className="px-4 py-3">{item.quantity ?? '—'}</td>

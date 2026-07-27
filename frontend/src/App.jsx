@@ -247,6 +247,25 @@ function App() {
     window.dispatchEvent(new Event('sp-workflow-updated'));
   }, [isAuthenticated, user?.id, normalizedItems, selectedVendors, substitutions, boqId, boqProject]);
 
+  // When a BOQ is opened from listing/dashboard, replace the active workflow so
+  // Supplier Selection cannot keep showing a previously selected BOQ.
+  useEffect(() => {
+    const onBoqWorkflowReplaced = (event) => {
+      const detail = event?.detail || {};
+      setNormalizedItems(Array.isArray(detail.normalizedItems) ? detail.normalizedItems : []);
+      setSelectedVendors(
+        detail.selectedVendors && typeof detail.selectedVendors === 'object'
+          ? detail.selectedVendors
+          : {}
+      );
+      setSubstitutions(Array.isArray(detail.substitutions) ? detail.substitutions : []);
+      setBoqId(detail.boqId || null);
+      setBoqProject(detail.boqProject && typeof detail.boqProject === 'object' ? detail.boqProject : null);
+    };
+    window.addEventListener('sp-boq-workflow-replaced', onBoqWorkflowReplaced);
+    return () => window.removeEventListener('sp-boq-workflow-replaced', onBoqWorkflowReplaced);
+  }, []);
+
   // Update document title based on logged-in user
   useEffect(() => {
     if (user && user.name) {
