@@ -455,7 +455,7 @@ Login
 | **B-3** | `/product-discovery` | Search by name, brand, category, or description | `GET /api/supplier/products/search` | Approved products with active supplier listings shown |
 | **B-4** | `/product-discovery` | Click **Add to Cart** on a product | Project picker modal opens | Modal shows existing cart projects + "New project" option |
 | **B-5** | Project picker | Choose **existing project** OR create **new project** | — | See project rules below |
-| **B-6** | Project picker (new project) | Enter project name + expected delivery date | Validated: date ≥ today, name required | Fields required before confirm |
+| **B-6** | Project picker (new project) | Enter project name + expected dispatch date | Validated: date ≥ today, name required | Fields required before confirm |
 | **B-7** | Project picker | Select or enter shipping address | Saved address from profile OR new address form | `POST /api/profile/shipping-addresses` if new |
 | **B-8** | Project picker | Confirm add to cart | `POST /api/po/cart/discovery-item` | Item saved to server cart under correct `boqGroup`; toast "Added to cart" |
 | **B-9** | `/product-discovery` | (Repeat B-4–B-8 for more products) | Same product to same project → qty increased (not duplicate row) | Cart badge updates |
@@ -474,9 +474,9 @@ When adding a product from Discovery, the user must assign it to a **project gro
 | Scenario | Required Fields | API Payload |
 |----------|-----------------|-------------|
 | Add to **existing project** | Select project group | `{ productId, quantity, groupId, shippingAddressId? }` |
-| Add to **new project** | Project name + expected delivery date (YYYY-MM-DD, not past) + shipping address | `{ productId, quantity, projectName, expectedDeliveryDate, shippingAddressId/shippingAddress }` |
+| Add to **new project** | Project name + expected dispatch date (YYYY-MM-DD, not past) + shipping address | `{ productId, quantity, projectName, expectedDeliveryDate, shippingAddressId/shippingAddress }` |
 | Same product, same project again | — | Quantity incremented on existing line (no duplicate row) |
-| Same project name + same delivery date | — | Error: "A project with the same name and expected delivery date already exists" |
+| Same project name + same dispatch date | — | Error: "A project with the same name and expected dispatch date already exists" |
 | Product with no eligible supplier | — | Error: "not currently listed by the terminal role supplier" |
 
 #### Flow B — Diagram
@@ -488,7 +488,7 @@ flowchart TD
     C --> D[Project picker modal]
     D --> E{New or existing project?}
     E -->|Existing| F[Select project group]
-    E -->|New| G[Enter name + delivery date + address]
+    E -->|New| G[Enter name + dispatch date + address]
     F --> H[POST /api/po/cart/discovery-item]
     G --> H
     H --> I[/cart/]
@@ -506,7 +506,7 @@ flowchart TD
 |-------|--------------|-------|
 | `boqId` | `null` on discovery-only projects | No BOQ file involved |
 | `boqName` | Cart `boqGroups[].boqName` | Project name entered in picker (or product name as default) |
-| `boqProject.requiredDate` | Cart `boqGroups[].boqProject` | Expected delivery date from picker |
+| `boqProject.requiredDate` | Cart `boqGroups[].boqProject` | Expected dispatch date from picker |
 | `boqProject.shippingAddress` | Cart `boqGroups[].boqProject` | Required before supplier select |
 | `productId` | Cart item | Direct catalog product reference |
 | Item `id` | `pd-item-<timestamp>-<random>` | Discovery-generated line ID |
@@ -517,8 +517,8 @@ flowchart TD
 |----|------|-------|----------|
 | **FLOW-B-01** | Full discovery path | Search product → add to new project → cart → suppliers → Create PO → pay | Order created without `boq_id` |
 | **FLOW-B-02** | Add to existing project | Add second product to same project group | Single project group; qty/lines updated |
-| **FLOW-B-03** | New project validation | Try new project without delivery date | Error: date required |
-| **FLOW-B-04** | Past delivery date | Enter yesterday's date | Error: cannot be in the past |
+| **FLOW-B-03** | New project validation | Try new project without dispatch date | Error: date required |
+| **FLOW-B-04** | Past dispatch date | Enter yesterday's date | Error: cannot be in the past |
 | **FLOW-B-05** | Duplicate project name+date | Create project with same name and date | Error: duplicate project |
 | **FLOW-B-06** | New shipping address inline | Add new address in project picker | Address saved to profile and used |
 | **FLOW-B-07** | Supplier select without address | Go to suppliers before setting delivery address | Error: "Please set a delivery address" |
@@ -570,7 +570,7 @@ This step is optional and may show a fallback if logistics APIs are not configur
 | **Entry page** | `/boq-normalize` | `/product-discovery` |
 | **Item source** | AI-parsed BOQ file | Catalog search |
 | **Signup redirect** | `/boq-normalize` | `/dashboard` (then navigate to Discovery) |
-| **Project setup** | Site location + required date on BOQ page | Project name + delivery date in add-to-cart picker |
+| **Project setup** | Site location + expected dispatch date on BOQ page | Project name + dispatch date in add-to-cart picker |
 | **Shipping address** | Set on cart before supplier select (if via cart) or at Create PO | Set in project picker or on cart page |
 | **`boqId` on order** | Yes — linked to uploaded BOQ | No — `boqId` is null |
 | **Cart entry** | Optional ("Add to Cart" button) | Mandatory (every product goes to cart first) |
@@ -798,7 +798,7 @@ Before sign-off, QA must confirm **both** flows pass end-to-end:
 2. Filter by category.
 3. View product details (images, specs, price, stock).
 4. Click **Add to Cart** → project picker modal opens.
-5. Assign product to an **existing cart project** or create a **new project** (name + delivery date + shipping address).
+5. Assign product to an **existing cart project** or create a **new project** (name + dispatch date + shipping address).
 6. Confirm → `POST /api/po/cart/discovery-item` saves item to server cart.
 7. Navigate to `/cart` → set delivery address → **Continue to suppliers**.
 
@@ -1055,7 +1055,7 @@ Before sign-off, QA must confirm **both** flows pass end-to-end:
 | ID | Test | Expected |
 |----|------|----------|
 | **ORD-EDIT-01** | Edit unpaid pending order | Changes saved; visible on re-open |
-| **ORD-EDIT-02** | Edit delivery date | Date updated |
+| **ORD-EDIT-02** | Edit dispatch date | Date updated |
 | **ORD-EDIT-03** | Edit delivery address | Address updated |
 | **ORD-EDIT-04** | Edit notes | Notes saved |
 | **ORD-EDIT-05** | Edit paid order | Blocked with lock reason badge |

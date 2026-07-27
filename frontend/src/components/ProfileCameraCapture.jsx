@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Camera, Loader2, X } from 'lucide-react';
 import './ProfileCameraCapture.css';
 
@@ -14,10 +15,15 @@ async function attachStreamToVideo(video, stream) {
 export default function ProfileCameraCapture({ open, onClose, onCapture }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const onCloseRef = useRef(onClose);
   const [starting, setStarting] = useState(false);
   const [videoReady, setVideoReady] = useState(false);
   const [capturing, setCapturing] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   const stopStream = useCallback(() => {
     const stream = streamRef.current;
@@ -132,6 +138,45 @@ export default function ProfileCameraCapture({ open, onClose, onCapture }) {
     };
   }, [open, stopStream]);
 
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const scrollY = window.scrollY;
+    const { style } = document.body;
+    const previousOverflow = style.overflow;
+    const previousPosition = style.position;
+    const previousTop = style.top;
+    const previousWidth = style.width;
+
+    style.overflow = 'hidden';
+    style.position = 'fixed';
+    style.top = `-${scrollY}px`;
+    style.width = '100%';
+
+    const preventBackgroundTouch = (event) => {
+      if (!event.target.closest('.profile-camera-dialog')) {
+        event.preventDefault();
+      }
+    };
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onCloseRef.current();
+    };
+
+    document.addEventListener('touchmove', preventBackgroundTouch, { passive: false });
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      style.overflow = previousOverflow;
+      style.position = previousPosition;
+      style.top = previousTop;
+      style.width = previousWidth;
+      window.scrollTo(0, scrollY);
+      document.removeEventListener('touchmove', preventBackgroundTouch);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
   const handleCapture = async () => {
     const video = videoRef.current;
     if (!video || !video.videoWidth) {
@@ -171,9 +216,14 @@ export default function ProfileCameraCapture({ open, onClose, onCapture }) {
 
   if (!open) return null;
 
-  return (
-    <div className="profile-camera-overlay" role="dialog" aria-modal="true" aria-label="Take profile photo">
-      <div className="profile-camera-dialog">
+  return createPortal(
+    <div
+      className="profile-camera-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Take profile photo"
+    >
+      <div className="profile-camera-dialog" onClick={(event) => event.stopPropagation()}>
         <div className="profile-camera-dialog__header">
           <h3>Take a photo</h3>
           <button type="button" className="profile-camera-dialog__close" onClick={onClose} aria-label="Close">
@@ -218,6 +268,7 @@ export default function ProfileCameraCapture({ open, onClose, onCapture }) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

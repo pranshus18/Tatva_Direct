@@ -85,10 +85,10 @@ export function validateRequiredDateNotPast(requiredDate, now = new Date(), time
     return { value: null, error: null };
   }
   if (!DATE_ONLY_PATTERN.test(raw)) {
-    return { value: null, error: 'Required date must be in YYYY-MM-DD format.' };
+    return { value: null, error: 'Expected dispatch date must be in YYYY-MM-DD format.' };
   }
   if (raw < getTodayDateInputValue(now, timeZone)) {
-    return { value: null, error: 'Required date cannot be in the past.' };
+    return { value: null, error: 'Expected dispatch date cannot be in the past.' };
   }
   return { value: raw, error: null };
 }

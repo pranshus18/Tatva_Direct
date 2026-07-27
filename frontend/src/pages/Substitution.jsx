@@ -81,7 +81,9 @@ const Substitution = ({ selectedVendors, onComplete, items }) => {
       didAutoSkipRef.current = true;
       onComplete([]);
       clearCheckoutHoldExpired(SP_PO_CHECKOUT_HOLD_EXPIRED_KEY);
-      navigate('/create-po');
+      // Replace so browser Back from Create PO returns to Supplier Selection
+      // instead of re-entering this auto-skip and trapping the user.
+      navigate('/create-po', { replace: true });
     }
   }, [hasFetchedSuggestions, loadingSuggestions, suggestions, workflowItems, substitutionsFetchFailed, onComplete, navigate]);
 

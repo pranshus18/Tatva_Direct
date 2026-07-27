@@ -457,7 +457,7 @@ const SupplierUpstreamCart = () => {
       return;
     }
     if (requiredDate && isDateBeforeToday(requiredDate)) {
-      setError('Expected delivery date cannot be in the past.');
+      setError('Expected dispatch date cannot be in the past.');
       return;
     }
     setSavingProjectName(true);
@@ -724,9 +724,7 @@ const SupplierUpstreamCart = () => {
                                 min={todayDateMin}
                                 value={projectDateDraft}
                                 onChange={(e) => {
-                                  const next = e.target.value;
-                                  if (next && isDateBeforeToday(next)) return;
-                                  setProjectDateDraft(next);
+                                  setProjectDateDraft(e.target.value);
                                 }}
                                 className="supplier-project-name-input"
                               />
@@ -930,7 +928,7 @@ const SupplierUpstreamCart = () => {
                         <p className="supplier-project-id">Project ID: {projectId}</p>
                         {String(project?.requiredDate || '').trim() ? (
                           <p className="supplier-project-id">
-                            <strong>Expected delivery: {formatDateIST(project.requiredDate, '—')}</strong>
+                            <strong>Expected dispatch: {formatDateIST(project.requiredDate, '—')}</strong>
                           </p>
                         ) : null}
                         {!isEditing ? (

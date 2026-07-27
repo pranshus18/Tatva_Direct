@@ -332,7 +332,7 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       doc.text(`Payment Method: ${safeString(order?.payment_method || '-')}`);
       doc.text(`Order Date: ${order?.created_at ? formatPlatformDateTime(order.created_at, '-') : '-'}`);
       doc.text(
-        `Expected Delivery: ${
+        `Expected Dispatch: ${
           order?.expected_delivery_date ? formatPlatformDate(order.expected_delivery_date, '-') : '-'
         }`
       );

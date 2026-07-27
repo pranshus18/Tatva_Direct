@@ -130,7 +130,7 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
       }
       return res.status(400).json({
         status: 'error',
-        message: 'Provide either project site location or site coordinates, and a required date, with the BOQ upload.'
+        message: 'Provide either project site location or site coordinates, and an expected dispatch date, with the BOQ upload.'
       });
     }
 

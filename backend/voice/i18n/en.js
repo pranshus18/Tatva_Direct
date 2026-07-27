@@ -88,7 +88,7 @@ export const enVoiceTexts = {
     'Review your cart on screen. Say continue or select supplier when you are ready.',
   'help.await_select_supplier': 'Say supplier number 1, or say the supplier name.',
   'help.await_substitution': 'Say no substitution to skip, or yes to accept suggestions.',
-  'help.await_po_requiredDate': 'Say a delivery date like 20 May 2026, or say default.',
+  'help.await_po_requiredDate': 'Say a dispatch date like 20 May 2026, or say default.',
   'help.await_po_payment': 'Say cash on delivery, online, or bank transfer.',
   'help.await_po_addresses': 'Say yes to confirm your shipping address.',
   'help.await_po_generic': 'Answer the question I just asked about your order.',
@@ -143,7 +143,7 @@ export const enVoiceTexts = {
   'supplier.thisSupplier': 'this supplier',
 
   'po.requiredDate':
-    'What delivery date should I use? Say a date like 20 May 2026, or say default.',
+    'What dispatch date should I use? Say a date like 20 May 2026, or say default.',
   'po.payment': 'How will you pay? Say cash on delivery, online payment, or bank transfer.',
   'po.address': 'Shipping address is {shipLine}. Say yes to confirm.',
   'po.addressFromProfile': 'from your profile',
@@ -157,7 +157,7 @@ export const enVoiceTexts = {
   'pay.notSet': 'not set',
 
   'confirm.summary':
-    'Here is your order summary. {groups}. Grand total about {grandTotal} rupees. Delivery by {requiredDate}. Payment: {pay}.{transportPart} Say place the order to confirm, or say no to cancel.',
+    'Here is your order summary. {groups}. Grand total about {grandTotal} rupees. Dispatch by {requiredDate}. Payment: {pay}.{transportPart} Say place the order to confirm, or say no to cancel.',
   'confirm.placeRetry': 'Say place the order to confirm, or say no to cancel.',
   'confirm.placing': 'Okay, placing your order now. One second.',
 

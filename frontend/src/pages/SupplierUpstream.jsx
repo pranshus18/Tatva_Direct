@@ -60,6 +60,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@/components/ui/dialog';
+import { cn } from '@/lib/utils';
 
 const blankShippingAddress = {
   label: '',
@@ -68,6 +69,11 @@ const blankShippingAddress = {
   state: '',
   pincode: '',
   country: ''
+};
+
+const emptyProjectFieldErrors = {
+  projectName: '',
+  expectedDispatchDate: ''
 };
 
 const todayDateMin = getTodayDateInputValue();
@@ -206,6 +212,8 @@ const SupplierUpstream = ({ user }) => {
   const [targetCartProjectId, setTargetCartProjectId] = useState('__new__');
   const [newCartProjectName, setNewCartProjectName] = useState('');
   const [newCartRequiredDate, setNewCartRequiredDate] = useState('');
+  const [projectFieldErrors, setProjectFieldErrors] = useState(emptyProjectFieldErrors);
+  const [dialogError, setDialogError] = useState('');
   const [shippingAddressBook, setShippingAddressBook] = useState([]);
   const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
   const [newShippingAddress, setNewShippingAddress] = useState(blankShippingAddress);
@@ -888,11 +896,14 @@ const SupplierUpstream = ({ user }) => {
     setTargetCartProjectId(initialProjectId);
     setNewCartProjectName(String(product?.name || '').trim() || 'Supplier Project');
     setNewCartRequiredDate('');
+    setProjectFieldErrors(emptyProjectFieldErrors);
+    setDialogError('');
     applyProjectShippingSelection(initialProjectId, projects, addresses);
     setAddCartDialogOpen(true);
   };
 
   const handleAddSingleProductToCart = async () => {
+    setDialogError('');
     const product = pendingCartProduct;
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return;
@@ -900,16 +911,27 @@ const SupplierUpstream = ({ user }) => {
     const parsedQty = parseSupplierStockQuantity(selectedMine?.[mineId]);
     const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
     const isNewProject = targetCartProjectId === '__new__';
-    if (isNewProject && !newCartProjectName.trim()) {
-      alert('Please enter project name for new supplier project.');
-      return;
+    if (isNewProject) {
+      const nextFieldErrors = { ...emptyProjectFieldErrors };
+      if (!newCartProjectName.trim()) {
+        nextFieldErrors.projectName = 'Please enter a project name.';
+      }
+      if (!newCartRequiredDate) {
+        nextFieldErrors.expectedDispatchDate = 'Expected dispatch date is required.';
+      } else if (isDateBeforeToday(newCartRequiredDate)) {
+        nextFieldErrors.expectedDispatchDate = 'Expected dispatch date cannot be in the past.';
+      }
+      setProjectFieldErrors(nextFieldErrors);
+      if (nextFieldErrors.projectName || nextFieldErrors.expectedDispatchDate) {
+        return;
+      }
+    } else {
+      setProjectFieldErrors(emptyProjectFieldErrors);
     }
-    if (isNewProject && !newCartRequiredDate) {
-      alert('Please select expected delivery date for new supplier project.');
-      return;
-    }
-    if (isNewProject && isDateBeforeToday(newCartRequiredDate)) {
-      alert('Expected delivery date cannot be in the past.');
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      setDialogError('Please log in again to add items to cart.');
       return;
     }
 
@@ -917,11 +939,6 @@ const SupplierUpstream = ({ user }) => {
     let ok = false;
     let responseMessage = '';
     try {
-      const token = localStorage.getItem('token');
-      if (!token) {
-        alert('Please log in again to add items to cart.');
-        return;
-      }
       const shippingPayload = await resolveShippingPayload(token);
       const res = await fetch(getApiUrl('/api/supplier/upstream/cart/items'), {
         method: 'POST',
@@ -962,7 +979,7 @@ const SupplierUpstream = ({ user }) => {
       return rest;
     });
     if (!ok) {
-      alert(responseMessage || 'Failed to add this product to cart.');
+      setDialogError(responseMessage || 'Failed to add this product to cart.');
       return;
     }
 
@@ -1516,13 +1533,16 @@ const SupplierUpstream = ({ user }) => {
         <SupplierProductDetailsModal product={viewingProduct} onClose={() => setViewingProduct(null)} />
       ) : null}
       <Dialog open={addCartDialogOpen} onOpenChange={setAddCartDialogOpen}>
-        <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden">
-          <DialogHeader>
-            <DialogTitle>Select supplier project</DialogTitle>
-            <DialogDescription>
-              Choose an existing project or create a new one for this cart item.
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden p-0">
+          <div className="shrink-0 border-b px-6 py-4 pr-12">
+            <DialogHeader>
+              <DialogTitle>Select supplier project</DialogTitle>
+              <DialogDescription>
+                Choose an existing project or create a new one for this cart item.
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-4">
           <div className="space-y-4">
             <div className="space-y-1">
               <label className="text-sm font-medium">Project</label>
@@ -1532,6 +1552,8 @@ const SupplierUpstream = ({ user }) => {
                 onChange={(event) => {
                   const nextProjectId = event.target.value;
                   setTargetCartProjectId(nextProjectId);
+                  setProjectFieldErrors(emptyProjectFieldErrors);
+                  setDialogError('');
                   if (nextProjectId !== '__new__') {
                     setNewCartRequiredDate('');
                   }
@@ -1549,31 +1571,74 @@ const SupplierUpstream = ({ user }) => {
             {targetCartProjectId === '__new__' ? (
               <div className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Project name</label>
+                  <label className="text-sm font-medium" htmlFor="upstream-new-project-name">
+                    Project name
+                  </label>
                   <Input
+                    id="upstream-new-project-name"
                     maxLength={120}
                     value={newCartProjectName}
-                    onChange={(event) => setNewCartProjectName(event.target.value)}
+                    aria-invalid={Boolean(projectFieldErrors.projectName)}
+                    className={cn(projectFieldErrors.projectName && 'border-destructive')}
+                    onChange={(event) => {
+                      setNewCartProjectName(event.target.value);
+                      if (projectFieldErrors.projectName) {
+                        setProjectFieldErrors((prev) => ({ ...prev, projectName: '' }));
+                      }
+                    }}
                     placeholder="e.g. July restock"
                   />
+                  {projectFieldErrors.projectName ? (
+                    <p className="text-xs text-destructive" role="alert">
+                      {projectFieldErrors.projectName}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Expected delivery date</label>
+                  <label className="text-sm font-medium" htmlFor="upstream-expected-dispatch-date">
+                    Expected dispatch date
+                  </label>
                   <Input
+                    id="upstream-expected-dispatch-date"
                     type="date"
                     min={todayDateMin}
                     value={newCartRequiredDate}
+                    aria-invalid={Boolean(projectFieldErrors.expectedDispatchDate)}
+                    aria-describedby={
+                      projectFieldErrors.expectedDispatchDate
+                        ? 'upstream-expected-dispatch-date-error'
+                        : undefined
+                    }
+                    className={cn(projectFieldErrors.expectedDispatchDate && 'border-destructive')}
                     onChange={(event) => {
                       const next = event.target.value;
-                      if (next && isDateBeforeToday(next)) return;
                       setNewCartRequiredDate(next);
+                      if (next && isDateBeforeToday(next)) {
+                        setProjectFieldErrors((prev) => ({
+                          ...prev,
+                          expectedDispatchDate: 'Expected dispatch date cannot be in the past.'
+                        }));
+                        return;
+                      }
+                      if (projectFieldErrors.expectedDispatchDate) {
+                        setProjectFieldErrors((prev) => ({ ...prev, expectedDispatchDate: '' }));
+                      }
                     }}
                   />
+                  {projectFieldErrors.expectedDispatchDate ? (
+                    <p
+                      id="upstream-expected-dispatch-date-error"
+                      className="text-xs text-destructive"
+                      role="alert"
+                    >
+                      {projectFieldErrors.expectedDispatchDate}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             ) : (
               <p className="text-xs text-muted-foreground">
-                Expected delivery date for this project:{' '}
+                Expected dispatch date for this project:{' '}
                 {(() => {
                   const requiredDate = cartProjects.find((project) => project.projectId === targetCartProjectId)?.requiredDate;
                   return requiredDate ? formatDateIST(requiredDate, '—') : 'Not set';
@@ -1696,12 +1761,23 @@ const SupplierUpstream = ({ user }) => {
               ) : null}
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAddCartDialogOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleAddSingleProductToCart}>Add to cart</Button>
-          </DialogFooter>
+          {dialogError ? (
+            <div
+              className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              role="alert"
+            >
+              {dialogError}
+            </div>
+          ) : null}
+          </div>
+          <div className="shrink-0 border-t bg-background px-6 py-4">
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setAddCartDialogOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={handleAddSingleProductToCart}>Add to cart</Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
       </div>

@@ -160,7 +160,7 @@ router.put('/cart', authenticateToken, isServiceProvider, async (req, res) => {
       if (seen.has(key)) {
         return res.status(400).json({
           status: 'error',
-          message: 'Duplicate projects are not allowed with the same name and expected delivery date'
+          message: 'Duplicate projects are not allowed with the same name and expected dispatch date'
         });
       }
       seen.add(key);
@@ -345,7 +345,7 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
       if (hasDuplicateProjectKey(currentDraft.boqGroups, proposedProjectName, proposedProjectDate)) {
         return res.status(400).json({
           status: 'error',
-          message: 'A project with the same name and expected delivery date already exists'
+          message: 'A project with the same name and expected dispatch date already exists'
         });
       }
       const appended = appendDiscoveryItemAsNewProject(currentDraft.boqGroups, discoveryItem, product.name, {
@@ -648,7 +648,7 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
     if (hasDuplicateProjectKey(groups, nextName, effectiveDate, groupId)) {
       return res.status(400).json({
         status: 'error',
-        message: 'A project with the same name and expected delivery date already exists'
+        message: 'A project with the same name and expected dispatch date already exists'
       });
     }
     let found = false;

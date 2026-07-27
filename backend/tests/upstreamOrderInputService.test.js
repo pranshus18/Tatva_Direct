@@ -20,7 +20,7 @@ test('normalizeRequiredDateForUpstream rejects past required date', () => {
   const now = new Date('2026-05-27T10:00:00.000Z');
   const out = normalizeRequiredDateForUpstream('2026-05-26', now);
   assert.equal(out.expectedDeliveryDate, null);
-  assert.equal(out.error, 'Required date cannot be in the past.');
+  assert.equal(out.error, 'Expected dispatch date cannot be in the past.');
 });
 
 test('normalizeRequiredDateForUpstream handles empty required date', () => {

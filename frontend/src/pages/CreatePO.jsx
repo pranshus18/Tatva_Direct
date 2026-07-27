@@ -1193,7 +1193,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
 
     if (!requiredDate) {
       const proceed = window.confirm(
-        'You have not specified an "Expected Dispatch" date.\n\nDo you want to continue without an expected dispatch date?'
+        'You have not specified an expected dispatch date.\n\nDo you want to continue without an expected dispatch date?'
       );
       if (!proceed) {
         return;
@@ -1464,16 +1464,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             textTransform: 'uppercase',
             letterSpacing: '0.05em'
           }}>
-            Expected Dispatch
+            Expected dispatch date
           </label>
           <input
             type="date"
             min={todayDateMin}
             value={requiredDate}
             onChange={(e) => {
-              const next = e.target.value;
-              if (next && isDateBeforeToday(next)) return;
-              setRequiredDate(next);
+              setRequiredDate(e.target.value);
             }}
             style={{
               width: '100%',

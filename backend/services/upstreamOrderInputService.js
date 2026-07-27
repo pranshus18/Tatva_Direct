@@ -86,7 +86,7 @@ export function normalizeRequiredDateForUpstream(requiredDate, now = new Date())
   if (requiredDayUtc.getTime() < todayUtc.getTime()) {
     return {
       expectedDeliveryDate: null,
-      error: 'Required date cannot be in the past.'
+      error: 'Expected dispatch date cannot be in the past.'
     };
   }
 

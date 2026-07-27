@@ -726,7 +726,7 @@ const SupplierPlaceOrder = () => {
     if (placing) return;
 
     if (!requiredDate) {
-      window.alert('Please select an "Expected Dispatch" date before getting transport suggestions.');
+      window.alert('Please select an expected dispatch date before getting transport suggestions.');
       return;
     }
     if (isDateBeforeToday(requiredDate)) {
@@ -815,7 +815,7 @@ const SupplierPlaceOrder = () => {
 
     if (!requiredDate) {
       const proceed = window.confirm(
-        'You have not specified an "Expected Dispatch" date.\n\nDo you want to continue without an expected dispatch date?'
+        'You have not specified an expected dispatch date.\n\nDo you want to continue without an expected dispatch date?'
       );
       if (!proceed) return;
     } else if (isDateBeforeToday(requiredDate)) {
@@ -1081,15 +1081,13 @@ const SupplierPlaceOrder = () => {
             <h2 className="spo-section-title">Delivery &amp; payment</h2>
             <div className="spo-two-col">
               <div className="spo-field">
-                <label htmlFor="spo-required-date">Expected Dispatch</label>
+                <label htmlFor="spo-required-date">Expected dispatch date</label>
                 <input
                   id="spo-required-date"
                   type="date"
                   value={requiredDate}
                   onChange={(e) => {
-                    const next = e.target.value;
-                    if (next && isDateBeforeToday(next)) return;
-                    setRequiredDate(next);
+                    setRequiredDate(e.target.value);
                   }}
                   min={todayDateInput}
                 />

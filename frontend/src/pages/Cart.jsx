@@ -483,7 +483,7 @@ const Cart = ({ onLoadCart }) => {
       return;
     }
     if (nextDate && isDateBeforeToday(nextDate)) {
-      setError('Expected delivery date cannot be in the past.');
+      setError('Expected dispatch date cannot be in the past.');
       return;
     }
 
@@ -1041,11 +1041,9 @@ const Cart = ({ onLoadCart }) => {
                                 min={todayDateMin}
                                 value={draftGroupDates[groupId] ?? getGroupRequiredDate(group)}
                                 onChange={(e) => {
-                                  const next = e.target.value;
-                                  if (next && isDateBeforeToday(next)) return;
                                   setDraftGroupDates((prev) => ({
                                     ...prev,
-                                    [groupId]: next
+                                    [groupId]: e.target.value
                                   }));
                                 }}
                               />
@@ -1258,7 +1256,7 @@ const Cart = ({ onLoadCart }) => {
                       {getGroupRequiredDate(group) ? (
                         <p className="mt-1 text-xs text-muted-foreground">
                           <span className="font-semibold text-foreground">
-                            Expected delivery: {formatDateIST(getGroupRequiredDate(group), '—')}
+                            Expected dispatch: {formatDateIST(getGroupRequiredDate(group), '—')}
                           </span>
                         </p>
                       ) : null}

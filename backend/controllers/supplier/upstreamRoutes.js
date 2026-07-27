@@ -1962,7 +1962,7 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       if (hasDuplicateUpstreamProject(currentProjects, requestedCartName, requiredDate)) {
         return res.status(400).json({
           status: 'error',
-          message: 'A supplier project with the same name and expected delivery date already exists'
+          message: 'A supplier project with the same name and expected dispatch date already exists'
         });
       }
       updatedProject = applyShippingToUpstreamProject(
@@ -2148,7 +2148,7 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
     ) {
       return res.status(400).json({
         status: 'error',
-        message: 'A supplier project with the same name and expected delivery date already exists'
+        message: 'A supplier project with the same name and expected dispatch date already exists'
       });
     }
     if (projects.length === 0) {
@@ -2290,7 +2290,7 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       ) {
         return res.status(400).json({
           status: 'error',
-          message: 'A supplier project with the same name and expected delivery date already exists'
+          message: 'A supplier project with the same name and expected dispatch date already exists'
         });
       }
       const idx = nextProjects.findIndex((p) => String(p?.projectId || '') === String(payloadInput.projectId));
@@ -2312,7 +2312,7 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       if (hasDuplicateUpstreamProject(nextProjects, nextProject.cartName, nextProject.requiredDate)) {
         return res.status(400).json({
           status: 'error',
-          message: 'A supplier project with the same name and expected delivery date already exists'
+          message: 'A supplier project with the same name and expected dispatch date already exists'
         });
       }
       nextProjects = [nextProject, ...nextProjects];

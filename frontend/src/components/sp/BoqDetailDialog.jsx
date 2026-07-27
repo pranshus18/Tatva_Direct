@@ -93,7 +93,7 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
               {boqStatus ? <p className="capitalize">Status: {boqStatus}</p> : null}
               {projectLocation ? <p>Site: {projectLocation}</p> : null}
               {requiredDate ? (
-                <p>Expected Dispatch: {formatDateIST(requiredDate, requiredDate)}</p>
+                <p>Expected dispatch date: {formatDateIST(requiredDate, requiredDate)}</p>
               ) : null}
             </div>
           </DialogDescription>
@@ -122,13 +122,20 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
                     <th className="px-4 py-3 font-medium">Item</th>
                     <th className="px-4 py-3 font-medium">Qty</th>
                     <th className="px-4 py-3 font-medium">Unit</th>
-                    <th className="px-4 py-3 font-medium">Match</th>
+                    <th className="px-4 py-3 font-medium">Product Match</th>
+                    <th className="px-4 py-3 font-medium">Supplier Availability</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map((item, index) => {
                     const label = item.normalizedName || item.rawName || '—';
                     const matched = Boolean(item.productId);
+                    const availableSuppliers = Number(item.availableSuppliers || 0);
+                    const hasAvailableSuppliers =
+                      (item.isAvailable ?? availableSuppliers > 0) && availableSuppliers > 0;
+                    const hasSupplierListing = Boolean(
+                      item.supplierInfo || item.supplyChainLastSupplier || item.nearestSupplier
+                    );
                     return (
                       <tr key={item.id || index} className="border-t">
                         <td className="px-4 py-3 text-muted-foreground">{index + 1}</td>
@@ -139,10 +146,24 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
                           {matched ? (
                             <span className="inline-flex items-center gap-1 text-emerald-700">
                               <CheckCircle className="h-3.5 w-3.5" />
-                              Matched
+                              Product Matched
                             </span>
                           ) : (
-                            <span className="text-muted-foreground">Unmatched</span>
+                            <span className="text-muted-foreground">Product Unmatched</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {hasAvailableSuppliers ? (
+                            <span className="inline-flex items-center gap-1 text-emerald-700">
+                              <Users className="h-3.5 w-3.5" />
+                              {availableSuppliers} supplier{availableSuppliers === 1 ? '' : 's'} available
+                            </span>
+                          ) : hasSupplierListing ? (
+                            <span className="text-amber-700">
+                              Supplier listed, currently out of stock
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">No supplier available</span>
                           )}
                         </td>
                       </tr>

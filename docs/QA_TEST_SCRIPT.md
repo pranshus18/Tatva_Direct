@@ -130,7 +130,7 @@ Use an order in `pending` or `confirmed` and unpaid:
 1. Open order details.
 2. Click `Edit order`.
 3. Update:
-   - expected delivery date
+   - expected dispatch date
    - payment method
    - notes
    - delivery address fields

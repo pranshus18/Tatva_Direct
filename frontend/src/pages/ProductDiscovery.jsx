@@ -35,6 +35,7 @@ import {
 } from '../utils/shippingAddressLabel';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import { openProductDetailInNewTab } from '../utils/discoveryNavigation';
+import { cn } from '@/lib/utils';
 import './ProductDiscovery.css';
 
 const blankShippingAddress = {
@@ -44,6 +45,11 @@ const blankShippingAddress = {
   state: '',
   pincode: '',
   country: ''
+};
+
+const emptyProjectFieldErrors = {
+  projectName: '',
+  expectedDispatchDate: ''
 };
 
 const todayDateMin = getTodayDateInputValue();
@@ -134,6 +140,8 @@ const ProductDiscovery = () => {
   const [targetProjectId, setTargetProjectId] = useState('__new__');
   const [newProjectName, setNewProjectName] = useState('');
   const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
+  const [projectFieldErrors, setProjectFieldErrors] = useState(emptyProjectFieldErrors);
+  const [dialogError, setDialogError] = useState('');
   const [shippingAddressBook, setShippingAddressBook] = useState([]);
   const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
   const [newShippingAddress, setNewShippingAddress] = useState(blankShippingAddress);
@@ -362,6 +370,8 @@ const ProductDiscovery = () => {
     setTargetProjectId(initialProjectId);
     setNewProjectName(String(product?.name || '').trim());
     setExpectedDeliveryDate('');
+    setProjectFieldErrors(emptyProjectFieldErrors);
+    setDialogError('');
     applyProjectShippingSelection(initialProjectId, groups, addresses);
     setProjectPickerOpen(true);
   };
@@ -442,31 +452,36 @@ const ProductDiscovery = () => {
   };
 
   const confirmAddToCart = async () => {
+    setDialogError('');
     const token = localStorage.getItem('token');
     if (!token) {
-      setError('Please log in again to add items to cart.');
+      setDialogError('Please log in again to add items to cart.');
       return false;
     }
     const productId = pendingProduct?.id;
     if (!productId) {
-      setError('No product selected for adding to cart.');
+      setDialogError('No product selected for adding to cart.');
       return false;
     }
     const isNewProject = targetProjectId === '__new__';
-    if (isNewProject && !newProjectName.trim()) {
-      setError('Please enter a project name for the new project.');
-      return false;
-    }
-    if (isNewProject && !expectedDeliveryDate) {
-      setError('Please select expected delivery date for the new project.');
-      return false;
-    }
-    if (isNewProject && isDateBeforeToday(expectedDeliveryDate)) {
-      setError('Expected delivery date cannot be in the past.');
-      return false;
+    if (isNewProject) {
+      const nextFieldErrors = { ...emptyProjectFieldErrors };
+      if (!newProjectName.trim()) {
+        nextFieldErrors.projectName = 'Please enter a project name.';
+      }
+      if (!expectedDeliveryDate) {
+        nextFieldErrors.expectedDispatchDate = 'Expected dispatch date is required.';
+      } else if (isDateBeforeToday(expectedDeliveryDate)) {
+        nextFieldErrors.expectedDispatchDate = 'Expected dispatch date cannot be in the past.';
+      }
+      setProjectFieldErrors(nextFieldErrors);
+      if (nextFieldErrors.projectName || nextFieldErrors.expectedDispatchDate) {
+        return false;
+      }
+    } else {
+      setProjectFieldErrors(emptyProjectFieldErrors);
     }
     setCartBusyByProductId((prev) => ({ ...prev, [String(productId)]: true }));
-    setError('');
     try {
       const shippingPayload = await resolveShippingPayload(token);
       const payload = {
@@ -509,7 +524,7 @@ const ProductDiscovery = () => {
       }, 1400);
       return true;
     } catch (e) {
-      setError(e.message || 'Failed to add to cart');
+      setDialogError(e.message || 'Failed to add to cart');
       return false;
     } finally {
       setCartBusyByProductId((prev) => {
@@ -719,13 +734,16 @@ const ProductDiscovery = () => {
         </div>
       )}
       <Dialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen}>
-        <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden">
-          <DialogHeader>
-            <DialogTitle>Select project for cart item</DialogTitle>
-            <DialogDescription>
-              Choose where to store this product in your cart. You can add multiple products under one project.
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden p-0">
+          <div className="shrink-0 border-b px-6 py-4 pr-12">
+            <DialogHeader>
+              <DialogTitle>Select project for cart item</DialogTitle>
+              <DialogDescription>
+                Choose where to store this product in your cart. You can add multiple products under one project.
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-4">
           <div className="space-y-4">
             <div className="space-y-1">
               <label className="text-sm font-medium">Project</label>
@@ -735,6 +753,8 @@ const ProductDiscovery = () => {
                 onChange={(event) => {
                   const nextTarget = event.target.value;
                   setTargetProjectId(nextTarget);
+                  setProjectFieldErrors(emptyProjectFieldErrors);
+                  setDialogError('');
                   if (nextTarget !== '__new__') {
                     setExpectedDeliveryDate('');
                     applyProjectShippingSelection(nextTarget, cartProjects, shippingAddressBook);
@@ -752,32 +772,75 @@ const ProductDiscovery = () => {
             {targetProjectId === '__new__' ? (
               <div className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Project name</label>
+                  <label className="text-sm font-medium" htmlFor="pd-new-project-name">
+                    Project name
+                  </label>
                   <Input
+                    id="pd-new-project-name"
                     maxLength={120}
                     placeholder="e.g. Site A plumbing"
                     value={newProjectName}
-                    onChange={(event) => setNewProjectName(event.target.value)}
+                    aria-invalid={Boolean(projectFieldErrors.projectName)}
+                    className={cn(projectFieldErrors.projectName && 'border-destructive')}
+                    onChange={(event) => {
+                      setNewProjectName(event.target.value);
+                      if (projectFieldErrors.projectName) {
+                        setProjectFieldErrors((prev) => ({ ...prev, projectName: '' }));
+                      }
+                    }}
                   />
+                  {projectFieldErrors.projectName ? (
+                    <p className="text-xs text-destructive" role="alert">
+                      {projectFieldErrors.projectName}
+                    </p>
+                  ) : null}
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium">Expected delivery date</label>
+                  <label className="text-sm font-medium" htmlFor="pd-expected-dispatch-date">
+                    Expected dispatch date
+                  </label>
                   <Input
+                    id="pd-expected-dispatch-date"
                     type="date"
                     min={todayDateMin}
                     value={expectedDeliveryDate}
+                    aria-invalid={Boolean(projectFieldErrors.expectedDispatchDate)}
+                    aria-describedby={
+                      projectFieldErrors.expectedDispatchDate
+                        ? 'pd-expected-dispatch-date-error'
+                        : undefined
+                    }
+                    className={cn(projectFieldErrors.expectedDispatchDate && 'border-destructive')}
                     onChange={(event) => {
                       const next = event.target.value;
-                      if (next && isDateBeforeToday(next)) return;
                       setExpectedDeliveryDate(next);
+                      if (next && isDateBeforeToday(next)) {
+                        setProjectFieldErrors((prev) => ({
+                          ...prev,
+                          expectedDispatchDate: 'Expected dispatch date cannot be in the past.'
+                        }));
+                        return;
+                      }
+                      if (projectFieldErrors.expectedDispatchDate) {
+                        setProjectFieldErrors((prev) => ({ ...prev, expectedDispatchDate: '' }));
+                      }
                     }}
                   />
+                  {projectFieldErrors.expectedDispatchDate ? (
+                    <p
+                      id="pd-expected-dispatch-date-error"
+                      className="text-xs text-destructive"
+                      role="alert"
+                    >
+                      {projectFieldErrors.expectedDispatchDate}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             ) : null}
             {targetProjectId !== '__new__' ? (
               <p className="text-xs text-muted-foreground">
-                Expected delivery date for this project:{' '}
+                Expected dispatch date for this project:{' '}
                 {(() => {
                   const requiredDate = cartProjects.find((group) => group.groupId === targetProjectId)?.requiredDate;
                   return requiredDate ? formatDateIST(requiredDate, '—') : 'Not set';
@@ -896,14 +959,25 @@ const ProductDiscovery = () => {
               ) : null}
             </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setProjectPickerOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={confirmAddToCart}>
-              Add to cart
-            </Button>
-          </DialogFooter>
+          {dialogError ? (
+            <div
+              className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              role="alert"
+            >
+              {dialogError}
+            </div>
+          ) : null}
+          </div>
+          <div className="shrink-0 border-t bg-background px-6 py-4">
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setProjectPickerOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={confirmAddToCart}>
+                Add to cart
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </SpPageLayout>

@@ -1092,7 +1092,7 @@ const YourOrders = () => {
                     )}
                     <div className="mt-4 text-[0.8125rem] text-[#64748b]">
                       <div>
-                        Expected delivery:{' '}
+                        Expected dispatch:{' '}
                         {orderDetails.expectedDeliveryDate
                           ? formatDate(orderDetails.expectedDeliveryDate)
                           : '—'}
@@ -1192,9 +1192,9 @@ const YourOrders = () => {
                   <OrderDialogSection title="Edit order">
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div className="space-y-2 sm:col-span-2">
-                        <Label htmlFor="edit-expected-delivery">Expected delivery</Label>
+                        <Label htmlFor="edit-expected-dispatch">Expected dispatch</Label>
                         <Input
-                          id="edit-expected-delivery"
+                          id="edit-expected-dispatch"
                         type="datetime-local"
                           value={
                             editingOrder.expectedDeliveryDate

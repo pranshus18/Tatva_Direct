@@ -29,8 +29,9 @@
   border-radius: 8px;
   padding: 1rem;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
   position: relative;
+  background: #fff;
   user-select: none;
   -webkit-user-select: none;
   -moz-user-select: none;
@@ -38,34 +39,36 @@
   outline: none;
 }
 
+/* Focus ring only for keyboard — do not reuse the selected indigo border. */
 .vendor-card:focus {
-  outline: 2px solid #4f46e5;
+  outline: none;
+}
+
+.vendor-card:focus-visible {
+  outline: 2px solid #94a3b8;
   outline-offset: 2px;
 }
 
+/* Hover stays neutral so it cannot be mistaken for the active selection. */
 .vendor-card:hover {
-  border-color: #4f46e5;
-  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.1);
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
 }
 
+/* Indigo highlight is reserved for the selected card only. */
 .vendor-card.selected {
   border-color: #4f46e5;
   background: #eef2ff;
-  border-width: 3px;
-  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.2);
+  box-shadow: 0 0 0 1px #4f46e5, 0 4px 12px rgba(79, 70, 229, 0.18);
 }
 
-.vendor-card.selected::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  border: 2px solid #4f46e5;
-  border-radius: 8px;
-  pointer-events: none;
-  z-index: 0;
+.vendor-card.selected:hover {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 1px #4f46e5, 0 4px 12px rgba(79, 70, 229, 0.18);
+}
+
+.vendor-card.selected:focus-visible {
+  outline-color: #4f46e5;
 }
 
 .vendor-card.insufficient-stock {
@@ -82,11 +85,12 @@
 .vendor-card.insufficient-stock.selected {
   border-color: #dc2626;
   background: #fef2f2;
-  box-shadow: none;
+  box-shadow: 0 0 0 1px #dc2626;
 }
 
-.vendor-card.insufficient-stock.selected::before {
+.vendor-card.insufficient-stock.selected:hover {
   border-color: #dc2626;
+  box-shadow: 0 0 0 1px #dc2626;
 }
 
 .vendor-name {

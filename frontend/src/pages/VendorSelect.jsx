@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { Clock, RefreshCw, MapPin } from 'lucide-react';
-import { resolveApiPath, authFetch } from '../config/api';
+import { ArrowLeft, Clock, RefreshCw, MapPin, Users } from 'lucide-react';
+import { toast } from 'sonner';
+import { resolveApiPath, authFetch, getApiUrl } from '../config/api';
 import { readSpWorkflow } from '../utils/spWorkflow';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
@@ -20,11 +21,25 @@ import {
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import { isVoiceGuidedActive, prepareSupplierSelectFromVoiceCart } from '../voice/voiceCartBridge';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
-import { Users } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { formatRupee } from '../utils/formatRupee';
 import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import { formatDateIST } from '../utils/dateTime';
 import './VendorSelect.css';
+
+/** Prefer in-app history so Back matches the browser back button; otherwise go to the prior workflow step. */
+function navigateToPreviousStep(navigate, fallbackPath) {
+  try {
+    const idx = window.history.state?.idx;
+    if (typeof idx === 'number' && idx > 0) {
+      navigate(-1);
+      return;
+    }
+  } catch {
+    /* ignore */
+  }
+  navigate(fallbackPath);
+}
 
 function enrichBoqProjectMeta(proj) {
   if (!proj || typeof proj !== 'object') return proj;
@@ -56,8 +71,61 @@ function vendorHasSufficientStock(vendor, item) {
   return getVendorAvailableStock(vendor) >= getItemRequestedQty(item);
 }
 
+/** True when the offer is explicitly unavailable or has no stock. */
+function vendorIsUnavailable(vendor) {
+  if (!vendor) return true;
+  const flag = vendor.isAvailable;
+  if (flag === false || flag === 0 || flag === 'false' || flag === '0') return true;
+  return getVendorAvailableStock(vendor) <= 0;
+}
+
+/** Supplier can fulfill only when stock covers qty and the offer is marked available. */
+function vendorCanFulfill(vendor, item) {
+  if (!vendor || vendorIsUnavailable(vendor)) return false;
+  return vendorHasSufficientStock(vendor, item);
+}
+
 function getVendorSelectionId(vendor) {
   return String(vendor?.selectionId || vendor?.supplierProductId || vendor?.id || '');
+}
+
+/**
+ * Normalize rank API / cache payloads so OOS offers cannot keep recommendation flags
+ * or inconsistent stock/availability fields that confuse auto-select + badges.
+ */
+function sanitizeVendorOffers(itemVendors, itemsList = []) {
+  const itemsById = new Map(
+    (itemsList || []).map((item) => [String(item?.id ?? ''), item])
+  );
+  const cleaned = {};
+  Object.keys(itemVendors || {}).forEach((itemId) => {
+    const item = itemsById.get(String(itemId)) || null;
+    const vendors = Array.isArray(itemVendors[itemId]) ? itemVendors[itemId] : [];
+    cleaned[itemId] = vendors
+      .filter((v) => v && v.id && v.name)
+      .map((v) => {
+        const availableStock = getVendorAvailableStock(v);
+        const isAvailable = !(
+          v.isAvailable === false ||
+          v.isAvailable === 0 ||
+          v.isAvailable === 'false' ||
+          v.isAvailable === '0' ||
+          availableStock <= 0
+        );
+        const canFulfill = item
+          ? isAvailable && availableStock >= getItemRequestedQty(item)
+          : isAvailable;
+        return {
+          ...v,
+          stock: availableStock,
+          availableStock,
+          isAvailable,
+          // Never keep a recommendation flag on an unfulfillable offer.
+          isNearestRecommended: Boolean(v.isNearestRecommended) && canFulfill
+        };
+      });
+  });
+  return cleaned;
 }
 
 function formatInsufficientStockMessage(item, vendor) {
@@ -66,7 +134,27 @@ function formatInsufficientStockMessage(item, vendor) {
   const requested = getItemRequestedQty(item);
   const available = getVendorAvailableStock(vendor);
   const unit = vendor?.unit || item?.unit || 'units';
+  if (vendor?.isAvailable === false || available <= 0) {
+    return `"${name}"${supplierName} is out of stock or not available. Please choose another supplier, request this product, or pick a substitute.`;
+  }
   return `Insufficient stock for "${name}"${supplierName}. Available: ${available} ${unit}, requested: ${requested}.`;
+}
+
+/** Sort fulfillable offers first, then by existing rank/distance order. */
+function sortVendorsForDisplay(vendors, item) {
+  return [...vendors].sort((a, b) => {
+    const aOk = vendorCanFulfill(a, item) ? 0 : 1;
+    const bOk = vendorCanFulfill(b, item) ? 0 : 1;
+    if (aOk !== bOk) return aOk - bOk;
+    const aRank = Number(a?.rank);
+    const bRank = Number(b?.rank);
+    if (Number.isFinite(aRank) && Number.isFinite(bRank) && aRank !== bRank) {
+      return aRank - bRank;
+    }
+    const aDist = typeof a?.distanceKm === 'number' ? a.distanceKm : Infinity;
+    const bDist = typeof b?.distanceKm === 'number' ? b.distanceKm : Infinity;
+    return aDist - bDist;
+  });
 }
 
 /** Pick nearest supplier when distance is known; otherwise first ranked approved option. */
@@ -75,8 +163,8 @@ function pickRecommendedVendor(vendors, item = null) {
   const eligible = vendors.filter((v) => v && (v.selectionId || v.supplierProductId || v.id));
   if (!eligible.length) return null;
 
-  // Never auto-select a supplier that cannot fulfill the requested quantity.
-  const inStock = eligible.filter((v) => vendorHasSufficientStock(v, item));
+  // Never recommend / auto-select a supplier that cannot fulfill the request.
+  const inStock = eligible.filter((v) => vendorCanFulfill(v, item));
   if (!inStock.length) return null;
 
   const preferredSupplierId =
@@ -147,6 +235,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   const [boqMeta, setBoqMeta] = useState(() =>
     enrichBoqProjectMeta(boqProject || workflowSeed.project || null)
   );
+  const [requestingProductKey, setRequestingProductKey] = useState('');
+  const [requestedProductKeys, setRequestedProductKeys] = useState(() => new Set());
   const navigate = useNavigate();
   const location = useLocation();
   const itemsPropRef = useRef(items);
@@ -191,6 +281,20 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     if (location?.state?.fromCartSupplierSelect === true) return true;
     return hasFreshCartSupplierSelectSession();
   }, [location.search, location.state]);
+
+  const previousStepPath = cartSupplierHandoff ? '/cart' : '/boq-normalize';
+  const previousStepLabel = cartSupplierHandoff ? 'Back to cart' : 'Back to BOQ';
+
+  const handleBackToPreviousStep = useCallback(() => {
+    navigateToPreviousStep(navigate, previousStepPath);
+  }, [navigate, previousStepPath]);
+
+  const backActions = (
+    <Button variant="outline" type="button" onClick={handleBackToPreviousStep}>
+      <ArrowLeft className="mr-2 h-4 w-4" />
+      {previousStepLabel}
+    </Button>
+  );
 
   const rankCacheKey = useMemo(() => {
     if (!effectiveItems?.length) return '';
@@ -483,59 +587,62 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         cleanedVendors[itemId] = validVendors.map((v) => ({
           ...v,
           price: typeof v.price === 'number' ? v.price : parseFloat(v.price),
-          stock: typeof v.availableStock === 'number' ? v.availableStock : typeof v.stock === 'number' ? v.stock : parseInt(v.stock || 0, 10)
+          stock:
+            typeof v.availableStock === 'number'
+              ? v.availableStock
+              : typeof v.stock === 'number'
+                ? v.stock
+                : parseInt(v.stock || 0, 10)
         }));
       } else {
         cleanedVendors[itemId] = [];
       }
     });
-    return cleanedVendors;
+    return sanitizeVendorOffers(cleanedVendors, effectiveItems);
   };
 
   const autoSelectNearestVendors = (cleanedVendors) => {
-    if (!hasDeliverySiteContext || !shouldAutoSelectNearestRef.current) return;
-    const next = {};
-    (effectiveItems || []).forEach((item) => {
-      const itemId = item.id?.toString() || String(item.id);
-      const vendors = cleanedVendors[itemId] || [];
-      const nearest = pickRecommendedVendor(vendors, item);
-      if (!nearest) return;
-      const key = nearest.selectionId || nearest.supplierProductId || nearest.id;
-      if (key) next[itemId] = String(key);
-    });
-    if (Object.keys(next).length > 0) {
-      setSelections(next);
+    const nextAuto = {};
+    if (hasDeliverySiteContext && shouldAutoSelectNearestRef.current) {
+      (effectiveItems || []).forEach((item) => {
+        const itemId = item.id?.toString() || String(item.id);
+        const vendors = cleanedVendors[itemId] || [];
+        const nearest = pickRecommendedVendor(vendors, item);
+        if (!nearest || !vendorCanFulfill(nearest, item)) return;
+        const key = getVendorSelectionId(nearest);
+        if (key) nextAuto[itemId] = String(key);
+      });
       shouldAutoSelectNearestRef.current = false;
     }
-  };
 
-  const pruneInsufficientSelections = (cleanedVendors) => {
     setSelections((prev) => {
-      if (!prev || typeof prev !== 'object') return prev;
-      let changed = false;
-      const next = { ...prev };
+      // Always drop unfulfillable selections; optionally apply nearest auto-picks.
+      const merged = { ...(prev || {}) };
       (effectiveItems || []).forEach((item) => {
         const selectionKey = getSelectionKey(item);
-        const selectedId = next[selectionKey];
+        const selectedId = merged[selectionKey];
         if (!selectedId) return;
         const itemId = item.id?.toString() || String(item.id);
         const vendors = cleanedVendors[itemId] || cleanedVendors[item.id] || [];
         const vendor = vendors.find((v) => getVendorSelectionId(v) === String(selectedId));
-        if (!vendor || !vendorHasSufficientStock(vendor, item)) {
-          delete next[selectionKey];
-          changed = true;
+        if (!vendor || !vendorCanFulfill(vendor, item)) {
+          delete merged[selectionKey];
         }
       });
-      return changed ? next : prev;
+      Object.keys(nextAuto).forEach((itemId) => {
+        merged[itemId] = nextAuto[itemId];
+      });
+      return merged;
     });
   };
 
   const applyRankResults = (cleanedVendors, cacheKey) => {
-    setItemVendors(cleanedVendors);
-    pruneInsufficientSelections(cleanedVendors);
-    autoSelectNearestVendors(cleanedVendors);
+    const sanitized = sanitizeVendorOffers(cleanedVendors, effectiveItems);
+    setItemVendors(sanitized);
+    // Prune OOS selections and auto-select only fulfillable nearest (when allowed).
+    autoSelectNearestVendors(sanitized);
     if (cacheKey) {
-      setVendorRankCache(cacheKey, cleanedVendors);
+      setVendorRankCache(cacheKey, sanitized);
     }
   };
 
@@ -704,17 +811,81 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     }
 
     const vendor = findVendorForItem(item, normalizedVendorId);
-    if (!vendor || !vendorHasSufficientStock(vendor, item)) {
+    if (!vendor || !vendorCanFulfill(vendor, item)) {
       alert(
         vendor
           ? formatInsufficientStockMessage(item, vendor)
-          : 'This supplier does not have enough stock for the requested quantity.'
+          : 'This supplier cannot fulfill the requested product. Please choose another option, request the product, or pick a substitute.'
       );
       return;
     }
 
     setSelections((prev) => ({ ...prev, [selectionKey]: normalizedVendorId }));
   };
+
+  const requestUnavailableProduct = async (item) => {
+    if (!item) return;
+    const itemKey = String(item.id ?? item.normalizedName || item.rawName || '');
+    if (!itemKey) return;
+    if (requestedProductKeys.has(itemKey)) {
+      toast.info('You have already made a request for this product.');
+      return;
+    }
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      toast.error('Please log in again to request a new product.');
+      return;
+    }
+
+    setRequestingProductKey(itemKey);
+    try {
+      const res = await fetch(getApiUrl('/api/boq/request-product'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          name: item.normalizedName || item.rawName,
+          category: item.category || 'other',
+          unit: item.unit || 'nos',
+          description: item.rawName || item.normalizedName || '',
+          brand: item.brand || item.normalizedName || item.rawName || '',
+          boqId: boqId || item.boqId || null,
+          boqItemId: item.id ?? null
+        })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 || data.alreadyRequested) {
+        setRequestedProductKeys((prev) => new Set(prev).add(itemKey));
+        toast.info(data.message || 'You have already made a request for this product.');
+        return;
+      }
+      if (res.ok && data.status === 'success') {
+        setRequestedProductKeys((prev) => new Set(prev).add(itemKey));
+        const productLabel = item.normalizedName || item.rawName || 'this product';
+        toast.success('Request sent', {
+          description: `Suppliers are being notified that a customer is looking for “${productLabel}”. They can add the product from their supplier portal if they stock it.`,
+          duration: 6000
+        });
+        return;
+      }
+      toast.error(data.message || 'Failed to submit product request. Please try again.');
+    } catch (error) {
+      console.error('Failed to submit product request:', error);
+      toast.error('Failed to submit product request. Please try again.');
+    } finally {
+      setRequestingProductKey('');
+    }
+  };
+
+  const goToSubstitutions = () => {
+    onComplete({ ...selections }, [...effectiveItems]);
+    clearSupplierSelectScopeSession();
+    navigate('/substitution');
+  };
+
   const toggleSpecifications = (item, vendorId) => {
     const itemKey = item?.id?.toString() || String(item?.id || '');
     const vendorKey = String(vendorId || '');
@@ -745,7 +916,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         const selectedVendorId = selections[selectionKey];
         if (!selectedVendorId) return null;
         const vendor = findVendorForItem(item, selectedVendorId);
-        if (vendor && vendorHasSufficientStock(vendor, item)) return null;
+        if (vendor && vendorCanFulfill(vendor, item)) return null;
         return { item, vendor };
       })
       .filter(Boolean);
@@ -755,11 +926,11 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         .map(({ item, vendor }) =>
           vendor
             ? formatInsufficientStockMessage(item, vendor)
-            : `Insufficient stock for "${item?.normalizedName || item?.rawName || 'an item'}".`
+            : `"${item?.normalizedName || item?.rawName || 'an item'}" cannot be fulfilled by the selected supplier.`
         )
         .join('\n');
       alert(
-        `Cannot proceed to Create Purchase Order — selected supplier(s) have insufficient stock:\n\n${details}`
+        `Cannot proceed — selected supplier(s) are out of stock or unavailable:\n\n${details}`
       );
       return;
     }
@@ -789,6 +960,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         title="Supplier Selection"
         description="Loading your BOQ line items…"
         icon={Users}
+        actions={backActions}
       >
         <div className="flex flex-col items-center justify-center gap-3 py-16 text-[#64748b]">
           <RefreshCw className="h-8 w-8 animate-spin text-[#4f46e5]" aria-hidden />
@@ -805,33 +977,46 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     const canTrySavedBoq = !!possibleBoqId && !cartSupplierHandoff;
 
     return (
-      <div className="page">
-        <div className="page-header">
-          <h1>Supplier Selection</h1>
-          <p>
-            {itemsLoadError
-              ? itemsLoadError
-              : cartSupplierHandoff
-                ? 'Your cart lines did not load on this page (common in production when a new tab opens or browser storage is restricted). Go back to the cart and use Select supplier again.'
-                : canTrySavedBoq
-                  ? 'No line items are on this screen yet. If you expected your last uploaded BOQ, open BOQ Normalize and continue again, or use the cart to pick supplier lines.'
-                  : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'}
-          </p>
-        </div>
+      <SpWorkflowPage
+        title="Supplier Selection"
+        description={
+          itemsLoadError
+            ? itemsLoadError
+            : cartSupplierHandoff
+              ? 'Your cart lines did not load on this page (common in production when a new tab opens or browser storage is restricted). Go back to the cart and use Select supplier again.'
+              : canTrySavedBoq
+                ? 'No line items are on this screen yet. If you expected your last uploaded BOQ, open BOQ Normalize and continue again, or use the cart to pick supplier lines.'
+                : 'No line items to show yet. Open your cart and use Select supplier again, or start from a BOQ upload.'
+        }
+        icon={Users}
+        actions={backActions}
+      >
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <button type="button" className="btn-primary" onClick={() => navigate('/cart')}>
-            Go to cart
-          </button>
-          <button type="button" className="btn-secondary" onClick={() => navigate('/boq-normalize')}>
-            Upload a BOQ
-          </button>
+          <Button type="button" onClick={handleBackToPreviousStep}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            {previousStepLabel}
+          </Button>
+          {!cartSupplierHandoff ? (
+            <Button variant="outline" type="button" onClick={() => navigate('/cart')}>
+              Go to cart
+            </Button>
+          ) : (
+            <Button variant="outline" type="button" onClick={() => navigate('/boq-normalize')}>
+              Upload a BOQ
+            </Button>
+          )}
         </div>
-      </div>
+      </SpWorkflowPage>
     );
   }
 
   return (
-    <SpWorkflowPage title="Supplier Selection" description="Choose the best vendor for each item" icon={Users}>
+    <SpWorkflowPage
+      title="Supplier Selection"
+      description="Choose the best vendor for each item"
+      icon={Users}
+      actions={backActions}
+    >
     <div className="page !p-0">
       <VoiceGuidedBanner />
       {cartSupplierHandoff && !hasDeliverySiteContext && (
@@ -871,14 +1056,14 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             {boqMeta?.requiredDate && (
               <>
                 {deliverySiteLabel ? ' · ' : ''}
-                <strong>Expected Dispatch:</strong> {formatDateIST(boqMeta.requiredDate, '—')}
+                <strong>Expected dispatch date:</strong> {formatDateIST(boqMeta.requiredDate, '—')}
               </>
             )}
             {deliverySiteLabel && (
               <span style={{ display: 'block', marginTop: '0.25rem', fontSize: '0.78rem', opacity: 0.9 }}>
                 Suppliers are ranked by distance to this address when outlet coordinates exist; otherwise city or
-                    state on the listing is used. The nearest supplier is pre-selected and marked{' '}
-                    <strong>Nearest · Recommended</strong>.
+                    state on the listing is used. The nearest <em>in-stock</em> supplier is pre-selected and marked{' '}
+                    <strong>Nearest · Recommended</strong>. Out-of-stock suppliers cannot be recommended or selected.
               </span>
             )}
           </span>
@@ -947,6 +1132,10 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           const itemId = item.id?.toString() || String(item.id);
           const vendors = itemVendors[itemId] || itemVendors[item.id] || [];
           const hasVendors = Array.isArray(vendors) && vendors.length > 0 && vendors.some(v => v.id && v.name);
+          const recommendedVendor = hasVendors ? pickRecommendedVendor(vendors, item) : null;
+          const recommendedVendorId = recommendedVendor ? getVendorSelectionId(recommendedVendor) : '';
+          const hasFulfillableVendors =
+            hasVendors && vendors.some((v) => v && v.id && v.name && vendorCanFulfill(v, item));
           
           const selectionKey = getSelectionKey(item);
           const currentSelection = String(selections[selectionKey] || '');
@@ -965,10 +1154,55 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             )}
             <div className="vendor-options">
               {hasVendors ? (
-                vendors
-                  .filter((vendor) => vendor && vendor.id && vendor.name)
-                  .map((vendor) => {
-                    const vendorIdStr = String(vendor.selectionId || vendor.supplierProductId || vendor.id);
+                <>
+                {!hasFulfillableVendors && (
+                  <div
+                    className="no-vendors"
+                    style={{
+                      padding: '1.25rem 1.5rem',
+                      textAlign: 'left',
+                      backgroundColor: '#fff7ed',
+                      borderRadius: '8px',
+                      border: '1px solid #fdba74',
+                      marginBottom: '0.75rem',
+                      width: '100%'
+                    }}
+                  >
+                    <p style={{ color: '#9a3412', fontSize: '0.95rem', margin: '0 0 0.75rem', fontWeight: 600 }}>
+                      No supplier can fulfill this product right now
+                    </p>
+                    <p style={{ color: '#c2410c', fontSize: '0.85rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
+                      Listed suppliers are out of stock or unavailable, so none can be recommended or selected.
+                      Request this product so suppliers can add it, or continue to choose a substitute.
+                    </p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                      <Button
+                        type="button"
+                        variant="default"
+                        disabled={requestingProductKey === itemId || requestedProductKeys.has(itemId)}
+                        onClick={() => requestUnavailableProduct(item)}
+                      >
+                        {requestedProductKeys.has(itemId)
+                          ? 'Request sent'
+                          : requestingProductKey === itemId
+                            ? 'Submitting…'
+                            : 'Request new product'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={goToSubstitutions}
+                      >
+                        Choose a substitute
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                {sortVendorsForDisplay(
+                  vendors.filter((vendor) => vendor && vendor.id && vendor.name),
+                  item
+                ).map((vendor, vendorIndex) => {
+                    const vendorIdStr = getVendorSelectionId(vendor);
                     const vendorSpecifications = normalizeSpecifications(vendor?.specifications);
                     const specificationEntries = Object.entries(vendorSpecifications);
                     const specsKey = `${itemId}::${vendorIdStr}`;
@@ -977,16 +1211,25 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                       ? specificationEntries
                       : specificationEntries.slice(0, 6);
                     const hasMoreSpecifications = specificationEntries.length > 6;
-                    const isSelected = currentSelection === vendorIdStr;
                     const availableStock = getVendorAvailableStock(vendor);
                     const requestedQty = getItemRequestedQty(item);
-                    const hasEnoughStock = availableStock >= requestedQty;
-                    const isOutOfStock = availableStock <= 0;
+                    const canFulfill = vendorCanFulfill(vendor, item);
+                    const hasEnoughStock = vendorHasSufficientStock(vendor, item);
+                    const isOutOfStock = vendorIsUnavailable(vendor);
+                    // Recommendation badge only for fulfillable auto-pick — never for OOS/unavailable.
+                    const isRecommended =
+                      canFulfill &&
+                      Boolean(recommendedVendorId) &&
+                      recommendedVendorId === vendorIdStr;
+                    // Only fulfillable offers may appear selected.
+                    const isSelected =
+                      canFulfill && Boolean(currentSelection) && currentSelection === vendorIdStr;
                     return (
                   <div 
-                    key={vendorIdStr}
-                    className={`vendor-card ${isSelected ? 'selected' : ''} ${!hasEnoughStock ? 'insufficient-stock' : ''}`}
-                    aria-disabled={!hasEnoughStock}
+                    key={`${vendorIdStr}-${vendorIndex}`}
+                    className={`vendor-card${isSelected ? ' selected' : ''}${!canFulfill ? ' insufficient-stock' : ''}`}
+                    aria-pressed={isSelected}
+                    aria-disabled={!canFulfill}
                     onClick={(e) => {
                       e.preventDefault();
                       e.stopPropagation();
@@ -999,12 +1242,12 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     style={{ 
                       userSelect: 'none',
                       WebkitUserSelect: 'none',
-                      cursor: hasEnoughStock ? 'pointer' : 'not-allowed',
+                      cursor: canFulfill ? 'pointer' : 'not-allowed',
                       position: 'relative',
                       zIndex: 1
                     }}
                     role="button"
-                    tabIndex={hasEnoughStock || isSelected ? 0 : -1}
+                    tabIndex={canFulfill || isSelected ? 0 : -1}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
@@ -1069,7 +1312,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                           </div>
                         )}
                       </div>
-                      {vendor.rank === 1 && (
+                      {isRecommended && (
                         <span className="badge">
                           {typeof vendor.distanceKm === 'number' && hasDeliverySiteContext
                             ? 'Nearest · Recommended'
@@ -1155,7 +1398,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                         <Clock size={16} />
                         <span>{vendor.leadTime} days delivery</span>
                       </div>
-                      {hasEnoughStock ? (
+                      {hasEnoughStock && !isOutOfStock ? (
                         <div className="detail" style={{ color: '#059669' }}>
                           <span>✓ Stock: {availableStock} {vendor.unit || 'units'}</span>
                         </div>
@@ -1175,7 +1418,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                           <span>⭐ {vendor.rating.toFixed(1)} rating</span>
                         </div>
                       )}
-                      {vendor.isAvailable === false && (
+                      {isOutOfStock && (
                         <div className="detail" style={{ color: '#dc2626', fontWeight: '600' }}>
                           <span>⚠ Not Available</span>
                         </div>
@@ -1204,7 +1447,8 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     )}
                   </div>
                     );
-                  })
+                  })}
+                </>
               ) : loading || !vendorsReady ? (
                 <div className="no-vendors" style={{
                   padding: '2rem',
@@ -1224,20 +1468,44 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                 </div>
               ) : (
                 <div className="no-vendors" style={{
-                  padding: '2rem',
-                  textAlign: 'center',
-                  backgroundColor: '#f8fafc',
+                  padding: '1.25rem 1.5rem',
+                  textAlign: 'left',
+                  backgroundColor: '#fff7ed',
                   borderRadius: '8px',
-                  border: '1px solid #e5e7eb'
+                  border: '1px solid #fdba74'
                 }}>
-                  <p style={{ 
-                    color: '#64748b', 
-                    fontSize: '1rem',
-                    margin: 0,
-                    fontWeight: '500'
+                  <p style={{
+                    color: '#9a3412',
+                    fontSize: '0.95rem',
+                    margin: '0 0 0.75rem',
+                    fontWeight: 600
                   }}>
                     No supplier is available for this requirement
                   </p>
+                  <p style={{ color: '#c2410c', fontSize: '0.85rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
+                    Request this product so suppliers can add it, or continue to choose a substitute product.
+                  </p>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <Button
+                      type="button"
+                      variant="default"
+                      disabled={requestingProductKey === itemId || requestedProductKeys.has(itemId)}
+                      onClick={() => requestUnavailableProduct(item)}
+                    >
+                      {requestedProductKeys.has(itemId)
+                        ? 'Request sent'
+                        : requestingProductKey === itemId
+                          ? 'Submitting…'
+                          : 'Request new product'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={goToSubstitutions}
+                    >
+                      Choose a substitute
+                    </Button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1255,7 +1523,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
             const selectedId = selections[selectionKey];
             if (!selectedId) return false;
             const vendor = findVendorForItem(item, selectedId);
-            return vendor && vendorHasSufficientStock(vendor, item);
+            return vendor && vendorCanFulfill(vendor, item);
           })
         }
       >

@@ -1262,7 +1262,7 @@ const SupplierDashboard = ({ user }) => {
                     <p><strong>Order Date:</strong> {formatDate(orderDetails.createdAt)}</p>
                   )}
                   {orderDetails.expectedDeliveryDate && (
-                    <p><strong>Expected Delivery:</strong> {formatDateIST(orderDetails.expectedDeliveryDate)}</p>
+                    <p><strong>Expected Dispatch:</strong> {formatDateIST(orderDetails.expectedDeliveryDate)}</p>
                   )}
                   {orderDetails.actualDeliveryDate && (
                     <p><strong>Actual Delivery:</strong> {formatDateIST(orderDetails.actualDeliveryDate)}</p>

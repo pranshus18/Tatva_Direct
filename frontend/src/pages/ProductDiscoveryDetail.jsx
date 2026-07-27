@@ -798,7 +798,6 @@ export default function ProductDiscoveryDetail() {
           setCartAdded(true);
           setTimeout(() => setCartAdded(false), 1400);
         }}
-        onError={setError}
       />
     </SpPageLayout>
   );

@@ -8,7 +8,7 @@ import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
-import { Upload, CheckCircle, AlertCircle, Users, Package, TrendingUp, PlusCircle, MapPin, Calendar, FileText } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Users, Package, PlusCircle, MapPin, Calendar, FileText, CircleCheck, CircleX } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
@@ -94,7 +94,7 @@ const BOQNormalize = ({ onComplete }) => {
         setSiteLng(String(resolved.longitude));
       }
     } catch (error) {
-      alert(getGeolocationErrorMessage(error));
+      toast.error(getGeolocationErrorMessage(error));
     } finally {
       setLocatingSite(false);
     }
@@ -107,12 +107,12 @@ const BOQNormalize = ({ onComplete }) => {
     const loc = siteLocation.trim();
     const hasGeo = siteLat.trim() && siteLng.trim();
     if ((!loc && !hasGeo) || !requiredDate) {
-      alert('Please provide the project site location and select the required date before uploading your BOQ.');
+      toast.error('Please provide the project site location and select the expected dispatch date before uploading your BOQ.');
       e.target.value = '';
       return;
     }
     if (isDateBeforeToday(requiredDate)) {
-      alert('Expected dispatch date cannot be in the past.');
+      toast.error('Expected dispatch date cannot be in the past.');
       e.target.value = '';
       return;
     }
@@ -189,7 +189,7 @@ const BOQNormalize = ({ onComplete }) => {
             : null);
         setSavedProjectMeta(proj);
       } else {
-        alert('No items found in the uploaded file. Please try again.');
+        toast.error('No items found in the uploaded file. Please try again.');
         setFile(null);
       }
     } catch (error) {
@@ -197,8 +197,8 @@ const BOQNormalize = ({ onComplete }) => {
       const errorMessage =
         error?.message ||
         (typeof error === 'string' ? error : null) ||
-        'Failed to process file. Please check site location, required date, and file format (CSV or Excel).';
-      alert(errorMessage);
+        'Failed to process file. Please check site location, expected dispatch date, and file format (CSV or Excel).';
+      toast.error(errorMessage);
       setFile(null);
       setItems([]);
       setSubmittedProductRequestKeys(new Set());
@@ -253,10 +253,12 @@ const BOQNormalize = ({ onComplete }) => {
       }
       if (res.ok && data.status === 'success') {
         setSubmittedProductRequestKeys((prev) => new Set(prev).add(requestKey));
+        const productLabel = item.normalizedName || item.rawName || 'this product';
         closeRequestProductModal();
-        toast.success(
-          data.message || 'Product request submitted. Suppliers have been notified.'
-        );
+        toast.success('Request sent', {
+          description: `Suppliers are being notified that a customer is looking for “${productLabel}”. They can add the product from their supplier portal if they stock it.`,
+          duration: 6000
+        });
         return;
       }
       toast.error(data.message || 'Failed to submit product request. Please try again.');
@@ -270,7 +272,7 @@ const BOQNormalize = ({ onComplete }) => {
 
   const handleProceed = () => {
     if (items.length === 0) {
-      alert('Please upload and process a BOQ file first');
+      toast.error('Please upload and process a BOQ file first');
       return;
     }
 
@@ -348,7 +350,7 @@ const BOQNormalize = ({ onComplete }) => {
 
   const handleAddToCart = async () => {
     if (items.length === 0) {
-      alert('Please upload and process a BOQ file first.');
+      toast.error('Please upload and process a BOQ file first.');
       return;
     }
 
@@ -458,7 +460,7 @@ const BOQNormalize = ({ onComplete }) => {
       onComplete(items, boqId, projectMeta);
       navigate('/cart');
     } catch (error) {
-      alert(error.message || 'Failed to save cart');
+      toast.error(error.message || 'Failed to save cart');
     } finally {
       setSavingCart(false);
     }
@@ -526,7 +528,7 @@ const BOQNormalize = ({ onComplete }) => {
               <label className="boq-site-label">
                 <span className="boq-site-label-text">
                   <Calendar size={16} />
-                  Expected Dispatch
+                  Expected dispatch date
                 </span>
                 <input
                   type="date"
@@ -534,9 +536,7 @@ const BOQNormalize = ({ onComplete }) => {
                   min={todayDateMin}
                   value={requiredDate}
                   onChange={(e) => {
-                    const next = e.target.value;
-                    if (next && isDateBeforeToday(next)) return;
-                    setRequiredDate(next);
+                    setRequiredDate(e.target.value);
                   }}
                 />
               </label>
@@ -546,15 +546,38 @@ const BOQNormalize = ({ onComplete }) => {
             <Upload size={48} />
             <h3>Upload BOQ File</h3>
             <p>Supported formats: CSV (.csv), Excel (.xlsx, .xls), or PDF (.pdf)</p>
-            <label className="btn-primary">
+            {(() => {
+              const loc = String(siteLocation || '').trim();
+              const hasGeo = String(siteLat || '').trim() && String(siteLng || '').trim();
+              const canUpload =
+                Boolean(requiredDate) &&
+                !isDateBeforeToday(requiredDate) &&
+                (Boolean(loc) || Boolean(hasGeo));
+
+              return (
+                <label
+                  className="btn-primary"
+                  style={{ opacity: canUpload ? 1 : 0.6, cursor: canUpload ? 'pointer' : 'not-allowed' }}
+                  aria-disabled={!canUpload}
+                  onClick={(e) => {
+                    if (canUpload) return;
+                    e.preventDefault();
+                    toast.error(
+                      'Please provide the project site location and select the expected dispatch date before uploading your BOQ.'
+                    );
+                  }}
+                >
               Choose File
               <input
                 type="file"
                 onChange={handleFileUpload}
                 accept=".csv,.xlsx,.xls,.pdf,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,application/pdf"
                 hidden
+                disabled={!canUpload}
               />
-            </label>
+                </label>
+              );
+            })()}
           </div>
         </div>
       ) : (
@@ -571,6 +594,11 @@ const BOQNormalize = ({ onComplete }) => {
                 {items.map((item) => {
                   const hasSuppliers = (item.availableSuppliers || 0) > 0;
                   const isAvailable = item.isAvailable ?? hasSuppliers;
+                  const hasListedSupplier = Boolean(
+                    item.supplierInfo || item.supplyChainLastSupplier || item.nearestSupplier
+                  );
+                  // Matched listing exists, but cannot fulfill right now (no stock / not available).
+                  const isListedOutOfStock = hasListedSupplier && !isAvailable;
                   const productRequestKey = buildProductRequestKey(item, boqId);
                   const alreadyRequestedProduct = submittedProductRequestKeys.has(productRequestKey);
 
@@ -596,22 +624,29 @@ const BOQNormalize = ({ onComplete }) => {
                           </span>
                         )}
                         <span className={`confidence ${hasSuppliers && isAvailable ? 'high' : 'low'}`}>
-                          {hasSuppliers && isAvailable ? `${item.availableSuppliers || 0} supplier${(item.availableSuppliers || 0) === 1 ? '' : 's'}` : '0 suppliers'}
+                          {hasSuppliers && isAvailable
+                            ? `${item.availableSuppliers || 0} supplier${(item.availableSuppliers || 0) === 1 ? '' : 's'}`
+                            : isListedOutOfStock
+                              ? 'Out of stock'
+                              : '0 suppliers'}
                         </span>
                       </div>
                     </div>
-                    {(item.supplierInfo || item.supplyChainLastSupplier || item.nearestSupplier) && (
+                    {hasListedSupplier && (
                       <div className="item-supplier-info" style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid #e5e7eb' }}>
                         {item.supplierInfo && (
                           <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.25rem' }}>
-                            <strong style={{ color: '#1e293b' }}>Available from:</strong> {item.supplierInfo.supplierName}
+                            <strong style={{ color: '#1e293b' }}>
+                              {isAvailable ? 'Available from:' : 'Listed by:'}
+                            </strong>{' '}
+                            {item.supplierInfo.supplierName}
                             {item.supplierInfo.supplierLocation && (
                               <span style={{ marginLeft: '0.5rem' }}>📍 {item.supplierInfo.supplierLocation}</span>
                             )}
                           </div>
                         )}
                         {/* Intentionally not rendering supplyChainLastSupplier text per requirements */}
-                        {item.nearestSupplier && (
+                        {item.nearestSupplier && isAvailable && (
                           <div style={{ fontSize: '0.8rem', color: '#1d4ed8', marginTop: '0.15rem' }}>
                             <strong>Nearest to site:</strong>{' '}
                             {item.nearestSupplier.supplierName}{' '}
@@ -623,19 +658,30 @@ const BOQNormalize = ({ onComplete }) => {
                             )}
                           </div>
                         )}
-                        {item.availableSuppliers > 0 && (
+                        {item.nearestSupplier && !isAvailable && !item.supplierInfo && (
+                          <div style={{ fontSize: '0.85rem', color: '#64748b', marginBottom: '0.25rem' }}>
+                            <strong style={{ color: '#1e293b' }}>Listed by:</strong>{' '}
+                            {item.nearestSupplier.supplierName}
+                            {typeof item.nearestSupplier.distanceKm === 'number' && (
+                              <span style={{ marginLeft: '0.5rem' }}>
+                                · {item.nearestSupplier.distanceKm} km from site
+                              </span>
+                            )}
+                          </div>
+                        )}
+                        {item.availableSuppliers > 0 && isAvailable && (
                           <div style={{ fontSize: '0.8rem', color: '#059669', marginTop: '0.25rem' }}>
                             {item.availableSuppliers} supplier{item.availableSuppliers > 1 ? 's' : ''} available
                           </div>
                         )}
                         {!isAvailable && (
-                          <div style={{ fontSize: '0.8rem', color: '#dc2626', marginTop: '0.25rem' }}>
-                            No stock available from current suppliers
+                          <div style={{ fontSize: '0.8rem', color: '#dc2626', marginTop: '0.25rem', fontWeight: 600 }}>
+                            Currently out of stock
                           </div>
                         )}
                       </div>
                     )}
-                    {!item.supplierInfo && !item.supplyChainLastSupplier && !item.nearestSupplier && (
+                    {!hasListedSupplier && (
                       <div style={{ marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid #e5e7eb' }}>
                         <div style={{ fontSize: '0.8rem', color: '#d97706' }}>
                           No matching suppliers found
@@ -670,7 +716,7 @@ const BOQNormalize = ({ onComplete }) => {
                             wordWrap: 'break-word',
                             lineHeight: '1.2'
                           }}>
-                            No suppliers available
+                            {isListedOutOfStock ? 'Currently out of stock' : 'No suppliers available'}
                           </div>
                         </div>
                         
@@ -742,129 +788,96 @@ const BOQNormalize = ({ onComplete }) => {
 
               {/* Summary Sidebar */}
               {items.length > 0 && (
-                <div style={{
-                  width: '280px',
-                  background: 'white',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '12px',
-                  padding: '1.5rem',
-                  position: 'sticky',
-                  top: '2rem',
-                  height: 'fit-content'
-                }}>
-                  <h3 style={{
-                    fontSize: '1.125rem',
-                    fontWeight: '600',
-                    color: '#1e293b',
-                    marginBottom: '1.5rem',
-                    paddingBottom: '1rem',
-                    borderBottom: '1px solid #e5e7eb'
-                  }}>
-                    Summary
-                  </h3>
-                  
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.75rem',
-                      padding: '0.75rem',
-                      background: '#f8fafc',
-                      borderRadius: '8px'
-                    }}>
-                      <div style={{
-                        padding: '0.5rem',
-                        background: '#e0e7ff',
-                        borderRadius: '8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}>
-                        <Package size={20} color="#4f46e5" />
+                <aside className="boq-summary-panel" aria-label="BOQ summary">
+                  <h3 className="boq-summary-title">Summary</h3>
+
+                  <div className="boq-summary-section">
+                    <p className="boq-summary-section-label">BOQ lines</p>
+                    <div className="boq-summary-stat">
+                      <div className="boq-summary-stat-icon boq-summary-stat-icon--items">
+                        <Package size={18} aria-hidden />
                       </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.25rem' }}>
-                          Total Items
+                      <div>
+                        <div className="boq-summary-stat-label">Total items</div>
+                        <div className="boq-summary-stat-value">{summaryStats.totalItems}</div>
+                      </div>
+                    </div>
+                    <div className="boq-summary-stat boq-summary-stat--muted">
+                      <div className="boq-summary-stat-label">Total quantity</div>
+                      <div className="boq-summary-stat-value boq-summary-stat-value--sm">
+                        {summaryStats.totalQuantity}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="boq-summary-section">
+                    <p className="boq-summary-section-label">Item coverage</p>
+                    <p className="boq-summary-section-hint">
+                      How many line items already have at least one matching supplier.
+                    </p>
+                    <div
+                      className="boq-coverage-bar"
+                      role="img"
+                      aria-label={`${summaryStats.itemsWithSuppliers} of ${summaryStats.totalItems} items have suppliers`}
+                    >
+                      <div
+                        className="boq-coverage-bar__fill"
+                        style={{
+                          width:
+                            summaryStats.totalItems > 0
+                              ? `${(summaryStats.itemsWithSuppliers / summaryStats.totalItems) * 100}%`
+                              : '0%'
+                        }}
+                      />
+                    </div>
+                    <div className="boq-coverage-split">
+                      <div className="boq-coverage-chip boq-coverage-chip--ok">
+                        <CircleCheck size={16} aria-hidden />
+                        <div>
+                          <div className="boq-coverage-chip__label">With suppliers</div>
+                          <div className="boq-coverage-chip__value">
+                            {summaryStats.itemsWithSuppliers}
+                            <span className="boq-coverage-chip__unit"> items</span>
+                          </div>
                         </div>
-                        <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#1e293b' }}>
-                          {summaryStats.totalItems}
+                      </div>
+                      <div
+                        className={`boq-coverage-chip ${
+                          summaryStats.itemsWithoutSuppliers > 0
+                            ? 'boq-coverage-chip--warn'
+                            : 'boq-coverage-chip--idle'
+                        }`}
+                      >
+                        <CircleX size={16} aria-hidden />
+                        <div>
+                          <div className="boq-coverage-chip__label">Without suppliers</div>
+                          <div className="boq-coverage-chip__value">
+                            {summaryStats.itemsWithoutSuppliers}
+                            <span className="boq-coverage-chip__unit"> items</span>
+                          </div>
                         </div>
                       </div>
                     </div>
+                  </div>
 
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.75rem',
-                      padding: '0.75rem',
-                      background: '#f0fdf4',
-                      borderRadius: '8px'
-                    }}>
-                      <div style={{
-                        padding: '0.5rem',
-                        background: '#d1fae5',
-                        borderRadius: '8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}>
-                        <Users size={20} color="#059669" />
+                  <div className="boq-summary-section boq-summary-section--last">
+                    <p className="boq-summary-section-label">Supplier matches</p>
+                    <p className="boq-summary-section-hint">
+                      Total matching supplier options across all line items (not a unique supplier count).
+                    </p>
+                    <div className="boq-summary-stat boq-summary-stat--suppliers">
+                      <div className="boq-summary-stat-icon boq-summary-stat-icon--suppliers">
+                        <Users size={18} aria-hidden />
                       </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.25rem' }}>
-                          Total Suppliers
-                        </div>
-                        <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#059669' }}>
+                      <div>
+                        <div className="boq-summary-stat-label">Matching options</div>
+                        <div className="boq-summary-stat-value boq-summary-stat-value--suppliers">
                           {summaryStats.totalSuppliers}
                         </div>
                       </div>
                     </div>
-
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.75rem',
-                      padding: '0.75rem',
-                      background: '#fef3c7',
-                      borderRadius: '8px'
-                    }}>
-                      <div style={{
-                        padding: '0.5rem',
-                        background: '#fde68a',
-                        borderRadius: '8px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center'
-                      }}>
-                        <TrendingUp size={20} color="#d97706" />
-                      </div>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: '0.75rem', color: '#64748b', marginBottom: '0.25rem' }}>
-                          Items with Suppliers
-                        </div>
-                        <div style={{ fontSize: '1.25rem', fontWeight: '600', color: '#d97706' }}>
-                          {summaryStats.itemsWithSuppliers} / {summaryStats.totalItems}
-                        </div>
-                      </div>
-                    </div>
-
-                    {summaryStats.itemsWithoutSuppliers > 0 && (
-                      <div style={{
-                        padding: '0.75rem',
-                        background: '#fef2f2',
-                        borderRadius: '8px',
-                        border: '1px solid #fecaca'
-                      }}>
-                        <div style={{ fontSize: '0.75rem', color: '#dc2626', marginBottom: '0.25rem', fontWeight: '500' }}>
-                          Items without Suppliers
-                        </div>
-                        <div style={{ fontSize: '1rem', fontWeight: '600', color: '#dc2626' }}>
-                          {summaryStats.itemsWithoutSuppliers}
-                        </div>
-                      </div>
-                    )}
                   </div>
-                </div>
+                </aside>
               )}
             </div>
           )}

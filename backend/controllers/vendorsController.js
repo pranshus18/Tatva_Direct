@@ -325,25 +325,26 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
           String(item?.supplyChainLastSupplier?.supplierId || '').trim() ||
           '';
         const withDistance = validVendors.filter((vendor) => typeof vendor?.distanceKm === 'number');
-        const inStockWithDistance = withDistance.filter((vendor) => Number(vendor?.stock || 0) > 0);
+        const vendorHasStock = (vendor) =>
+          vendor?.isAvailable !== false && Number(vendor?.availableStock ?? vendor?.stock ?? 0) > 0;
+        const inStockWithDistance = withDistance.filter(vendorHasStock);
         const preferredWithDistance = preferredSupplierId
           ? withDistance.filter((vendor) => String(vendor?.id || '') === preferredSupplierId)
           : [];
-        const preferredInStockWithDistance = preferredWithDistance.filter(
-          (vendor) => Number(vendor?.stock || 0) > 0
-        );
+        const preferredInStockWithDistance = preferredWithDistance.filter(vendorHasStock);
 
         const pickNearestFrom = (list) =>
           list.reduce((best, vendor) =>
             (vendor.distanceKm || Infinity) < (best.distanceKm || Infinity) ? vendor : best
           );
 
+        // Only in-stock offers may be recommended. Never fall back to OOS/unavailable
+        // suppliers — that produces contradictory "Nearest · Recommended" + "Out of stock".
         const nearestRecommended =
-          (preferredInStockWithDistance.length > 0 && pickNearestFrom(preferredInStockWithDistance)) ||
+          (preferredInStockWithDistance.length > 0 &&
+            pickNearestFrom(preferredInStockWithDistance)) ||
           (inStockWithDistance.length > 0 && pickNearestFrom(inStockWithDistance)) ||
-          (preferredWithDistance.length > 0 && pickNearestFrom(preferredWithDistance)) ||
-          (withDistance.length > 0 && pickNearestFrom(withDistance)) ||
-          validVendors[0];
+          null;
 
         validVendors.forEach((vendor) => {
           delete vendor.isNearestRecommended;
@@ -351,6 +352,14 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         if (nearestRecommended) {
           nearestRecommended.isNearestRecommended = true;
         }
+
+        // Final safety: never leave recommendation flags on zero-stock / unavailable offers.
+        validVendors.forEach((vendor) => {
+          const stock = Number(vendor?.availableStock ?? vendor?.stock ?? 0);
+          if (vendor?.isAvailable === false || !(stock > 0)) {
+            delete vendor.isNearestRecommended;
+          }
+        });
       }
       
       // CRITICAL: If we have a reference product with a supplier but no vendors were found,

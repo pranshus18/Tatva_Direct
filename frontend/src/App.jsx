@@ -1,5 +1,6 @@
 import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { Toaster } from 'sonner';
 import ProtectedRoute from './components/ProtectedRoute';
 import { clearPmAuthSession } from './utils/pmAuthSession';
 import { clearCachedProfilePhotoUrl } from './utils/profilePhoto';
@@ -48,7 +49,6 @@ const safeLazyNamed = (importer, exportName, label) =>
   });
 
 const Layout = safeLazy(() => import('./components/Layout'), 'Layout shell');
-const Toaster = safeLazyNamed(() => import('sonner'), 'Toaster', 'Toast notifications');
 
 const Login = safeLazy(() => import('./pages/Login'), 'Login page');
 const PmOtpAuth = safeLazy(() => import('./pages/PmOtpAuth'), 'PM OTP auth page');
@@ -818,9 +818,7 @@ function App() {
         />
       </Routes>
       </Suspense>
-      <Suspense fallback={null}>
-        <Toaster position="top-right" richColors closeButton />
-      </Suspense>
+      <Toaster position="top-right" richColors closeButton />
     </BrowserRouter>
   );
 }

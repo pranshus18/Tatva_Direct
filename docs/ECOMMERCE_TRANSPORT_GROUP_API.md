@@ -16,7 +16,7 @@ Logistics module endpoints for Tatva Direct after `POST /api/po/group` returns `
 Existing booking (unchanged):
 
 | POST | `/api/logistics/book-courier-checkout` | Immediate Shiprocket book |
-| POST | `/api/logistics/schedule-courier` | Deferred dispatch by delivery date |
+| POST | `/api/logistics/schedule-courier` | Deferred dispatch by expected dispatch date |
 | POST | `/carrier/trucking-book` | Borzo intracity book |
 
 ---
