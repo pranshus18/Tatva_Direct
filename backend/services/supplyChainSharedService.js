@@ -47,12 +47,29 @@ export function catalogBrandDedupKey(value) {
 export function brandKeysMatchForChainLookup(wantedKey, categoryKey) {
   if (!wantedKey || !categoryKey) return false;
   if (wantedKey === categoryKey) return true;
-  const wantedToken = wantedKey.split(' ')[0];
-  const categoryToken = categoryKey.split(' ')[0];
-  if (wantedToken.length >= 3 && wantedToken === categoryToken) return true;
-  if (wantedKey.length >= 3 && categoryKey.includes(wantedKey)) return true;
-  if (categoryKey.length >= 3 && wantedKey.includes(categoryKey)) return true;
-  return false;
+  if (collapseRepeatedLetters(wantedKey) === collapseRepeatedLetters(categoryKey)) return true;
+
+  const wantedWords = wantedKey.split(' ').filter(Boolean);
+  const categoryWords = categoryKey.split(' ').filter(Boolean);
+  const wantedToken = wantedWords[0] || '';
+  const categoryToken = categoryWords[0] || '';
+
+  // Complete first-token match only — never character prefixes ("h" vs "hp").
+  if (
+    wantedToken.length >= 3 &&
+    categoryToken.length >= 3 &&
+    collapseRepeatedLetters(wantedToken) === collapseRepeatedLetters(categoryToken)
+  ) {
+    return true;
+  }
+
+  const isWordPrefix = (shorter, longer) =>
+    shorter.length >= 1 &&
+    longer.length > shorter.length &&
+    shorter.every((word, index) => word === longer[index]) &&
+    String(shorter[shorter.length - 1] || '').length >= 3;
+
+  return isWordPrefix(wantedWords, categoryWords) || isWordPrefix(categoryWords, wantedWords);
 }
 
 /** Unique roles from saved stages, always in canonical upstream → downstream order. */

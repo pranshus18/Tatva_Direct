@@ -621,14 +621,16 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
 
       // Update all pending products to approved
       const productIds = pendingProducts.map(p => p.id);
+      const nowIso = new Date().toISOString();
       const { data: updatedProducts, error: updateError } = await supabase
         .from('products')
         .update({
           status: 'approved',
           is_active: true,
           approved_by: req.userId,
-          approved_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
+          approved_at: nowIso,
+          rejection_reason: null,
+          updated_at: nowIso
         })
         .in('id', productIds)
         .select('name, status, is_active')
@@ -636,6 +638,28 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
 
       if (updateError) {
         throw updateError;
+      }
+
+      // Keep supplier portal in sync: approve matching supplier offers too.
+      const { data: updatedOffers, error: offerUpdateError } = await supabase
+        .from('supplier_products')
+        .update({
+          status: 'approved',
+          is_active: true,
+          approved_by: req.userId,
+          approved_at: nowIso,
+          rejection_reason: null,
+          updated_at: nowIso
+        })
+        .in('product_id', productIds)
+        .select('id, product_id, supplier_id');
+
+      if (offerUpdateError) {
+        console.error('[ADMIN APPROVE ALL] Failed to sync supplier_products:', offerUpdateError);
+      } else {
+        console.log(
+          `[ADMIN APPROVE ALL] Synced ${updatedOffers?.length || 0} supplier_products offer(s)`
+        );
       }
 
       console.log(`Admin ${req.userId} approved ${pendingProducts.length} existing products`);
@@ -650,6 +674,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         status: 'success',
         message: `Successfully approved ${pendingProducts.length} product(s)`,
         approvedCount: pendingProducts.length,
+        supplierOffersSynced: updatedOffers?.length || 0,
         products: updatedProducts || []
       });
     } catch (error) {

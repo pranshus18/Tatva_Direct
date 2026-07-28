@@ -3,9 +3,6 @@ import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuanti
 import { expireStaleReservations } from '../../services/checkoutInventoryReservationService.js';
 import {
   PRODUCT_IMAGES_BUCKET,
-  resolveUpstreamBrandLabel,
-  supplierCanAccessBrandStrict,
-  mergeSpecificationMaps,
   uploadFile
 } from './supplierImports.js';
 import {
@@ -30,15 +27,8 @@ router.get('/products', authenticateToken, async (req, res) => {
     // Scoped to this supplier's own holds — no need to sweep the whole platform on every page load.
     await expireStaleReservations({ supplierId: req.userId });
 
-    const { data: profileRow } = await supabase
-      .from('users')
-      .select('profile')
-      .eq('id', req.userId)
-      .maybeSingle();
-    const effectiveProfile = profileRow?.profile || req.user?.profile || {};
-
-    // Fetch all of this supplier's offers, including pending and rejected,
-    // so the portal can show a clear approval status throughout the workflow.
+    // Fetch all of this supplier's offers, including pending, approved, and rejected,
+    // so the portal stays in sync with admin approval status.
     const { data: supplierProducts, error: supplierProductsError } = await supabase
       .from('supplier_products')
       .select(`
@@ -67,18 +57,43 @@ router.get('/products', authenticateToken, async (req, res) => {
       });
     }
     
-    // Combine product and supplier_products data.
-    // Keep offers visible even if the shared catalog row is missing (legacy/orphaned),
-    // so suppliers always see status instead of a silent disappearance.
-    const visibleSupplierProducts = (supplierProducts || []).filter((sp) => {
-      const brandCandidate = resolveUpstreamBrandLabel(
-        sp?.attributes,
-        sp?.product?.brand
-      );
-      return supplierCanAccessBrandStrict(effectiveProfile, brandCandidate).allowed;
-    });
+    // Heal stale junction rows before building the response so Total/Active counters
+    // and card status match Admin approval immediately.
+    const offerIdsNeedingSync = (supplierProducts || [])
+      .filter((sp) => resolveEffectiveSupplierOfferState(sp, sp.product).needsCatalogSync)
+      .map((sp) => sp.id)
+      .filter(Boolean);
+    if (offerIdsNeedingSync.length > 0) {
+      const syncAt = new Date().toISOString();
+      const { error: syncErr } = await supabase
+        .from('supplier_products')
+        .update({
+          status: 'approved',
+          is_active: true,
+          updated_at: syncAt
+        })
+        .in('id', offerIdsNeedingSync);
+      if (syncErr) {
+        console.warn(
+          '[SupplierProducts] Failed to sync approved catalog status onto offers:',
+          syncErr.message || syncErr
+        );
+      } else {
+        const syncIdSet = new Set(offerIdsNeedingSync.map(String));
+        for (const sp of supplierProducts || []) {
+          if (syncIdSet.has(String(sp.id))) {
+            sp.status = 'approved';
+            sp.is_active = true;
+            sp.updated_at = syncAt;
+          }
+        }
+      }
+    }
 
-    const products = visibleSupplierProducts
+    // Own-catalog list: never hide offers by brand profile matching.
+    // Brand access is enforced at create/update time; filtering here caused approved
+    // products to disappear from the supplier portal after admin approval.
+    const products = (supplierProducts || [])
       .map((sp) => {
         const attributes =
           typeof sp.attributes === 'string'
@@ -228,10 +243,29 @@ router.get('/products', authenticateToken, async (req, res) => {
         brandStatusError?.message || brandStatusError
       );
     }
+
+    const list = products || [];
+    const stats = {
+      total: list.length,
+      active: 0,
+      pending: 0,
+      rejected: 0
+    };
+    for (const product of list) {
+      const status = String(product?.status || 'pending').toLowerCase();
+      if (status === 'rejected') {
+        stats.rejected += 1;
+      } else if (status === 'approved' || product?.is_active === true) {
+        stats.active += 1;
+      } else {
+        stats.pending += 1;
+      }
+    }
     
     res.json({ 
       status: 'success',
-      products: products || []
+      products: list,
+      stats
     });
   } catch (error) {
     console.error('Get products error:', error);

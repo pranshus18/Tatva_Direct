@@ -180,6 +180,32 @@ function buildSupplierRejectedBrandKeys(supplierBrandRequests = []) {
   return keys;
 }
 
+/** Find this supplier's brand-approval request row for a brand name (any status). */
+export function findSupplierBrandRequest(brandName, supplierBrandRequests = []) {
+  const brandKey = brandKeyForDuplicateCheck(brandName);
+  if (!brandKey) return null;
+  for (const item of Array.isArray(supplierBrandRequests) ? supplierBrandRequests : []) {
+    if (typeof item === 'string') {
+      if (brandKeyForDuplicateCheck(item) === brandKey) {
+        return { name: item, status: 'pending', requestedAt: null, submittedAt: null, rejectionReason: '' };
+      }
+      continue;
+    }
+    const name = String(item?.name || item?.normalizedName || '').trim();
+    const itemKey = brandKeyForDuplicateCheck(item?.normalizedName || name);
+    if (itemKey === brandKey) {
+      return {
+        name: name || brandName,
+        status: String(item?.status || 'pending').trim().toLowerCase() || 'pending',
+        requestedAt: item?.requestedAt || item?.submittedAt || null,
+        submittedAt: item?.submittedAt || item?.requestedAt || null,
+        rejectionReason: String(item?.rejectionReason || '').trim()
+      };
+    }
+  }
+  return null;
+}
+
 /** Whether Step 2 (supply-chain role + docs) may proceed for this brand. */
 export function isBrandApprovedForSupplyChainStep(
   brandName,
@@ -204,14 +230,12 @@ export function isBrandApprovedForSupplyChainStep(
 }
 
 /**
- * Summary rows for "Your supply chain by brand": only brands that are ready for Step 2 —
- * admin-defined supply chains (platform-wide) or brands this supplier has had approved by admin.
+ * Summary rows for "Your supply chain by brand": brands ready for Step 2 role setup.
+ * Includes:
+ * - catalog brands with an admin-defined supply chain
+ * - brands this supplier has had approved
+ * - approved catalog brands the supplier already selected in Step 1
  * Pending/rejected brand requests stay in Step 1 only.
- * @param {Array<string | { name?: string, normalizedName?: string, status?: string, hasAdminSupplyChain?: boolean }>} catalogBrands
- * @param {Array<object>} entries
- * @param {Array<object>} baselineEntries
- * @param {Array<string | { name?: string, normalizedName?: string, status?: string }>} supplierApprovedBrands
- * @param {Array<string | { name?: string, normalizedName?: string, status?: string }>} supplierBrandRequests
  */
 export function buildSupplyChainSummaryRows(
   catalogBrands = [],
@@ -234,7 +258,14 @@ export function buildSupplyChainSummaryRows(
   const supplierRejectedBrandKeys = buildSupplierRejectedBrandKeys(supplierBrandRequests);
 
   const rows = [];
-  const seenCatalogKeys = new Set();
+  const seenKeys = new Set();
+
+  const pushRow = (row) => {
+    const key = brandKeyForDuplicateCheck(row?.brand);
+    if (!key || seenKeys.has(key) || supplierRejectedBrandKeys.has(key)) return;
+    seenKeys.add(key);
+    rows.push(row);
+  };
 
   for (const item of Array.isArray(catalogBrands) ? catalogBrands : []) {
     const brand = String(typeof item === 'string' ? item : item?.name || '').trim();
@@ -244,27 +275,27 @@ export function buildSupplyChainSummaryRows(
     if (status && status !== 'approved') continue;
 
     const catalogKey = brandKeyForDuplicateCheck(brand);
-    if (!catalogKey || seenCatalogKeys.has(catalogKey)) continue;
-    if (supplierRejectedBrandKeys.has(catalogKey)) continue;
-    seenCatalogKeys.add(catalogKey);
+    if (!catalogKey) continue;
 
     const catalogHasAdminSupplyChain =
       typeof item === 'object' && item?.hasAdminSupplyChain === true;
     const supplierApproved = supplierApprovedBrandKeys.has(catalogKey);
-    // Step 2 dropdown: hide globally listed brands until admin approved this supplier's
-    // request or admin has defined the brand's supply chain for the platform.
-    if (!catalogHasAdminSupplyChain && !supplierApproved) continue;
+    const selectedInStep1 = assignmentByKey.has(catalogKey);
+
+    // Step 2: catalog-approved brands the supplier selected, supplier-approved brands,
+    // or brands with an admin-defined supply chain.
+    if (!catalogHasAdminSupplyChain && !supplierApproved && !selectedInStep1) continue;
 
     const assignment = assignmentByKey.get(catalogKey);
     if (assignment) {
-      rows.push({
+      pushRow({
         ...assignment,
         hasAdminSupplyChain: assignment.hasAdminSupplyChain === true || catalogHasAdminSupplyChain
       });
       continue;
     }
 
-    rows.push({
+    pushRow({
       id: `catalog-${catalogKey}`,
       brand,
       role: '',
@@ -273,6 +304,18 @@ export function buildSupplyChainSummaryRows(
       hasRoleDocuments: false,
       registrationStarted: false,
       hasAdminSupplyChain: catalogHasAdminSupplyChain
+    });
+  }
+
+  // Include supplier-approved / selected brands that are missing from the catalog payload.
+  for (const assignment of assignments) {
+    const key = brandKeyForDuplicateCheck(assignment.brand);
+    if (!key || seenKeys.has(key) || supplierRejectedBrandKeys.has(key)) continue;
+    const supplierApproved = supplierApprovedBrandKeys.has(key);
+    if (!supplierApproved) continue;
+    pushRow({
+      ...assignment,
+      hasAdminSupplyChain: assignment.hasAdminSupplyChain === true
     });
   }
 

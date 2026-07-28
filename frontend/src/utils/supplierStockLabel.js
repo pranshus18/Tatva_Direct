@@ -4,7 +4,7 @@ import { RUPEE_SYMBOL } from './formatRupee';
 export const SUPPLIER_CURRENT_STOCK_LABEL = 'Current stock with you';
 
 /** Shown until MRP / location inventory details are completed (step 2) */
-export const SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL = 'Inventory Not Configured';
+export const SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL = 'Inventory Setup Pending';
 
 /** Supplier portal label for catalog / inventory unit amount (API field remains `price`) */
 export const SUPPLIER_MRP_LABEL = 'MRP';
@@ -24,7 +24,27 @@ export const SUPPLIER_COV_PRICE_FIELD_LABEL = `${SUPPLIER_COV_PRICE_LABEL} (${RU
  */
 export function isSupplierInventoryConfigured(product) {
   if (!product) return false;
-  const hasPrice = Number(product.price) > 0;
+  const price = Number(product.price);
+  const hasPrice = Number.isFinite(price) && price > 0;
   const hasLocation = Boolean(String(product.location || '').trim());
   return hasPrice || hasLocation;
+}
+
+/** Catalog card stock line: "12 in stock" / "Out of stock". */
+export function formatSupplierStockAvailability(stock) {
+  const qty = Number(stock);
+  if (!Number.isFinite(qty) || qty <= 0) return 'Out of stock';
+  return `${qty} in stock`;
+}
+
+/** Parse offer MRP from API / form values. */
+export function parseSupplierOfferPrice(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) && raw >= 0 ? raw : null;
+  }
+  const normalized = String(raw).trim().replace(/,/g, '');
+  if (!normalized) return null;
+  const num = Number(normalized);
+  return Number.isFinite(num) && num >= 0 ? num : null;
 }

@@ -167,3 +167,22 @@ test('validateCompanyInfoEntriesList rejects duplicate brands across entries', (
   assert.match(result.message, /already registered/i);
   assert.match(result.message, /only one supply-chain role/i);
 });
+
+test('validateUniqueBrandsAcrossEntries requires complete brand name — H is not a duplicate of HP', async () => {
+  const { validateUniqueBrandsAcrossEntries } = await import('../utils/supplierChainEntryValidation.js');
+  const result = validateUniqueBrandsAcrossEntries([
+    { id: 'e1', brands: 'HP' },
+    { id: 'e2', brands: 'H' }
+  ]);
+  assert.equal(result.ok, true);
+});
+
+test('validateUniqueBrandsAcrossEntries still flags exact complete-name duplicates', async () => {
+  const { validateUniqueBrandsAcrossEntries } = await import('../utils/supplierChainEntryValidation.js');
+  const result = validateUniqueBrandsAcrossEntries([
+    { id: 'e1', brands: 'HP' },
+    { id: 'e2', brands: 'hp' }
+  ]);
+  assert.equal(result.ok, false);
+  assert.match(result.message, /already registered/i);
+});

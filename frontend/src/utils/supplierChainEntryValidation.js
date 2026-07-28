@@ -26,7 +26,11 @@ function collapseRepeatedLetters(value) {
   return String(value || '').replace(/(.)\1+/g, '$1');
 }
 
-/** Case-insensitive brand key for duplicate detection across entries. */
+/**
+ * Case-insensitive brand key for duplicate detection across entries.
+ * Uses the complete normalized name only — prefixes must not match
+ * (e.g. "H" is not a duplicate of "HP"; "Philips" still matches "Phillips").
+ */
 export function brandKeyForDuplicateCheck(raw) {
   const token = String(raw || '')
     .trim()
@@ -35,6 +39,13 @@ export function brandKeyForDuplicateCheck(raw) {
     .replace(/\s+/g, ' ')
     .trim();
   return collapseRepeatedLetters(token);
+}
+
+/** True only when both values refer to the same complete brand name. */
+export function areBrandNamesExactDuplicates(left, right) {
+  const leftKey = brandKeyForDuplicateCheck(left);
+  const rightKey = brandKeyForDuplicateCheck(right);
+  return Boolean(leftKey && rightKey && leftKey === rightKey);
 }
 
 /** Merge spelling variants (e.g. Philips / Phillips) into one display name. */
@@ -107,6 +118,7 @@ export function validateUniqueBrandsAcrossEntries(entries) {
       const brandKey = brandKeyForDuplicateCheck(brandName);
       if (!brandKey) continue;
 
+      // Exact complete-name match only (never prefix/substring).
       if (brandToEntryIndex.has(brandKey)) {
         const duplicateEntryIndex = brandToEntryIndex.get(brandKey);
         return {

@@ -43,14 +43,29 @@ function brandTokenKeysMatch(a, b) {
   if (!keyA || !keyB) return false;
   if (keyA === keyB) return true;
   if (collapseRepeatedLetters(keyA) === collapseRepeatedLetters(keyB)) return true;
-  const tokenA = keyA.split(' ')[0];
-  const tokenB = keyB.split(' ')[0];
-  if (tokenA.length >= 3 && tokenB.length >= 3 && collapseRepeatedLetters(tokenA) === collapseRepeatedLetters(tokenB)) {
+
+  const wordsA = keyA.split(' ').filter(Boolean);
+  const wordsB = keyB.split(' ').filter(Boolean);
+  const tokenA = wordsA[0] || '';
+  const tokenB = wordsB[0] || '';
+
+  // Same leading token (Philips / Phillips Lighting) — require a complete token, never a prefix.
+  if (
+    tokenA.length >= 3 &&
+    tokenB.length >= 3 &&
+    collapseRepeatedLetters(tokenA) === collapseRepeatedLetters(tokenB)
+  ) {
     return true;
   }
-  if (tokenA.length >= 3 && tokenA === tokenB) return true;
-  if (keyA.length >= 3 && keyB.includes(keyA)) return true;
-  if (keyB.length >= 3 && keyA.includes(keyB)) return true;
+
+  // Multi-word containment: "havells" matches "havells electrical", but "h" must not match "hp".
+  const isWordPrefix = (shorter, longer) =>
+    shorter.length >= 1 &&
+    longer.length > shorter.length &&
+    shorter.every((word, index) => word === longer[index]) &&
+    String(shorter[shorter.length - 1] || '').length >= 3;
+
+  if (isWordPrefix(wordsA, wordsB) || isWordPrefix(wordsB, wordsA)) return true;
   return false;
 }
 
@@ -162,12 +177,6 @@ function findMatchingDeclaredBrandLabel(profile, brandInput) {
   }
   for (const label of declaredLabels) {
     if (brandTokenKeysMatch(label, candidate)) return label;
-  }
-  for (const label of declaredLabels) {
-    const token = label.toLowerCase();
-    if (token.length >= 2 && (candidateLower.includes(token) || token.includes(candidateLower))) {
-      return label;
-    }
   }
   return null;
 }

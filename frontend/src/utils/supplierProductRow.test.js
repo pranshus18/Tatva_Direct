@@ -20,4 +20,26 @@ describe('normalizeSupplierProductFromApi approval status', () => {
     expect(normalizeSupplierProductFromApi({ status: 'active' }).status).toBe('approved');
     expect(normalizeSupplierProductFromApi({ status: 'approved' }).status).toBe('approved');
   });
+
+  it('treats is_active offers as approved/active for catalog counters', () => {
+    const row = normalizeSupplierProductFromApi({
+      status: 'pending',
+      is_active: true,
+      supplier_product_id: 'sp2'
+    });
+    expect(row.status).toBe('approved');
+    expect(row.is_active).toBe(true);
+  });
+
+  it('normalizes configured price and stock for catalog display', () => {
+    const row = normalizeSupplierProductFromApi({
+      supplier_product_id: 'sp3',
+      price: '1,250.50',
+      stock: '8',
+      location: 'Pune'
+    });
+    expect(row.price).toBe(1250.5);
+    expect(row.stock).toBe(8);
+    expect(row.location).toBe('Pune');
+  });
 });

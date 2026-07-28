@@ -45,6 +45,7 @@ import {
   SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
   SUPPLIER_MRP_FIELD_LABEL,
   SUPPLIER_MRP_LABEL,
+  formatSupplierStockAvailability,
   isSupplierInventoryConfigured
 } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
@@ -87,9 +88,9 @@ const STATUS_CONFIG = {
     notice: 'Pending admin approval. This product stays in your list until it is approved or rejected.'
   },
   approved: {
-    label: 'Approved',
+    label: 'Approved / Active',
     statusClass: 'pm-status--approved',
-    notice: null
+    notice: 'Approved by admin and active in your catalog.'
   },
   rejected: {
     label: 'Rejected',
@@ -100,8 +101,10 @@ const STATUS_CONFIG = {
 
 function getSupplierApprovalStatus(product) {
   const raw = String(product?.status || 'pending').trim().toLowerCase();
-  if (raw === 'approved' || raw === 'active') return 'approved';
   if (raw === 'rejected') return 'rejected';
+  if (raw === 'approved' || raw === 'active') return 'approved';
+  // Admin-approved offers are marked active even if a stale status string remains.
+  if (product?.is_active === true || product?.isActive === true) return 'approved';
   return 'pending';
 }
 
@@ -136,7 +139,21 @@ const ProductManagement = ({ user }) => {
   const [categories, setCategories] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
 
+  const [catalogStats, setCatalogStats] = useState(null);
+
+  const resetCatalogViewToDefault = () => {
+    setSearchTerm('');
+    setFilterCategory('all');
+    setFilterStatus('all');
+    setShowAddModal(false);
+    setEditingItem(null);
+    setViewingItem(null);
+  };
+
   useEffect(() => {
+    // Full remount / route change / browser refresh: always start from the default catalog view.
+    resetCatalogViewToDefault();
+
     let cancelled = false;
     (async () => {
       await fetchProducts();
@@ -162,23 +179,48 @@ const ProductManagement = ({ user }) => {
     };
   }, [location.pathname]);
 
+  // Guard against browser restoring the search field after a hard refresh.
   useEffect(() => {
-    if (!isInventoryView) return undefined;
+    resetCatalogViewToDefault();
+  }, []);
 
-    const refreshInventory = () => fetchProducts({ silent: true });
-    const intervalId = window.setInterval(refreshInventory, 15000);
-    window.addEventListener('focus', refreshInventory);
+  useEffect(() => {
+    const refreshCatalog = () => {
+      fetchProducts({ silent: true });
+      fetchNotifications();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refreshCatalog();
+    };
+    const intervalMs = isInventoryView ? 15000 : 20000;
+    const intervalId = window.setInterval(refreshCatalog, intervalMs);
+    window.addEventListener('focus', refreshCatalog);
+    document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
       window.clearInterval(intervalId);
-      window.removeEventListener('focus', refreshInventory);
+      window.removeEventListener('focus', refreshCatalog);
+      document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [isInventoryView]);
 
   useEffect(() => {
-    fetchCategories();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const hasApprovalUpdate = (notifications || []).some((n) => {
+      const type = String(n?.type || '').toLowerCase();
+      const status = String(n?.metadata?.status || '').toLowerCase();
+      const title = String(n?.title || '').toLowerCase();
+      return (
+        type === 'product_approval' &&
+        (status === 'approved' || title.includes('approved')) &&
+        !(n?.is_read ?? n?.isRead)
+      );
+    });
+    if (!hasApprovalUpdate) return undefined;
+    const timer = window.setTimeout(() => {
+      fetchProducts({ silent: true });
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [notifications]);
 
   const fetchNotifications = async () => {
     try {
@@ -265,14 +307,27 @@ const ProductManagement = ({ user }) => {
       });
       const data = await response.json();
       if (data.status === 'success') {
-        // Ensure all products have a status field (default to 'pending' if missing)
         const productsWithStatus = normalizeSupplierProductsFromApi(data.products || []).map(
           (product) => ({
             ...product,
-            status: product.status || 'pending'
+            status: getSupplierApprovalStatus(product),
+            is_active:
+              product.is_active === true ||
+              product.isActive === true ||
+              getSupplierApprovalStatus(product) === 'approved'
           })
         );
         setProducts(productsWithStatus);
+        if (data.stats && typeof data.stats === 'object') {
+          setCatalogStats({
+            total: Number(data.stats.total) || productsWithStatus.length,
+            active: Number(data.stats.active) || 0,
+            pending: Number(data.stats.pending) || 0,
+            rejected: Number(data.stats.rejected) || 0
+          });
+        } else {
+          setCatalogStats(null);
+        }
       }
     } catch (error) {
       console.error('Failed to fetch products:', error);
@@ -284,6 +339,7 @@ const ProductManagement = ({ user }) => {
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
+      resetCatalogViewToDefault();
       await fetchProducts({ silent: true });
     } finally {
       setRefreshing(false);
@@ -438,9 +494,23 @@ const ProductManagement = ({ user }) => {
                     getSupplierOfferRowId(p) ||
                     getSupplierOfferRowId(updatedProduct) ||
                     productId,
-                  stock: savedStock != null ? savedStock : p.stock,
-                  price:
-                    updatedProduct.price !== undefined ? updatedProduct.price : p.price
+                  // Keep configured inventory values if a catalog-only save omits them.
+                  stock:
+                    savedStock != null
+                      ? savedStock
+                      : updatedProduct.stock != null
+                        ? updatedProduct.stock
+                        : p.stock,
+                  price: (() => {
+                    const nextPrice = Number(updatedProduct.price);
+                    if (Number.isFinite(nextPrice) && nextPrice > 0) return nextPrice;
+                    const prevPrice = Number(p.price);
+                    return Number.isFinite(prevPrice) && prevPrice > 0 ? prevPrice : nextPrice || 0;
+                  })(),
+                  location:
+                    String(updatedProduct.location || '').trim() ||
+                    String(p.location || '').trim() ||
+                    ''
                 }
               : p
           )
@@ -523,9 +593,9 @@ const ProductManagement = ({ user }) => {
     }
   };
 
-  const filteredProducts = products.filter(product => {
-    const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase());
-    // Normalize category comparison (both should be lowercase for matching)
+  const filteredProducts = products.filter((product) => {
+    const name = String(product?.name || '').toLowerCase();
+    const matchesSearch = name.includes(String(searchTerm || '').toLowerCase());
     const productCategory = (product.category || '').toLowerCase();
     const filterCategoryLower = filterCategory === 'all' ? 'all' : filterCategory.toLowerCase();
     const matchesCategory = filterCategoryLower === 'all' || productCategory === filterCategoryLower;
@@ -535,17 +605,31 @@ const ProductManagement = ({ user }) => {
   });
 
   const pageStats = useMemo(() => {
-    const total = products.length;
-    const pending = products.filter((p) => getSupplierApprovalStatus(p) === 'pending').length;
-    const approved = products.filter((p) => getSupplierApprovalStatus(p) === 'approved').length;
-    const rejected = products.filter((p) => getSupplierApprovalStatus(p) === 'rejected').length;
+    const derivedTotal = products.length;
+    const derivedPending = products.filter((p) => getSupplierApprovalStatus(p) === 'pending').length;
+    const derivedActive = products.filter((p) => getSupplierApprovalStatus(p) === 'approved').length;
+    const derivedRejected = products.filter((p) => getSupplierApprovalStatus(p) === 'rejected').length;
     const lowStock = products.filter((p) => {
       if (!isSupplierInventoryConfigured(p)) return false;
       const health = getStockHealth(p.stock);
       return health === 'out' || health === 'low';
     }).length;
-    return { total, pending, approved, rejected, lowStock };
-  }, [products]);
+
+    // Prefer server stats when present, but never under-count local list after a refresh.
+    const total = Math.max(derivedTotal, Number(catalogStats?.total) || 0);
+    const active = Math.max(derivedActive, Number(catalogStats?.active) || 0);
+    const pending = catalogStats ? Number(catalogStats.pending) || derivedPending : derivedPending;
+    const rejected = catalogStats ? Number(catalogStats.rejected) || derivedRejected : derivedRejected;
+
+    return {
+      total,
+      active,
+      approved: active,
+      pending,
+      rejected,
+      lowStock
+    };
+  }, [products, catalogStats]);
 
   if (loading) {
     return (
@@ -624,11 +708,11 @@ const ProductManagement = ({ user }) => {
       <div className="pm-kpis">
         <div className="pm-kpi">
           <div className="pm-kpi__value">{pageStats.total}</div>
-          <div className="pm-kpi__label">Total variants</div>
+          <div className="pm-kpi__label">Total Variants</div>
         </div>
         <div className="pm-kpi">
-          <div className="pm-kpi__value">{pageStats.approved}</div>
-          <div className="pm-kpi__label">Approved</div>
+          <div className="pm-kpi__value">{pageStats.active}</div>
+          <div className="pm-kpi__label">Active</div>
         </div>
         <div className="pm-kpi">
           <div className="pm-kpi__value">{pageStats.pending}</div>
@@ -668,9 +752,13 @@ const ProductManagement = ({ user }) => {
               <Search size={16} />
               <input
                 type="search"
+                name="pm-product-search"
                 placeholder="Search by product name…"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
                 aria-label="Search products"
               />
             </label>
@@ -695,7 +783,7 @@ const ProductManagement = ({ user }) => {
             >
               <option value="all">All statuses</option>
               <option value="pending">Pending Approval</option>
-              <option value="approved">Approved</option>
+              <option value="approved">Approved / Active</option>
               <option value="rejected">Rejected</option>
             </select>
           </div>
@@ -777,6 +865,9 @@ const ProductManagement = ({ user }) => {
                       {productStatus === 'pending' ? (
                         <p className="pm-card__notice">{status.notice}</p>
                       ) : null}
+                      {productStatus === 'approved' && status.notice ? (
+                        <p className="pm-card__notice pm-card__notice--success">{status.notice}</p>
+                      ) : null}
                       {(() => {
                         const brandWarning = getBrandApprovalWarning(
                           product.brandApprovalStatus,
@@ -809,12 +900,16 @@ const ProductManagement = ({ user }) => {
                       ) : null}
 
                       <div className="pd-card__details">
-                        {Number(product.price) > 0 ? (
+                        {inventoryConfigured && Number(product.price) > 0 ? (
                           <span className="pd-card__price">
                             {formatRupeePerUnit(product.price, product.unit)}
                           </span>
+                        ) : !inventoryConfigured ? (
+                          <span className="pd-card__price pd-card__price--pending">
+                            {SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
+                          </span>
                         ) : (
-                          <span className="pd-card__price pd-card__price--na">Price not set</span>
+                          <span className="pd-card__price pd-card__price--na">MRP not set</span>
                         )}
 
                         <div className="pd-card__meta-row">
@@ -822,23 +917,19 @@ const ProductManagement = ({ user }) => {
                             <span className="pd-card__meta-item">Unit: {product.unit}</span>
                           ) : null}
                           {moq > 1 ? <span className="pd-card__meta-item">MOQ: {moq}</span> : null}
-                          <span
-                            className={`pd-card__stock ${
-                              !inventoryConfigured
-                                ? 'pd-card__stock--unset'
-                                : inStock
-                                  ? 'pd-card__stock--in'
-                                  : 'pd-card__stock--out'
-                            }`}
-                          >
-                            {!inventoryConfigured
-                              ? SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL
-                              : inStock
-                                ? `${product.stock} ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}`
-                                : 'Out of stock'}
-                          </span>
-                          {stockHealth === 'low' ? (
-                            <span className="pd-card__meta-item pm-card__meta-warn">Low stock</span>
+                          {inventoryConfigured ? (
+                            <>
+                              <span
+                                className={`pd-card__stock ${
+                                  inStock ? 'pd-card__stock--in' : 'pd-card__stock--out'
+                                }`}
+                              >
+                                {formatSupplierStockAvailability(product.stock)}
+                              </span>
+                              {stockHealth === 'low' ? (
+                                <span className="pd-card__meta-item pm-card__meta-warn">Low stock</span>
+                              ) : null}
+                            </>
                           ) : null}
                         </div>
 
@@ -1333,13 +1424,17 @@ const ProductDetailsModal = ({
             ) : null}
             <div className="pm-details-field">
               <span className="pm-details-field__label">{SUPPLIER_MRP_LABEL}</span>
-              <span className="pm-details-field__value">{formatRupeePerUnit(product.price, product.unit)}</span>
+              <span className="pm-details-field__value">
+                {isSupplierInventoryConfigured(product) && Number(product.price) > 0
+                  ? formatRupeePerUnit(product.price, product.unit)
+                  : SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
+              </span>
             </div>
             <div className="pm-details-field">
               <span className="pm-details-field__label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
               <span className="pm-details-field__value">
                 {isSupplierInventoryConfigured(product)
-                  ? `${product.stock} ${product.unit || 'unit'}`
+                  ? formatSupplierStockAvailability(product.stock)
                   : SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
               </span>
             </div>

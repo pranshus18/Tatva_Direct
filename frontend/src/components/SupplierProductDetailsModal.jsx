@@ -125,7 +125,11 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
             </div>
             <div className="us-details-field">
               <span className="us-details-field__label">{SUPPLIER_MRP_LABEL}</span>
-              <span className="us-details-field__value">{formatRupeePerUnit(product.price, product.unit)}</span>
+              <span className="us-details-field__value">
+                {isSupplierInventoryConfigured(product) && Number(product.price) > 0
+                  ? formatRupeePerUnit(product.price, product.unit)
+                  : SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
+              </span>
             </div>
             <div className="us-details-field">
               <span className="us-details-field__label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>

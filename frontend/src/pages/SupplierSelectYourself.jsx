@@ -16,6 +16,7 @@ import {
   deduplicateCompanyInfoEntriesByBrand,
   detectEntryRoleChanges,
   ensureAtLeastOneCompanyInfoEntry,
+  findSupplierBrandRequest,
   formatSupplyChainRoleLabel,
   getApprovedBaselineEntries,
   getCompanyInfoEntriesForSave,
@@ -72,6 +73,7 @@ export default function SupplierSelectYourself() {
   const [focusSupplyChainEntryId, setFocusSupplyChainEntryId] = useState('');
   const [discountInsights, setDiscountInsights] = useState(null);
   const [assignmentChainInfo, setAssignmentChainInfo] = useState({ loading: false, data: null });
+  const [brandSubmissionNotice, setBrandSubmissionNotice] = useState(null);
   const supplyChainSectionRef = useRef(null);
 
   const hasUnsavedChanges = useMemo(() => {
@@ -79,12 +81,63 @@ export default function SupplierSelectYourself() {
     return chainFormSignature(profile) !== chainFormSignature(baseline);
   }, [profile, baseline]);
 
-  const { brands: catalogBrands } = useSupplierBrands({ source: 'catalog' });
+  const { brands: catalogBrands } = useSupplierBrands({
+    source: 'catalog'
+  });
 
   const approvedBaselineEntries = useMemo(
     () => getApprovedBaselineEntries(baseline || profile || {}),
     [baseline, profile]
   );
+
+  /** Catalog-approved brands already selected in Step 1 count as approved for Step 2. */
+  const effectiveApprovedBrands = useMemo(() => {
+    const merged = [];
+    const seen = new Set();
+    const rejectedKeys = new Set(
+      (Array.isArray(profile?.supplierBrandRequests) ? profile.supplierBrandRequests : [])
+        .filter((row) => String(row?.status || '').toLowerCase() === 'rejected')
+        .map((row) => brandKeyForDuplicateCheck(row?.normalizedName || row?.name))
+        .filter(Boolean)
+    );
+
+    const push = (name, status = 'approved') => {
+      const label = String(name || '').trim();
+      const key = brandKeyForDuplicateCheck(label);
+      if (!label || !key || seen.has(key) || rejectedKeys.has(key)) return;
+      if (String(status || 'approved').toLowerCase() !== 'approved') return;
+      seen.add(key);
+      merged.push({ name: label, status: 'approved' });
+    };
+
+    for (const item of Array.isArray(profile?.adminApprovedBrands) ? profile.adminApprovedBrands : []) {
+      push(typeof item === 'string' ? item : item?.name, typeof item === 'object' ? item?.status : 'approved');
+    }
+
+    const catalogApprovedKeys = new Set(
+      (Array.isArray(catalogBrands) ? catalogBrands : [])
+        .filter((item) => {
+          const status =
+            typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
+          return status === 'approved';
+        })
+        .map((item) =>
+          brandKeyForDuplicateCheck(typeof item === 'string' ? item : item?.name)
+        )
+        .filter(Boolean)
+    );
+
+    for (const entry of getCompanyInfoEntriesForSave(profile || {})) {
+      const brand = String(entry?.brands || '').trim();
+      if (!brand) continue;
+      const key = brandKeyForDuplicateCheck(brand);
+      if (key && catalogApprovedKeys.has(key)) {
+        push(brand, 'approved');
+      }
+    }
+
+    return merged;
+  }, [catalogBrands, profile]);
 
   const supplyChainSummaryRows = useMemo(
     () =>
@@ -92,10 +145,10 @@ export default function SupplierSelectYourself() {
         catalogBrands,
         getCompanyInfoEntriesForSave(profile || {}),
         approvedBaselineEntries,
-        profile?.adminApprovedBrands || [],
+        effectiveApprovedBrands,
         profile?.supplierBrandRequests || []
       ),
-    [catalogBrands, profile, approvedBaselineEntries]
+    [catalogBrands, profile, approvedBaselineEntries, effectiveApprovedBrands]
   );
 
   const supplyChainFormProfile = useMemo(
@@ -109,6 +162,18 @@ export default function SupplierSelectYourself() {
     [profile]
   );
 
+  const pendingBrandRequests = useMemo(() => {
+    const requests = Array.isArray(profile?.supplierBrandRequests) ? profile.supplierBrandRequests : [];
+    return requests
+      .filter((row) => String(row?.status || '').toLowerCase() === 'pending')
+      .map((row) => ({
+        name: String(row?.name || '').trim(),
+        submittedAt: row?.submittedAt || row?.requestedAt || null
+      }))
+      .filter((row) => row.name)
+      .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  }, [profile?.supplierBrandRequests]);
+
   const chainReadyBrandCount = useMemo(
     () => supplyChainSummaryRows.filter((row) => row.hasAdminSupplyChain).length,
     [supplyChainSummaryRows]
@@ -121,16 +186,44 @@ export default function SupplierSelectYourself() {
 
   useEffect(() => {
     if (supplyChainSummaryRows.length === 0) {
+      if (selectedAssignmentId) setSelectedAssignmentId('');
+      return;
+    }
+
+    const selectionStillValid =
+      selectedAssignmentId &&
+      supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId);
+    if (selectionStillValid) return;
+
+    // Prefer a brand the supplier already has in their entries, then chain-ready brands.
+    const entryBrandKeys = new Set(
+      getCompanyInfoEntriesForSave(profile || {})
+        .map((entry) => brandKeyForDuplicateCheck(entry?.brands))
+        .filter(Boolean)
+    );
+    const preferred =
+      supplyChainSummaryRows.find(
+        (row) => entryBrandKeys.has(brandKeyForDuplicateCheck(row.brand)) && row.hasAdminSupplyChain
+      ) ||
+      supplyChainSummaryRows.find((row) =>
+        entryBrandKeys.has(brandKeyForDuplicateCheck(row.brand))
+      ) ||
+      supplyChainSummaryRows.find((row) => row.hasAdminSupplyChain) ||
+      supplyChainSummaryRows[0];
+
+    if (!preferred?.id) {
       setSelectedAssignmentId('');
       return;
     }
-    if (
-      selectedAssignmentId &&
-      !supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId)
-    ) {
-      setSelectedAssignmentId('');
-    }
-  }, [supplyChainSummaryRows, selectedAssignmentId]);
+
+    setSelectedAssignmentId(preferred.id);
+    const preferredKey = brandKeyForDuplicateCheck(preferred.brand);
+    const matchingEntry = getCompanyInfoEntriesForSave(profile || {}).find(
+      (entry) => brandKeyForDuplicateCheck(entry?.brands) === preferredKey
+    );
+    const entryId = String(matchingEntry?.id || '').trim();
+    if (entryId) setFocusSupplyChainEntryId(entryId);
+  }, [supplyChainSummaryRows, selectedAssignmentId, profile]);
 
   const selectedAssignmentChainState = useMemo(() => {
     const brand = String(selectedAssignment?.brand || '').trim();
@@ -354,6 +447,19 @@ export default function SupplierSelectYourself() {
         return;
       }
 
+      const assignmentRow =
+        row?.id && supplyChainSummaryRows.some((item) => item.id === row.id)
+          ? row
+          : supplyChainSummaryRows.find(
+              (item) =>
+                brandKeyForDuplicateCheck(item.brand) === brandKeyForDuplicateCheck(brandLabel)
+            ) || null;
+      if (assignmentRow?.id) {
+        setSelectedAssignmentId(assignmentRow.id);
+      } else {
+        // Entry exists locally; summary row may appear on next render — use entry id as fallback key.
+        setSelectedAssignmentId(entryId);
+      }
       setFocusSupplyChainEntryId(entryId);
       window.requestAnimationFrame(() => {
         supplyChainSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -496,7 +602,7 @@ export default function SupplierSelectYourself() {
       selectedBrand &&
       !isBrandApprovedForSupplyChainStep(
         selectedBrand,
-        profile?.adminApprovedBrands || [],
+        effectiveApprovedBrands,
         selectedBrandState || null,
         profile?.supplierBrandRequests || []
       )
@@ -610,6 +716,14 @@ export default function SupplierSelectYourself() {
       return;
     }
 
+    const brandsBeingSaved = [
+      ...new Set(
+        allEntries
+          .map((entry) => String(entry?.brands || '').trim())
+          .filter(Boolean)
+      )
+    ];
+
     try {
       setSavingBrandApproval(true);
       const token = localStorage.getItem('token');
@@ -631,9 +745,58 @@ export default function SupplierSelectYourself() {
         alert(data.message || 'Failed to save brand request. Please try again.');
         return;
       }
-      alert(data.message || 'Brand saved. Supply-chain role form is ready in Step 2 below.');
-      if (!applyProfileFromResponse(data.profile)) {
+
+      const nextProfile = data.profile || null;
+      if (!applyProfileFromResponse(nextProfile)) {
         await fetchProfile();
+      }
+
+      const requestSource = nextProfile?.supplierBrandRequests || profile?.supplierBrandRequests || [];
+      const submittedRows = brandsBeingSaved.map((brandName) => {
+        const request = findSupplierBrandRequest(brandName, requestSource);
+        return {
+          name: brandName,
+          status: String(request?.status || 'pending').toLowerCase(),
+          submittedAt: request?.submittedAt || request?.requestedAt || new Date().toISOString()
+        };
+      });
+      const pendingRows = submittedRows.filter((row) => row.status === 'pending' || !row.status);
+      const approvedRows = submittedRows.filter((row) => row.status === 'approved');
+
+      if (pendingRows.length > 0) {
+        const submittedAt =
+          pendingRows.find((row) => row.submittedAt)?.submittedAt || new Date().toISOString();
+        setBrandSubmissionNotice({
+          tone: 'pending',
+          title: pendingRows.length === 1
+            ? `Brand request submitted for "${pendingRows[0].name}"`
+            : `${pendingRows.length} brand requests submitted`,
+          brands: pendingRows,
+          submittedAt,
+          message:
+            pendingRows.length === 1
+              ? 'Your brand request was sent for admin approval. You can track it below in Brand status.'
+              : 'Your brand requests were sent for admin approval. You can track each one below in Brand status.'
+        });
+        setBrandSectionExpanded(true);
+      } else if (approvedRows.length > 0) {
+        setBrandSubmissionNotice({
+          tone: 'success',
+          title: approvedRows.length === 1
+            ? `"${approvedRows[0].name}" is already approved`
+            : 'Selected brands are already approved',
+          brands: approvedRows,
+          submittedAt: approvedRows.find((row) => row.submittedAt)?.submittedAt || null,
+          message: 'These brands are ready for supply-chain role selection in Step 2.'
+        });
+      } else {
+        setBrandSubmissionNotice({
+          tone: 'success',
+          title: 'Brand saved',
+          brands: submittedRows,
+          submittedAt: new Date().toISOString(),
+          message: data.message || 'Brand saved. Supply-chain role form is ready in Step 2 below.'
+        });
       }
     } catch (e) {
       console.error('Failed to save brand approval:', e);
@@ -862,6 +1025,63 @@ export default function SupplierSelectYourself() {
               </button>
             </div>
           </div>
+
+          {brandSubmissionNotice ? (
+            <div
+              className={`supplier-select-alert supplier-select-alert--${
+                brandSubmissionNotice.tone === 'success' ? 'draft' : 'pending'
+              }`}
+              role="status"
+            >
+              <strong>{brandSubmissionNotice.title}</strong>
+              <p>{brandSubmissionNotice.message}</p>
+              {brandSubmissionNotice.submittedAt ? (
+                <p>
+                  Submitted: {formatDateTimeIST(brandSubmissionNotice.submittedAt, '—')}
+                </p>
+              ) : null}
+              {Array.isArray(brandSubmissionNotice.brands) && brandSubmissionNotice.brands.length > 1 ? (
+                <ul className="supplier-select-alert__list">
+                  {brandSubmissionNotice.brands.map((row) => (
+                    <li key={row.name}>
+                      {row.name}
+                      {row.submittedAt ? ` — ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <button
+                type="button"
+                className="supplier-select-alert__dismiss"
+                onClick={() => setBrandSubmissionNotice(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
+
+          {!brandSubmissionNotice && pendingBrandRequests.length > 0 ? (
+            <div className="supplier-select-alert supplier-select-alert--pending" role="status">
+              <strong>
+                {pendingBrandRequests.length === 1
+                  ? 'Brand request awaiting admin approval'
+                  : `${pendingBrandRequests.length} brand requests awaiting admin approval`}
+              </strong>
+              <p>
+                Your request{pendingBrandRequests.length === 1 ? ' was' : 's were'} submitted and are waiting for
+                admin review.
+              </p>
+              <ul className="supplier-select-alert__list">
+                {pendingBrandRequests.map((row) => (
+                  <li key={row.name}>
+                    {row.name}
+                    {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           {brandSectionExpanded ? (
             <SupplierSupplyChainEntriesEditor
               key={`brand-${editorResetKey}`}
@@ -875,6 +1095,8 @@ export default function SupplierSelectYourself() {
               approvedBaselineEntries={approvedBaselineEntries}
               onBrandPickedWithoutRole={handleBrandPickedWithoutRole}
               startInNewBrandMode
+              supplierApprovedBrands={effectiveApprovedBrands}
+              supplierBrandRequests={profile?.supplierBrandRequests || []}
             />
           ) : null}
         </div>
@@ -894,10 +1116,15 @@ export default function SupplierSelectYourself() {
 
           {!selectedAssignmentId ? (
             <div className="supplier-select-alert supplier-select-alert--draft">
-              <strong>Select a brand to continue</strong>
+              <strong>
+                {supplyChainSummaryRows.length === 0
+                  ? 'No approved brands ready for Step 2 yet'
+                  : 'Select a brand to continue'}
+              </strong>
               <p>
-                Pick any brand from the <strong>Your supply chain by brand</strong> dropdown above. If admin has defined
-                its supply chain, your role options will appear here automatically.
+                {supplyChainSummaryRows.length === 0
+                  ? 'Add an admin-approved brand in Step 1 (or wait for your brand request to be approved). Once it appears under Your supply chain by brand, you can choose your supply-chain role here.'
+                  : 'Pick any brand from the Your supply chain by brand dropdown above. If admin has defined its supply chain, your role options will appear here automatically.'}
               </p>
             </div>
           ) : null}
@@ -928,7 +1155,7 @@ export default function SupplierSelectYourself() {
               focusEntryId={focusSupplyChainEntryId}
               onFocusEntryHandled={handleFocusEntryHandled}
               filterBrandName={selectedAssignment?.brand || ''}
-              supplierApprovedBrands={profile?.adminApprovedBrands || []}
+              supplierApprovedBrands={effectiveApprovedBrands}
               supplierBrandRequests={profile?.supplierBrandRequests || []}
             />
           ) : null}

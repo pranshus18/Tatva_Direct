@@ -24,6 +24,7 @@ function collapseRepeatedLetters(value) {
   return String(value || '').replace(/(.)\1+/g, '$1');
 }
 
+/** Complete-name key only — "H" must not equal "HP"; Philips still equals Phillips. */
 function brandKeyForDuplicateCheck(raw) {
   const token = String(raw || '')
     .trim()
@@ -49,6 +50,7 @@ export function validateUniqueBrandsAcrossEntries(entries) {
       const brandKey = brandKeyForDuplicateCheck(brandName);
       if (!brandKey) continue;
 
+      // Exact complete-name match only (never prefix/substring).
       if (brandToEntryIndex.has(brandKey)) {
         const duplicateEntryIndex = brandToEntryIndex.get(brandKey);
         return {

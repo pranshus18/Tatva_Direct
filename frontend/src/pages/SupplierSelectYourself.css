@@ -371,6 +371,29 @@
   color: #7f1d1d;
 }
 
+.supplier-select-alert__list {
+  margin: 0.55rem 0 0;
+  padding-left: 1.15rem;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.supplier-select-alert__list li + li {
+  margin-top: 0.2rem;
+}
+
+.supplier-select-alert__dismiss {
+  margin-top: 0.65rem;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font-size: 0.84rem;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .supplier-select-yourself-page .supplier-select-section--brand {
   padding: 1.1rem 1.2rem;
 }

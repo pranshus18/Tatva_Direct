@@ -53,6 +53,45 @@
   text-align: left;
 }
 
+.chain-entry-selector__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1rem;
+  margin-top: 0.55rem;
+}
+
+.chain-entry-selector__actions .chain-entry-selector__link {
+  margin-top: 0;
+}
+
+.supplier-select-yourself-editor .chain-selected-brand-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 0.9rem;
+}
+
+.supplier-select-yourself-editor .chain-change-brand-btn {
+  padding: 0.45rem 0.8rem;
+  border: 1px solid #c7d2fe;
+  border-radius: 8px;
+  background: #fff;
+  color: #3730a3;
+  font-size: 0.84rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.supplier-select-yourself-editor .chain-change-brand-btn:hover {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+}
+
+.supplier-select-yourself-editor .chain-change-brand-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .chain-entry-selector__link:hover:not(:disabled) {
   text-decoration: underline;
 }
@@ -459,9 +498,15 @@
 }
 
 .supplier-select-yourself-editor .chain-status-card span {
+  display: block;
   font-size: 0.82rem;
   color: #475569;
   word-break: break-word;
+  line-height: 1.4;
+}
+
+.supplier-select-yourself-editor .chain-status-card span + span {
+  margin-top: 0.2rem;
 }
 
 .supplier-select-yourself-editor .chain-status-card--success {

@@ -95,3 +95,19 @@ test('resolveSupplierProductBrandGuard: maps Philips input to declared Phillips 
   assert.equal(result.allowed, true);
   assert.equal(result.brand, 'Phillips');
 });
+
+test('brandIsAllowedForSupplier: partial prefix H must not match registered HP', () => {
+  const profile = {
+    companyInfoEntries: [{ id: '1', role: 'dealer', brands: 'HP' }]
+  };
+  assert.equal(brandIsAllowedForSupplier(profile, 'H').allowed, false);
+  assert.equal(brandIsAllowedForSupplier(profile, 'HP').allowed, true);
+  assert.equal(brandIsAllowedForSupplier(profile, 'Haier').allowed, false);
+});
+
+test('brandIsAllowedForSupplier: multi-word brand still matches longer product brand label', () => {
+  const profile = {
+    companyInfoEntries: [{ id: '1', role: 'retailer', brands: 'Havells' }]
+  };
+  assert.equal(brandIsAllowedForSupplier(profile, 'Havells Electrical').allowed, true);
+});

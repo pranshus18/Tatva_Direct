@@ -665,7 +665,9 @@ export async function createProfileResponse(user) {
         name: row.name,
         normalizedName: row.normalized_name || normalizeBrandKey(row.name),
         status: row.status || 'pending',
-        rejectionReason: row.rejectionReason || ''
+        rejectionReason: row.rejectionReason || '',
+        requestedAt: row.requestedAt || null,
+        submittedAt: row.requestedAt || null
       }))
     };
   }

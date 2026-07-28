@@ -29,12 +29,22 @@ export function normalizeSupplierProductFromApi(product) {
   const offerId = getSupplierOfferRowId(product);
   const stock = parseSupplierStockQuantity(product.stock);
   const minOrder = parseSupplierStockQuantity(product.min_order_quantity);
+  const parsedPrice = (() => {
+    if (product.price === undefined || product.price === null || product.price === '') return null;
+    if (typeof product.price === 'number') {
+      return Number.isFinite(product.price) ? product.price : null;
+    }
+    const normalized = String(product.price).trim().replace(/,/g, '');
+    const num = Number(normalized);
+    return Number.isFinite(num) ? num : null;
+  })();
   const rawStatus = String(product.status || 'pending').trim().toLowerCase();
+  const isActive = product.is_active === true || product.isActive === true;
   const status =
-    rawStatus === 'approved' || rawStatus === 'active'
-      ? 'approved'
-      : rawStatus === 'rejected'
-        ? 'rejected'
+    rawStatus === 'rejected'
+      ? 'rejected'
+      : rawStatus === 'approved' || rawStatus === 'active' || isActive
+        ? 'approved'
         : 'pending';
   const rejectionReason = String(
     product.rejectionReason || product.rejection_reason || ''
@@ -43,9 +53,12 @@ export function normalizeSupplierProductFromApi(product) {
     ...product,
     ...(offerId ? { supplier_product_id: offerId } : {}),
     status,
+    is_active: status === 'approved' ? true : Boolean(isActive),
     rejection_reason: rejectionReason || product.rejection_reason || null,
     rejectionReason: rejectionReason || null,
+    price: parsedPrice != null ? parsedPrice : Number(product.price) || 0,
     stock: stock != null ? stock : 0,
+    location: product.location == null ? '' : String(product.location),
     min_order_quantity: minOrder != null && minOrder > 0 ? minOrder : 1
   };
 }

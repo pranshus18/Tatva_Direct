@@ -279,14 +279,15 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
       name,
       normalized_name: key,
       status,
-      rejectionReason: String(row?.rejection_reason || '').trim()
+      rejectionReason: String(row?.rejection_reason || '').trim(),
+      requestedAt: row?.requested_at || row?.updated_at || row?.created_at || null
     });
   };
 
   try {
     const { data: requestedRows, error: requestedError } = await supabase
       .from('brands')
-      .select('name, normalized_name, status, rejection_reason, requested_by')
+      .select('name, normalized_name, status, rejection_reason, requested_by, requested_at, updated_at, created_at')
       .eq('requested_by', userId);
     if (requestedError) throw requestedError;
     for (const row of requestedRows || []) {
@@ -298,7 +299,7 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
     if (declaredKeys.length > 0) {
       const { data: declaredRows, error: declaredError } = await supabase
         .from('brands')
-        .select('name, normalized_name, status, rejection_reason, requested_by')
+        .select('name, normalized_name, status, rejection_reason, requested_by, requested_at, updated_at, created_at')
         .in('normalized_name', declaredKeys);
       if (declaredError) throw declaredError;
       for (const row of declaredRows || []) {

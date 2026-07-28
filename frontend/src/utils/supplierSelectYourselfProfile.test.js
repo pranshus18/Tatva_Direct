@@ -3,11 +3,36 @@ import {
   buildSupplyChainFormProfile,
   buildSupplyChainSummaryRows,
   deduplicateCompanyInfoEntriesByBrand,
+  findSupplierBrandRequest,
   isBrandApprovedForSupplyChainStep,
   mergeCompanyInfoEntriesById,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE
 } from './supplierSelectYourselfProfile';
 import { resolveRoleVerificationDocumentUrls } from './authorizationCertificateUrls';
+
+describe('findSupplierBrandRequest', () => {
+  it('returns pending request with submitted date for matching brand', () => {
+    const request = findSupplierBrandRequest('Haier', [
+      {
+        name: 'Haier',
+        status: 'pending',
+        requestedAt: '2026-07-28T10:15:00.000Z',
+        submittedAt: '2026-07-28T10:15:00.000Z'
+      }
+    ]);
+    expect(request).toEqual({
+      name: 'Haier',
+      status: 'pending',
+      requestedAt: '2026-07-28T10:15:00.000Z',
+      submittedAt: '2026-07-28T10:15:00.000Z',
+      rejectionReason: ''
+    });
+  });
+
+  it('returns null when brand has not been submitted', () => {
+    expect(findSupplierBrandRequest('Haier', [{ name: 'HP', status: 'pending' }])).toBeNull();
+  });
+});
 
 describe('buildSupplyChainFormProfile', () => {
   it('keeps a draft role when approved baseline role is empty', () => {
@@ -164,7 +189,7 @@ describe('buildSupplyChainSummaryRows', () => {
     expect(rows[0].roleLabel).toBe('Retailer');
   });
 
-  it('hides catalog brands without admin supply chain unless supplier-approved', () => {
+  it('shows catalog-approved brands the supplier selected in Step 1', () => {
     const rows = buildSupplyChainSummaryRows(
       [
         { name: 'Titan', status: 'approved' },
@@ -172,6 +197,21 @@ describe('buildSupplyChainSummaryRows', () => {
         { name: 'hp', status: 'approved' }
       ],
       [{ id: 'e1', brands: 'Titan', role: '' }],
+      [],
+      []
+    );
+
+    expect(rows.map((row) => row.brand).sort()).toEqual(['Fossil', 'Titan']);
+  });
+
+  it('hides catalog brands the supplier has not selected and that lack a supply chain', () => {
+    const rows = buildSupplyChainSummaryRows(
+      [
+        { name: 'Titan', status: 'approved' },
+        { name: 'Fossil', status: 'approved', hasAdminSupplyChain: true },
+        { name: 'hp', status: 'approved' }
+      ],
+      [],
       [],
       []
     );
@@ -191,12 +231,24 @@ describe('buildSupplyChainSummaryRows', () => {
     expect(rows[0].brand).toBe('Titan');
   });
 
-  it('skips pending supplier-approved brands', () => {
+  it('still shows catalog-approved selected brands when a stale pending approved-list row exists', () => {
     const rows = buildSupplyChainSummaryRows(
       [{ name: 'Titan', status: 'approved' }],
       [{ id: 'e1', brands: 'Titan', role: '' }],
       [],
       [{ name: 'Titan', status: 'pending' }]
+    );
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0].brand).toBe('Titan');
+  });
+
+  it('hides brands that only appear as pending and are not catalog-approved', () => {
+    const rows = buildSupplyChainSummaryRows(
+      [],
+      [{ id: 'e1', brands: 'NewCo', role: '' }],
+      [],
+      [{ name: 'NewCo', status: 'pending' }]
     );
 
     expect(rows).toHaveLength(0);

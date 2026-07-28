@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
 import {
   SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
+  formatSupplierStockAvailability,
   isSupplierInventoryConfigured
 } from './supplierStockLabel';
 
@@ -20,8 +20,17 @@ describe('isSupplierInventoryConfigured', () => {
       true
     );
   });
+});
 
-  it('exposes the not-configured label', () => {
-    expect(SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL).toBe('Inventory Not Configured');
+describe('inventory labels', () => {
+  it('uses Inventory Setup Pending copy', () => {
+    expect(SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL).toBe('Inventory Setup Pending');
+  });
+
+  it('formats stock availability for catalog cards', () => {
+    expect(formatSupplierStockAvailability(12)).toBe('12 in stock');
+    expect(formatSupplierStockAvailability(3)).toBe('3 in stock');
+    expect(formatSupplierStockAvailability(0)).toBe('Out of stock');
+    expect(formatSupplierStockAvailability(null)).toBe('Out of stock');
   });
 });

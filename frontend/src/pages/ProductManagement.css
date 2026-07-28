@@ -375,6 +375,12 @@
   background: #fffbeb;
 }
 
+.pm-card__notice--success {
+  color: #047857;
+  border-color: #a7f3d0;
+  background: #ecfdf5;
+}
+
 .pm-brand-approval-warning {
   margin: 0.55rem 0 0;
   padding: 0.65rem 0.75rem;
