@@ -48,6 +48,89 @@ export function areBrandNamesExactDuplicates(left, right) {
   return Boolean(leftKey && rightKey && leftKey === rightKey);
 }
 
+function brandNameEditDistance(left, right) {
+  const a = String(left || '');
+  const b = String(right || '');
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const matrix = Array.from({ length: rows }, () => new Array(cols).fill(0));
+  for (let i = 0; i < rows; i += 1) matrix[i][0] = i;
+  for (let j = 0; j < cols; j += 1) matrix[0][j] = j;
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+/**
+ * Find an approved catalog brand that matches a typed "new brand" request.
+ * Exact keys, spelling variants, prefixes (min 4 chars), and near-typos are treated as matches.
+ * @returns {{ name: string, matchType: 'exact'|'prefix'|'typo' } | null}
+ */
+export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
+  const typed = String(typedName || '').trim();
+  const typedKey = brandKeyForDuplicateCheck(typed);
+  if (!typedKey) return null;
+
+  const rows = [];
+  for (const item of Array.isArray(catalogBrands) ? catalogBrands : []) {
+    const name = String(typeof item === 'string' ? item : item?.name || '').trim();
+    if (!name) continue;
+    const status =
+      typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
+    if (status && status !== 'approved') continue;
+    const key = brandKeyForDuplicateCheck(name);
+    if (!key) continue;
+    rows.push({ name, key });
+  }
+  if (rows.length === 0) return null;
+
+  const exact = rows.find((row) => row.key === typedKey);
+  if (exact) return { name: exact.name, matchType: 'exact' };
+
+  const prefix = rows.find((row) => {
+    const shorter = typedKey.length <= row.key.length ? typedKey : row.key;
+    const longer = typedKey.length <= row.key.length ? row.key : typedKey;
+    return shorter.length >= 4 && longer.startsWith(shorter);
+  });
+  if (prefix) return { name: prefix.name, matchType: 'prefix' };
+
+  let best = null;
+  for (const row of rows) {
+    const maxLen = Math.max(typedKey.length, row.key.length);
+    if (maxLen < 5) continue;
+    const distance = brandNameEditDistance(typedKey, row.key);
+    const allowed = maxLen >= 7 ? 2 : 1;
+    if (distance > allowed) continue;
+    if (!best || distance < best.distance) {
+      best = { name: row.name, matchType: 'typo', distance };
+    }
+  }
+  return best ? { name: best.name, matchType: best.matchType } : null;
+}
+
+export function formatApprovedCatalogBrandMatchMessage(typedName, matchedName) {
+  const typed = String(typedName || '').trim() || 'This brand';
+  const matched = String(matchedName || '').trim();
+  if (!matched) {
+    return `${typed} already exists in the approved brands list. Choose it from the approved brands list instead of requesting a new brand.`;
+  }
+  if (brandKeyForDuplicateCheck(typed) === brandKeyForDuplicateCheck(matched)) {
+    return `"${matched}" is already an approved brand. Choose it from the approved brands list instead of requesting a new brand.`;
+  }
+  return `"${typed}" looks like approved brand "${matched}". Choose "${matched}" from the approved brands list instead of requesting a new brand.`;
+}
+
 /** Merge spelling variants (e.g. Philips / Phillips) into one display name. */
 export function dedupeBrandNames(names = []) {
   const deduped = [];

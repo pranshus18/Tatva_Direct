@@ -16,6 +16,7 @@ import {
   supplierBcovResolvePriceSchema,
   toFiniteNumber,
   fetchVariantCatalogMrp,
+  resolveVariantProductCovEligibility,
   validateAndNormalizeBcovLevels
 } from './supplierImports.js';
 import { buildSupplyChainPartnerGroups } from '../../services/supplyChainPartnerGroupsService.js';
@@ -185,10 +186,16 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
     if (error) throw error;
 
     const catalogMrp = variantKey ? await fetchVariantCatalogMrp(supabase, req.userId, variantKey) : null;
+    const covEligibility = variantKey
+      ? await resolveVariantProductCovEligibility(supabase, req.userId, variantKey)
+      : { eligible: false, status: 'missing', message: 'No product variant selected for Product_COV.' };
 
     return res.json({
       status: 'success',
       catalogMrp,
+      offerStatus: covEligibility.status,
+      covEligible: covEligibility.eligible === true,
+      covBlockedMessage: covEligibility.eligible ? '' : covEligibility.message,
       levels: (data || []).map((r) => {
         const parsedNotes = parseBcovNotes(r.notes);
         return {
@@ -222,6 +229,15 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
 
     if (!variantKey) {
       return res.status(400).json({ status: 'error', message: 'variantKey is required' });
+    }
+
+    const covEligibility = await resolveVariantProductCovEligibility(supabase, req.userId, variantKey);
+    if (!covEligibility.eligible) {
+      return res.status(403).json({
+        status: 'error',
+        code: 'product_cov_not_allowed',
+        message: covEligibility.message || 'Product_COV is not available for this product.'
+      });
     }
 
     const catalogMrp = await fetchVariantCatalogMrp(supabase, req.userId, variantKey);

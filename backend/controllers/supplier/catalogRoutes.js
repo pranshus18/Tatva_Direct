@@ -17,6 +17,15 @@ import {
   listSupplierSelectableBrands
 } from '../../services/supplierBrandCatalogService.js';
 import { resolveBrandApprovalStatus } from '../../services/brandApprovalService.js';
+import { isSupplierUserType } from '../../utils/notificationAudience.js';
+import { hasEffectiveRegisteredRole } from '../../utils/portalRoles.js';
+
+function isAuthenticatedSupplier(req) {
+  if (isSupplierUserType(req.user?.user_type)) return true;
+  if (isSupplierUserType(req.user?.profile?.userType)) return true;
+  return hasEffectiveRegisteredRole(req.user, 'supplier');
+}
+
 export function registerSupplierCatalogRoutes(ctx) {
   const {
     router,
@@ -47,7 +56,7 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       offset,
       legacyManualDiscoveryCategoryFilter: true
     });
-    const isSupplierUser = String(req.user?.user_type || '').trim().toLowerCase() === 'supplier';
+    const isSupplierUser = isAuthenticatedSupplier(req);
     const visibleSuggestions = isSupplierUser
       ? (result.suggestions || []).filter((s) => {
           const brandLabel = resolveUpstreamBrandLabel(
@@ -708,7 +717,7 @@ router.post('/units', authenticateToken, async (req, res) => {
 
 router.get('/brands/status', authenticateToken, async (req, res) => {
   try {
-    if (req.user?.user_type !== 'supplier') {
+    if (!isAuthenticatedSupplier(req)) {
       return res.status(403).json({ status: 'error', message: 'Only suppliers can check brand status' });
     }
 
@@ -744,7 +753,7 @@ router.get('/brands/status', authenticateToken, async (req, res) => {
 
 router.get('/brands/approved-catalog', authenticateToken, async (req, res) => {
   try {
-    if (req.user?.user_type !== 'supplier') {
+    if (!isAuthenticatedSupplier(req)) {
       return res.status(403).json({ status: 'error', message: 'Only suppliers can list brands' });
     }
 
@@ -765,7 +774,7 @@ router.get('/brands/approved-catalog', authenticateToken, async (req, res) => {
 
 router.get('/brands', authenticateToken, async (req, res) => {
   try {
-    if (req.user?.user_type !== 'supplier') {
+    if (!isAuthenticatedSupplier(req)) {
       return res.status(403).json({ status: 'error', message: 'Only suppliers can list brands' });
     }
 

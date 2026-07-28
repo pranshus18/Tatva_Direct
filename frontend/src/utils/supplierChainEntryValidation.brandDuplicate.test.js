@@ -30,4 +30,19 @@ describe('brand duplicate matching', () => {
   it('still treats Philips / Phillips spelling variants as the same brand', () => {
     expect(areBrandNamesExactDuplicates('Philips', 'Phillips')).toBe(true);
   });
+
+  it('matches approved catalog brands including near-typos like samsun → samsung', async () => {
+    const { findApprovedCatalogBrandMatch, formatApprovedCatalogBrandMatchMessage } = await import(
+      './supplierChainEntryValidation'
+    );
+    const match = findApprovedCatalogBrandMatch('samsun', [
+      { name: 'samsung', status: 'approved' },
+      { name: 'Stella', status: 'approved' }
+    ]);
+    expect(match?.name).toBe('samsung');
+    expect(match?.matchType).toMatch(/prefix|typo/);
+    expect(formatApprovedCatalogBrandMatchMessage('samsun', 'samsung')).toMatch(
+      /approved brands list/i
+    );
+  });
 });

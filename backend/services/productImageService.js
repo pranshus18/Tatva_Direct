@@ -12,9 +12,15 @@ export function mergeProductImageLists(...lists) {
 /**
  * Supplier portal / offer responses must show only this offer's photos when present.
  * Do not merge shared catalog history into the supplier's listing (that leaked "old" images
- * into add/edit flows). Fall back to catalog images only when the offer has none yet.
+ * into add/edit flows).
+ *
+ * An explicit array (including []) means the offer owns its image list — e.g. the supplier
+ * deleted every photo. Fall back to catalog only when offer images were never set (null/undefined).
  */
 export function resolveSupplierOfferDisplayImages(offerImages, catalogImages = []) {
+  if (Array.isArray(offerImages)) {
+    return sanitizeImageUrls(offerImages);
+  }
   const offer = sanitizeImageUrls(offerImages);
   if (offer.length > 0) return offer;
   return sanitizeImageUrls(catalogImages);

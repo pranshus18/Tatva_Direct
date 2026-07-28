@@ -46,6 +46,83 @@ export async function findBrandByCatalogDedupKey(brandName, dbClient, { excludeI
   return { data: best || null, error: null };
 }
 
+function brandNameEditDistance(left, right) {
+  const a = String(left || '');
+  const b = String(right || '');
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i += 1) {
+    let prevDiag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j += 1) {
+      const temp = prev[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, prevDiag + cost);
+      prevDiag = temp;
+    }
+  }
+  return prev[b.length];
+}
+
+/**
+ * Match a typed brand request against already-approved catalog brands
+ * (exact key, spelling variant, prefix, or near-typo).
+ */
+export async function findApprovedCatalogBrandCloseMatch(brandName, dbClient) {
+  const typedKey = catalogBrandDedupKey(brandName);
+  if (!typedKey) return { data: null, error: null, matchType: null };
+
+  const { data: rows, error } = await listAllBrands(dbClient);
+  if (error) return { data: null, error, matchType: null };
+
+  const approved = (rows || []).filter(
+    (row) => String(row?.status || '').toLowerCase() === 'approved'
+  );
+  if (approved.length === 0) return { data: null, error: null, matchType: null };
+
+  const withKeys = approved
+    .map((row) => ({
+      row,
+      key: catalogBrandDedupKey(row?.name || row?.normalized_name)
+    }))
+    .filter((item) => item.key);
+
+  const exact = withKeys.filter((item) => item.key === typedKey);
+  if (exact.length > 0) {
+    const [best] = sortBrandRowsForCanonicalPick(exact.map((item) => item.row));
+    return { data: best || null, error: null, matchType: 'exact' };
+  }
+
+  const prefixHits = withKeys.filter((item) => {
+    const shorter = typedKey.length <= item.key.length ? typedKey : item.key;
+    const longer = typedKey.length <= item.key.length ? item.key : typedKey;
+    return shorter.length >= 4 && longer.startsWith(shorter);
+  });
+  if (prefixHits.length > 0) {
+    const [best] = sortBrandRowsForCanonicalPick(prefixHits.map((item) => item.row));
+    return { data: best || null, error: null, matchType: 'prefix' };
+  }
+
+  let bestTypo = null;
+  for (const item of withKeys) {
+    const maxLen = Math.max(typedKey.length, item.key.length);
+    if (maxLen < 5) continue;
+    const distance = brandNameEditDistance(typedKey, item.key);
+    const allowed = maxLen >= 7 ? 2 : 1;
+    if (distance > allowed) continue;
+    if (!bestTypo || distance < bestTypo.distance) {
+      bestTypo = { row: item.row, distance };
+    }
+  }
+  if (bestTypo?.row) {
+    return { data: bestTypo.row, error: null, matchType: 'typo' };
+  }
+
+  return { data: null, error: null, matchType: null };
+}
+
 function sortBrandRowsForCanonicalPick(rows = []) {
   return [...rows].sort((a, b) => {
     const statusDiff =

@@ -22,6 +22,62 @@ export async function fetchVariantCatalogMrp(supabase, supplierId, variantKey) {
   return Number.isFinite(mrp) && mrp >= 0 ? mrp : null;
 }
 
+/**
+ * Whether this supplier offer may configure Product_COV / pricing levels.
+ * Rejected offers must be corrected and re-approved first.
+ */
+export async function resolveVariantProductCovEligibility(supabase, supplierId, variantKey) {
+  const key = String(variantKey || '').trim();
+  if (!key || !supplierId) {
+    return {
+      eligible: false,
+      status: 'missing',
+      message: 'No product variant selected for Product_COV.'
+    };
+  }
+
+  const { data, error } = await supabase
+    .from('supplier_products')
+    .select('id, status, is_active')
+    .eq('supplier_id', supplierId)
+    .eq('variant_key', key)
+    .order('updated_at', { ascending: false })
+    .limit(1);
+
+  if (error) {
+    return {
+      eligible: false,
+      status: 'unknown',
+      message: 'Could not verify product approval status for Product_COV.'
+    };
+  }
+
+  const offer = Array.isArray(data) && data.length > 0 ? data[0] : null;
+  if (!offer) {
+    return {
+      eligible: false,
+      status: 'missing',
+      message: 'No supplier offer found for this variant.'
+    };
+  }
+
+  const status = String(offer.status || '').trim().toLowerCase();
+  if (status === 'rejected') {
+    return {
+      eligible: false,
+      status: 'rejected',
+      message:
+        'This product is rejected. Correct it and wait for admin approval before configuring Product_COV.'
+    };
+  }
+
+  return {
+    eligible: true,
+    status: status || (offer.is_active ? 'approved' : 'pending'),
+    message: ''
+  };
+}
+
 export function validateAndNormalizeBcovLevels(levelsRaw = [], options = {}) {
   const catalogMrp =
     options.catalogMrp === null || options.catalogMrp === undefined

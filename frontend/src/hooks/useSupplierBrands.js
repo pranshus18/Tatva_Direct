@@ -19,15 +19,25 @@ export function useSupplierBrands({ source = 'profile' } = {}) {
       setError('');
       try {
         const token = localStorage.getItem('token');
+        if (!token) {
+          throw new Error('Please sign in again to load brands.');
+        }
         const endpoint =
           source === 'catalog' ? '/api/supplier/brands/approved-catalog' : '/api/supplier/brands';
         const res = await fetch(getApiUrl(endpoint), {
           headers: { Authorization: `Bearer ${token}` },
           cache: 'no-cache'
         });
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok || data.status !== 'success') {
-          throw new Error(data.message || 'Failed to load brands');
+          const apiMessage = String(data.message || '').trim();
+          // Authenticated suppliers should never see the raw role-gate message.
+          if (/only suppliers can list brands/i.test(apiMessage)) {
+            throw new Error(
+              'Could not load brands right now. Refresh the page, or use “Request a new brand instead”.'
+            );
+          }
+          throw new Error(apiMessage || 'Failed to load brands');
         }
         if (!cancelled) {
           setBrands(Array.isArray(data.brands) ? data.brands : []);

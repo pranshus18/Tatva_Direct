@@ -40,4 +40,15 @@ describe('productImages', () => {
       'https://cdn.example.com/only.jpg'
     ]);
   });
+
+  it('does not restore catalog images when offer images were explicitly cleared', () => {
+    const product = {
+      images: ['https://cdn.example.com/old-catalog.jpg'],
+      attributes: {
+        images: []
+      }
+    };
+    expect(getSupplierOfferImagesForForm(product)).toEqual([]);
+    expect(getProductImageList(product)).toEqual([]);
+  });
 });

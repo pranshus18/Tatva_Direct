@@ -108,6 +108,11 @@ function getSupplierApprovalStatus(product) {
   return 'pending';
 }
 
+/** ProductCOV / pricing setup is only for offers that are not rejected. */
+function isSupplierProductEligibleForProductCov(product) {
+  return getSupplierApprovalStatus(product) !== 'rejected';
+}
+
 function getSupplierRejectionReason(product) {
   return String(
     product?.rejectionReason ||
@@ -493,15 +498,23 @@ const ProductManagement = ({ user }) => {
           options.expectedStock ??
           parseSupplierStockQuantity(productData.stock) ??
           parseSupplierStockQuantity(data.product?.stock);
+        const savedImages = Array.isArray(productData.images)
+          ? productData.images
+          : Array.isArray(data.product?.images)
+            ? data.product.images
+            : [];
         const updatedProduct = {
           ...data.product,
           specifications: data.product.specifications || {},
           // Prefer images the supplier just saved so catalog extras never reappear in the list.
-          images: Array.isArray(productData.images)
-            ? productData.images
-            : Array.isArray(data.product?.images)
-              ? data.product.images
-              : [],
+          images: savedImages,
+          // Keep attributes.images in sync so thumbnails/forms do not revive deleted photos.
+          attributes: {
+            ...(data.product?.attributes && typeof data.product.attributes === 'object'
+              ? data.product.attributes
+              : {}),
+            ...(Array.isArray(productData.images) ? { images: savedImages } : {})
+          },
           ...(savedStock != null ? { stock: savedStock } : {})
         };
 
@@ -537,13 +550,22 @@ const ProductManagement = ({ user }) => {
           )
         );
 
+        // Confirm save before closing the modal / navigating away.
+        if (data.message === 'No changes detected') {
+          alert(data.message);
+          setEditingItem(null);
+          return;
+        }
+
+        const successMessage =
+          data.message && /pending admin approval/i.test(String(data.message))
+            ? data.message
+            : 'Product updated successfully! Your changes have been saved.';
+        alert(successMessage);
         setEditingItem(null);
 
-        // After inventory (step 2), go straight to ProductCOV (step 3)
-        if (
-          isInventoryView &&
-          data.message !== 'No changes detected'
-        ) {
+        // After inventory (step 2), continue to ProductCOV only when the offer is eligible.
+        if (isInventoryView && isSupplierProductEligibleForProductCov(updatedProduct)) {
           const nextBrand = String(
             data?.nextStep?.brand ||
               updatedProduct?.brandModel ||
@@ -564,10 +586,6 @@ const ProductManagement = ({ user }) => {
           if (nextProductName) params.set('productName', nextProductName);
           params.set('from', 'manage-inventory');
           navigate(`/supplier-bcov?${params.toString()}`);
-        } else if (data.message === 'No changes detected') {
-          alert(data.message);
-        } else {
-          alert('Product updated successfully!');
         }
 
         // Don't call fetchProducts() here as it might load stale data
@@ -582,13 +600,19 @@ const ProductManagement = ({ user }) => {
     }
   };
 
-  const handleDeleteProduct = async (supplierProductId) => {
-    // Show confirmation dialog
+  const handleDeleteProduct = async (supplierProductId, options = {}) => {
     const product = products.find((p) => matchSupplierOfferRow(p, supplierProductId));
     const productName = product?.name || 'this product';
-    
-    if (!window.confirm(`Are you sure you want to delete "${productName}"? This action cannot be undone.`)) {
-      return;
+    const isRejectedCatalogRemove =
+      options.fromRejectedCatalog === true ||
+      (!isInventoryView && getSupplierApprovalStatus(product) === 'rejected');
+
+    const confirmMessage = isRejectedCatalogRemove
+      ? `Remove "${productName}" from your catalog?\n\nThis rejected product will be permanently deleted from your catalog. This cannot be undone.`
+      : `Are you sure you want to delete "${productName}"? This action cannot be undone.`;
+
+    if (!window.confirm(confirmMessage)) {
+      return false;
     }
 
     try {
@@ -602,15 +626,20 @@ const ProductManagement = ({ user }) => {
       
       const data = await response.json();
       if (data.status === 'success') {
-        // Remove the product from the list
         setProducts((prev) => prev.filter((p) => !matchSupplierOfferRow(p, supplierProductId)));
-        alert('Product deleted successfully');
-      } else {
-        alert(data.message || 'Failed to delete product');
+        alert(
+          isRejectedCatalogRemove
+            ? 'Rejected product removed from your catalog.'
+            : 'Product deleted successfully'
+        );
+        return true;
       }
+      alert(data.message || 'Failed to delete product');
+      return false;
     } catch (error) {
       console.error('Failed to delete product:', error);
       alert('Failed to delete product. Please try again.');
+      return false;
     }
   };
 
@@ -884,91 +913,109 @@ const ProductManagement = ({ user }) => {
                         {displayBrand ? <span className="pd-card__brand">{displayBrand}</span> : null}
                       </div>
 
+                      {productStatus === 'rejected' ? (
+                        <div className="pm-card__rejection" role="status">
+                          <strong className="pm-card__rejection-title">Rejected</strong>
+                          <p className="pm-card__rejection-reason">
+                            {rejectionReason || status.notice}
+                          </p>
+                          <p className="pm-card__rejection-hint">
+                            Correct the product and resubmit for approval. Inventory and pricing apply after approval.
+                          </p>
+                        </div>
+                      ) : null}
+
                       {productStatus === 'pending' ? (
                         <p className="pm-card__notice">{status.notice}</p>
                       ) : null}
                       {productStatus === 'approved' && status.notice ? (
                         <p className="pm-card__notice pm-card__notice--success">{status.notice}</p>
                       ) : null}
-                      {(() => {
-                        const brandWarning = getBrandApprovalWarning(
-                          product.brandApprovalStatus,
-                          product.brand || product.brandModel,
-                          product.brandApprovalMessage
-                        );
-                        if (!brandWarning) return null;
-                        return (
-                          <p
-                            className={`pm-card__notice ${
-                              brandWarning.tone === 'danger' ? 'pm-card__notice--danger' : 'pm-card__notice--warning'
-                            }`}
-                          >
-                            {brandWarning.title}: {brandWarning.message}
-                          </p>
-                        );
-                      })()}
-                      {productStatus === 'rejected' ? (
-                        <p className="pm-card__notice pm-card__notice--danger">
-                          {rejectionReason
-                            ? `Rejected: ${rejectionReason}`
-                            : status.notice}
-                        </p>
-                      ) : null}
-                      {product.catalogMissing ? (
+                      {productStatus !== 'rejected'
+                        ? (() => {
+                            const brandWarning = getBrandApprovalWarning(
+                              product.brandApprovalStatus,
+                              product.brand || product.brandModel,
+                              product.brandApprovalMessage
+                            );
+                            if (!brandWarning) return null;
+                            return (
+                              <p
+                                className={`pm-card__notice ${
+                                  brandWarning.tone === 'danger'
+                                    ? 'pm-card__notice--danger'
+                                    : 'pm-card__notice--warning'
+                                }`}
+                              >
+                                {brandWarning.title}: {brandWarning.message}
+                              </p>
+                            );
+                          })()
+                        : null}
+                      {product.catalogMissing && productStatus !== 'rejected' ? (
                         <p className="pm-card__notice">
                           Catalog record unavailable. Your offer is still listed with status{' '}
                           {status.label}.
                         </p>
                       ) : null}
 
-                      <div className="pd-card__details">
-                        {inventoryConfigured && Number(product.price) > 0 ? (
-                          <span className="pd-card__price">
-                            {formatRupeePerUnit(product.price, product.unit)}
-                          </span>
-                        ) : !inventoryConfigured ? (
-                          <span className="pd-card__price pd-card__price--pending">
-                            {SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
-                          </span>
-                        ) : (
-                          <span className="pd-card__price pd-card__price--na">MRP not set</span>
-                        )}
-
-                        <div className="pd-card__meta-row">
-                          {product.unit ? (
-                            <span className="pd-card__meta-item">Unit: {product.unit}</span>
-                          ) : null}
-                          {moq > 1 ? <span className="pd-card__meta-item">MOQ: {moq}</span> : null}
-                          {inventoryConfigured ? (
-                            <>
-                              <span
-                                className={`pd-card__stock ${
-                                  inStock ? 'pd-card__stock--in' : 'pd-card__stock--out'
-                                }`}
-                              >
-                                {formatSupplierStockAvailability(product.stock)}
-                              </span>
-                              {stockHealth === 'low' ? (
-                                <span className="pd-card__meta-item pm-card__meta-warn">Low stock</span>
-                              ) : null}
-                            </>
-                          ) : null}
-                        </div>
-
-                        {product.location ? (
-                          <div className="pd-card__location">
-                            <MapPin size={13} />
-                            <span>{product.location}</span>
-                          </div>
-                        ) : null}
-
-                        {product.asin || variantCode ? (
-                          <div className="pm-card__codes">
+                      {productStatus === 'rejected' ? (
+                        product.asin || variantCode ? (
+                          <div className="pm-card__codes pm-card__codes--muted">
                             {product.asin ? <span>TSIN {product.asin}</span> : null}
                             {variantCode ? <span>Variant {variantCode}</span> : null}
                           </div>
-                        ) : null}
-                      </div>
+                        ) : null
+                      ) : (
+                        <div className="pd-card__details">
+                          {inventoryConfigured && Number(product.price) > 0 ? (
+                            <span className="pd-card__price">
+                              {formatRupeePerUnit(product.price, product.unit)}
+                            </span>
+                          ) : !inventoryConfigured ? (
+                            <span className="pd-card__price pd-card__price--pending">
+                              {SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
+                            </span>
+                          ) : (
+                            <span className="pd-card__price pd-card__price--na">MRP not set</span>
+                          )}
+
+                          <div className="pd-card__meta-row">
+                            {product.unit ? (
+                              <span className="pd-card__meta-item">Unit: {product.unit}</span>
+                            ) : null}
+                            {moq > 1 ? <span className="pd-card__meta-item">MOQ: {moq}</span> : null}
+                            {inventoryConfigured ? (
+                              <>
+                                <span
+                                  className={`pd-card__stock ${
+                                    inStock ? 'pd-card__stock--in' : 'pd-card__stock--out'
+                                  }`}
+                                >
+                                  {formatSupplierStockAvailability(product.stock)}
+                                </span>
+                                {stockHealth === 'low' ? (
+                                  <span className="pd-card__meta-item pm-card__meta-warn">Low stock</span>
+                                ) : null}
+                              </>
+                            ) : null}
+                          </div>
+
+                          {product.location ? (
+                            <div className="pd-card__location">
+                              <MapPin size={13} />
+                              <span>{product.location}</span>
+                            </div>
+                          ) : null}
+
+                          {product.asin || variantCode ? (
+                            <div className="pm-card__codes">
+                              {product.asin ? <span>TSIN {product.asin}</span> : null}
+                              {variantCode ? <span>Variant {variantCode}</span> : null}
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
                     </button>
                   </div>
 
@@ -978,21 +1025,33 @@ const ProductManagement = ({ user }) => {
                     </span>
                     <div className="pm-card__actions">
                       {product.variantKey ? (
-                        <button
-                          type="button"
-                          className="pm-card__action-btn"
-                          onClick={() => {
-                            const params = new URLSearchParams();
-                            params.set('variantKey', product.variantKey);
-                            if (variantCode) params.set('variantAsin', variantCode);
-                            if (product.name) params.set('variantName', product.name);
-                            if (product.brand) params.set('brand', product.brand);
-                            navigate(`/supplier-bcov?${params.toString()}`);
-                          }}
-                          title="ProductCOV"
-                        >
-                          <Wallet size={15} />
-                        </button>
+                        isSupplierProductEligibleForProductCov(product) ? (
+                          <button
+                            type="button"
+                            className="pm-card__action-btn"
+                            onClick={() => {
+                              const params = new URLSearchParams();
+                              params.set('variantKey', product.variantKey);
+                              if (variantCode) params.set('variantAsin', variantCode);
+                              if (product.name) params.set('variantName', product.name);
+                              if (product.brand) params.set('brand', product.brand);
+                              navigate(`/supplier-bcov?${params.toString()}`);
+                            }}
+                            title="ProductCOV"
+                          >
+                            <Wallet size={15} />
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="pm-card__action-btn pm-card__action-btn--disabled"
+                            disabled
+                            title="ProductCOV unavailable while rejected. Correct the product and get approval first."
+                            aria-label="ProductCOV unavailable while rejected"
+                          >
+                            <Wallet size={15} />
+                          </button>
+                        )
                       ) : null}
                       {isInventoryView ? (
                         <>
@@ -1035,6 +1094,22 @@ const ProductManagement = ({ user }) => {
                           >
                             <Eye size={15} />
                           </button>
+                          {productStatus === 'rejected' ? (
+                            <button
+                              type="button"
+                              className="pm-card__action-btn pm-card__action-btn--danger"
+                              onClick={() =>
+                                handleDeleteProduct(
+                                  getSupplierOfferRowId(product) || product.id || product._id,
+                                  { fromRejectedCatalog: true }
+                                )
+                              }
+                              title="Remove rejected product from catalog"
+                              aria-label={`Remove ${product.name || 'rejected product'} from catalog`}
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          ) : null}
                         </>
                       )}
                     </div>
@@ -1092,7 +1167,7 @@ const ProductManagement = ({ user }) => {
           product={editingItem}
           showInventoryFields={isInventoryView}
           onClose={() => setEditingItem(null)}
-          onSave={(data) => {
+          onSave={async (data) => {
             const productId = getSupplierOfferRowId(editingItem);
             if (!productId) {
               alert(
@@ -1108,7 +1183,7 @@ const ProductManagement = ({ user }) => {
                 alert(result.error);
                 return;
               }
-              handleUpdateProduct(productId, result.payload, {
+              await handleUpdateProduct(productId, result.payload, {
                 expectedStock: result.payload.stock
               });
               return;
@@ -1138,7 +1213,7 @@ const ProductManagement = ({ user }) => {
               alert(formatSupplierProductValidationMessage(catalogMissing));
               return;
             }
-            handleUpdateProduct(productId, catalogPayload);
+            await handleUpdateProduct(productId, catalogPayload);
           }}
         />
       )}
@@ -1157,6 +1232,16 @@ const ProductManagement = ({ user }) => {
                 }
               : undefined
           }
+          onRemoveRejected={
+            !isInventoryView && getSupplierApprovalStatus(viewingItem) === 'rejected'
+              ? async (item) => {
+                  const offerId = getSupplierOfferRowId(item) || item.id || item._id;
+                  if (!offerId) return;
+                  const removed = await handleDeleteProduct(offerId, { fromRejectedCatalog: true });
+                  if (removed) setViewingItem(null);
+                }
+              : undefined
+          }
         />
       )}
     </div>
@@ -1169,6 +1254,7 @@ const ProductDetailsModal = ({
   specificationsReadOnly = false,
   onClose,
   onEdit,
+  onRemoveRejected,
   onSaveSpecifications
 }) => {
   const detailsNavigate = useNavigate();
@@ -1370,25 +1456,36 @@ const ProductDetailsModal = ({
         <div className="modal-header">
           <h2>{product.name || 'Product details'}</h2>
           <div className="modal-actions">
-            {product?.variantKey && (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => {
-                  const params = new URLSearchParams();
-                  params.set('variantKey', product.variantKey);
-                  if (product.variantAsin || product.variant_asin) {
-                    params.set('variantAsin', product.variantAsin || product.variant_asin);
-                  }
-                  if (product.name) params.set('variantName', product.name);
-                  if (product.brand) params.set('brand', product.brand);
-                  detailsNavigate(`/supplier-bcov?${params.toString()}`);
-                }}
-                style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}
-              >
-                ProductCOV
-              </button>
-            )}
+            {product?.variantKey ? (
+              isSupplierProductEligibleForProductCov(product) ? (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => {
+                    const params = new URLSearchParams();
+                    params.set('variantKey', product.variantKey);
+                    if (product.variantAsin || product.variant_asin) {
+                      params.set('variantAsin', product.variantAsin || product.variant_asin);
+                    }
+                    if (product.name) params.set('variantName', product.name);
+                    if (product.brand) params.set('brand', product.brand);
+                    detailsNavigate(`/supplier-bcov?${params.toString()}`);
+                  }}
+                  style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}
+                >
+                  ProductCOV
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  disabled
+                  title="ProductCOV unavailable while rejected. Correct the product and get approval first."
+                >
+                  ProductCOV unavailable
+                </button>
+              )
+            ) : null}
             {canEditInventory ? (
               <button
                 type="button"
@@ -1397,6 +1494,17 @@ const ProductDetailsModal = ({
               >
                 <Edit size={16} />
                 Edit Inventory
+              </button>
+            ) : null}
+            {onRemoveRejected ? (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => onRemoveRejected(product)}
+                style={{ color: '#b91c1c', borderColor: '#fecaca' }}
+              >
+                <Trash2 size={16} />
+                Remove from catalog
               </button>
             ) : null}
             <button type="button" className="btn-icon" onClick={onClose}>

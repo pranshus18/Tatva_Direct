@@ -5,6 +5,8 @@ import SupplierSupplyChainEntriesEditor from '../components/SupplierSupplyChainE
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
 import {
   brandKeyForDuplicateCheck,
+  findApprovedCatalogBrandMatch,
+  formatApprovedCatalogBrandMatchMessage,
   validateUniqueBrandsAcrossEntries
 } from '../utils/supplierChainEntryValidation';
 import { validateSelectYourselfChainEntries } from '../utils/supplierSelectYourselfValidation';
@@ -724,6 +726,23 @@ export default function SupplierSelectYourself() {
       )
     ];
 
+    // Block brand requests that match the approved catalog master (including near-typos).
+    // Suppliers must choose the existing approved brand from the list instead.
+    for (const brandName of brandsBeingSaved) {
+      const catalogMatch = findApprovedCatalogBrandMatch(brandName, catalogBrands);
+      if (!catalogMatch?.name) continue;
+      const isLiteralCatalogPick = (Array.isArray(catalogBrands) ? catalogBrands : []).some(
+        (item) => {
+          const name = typeof item === 'string' ? item : item?.name;
+          return String(name || '').trim().toLowerCase() === brandName.toLowerCase();
+        }
+      );
+      if (isLiteralCatalogPick) continue;
+      alert(formatApprovedCatalogBrandMatchMessage(brandName, catalogMatch.name));
+      setBrandSectionExpanded(true);
+      return;
+    }
+
     try {
       setSavingBrandApproval(true);
       const token = localStorage.getItem('token');
@@ -752,31 +771,82 @@ export default function SupplierSelectYourself() {
       }
 
       const requestSource = nextProfile?.supplierBrandRequests || profile?.supplierBrandRequests || [];
+      const approvedCatalogKeys = new Set(
+        (Array.isArray(catalogBrands) ? catalogBrands : [])
+          .filter((item) => {
+            const status =
+              typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
+            return status === 'approved';
+          })
+          .map((item) => brandKeyForDuplicateCheck(typeof item === 'string' ? item : item?.name))
+          .filter(Boolean)
+      );
+      const adminApprovedKeys = new Set(
+        (Array.isArray(nextProfile?.adminApprovedBrands)
+          ? nextProfile.adminApprovedBrands
+          : Array.isArray(profile?.adminApprovedBrands)
+            ? profile.adminApprovedBrands
+            : []
+        )
+          .map((item) =>
+            brandKeyForDuplicateCheck(typeof item === 'string' ? item : item?.name)
+          )
+          .filter(Boolean)
+      );
+
       const submittedRows = brandsBeingSaved.map((brandName) => {
         const request = findSupplierBrandRequest(brandName, requestSource);
+        const brandKey = brandKeyForDuplicateCheck(brandName);
+        const alreadyApproved =
+          (brandKey &&
+            (approvedCatalogKeys.has(brandKey) ||
+              adminApprovedKeys.has(brandKey) ||
+              effectiveApprovedBrands.some(
+                (row) => brandKeyForDuplicateCheck(row?.name) === brandKey
+              ))) ||
+          String(request?.status || '').toLowerCase() === 'approved';
+        // Prefer real request status; never default catalog-approved brands to pending.
+        const status = alreadyApproved
+          ? 'approved'
+          : String(request?.status || (data.brandApprovalRequested ? 'pending' : 'approved')).toLowerCase();
         return {
           name: brandName,
-          status: String(request?.status || 'pending').toLowerCase(),
-          submittedAt: request?.submittedAt || request?.requestedAt || new Date().toISOString()
+          status,
+          submittedAt: request?.submittedAt || request?.requestedAt || null
         };
       });
-      const pendingRows = submittedRows.filter((row) => row.status === 'pending' || !row.status);
+      const pendingRows = submittedRows.filter((row) => row.status === 'pending');
       const approvedRows = submittedRows.filter((row) => row.status === 'approved');
 
-      if (pendingRows.length > 0) {
+      // API flags win when the server already classified this save.
+      if (data.brandAlreadyApproved && pendingRows.length === 0) {
+        setBrandSubmissionNotice({
+          tone: 'success',
+          title: approvedRows.length === 1
+            ? `"${approvedRows[0].name}" is already approved`
+            : 'Selected brands are already approved',
+          brands: approvedRows.length > 0 ? approvedRows : submittedRows,
+          submittedAt: null,
+          message:
+            data.message ||
+            'This brand is already approved by admin. You can continue with supply-chain role selection in Step 2.'
+        });
+      } else if (data.brandApprovalRequested || pendingRows.length > 0) {
+        const rowsForNotice = pendingRows.length > 0 ? pendingRows : submittedRows;
         const submittedAt =
-          pendingRows.find((row) => row.submittedAt)?.submittedAt || new Date().toISOString();
+          rowsForNotice.find((row) => row.submittedAt)?.submittedAt || new Date().toISOString();
         setBrandSubmissionNotice({
           tone: 'pending',
-          title: pendingRows.length === 1
-            ? `Brand request submitted for "${pendingRows[0].name}"`
-            : `${pendingRows.length} brand requests submitted`,
-          brands: pendingRows,
+          title: rowsForNotice.length === 1
+            ? `Brand request submitted for "${rowsForNotice[0].name}"`
+            : `${rowsForNotice.length} brand requests submitted`,
+          brands: rowsForNotice,
           submittedAt,
           message:
-            pendingRows.length === 1
+            data.message ||
+            (rowsForNotice.length === 1
               ? 'Your brand request was sent for admin approval. You can track it below in Brand status.'
-              : 'Your brand requests were sent for admin approval. You can track each one below in Brand status.'
+              : 'Your brand requests were sent for admin approval. You can track each one below in Brand status.')
         });
         setBrandSectionExpanded(true);
       } else if (approvedRows.length > 0) {

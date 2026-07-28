@@ -128,9 +128,6 @@ router.get('/products', authenticateToken, async (req, res) => {
                 ? String(attributes.name).trim()
                 : 'Product');
         const displayBrand = attributes?.brand || baseProduct?.brand || '';
-        const offerImages = sanitizeImageUrls(attributes?.images);
-        const baseImages = sanitizeImageUrls(baseProduct?.images);
-
         const effective = resolveEffectiveSupplierOfferState(sp, baseProduct);
         const rejectionReason =
           sp.rejection_reason ||
@@ -157,7 +154,8 @@ router.get('/products', authenticateToken, async (req, res) => {
           gtin: attributes?.gtin || baseProduct?.gtin,
           mpn: attributes?.mpn || baseProduct?.mpn,
           specifications: storedSpecs,
-          images: resolveSupplierOfferDisplayImages(offerImages, baseImages),
+          // Pass raw attributes.images so an explicit [] (deleted photos) is not treated as "unset".
+          images: resolveSupplierOfferDisplayImages(attributes?.images, baseProduct?.images),
           price: sp.price,
           stock: parseSupplierStockQuantity(sp.stock) ?? 0,
           igst_rate: sp.igst_rate ?? attributes?.igstRate ?? null,

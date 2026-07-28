@@ -4,7 +4,7 @@ import { getApiUrl } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
 import BrandSelect from './BrandSelect';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
-import { brandKeyForDuplicateCheck } from '../utils/supplierChainEntryValidation';
+import { brandKeyForDuplicateCheck, findApprovedCatalogBrandMatch, formatApprovedCatalogBrandMatchMessage } from '../utils/supplierChainEntryValidation';
 import {
   formatSupplyChainRoleLabel,
   getApprovedRoleForEntry,
@@ -205,6 +205,14 @@ const CompanyInfoEntryCard = ({
     !!selectedBrand &&
     catalogBrandNames.some((name) => name.toLowerCase() === selectedBrand.toLowerCase());
   const brandNameEditable = editing && (!useBrandNameTextInput || !catalogBrandSelected);
+  const hasBrandValue = !!selectedBrand;
+  const approvedCatalogMatch =
+    useBrandNameTextInput && hasBrandValue && !catalogBrandSelected
+      ? findApprovedCatalogBrandMatch(selectedBrand, catalogBrandNames)
+      : null;
+  const approvedCatalogMatchMessage = approvedCatalogMatch?.name
+    ? formatApprovedCatalogBrandMatchMessage(selectedBrand, approvedCatalogMatch.name)
+    : '';
   const roleLabel = SUPPLY_CHAIN_ROLE_OPTIONS.find((o) => o.value === entry.role)?.label || null;
   const brandDocUrls = resolveBrandApprovalDocumentUrls(entry);
   const roleDocUrls = resolveRoleVerificationDocumentUrls(entry);
@@ -214,7 +222,6 @@ const CompanyInfoEntryCard = ({
   const isBrandOnlyStep = sectionView === 'brand';
   const isSupplyChainOnlyStep = sectionView === 'form';
   const hasResolvedChainRoles = availableRoleOptions.length > 0;
-  const hasBrandValue = !!selectedBrand;
   const currentRoleValue = String(entry.role || '').trim();
   const roleSelectOptions = (() => {
     const opts = Array.isArray(availableRoleOptions) ? [...availableRoleOptions] : [];
@@ -229,11 +236,19 @@ const CompanyInfoEntryCard = ({
   const brandRequestStatus = String(brandRequest?.status || '').toLowerCase();
   const brandRequestSubmittedAt = brandRequest?.submittedAt || brandRequest?.requestedAt || null;
   const brandOnlyPendingSubmitted =
-    isBrandOnlyStep && hasBrandValue && !catalogBrandSelected && brandRequestStatus === 'pending';
+    isBrandOnlyStep &&
+    hasBrandValue &&
+    !catalogBrandSelected &&
+    !approvedCatalogMatchMessage &&
+    brandRequestStatus === 'pending';
   const brandOnlyRejected =
     isBrandOnlyStep && hasBrandValue && brandRequestStatus === 'rejected';
   const brandOnlyReadyToSubmit =
-    isBrandOnlyStep && hasBrandValue && !catalogBrandSelected && !brandRequest;
+    isBrandOnlyStep &&
+    hasBrandValue &&
+    !catalogBrandSelected &&
+    !approvedCatalogMatchMessage &&
+    !brandRequest;
   const brandStatus = String(
     brandMeta?.status ||
       brandRequestStatus ||
@@ -245,13 +260,15 @@ const CompanyInfoEntryCard = ({
       ? 'neutral'
       : brandOnlyApproved || brandRequestStatus === 'approved'
         ? 'success'
-        : brandOnlyPendingSubmitted
-          ? 'warning'
-          : brandOnlyRejected
-            ? 'danger'
-            : brandOnlyReadyToSubmit
-              ? 'neutral'
-              : 'neutral'
+        : approvedCatalogMatchMessage
+          ? 'danger'
+          : brandOnlyPendingSubmitted
+            ? 'warning'
+            : brandOnlyRejected
+              ? 'danger'
+              : brandOnlyReadyToSubmit
+                ? 'neutral'
+                : 'neutral'
     : brandStatus === 'approved' && chainDefined
       ? 'success'
       : brandStatus === 'pending'
@@ -264,13 +281,15 @@ const CompanyInfoEntryCard = ({
       ? 'Select a brand first'
       : brandOnlyApproved || brandRequestStatus === 'approved'
         ? 'Approved by admin'
-        : brandOnlyPendingSubmitted
-          ? 'Request submitted'
-          : brandOnlyRejected
-            ? 'Rejected by admin'
-            : brandOnlyReadyToSubmit
-              ? 'Ready to submit for approval'
-              : 'Not requested yet'
+        : approvedCatalogMatchMessage
+          ? 'Choose approved brand'
+          : brandOnlyPendingSubmitted
+            ? 'Request submitted'
+            : brandOnlyRejected
+              ? 'Rejected by admin'
+              : brandOnlyReadyToSubmit
+                ? 'Ready to submit for approval'
+                : 'Not requested yet'
     : !hasBrandValue
       ? 'Select a brand first'
       : brandStatus === 'approved' && chainDefined
@@ -287,7 +306,9 @@ const CompanyInfoEntryCard = ({
     if (hasBrandValue && resolvedBrandName) {
       lines.push(resolvedBrandName);
     }
-    if (brandOnlyPendingSubmitted || (!isBrandOnlyStep && brandStatus === 'pending')) {
+    if (approvedCatalogMatchMessage) {
+      lines.push(approvedCatalogMatchMessage);
+    } else if (brandOnlyPendingSubmitted || (!isBrandOnlyStep && brandStatus === 'pending')) {
       lines.push('Waiting for admin approval.');
       if (brandRequestSubmittedAt) {
         lines.push(`Submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`);
@@ -480,15 +501,21 @@ const CompanyInfoEntryCard = ({
                     placeholder="Enter your brand name for admin approval"
                     required={editing}
                     aria-required="true"
-                    aria-invalid={duplicateBrandMessage ? 'true' : undefined}
+                    aria-invalid={duplicateBrandMessage || approvedCatalogMatchMessage ? 'true' : undefined}
                   />
                   {duplicateBrandMessage ? (
                     <p className="chain-field__error" role="alert">
                       {duplicateBrandMessage}
                     </p>
+                  ) : approvedCatalogMatchMessage ? (
+                    <p className="chain-field__error" role="alert">
+                      {approvedCatalogMatchMessage}
+                    </p>
                   ) : null}
                   <p className="chain-field__sublabel">
-                    Type the brand name when requesting admin approval for a brand not in the list.
+                    {approvedCatalogMatchMessage
+                      ? 'Use “Choose from approved brands instead” and select the matching brand.'
+                      : 'Type the brand name when requesting admin approval for a brand not in the list.'}
                   </p>
                 </div>
                 ) : brandPickerAtTop && selectedBrand ? (

@@ -381,6 +381,45 @@
   background: #ecfdf5;
 }
 
+.pm-card__rejection {
+  margin: 0.15rem 0 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+}
+
+.pm-card__rejection-title {
+  display: block;
+  margin: 0 0 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #991b1b;
+}
+
+.pm-card__rejection-reason {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #b91c1c;
+}
+
+.pm-card__rejection-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: #9f1239;
+  opacity: 0.9;
+}
+
+.pm-card__codes--muted {
+  margin-top: 0.45rem;
+  opacity: 0.65;
+}
+
 .pm-brand-approval-warning {
   margin: 0.55rem 0 0;
   padding: 0.65rem 0.75rem;
@@ -455,6 +494,20 @@
   background: var(--pm-surface-muted);
   border-color: var(--pm-border-strong);
   color: var(--pm-text);
+}
+
+.pm-card__action-btn:disabled,
+.pm-card__action-btn--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
+
+.pm-card__action-btn:disabled:hover,
+.pm-card__action-btn--disabled:hover {
+  background: var(--pm-surface);
+  border-color: var(--pm-border);
+  color: var(--pm-text-muted);
 }
 
 .pm-card__action-btn--danger:hover {

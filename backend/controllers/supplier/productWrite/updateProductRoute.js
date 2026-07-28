@@ -289,6 +289,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
           supplier_product_id: updatedSupplierProduct.id,
           variantKey: updatedSupplierProduct.variant_key,
           variantAsin: updatedSupplierProduct.variant_asin,
+          attributes: updatedSupplierProduct.attributes || {},
           images: resolveSupplierOfferDisplayImages(
             updatedSupplierProduct.attributes?.images,
             baseProduct?.images

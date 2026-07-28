@@ -1,6 +1,12 @@
-import { catalogBrandDedupKey, normalizeBrandKey } from './supplyChainSharedService.js';
+import {
+  catalogBrandDedupKey,
+  findCategorySupplyChainRowForBrandKey,
+  normalizeBrandKey,
+  normalizeChainRolesFromStages
+} from './supplyChainSharedService.js';
 import {
   findBrandByCatalogDedupKey,
+  findApprovedCatalogBrandCloseMatch,
   getCanonicalBrandNormalizedName,
   pickCanonicalBrandDisplayName
 } from './brandDedupService.js';
@@ -10,6 +16,76 @@ import {
   updateBrandById
 } from '../repositories/brandsRepository.js';
 import { insertNotification } from '../repositories/notificationsRepository.js';
+
+/**
+ * Brands with an admin-defined supply chain are already offered in the approved catalog.
+ * Keep the brands table in sync so Save brand does not re-open a pending request.
+ */
+async function approveBrandWhenAdminSupplyChainExists({
+  supabase,
+  brandName,
+  normalized,
+  brandRow,
+  requesterUserId
+}) {
+  try {
+    const { data: chainRows, error } = await supabase
+      .from('category_supply_chains')
+      .select('category_name, stages, updated_at');
+    if (error) return null;
+
+    const chainRow =
+      findCategorySupplyChainRowForBrandKey(chainRows, catalogBrandDedupKey(brandName) || normalized) ||
+      findCategorySupplyChainRowForBrandKey(chainRows, normalized) ||
+      findCategorySupplyChainRowForBrandKey(chainRows, brandName);
+    const roles = normalizeChainRolesFromStages(chainRow?.stages);
+    if (!chainRow?.category_name || roles.length === 0) return null;
+
+    const nowIso = new Date().toISOString();
+    const displayName = pickCanonicalBrandDisplayName(
+      brandRow?.name,
+      chainRow.category_name,
+      brandName
+    );
+    const canonicalNormalized =
+      getCanonicalBrandNormalizedName(displayName) || normalized;
+
+    if (brandRow?.id) {
+      const { data: updated, error: upErr } = await updateBrandById(
+        brandRow.id,
+        {
+          name: displayName,
+          normalized_name: canonicalNormalized,
+          status: 'approved',
+          approved_at: nowIso,
+          updated_at: nowIso,
+          rejection_reason: null
+        },
+        supabase
+      );
+      if (!upErr && updated) return updated;
+      return null;
+    }
+
+    const { data: createdApproved, error: createApprovedErr } = await createBrand(
+      {
+        name: displayName,
+        normalized_name: canonicalNormalized,
+        status: 'approved',
+        requested_by: requesterUserId || null,
+        requested_at: nowIso,
+        approved_at: nowIso,
+        created_at: nowIso,
+        updated_at: nowIso
+      },
+      supabase
+    );
+    if (!createApprovedErr && createdApproved) return createdApproved;
+  } catch (_e) {
+    return null;
+  }
+  return null;
+}
 
 export async function notifySupplierBrandRejected({ supabase, brand, reason }) {
   const brandName = String(brand?.name || '').trim() || 'Brand';
@@ -149,6 +225,35 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
   }
 
   if (!brandRow) {
+    // Prefer approving immediately when the brand is already in the admin catalog / supply chain.
+    const chainApprovedMissing = await approveBrandWhenAdminSupplyChainExists({
+      supabase,
+      brandName: name,
+      normalized,
+      brandRow: null,
+      requesterUserId
+    });
+    if (chainApprovedMissing) {
+      return { ok: true, brand: chainApprovedMissing };
+    }
+
+    // Block new approval requests when an approved catalog brand already matches
+    // (including near-typos like "samsun" → "Samsung").
+    const catalogMatch = await findApprovedCatalogBrandCloseMatch(name, supabase);
+    if (catalogMatch.data && String(catalogMatch.data.status || '').toLowerCase() === 'approved') {
+      const matchedName = String(catalogMatch.data.name || name).trim() || name;
+      const typedLooksDifferent =
+        getCanonicalBrandNormalizedName(name) !== getCanonicalBrandNormalizedName(matchedName);
+      return {
+        ok: false,
+        code: 'brand_already_in_approved_catalog',
+        message: typedLooksDifferent
+          ? `"${name}" looks like approved brand "${matchedName}". Choose "${matchedName}" from the approved brands list instead of requesting a new brand.`
+          : `"${matchedName}" is already an approved brand. Choose it from the approved brands list instead of requesting a new brand.`,
+        brand: catalogMatch.data
+      };
+    }
+
     const nowIso = new Date().toISOString();
     const displayName = pickCanonicalBrandDisplayName(name);
     const { data: created, error: insertError } = await createBrand({
@@ -173,9 +278,43 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     }
   }
 
-  const status = String(brandRow?.status || 'pending');
+  const status = String(brandRow?.status || 'pending').toLowerCase();
   if (status === 'approved') {
     return { ok: true, brand: brandRow };
+  }
+
+  // If lookup found a non-approved row but an approved catalog spelling/near-match exists,
+  // do not open another pending request — send the supplier back to the approved list.
+  const catalogMatchExisting = await findApprovedCatalogBrandCloseMatch(name, supabase);
+  if (
+    catalogMatchExisting.data &&
+    String(catalogMatchExisting.data.status || '').toLowerCase() === 'approved' &&
+    String(catalogMatchExisting.data.id || '') !== String(brandRow?.id || '')
+  ) {
+    const matchedName = String(catalogMatchExisting.data.name || name).trim() || name;
+    const typedLooksDifferent =
+      getCanonicalBrandNormalizedName(name) !== getCanonicalBrandNormalizedName(matchedName);
+    return {
+      ok: false,
+      code: 'brand_already_in_approved_catalog',
+      message: typedLooksDifferent
+        ? `"${name}" looks like approved brand "${matchedName}". Choose "${matchedName}" from the approved brands list instead of requesting a new brand.`
+        : `"${matchedName}" is already an approved brand. Choose it from the approved brands list instead of requesting a new brand.`,
+      brand: catalogMatchExisting.data
+    };
+  }
+
+  // Catalog already lists brands that have an admin supply chain as approved.
+  // Sync the brands row so Save brand does not falsely open a pending request.
+  const chainApproved = await approveBrandWhenAdminSupplyChainExists({
+    supabase,
+    brandName: name,
+    normalized,
+    brandRow,
+    requesterUserId
+  });
+  if (chainApproved) {
+    return { ok: true, brand: chainApproved };
   }
 
   // Re-submit flow: if admin previously rejected this brand and supplier tries again,
@@ -259,21 +398,21 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     }
   }
 
+  const finalStatus = String(brandRow?.status || 'pending').toLowerCase();
   return {
     ok: false,
     code:
-      String(brandRow?.status || '').toLowerCase() === 'pending' ||
-      String(brandRow?.status || '').toLowerCase() === 'rejected'
-        ? String(brandRow?.status || '').toLowerCase() === 'rejected'
-          ? 'brand_approval_required'
-          : 'brand_approval_pending'
-        : 'brand_approval_required',
+      finalStatus === 'rejected'
+        ? 'brand_approval_required'
+        : finalStatus === 'pending'
+          ? 'brand_approval_pending'
+          : 'brand_approval_required',
     message:
-      String(brandRow?.status || '').toLowerCase() === 'rejected'
+      finalStatus === 'rejected'
         ? `Brand "${brandRow?.name || name}" was rejected by admin. Please use another brand or request approval again.`
-        : String(brandRow?.status || '').toLowerCase() === 'pending'
+        : finalStatus === 'pending'
           ? `Brand approval pending for "${brandRow?.name || name}". Wait for admin approval before submitting products.`
-        : `Brand approval required for "${brandRow?.name || name}". Please wait for approval before adding products.`,
+          : `Brand approval required for "${brandRow?.name || name}". Please wait for approval before adding products.`,
     brand: brandRow
   };
 }

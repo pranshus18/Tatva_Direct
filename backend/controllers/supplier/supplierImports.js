@@ -99,6 +99,7 @@ export { insertNotification, insertNotifications } from '../../repositories/noti
 export { findAdmins, findUserBasicById } from '../../repositories/usersRepository.js';
 export {
   fetchVariantCatalogMrp,
+  resolveVariantProductCovEligibility,
   validateAndNormalizeBcovLevels
 } from '../../services/supplierBcovService.js';
 export {

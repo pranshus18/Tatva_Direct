@@ -115,6 +115,8 @@ const SupplierBCOV = () => {
   const [saveMessage, setSaveMessage] = useState('');
   const [isStepCompleted, setIsStepCompleted] = useState(false);
   const [catalogMrp, setCatalogMrp] = useState(null);
+  const [covEligible, setCovEligible] = useState(true);
+  const [covBlockedMessage, setCovBlockedMessage] = useState('');
 
   const { variantKey, variantAsin, variantName } = useMemo(() => {
     const params = new URLSearchParams(location.search || '');
@@ -151,6 +153,16 @@ const SupplierBCOV = () => {
             ? null
             : Number(data.catalogMrp);
         setCatalogMrp(Number.isFinite(mrp) && mrp >= 0 ? mrp : null);
+        const eligible = data.covEligible !== false;
+        setCovEligible(eligible);
+        setCovBlockedMessage(
+          eligible
+            ? ''
+            : String(
+                data.covBlockedMessage ||
+                  'This product is not eligible for Product_COV configuration yet.'
+              )
+        );
 
         const mapped = (data.levels || []).map((item) => ({
           id: item.id || null,
@@ -283,6 +295,13 @@ const SupplierBCOV = () => {
       alert('No variant selected. Please open this page from a product variant.');
       return;
     }
+    if (!covEligible) {
+      alert(
+        covBlockedMessage ||
+          'This product is not eligible for Product_COV configuration yet.'
+      );
+      return;
+    }
     if (validationErrors.length > 0) {
       alert(validationErrors[0]);
       return;
@@ -312,6 +331,27 @@ const SupplierBCOV = () => {
       <div className="dashboard-loading">
         <div className="spinner" />
         <p>Loading Product_COV table...</p>
+      </div>
+    );
+  }
+
+  if (!covEligible) {
+    return (
+      <div className="dashboard-container bcov-page">
+        <div className="dashboard-header">
+          <div>
+            <h1>Product_COV</h1>
+            <p className="bcov-subtitle">
+              Variant: <strong>{variantName || variantKey}</strong>
+            </p>
+          </div>
+        </div>
+        <div className="bcov-empty">
+          <p>
+            {covBlockedMessage ||
+              'This product is rejected. Correct it and wait for admin approval before configuring Product_COV.'}
+          </p>
+        </div>
       </div>
     );
   }

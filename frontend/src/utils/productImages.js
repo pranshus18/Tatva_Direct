@@ -22,9 +22,14 @@ export function normalizeProductImages(input) {
 /**
  * Images belonging to this supplier offer (not shared catalog history).
  * Prefer attributes.images so catalog/old photos do not leak into add/edit forms.
+ * An explicit empty attributes.images array means the supplier cleared photos — do not
+ * fall back to catalog/product.images.
  */
 export function getSupplierOfferImagesForForm(product) {
   if (!product) return [];
+  if (Array.isArray(product?.attributes?.images)) {
+    return normalizeProductImages(product.attributes.images);
+  }
   const fromAttributes = normalizeProductImages(product?.attributes?.images);
   if (fromAttributes.length > 0) return fromAttributes;
   return normalizeProductImages(product.images);
@@ -33,6 +38,9 @@ export function getSupplierOfferImagesForForm(product) {
 /** First image URL for thumbnails; prefers supplier offer images when present on the row. */
 export function getProductImageList(product) {
   if (!product) return [];
+  if (Array.isArray(product?.attributes?.images)) {
+    return normalizeProductImages(product.attributes.images);
+  }
   const fromAttributes = normalizeProductImages(product?.attributes?.images);
   if (fromAttributes.length > 0) return fromAttributes;
   const direct = normalizeProductImages(product.images);

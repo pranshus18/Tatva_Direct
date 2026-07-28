@@ -443,8 +443,25 @@ export function registerProfileUpdateRoutes(router) {
           profileUpdate.chainProfileDraftUpdatedAt = null;
           const brandFailures = await runGlobalBrandGate(incomingChain, { force: true });
           if (brandFailures) {
+            const catalogExistsErrors = brandFailures.filter(
+              (f) => String(f?.code || '') === 'brand_already_in_approved_catalog'
+            );
+            if (catalogExistsErrors.length > 0) {
+              return res.status(400).json({
+                status: 'error',
+                code: 'brand_already_in_approved_catalog',
+                message:
+                  catalogExistsErrors[0]?.message ||
+                  'This brand is already in the approved brands list. Choose it from the approved brands list instead of requesting a new brand.',
+                brands: catalogExistsErrors
+              });
+            }
+            const expectedApprovalCodes = new Set([
+              'brand_approval_required',
+              'brand_approval_pending'
+            ]);
             const nonApprovalErrors = brandFailures.filter(
-              (f) => String(f?.code || '') !== 'brand_approval_required'
+              (f) => !expectedApprovalCodes.has(String(f?.code || ''))
             );
             if (nonApprovalErrors.length > 0) {
               return res.status(500).json({

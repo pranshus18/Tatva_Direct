@@ -11,10 +11,15 @@ test('resolveSupplierOfferDisplayImages returns only offer images when present',
   assert.deepEqual(resolveSupplierOfferDisplayImages(offer, catalog), offer);
 });
 
-test('resolveSupplierOfferDisplayImages falls back to catalog when offer has none', () => {
+test('resolveSupplierOfferDisplayImages keeps explicit empty offer list (deleted photos)', () => {
   const catalog = ['https://cdn.example.com/old-catalog.jpg'];
-  assert.deepEqual(resolveSupplierOfferDisplayImages([], catalog), catalog);
+  assert.deepEqual(resolveSupplierOfferDisplayImages([], catalog), []);
+});
+
+test('resolveSupplierOfferDisplayImages falls back to catalog when offer images were never set', () => {
+  const catalog = ['https://cdn.example.com/old-catalog.jpg'];
   assert.deepEqual(resolveSupplierOfferDisplayImages(null, catalog), catalog);
+  assert.deepEqual(resolveSupplierOfferDisplayImages(undefined, catalog), catalog);
 });
 
 test('mergeProductImageLists still combines lists for catalog sync / buyer discovery', () => {
