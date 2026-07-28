@@ -3,6 +3,9 @@ import { RUPEE_SYMBOL } from './formatRupee';
 /** Supplier portal label for the logged-in supplier's on-hand quantity */
 export const SUPPLIER_CURRENT_STOCK_LABEL = 'Current stock with you';
 
+/** Shown until MRP / location inventory details are completed (step 2) */
+export const SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL = 'Inventory Not Configured';
+
 /** Supplier portal label for catalog / inventory unit amount (API field remains `price`) */
 export const SUPPLIER_MRP_LABEL = 'MRP';
 
@@ -14,3 +17,14 @@ export const SUPPLIER_COV_PRICE_LABEL = 'COV price';
 
 /** Form column: COV price with rupee symbol */
 export const SUPPLIER_COV_PRICE_FIELD_LABEL = `${SUPPLIER_COV_PRICE_LABEL} (${RUPEE_SYMBOL})`;
+
+/**
+ * True once inventory details (MRP and/or location) have been set.
+ * Catalog-only offers default to price 0 and empty location until Manage Inventory.
+ */
+export function isSupplierInventoryConfigured(product) {
+  if (!product) return false;
+  const hasPrice = Number(product.price) > 0;
+  const hasLocation = Boolean(String(product.location || '').trim());
+  return hasPrice || hasLocation;
+}

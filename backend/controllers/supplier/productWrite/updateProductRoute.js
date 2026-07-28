@@ -13,6 +13,7 @@ import {
   normalizeGtin,
   parseWithSchema,
   shouldMoveToPendingForSpecChange,
+  shouldRequireApprovalForVariantSpecChange,
   supplierProductUpdateSchema
 } from '../supplierImports.js';
 import {
@@ -27,6 +28,10 @@ import {
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import { mergeProductImageLists, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
+import {
+  bodyHasInventoryUpdateFields,
+  validateSupplierProductUpdateRequest
+} from '../../../services/supplierProductUpdateValidation.js';
 
 export function registerSupplierProductUpdateRoute(ctx) {
   const {
@@ -40,22 +45,22 @@ export function registerSupplierProductUpdateRoute(ctx) {
   router.put('/products/:id', authenticateToken, async (req, res) => {
     try {
       req.body = parseWithSchema(supplierProductUpdateSchema, req.body || {});
-      const inventoryFieldKeys = [
-        'stock',
-        'price',
-        'location',
-        'min_order_quantity',
-        'unit',
-        'igst_rate',
-        'cgst_rate',
-        'sgst_rate',
-        'hsnCode',
-        'hsn_code'
-      ];
-      const hasInventoryFields = inventoryFieldKeys.some((key) => req.body[key] !== undefined);
+      const hasInventoryFields = bodyHasInventoryUpdateFields(req.body);
       if (hasInventoryFields && req.body.specifications !== undefined) {
         delete req.body.specifications;
       }
+
+      const validation = validateSupplierProductUpdateRequest(req.body || {});
+      if (!validation.ok) {
+        return res.status(400).json({
+          status: 'error',
+          code: validation.code || 'validation_error',
+          message: validation.message || 'Please complete all required fields.',
+          errors: validation.errors || [],
+          missingFields: validation.missingFields || []
+        });
+      }
+
       const id = req.params.id;
       console.log(`[Supplier Inventory] PUT /api/supplier/products/${id} by supplier ${req.userId}`, {
         bodyKeys: Object.keys(req.body || {}),
@@ -119,7 +124,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
           : supplierProduct.location;
         const { data: parentProduct } = await supabase
           .from('products')
-          .select('asin, specifications')
+          .select('asin, specifications, status')
           .eq('id', supplierProduct.product_id)
           .maybeSingle();
         const variantIdentity = buildSupplierVariantIdentity(
@@ -169,12 +174,26 @@ export function registerSupplierProductUpdateRoute(ctx) {
 
         let movedToPendingForSpecReview = false;
         if (specificationsChanged) {
-          movedToPendingForSpecReview = true;
-          updateSupplierProductData.status = 'pending';
-          updateSupplierProductData.is_active = false;
-          updateSupplierProductData.approved_by = null;
-          updateSupplierProductData.approved_at = null;
-          updateSupplierProductData.rejection_reason = null;
+          const { data: anyApprovedOfferForProduct } = await supabase
+            .from('supplier_products')
+            .select('id')
+            .eq('product_id', supplierProduct.product_id)
+            .eq('status', 'approved')
+            .limit(1)
+            .maybeSingle();
+          const requiresApproval = shouldRequireApprovalForVariantSpecChange({
+            catalogProductStatus: parentProduct?.status,
+            hasAnyApprovedOfferForProduct: Boolean(anyApprovedOfferForProduct?.id),
+            currentOfferStatus: supplierProduct.status
+          });
+          if (requiresApproval) {
+            movedToPendingForSpecReview = true;
+            updateSupplierProductData.status = 'pending';
+            updateSupplierProductData.is_active = false;
+            updateSupplierProductData.approved_by = null;
+            updateSupplierProductData.approved_at = null;
+            updateSupplierProductData.rejection_reason = null;
+          }
         }
 
         if (Object.keys(updateSupplierProductData).length === 0) {
@@ -285,7 +304,13 @@ export function registerSupplierProductUpdateRoute(ctx) {
             if (supplierProduct.stock !== updatedSupplierProduct.stock) changes.push(`Stock: ${supplierProduct.stock} -> ${updatedSupplierProduct.stock}`);
             if (supplierProduct.location !== updatedSupplierProduct.location) changes.push(`Location changed`);
             if (supplierProduct.min_order_quantity !== updatedSupplierProduct.min_order_quantity) changes.push(`Min Order Qty changed`);
-            if (specificationsChanged) changes.push('Specifications changed (requires admin approval)');
+            if (specificationsChanged) {
+              changes.push(
+                movedToPendingForSpecReview
+                  ? 'Specifications changed (requires admin approval)'
+                  : 'Variant specifications updated'
+              );
+            }
             if (changes.length === 0) return;
 
             const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';

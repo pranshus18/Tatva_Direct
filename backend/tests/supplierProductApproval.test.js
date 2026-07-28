@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   areSpecificationsEqual,
-  shouldMoveToPendingForSpecChange
+  shouldMoveToPendingForSpecChange,
+  shouldAutoApproveSupplierOfferOnCreate,
+  shouldRequireApprovalForVariantSpecChange
 } from '../utils/supplierProductApproval.js';
 
 test('areSpecificationsEqual treats same spec object with different key order as equal', () => {
@@ -38,4 +40,81 @@ test('shouldMoveToPendingForSpecChange returns true when supplier changes specif
   });
 
   assert.equal(result, true);
+});
+
+test('shouldAutoApproveSupplierOfferOnCreate approves when same variant already approved', () => {
+  assert.equal(
+    shouldAutoApproveSupplierOfferOnCreate({
+      hasApprovedSameVariantOffer: true,
+      catalogProductStatus: 'pending',
+      hasAnyApprovedOfferForProduct: false
+    }),
+    true
+  );
+});
+
+test('shouldAutoApproveSupplierOfferOnCreate approves different variant when catalog is approved', () => {
+  assert.equal(
+    shouldAutoApproveSupplierOfferOnCreate({
+      hasApprovedSameVariantOffer: false,
+      catalogProductStatus: 'approved',
+      hasAnyApprovedOfferForProduct: false
+    }),
+    true
+  );
+});
+
+test('shouldAutoApproveSupplierOfferOnCreate approves different variant when another offer is already approved', () => {
+  assert.equal(
+    shouldAutoApproveSupplierOfferOnCreate({
+      hasApprovedSameVariantOffer: false,
+      catalogProductStatus: 'pending',
+      hasAnyApprovedOfferForProduct: true
+    }),
+    true
+  );
+});
+
+test('shouldAutoApproveSupplierOfferOnCreate keeps brand-new products pending', () => {
+  assert.equal(
+    shouldAutoApproveSupplierOfferOnCreate({
+      hasApprovedSameVariantOffer: false,
+      catalogProductStatus: 'pending',
+      hasAnyApprovedOfferForProduct: false
+    }),
+    false
+  );
+});
+
+test('shouldRequireApprovalForVariantSpecChange is false when catalog is already approved', () => {
+  assert.equal(
+    shouldRequireApprovalForVariantSpecChange({
+      catalogProductStatus: 'approved',
+      hasAnyApprovedOfferForProduct: false,
+      currentOfferStatus: 'approved'
+    }),
+    false
+  );
+});
+
+test('shouldRequireApprovalForVariantSpecChange is false when another variant offer is approved', () => {
+  assert.equal(
+    shouldRequireApprovalForVariantSpecChange({
+      catalogProductStatus: 'pending',
+      hasAnyApprovedOfferForProduct: true,
+      currentOfferStatus: 'pending'
+    }),
+    false
+  );
+});
+
+test('shouldRequireApprovalForVariantSpecChange is true for brand-new pending products', () => {
+  assert.equal(
+    shouldRequireApprovalForVariantSpecChange({
+      catalogProductStatus: 'pending',
+      hasAnyApprovedOfferForProduct: false,
+      currentOfferStatus: 'pending'
+    }),
+    true
+  );
 });

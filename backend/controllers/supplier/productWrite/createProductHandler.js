@@ -18,7 +18,7 @@ import {
   onboardingAutoApproveThreshold,
   resolveSupplierProductBrandGuard,
   scoreOnboardingConfidence,
-  shouldMoveToPendingForSpecChange,
+  shouldAutoApproveSupplierOfferOnCreate,
   validateSpecValues
 } from '../supplierImports.js';
 import { sanitizeImageUrls } from '../shared/productHelpers.js';
@@ -31,6 +31,10 @@ import {
   findExistingProductCandidate
 } from '../../../services/supplierProductWriteService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
+import {
+  MIN_SUPPLIER_PRODUCT_PHOTOS,
+  validateMinSupplierProductPhotos
+} from '../../../utils/supplierProductPhotos.js';
 
 export function buildSupplierProductCreateHandler(ctx) {
   const {
@@ -51,6 +55,17 @@ export function buildSupplierProductCreateHandler(ctx) {
       if (posLookupGsku) requestSpecs.gsku = posLookupGsku;
       const explicitBarcode = String(otherData.barcode || '').trim();
       const normalizedImageUrls = sanitizeImageUrls(otherData.images);
+      const photoValidation = validateMinSupplierProductPhotos(normalizedImageUrls);
+      if (!photoValidation.ok) {
+        return res.status(400).json({
+          status: 'error',
+          code: 'product_photos_required',
+          message: photoValidation.message,
+          missingFields: photoValidation.missingFields,
+          photoCount: photoValidation.count,
+          minPhotos: MIN_SUPPLIER_PRODUCT_PHOTOS
+        });
+      }
       const brandInput = String(otherData.brand || requestSpecs?.brand || brandModel || '').trim();
       const mpnInput = '';
       const gtinInput = normalizeGtin(
@@ -264,22 +279,32 @@ export function buildSupplierProductCreateHandler(ctx) {
         .eq('is_active', true)
         .limit(1)
         .maybeSingle();
-      const selectedCatalogSpecs =
-        existingProduct?.specifications &&
-        typeof existingProduct.specifications === 'object' &&
-        !Array.isArray(existingProduct.specifications)
-          ? existingProduct.specifications
-          : {};
-      const selectedCatalogIsApproved = String(existingProduct?.status || '').toLowerCase() === 'approved';
-      const selectedProductSpecsChanged = !!selectedCatalogProductId && shouldMoveToPendingForSpecChange({
-        specificationsProvided: true,
-        currentSpecs: selectedCatalogSpecs,
-        nextSpecs: normalizedSpecs
+      // Any approved offer for this catalog product means the product is already live —
+      // a different variant from another (or the same) supplier must not re-enter approval.
+      const { data: anyApprovedOfferForProduct } = await supabase
+        .from('supplier_products')
+        .select('id')
+        .eq('product_id', productId)
+        .eq('status', 'approved')
+        .limit(1)
+        .maybeSingle();
+      const catalogProductStatus =
+        existingProduct?.status ||
+        (isNewProduct ? 'pending' : null);
+      let resolvedCatalogStatus = catalogProductStatus;
+      if (!resolvedCatalogStatus) {
+        const { data: catalogRow } = await supabase
+          .from('products')
+          .select('status')
+          .eq('id', productId)
+          .maybeSingle();
+        resolvedCatalogStatus = catalogRow?.status || 'pending';
+      }
+      const shouldBeApproved = shouldAutoApproveSupplierOfferOnCreate({
+        hasApprovedSameVariantOffer: Boolean(approvedVariantOffer?.id),
+        catalogProductStatus: resolvedCatalogStatus,
+        hasAnyApprovedOfferForProduct: Boolean(anyApprovedOfferForProduct?.id)
       });
-      const shouldBeApproved = Boolean(
-        approvedVariantOffer ||
-        (selectedCatalogProductId && selectedCatalogIsApproved && !selectedProductSpecsChanged)
-      );
       const variantAsin = buildVariantAsinLikeId(
         catalogAsin || identityBundle.asinLikeId,
         variantIdentityBundle.variantKey
@@ -473,7 +498,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         status: 'success',
         message: shouldBeApproved
           ? 'Product added successfully and is immediately available.'
-          : 'Product added successfully and is pending admin approval for this variant.',
+          : 'Product added successfully and is pending admin approval.',
         product: responseProduct
       });
     } catch (error) {

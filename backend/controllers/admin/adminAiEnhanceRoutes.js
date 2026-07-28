@@ -5,6 +5,7 @@ import {
 } from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 import { polishSupplierListingWithAi } from '../../services/adminProductListingPolishService.js';
+import { detectCategoryMismatch } from '../../utils/categoryMismatch.js';
 
 export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmin }) {
   // AI Fetch endpoint - Fetch product description and attributes from AI platforms (ChatGPT, Gemini, Claude)
@@ -131,44 +132,11 @@ export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmi
 
       const brandsList = [...new Set(relevantBrands)].slice(0, 15).join(', ');
 
-      // Validate category and description match
+      // Validate category and description match (also uses product name for context)
       let categoryMismatchWarning = null;
       if (category && description && description.trim().length > 0) {
-        const categoryLower = (category || '').trim().toLowerCase();
-        const descriptionLower = (description || '').trim().toLowerCase();
-
-        // Common category keywords
-        const categoryKeywords = {
-          'cement': ['cement', 'concrete', 'portland', 'opc', 'ppc', 'pcc'],
-          'steel': ['steel', 'iron', 'metal', 'alloy', 'carbon steel', 'stainless'],
-          'iron': ['iron', 'steel', 'metal', 'cast iron', 'wrought iron'],
-          'bricks': ['brick', 'clay', 'fly ash', 'red brick', 'hollow brick'],
-          'sand': ['sand', 'm-sand', 'river sand', 'silica'],
-          'aggregate': ['aggregate', 'gravel', 'stone', 'crushed stone'],
-          'tiles': ['tile', 'ceramic', 'vitrified', 'porcelain'],
-          'paint': ['paint', 'coating', 'primer', 'enamel'],
-          'electrical': ['electrical', 'wire', 'cable', 'switch', 'socket', 'fixture'],
-          'plumbing': ['plumbing', 'pipe', 'faucet', 'tap', 'fixture', 'fitting']
-        };
-
-        // Get keywords for the category
-        const keywords = categoryKeywords[categoryLower] || [categoryLower];
-
-        // Check if description contains category-related keywords
-        const hasCategoryMatch = keywords.some(keyword => descriptionLower.includes(keyword));
-
-        // Also check if description mentions other categories (mismatch)
-        const otherCategories = Object.keys(categoryKeywords).filter(cat => cat !== categoryLower);
-        const mentionsOtherCategory = otherCategories.some(cat => {
-          const otherKeywords = categoryKeywords[cat] || [cat];
-          return otherKeywords.some(keyword => descriptionLower.includes(keyword));
-        });
-
-        if (!hasCategoryMatch && mentionsOtherCategory) {
-          categoryMismatchWarning = `Warning: The category "${category}" does not match the description. The description seems to be about a different category. Please verify that the category and description are aligned.`;
-          console.log('⚠️ [CATEGORY MISMATCH]', categoryMismatchWarning);
-        } else if (!hasCategoryMatch) {
-          categoryMismatchWarning = `Warning: The category "${category}" may not match the description. Please verify that the category and description are aligned.`;
+        categoryMismatchWarning = detectCategoryMismatch(category, description, productName);
+        if (categoryMismatchWarning) {
           console.log('⚠️ [CATEGORY MISMATCH]', categoryMismatchWarning);
         }
       }

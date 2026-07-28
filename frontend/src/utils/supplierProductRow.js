@@ -29,9 +29,22 @@ export function normalizeSupplierProductFromApi(product) {
   const offerId = getSupplierOfferRowId(product);
   const stock = parseSupplierStockQuantity(product.stock);
   const minOrder = parseSupplierStockQuantity(product.min_order_quantity);
+  const rawStatus = String(product.status || 'pending').trim().toLowerCase();
+  const status =
+    rawStatus === 'approved' || rawStatus === 'active'
+      ? 'approved'
+      : rawStatus === 'rejected'
+        ? 'rejected'
+        : 'pending';
+  const rejectionReason = String(
+    product.rejectionReason || product.rejection_reason || ''
+  ).trim();
   return {
     ...product,
     ...(offerId ? { supplier_product_id: offerId } : {}),
+    status,
+    rejection_reason: rejectionReason || product.rejection_reason || null,
+    rejectionReason: rejectionReason || null,
     stock: stock != null ? stock : 0,
     min_order_quantity: minOrder != null && minOrder > 0 ? minOrder : 1
   };

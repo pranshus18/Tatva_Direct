@@ -111,7 +111,8 @@ export async function listApprovedCatalogBrands(supabase) {
 
 /**
  * Approved brand names suppliers can pick when adding products.
- * Only brands declared on Select yourself (and admin-approved) are returned.
+ * Declared profile brands that are still pending/rejected are included with their real status
+ * so the UI can warn before product submission.
  */
 export async function listSupplierSelectableBrands(supabase, { profile } = {}) {
   const declaredLabels = getDeclaredBrandLabels(profile);
@@ -119,30 +120,70 @@ export async function listSupplierSelectableBrands(supabase, { profile } = {}) {
     return [];
   }
 
-  const { data: approvedRows, error: approvedErr } = await supabase
+  const { data: brandRows, error: brandErr } = await supabase
     .from('brands')
-    .select('name, normalized_name, status')
-    .eq('status', 'approved')
+    .select('id, name, normalized_name, status, rejection_reason')
     .order('name', { ascending: true });
 
-  if (approvedErr) {
-    throw approvedErr;
+  if (brandErr) {
+    throw brandErr;
+  }
+
+  const brandsByKey = new Map();
+  for (const row of brandRows || []) {
+    const name = String(row?.name || '').trim();
+    if (!name) continue;
+    const key = catalogBrandDedupKey(name) || normalizeBrandKey(name);
+    if (!key) continue;
+    brandsByKey.set(key, row);
   }
 
   const brands = [];
+  const seen = new Set();
 
-  for (const row of approvedRows || []) {
+  const pushBrand = (displayName, row = null, extra = {}) => {
+    const trimmed = String(displayName || '').trim();
+    if (!trimmed) return;
+    const key = catalogBrandDedupKey(trimmed) || normalizeBrandKey(trimmed);
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const status = String(row?.status || extra.status || 'unregistered').trim().toLowerCase() || 'unregistered';
+    brands.push({
+      id: row?.id || null,
+      name: trimmed,
+      normalizedName: String(row?.normalized_name || '').trim() || normalizeBrandKey(trimmed),
+      status,
+      rejectionReason: row?.rejection_reason || null,
+      source: extra.source || 'profile',
+      fromProfile: extra.fromProfile === true
+    });
+  };
+
+  for (const row of brandRows || []) {
+    if (String(row?.status || '').toLowerCase() !== 'approved') continue;
     const name = String(row?.name || '').trim();
     if (!name) continue;
     const guard = brandIsAllowedForSupplier(profile, name);
     if (!guard.allowed) continue;
-    upsertCatalogBrand(brands, guard.matchedBrand || name, { source: 'profile', fromProfile: true });
+    pushBrand(guard.matchedBrand || name, row, { source: 'profile', fromProfile: true });
   }
 
   for (const label of declaredLabels) {
     const guard = brandIsAllowedForSupplier(profile, label);
     if (!guard.allowed) continue;
-    upsertCatalogBrand(brands, guard.matchedBrand || label, { source: 'profile', fromProfile: true });
+    const display = guard.matchedBrand || label;
+    const key = catalogBrandDedupKey(display) || normalizeBrandKey(display);
+    const row = key ? brandsByKey.get(key) : null;
+    if (row && String(row.status || '').toLowerCase() === 'approved') {
+      pushBrand(display, row, { source: 'profile', fromProfile: true });
+      continue;
+    }
+    // Surface pending/rejected/unregistered declared brands with truthful status.
+    pushBrand(display, row, {
+      source: 'profile',
+      fromProfile: true,
+      status: row ? String(row.status || 'pending').toLowerCase() : 'unregistered'
+    });
   }
 
   return brands.sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));

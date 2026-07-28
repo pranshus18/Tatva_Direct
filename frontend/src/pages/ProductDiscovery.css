@@ -551,6 +551,10 @@
   color: #dc2626;
 }
 
+.pd-card__stock--unset {
+  color: #b45309;
+}
+
 .pd-card__location {
   display: flex;
   align-items: center;

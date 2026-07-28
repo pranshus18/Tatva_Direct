@@ -141,7 +141,22 @@ export async function resolveAdminSpecificationTemplate(supabase, {
     category = (allCategories || []).find((cat) => String(cat?.name || '').toLowerCase() === categoryName);
   }
 
-  let specs = {};
+  // Always start from the category's predefined template keys (defaults + active spec_templates).
+  // Values from model/catalog profiles are merged on top so keys never disappear.
+  let templateSkeleton = {};
+  if (category) {
+    const defaultSpecs = parseSpecificationsObject(category.default_specifications);
+    if (defaultSpecs && Object.keys(defaultSpecs).length > 0) {
+      templateSkeleton = defaultSpecs;
+    }
+  }
+  const { fields } = await loadSpecTemplateForCategory(supabase, categoryName);
+  const fieldTemplate = buildSpecificationTemplateFromFields(fields);
+  if (Object.keys(fieldTemplate).length > 0) {
+    templateSkeleton = mergeSpecificationMaps(fieldTemplate, templateSkeleton);
+  }
+
+  let specs = { ...templateSkeleton };
 
   if (modelIdentifier) {
     const { data: profile, error: profileError } = await supabase
@@ -155,12 +170,12 @@ export async function resolveAdminSpecificationTemplate(supabase, {
     } else {
       const profileSpecs = parseSpecificationsObject(profile?.specifications);
       if (profileSpecs && Object.keys(profileSpecs).length > 0) {
-        specs = profileSpecs;
+        specs = mergeSpecificationMaps(specs, profileSpecs);
       }
     }
   }
 
-  if (Object.keys(specs).length === 0 && modelIdentifier) {
+  if (modelIdentifier) {
     const { data: productMatches, error: productMatchError } = await supabase
       .from('products')
       .select('id, name, specifications, status, updated_at')
@@ -177,14 +192,9 @@ export async function resolveAdminSpecificationTemplate(supabase, {
         return normalizedName && normalizedName === modelIdentifier;
       });
       const matchSpecs = pickBestSpecificationMap(modelRows, { excludeProductId });
-      if (matchSpecs) specs = matchSpecs;
-    }
-  }
-
-  if (Object.keys(specs).length === 0 && category) {
-    const defaultSpecs = parseSpecificationsObject(category.default_specifications);
-    if (defaultSpecs && Object.keys(defaultSpecs).length > 0) {
-      specs = defaultSpecs;
+      if (matchSpecs) {
+        specs = mergeSpecificationMaps(specs, matchSpecs);
+      }
     }
   }
 
@@ -207,14 +217,6 @@ export async function resolveAdminSpecificationTemplate(supabase, {
     const brandMatchedSpecs = pickBestSpecificationMap(catalogRows, { excludeProductId });
     if (brandMatchedSpecs) {
       specs = mergeSpecificationMaps(specs, brandMatchedSpecs);
-    }
-  }
-
-  if (Object.keys(specs).length === 0) {
-    const { fields } = await loadSpecTemplateForCategory(supabase, categoryName);
-    const templateSpecs = buildSpecificationTemplateFromFields(fields);
-    if (Object.keys(templateSpecs).length > 0) {
-      specs = templateSpecs;
     }
   }
 

@@ -94,7 +94,7 @@ export {
   extractSpecificationPairsFromDescription,
   extractSpecificationValuesFromDescription
 } from '../../services/supplierAiSpecExtractionService.js';
-export { ensureBrandApprovedOrRequest } from '../../services/brandApprovalService.js';
+export { ensureBrandApprovedOrRequest, resolveBrandApprovalStatus } from '../../services/brandApprovalService.js';
 export { insertNotification, insertNotifications } from '../../repositories/notificationsRepository.js';
 export { findAdmins, findUserBasicById } from '../../repositories/usersRepository.js';
 export {
@@ -159,5 +159,9 @@ export {
   SUPPLIER_ROLE_SET,
   userHasSupplierRole
 } from '../../services/supplierChainRoutingService.js';
-export { shouldMoveToPendingForSpecChange } from '../../utils/supplierProductApproval.js';
+export {
+  shouldMoveToPendingForSpecChange,
+  shouldAutoApproveSupplierOfferOnCreate,
+  shouldRequireApprovalForVariantSpecChange
+} from '../../utils/supplierProductApproval.js';
 export { PRODUCT_IMAGES_BUCKET, uploadFile } from '../../services/storage.js';

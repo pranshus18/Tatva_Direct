@@ -16,6 +16,7 @@ import {
   listApprovedCatalogBrands,
   listSupplierSelectableBrands
 } from '../../services/supplierBrandCatalogService.js';
+import { resolveBrandApprovalStatus } from '../../services/brandApprovalService.js';
 export function registerSupplierCatalogRoutes(ctx) {
   const {
     router,
@@ -701,6 +702,42 @@ router.post('/units', authenticateToken, async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: 'Internal server error'
+    });
+  }
+});
+
+router.get('/brands/status', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res.status(403).json({ status: 'error', message: 'Only suppliers can check brand status' });
+    }
+
+    const brandName = String(req.query?.name || req.query?.brand || '').trim();
+    const result = await resolveBrandApprovalStatus({
+      supabase,
+      brandName
+    });
+
+    return res.json({
+      status: 'success',
+      ok: result.ok === true,
+      brandStatus: result.status,
+      code: result.code || null,
+      message: result.message || '',
+      brand: result.brand
+        ? {
+            id: result.brand.id,
+            name: result.brand.name,
+            status: result.brand.status,
+            rejection_reason: result.brand.rejection_reason || null
+          }
+        : null
+    });
+  } catch (error) {
+    console.error('Supplier brand status error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to check brand approval status'
     });
   }
 });

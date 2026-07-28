@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { getApiUrl, resolveApiPath } from '../config/api';
@@ -8,10 +8,11 @@ import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
-import { Upload, CheckCircle, AlertCircle, Users, Package, PlusCircle, MapPin, Calendar, FileText, XCircle } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Users, Package, PlusCircle, MapPin, Calendar, FileText, XCircle, RefreshCw } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
+import { Button } from '@/components/ui/button';
 import './BOQNormalize.css';
 
 // Ask the user to confirm ANY match that is not nearly exact.
@@ -52,6 +53,7 @@ const BOQNormalize = ({ onComplete }) => {
   const [locatingSite, setLocatingSite] = useState(false);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const uploadGenerationRef = useRef(0);
 
   const requestingProductForItem = useMemo(() => {
     const itemId = searchParams.get(REQUEST_PRODUCT_PARAM);
@@ -80,6 +82,56 @@ const BOQNormalize = ({ onComplete }) => {
     if (!searchParams.get(REQUEST_PRODUCT_PARAM)) return;
     navigate(-1);
   }, [navigate, searchParams]);
+
+  /** Return to the upload step so the user can replace a wrong BOQ file in-app. */
+  const handleReplaceBoq = useCallback(() => {
+    if (savingCart || requestSubmitting) return;
+
+    const hasResults = Boolean(file) || items.length > 0 || loading;
+    if (hasResults) {
+      const confirmed = window.confirm(
+        loading
+          ? 'Cancel this upload and replace the BOQ file?\n\nYour site location and expected dispatch date will be kept.'
+          : 'Replace this BOQ file?\n\nCurrent normalized items will be cleared. Your site location and expected dispatch date will be kept so you can upload a different file.'
+      );
+      if (!confirmed) return;
+    }
+
+    uploadGenerationRef.current += 1;
+
+    if (searchParams.get(REQUEST_PRODUCT_PARAM)) {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete(REQUEST_PRODUCT_PARAM);
+          return next;
+        },
+        { replace: true }
+      );
+    }
+
+    setFile(null);
+    setItems([]);
+    setBoqId(null);
+    setSubmittedProductRequestKeys(new Set());
+    setSavedProjectMeta(null);
+    setLoading(false);
+    clearSupplierSelectScopeSession();
+    try {
+      localStorage.removeItem('lastBoqId');
+    } catch {
+      /* ignore */
+    }
+    toast.info('Upload a different BOQ file when ready.');
+  }, [
+    savingCart,
+    requestSubmitting,
+    file,
+    items.length,
+    loading,
+    searchParams,
+    setSearchParams
+  ]);
 
   const fillGeoFromBrowser = async () => {
     setLocatingSite(true);
@@ -119,6 +171,7 @@ const BOQNormalize = ({ onComplete }) => {
 
     setFile(uploadedFile);
     setLoading(true);
+    const uploadGeneration = ++uploadGenerationRef.current;
 
     const formData = new FormData();
     formData.append('file', uploadedFile);
@@ -153,6 +206,7 @@ const BOQNormalize = ({ onComplete }) => {
       });
       
       const data = await res.json();
+      if (uploadGeneration !== uploadGenerationRef.current) return;
       
       if (!res.ok) {
         const errorMessage =
@@ -193,6 +247,7 @@ const BOQNormalize = ({ onComplete }) => {
         setFile(null);
       }
     } catch (error) {
+      if (uploadGeneration !== uploadGenerationRef.current) return;
       console.error('Upload failed:', error);
       const errorMessage =
         error?.message ||
@@ -203,7 +258,9 @@ const BOQNormalize = ({ onComplete }) => {
       setItems([]);
       setSubmittedProductRequestKeys(new Set());
     } finally {
-      setLoading(false);
+      if (uploadGeneration === uploadGenerationRef.current) {
+        setLoading(false);
+      }
     }
   };
 
@@ -492,8 +549,25 @@ const BOQNormalize = ({ onComplete }) => {
     <>
     <SpWorkflowPage
       title="BOQ Normalize"
-      description=""
+      description={
+        file
+          ? 'Review matched items, or replace the BOQ file if this upload is incorrect.'
+          : 'Set the dispatch location and date, then upload your BOQ file.'
+      }
       icon={FileText}
+      actions={
+        file ? (
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleReplaceBoq}
+            disabled={savingCart || requestSubmitting}
+          >
+            <RefreshCw className="mr-2 h-4 w-4" />
+            Replace BOQ
+          </Button>
+        ) : null
+      }
     >
     <div className="page !p-0">
 
@@ -584,12 +658,44 @@ const BOQNormalize = ({ onComplete }) => {
         <div className="results">
           {loading ? (
             <div className="loading">
-              Processing BOQ… matching products in bulk. Large files may take a minute.
+              <p>Processing BOQ… matching products in bulk. Large files may take a minute.</p>
+              <div style={{ marginTop: '1rem' }}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleReplaceBoq}
+                  disabled={savingCart || requestSubmitting}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Cancel and replace BOQ
+                </Button>
+              </div>
             </div>
           ) : (
             <div style={{ display: 'flex', gap: '2rem', alignItems: 'flex-start' }}>
               {/* Main Content Area */}
               <div style={{ flex: 1 }}>
+                <div className="boq-replace-banner">
+                  <div className="boq-replace-banner__copy">
+                    <strong>Wrong file?</strong>
+                    <span>
+                      {file?.name
+                        ? ` Current upload: ${file.name}. `
+                        : ' '}
+                      You can replace this BOQ and upload a different file without using the browser back button.
+                    </span>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleReplaceBoq}
+                    disabled={savingCart || requestSubmitting}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    Replace BOQ file
+                  </Button>
+                </div>
                 <div className="items-grid">
                 {items.map((item) => {
                   const hasSuppliers = (item.availableSuppliers || 0) > 0;

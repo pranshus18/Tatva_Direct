@@ -1,19 +1,7 @@
 import logger from '../utils/logger.js';
+import { detectCategoryMismatch } from '../utils/categoryMismatch.js';
 import { parseSpecificationsObject, sanitizeSpecifications } from './supplierCatalogHelpersService.js';
 import { generateGeminiJsonText, parseJsonFromAiText } from './geminiGenerateService.js';
-
-const CATEGORY_KEYWORDS = {
-  cement: ['cement', 'concrete', 'portland', 'opc', 'ppc', 'pcc'],
-  steel: ['steel', 'iron', 'metal', 'alloy', 'carbon steel', 'stainless'],
-  iron: ['iron', 'steel', 'metal', 'cast iron', 'wrought iron'],
-  bricks: ['brick', 'clay', 'fly ash', 'red brick', 'hollow brick'],
-  sand: ['sand', 'm-sand', 'river sand', 'silica'],
-  aggregate: ['aggregate', 'gravel', 'stone', 'crushed stone'],
-  tiles: ['tile', 'ceramic', 'vitrified', 'porcelain'],
-  paint: ['paint', 'coating', 'primer', 'enamel', 'sheen', 'emulsion', 'latex'],
-  electrical: ['electrical', 'wire', 'cable', 'switch', 'socket', 'fixture'],
-  plumbing: ['plumbing', 'pipe', 'faucet', 'tap', 'fixture', 'fitting']
-};
 
 async function getFetch() {
   if (typeof globalThis.fetch === 'function') return globalThis.fetch;
@@ -50,28 +38,6 @@ function pickProvider(requested = 'auto') {
     geminiApiKey,
     anthropicApiKey
   };
-}
-
-function detectCategoryMismatch(category, description) {
-  const categoryName = String(category || '').trim().toLowerCase();
-  const descriptionLower = String(description || '').trim().toLowerCase();
-  if (!categoryName || !descriptionLower) return null;
-
-  const keywords = CATEGORY_KEYWORDS[categoryName] || [categoryName];
-  const hasCategoryMatch = keywords.some((keyword) => descriptionLower.includes(keyword));
-  const otherCategories = Object.keys(CATEGORY_KEYWORDS).filter((cat) => cat !== categoryName);
-  const mentionsOtherCategory = otherCategories.some((cat) => {
-    const otherKeywords = CATEGORY_KEYWORDS[cat] || [cat];
-    return otherKeywords.some((keyword) => descriptionLower.includes(keyword));
-  });
-
-  if (!hasCategoryMatch && mentionsOtherCategory) {
-    return `Warning: The category "${category}" does not match the description. Please verify category and description align.`;
-  }
-  if (!hasCategoryMatch) {
-    return `Warning: The category "${category}" may not match the description. Please verify they align.`;
-  }
-  return null;
 }
 
 async function callGemini({ systemPrompt, userPrompt, geminiApiKey }) {
@@ -185,7 +151,11 @@ export async function extractSpecificationValuesFromDescription({
     };
   }
 
-  const categoryMismatchWarning = detectCategoryMismatch(category, descriptionText);
+  const categoryMismatchWarning = detectCategoryMismatch(
+    category,
+    descriptionText,
+    productName
+  );
   if (blockOnCategoryMismatch && categoryMismatchWarning) {
     return {
       status: 'warning',
@@ -257,7 +227,11 @@ export async function extractSpecificationPairsFromDescription({
     return { status: 'error', message: 'description is required' };
   }
 
-  const categoryMismatchWarning = detectCategoryMismatch(category, descriptionText);
+  const categoryMismatchWarning = detectCategoryMismatch(
+    category,
+    descriptionText,
+    productName
+  );
   const systemPrompt = `You extract product specification key-value pairs from descriptions.
 Return ONLY valid JSON:
 { "specifications": { "Key Name": "value" } }

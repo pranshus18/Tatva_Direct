@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Package, MapPin, Box, Save, ArrowRight, Sparkles } from 'lucide-react';
 import {
   applyExtractResultToSpecs,
+  buildSpecExtractionSourceKey,
   extractSpecificationsFromDescription
 } from '../utils/extractSpecificationsApi';
 import { parseSpecInputToValue, specValueToInput } from '../utils/specifications';
@@ -56,6 +57,7 @@ const SupplierProductSetup = ({ user }) => {
   const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [categories, setCategories] = useState([]);
   const [extractingSpecs, setExtractingSpecs] = useState(false);
+  const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
   const navigate = useNavigate();
 
   const handleExtractSpecifications = async () => {
@@ -65,6 +67,16 @@ const SupplierProductSetup = ({ user }) => {
     }
     if (!formData.category?.trim()) {
       setError('Select a category before extracting specifications.');
+      return;
+    }
+
+    const sourceKey = buildSpecExtractionSourceKey({
+      name: formData.name,
+      category: formData.category,
+      brand: formData.brand,
+      description: formData.description
+    });
+    if (lastSuccessfulExtractionSourceKey && lastSuccessfulExtractionSourceKey === sourceKey) {
       return;
     }
 
@@ -91,6 +103,8 @@ const SupplierProductSetup = ({ user }) => {
       setSpecifications(result.merged);
       if (result.filledCount === 0) {
         setError('No values found in description. Use key: value lines.');
+      } else {
+        setLastSuccessfulExtractionSourceKey(sourceKey);
       }
     } catch (err) {
       setError(err.message || 'Failed to extract specifications from description.');
@@ -98,6 +112,16 @@ const SupplierProductSetup = ({ user }) => {
       setExtractingSpecs(false);
     }
   };
+
+  const currentSpecExtractionSourceKey = buildSpecExtractionSourceKey({
+    name: formData.name,
+    category: formData.category,
+    brand: formData.brand,
+    description: formData.description
+  });
+  const specsAlreadyExtractedForCurrentSource =
+    Boolean(lastSuccessfulExtractionSourceKey) &&
+    lastSuccessfulExtractionSourceKey === currentSpecExtractionSourceKey;
 
   const handleChange = (e) => {
     if (e.target?.name === 'price') {
@@ -752,27 +776,33 @@ const SupplierProductSetup = ({ user }) => {
               />
             </div>
             {formData.description?.trim() && formData.category?.trim() ? (
-              <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  className="btn-secondary"
-                  onClick={handleExtractSpecifications}
-                  disabled={extractingSpecs}
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '0.35rem',
-                    background: extractingSpecs ? '#9ca3af' : '#10b981',
-                    color: '#fff',
-                    border: 'none',
-                    padding: '0.4rem 0.75rem',
-                    borderRadius: '6px',
-                    fontSize: '0.85rem'
-                  }}
-                >
-                  <Sparkles size={14} />
-                  {extractingSpecs ? 'Extracting…' : 'Extract Specifications (AI)'}
-                </button>
+              <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                {specsAlreadyExtractedForCurrentSource ? (
+                  <span style={{ fontSize: '0.75rem', color: '#047857', fontStyle: 'italic' }}>
+                    Specifications extracted for the current product details. Edit name, brand, category, or description to extract again.
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={handleExtractSpecifications}
+                    disabled={extractingSpecs}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.35rem',
+                      background: extractingSpecs ? '#9ca3af' : '#10b981',
+                      color: '#fff',
+                      border: 'none',
+                      padding: '0.4rem 0.75rem',
+                      borderRadius: '6px',
+                      fontSize: '0.85rem'
+                    }}
+                  >
+                    <Sparkles size={14} />
+                    {extractingSpecs ? 'Extracting…' : 'Extract Specifications'}
+                  </button>
+                )}
               </div>
             ) : null}
           </div>

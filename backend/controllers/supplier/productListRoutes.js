@@ -14,6 +14,7 @@ import {
   resolveEffectiveSupplierOfferState
 } from './shared/productHelpers.js';
 import { mergeProductImageLists } from '../../services/productImageService.js';
+import { catalogBrandDedupKey, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 
 export function registerSupplierProductListRoutes(ctx) {
   const {
@@ -36,7 +37,8 @@ router.get('/products', authenticateToken, async (req, res) => {
       .maybeSingle();
     const effectiveProfile = profileRow?.profile || req.user?.profile || {};
 
-    // Fetch products with supplier_products join
+    // Fetch all of this supplier's offers, including pending and rejected,
+    // so the portal can show a clear approval status throughout the workflow.
     const { data: supplierProducts, error: supplierProductsError } = await supabase
       .from('supplier_products')
       .select(`
@@ -44,9 +46,6 @@ router.get('/products', authenticateToken, async (req, res) => {
         product:products(*)
       `)
       .eq('supplier_id', req.userId)
-      // If admin rejects a product, we update supplier_products.status = 'rejected'
-      // and we want the rejected item to disappear from the supplier portal.
-      .neq('status', 'rejected')
       .order('created_at', { ascending: false });
     
     if (supplierProductsError) {
@@ -56,7 +55,6 @@ router.get('/products', authenticateToken, async (req, res) => {
       .from('products')
       .select('*')
       .eq('supplier_id', req.userId)
-      .neq('status', 'rejected')
       .order('created_at', { ascending: false });
     
     if (error) {
@@ -70,17 +68,18 @@ router.get('/products', authenticateToken, async (req, res) => {
     }
     
     // Combine product and supplier_products data.
-    // If an admin deletes the shared product but a junction row remains (unexpected legacy data),
-    // skip the row so the supplier UI doesn't show "ghost" products.
+    // Keep offers visible even if the shared catalog row is missing (legacy/orphaned),
+    // so suppliers always see status instead of a silent disappearance.
     const visibleSupplierProducts = (supplierProducts || []).filter((sp) => {
-      const brandCandidate = resolveUpstreamBrandLabel(sp?.attributes, sp?.product?.brand);
+      const brandCandidate = resolveUpstreamBrandLabel(
+        sp?.attributes,
+        sp?.product?.brand
+      );
       return supplierCanAccessBrandStrict(effectiveProfile, brandCandidate).allowed;
     });
 
     const products = visibleSupplierProducts
       .map((sp) => {
-        if (!sp.product) return null;
-
         const attributes =
           typeof sp.attributes === 'string'
             ? (() => {
@@ -94,9 +93,10 @@ router.get('/products', authenticateToken, async (req, res) => {
               ? sp.attributes
               : {};
 
+        const baseProduct = sp.product || null;
         const baseSpecs =
-          sp.product?.specifications && typeof sp.product.specifications === 'object'
-            ? sp.product.specifications
+          baseProduct?.specifications && typeof baseProduct.specifications === 'object'
+            ? baseProduct.specifications
             : {};
         const offerSpecs =
           attributes?.specifications && typeof attributes.specifications === 'object'
@@ -108,30 +108,39 @@ router.get('/products', authenticateToken, async (req, res) => {
         const listingName =
           attributes?.listingName != null && String(attributes.listingName).trim() !== ''
             ? String(attributes.listingName).trim()
-            : sp.product.name;
-        const displayBrand = attributes?.brand || sp.product.brand || '';
+            : baseProduct?.name ||
+              (attributes?.name != null && String(attributes.name).trim() !== ''
+                ? String(attributes.name).trim()
+                : 'Product');
+        const displayBrand = attributes?.brand || baseProduct?.brand || '';
         const offerImages = sanitizeImageUrls(attributes?.images);
-        const baseImages = sanitizeImageUrls(sp.product?.images);
+        const baseImages = sanitizeImageUrls(baseProduct?.images);
 
-        const effective = resolveEffectiveSupplierOfferState(sp, sp.product);
+        const effective = resolveEffectiveSupplierOfferState(sp, baseProduct);
+        const rejectionReason =
+          sp.rejection_reason ||
+          baseProduct?.rejection_reason ||
+          null;
 
         return {
-          ...sp.product,
+          ...(baseProduct || { id: sp.product_id }),
           // Per-variant display: offer overrides shared catalog (same merge as PUT response)
           name: listingName,
           supplierDescription:
             attributes?.supplierDescription ||
             attributes?.description ||
             '',
-          publishedDescription: sp.product?.description || '',
+          publishedDescription: baseProduct?.description || '',
           description:
             attributes?.supplierDescription ||
             attributes?.description ||
-            sp.product?.description ||
+            baseProduct?.description ||
             '',
-          brand: displayBrand || sp.product.brand,
-          gtin: attributes?.gtin || sp.product.gtin,
-          mpn: attributes?.mpn || sp.product.mpn,
+          brand: displayBrand || baseProduct?.brand || '',
+          category: attributes?.category || baseProduct?.category || '',
+          unit: attributes?.unit || baseProduct?.unit || '',
+          gtin: attributes?.gtin || baseProduct?.gtin,
+          mpn: attributes?.mpn || baseProduct?.mpn,
           specifications: storedSpecs,
           images: mergeProductImageLists(offerImages, baseImages),
           price: sp.price,
@@ -143,21 +152,82 @@ router.get('/products', authenticateToken, async (req, res) => {
           min_order_quantity: sp.min_order_quantity,
           status: effective.effectiveStatus,
           is_active: effective.effectiveActive,
-          rejection_reason: sp.rejection_reason,
+          rejection_reason: rejectionReason,
+          rejectionReason,
           approved_by: sp.approved_by,
           approved_at: sp.approved_at,
           supplier_id: sp.supplier_id,
-          ...supplierOfferTsinFields(sp.product, sp),
+          ...supplierOfferTsinFields(baseProduct || { asin: null }, sp),
           brandModel: attributes?.brandModel,
           lsa: attributes?.lsa,
           hsnCode: attributes?.hsnCode,
           supplier_product_id: sp.id,
           variantKey: sp.variant_key || null,
           variantAsin: sp.variant_asin || null,
-          attributes
+          attributes,
+          catalogMissing: !baseProduct
         };
       })
       .filter(Boolean);
+
+    // Attach brand approval status so cards can warn when brand is not approved yet.
+    try {
+      const brandKeys = new Set();
+      for (const product of products) {
+        const brandLabel = String(product?.brand || product?.brandModel || '').trim();
+        const key = catalogBrandDedupKey(brandLabel) || normalizeBrandKey(brandLabel);
+        if (key) brandKeys.add(key);
+      }
+
+      let brandStatusByKey = new Map();
+      if (brandKeys.size > 0) {
+        const { data: brandRows } = await supabase
+          .from('brands')
+          .select('name, normalized_name, status, rejection_reason');
+        brandStatusByKey = new Map();
+        for (const row of brandRows || []) {
+          const name = String(row?.name || '').trim();
+          const key =
+            catalogBrandDedupKey(name) ||
+            normalizeBrandKey(name) ||
+            normalizeBrandKey(row?.normalized_name);
+          if (!key) continue;
+          brandStatusByKey.set(key, row);
+        }
+      }
+
+      for (const product of products) {
+        const brandLabel = String(product?.brand || product?.brandModel || '').trim();
+        const key = catalogBrandDedupKey(brandLabel) || normalizeBrandKey(brandLabel);
+        const row = key ? brandStatusByKey.get(key) : null;
+        if (!brandLabel) {
+          product.brandApprovalStatus = 'missing';
+          product.brandApprovalMessage = '';
+          continue;
+        }
+        if (!row) {
+          product.brandApprovalStatus = 'unregistered';
+          product.brandApprovalMessage = `Brand approval required for "${brandLabel}".`;
+          continue;
+        }
+        const brandStatus = String(row.status || 'pending').toLowerCase();
+        product.brandApprovalStatus = brandStatus;
+        if (brandStatus === 'approved') {
+          product.brandApprovalMessage = '';
+        } else if (brandStatus === 'rejected') {
+          product.brandApprovalMessage = row.rejection_reason
+            ? `Brand "${row.name || brandLabel}" was rejected: ${row.rejection_reason}`
+            : `Brand "${row.name || brandLabel}" was rejected by admin.`;
+        } else {
+          product.brandApprovalMessage = `Brand approval pending for "${row.name || brandLabel}".`;
+        }
+      }
+    } catch (brandStatusError) {
+      console.warn(
+        'Supplier product list brand status enrichment failed:',
+        brandStatusError?.message || brandStatusError
+      );
+    }
     
     res.json({ 
       status: 'success',

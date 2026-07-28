@@ -226,11 +226,13 @@ function isCatalogProductApproved(catalogProduct) {
  * Align supplier_products visibility with supplier inventory UI:
  * when the shared catalog product is approved but the junction row is still pending,
  * treat the offer as approved + active (legacy / race after catalog approval).
+ * Rejected catalog or offer status always wins so suppliers keep a clear approval outcome.
  */
 export function resolveEffectiveSupplierOfferState(row, catalogProduct = null) {
   const product = catalogProduct ?? row?.product ?? null;
   const rawStatus = String(row?.status ?? '').trim().toLowerCase();
-  const rejected = rawStatus === 'rejected';
+  const catalogStatus = String(product?.status ?? '').trim().toLowerCase();
+  const rejected = rawStatus === 'rejected' || catalogStatus === 'rejected';
   const pendingLike = !rawStatus || rawStatus === 'pending';
   const catalogApproved = isCatalogProductApproved(product);
 

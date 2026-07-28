@@ -29,6 +29,33 @@ test('resolveEffectiveSupplierOfferState: pending without approved catalog stays
     product: { status: 'pending' }
   };
   const state = resolveEffectiveSupplierOfferState(row);
+  assert.equal(state.effectiveStatus, 'pending');
+  assert.equal(state.effectiveActive, false);
+  assert.equal(state.availableForUpstream, false);
+});
+
+test('resolveEffectiveSupplierOfferState: rejected offer stays rejected', () => {
+  const row = {
+    status: 'rejected',
+    is_active: false,
+    stock: 10,
+    product: { status: 'approved' }
+  };
+  const state = resolveEffectiveSupplierOfferState(row);
+  assert.equal(state.effectiveStatus, 'rejected');
+  assert.equal(state.effectiveActive, false);
+  assert.equal(state.availableForUpstream, false);
+});
+
+test('resolveEffectiveSupplierOfferState: rejected catalog marks offer rejected', () => {
+  const row = {
+    status: 'pending',
+    is_active: false,
+    stock: 10,
+    product: { status: 'rejected' }
+  };
+  const state = resolveEffectiveSupplierOfferState(row);
+  assert.equal(state.effectiveStatus, 'rejected');
   assert.equal(state.effectiveActive, false);
   assert.equal(state.availableForUpstream, false);
 });

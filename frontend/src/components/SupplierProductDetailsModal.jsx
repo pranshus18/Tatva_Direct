@@ -11,7 +11,9 @@ import {
 import { isMeaningfulProductDescription } from '../utils/productDisplay';
 import {
   SUPPLIER_CURRENT_STOCK_LABEL,
-  SUPPLIER_MRP_LABEL
+  SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
+  SUPPLIER_MRP_LABEL,
+  isSupplierInventoryConfigured
 } from '../utils/supplierStockLabel';
 import { formatRupeePerUnit } from '../utils/formatRupee';
 
@@ -128,7 +130,9 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
             <div className="us-details-field">
               <span className="us-details-field__label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
               <span className="us-details-field__value">
-                {product.stock ?? 0} {product.unit || ''}
+                {isSupplierInventoryConfigured(product)
+                  ? `${product.stock ?? 0} ${product.unit || ''}`.trim()
+                  : SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
               </span>
             </div>
             <div className="us-details-field">

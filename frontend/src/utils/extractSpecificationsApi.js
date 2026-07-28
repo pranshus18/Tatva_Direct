@@ -1,6 +1,17 @@
 import { getApiUrl } from '../config/api';
 import { mergeSpecificationObjects } from './specifications';
 
+/** Stable fingerprint of fields that feed specification extraction. */
+export function buildSpecExtractionSourceKey({
+  name = '',
+  category = '',
+  brand = '',
+  description = ''
+} = {}) {
+  const normalize = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  return [normalize(name), normalize(category), normalize(brand), normalize(description)].join('\n');
+}
+
 export async function extractSpecificationsFromDescription({
   description,
   category,

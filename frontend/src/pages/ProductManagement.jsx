@@ -37,12 +37,15 @@ import {
 } from '../utils/specifications';
 import {
   applyExtractResultToSpecs,
+  buildSpecExtractionSourceKey,
   extractSpecificationsFromDescription
 } from '../utils/extractSpecificationsApi';
 import {
   SUPPLIER_CURRENT_STOCK_LABEL,
+  SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
   SUPPLIER_MRP_FIELD_LABEL,
-  SUPPLIER_MRP_LABEL
+  SUPPLIER_MRP_LABEL,
+  isSupplierInventoryConfigured
 } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
 import RupeeInput from '../components/RupeeInput';
@@ -54,6 +57,20 @@ import {
 } from '../utils/supplierProductRow';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import {
+  formatMissingProductPhotosMessage,
+  formatSupplierProductValidationMessage,
+  countSupplierProductPhotos,
+  getSupplierCatalogMandatoryMissingFields,
+  getSupplierInventoryUpdateMissingFields,
+  getSupplierProductCreateErrorMessage,
+  getSupplierProductUpdateErrorMessage,
+  MIN_SUPPLIER_PRODUCT_PHOTOS
+} from '../utils/supplierProductValidation';
+import {
+  getBrandApprovalWarning,
+  isBrandApprovedForProductSubmit
+} from '../utils/brandApprovalStatus';
+import {
   applyIgstToTaxFields,
   CGST_SGST_OPTIONS,
   IGST_OPTIONS
@@ -64,10 +81,37 @@ import { useLocation, useNavigate } from 'react-router-dom';
 const LOW_STOCK_THRESHOLD = 10;
 
 const STATUS_CONFIG = {
-  pending: { label: 'Pending', statusClass: 'pm-status--pending' },
-  approved: { label: 'Active', statusClass: 'pm-status--approved' },
-  rejected: { label: 'Rejected', statusClass: 'pm-status--rejected' }
+  pending: {
+    label: 'Pending Approval',
+    statusClass: 'pm-status--pending',
+    notice: 'Pending admin approval. This product stays in your list until it is approved or rejected.'
+  },
+  approved: {
+    label: 'Approved',
+    statusClass: 'pm-status--approved',
+    notice: null
+  },
+  rejected: {
+    label: 'Rejected',
+    statusClass: 'pm-status--rejected',
+    notice: 'This product was rejected and is not orderable. Review the reason below and update if needed.'
+  }
 };
+
+function getSupplierApprovalStatus(product) {
+  const raw = String(product?.status || 'pending').trim().toLowerCase();
+  if (raw === 'approved' || raw === 'active') return 'approved';
+  if (raw === 'rejected') return 'rejected';
+  return 'pending';
+}
+
+function getSupplierRejectionReason(product) {
+  return String(
+    product?.rejectionReason ||
+      product?.rejection_reason ||
+      ''
+  ).trim();
+}
 
 function getStockHealth(stock) {
   const quantity = parseSupplierStockQuantity(stock);
@@ -93,9 +137,30 @@ const ProductManagement = ({ user }) => {
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    fetchProducts();
+    let cancelled = false;
+    (async () => {
+      await fetchProducts();
+      if (cancelled) return;
+      const newlyAdded = location.state?.newlyAddedProduct;
+      if (!newlyAdded) return;
+      const normalized =
+        normalizeSupplierProductsFromApi([newlyAdded])[0] || newlyAdded;
+      setProducts((prev) => {
+        const offerId = normalized?.supplier_product_id || normalized?.supplierProductId;
+        if (offerId && prev.some((p) => matchSupplierOfferRow(p, offerId))) {
+          return prev.map((p) =>
+            matchSupplierOfferRow(p, offerId) ? { ...p, ...normalized } : p
+          );
+        }
+        return [normalized, ...prev];
+      });
+      navigate(`${location.pathname}${location.search}`, { replace: true, state: {} });
+    })();
     fetchNotifications();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname]);
 
   useEffect(() => {
     if (!isInventoryView) return undefined;
@@ -225,6 +290,27 @@ const ProductManagement = ({ user }) => {
     }
   };
 
+  const mergeNewlyAddedProduct = (addedProduct) => {
+    if (!addedProduct) return;
+    const normalized =
+      normalizeSupplierProductsFromApi([addedProduct])[0] || addedProduct;
+    setProducts((prev) => {
+      const offerId = normalized?.supplier_product_id || normalized?.supplierProductId;
+      if (offerId && prev.some((p) => matchSupplierOfferRow(p, offerId))) {
+        return prev.map((p) => (matchSupplierOfferRow(p, offerId) ? { ...p, ...normalized } : p));
+      }
+      const catalogId = normalized?.id || normalized?._id;
+      if (
+        !offerId &&
+        catalogId &&
+        prev.some((p) => String(p.id || p._id || '') === String(catalogId))
+      ) {
+        return prev;
+      }
+      return [normalized, ...prev];
+    });
+  };
+
   const handleAddProduct = async (productData) => {
     try {
       const token = localStorage.getItem('token');
@@ -240,8 +326,10 @@ const ProductManagement = ({ user }) => {
       if (data.status === 'success') {
         const addedProduct =
           normalizeSupplierProductsFromApi([data.product])[0] || data.product;
-        setProducts((prev) => [...prev, addedProduct]);
         setShowAddModal(false);
+        // Prefer server list so status/offer id match DB; merge create response if fetch lags.
+        await fetchProducts({ silent: true });
+        mergeNewlyAddedProduct(addedProduct);
         const nextBrand = String(data?.nextStep?.brand || data?.product?.brand || productData?.brand || '').trim();
         const nextProductName = String(data?.nextStep?.productName || data?.product?.name || productData?.name || '').trim();
         const params = new URLSearchParams();
@@ -251,12 +339,14 @@ const ProductManagement = ({ user }) => {
         alert(
           `${data.message || 'Product added successfully!'} Next: complete inventory details (step 2), then ProductCOV (step 3).`
         );
-        navigate(`/manage-inventory?${params.toString()}`);
+        navigate(`/manage-inventory?${params.toString()}`, {
+          state: { newlyAddedProduct: addedProduct }
+        });
       } else {
         const allowed = Array.isArray(data.allowedBrands) && data.allowedBrands.length > 0
           ? `\n\nAllowed brands in your profile: ${data.allowedBrands.join(', ')}`
           : '';
-        alert((data.message || 'Failed to add product') + allowed);
+        alert((getSupplierProductCreateErrorMessage(data) || 'Failed to add product') + allowed);
       }
     } catch (error) {
       console.error('Failed to add product:', error);
@@ -265,15 +355,19 @@ const ProductManagement = ({ user }) => {
   };
 
   const buildInventoryUpdatePayload = (item, data) => {
+    const missing = getSupplierInventoryUpdateMissingFields(data);
+    if (missing.length > 0) {
+      return {
+        error: formatSupplierProductValidationMessage(missing),
+        missingFields: missing
+      };
+    }
+
     const stock = parseSupplierStockQuantity(data.stock);
-    if (stock === null) return null;
-    const priceRaw = data.price;
-    const price =
-      priceRaw !== '' && priceRaw !== undefined && priceRaw !== null
-        ? parseFloat(priceRaw)
-        : undefined;
+    const price = parseFloat(data.price);
     const payload = {
       stock,
+      price,
       location: data.location,
       unit: data.unit,
       igst_rate: data.igst_rate,
@@ -281,9 +375,6 @@ const ProductManagement = ({ user }) => {
       sgst_rate: data.sgst_rate,
       hsnCode: data.hsnCode || data.hsn_code
     };
-    if (price !== undefined && Number.isFinite(price)) {
-      payload.price = price;
-    }
     // Persist product photos uploaded in the inventory edit modal.
     if (Array.isArray(data.images)) {
       payload.images = data.images;
@@ -306,7 +397,7 @@ const ProductManagement = ({ user }) => {
     if (mpn) payload.mpn = mpn;
     const gtin = String(data.gtin || item?.gtin || '').trim();
     if (gtin) payload.gtin = gtin;
-    return payload;
+    return { payload };
   };
 
   const handleUpdateProduct = async (productId, productData, options = {}) => {
@@ -391,9 +482,8 @@ const ProductManagement = ({ user }) => {
         // Don't call fetchProducts() here as it might load stale data
         // The local state update above is sufficient
       } else {
-        // Show specific error message from backend
-        const errorMessage = data.message || (data.errors && data.errors.length > 0 ? data.errors[0] : 'Failed to update product');
-        alert(errorMessage);
+        // Show specific error message from backend (including validation details)
+        alert(getSupplierProductUpdateErrorMessage(data));
       }
     } catch (error) {
       console.error('Failed to update product:', error);
@@ -439,24 +529,22 @@ const ProductManagement = ({ user }) => {
     const productCategory = (product.category || '').toLowerCase();
     const filterCategoryLower = filterCategory === 'all' ? 'all' : filterCategory.toLowerCase();
     const matchesCategory = filterCategoryLower === 'all' || productCategory === filterCategoryLower;
-    const matchesStatus = filterStatus === 'all' || (product.status || 'pending') === filterStatus;
+    const matchesStatus =
+      filterStatus === 'all' || getSupplierApprovalStatus(product) === filterStatus;
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
   const pageStats = useMemo(() => {
     const total = products.length;
-    const pending = products.filter((p) => (p.status || 'pending') === 'pending').length;
-    const approved = products.filter((p) => p.status === 'approved').length;
+    const pending = products.filter((p) => getSupplierApprovalStatus(p) === 'pending').length;
+    const approved = products.filter((p) => getSupplierApprovalStatus(p) === 'approved').length;
+    const rejected = products.filter((p) => getSupplierApprovalStatus(p) === 'rejected').length;
     const lowStock = products.filter((p) => {
+      if (!isSupplierInventoryConfigured(p)) return false;
       const health = getStockHealth(p.stock);
       return health === 'out' || health === 'low';
     }).length;
-    const inventoryValue = products.reduce((sum, p) => {
-      const price = parseFloat(p.price) || 0;
-      const stock = parseSupplierStockQuantity(p.stock) ?? 0;
-      return sum + price * stock;
-    }, 0);
-    return { total, pending, approved, lowStock, inventoryValue };
+    return { total, pending, approved, rejected, lowStock };
   }, [products]);
 
   if (loading) {
@@ -540,17 +628,17 @@ const ProductManagement = ({ user }) => {
         </div>
         <div className="pm-kpi">
           <div className="pm-kpi__value">{pageStats.approved}</div>
-          <div className="pm-kpi__label">Active</div>
+          <div className="pm-kpi__label">Approved</div>
         </div>
         <div className="pm-kpi">
           <div className="pm-kpi__value">{pageStats.pending}</div>
-          <div className="pm-kpi__label">Pending review</div>
+          <div className="pm-kpi__label">Pending Approval</div>
         </div>
         <div className="pm-kpi">
           <div className="pm-kpi__value">
-            {isInventoryView ? pageStats.lowStock : formatRupee(pageStats.inventoryValue)}
+            {isInventoryView ? pageStats.lowStock : pageStats.rejected}
           </div>
-          <div className="pm-kpi__label">{isInventoryView ? 'Low / zero stock' : 'Inventory value'}</div>
+          <div className="pm-kpi__label">{isInventoryView ? 'Low / zero stock' : 'Rejected'}</div>
         </div>
       </div>
 
@@ -606,8 +694,8 @@ const ProductManagement = ({ user }) => {
               aria-label="Filter by status"
             >
               <option value="all">All statuses</option>
-              <option value="pending">Pending approval</option>
-              <option value="approved">Live</option>
+              <option value="pending">Pending Approval</option>
+              <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>
             </select>
           </div>
@@ -623,19 +711,27 @@ const ProductManagement = ({ user }) => {
                   product._id ||
                   `row-${productIndex}`
               );
-              const productStatus = product.status || 'pending';
+              const productStatus = getSupplierApprovalStatus(product);
               const status = STATUS_CONFIG[productStatus] || STATUS_CONFIG.pending;
-              const stockHealth = getStockHealth(product.stock);
+              const rejectionReason = getSupplierRejectionReason(product);
+              const inventoryConfigured = isSupplierInventoryConfigured(product);
+              const stockHealth = inventoryConfigured ? getStockHealth(product.stock) : null;
               const displayBrand = String(product.brand || product.brandModel || '').trim();
               const imgs = getProductImageList(product);
-              const inStock = Number(product.stock) > 0;
+              const inStock = inventoryConfigured && Number(product.stock) > 0;
               const moq = Number(product.min_order_quantity);
               const variantCode = product.variantAsin || product.variant_asin;
 
               return (
                 <article
                   key={rowKey}
-                  className={`pm-card pd-card flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${productStatus === 'pending' ? 'pm-card--pending' : ''}`}
+                  className={`pm-card pd-card flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
+                    productStatus === 'pending'
+                      ? 'pm-card--pending'
+                      : productStatus === 'rejected'
+                        ? 'pm-card--rejected'
+                        : ''
+                  }`}
                 >
                   <button
                     type="button"
@@ -679,11 +775,36 @@ const ProductManagement = ({ user }) => {
                       </div>
 
                       {productStatus === 'pending' ? (
-                        <p className="pm-card__notice">Pending admin approval before this variant is orderable.</p>
+                        <p className="pm-card__notice">{status.notice}</p>
                       ) : null}
-                      {productStatus === 'rejected' && product.rejectionReason ? (
+                      {(() => {
+                        const brandWarning = getBrandApprovalWarning(
+                          product.brandApprovalStatus,
+                          product.brand || product.brandModel,
+                          product.brandApprovalMessage
+                        );
+                        if (!brandWarning) return null;
+                        return (
+                          <p
+                            className={`pm-card__notice ${
+                              brandWarning.tone === 'danger' ? 'pm-card__notice--danger' : 'pm-card__notice--warning'
+                            }`}
+                          >
+                            {brandWarning.title}: {brandWarning.message}
+                          </p>
+                        );
+                      })()}
+                      {productStatus === 'rejected' ? (
                         <p className="pm-card__notice pm-card__notice--danger">
-                          Rejected: {product.rejectionReason}
+                          {rejectionReason
+                            ? `Rejected: ${rejectionReason}`
+                            : status.notice}
+                        </p>
+                      ) : null}
+                      {product.catalogMissing ? (
+                        <p className="pm-card__notice">
+                          Catalog record unavailable. Your offer is still listed with status{' '}
+                          {status.label}.
                         </p>
                       ) : null}
 
@@ -702,11 +823,19 @@ const ProductManagement = ({ user }) => {
                           ) : null}
                           {moq > 1 ? <span className="pd-card__meta-item">MOQ: {moq}</span> : null}
                           <span
-                            className={`pd-card__stock ${inStock ? 'pd-card__stock--in' : 'pd-card__stock--out'}`}
+                            className={`pd-card__stock ${
+                              !inventoryConfigured
+                                ? 'pd-card__stock--unset'
+                                : inStock
+                                  ? 'pd-card__stock--in'
+                                  : 'pd-card__stock--out'
+                            }`}
                           >
-                            {inStock
-                              ? `${product.stock} ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}`
-                              : 'Out of stock'}
+                            {!inventoryConfigured
+                              ? SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL
+                              : inStock
+                                ? `${product.stock} ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}`
+                                : 'Out of stock'}
                           </span>
                           {stockHealth === 'low' ? (
                             <span className="pd-card__meta-item pm-card__meta-warn">Low stock</span>
@@ -861,15 +990,17 @@ const ProductManagement = ({ user }) => {
               return;
             }
             if (isInventoryView) {
-              const payload = buildInventoryUpdatePayload(editingItem, data);
-              if (!payload) {
-                alert('Enter a valid whole-number stock quantity (0 or greater).');
+              const result = buildInventoryUpdatePayload(editingItem, data);
+              if (result.error) {
+                alert(result.error);
                 return;
               }
-              handleUpdateProduct(productId, payload, { expectedStock: payload.stock });
+              handleUpdateProduct(productId, result.payload, {
+                expectedStock: result.payload.stock
+              });
               return;
             }
-            // Catalog edit: keep identity + images (and description/specs from the form).
+            // Catalog edit: identity + images/specs. Brand is mandatory.
             const brandValue = String(
               data.brand ||
                 editingItem?.brand ||
@@ -877,15 +1008,24 @@ const ProductManagement = ({ user }) => {
                 editingItem?.attributes?.brand ||
                 ''
             ).trim();
-            handleUpdateProduct(productId, {
+            const catalogPayload = {
               name: data.name,
               description: data.description,
               category: data.category,
-              ...(brandValue ? { brand: brandValue } : {}),
+              brand: brandValue,
               gtin: data.gtin,
               images: Array.isArray(data.images) ? data.images : [],
               specifications: data.specifications
+            };
+            const catalogMissing = getSupplierCatalogMandatoryMissingFields(catalogPayload, {
+              isCreate: false,
+              requireUnit: false
             });
+            if (catalogMissing.length > 0) {
+              alert(formatSupplierProductValidationMessage(catalogMissing));
+              return;
+            }
+            handleUpdateProduct(productId, catalogPayload);
           }}
         />
       )}
@@ -925,6 +1065,7 @@ const ProductDetailsModal = ({
   const [savingSpecs, setSavingSpecs] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState(product?.description || '');
   const [extractingSpecs, setExtractingSpecs] = useState(false);
+  const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
   const specsObject =
     product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
       ? product.specifications
@@ -1041,6 +1182,16 @@ const ProductDetailsModal = ({
       return;
     }
 
+    const sourceKey = buildSpecExtractionSourceKey({
+      name: product?.name,
+      category,
+      brand: product?.brand || product?.brandModel,
+      description: descriptionDraft
+    });
+    if (lastSuccessfulExtractionSourceKey && lastSuccessfulExtractionSourceKey === sourceKey) {
+      return;
+    }
+
     setExtractingSpecs(true);
     try {
       const { response, data } = await extractSpecificationsFromDescription({
@@ -1071,16 +1222,31 @@ const ProductDetailsModal = ({
       setDraftSpecs(nextDraft);
 
       if (result.filledCount > 0) {
-        alert(`Filled ${result.filledCount} specification field${result.filledCount > 1 ? 's' : ''} from description. Review and click Save.`);
+        setLastSuccessfulExtractionSourceKey(sourceKey);
+        alert(
+          `Specifications extracted successfully. ${result.filledCount} field${
+            result.filledCount > 1 ? 's were' : ' was'
+          } filled. Review and click Save.`
+        );
       } else {
         alert('No values found in description. Use lines like "Finish: Matt" or "Sheen: Low".');
       }
     } catch (error) {
-      alert(`Failed to extract specifications: ${error.message}`);
+      alert('Failed to extract specifications. Please try again.');
     } finally {
       setExtractingSpecs(false);
     }
   };
+
+  const detailsExtractionSourceKey = buildSpecExtractionSourceKey({
+    name: product?.name,
+    category: product?.category,
+    brand: product?.brand || product?.brandModel,
+    description: descriptionDraft
+  });
+  const detailsSpecsAlreadyExtracted =
+    Boolean(lastSuccessfulExtractionSourceKey) &&
+    lastSuccessfulExtractionSourceKey === detailsExtractionSourceKey;
 
   const modalNode = (
     <div className="modal-overlay" onClick={onClose}>
@@ -1145,8 +1311,26 @@ const ProductDetailsModal = ({
             </div>
             <div className="pm-details-field">
               <span className="pm-details-field__label">Status</span>
-              <span className="pm-details-field__value">{(product.status || 'pending').replace('_', ' ')}</span>
+              <span className="pm-details-field__value">
+                {(STATUS_CONFIG[getSupplierApprovalStatus(product)] || STATUS_CONFIG.pending).label}
+              </span>
             </div>
+            {getSupplierApprovalStatus(product) === 'rejected' ? (
+              <div className="pm-details-field" style={{ gridColumn: '1 / -1' }}>
+                <span className="pm-details-field__label">Rejection reason</span>
+                <span className="pm-details-field__value">
+                  {getSupplierRejectionReason(product) || 'No reason provided'}
+                </span>
+              </div>
+            ) : null}
+            {getSupplierApprovalStatus(product) === 'pending' ? (
+              <div className="pm-details-field" style={{ gridColumn: '1 / -1' }}>
+                <span className="pm-details-field__label">Approval</span>
+                <span className="pm-details-field__value">
+                  Pending admin approval. This product remains visible in your list until reviewed.
+                </span>
+              </div>
+            ) : null}
             <div className="pm-details-field">
               <span className="pm-details-field__label">{SUPPLIER_MRP_LABEL}</span>
               <span className="pm-details-field__value">{formatRupeePerUnit(product.price, product.unit)}</span>
@@ -1154,7 +1338,9 @@ const ProductDetailsModal = ({
             <div className="pm-details-field">
               <span className="pm-details-field__label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
               <span className="pm-details-field__value">
-                {product.stock} {product.unit || 'unit'}
+                {isSupplierInventoryConfigured(product)
+                  ? `${product.stock} ${product.unit || 'unit'}`
+                  : SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
               </span>
             </div>
             {gtinValue ? (
@@ -1294,24 +1480,30 @@ const ProductDetailsModal = ({
                       resize: 'vertical'
                     }}
                   />
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={handleExtractSpecificationsInDetails}
-                      disabled={extractingSpecs || !descriptionDraft.trim()}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '0.35rem',
-                        background: extractingSpecs ? '#9ca3af' : '#10b981',
-                        color: '#fff',
-                        border: 'none'
-                      }}
-                    >
-                      <Sparkles size={14} />
-                      {extractingSpecs ? 'Extracting…' : 'Extract from description (AI)'}
-                    </button>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                    {detailsSpecsAlreadyExtracted ? (
+                      <span style={{ fontSize: '0.75rem', color: '#047857', fontStyle: 'italic' }}>
+                        Specifications extracted for the current description. Edit the description to extract again.
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={handleExtractSpecificationsInDetails}
+                        disabled={extractingSpecs || !descriptionDraft.trim()}
+                        style={{
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          background: extractingSpecs ? '#9ca3af' : '#10b981',
+                          color: '#fff',
+                          border: 'none'
+                        }}
+                      >
+                        <Sparkles size={14} />
+                        {extractingSpecs ? 'Extracting…' : 'Extract from description'}
+                      </button>
+                    )}
                   </div>
                 </div>
               ) : null}
@@ -1413,9 +1605,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const previousCategoryRef = useRef(null);
   const preserveSpecsOnNextCategoryLoadRef = useRef(false);
   const selectedSuggestionSpecsRef = useRef(null);
+  const loadCategorySpecsRequestRef = useRef(0);
   
   // Extract Specifications state
   const [extracting, setExtracting] = useState(false); // For extracting specs from description
+  const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [aiProvider, setAiProvider] = useState('auto'); // 'auto', 'openai', 'gemini', 'claude' - for extract specs only
   // Initialize specifications: for existing products, use their specs; for new products, start empty
@@ -1427,8 +1621,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   });
   const canEditSpecificationValues = !product;
   const [isSaving, setIsSaving] = useState(false);
+  const [formValidationError, setFormValidationError] = useState('');
+  const [showMissingHints, setShowMissingHints] = useState(false);
+  const [brandApprovalState, setBrandApprovalState] = useState({
+    loading: false,
+    status: '',
+    message: '',
+    brandName: ''
+  });
+  const formRef = useRef(null);
+  const productPhotosSectionRef = useRef(null);
+  const brandFieldRef = useRef(null);
 
-  const MIN_AI_PRODUCT_IMAGES = 3;
+  const MIN_AI_PRODUCT_IMAGES = MIN_SUPPLIER_PRODUCT_PHOTOS;
   const MAX_AI_PRODUCT_IMAGES = 8;
 
   // Multiple product photos for AI (minimum 3 required before analysis runs)
@@ -1447,6 +1652,68 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   useEffect(() => {
     productAiImagesRef.current = productAiImages;
   }, [productAiImages]);
+
+  useEffect(() => {
+    if (showInventoryFields) {
+      setBrandApprovalState({ loading: false, status: 'approved', message: '', brandName: '' });
+      return undefined;
+    }
+
+    const brandName = String(formData.brand || '').trim();
+    if (!brandName) {
+      setBrandApprovalState({ loading: false, status: 'missing', message: '', brandName: '' });
+      return undefined;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      setBrandApprovalState((prev) => ({
+        ...prev,
+        loading: true,
+        brandName
+      }));
+      try {
+        const token = localStorage.getItem('token');
+        const response = await fetch(
+          getApiUrl(`/api/supplier/brands/status?name=${encodeURIComponent(brandName)}`),
+          {
+            headers: { Authorization: `Bearer ${token}` },
+            cache: 'no-cache'
+          }
+        );
+        const data = await response.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!response.ok || data.status !== 'success') {
+          setBrandApprovalState({
+            loading: false,
+            status: 'unknown',
+            message: data.message || 'Could not verify brand approval status.',
+            brandName
+          });
+          return;
+        }
+        setBrandApprovalState({
+          loading: false,
+          status: data.brandStatus || 'unknown',
+          message: data.message || '',
+          brandName: data.brand?.name || brandName
+        });
+      } catch (_err) {
+        if (cancelled) return;
+        setBrandApprovalState({
+          loading: false,
+          status: 'unknown',
+          message: 'Could not verify brand approval status.',
+          brandName
+        });
+      }
+    }, 350);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [formData.brand, showInventoryFields]);
 
   useEffect(() => {
     return () => {
@@ -1694,12 +1961,141 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.name, formData.category, formData.brand]);
 
+  const getMissingMandatoryFields = () => {
+    if (showInventoryFields) {
+      return getSupplierInventoryUpdateMissingFields(formData);
+    }
+
+    // Only count successfully uploaded http(s) URLs — local previews must not unlock submit.
+    const imageCount = countSupplierProductPhotos(formData.images);
+
+    // Catalog create and catalog edit both require identity fields.
+    return getSupplierCatalogMandatoryMissingFields(formData, {
+      isCreate: !product,
+      requireUnit: !product,
+      requirePhotos: !product,
+      minPhotos: MIN_AI_PRODUCT_IMAGES,
+      photoCount: imageCount
+    });
+  };
+
+  const missingMandatoryFields = useMemo(
+    () => getMissingMandatoryFields(),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [
+      showInventoryFields,
+      product,
+      formData.name,
+      formData.brand,
+      formData.category,
+      formData.unit,
+      formData.price,
+      formData.stock,
+      formData.sgst_rate,
+      formData.cgst_rate,
+      formData.igst_rate,
+      formData.images,
+      productAiImages
+    ]
+  );
+
+  const uploadedPhotoCount = countSupplierProductPhotos(formData.images);
+  const photosRequirementMet = product
+    ? true
+    : uploadedPhotoCount >= MIN_AI_PRODUCT_IMAGES;
+  const photosMissingFromMandatory = missingMandatoryFields.some((field) =>
+    /product photos/i.test(String(field || ''))
+  );
+
+  const brandApprovalWarning =
+    !showInventoryFields && formData.brand
+      ? getBrandApprovalWarning(
+          brandApprovalState.status,
+          brandApprovalState.brandName || formData.brand,
+          brandApprovalState.message
+        )
+      : null;
+  const brandApprovalBlocksSubmit =
+    !showInventoryFields &&
+    !product &&
+    Boolean(String(formData.brand || '').trim()) &&
+    (brandApprovalState.loading ||
+      !isBrandApprovedForProductSubmit(brandApprovalState.status));
+
+  const isAddOrInventorySubmitBlocked =
+    missingMandatoryFields.length > 0 || brandApprovalBlocksSubmit;
+
+  useEffect(() => {
+    if (!isAddOrInventorySubmitBlocked) {
+      setFormValidationError('');
+      setShowMissingHints(false);
+    }
+  }, [isAddOrInventorySubmitBlocked]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isSaving) return;
     setSuggestions([]);
     setShowSuggestions(false);
-    
+
+    const missing = getMissingMandatoryFields();
+    if (missing.length > 0) {
+      setShowMissingHints(true);
+      const photosMissing = missing.some((field) => /product photos/i.test(String(field || '')));
+      setFormValidationError(
+        photosMissing && missing.length === 1
+          ? formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)
+          : formatSupplierProductValidationMessage(missing)
+      );
+      const formEl = formRef.current;
+      if (photosMissing && productPhotosSectionRef.current) {
+        productPhotosSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (formEl) {
+        const firstInvalid = formEl.querySelector(':invalid');
+        if (firstInvalid && typeof firstInvalid.reportValidity === 'function') {
+          firstInvalid.reportValidity();
+          firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else {
+          formEl.scrollTo?.({ top: 0, behavior: 'smooth' });
+        }
+      }
+      return;
+    }
+
+    if (brandApprovalBlocksSubmit) {
+      setShowMissingHints(true);
+      const warning =
+        brandApprovalWarning ||
+        getBrandApprovalWarning(
+          brandApprovalState.status || 'unregistered',
+          formData.brand,
+          brandApprovalState.message
+        );
+      setFormValidationError(
+        warning
+          ? `${warning.title}. ${warning.message}`
+          : 'Brand approval is required before submitting this product.'
+      );
+      brandFieldRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    // Final guard: never submit create with fewer than the required uploaded photos.
+    if (!product) {
+      const finalPhotoCount = countSupplierProductPhotos(formData.images);
+      if (finalPhotoCount < MIN_AI_PRODUCT_IMAGES) {
+        setShowMissingHints(true);
+        setFormValidationError(
+          formatMissingProductPhotosMessage(finalPhotoCount, MIN_AI_PRODUCT_IMAGES)
+        );
+        productPhotosSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+    }
+
+    setFormValidationError('');
+    setShowMissingHints(false);
+
     // Include ALL specifications in the product data (both predefined and dynamic from AI)
     // IMPORTANT: Keep ALL keys even if values are null/empty - admin needs to see all AI-generated keys
     const allSpecifications = { ...specifications };
@@ -1729,17 +2125,20 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       delete productData.specifications;
     }
 
-    // When editing in Manage Products (specifications only), strip inventory fields
-    if (!showInventoryFields && product) {
-      // Editing existing product in Manage Products view - only update specifications
+    // Catalog view (Manage Products): never persist inventory fields here.
+    // Stock/MRP/location are completed in Manage Inventory (step 2).
+    if (!showInventoryFields) {
       delete productData.price;
-      delete productData.unit;
       delete productData.stock;
       delete productData.location;
       delete productData.igst_rate;
       delete productData.cgst_rate;
       delete productData.sgst_rate;
       delete productData.lsa;
+      // Editing existing catalog row: specifications only (unit stays on catalog create).
+      if (product) {
+        delete productData.unit;
+      }
     }
 
     setIsSaving(true);
@@ -1811,7 +2210,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     // Get current category.
     const currentCategory = formData.category ? formData.category.trim().toLowerCase() : '';
-    const previousCategory = previousCategoryRef.current ? previousCategoryRef.current.trim().toLowerCase() : null;
+    const previousCategory = previousCategoryRef.current
+      ? previousCategoryRef.current.trim().toLowerCase()
+      : null;
 
     // On initial modal open for an existing (pending) product, keep its current specs.
     // We only want to clear/reload specs after a real user category change.
@@ -1820,32 +2221,39 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       return;
     }
 
-    // Only proceed if category actually changed
-    if (currentCategory === previousCategory) {
-      return; // Category hasn't changed, don't reload specs
+    if (!currentCategory) {
+      previousCategoryRef.current = formData.category;
+      setSpecifications({});
+      return;
     }
 
-    // Update the ref to track current category
+    // Wait for the categories list so we can resolve the canonical category name.
+    // Do not advance previousCategoryRef yet — otherwise specs never load when the
+    // category was set (e.g. by AI) before categories finished fetching.
+    if (categories.length === 0) {
+      return;
+    }
+
+    // Only proceed if category actually changed
+    if (currentCategory === previousCategory) {
+      return;
+    }
+
     previousCategoryRef.current = formData.category;
 
-    // Clear specs immediately when category changes (before loading new ones)
-    // This prevents showing old specs from previous category
-    setSpecifications({});
-
-    // Only if category is set and categories are loaded.
-    if (currentCategory && categories.length > 0) {
-      // Check if the category matches an existing category
-      const matchedCategory = categories.find(cat => 
+    const matchedCategory = categories.find(
+      (cat) =>
         cat.name.toLowerCase() === currentCategory ||
         (cat.displayName || cat.name).toLowerCase() === currentCategory
-      );
+    );
 
-      if (matchedCategory) {
-        const modelHint = String(formData?.name || '').trim();
-        const preserveExistingValues = preserveSpecsOnNextCategoryLoadRef.current;
-        preserveSpecsOnNextCategoryLoadRef.current = false;
-        loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues });
-      }
+    if (matchedCategory) {
+      const modelHint = String(formData?.name || '').trim();
+      const preserveExistingValues = preserveSpecsOnNextCategoryLoadRef.current;
+      preserveSpecsOnNextCategoryLoadRef.current = false;
+      loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues });
+    } else {
+      setSpecifications({});
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.category, categories, product]);
@@ -1941,8 +2349,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     const normalizedCategoryName = categoryName.trim().toLowerCase();
     const normalizedModel = String(modelValue || '').trim();
+    const requestId = `${normalizedCategoryName}::${normalizedModel}::${brandValue}::${Date.now()}`;
+    loadCategorySpecsRequestRef.current = requestId;
 
-    setSpecifications({});
     setLoadingSpecs(true);
 
     try {
@@ -1962,6 +2371,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         cache: 'no-cache'
       });
 
+      // Ignore stale responses from overlapping category/name loads.
+      if (loadCategorySpecsRequestRef.current !== requestId) {
+        return;
+      }
+
       if (resp.ok) {
         const data = await resp.json();
 
@@ -1973,43 +2387,116 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             const newSpecs = {};
             specKeys.forEach((k) => {
               if (preserveExistingValues && Object.prototype.hasOwnProperty.call(existingSpecsSnapshot, k)) {
-                newSpecs[k] = existingSpecsSnapshot[k];
+                const existingValue = existingSpecsSnapshot[k];
+                const incomingValue = specsObj[k];
+                const existingFilled =
+                  existingValue !== null &&
+                  existingValue !== undefined &&
+                  String(existingValue).trim() !== '';
+                newSpecs[k] = existingFilled ? existingValue : incomingValue;
               } else {
                 newSpecs[k] = specsObj[k];
               }
             });
+            // Keep any supplier-added keys that are not in the template.
+            if (preserveExistingValues) {
+              Object.keys(existingSpecsSnapshot).forEach((k) => {
+                if (!Object.prototype.hasOwnProperty.call(newSpecs, k)) {
+                  newSpecs[k] = existingSpecsSnapshot[k];
+                }
+              });
+            }
             setSpecifications(newSpecs);
-          } else {
+          } else if (!preserveExistingValues) {
             setSpecifications({});
           }
           selectedSuggestionSpecsRef.current = null;
-        } else {
+        } else if (!preserveExistingValues) {
           setSpecifications({});
           selectedSuggestionSpecsRef.current = null;
         }
       } else if (resp.status === 404) {
-        setSpecifications({});
-        selectedSuggestionSpecsRef.current = null;
+        if (!preserveExistingValues) {
+          setSpecifications({});
+          selectedSuggestionSpecsRef.current = null;
+        }
       } else {
         console.error('Failed to load specifications:', resp.status, resp.statusText);
-        setSpecifications({});
+        if (!preserveExistingValues) {
+          setSpecifications({});
+        }
       }
     } catch (err) {
       console.error('Failed to load specifications:', normalizedCategoryName, normalizedModel, err);
-      setSpecifications({});
-      selectedSuggestionSpecsRef.current = null;
+      if (!preserveExistingValues) {
+        setSpecifications({});
+        selectedSuggestionSpecsRef.current = null;
+      }
     } finally {
-      setLoadingSpecs(false);
+      if (loadCategorySpecsRequestRef.current === requestId) {
+        setLoadingSpecs(false);
+      }
     }
+  };
+
+  const CATEGORY_OTHER_VALUE = '__other_category__';
+
+  const resolveMatchedCategory = (rawValue = formData.category) => {
+    const value = String(rawValue || '').trim().toLowerCase();
+    if (!value) return null;
+    return (
+      categories.find(
+        (cat) =>
+          cat.name.toLowerCase() === value ||
+          String(cat.displayName || cat.name)
+            .toLowerCase()
+            .trim() === value
+      ) || null
+    );
+  };
+
+  const matchedCategoryOption = resolveMatchedCategory();
+  const categorySelectValue = matchedCategoryOption
+    ? matchedCategoryOption.name
+    : productType === 'new_category' || String(formData.category || '').trim()
+      ? CATEGORY_OTHER_VALUE
+      : '';
+  const showNewCategoryInput = categorySelectValue === CATEGORY_OTHER_VALUE;
+
+  const handleCategoryDropdownChange = async (e) => {
+    const value = e.target.value;
+
+    if (value === '') {
+      setProductType('existing_category');
+      previousCategoryRef.current = null;
+      setFormData((prev) => ({ ...prev, category: '' }));
+      setSpecifications({});
+      return;
+    }
+
+    if (value === CATEGORY_OTHER_VALUE) {
+      setProductType('new_category');
+      previousCategoryRef.current = null;
+      setFormData((prev) => ({ ...prev, category: '' }));
+      setSpecifications({});
+      return;
+    }
+
+    setProductType('existing_category');
+    const matched =
+      categories.find((cat) => cat.name === value) ||
+      resolveMatchedCategory(value) ||
+      { name: value };
+    await handleCategorySelect(matched);
   };
 
   const handleCategoryChange = async (e) => {
     const value = e.target.value;
-    setFormData({...formData, category: value});
-    
-    // Filter categories based on input
+    setFormData({ ...formData, category: value });
+
+    // Filter categories based on input (legacy typeahead helpers / unit parity)
     if (value.trim().length > 0) {
-      const filtered = categories.filter(cat => 
+      const filtered = categories.filter((cat) =>
         (cat.displayName || cat.name).toLowerCase().includes(value.toLowerCase())
       );
       setCategorySuggestions(filtered);
@@ -2022,23 +2509,17 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     // If user manually types a category name that matches an existing category,
     // load specs for that category and current product/model hint.
     if (value.trim().length > 0 && (!product || (product && (product.status || 'pending') === 'pending'))) {
-      // Check if the typed value exactly matches a category name.
-      const matchedCategory = categories.find(cat => 
-        cat.name.toLowerCase() === value.trim().toLowerCase() ||
-        (cat.displayName || cat.name).toLowerCase() === value.trim().toLowerCase()
-      );
-      
+      const matchedCategory = resolveMatchedCategory(value);
+
       if (matchedCategory) {
-        // User typed a valid category name - include product name as model hint so
-        // admin-defined model spec profiles are shown while adding products.
         const modelHint = String(formData?.name || '').trim();
-        await loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues: false });
+        await loadCategorySpecifications(matchedCategory.name, modelHint, {
+          preserveExistingValues: false
+        });
       } else {
-        // User is typing but hasn't matched a category yet - clear specs
         setSpecifications({});
       }
     } else if (!value.trim() && (!product || (product && (product.status || 'pending') === 'pending'))) {
-      // Category field cleared - clear specs
       setSpecifications({});
     }
   };
@@ -2347,15 +2828,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           }, 100);
         }
 
-        const providerName =
-          data.provider === 'openai'
-            ? 'ChatGPT'
-            : data.provider === 'gemini'
-              ? 'Gemini'
-              : data.provider === 'claude'
-                ? 'Claude'
-                : 'AI';
-        openAiSuggestionPopupFromReview(data.review || null, providerName);
+        openAiSuggestionPopupFromReview(data.review || null, 'AI');
       } else {
         setAiDetectionReview(null);
         setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
@@ -2365,9 +2838,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       console.error('Image analysis error:', error);
       setAiDetectionReview(null);
       setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
-      alert(
-        `Failed to analyze images: ${error.message}. Please check your API keys configuration and try again.`
-      );
+      alert('Failed to analyze images. Please try again.');
     } finally {
       setAnalyzingImage(false);
     }
@@ -2563,6 +3034,16 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       return;
     }
 
+    const sourceKey = buildSpecExtractionSourceKey({
+      name: formData.name,
+      category: formData.category,
+      brand: formData.brand,
+      description: formData.description
+    });
+    if (lastSuccessfulExtractionSourceKey && lastSuccessfulExtractionSourceKey === sourceKey) {
+      return;
+    }
+
     setExtracting(true);
     try {
       const { response, data } = await extractSpecificationsFromDescription({
@@ -2589,18 +3070,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
       setSpecifications(result.merged);
 
-      const providerName =
-        result.provider === 'openai'
-          ? 'ChatGPT'
-          : result.provider === 'gemini'
-            ? 'Gemini'
-            : result.provider === 'claude'
-              ? 'Claude'
-              : 'AI';
-
       if (result.filledCount > 0) {
+        setLastSuccessfulExtractionSourceKey(sourceKey);
         alert(
-          `Successfully extracted ${result.filledCount} specification value${result.filledCount > 1 ? 's' : ''} from description using ${providerName}.`
+          result.filledCount === 1
+            ? 'Specifications extracted successfully. 1 value was filled from the description.'
+            : `Specifications extracted successfully. ${result.filledCount} values were filled from the description.`
         );
       } else {
         alert(
@@ -2609,11 +3084,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       }
     } catch (error) {
       console.error('Extract specifications error:', error);
-      alert(`Failed to extract specifications: ${error.message}. Check AI API keys in server configuration.`);
+      alert('Failed to extract specifications. Please try again.');
     } finally {
       setExtracting(false);
     }
   };
+
+  const currentSpecExtractionSourceKey = buildSpecExtractionSourceKey({
+    name: formData.name,
+    category: formData.category,
+    brand: formData.brand,
+    description: formData.description
+  });
+  const specsAlreadyExtractedForCurrentSource =
+    Boolean(lastSuccessfulExtractionSourceKey) &&
+    lastSuccessfulExtractionSourceKey === currentSpecExtractionSourceKey;
 
   const modalNode = (
     <div className="modal-overlay">
@@ -2635,7 +3120,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           </div>
         )}
         
-        <form onSubmit={handleSubmit} className="modal-form">
+        <form ref={formRef} onSubmit={handleSubmit} className="modal-form" noValidate>
           <div className="form-grid">
             {product && (
             <div className="form-group" style={{ gridColumn: '1 / -1', marginBottom: '1rem', order: !product ? 100 : 1 }}>
@@ -2741,17 +3226,36 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             )}
             {/* Image Upload Section */}
             {!product && (
-              <div className="form-group" style={{ gridColumn: '1 / -1', marginBottom: '1rem', order: -10 }}>
+              <div
+                className="form-group"
+                ref={productPhotosSectionRef}
+                style={{ gridColumn: '1 / -1', marginBottom: '1rem', order: -10 }}
+              >
                 <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                   <ImageIcon size={16} />
-                  Product photos for AI + customer display (minimum {MIN_AI_PRODUCT_IMAGES})
+                  Product photos (minimum {MIN_AI_PRODUCT_IMAGES} required)
+                  <span style={{ color: '#dc2626', fontWeight: 700 }}>*</span>
                 </label>
                 <div
+                  className={
+                    !photosRequirementMet && (showMissingHints || photosMissingFromMandatory)
+                      ? 'pm-photos-upload pm-photos-upload--error'
+                      : 'pm-photos-upload'
+                  }
                   style={{
-                    border: '2px dashed #d1d5db',
+                    border: `2px dashed ${
+                      !photosRequirementMet && (showMissingHints || photosMissingFromMandatory)
+                        ? '#f87171'
+                        : photosRequirementMet
+                          ? '#6ee7b7'
+                          : '#d1d5db'
+                    }`,
                     borderRadius: '8px',
                     padding: '1rem',
-                    backgroundColor: '#f9fafb',
+                    backgroundColor:
+                      !photosRequirementMet && (showMissingHints || photosMissingFromMandatory)
+                        ? '#fef2f2'
+                        : '#f9fafb',
                     position: 'relative'
                   }}
                 >
@@ -2860,21 +3364,39 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     }}
                   >
                     <p style={{ margin: 0, fontSize: '0.75rem', color: '#6b7280', flex: '1 1 200px' }}>
-                      Select <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong> at once (different angles,
-                      packaging, or label).
+                      Upload <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong> (you can add them one by
+                      one or together). Use different angles, packaging, or the label.
                     </p>
                     <span
                       style={{
                         fontSize: '0.8rem',
                         fontWeight: 600,
-                        color:
-                          productAiImages.length >= MIN_AI_PRODUCT_IMAGES ? '#059669' : '#b45309',
+                        color: photosRequirementMet ? '#059669' : '#b45309',
                         whiteSpace: 'nowrap'
                       }}
                     >
-                      {productAiImages.length} / {MIN_AI_PRODUCT_IMAGES}+
+                      {uploadedPhotoCount} / {MIN_AI_PRODUCT_IMAGES} required
                     </span>
                   </div>
+                  {!photosRequirementMet ? (
+                    <p
+                      className={
+                        showMissingHints || photosMissingFromMandatory
+                          ? 'pm-photos-validation'
+                          : 'pm-photos-validation-hint'
+                      }
+                      role={showMissingHints || photosMissingFromMandatory ? 'alert' : 'status'}
+                      style={{
+                        margin: '0.65rem 0 0',
+                        fontSize: '0.8rem',
+                        fontWeight: showMissingHints || photosMissingFromMandatory ? 600 : 500,
+                        color:
+                          showMissingHints || photosMissingFromMandatory ? '#991b1b' : '#92400e'
+                      }}
+                    >
+                      {formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)}
+                    </p>
+                  ) : null}
                   {aiDetectionReview && (
                     <div
                       style={{
@@ -3293,18 +3815,39 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                 )}
                 </div>
 
-                <div style={{ marginTop: '0.9rem' }}>
+                <div style={{ marginTop: '0.9rem' }} ref={brandFieldRef}>
                   <label style={{ display: 'block', marginBottom: '0.35rem' }}>
                     Brand
                   </label>
                   <BrandSelect
                     value={formData.brand}
                     onChange={(brand) => setFormData((prev) => ({ ...prev, brand }))}
-                    disabled={!!product}
-                    required={!product}
+                    disabled={!!product && Boolean(String(formData.brand || '').trim())}
+                    required
                     searchable
                     allowOther={false}
                   />
+                  {brandApprovalState.loading && String(formData.brand || '').trim() ? (
+                    <p className="pm-brand-approval-warning" role="status" style={{ borderColor: '#cbd5e1', background: '#f8fafc', color: '#475569' }}>
+                      Checking brand approval status…
+                    </p>
+                  ) : null}
+                  {!brandApprovalState.loading && brandApprovalWarning ? (
+                    <div
+                      className={`pm-brand-approval-warning${
+                        brandApprovalWarning.tone === 'danger' ? ' pm-brand-approval-warning--danger' : ''
+                      }`}
+                      role="alert"
+                    >
+                      <span className="pm-brand-approval-warning__title">
+                        {brandApprovalWarning.title}
+                      </span>
+                      {brandApprovalWarning.message}
+                      <div style={{ marginTop: '0.35rem' }}>
+                        Open <strong>Select yourself</strong> to request or track brand approval before submitting products.
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
 
                 <div style={{ marginTop: '0.9rem' }}>
@@ -3404,81 +3947,57 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             )}
             
             {!showInventoryFields && (
-              <div className="form-group" style={{ 
-                opacity: showSuggestions && suggestions.length > 0 ? 0.3 : 1,
-                pointerEvents: showSuggestions && suggestions.length > 0 ? 'none' : 'auto',
-                transition: 'opacity 0.2s ease',
-                zIndex: showCategorySuggestions ? 1000 : 1
-              }}>
-                <label>Category</label>
-                <div className={`pm-suggest-anchor${showCategorySuggestions ? ' is-open' : ''}`}>
-                  <input
-                    ref={categoryInputRef}
-                    type="text"
-                    value={formData.category}
-                    onChange={handleCategoryChange}
-                    onFocus={() => {
-                      if (categories.length > 0) {
-                        setCategorySuggestions(categories);
-                        setShowCategorySuggestions(true);
-                      }
-                    }}
-                    onBlur={(e) => {
-                      if (categorySuggestionsRef.current && categorySuggestionsRef.current.contains(e.relatedTarget)) {
-                        return;
-                      }
-                      setTimeout(() => {
-                        if (!categorySuggestionsRef.current || !categorySuggestionsRef.current.contains(document.activeElement)) {
-                          setShowCategorySuggestions(false);
-                        }
-                      }, 200);
-                    }}
-                    placeholder="Select or type a new category"
-                    required
-                    autoComplete="off"
-                    style={{ width: '100%', boxSizing: 'border-box' }}
-                  />
-                  {showCategorySuggestions && (
-                    <div
-                      ref={categorySuggestionsRef}
-                      className="pm-suggest-menu"
-                      onMouseDown={(e) => e.preventDefault()}
+              <div
+                className="form-group"
+                style={{
+                  opacity: showSuggestions && suggestions.length > 0 ? 0.3 : 1,
+                  pointerEvents: showSuggestions && suggestions.length > 0 ? 'none' : 'auto',
+                  transition: 'opacity 0.2s ease',
+                  zIndex: 1
+                }}
+              >
+                <label htmlFor="pm-category-select">Category</label>
+                <select
+                  id="pm-category-select"
+                  className="pm-category-select"
+                  value={categorySelectValue}
+                  onChange={handleCategoryDropdownChange}
+                  required={!showNewCategoryInput}
+                  aria-label="Select category"
+                >
+                  <option value="">Select category…</option>
+                  {categories.map((cat) => (
+                    <option key={cat.name || cat.displayName} value={cat.name}>
+                      {cat.displayName || cat.name}
+                    </option>
+                  ))}
+                  <option value={CATEGORY_OTHER_VALUE}>Other / create new category…</option>
+                </select>
+                {showNewCategoryInput ? (
+                  <div className="pm-category-other">
+                    <input
+                      type="text"
+                      value={formData.category}
+                      onChange={handleCategoryChange}
+                      placeholder="Enter new category name"
+                      required
+                      autoComplete="off"
+                      aria-label="New category name"
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={handleCategoryCreate}
+                      disabled={!String(formData.category || '').trim()}
                     >
-                      {categorySuggestions.length > 0 ? (
-                        categorySuggestions.map((cat, index) => (
-                          <div
-                            key={index}
-                            className="pm-suggest-menu__item"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleCategorySelect(cat);
-                            }}
-                          >
-                            {cat.displayName || cat.name}
-                          </div>
-                        ))
-                      ) : (
-                        <div className="pm-suggest-menu__empty">
-                          No matching categories
-                        </div>
-                      )}
-                      {formData.category.trim() && !categorySuggestions.some(cat => cat.name.toLowerCase() === formData.category.trim().toLowerCase()) && (
-                        <div
-                          className="pm-suggest-menu__create"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            handleCategoryCreate();
-                          }}
-                        >
-                          <Plus size={16} />
-                          Create "{formData.category.trim()}"
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
+                      <Plus size={16} />
+                      Create category
+                    </button>
+                  </div>
+                ) : null}
+                <p className="pm-category-hint">
+                  Open the list to scroll through all available categories.
+                </p>
               </div>
             )}
             
@@ -3640,44 +4159,72 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   </p>
                   {/* Extract Specifications Button */}
                   {formData.description && formData.description.trim() && (
-                    <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem' }}>
-                      {(!formData.category || !formData.category.trim()) && (
+                    <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      {specsAlreadyExtractedForCurrentSource ? (
+                        <span style={{ fontSize: '0.75rem', color: '#047857', fontStyle: 'italic' }}>
+                          Specifications extracted for the current product details. Edit name, brand, category, or description to extract again.
+                        </span>
+                      ) : (!formData.category || !formData.category.trim()) ? (
                         <span style={{ fontSize: '0.75rem', color: '#dc2626', fontStyle: 'italic' }}>
                           ⚠️ Category required for extraction
                         </span>
-                      )}
-                      <button
-                        type="button"
-                        onClick={handleExtractSpecifications}
-                        disabled={extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim()}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.5rem',
-                          padding: '0.375rem 0.75rem',
-                          background: extracting ? '#9ca3af' : (!formData.category || !formData.category.trim()) ? '#9ca3af' : '#10b981',
-                          color: 'white',
-                          border: 'none',
-                          borderRadius: '6px',
-                          fontSize: '0.875rem',
-                          fontWeight: '500',
-                          cursor: extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim() ? 'not-allowed' : 'pointer',
-                          opacity: extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim() ? 0.6 : 1,
-                          transition: 'all 0.2s ease',
-                          whiteSpace: 'nowrap'
-                        }}
-                        title={(!formData.category || !formData.category.trim()) 
-                          ? "Please select a category first to extract specifications"
-                          : "Extract specification key-value pairs from the description above using AI. Category and description must match."}
-                      >
-                        <Sparkles size={14} />
-                        <span>{extracting ? 'Extracting...' : 'Extract Specifications'}</span>
-                      </button>
+                      ) : null}
+                      {!specsAlreadyExtractedForCurrentSource ? (
+                        <button
+                          type="button"
+                          onClick={handleExtractSpecifications}
+                          disabled={
+                            extracting ||
+                            !formData.description ||
+                            !formData.description.trim() ||
+                            !formData.category ||
+                            !formData.category.trim()
+                          }
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.5rem',
+                            padding: '0.375rem 0.75rem',
+                            background: extracting ? '#9ca3af' : (!formData.category || !formData.category.trim()) ? '#9ca3af' : '#10b981',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: '6px',
+                            fontSize: '0.875rem',
+                            fontWeight: '500',
+                            cursor: extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim() ? 'not-allowed' : 'pointer',
+                            opacity: extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim() ? 0.6 : 1,
+                            transition: 'all 0.2s ease',
+                            whiteSpace: 'nowrap'
+                          }}
+                          title={(!formData.category || !formData.category.trim())
+                            ? "Please select a category first to extract specifications"
+                            : "Extract specification key-value pairs from the description above using AI. Category and description must match."}
+                        >
+                          <Sparkles size={14} />
+                          <span>{extracting ? 'Extracting...' : 'Extract Specifications'}</span>
+                        </button>
+                      ) : null}
                     </div>
                   )}
                 </div>
                 
                 {/* Show message when category is selected but no admin specs found */}
+                {formData.category && formData.category.trim() &&
+                 !formData.catalogProductId &&
+                 loadingSpecs &&
+                 (!product || (product && (product.status || 'pending') === 'pending')) && (
+                  <div className="form-group span-2" style={{
+                    marginTop: '1rem',
+                    padding: '0.85rem 1rem',
+                    background: '#f8fafc',
+                    borderRadius: '8px',
+                    border: '1px solid #e2e8f0',
+                    color: '#475569',
+                    fontSize: '0.875rem'
+                  }}>
+                    Loading specification fields for "{formData.category}"…
+                  </div>
+                )}
                 {formData.category && formData.category.trim() &&
                  !formData.catalogProductId &&
                  !loadingSpecs &&
@@ -3859,7 +4406,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                 <Sparkles size={16} color="#9a3412" />
                 <strong style={{ color: '#9a3412' }}>
-                  {aiSuggestionPopup.providerName} confidence is below 80%. Do you mean these values?
+                  AI confidence is below 80%. Do you mean these values?
                 </strong>
               </div>
               <p style={{ margin: '0 0 0.55rem 0', fontSize: '0.82rem', color: '#7c2d12' }}>
@@ -3920,11 +4467,41 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             </div>
           )}
           
+          {isAddOrInventorySubmitBlocked ? (
+            <div
+              className={
+                formValidationError || showMissingHints
+                  ? 'pm-form-validation'
+                  : 'pm-form-validation-hint'
+              }
+              role={formValidationError || showMissingHints ? 'alert' : 'status'}
+            >
+              {formValidationError ||
+                (brandApprovalBlocksSubmit && brandApprovalWarning
+                  ? `${brandApprovalWarning.title}. ${brandApprovalWarning.message}`
+                  : photosMissingFromMandatory && missingMandatoryFields.length === 1
+                  ? formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)
+                  : `Complete required fields to enable ${product ? 'Update Product' : 'Add Product'}: ${[
+                      ...missingMandatoryFields,
+                      ...(brandApprovalBlocksSubmit ? ['Brand approval'] : [])
+                    ].join(', ')}.`)}
+            </div>
+          ) : null}
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose} disabled={isSaving}>
               Cancel
             </button>
-            <button type="submit" className="btn-primary" disabled={isSaving}>
+            <button
+              type="submit"
+              className="btn-primary"
+              disabled={isSaving || isAddOrInventorySubmitBlocked}
+              aria-disabled={isSaving || isAddOrInventorySubmitBlocked}
+              title={
+                isAddOrInventorySubmitBlocked
+                  ? `Required: ${missingMandatoryFields.join(', ')}`
+                  : undefined
+              }
+            >
               <Save size={16} />
               {isSaving ? 'Saving…' : product ? 'Update Product' : 'Add Product'}
             </button>
