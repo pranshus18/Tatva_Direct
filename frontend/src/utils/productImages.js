@@ -19,13 +19,24 @@ export function normalizeProductImages(input) {
   return [];
 }
 
+/**
+ * Images belonging to this supplier offer (not shared catalog history).
+ * Prefer attributes.images so catalog/old photos do not leak into add/edit forms.
+ */
+export function getSupplierOfferImagesForForm(product) {
+  if (!product) return [];
+  const fromAttributes = normalizeProductImages(product?.attributes?.images);
+  if (fromAttributes.length > 0) return fromAttributes;
+  return normalizeProductImages(product.images);
+}
+
 /** First image URL for thumbnails; prefers supplier offer images when present on the row. */
 export function getProductImageList(product) {
   if (!product) return [];
-  const direct = normalizeProductImages(product.images);
-  if (direct.length > 0) return direct;
   const fromAttributes = normalizeProductImages(product?.attributes?.images);
   if (fromAttributes.length > 0) return fromAttributes;
+  const direct = normalizeProductImages(product.images);
+  if (direct.length > 0) return direct;
   const single = product?.image ? normalizeProductImages([product.image]) : [];
   return single;
 }

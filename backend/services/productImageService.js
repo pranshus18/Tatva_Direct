@@ -10,7 +10,20 @@ export function mergeProductImageLists(...lists) {
 }
 
 /**
+ * Supplier portal / offer responses must show only this offer's photos when present.
+ * Do not merge shared catalog history into the supplier's listing (that leaked "old" images
+ * into add/edit flows). Fall back to catalog images only when the offer has none yet.
+ */
+export function resolveSupplierOfferDisplayImages(offerImages, catalogImages = []) {
+  const offer = sanitizeImageUrls(offerImages);
+  if (offer.length > 0) return offer;
+  return sanitizeImageUrls(catalogImages);
+}
+
+/**
  * Persist uploaded offer images on the shared catalog row so buyer discovery can show thumbnails.
+ * Catalog may accumulate images across offers; supplier-facing APIs must use
+ * resolveSupplierOfferDisplayImages so those catalog extras do not appear on the offer.
  */
 export async function syncCatalogProductImages(supabase, productId, candidateImages = []) {
   if (!productId) return [];

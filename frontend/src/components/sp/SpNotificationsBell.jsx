@@ -9,8 +9,9 @@ import {
   getSupplierNotificationTargetPath,
   isBrandRejectedNotification
 } from '@/utils/supplierNotificationDisplay';
+import { filterSpNotifications } from '@/utils/spNotificationAudience';
+import { useNotificationPanelScrollLock } from '@/hooks/useNotificationPanelScrollLock';
 import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/utils';
 
 function formatNotificationDate(dateString) {
@@ -21,6 +22,7 @@ export default function SpNotificationsBell() {
   const navigate = useNavigate();
   const location = useLocation();
   const containerRef = useRef(null);
+  const listScrollRef = useRef(null);
   const isDashboard = location.pathname === '/dashboard';
   const [showDropdown, setShowDropdown] = useState(false);
   const [dashboardPanelOpen, setDashboardPanelOpen] = useState(false);
@@ -29,14 +31,21 @@ export default function SpNotificationsBell() {
   const [markingAllRead, setMarkingAllRead] = useState(false);
 
   const panelOpen = isDashboard ? dashboardPanelOpen : showDropdown;
+  useNotificationPanelScrollLock(!isDashboard && showDropdown, listScrollRef);
 
   const fetchNotifications = async () => {
     try {
       const res = await authFetch('/api/supplier/notifications');
       const data = await res.json();
       if (data.status === 'success') {
-        setNotifications(data.notifications || []);
-        setUnreadCount(data.unreadCount ?? 0);
+        const raw = data.notifications || [];
+        const { notifications: visible, unreadCount: visibleUnread } = filterSpNotifications(raw);
+        setNotifications(visible);
+        setUnreadCount(
+          visible.length === raw.length && typeof data.unreadCount === 'number'
+            ? data.unreadCount
+            : visibleUnread
+        );
       } else {
         setNotifications([]);
         setUnreadCount(0);
@@ -205,11 +214,11 @@ export default function SpNotificationsBell() {
 
       {!isDashboard && showDropdown ? (
         <div
-          className="absolute right-0 top-full z-50 mt-2 w-[min(100vw-2rem,22rem)] overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
+          className="absolute right-0 top-full z-50 mt-2 flex max-h-[min(80vh,440px)] w-[min(100vw-2rem,22rem)] flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
           role="dialog"
           aria-label="Notifications"
         >
-          <div className="flex items-center justify-between border-b px-4 py-3">
+          <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
             <h3 className="text-sm font-semibold">Notifications</h3>
             <div className="flex items-center gap-2">
               {unreadCount > 0 ? (
@@ -229,7 +238,11 @@ export default function SpNotificationsBell() {
               </Button>
             </div>
           </div>
-          <ScrollArea className="max-h-[min(70vh,400px)]">
+          <div
+            ref={listScrollRef}
+            className="min-h-0 flex-1 overflow-y-auto overscroll-contain"
+            data-notification-scroll-list
+          >
             {notifications.length === 0 ? (
               <p className="px-4 py-8 text-center text-sm text-muted-foreground">No notifications</p>
             ) : (
@@ -294,7 +307,7 @@ export default function SpNotificationsBell() {
                 );
               })
             )}
-          </ScrollArea>
+          </div>
         </div>
       ) : null}
     </div>

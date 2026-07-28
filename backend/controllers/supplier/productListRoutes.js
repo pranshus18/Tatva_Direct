@@ -10,7 +10,7 @@ import {
   supplierOfferTsinFields,
   resolveEffectiveSupplierOfferState
 } from './shared/productHelpers.js';
-import { mergeProductImageLists } from '../../services/productImageService.js';
+import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
 import { catalogBrandDedupKey, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 
 export function registerSupplierProductListRoutes(ctx) {
@@ -157,7 +157,7 @@ router.get('/products', authenticateToken, async (req, res) => {
           gtin: attributes?.gtin || baseProduct?.gtin,
           mpn: attributes?.mpn || baseProduct?.mpn,
           specifications: storedSpecs,
-          images: mergeProductImageLists(offerImages, baseImages),
+          images: resolveSupplierOfferDisplayImages(offerImages, baseImages),
           price: sp.price,
           stock: parseSupplierStockQuantity(sp.stock) ?? 0,
           igst_rate: sp.igst_rate ?? attributes?.igstRate ?? null,

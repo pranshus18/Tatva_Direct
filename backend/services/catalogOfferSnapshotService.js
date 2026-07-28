@@ -136,7 +136,7 @@ export function reconcileDiscoveryProductFields(product, aggregates) {
   return {
     ...product,
     supplierCount,
-    canAddToCart: supplierCount > 0,
+    canAddToCart: supplierCount > 0 && resolvedStock > 0,
     stock: resolvedStock,
     price: catalogPrice > 0 ? catalogPrice : offerPrice,
     min_order_quantity: bestOffer?.min_order_quantity ?? product?.min_order_quantity ?? null,

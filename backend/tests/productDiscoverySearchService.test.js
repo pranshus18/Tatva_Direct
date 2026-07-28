@@ -99,6 +99,7 @@ test('aggregateEligibleDiscoveryOffers sums stock from eligible supplier offers'
 
   assert.equal(reconciled.supplierCount, 2);
   assert.equal(reconciled.stock, 76);
+  assert.equal(reconciled.canAddToCart, true);
   assert.equal(reconciled.price, 299);
   assert.equal(reconciled.location, 'Pune, Maharashtra');
 });
@@ -131,9 +132,41 @@ test('reconcileDiscoveryProductFields ignores legacy catalog stock when offers e
   const reconciled = reconcileDiscoveryProductFields(product, aggregates);
 
   assert.equal(reconciled.stock, 42);
+  assert.equal(reconciled.canAddToCart, true);
   assert.equal(reconciled.price, 199);
   assert.equal(reconciled.min_order_quantity, 2);
   assert.equal(reconciled.location, 'Mumbai');
+});
+
+test('reconcileDiscoveryProductFields disables cart when eligible stock is zero', () => {
+  const product = {
+    id: 'product-oos',
+    stock: 999,
+    price: 10,
+    location: 'Legacy'
+  };
+  const aggregates = {
+    eligibleSupplierCountByProduct: new Map([['product-oos', 1]]),
+    totalStockByProduct: new Map([['product-oos', 0]]),
+    bestOfferByProduct: new Map([
+      [
+        'product-oos',
+        {
+          price: 10,
+          stock: 0,
+          location: 'Pune',
+          min_order_quantity: 1,
+          _stock: 0,
+          _price: 10
+        }
+      ]
+    ])
+  };
+
+  const reconciled = reconcileDiscoveryProductFields(product, aggregates);
+  assert.equal(reconciled.supplierCount, 1);
+  assert.equal(reconciled.stock, 0);
+  assert.equal(reconciled.canAddToCart, false);
 });
 
 test('pickBetterListedOffer prefers higher stock then lower price', () => {

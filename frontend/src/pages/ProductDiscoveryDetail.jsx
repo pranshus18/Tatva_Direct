@@ -390,6 +390,10 @@ export default function ProductDiscoveryDetail() {
   };
 
   const openAddToCart = () => {
+    if (!inStock) {
+      setError('Product is out of stock');
+      return;
+    }
     if (!activeListing?.canAddToCart && !productSummary.canAddToCart) {
       setError('This variant is not currently available from eligible suppliers.');
       return;
@@ -428,7 +432,7 @@ export default function ProductDiscoveryDetail() {
       </div>
 
       <div className={`pdd-buybox__stock ${inStock ? 'pdd-buybox__stock--in' : 'pdd-buybox__stock--out'}`}>
-        {inStock ? `${activeListing.stock} in stock` : 'Currently unavailable'}
+        {inStock ? `${activeListing.stock} in stock` : 'Product is out of stock'}
       </div>
 
       <dl className="pdd-buybox__facts">
@@ -462,12 +466,18 @@ export default function ProductDiscoveryDetail() {
         className="pdd-buybox__cta"
         size="lg"
         onClick={openAddToCart}
-        disabled={!activeListing.canAddToCart && !productSummary.canAddToCart}
+        disabled={
+          !inStock ||
+          (!activeListing.canAddToCart && !productSummary.canAddToCart)
+        }
+        title={!inStock ? 'Product is out of stock' : undefined}
       >
         {cartAdded ? (
           <>
             <Check className="mr-2 h-4 w-4" /> Added to cart
           </>
+        ) : !inStock ? (
+          <>Product is out of stock</>
         ) : (
           <>
             <ShoppingCart className="mr-2 h-4 w-4" /> Add to cart

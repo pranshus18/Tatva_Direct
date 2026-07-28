@@ -107,6 +107,12 @@ const AdminProductStatus = ({ user }) => {
     filterProducts();
   }, [products, searchTerm]); // Remove statusFilter since backend handles it
 
+  const handleRefresh = () => {
+    setSearchTerm('');
+    setSelectedProduct(null);
+    fetchProducts();
+  };
+
   const fetchProducts = async () => {
     setLoading(true);
     try {
@@ -397,7 +403,7 @@ const AdminProductStatus = ({ user }) => {
         <div className="product-status-actions">
           <button 
             className="btn-refresh" 
-            onClick={fetchProducts}
+            onClick={handleRefresh}
             disabled={loading || actionLoading}
           >
             <RefreshCw size={16} className={loading ? 'spinning' : ''} />
@@ -487,7 +493,7 @@ const AdminProductStatus = ({ user }) => {
             </p>
             {statusFilter === 'pending' && (
               <button 
-                onClick={fetchProducts}
+                onClick={handleRefresh}
                 style={{
                   marginTop: '1rem',
                   padding: '0.75rem 1.5rem',

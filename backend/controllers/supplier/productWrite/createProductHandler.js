@@ -22,7 +22,7 @@ import {
   validateSpecValues
 } from '../supplierImports.js';
 import { sanitizeImageUrls } from '../shared/productHelpers.js';
-import { mergeProductImageLists, syncCatalogProductImages } from '../../../services/productImageService.js';
+import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 import {
   createBaseProductIfNeeded,
@@ -365,9 +365,8 @@ export function buildSupplierProductCreateHandler(ctx) {
         console.error('[CatalogSnapshot] create product sync failed:', syncError?.message || syncError);
       });
 
-      let syncedCatalogImages = [];
       if (normalizedImageUrls.length > 0) {
-        syncedCatalogImages = await syncCatalogProductImages(supabase, productId, normalizedImageUrls);
+        await syncCatalogProductImages(supabase, productId, normalizedImageUrls);
       }
 
       const { data: baseProduct } = await supabase
@@ -395,11 +394,8 @@ export function buildSupplierProductCreateHandler(ctx) {
         supplier_product_id: createdOffer?.id || newSupplierProduct?.id,
         variantKey: createdOffer?.variant_key || variantIdentityBundle.variantKey,
         variantAsin: createdOffer?.variant_asin || variantAsin,
-        images: mergeProductImageLists(
-          normalizedImageUrls,
-          syncedCatalogImages,
-          baseProduct?.images
-        )
+        // Only images uploaded for this offer — never catalog history from prior listings.
+        images: resolveSupplierOfferDisplayImages(normalizedImageUrls, baseProduct?.images)
       };
 
       if (isCatalogGuardrailsEnabled()) {

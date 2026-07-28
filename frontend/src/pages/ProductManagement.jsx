@@ -28,7 +28,7 @@ import './ProductDiscovery.css';
 import './ProductManagement.css';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import ProductImageCarousel from '../components/ProductImageCarousel';
-import { getProductImageList } from '../utils/productImages';
+import { getProductImageList, getSupplierOfferImagesForForm } from '../utils/productImages';
 import {
   mergeSpecificationObjects,
   parseSpecInputToValue,
@@ -140,6 +140,8 @@ const ProductManagement = ({ user }) => {
   const [refreshing, setRefreshing] = useState(false);
 
   const [catalogStats, setCatalogStats] = useState(null);
+  const [catalogViewEpoch, setCatalogViewEpoch] = useState(0);
+  const searchInputRef = useRef(null);
 
   const resetCatalogViewToDefault = () => {
     setSearchTerm('');
@@ -148,6 +150,11 @@ const ProductManagement = ({ user }) => {
     setShowAddModal(false);
     setEditingItem(null);
     setViewingItem(null);
+    setCatalogViewEpoch((epoch) => epoch + 1);
+    // Browsers can keep a stale value on type=search inputs; clear the DOM node too.
+    if (searchInputRef.current) {
+      searchInputRef.current.value = '';
+    }
   };
 
   useEffect(() => {
@@ -337,10 +344,16 @@ const ProductManagement = ({ user }) => {
   };
 
   const handleRefresh = async () => {
+    if (refreshing) return;
     setRefreshing(true);
+    // Match browser refresh: reset filters/search first, then reload catalog data.
+    resetCatalogViewToDefault();
     try {
-      resetCatalogViewToDefault();
-      await fetchProducts({ silent: true });
+      await Promise.all([
+        fetchProducts({ silent: true }),
+        fetchNotifications(),
+        fetchCategories()
+      ]);
     } finally {
       setRefreshing(false);
     }
@@ -380,8 +393,15 @@ const ProductManagement = ({ user }) => {
       });
       const data = await response.json();
       if (data.status === 'success') {
-        const addedProduct =
-          normalizeSupplierProductsFromApi([data.product])[0] || data.product;
+        const addedProduct = {
+          ...(normalizeSupplierProductsFromApi([data.product])[0] || data.product),
+          // Keep only images submitted for this create — never catalog history.
+          images: Array.isArray(productData.images)
+            ? productData.images
+            : Array.isArray(data.product?.images)
+              ? data.product.images
+              : []
+        };
         setShowAddModal(false);
         // Prefer server list so status/offer id match DB; merge create response if fetch lags.
         await fetchProducts({ silent: true });
@@ -476,10 +496,11 @@ const ProductManagement = ({ user }) => {
         const updatedProduct = {
           ...data.product,
           specifications: data.product.specifications || {},
-          images: Array.isArray(data.product?.images)
-            ? data.product.images
-            : Array.isArray(productData.images)
-              ? productData.images
+          // Prefer images the supplier just saved so catalog extras never reappear in the list.
+          images: Array.isArray(productData.images)
+            ? productData.images
+            : Array.isArray(data.product?.images)
+              ? data.product.images
               : [],
           ...(savedStock != null ? { stock: savedStock } : {})
         };
@@ -747,11 +768,12 @@ const ProductManagement = ({ user }) => {
               {searchTerm ? ` matching “${searchTerm}”` : ''}
             </p>
           </div>
-          <div className="pm-toolbar__controls">
+          <div className="pm-toolbar__controls" key={`pm-filters-${catalogViewEpoch}`}>
             <label className="pm-search">
               <Search size={16} />
               <input
-                type="search"
+                ref={searchInputRef}
+                type="text"
                 name="pm-product-search"
                 placeholder="Search by product name…"
                 value={searchTerm}
@@ -1665,7 +1687,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
     location: product?.location || '',
     description: product?.description || '',
-    images: Array.isArray(product?.images) ? product.images : []
+    images: getSupplierOfferImagesForForm(product)
   });
   const [recommendedPrice, setRecommendedPrice] = useState(null);
   const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
@@ -2209,7 +2231,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     
     const productData = {
       ...formData,
-      images: Array.isArray(formData.images) ? formData.images : [],
+      // Add flow: only photos uploaded in this modal session (AI image list).
+      // Edit flow: only images currently in the form (offer photos, not catalog history).
+      images: !product
+        ? productAiImages.map((item) => item.uploadedUrl).filter(Boolean)
+        : Array.isArray(formData.images)
+          ? formData.images
+          : [],
       specifications: allSpecifications
     };
 
@@ -3009,18 +3037,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         if (next.length >= MIN_AI_PRODUCT_IMAGES) {
           filesToAnalyze = next.map((x) => x.file);
         }
+        // Keep form images strictly in sync with this add-session upload list only.
+        setFormData((prevForm) => ({
+          ...prevForm,
+          images: next.map((item) => item.uploadedUrl).filter(Boolean)
+        }));
         return next;
       });
-
-      setFormData((prev) => ({
-        ...prev,
-        images: Array.from(
-          new Set([
-            ...(Array.isArray(prev.images) ? prev.images : []),
-            ...uploadResults.map((result) => result.uploadedUrl)
-          ])
-        )
-      }));
 
       if (filesToAnalyze) {
         await analyzeImagesFromFiles(filesToAnalyze);
@@ -3090,14 +3113,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const handleRemoveAiImage = (id) => {
     const target = productAiImagesRef.current.find((x) => x.id === id);
     if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
-    if (target?.uploadedUrl) {
-      setFormData((prevForm) => ({
-        ...prevForm,
-        images: (Array.isArray(prevForm.images) ? prevForm.images : []).filter((url) => url !== target.uploadedUrl)
-      }));
-    }
     setProductAiImages((prev) => {
       const next = prev.filter((x) => x.id !== id);
+      setFormData((prevForm) => ({
+        ...prevForm,
+        images: next.map((item) => item.uploadedUrl).filter(Boolean)
+      }));
       if (next.length === 0) {
         setAiDetectionReview(null);
         setAiSuggestionPopup((popup) => ({ ...popup, open: false, items: [], selected: {} }));

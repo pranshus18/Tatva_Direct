@@ -48,9 +48,10 @@
   border-radius: 12px;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.1);
   z-index: 1000;
-  max-height: 600px;
+  max-height: min(70vh, 600px);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .admin-notifications-header {
@@ -61,6 +62,7 @@
   align-items: center;
   background: #f9fafb;
   border-radius: 12px 12px 0 0;
+  flex-shrink: 0;
 }
 
 .admin-notifications-header h3 {
@@ -94,8 +96,12 @@
 }
 
 .admin-notifications-list {
+  min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
-  max-height: 500px;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  max-height: none;
 }
 
 .admin-notification-item {

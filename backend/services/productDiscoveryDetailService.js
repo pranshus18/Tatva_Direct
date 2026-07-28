@@ -241,7 +241,7 @@ async function buildVariantRecord({
     min_order_quantity: offer?.min_order_quantity ?? reconciled.min_order_quantity,
     location: String(offer?.location || reconciled.location || '').trim() || null,
     supplierCount: offer ? 1 : reconciled.supplierCount,
-    canAddToCart: true,
+    canAddToCart: stock > 0 && (offer ? true : Number(reconciled.supplierCount || 0) > 0),
     average_rating: product.average_rating,
     total_reviews: product.total_reviews,
     tags: product.tags || [],
@@ -592,7 +592,7 @@ export async function getProductDiscoveryDetail(supabase, { productId, enrichSpe
       brandModel: summaryIdentity.brandModel,
       priceRange,
       supplierCount: summaryProduct.supplierCount,
-      canAddToCart: Number(summaryProduct.supplierCount || 0) > 0
+      canAddToCart: Number(summaryProduct.supplierCount || 0) > 0 && Number(summaryProduct.stock || 0) > 0
     },
     family,
     hasVariants,

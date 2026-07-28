@@ -226,6 +226,10 @@ export default function DiscoveryAddToCartDialog({
       setDialogError('No product selected for adding to cart.');
       return;
     }
+    if (!(Number(product?.stock) > 0)) {
+      setDialogError('Product is out of stock');
+      return;
+    }
     const isNewProject = targetProjectId === '__new__';
     if (isNewProject) {
       const nextFieldErrors = { ...emptyProjectFieldErrors };
@@ -530,8 +534,16 @@ export default function DiscoveryAddToCartDialog({
             <Button variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button onClick={confirmAddToCart} disabled={busy}>
-              {busy ? 'Adding…' : 'Add to cart'}
+            <Button
+              onClick={confirmAddToCart}
+              disabled={busy || !(Number(product?.stock) > 0)}
+              title={!(Number(product?.stock) > 0) ? 'Product is out of stock' : undefined}
+            >
+              {busy
+                ? 'Adding…'
+                : !(Number(product?.stock) > 0)
+                  ? 'Product is out of stock'
+                  : 'Add to cart'}
             </Button>
           </DialogFooter>
         </div>

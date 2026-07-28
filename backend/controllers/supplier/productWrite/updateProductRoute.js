@@ -26,7 +26,7 @@ import {
   fetchAndValidateSupplierProductForUpdate
 } from '../../../services/supplierProductWriteService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
-import { mergeProductImageLists, syncCatalogProductImages } from '../../../services/productImageService.js';
+import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 import {
   bodyHasInventoryUpdateFields,
@@ -289,7 +289,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
           supplier_product_id: updatedSupplierProduct.id,
           variantKey: updatedSupplierProduct.variant_key,
           variantAsin: updatedSupplierProduct.variant_asin,
-          images: mergeProductImageLists(
+          images: resolveSupplierOfferDisplayImages(
             updatedSupplierProduct.attributes?.images,
             baseProduct?.images
           )

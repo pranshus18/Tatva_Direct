@@ -90,6 +90,12 @@ const AdminUsers = ({ user }) => {
     }
   };
 
+  const handleRefresh = () => {
+    setSearchTerm('');
+    setFilterType('all');
+    fetchAdminData();
+  };
+
   const filteredUsers = users.filter(user => {
     const matchesSearch = (user.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
                          (user.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -118,7 +124,7 @@ const AdminUsers = ({ user }) => {
           <AdminNotifications />
           <button 
             className="btn-refresh" 
-            onClick={fetchAdminData}
+            onClick={handleRefresh}
             disabled={loading}
           >
             <RefreshCw size={16} className={loading ? 'spinning' : ''} />

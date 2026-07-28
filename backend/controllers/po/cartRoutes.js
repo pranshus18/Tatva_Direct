@@ -6,15 +6,13 @@ import {
   mergeTransportSelection,
   mergeOrAppendCartGroupItem,
   appendDiscoveryItemAsNewProject,
-  loadAdminBrandTerminalRoleMap,
   normalizePoCartDraft,
   poCartDraftNeedsPersistAfterPrune,
   parseWithSchema,
   poCartSaveSchema,
   poCartTransportPatchSchema,
   poCheckoutReleaseSchema,
-  poCheckoutReserveSchema,
-  supplierMatchesBrandTerminalRole
+  poCheckoutReserveSchema
 } from './poImports.js';
 import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js';
 import { isAddressComplete, normalizeAddress } from './shared/poHelpers.js';
@@ -28,6 +26,11 @@ import {
   releaseCheckoutReservations,
   reserveCheckoutLines
 } from '../../services/checkoutInventoryReservationService.js';
+import {
+  assertCartDraftItemsHaveSellableStock,
+  assertProductHasSellableStock,
+  PRODUCT_OUT_OF_STOCK_MESSAGE
+} from '../../services/cartStockGuardService.js';
 
 export function registerPoCartRoutes(ctx) {
   const {
@@ -166,6 +169,14 @@ router.put('/cart', authenticateToken, isServiceProvider, async (req, res) => {
       seen.add(key);
     }
 
+    const stockCheck = await assertCartDraftItemsHaveSellableStock(supabase, draftPayload);
+    if (!stockCheck.ok) {
+      return res.status(stockCheck.status || 400).json({
+        status: 'error',
+        message: stockCheck.message || PRODUCT_OUT_OF_STOCK_MESSAGE
+      });
+    }
+
     const { data: saved, error } = await supabase
       .from('po_carts')
       .upsert(
@@ -249,38 +260,6 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
     if (!product || String(product.status || '').toLowerCase() !== 'approved') {
       return res.status(404).json({ status: 'error', message: 'Product not found' });
     }
-    // Keep cart add behavior aligned with Product Discovery and PO grouping rules:
-    // product must have at least one active approved offer from a supplier eligible
-    // for the terminal role configured for this brand's supply chain.
-    const { data: activeListings, error: listingError } = await supabase
-      .from('supplier_products')
-      .select('id, supplier:users!supplier_products_supplier_id_fkey(profile)')
-      .eq('product_id', productId)
-      .eq('status', 'approved')
-      .eq('is_active', true)
-      .limit(200);
-    if (listingError) throw listingError;
-    const brandLabel =
-      String(product?.brand || '').trim() ||
-      String(product?.specifications?.brand || '').trim() ||
-      String(product?.specifications?.brandModel || '').trim();
-    const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(
-      supabase,
-      brandLabel ? [brandLabel] : []
-    );
-    const hasTerminalEligibleListing = (activeListings || []).some((row) =>
-      supplierMatchesBrandTerminalRole(
-        row?.supplier?.profile || {},
-        brandLabel,
-        terminalRoleByBrandMap
-      )
-    );
-    if (!hasTerminalEligibleListing) {
-      return res.status(400).json({
-        status: 'error',
-        message: "This product is not currently listed by the terminal role supplier for this brand's supply chain."
-      });
-    }
 
     const { data: cartRow, error: cartError } = await supabase
       .from('po_carts')
@@ -292,6 +271,36 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
     const currentDraft = normalizePoCartDraft(
       cartRow?.draft_payload && typeof cartRow.draft_payload === 'object' ? cartRow.draft_payload : {}
     );
+
+    // Resolve desired quantity after potential merge into an existing project line.
+    let requestedQuantity = quantity;
+    if (targetGroupId) {
+      const targetGroup = (currentDraft.boqGroups || []).find(
+        (group) => String(group?.groupId || '') === targetGroupId
+      );
+      const existingMatch = (Array.isArray(targetGroup?.items) ? targetGroup.items : []).find((item) => {
+        if (String(item?.productId || '') !== String(product.id)) return false;
+        const existingVariant = String(item?.variantKey || '').trim();
+        return existingVariant === variantKey;
+      });
+      if (existingMatch) {
+        requestedQuantity =
+          Math.max(1, Math.floor(Number(existingMatch.quantity) || 0)) + quantity;
+      }
+    }
+
+    const stockCheck = await assertProductHasSellableStock(supabase, {
+      productId,
+      variantKey,
+      quantity: requestedQuantity,
+      product
+    });
+    if (!stockCheck.ok) {
+      return res.status(stockCheck.status || 400).json({
+        status: 'error',
+        message: stockCheck.message || PRODUCT_OUT_OF_STOCK_MESSAGE
+      });
+    }
 
     const discoveryItem = {
       id: `pd-item-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
@@ -473,6 +482,7 @@ router.patch('/cart/items/:itemId/quantity', authenticateToken, isServiceProvide
     );
     const groups = Array.isArray(currentDraft.boqGroups) ? [...currentDraft.boqGroups] : [];
     let found = false;
+    let matchedItem = null;
     const nextGroups = groups.map((group) => {
       const arr = Array.isArray(group.items) ? [...group.items] : [];
       const idx = arr.findIndex((item) => item?.id !== undefined && item?.id !== null && String(item.id) === itemId);
@@ -480,11 +490,27 @@ router.patch('/cart/items/:itemId/quantity', authenticateToken, isServiceProvide
       found = true;
       const nextArr = [...arr];
       nextArr[idx] = { ...nextArr[idx], quantity };
+      matchedItem = nextArr[idx];
       return { ...group, items: nextArr };
     });
 
     if (!found) {
       return res.status(404).json({ status: 'error', message: 'Cart item not found' });
+    }
+
+    const productId = String(matchedItem?.productId || matchedItem?.product_id || '').trim();
+    if (productId) {
+      const stockCheck = await assertProductHasSellableStock(supabase, {
+        productId,
+        variantKey: matchedItem?.variantKey || matchedItem?.variant_key || '',
+        quantity
+      });
+      if (!stockCheck.ok) {
+        return res.status(stockCheck.status || 400).json({
+          status: 'error',
+          message: stockCheck.message || PRODUCT_OUT_OF_STOCK_MESSAGE
+        });
+      }
     }
 
     const nextDraftPayload = normalizePoCartDraft({

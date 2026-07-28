@@ -29,8 +29,13 @@ const BoqListing = () => {
   const [selectedBoq, setSelectedBoq] = useState(null);
   const navigate = useNavigate();
 
-  const fetchBoqs = async () => {
+  const fetchBoqs = async ({ resetFilters = false } = {}) => {
     try {
+      if (resetFilters) {
+        setSearchTerm('');
+        setStatusFilter('all');
+        setSelectedBoq(null);
+      }
       setLoading(true);
       setLoadError('');
       const response = await authFetch(getApiUrl('/api/boq'));
@@ -110,7 +115,7 @@ const BoqListing = () => {
         icon={FileText}
         actions={
           <>
-            <Button variant="outline" onClick={fetchBoqs} disabled={loading}>
+            <Button variant="outline" onClick={() => fetchBoqs({ resetFilters: true })} disabled={loading}>
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               Refresh
             </Button>

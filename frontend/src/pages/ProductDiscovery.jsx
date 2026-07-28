@@ -364,6 +364,10 @@ const ProductDiscovery = () => {
       setError("This product is approved but not currently listed by an eligible supplier.");
       return;
     }
+    if (!(Number(product?.stock) > 0)) {
+      setError('Product is out of stock');
+      return;
+    }
     const [groups, addresses] = await Promise.all([loadCartProjects(), loadProfileShippingAddresses()]);
     const initialProjectId = groups[0]?.groupId || '__new__';
     setPendingProduct(product);
@@ -716,13 +720,21 @@ const ProductDiscovery = () => {
                       event.stopPropagation();
                       openProjectPicker(product);
                     }}
-                    disabled={Boolean(cartBusyByProductId[pid]) || !hasEligibleSupplier}
-                    title={!hasEligibleSupplier ? 'No eligible supplier is currently listing this product' : undefined}
+                    disabled={Boolean(cartBusyByProductId[pid]) || !hasEligibleSupplier || !inStock}
+                    title={
+                      !hasEligibleSupplier
+                        ? 'No eligible supplier is currently listing this product'
+                        : !inStock
+                          ? 'Product is out of stock'
+                          : undefined
+                    }
                   >
                     {cartAddedByProductId[pid] ? (
                       <><Check size={16} /> Added</>
                     ) : !hasEligibleSupplier ? (
                       <>No suppliers</>
+                    ) : !inStock ? (
+                      <>Out of stock</>
                     ) : (
                       <><ShoppingCart size={16} /> Add to Cart</>
                     )}

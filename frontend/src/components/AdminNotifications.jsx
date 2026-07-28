@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { getApiUrl } from '../config/api';
 import { Bell, X, Package, Eye, Check } from 'lucide-react';
 import { formatDateIST, parseServerDate } from '../utils/dateTime';
+import { useNotificationPanelScrollLock } from '../hooks/useNotificationPanelScrollLock';
 import './AdminNotifications.css';
 
 const AdminNotifications = ({ onProductClick }) => {
@@ -10,6 +11,9 @@ const AdminNotifications = ({ onProductClick }) => {
   const [showNotifications, setShowNotifications] = useState(false);
   const [loading, setLoading] = useState(false);
   const notificationsRef = useRef(null);
+  const notificationsListRef = useRef(null);
+
+  useNotificationPanelScrollLock(showNotifications, notificationsListRef);
 
   useEffect(() => {
     fetchNotifications();
@@ -202,7 +206,11 @@ const AdminNotifications = ({ onProductClick }) => {
             )}
           </div>
           
-          <div className="admin-notifications-list">
+          <div
+            ref={notificationsListRef}
+            className="admin-notifications-list"
+            data-notification-scroll-list
+          >
             {notifications.length === 0 ? (
               <div className="admin-notification-empty">
                 <Bell size={32} />

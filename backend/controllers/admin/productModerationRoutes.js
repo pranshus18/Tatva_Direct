@@ -7,6 +7,24 @@ import {
 } from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
+import { isSupplierUserType } from '../../utils/notificationAudience.js';
+
+function supplierOfferRecipients(supplierProductRows, fallbackSupplier) {
+  const isCatalogSupplierRecipient = (supplier) => {
+    if (!supplier?.id) return false;
+    // Legacy joins may omit user_type; only exclude when type is present and not supplier.
+    if (supplier.user_type == null || String(supplier.user_type).trim() === '') return true;
+    return isSupplierUserType(supplier.user_type);
+  };
+
+  const fromOffers = (Array.isArray(supplierProductRows) ? supplierProductRows : [])
+    .map((row) => row?.supplier)
+    .filter(isCatalogSupplierRecipient);
+
+  if (fromOffers.length > 0) return fromOffers;
+  if (isCatalogSupplierRecipient(fallbackSupplier)) return [fallbackSupplier];
+  return [];
+}
 
 export function registerAdminProductModerationRoutes({ router, authenticateToken, isAdmin, supabase }) {
   // Approve product (admin only)
@@ -27,7 +45,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         .eq('id', req.params.id)
         .select(`
         *,
-        supplier:users!products_supplier_id_fkey (id, name, email)
+        supplier:users!products_supplier_id_fkey (id, name, email, user_type)
       `)
         .single();
 
@@ -81,7 +99,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
             })
             .select(`
             supplier_id,
-            supplier:users!supplier_products_supplier_id_fkey (id, name, email, company)
+            supplier:users!supplier_products_supplier_id_fkey (id, name, email, company, user_type)
           `);
 
           if (insertError) {
@@ -109,7 +127,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         .eq('product_id', product.id)
         .select(`
         supplier_id,
-        supplier:users!supplier_products_supplier_id_fkey (id, name, email, company)
+        supplier:users!supplier_products_supplier_id_fkey (id, name, email, company, user_type)
       `);
 
       if (spUpdateError) {
@@ -123,10 +141,11 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         console.error('[CatalogSnapshot] admin approve sync failed:', syncError?.message || syncError);
       });
 
-      // Create notification(s) for supplier(s) whose offer got approved
-      const suppliersToNotify = (approvedSupplierProducts || [])
-        .map(sp => sp?.supplier)
-        .filter(Boolean);
+      // Create notification(s) for supplier(s) whose offer got approved (never SPs/admins).
+      const suppliersToNotify = supplierOfferRecipients(
+        approvedSupplierProducts,
+        product.supplier
+      );
 
       if (suppliersToNotify.length > 0) {
         const notifications = suppliersToNotify.map((supplier) => ({
@@ -143,20 +162,6 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
 
         await insertNotifications(notifications, supabase);
         console.log(`Created ${notifications.length} supplier notification(s) about product approval`);
-      } else if (product.supplier && product.supplier.id) {
-        // Fallback for cases where supplier_products are missing but the legacy join exists.
-        await insertNotification({
-          user_id: product.supplier.id,
-          type: 'product_approval',
-          title: `Product Approved: ${product.name}`,
-          message: `Your product "${product.name}" has been approved by admin and is now active in the marketplace.`,
-          related_product_id: product.id,
-          metadata: {
-            productName: product.name,
-            status: 'approved'
-          }
-        }, supabase);
-        console.log(`Created notification for supplier ${product.supplier.id} about product approval`);
       }
 
       // If this product originated from a service provider request, notify
@@ -259,7 +264,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         .eq('id', req.params.id)
         .select(`
         *,
-        supplier:users!products_supplier_id_fkey (id, name, email)
+        supplier:users!products_supplier_id_fkey (id, name, email, user_type)
       `)
         .single();
 
@@ -311,7 +316,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
             })
             .select(`
             supplier_id,
-            supplier:users!supplier_products_supplier_id_fkey (id, name, email, company)
+            supplier:users!supplier_products_supplier_id_fkey (id, name, email, company, user_type)
           `);
 
           if (insertError) {
@@ -339,7 +344,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         .eq('product_id', product.id)
         .select(`
         supplier_id,
-        supplier:users!supplier_products_supplier_id_fkey (id, name, email, company)
+        supplier:users!supplier_products_supplier_id_fkey (id, name, email, company, user_type)
       `);
 
       if (spRejectUpdateError) {
@@ -349,17 +354,20 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
       }
       console.log(`[ADMIN REJECT PRODUCT] supplier_products updated rows: ${updatedSupplierProducts?.length || 0}`);
 
-      const suppliersToNotify = (rejectedSupplierProducts || [])
-        .map(sp => sp?.supplier)
-        .filter(Boolean);
+      const rejectionReasonText =
+        reason || product.rejection_reason || 'No reason provided';
+      const suppliersToNotify = supplierOfferRecipients(
+        rejectedSupplierProducts,
+        product.supplier
+      );
 
-      // Create notification(s) for supplier(s) whose offer got rejected
+      // Create notification(s) for supplier(s) whose offer got rejected (never SPs/admins).
       if (suppliersToNotify.length > 0) {
         const notifications = suppliersToNotify.map((supplier) => ({
           user_id: supplier.id,
           type: 'product_approval',
           title: `Product Rejected: ${product.name}`,
-          message: `Your product "${product.name}" has been rejected by admin. Reason: ${reason || product.rejection_reason || 'No reason provided'}`,
+          message: `Your product "${product.name}" has been rejected by admin. Reason: ${rejectionReasonText}`,
           related_product_id: product.id,
           metadata: {
             productName: product.name,
@@ -370,21 +378,38 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
 
         await insertNotifications(notifications, supabase);
         console.log(`Created ${notifications.length} supplier notification(s) about product rejection`);
-      } else if (product.supplier && product.supplier.id) {
-        // Fallback for legacy join cases.
-        await insertNotification({
-            user_id: product.supplier.id,
-            type: 'product_approval',
-            title: `Product Rejected: ${product.name}`,
-            message: `Your product "${product.name}" has been rejected by admin. Reason: ${product.rejection_reason || 'No reason provided'}`,
-            related_product_id: product.id,
-            metadata: {
-              productName: product.name,
-              status: 'rejected',
-              rejectionReason: product.rejection_reason
-            }
-          }, supabase);
-        console.log(`Created notification for supplier ${product.supplier.id} about product rejection`);
+      }
+
+      // If this product originated from a service provider request, notify the requester
+      // with a procurement-facing status update (not supplier catalog "Product Rejected").
+      if (product.requested_by_service_provider_id) {
+        try {
+          await insertNotification(
+            {
+              user_id: product.requested_by_service_provider_id,
+              type: 'system',
+              title: `Your requested product was rejected: ${product.name}`,
+              message: `Your requested product "${product.name}" was rejected by admin. Reason: ${rejectionReasonText}`,
+              related_product_id: product.id,
+              metadata: {
+                productId: product.id,
+                productName: product.name,
+                status: 'rejected',
+                rejectionReason: reason || product.rejection_reason || null,
+                source: 'service_provider_request_rejected'
+              }
+            },
+            supabase
+          );
+          console.log(
+            `[ADMIN REJECT PRODUCT] Notified service provider ${product.requested_by_service_provider_id} about requested product rejection`
+          );
+        } catch (spNotifError) {
+          console.error(
+            '[ADMIN REJECT PRODUCT] Failed to notify requesting service provider about rejection:',
+            spNotifError
+          );
+        }
       }
 
       res.json({

@@ -411,6 +411,18 @@ const BOQNormalize = ({ onComplete }) => {
       return;
     }
 
+    const inStockItems = items.filter((item) => {
+      const hasSuppliers = (item.availableSuppliers || 0) > 0;
+      const isAvailable = item.isAvailable ?? hasSuppliers;
+      return Boolean(isAvailable);
+    });
+    const outOfStockCount = items.length - inStockItems.length;
+
+    if (inStockItems.length === 0) {
+      toast.error('Product is out of stock');
+      return;
+    }
+
     setSavingCart(true);
     try {
       const token = localStorage.getItem('token');
@@ -461,7 +473,7 @@ const BOQNormalize = ({ onComplete }) => {
           ? crypto.randomUUID()
           : `g-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
 
-      const prefixedItems = items.map((it, idx) => ({
+      const prefixedItems = inStockItems.map((it, idx) => ({
         ...it,
         id:
           it.id !== undefined && it.id !== null
@@ -514,7 +526,13 @@ const BOQNormalize = ({ onComplete }) => {
         throw new Error(data.message || 'Failed to save cart');
       }
 
-      onComplete(items, boqId, projectMeta);
+      if (outOfStockCount > 0) {
+        toast.success(
+          `Added ${inStockItems.length} in-stock item${inStockItems.length === 1 ? '' : 's'} to cart. Skipped ${outOfStockCount} out of stock.`
+        );
+      }
+
+      onComplete(inStockItems, boqId, projectMeta);
       navigate('/cart');
     } catch (error) {
       toast.error(error.message || 'Failed to save cart');
@@ -730,20 +748,16 @@ const BOQNormalize = ({ onComplete }) => {
                             Qty: <strong>{item.quantity}</strong>
                             {item.unit ? ` ${item.unit}` : ''}
                           </span>
-                          <div className="item-badges">
-                            {hasSuppliers && isAvailable ? (
+                          {hasSuppliers && isAvailable ? (
+                            <div className="item-badges">
                               <span className={`confidence ${item.confidence >= 0.8 ? 'high' : 'medium'}`}>
                                 {Math.round((item.confidence || 0) * 100)}% match
                               </span>
-                            ) : null}
-                            <span className={`confidence ${hasSuppliers && isAvailable ? 'high' : 'low'}`}>
-                              {hasSuppliers && isAvailable
-                                ? `${item.availableSuppliers || 0} supplier${(item.availableSuppliers || 0) === 1 ? '' : 's'}`
-                                : isListedOutOfStock
-                                  ? 'Out of stock'
-                                  : '0 suppliers'}
-                            </span>
-                          </div>
+                              <span className="confidence high">
+                                {`${item.availableSuppliers || 0} supplier${(item.availableSuppliers || 0) === 1 ? '' : 's'}`}
+                              </span>
+                            </div>
+                          ) : null}
                         </div>
 
                         {hasListedSupplier ? (
@@ -794,20 +808,8 @@ const BOQNormalize = ({ onComplete }) => {
                                 {item.availableSuppliers > 1 ? 's' : ''} available
                               </div>
                             ) : null}
-
-                            {!isAvailable ? (
-                              <div className="item-supplier-status item-supplier-status--warn">
-                                Currently out of stock
-                              </div>
-                            ) : null}
                           </div>
-                        ) : (
-                          <div className="item-supplier-info item-supplier-info--empty">
-                            <div className="item-supplier-status item-supplier-status--empty">
-                              No matching suppliers found
-                            </div>
-                          </div>
-                        )}
+                        ) : null}
                       </div>
 
                       {(!hasSuppliers || !isAvailable) ? (
@@ -816,7 +818,9 @@ const BOQNormalize = ({ onComplete }) => {
                             <div className="item-action-status">
                               <AlertCircle size={14} aria-hidden />
                               <span>
-                                {isListedOutOfStock ? 'Currently out of stock' : 'No suppliers available'}
+                                {isListedOutOfStock
+                                  ? 'Currently out of stock'
+                                  : 'No matching suppliers available'}
                               </span>
                             </div>
                             <button
@@ -850,10 +854,24 @@ const BOQNormalize = ({ onComplete }) => {
                   <button
                     className="btn-secondary btn-large"
                     onClick={handleAddToCart}
-                    disabled={items.length === 0 || savingCart || loading}
+                    disabled={
+                      items.length === 0 ||
+                      savingCart ||
+                      loading ||
+                      summaryStats.itemsWithSuppliers === 0
+                    }
+                    title={
+                      summaryStats.itemsWithSuppliers === 0
+                        ? 'Product is out of stock'
+                        : undefined
+                    }
                     style={{ flex: 1 }}
                   >
-                    {savingCart ? 'Saving Cart...' : 'Add to Cart'}
+                    {savingCart
+                      ? 'Saving Cart...'
+                      : summaryStats.itemsWithSuppliers === 0
+                        ? 'Product is out of stock'
+                        : 'Add to Cart'}
                   </button>
                 </div>
               </div>

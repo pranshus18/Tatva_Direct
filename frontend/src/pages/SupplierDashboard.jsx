@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { authFetch, getApiUrl, resolveApiPath } from '../config/api';
 import { useNavigate } from 'react-router-dom';
@@ -31,6 +31,7 @@ import {
   getSupplierNotificationMessage,
   getSupplierNotificationTargetPath
 } from '../utils/supplierNotificationDisplay';
+import { useNotificationPanelScrollLock } from '../hooks/useNotificationPanelScrollLock';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import SpPageLayout from '../components/sp/SpPageLayout';
@@ -60,6 +61,7 @@ const SupplierDashboard = ({ user }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
+  const notificationsListRef = useRef(null);
   const [inventorySummary, setInventorySummary] = useState(null);
   const [restockSuggestions, setRestockSuggestions] = useState(null);
   const [settlementReport, setSettlementReport] = useState(null);
@@ -67,6 +69,8 @@ const SupplierDashboard = ({ user }) => {
   const [shipTrackingNumber, setShipTrackingNumber] = useState('');
   const [shipTrackingUrl, setShipTrackingUrl] = useState('');
   const [liveOrdersSearch, setLiveOrdersSearch] = useState('');
+
+  useNotificationPanelScrollLock(showNotifications, notificationsListRef);
 
   const filteredLiveOrders = useMemo(() => {
     const q = (liveOrdersSearch || '').trim().toLowerCase();
@@ -625,7 +629,11 @@ const SupplierDashboard = ({ user }) => {
                   </button>
                 )}
               </div>
-              <div>
+              <div
+                ref={notificationsListRef}
+                className="supplier-dashboard-notifications-list"
+                data-notification-scroll-list
+              >
                 {notifications.length === 0 ? (
                   <div className="supplier-dashboard-notifications-empty">
                     No notifications

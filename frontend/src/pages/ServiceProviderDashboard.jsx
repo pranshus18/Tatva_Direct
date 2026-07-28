@@ -28,6 +28,8 @@ import {
 } from '../utils/orderReturnUi';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
 import { isMeaningfulProductDescription } from '../utils/productDisplay';
+import { filterSpNotifications } from '../utils/spNotificationAudience';
+import { useNotificationPanelScrollLock } from '../hooks/useNotificationPanelScrollLock';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import SpPageLayout from '../components/sp/SpPageLayout';
@@ -36,7 +38,6 @@ import SpStatCard from '../components/sp/SpStatCard';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import BoqDetailDialog from '../components/sp/BoqDetailDialog';
 import './Dashboard.css';
 
@@ -60,6 +61,7 @@ const ServiceProviderDashboard = ({ user }) => {
   const [loadingVaultBalance, setLoadingVaultBalance] = useState(false);
   const [deletingOrder, setDeletingOrder] = useState(false);
   const orderPollIntervalRef = useRef(null);
+  const notificationsListRef = useRef(null);
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [rating, setRating] = useState(0);
@@ -70,6 +72,8 @@ const ServiceProviderDashboard = ({ user }) => {
   const [dashboardError, setDashboardError] = useState('');
   const [selectedBoq, setSelectedBoq] = useState(null);
   const navigate = useNavigate();
+
+  useNotificationPanelScrollLock(notificationsPanelVisible, notificationsListRef);
 
   useEffect(() => {
     const onPanelToggle = (event) => {
@@ -228,8 +232,14 @@ const ServiceProviderDashboard = ({ user }) => {
       const response = await authFetch('/api/supplier/notifications');
       const data = await response.json();
       if (data.status === 'success') {
-        setNotifications(data.notifications || []);
-        setUnreadCount(data.unreadCount || 0);
+        const raw = data.notifications || [];
+        const { notifications: visible, unreadCount: visibleUnread } = filterSpNotifications(raw);
+        setNotifications(visible);
+        setUnreadCount(
+          visible.length === raw.length && typeof data.unreadCount === 'number'
+            ? data.unreadCount
+            : visibleUnread
+        );
       } else {
         setNotifications([]);
         setUnreadCount(0);
@@ -921,11 +931,12 @@ const ServiceProviderDashboard = ({ user }) => {
         </div>
 
         <Card
-          className={`hidden h-fit max-h-[calc(100vh-8rem)] lg:sticky lg:top-20 lg:flex-col data-sp-notification-container ${
+          className={`hidden h-fit max-h-[calc(100vh-8rem)] flex-col overflow-hidden lg:sticky lg:top-20 ${
             notificationsPanelVisible ? 'lg:flex' : 'lg:hidden'
           }`}
+          data-sp-notification-container
         >
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+          <CardHeader className="flex shrink-0 flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-base font-semibold">Notifications</CardTitle>
             <div className="flex items-center gap-2">
               {unreadCount > 0 ? (
@@ -945,8 +956,12 @@ const ServiceProviderDashboard = ({ user }) => {
               </Button>
             </div>
           </CardHeader>
-          <CardContent className="p-0">
-            <ScrollArea className="h-[min(420px,calc(100vh-12rem))]">
+          <CardContent className="min-h-0 flex-1 p-0">
+            <div
+              ref={notificationsListRef}
+              className="h-[min(420px,calc(100vh-12rem))] overflow-y-auto overscroll-contain"
+              data-notification-scroll-list
+            >
               {notifications.length === 0 ? (
                 <p className="px-4 py-8 text-center text-sm text-muted-foreground">No notifications</p>
               ) : (
@@ -992,7 +1007,7 @@ const ServiceProviderDashboard = ({ user }) => {
                   );
                 })
               )}
-            </ScrollArea>
+            </div>
           </CardContent>
         </Card>
       </div>
