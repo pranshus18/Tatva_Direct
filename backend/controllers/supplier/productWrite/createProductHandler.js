@@ -35,6 +35,7 @@ import {
   MIN_SUPPLIER_PRODUCT_PHOTOS,
   validateMinSupplierProductPhotos
 } from '../../../utils/supplierProductPhotos.js';
+import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
 
 export function buildSupplierProductCreateHandler(ctx) {
   const {
@@ -64,6 +65,21 @@ export function buildSupplierProductCreateHandler(ctx) {
           missingFields: photoValidation.missingFields,
           photoCount: photoValidation.count,
           minPhotos: MIN_SUPPLIER_PRODUCT_PHOTOS
+        });
+      }
+
+      const unitCompatibility = validateProductUnitCompatibility({
+        unit,
+        productName: otherData.name,
+        category
+      });
+      if (!unitCompatibility.ok && unitCompatibility.severity === 'error') {
+        return res.status(400).json({
+          status: 'error',
+          code: unitCompatibility.code || 'unit_incompatible',
+          message: unitCompatibility.message,
+          missingFields: ['unit'],
+          suggestedUnits: unitCompatibility.suggestedUnits
         });
       }
       const brandInput = String(otherData.brand || requestSpecs?.brand || brandModel || '').trim();

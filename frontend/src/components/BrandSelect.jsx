@@ -39,9 +39,32 @@ export default function BrandSelect({
   dropdownOnly = false,
   hideHint = false,
   excludeBrands = [],
-  onSelectionModeChange = null
+  onSelectionModeChange = null,
+  /** Optional controlled catalog from parent — skips the internal fetch when provided. */
+  brands: brandsProp = null,
+  brandNames: brandNamesProp = null,
+  loading: loadingProp = null,
+  error: errorProp = null,
+  onRetry = null
 }) {
-  const { brands, brandNames: rawBrandNames, loading, error: loadError } = useSupplierBrands({ source });
+  const shouldFetch = !Array.isArray(brandsProp) && !Array.isArray(brandNamesProp);
+  const {
+    brands: fetchedBrands,
+    brandNames: fetchedBrandNames,
+    loading: fetchedLoading,
+    error: fetchedError,
+    reload
+  } = useSupplierBrands({ source, enabled: shouldFetch });
+
+  const brands = Array.isArray(brandsProp) ? brandsProp : fetchedBrands;
+  const rawBrandNames = Array.isArray(brandNamesProp)
+    ? brandNamesProp
+    : Array.isArray(brandsProp)
+      ? brandsProp.map((row) => (typeof row === 'string' ? row : row?.name)).filter(Boolean)
+      : fetchedBrandNames;
+  const loading = loadingProp != null ? Boolean(loadingProp) : fetchedLoading;
+  const loadError = errorProp != null ? String(errorProp || '') : fetchedError;
+  const retry = onRetry || (shouldFetch ? reload : null);
 
   const brandNames = useMemo(() => dedupeBrandNames(rawBrandNames), [rawBrandNames]);
 
@@ -153,7 +176,17 @@ export default function BrandSelect({
         </datalist>
 
         {loadError ? (
-          <p className="brand-select__hint brand-select__hint--error">{loadError}</p>
+          <p className="brand-select__hint brand-select__hint--error" role="alert">
+            {loadError}
+            {retry ? (
+              <>
+                {' '}
+                <button type="button" className="brand-select__retry" onClick={retry}>
+                  Retry
+                </button>
+              </>
+            ) : null}
+          </p>
         ) : hint ? (
           <p className="brand-select__hint">{hint}</p>
         ) : (
@@ -203,30 +236,48 @@ export default function BrandSelect({
       ) : null}
 
       {loadError ? (
-        <p className="brand-select__hint brand-select__hint--error">{loadError}</p>
+        <p className="brand-select__hint brand-select__hint--error" role="alert">
+          {loadError}
+          {retry ? (
+            <>
+              {' '}
+              <button type="button" className="brand-select__retry" onClick={retry}>
+                Retry
+              </button>
+            </>
+          ) : null}
+        </p>
       ) : hint ? (
         <p className="brand-select__hint">{hint}</p>
-      ) : hideHint ? null : brandNames.length === 0 && !loading ? (
+      ) : brandNames.length === 0 && !loading ? (
         <p className="brand-select__hint">
           {source === 'catalog' ? (
             <>
-              No admin-approved brands in the catalog yet. Select <strong>Other brand</strong> below to request a new
-              brand for admin approval.
+              No admin-approved brands loaded yet.
+              {retry ? (
+                <>
+                  {' '}
+                  <button type="button" className="brand-select__retry" onClick={retry}>
+                    Retry loading
+                  </button>
+                </>
+              ) : null}{' '}
+              Or select <strong>Other brand</strong> to request a new brand for admin approval.
             </>
           ) : (
             <>
-              No approved brands in your profile yet. Add your brand under <strong>Select yourself</strong> (Step 1),
-              click <strong>Save brand request</strong>, and wait for admin approval before adding products.
+              No approved brands in your profile yet. Under <strong>Select yourself</strong>, pick an approved brand
+              or request a new one, then wait for approval before adding products.
             </>
           )}
         </p>
-      ) : (
+      ) : hideHint ? null : (
         <p className="brand-select__hint">
           {source === 'catalog' ? (
             <>
               Choose an admin-approved brand from the list. For a brand not listed, select{' '}
               <strong>Other brand (request admin approval)</strong>, enter the name, then click{' '}
-              <strong>Save brand request</strong>.
+              <strong>Save brand</strong>.
             </>
           ) : (
             <>

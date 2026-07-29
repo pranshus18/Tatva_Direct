@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import {
   buildSupplyChainFormProfile,
   buildSupplyChainSummaryRows,
+  buildBrandApprovalDetailsSignature,
   deduplicateCompanyInfoEntriesByBrand,
   findSupplierBrandRequest,
   isBrandApprovedForSupplyChainStep,
+  isBrandApprovalSaveBlockedForPendingRequests,
   mergeCompanyInfoEntriesById,
+  mergeSupplierBrandRequestsIntoProfile,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE
 } from './supplierSelectYourselfProfile';
 import { resolveRoleVerificationDocumentUrls } from './authorizationCertificateUrls';
@@ -31,6 +34,128 @@ describe('findSupplierBrandRequest', () => {
 
   it('returns null when brand has not been submitted', () => {
     expect(findSupplierBrandRequest('Haier', [{ name: 'HP', status: 'pending' }])).toBeNull();
+  });
+});
+
+describe('mergeSupplierBrandRequestsIntoProfile', () => {
+  it('adds pending requests so Brand status can show submitted state', () => {
+    const next = mergeSupplierBrandRequestsIntoProfile(
+      { supplierBrandRequests: [] },
+      [{ name: 'samsung', status: 'pending', submittedAt: '2026-07-28T11:00:00.000Z' }]
+    );
+    expect(findSupplierBrandRequest('samsung', next.supplierBrandRequests)?.status).toBe('pending');
+    expect(findSupplierBrandRequest('samsung', next.supplierBrandRequests)?.submittedAt).toBe(
+      '2026-07-28T11:00:00.000Z'
+    );
+  });
+
+  it('does not downgrade an approved request to pending', () => {
+    const next = mergeSupplierBrandRequestsIntoProfile(
+      {
+        supplierBrandRequests: [
+          { name: 'Samsung', status: 'approved', submittedAt: '2026-07-01T00:00:00.000Z' }
+        ]
+      },
+      [{ name: 'samsung', status: 'pending', submittedAt: '2026-07-28T11:00:00.000Z' }]
+    );
+    expect(findSupplierBrandRequest('Samsung', next.supplierBrandRequests)?.status).toBe('approved');
+  });
+});
+
+describe('isBrandApprovedForSupplyChainStep', () => {
+  it('treats supplierApprovedBrands as approved even when brandMeta is still pending', () => {
+    expect(
+      isBrandApprovedForSupplyChainStep(
+        'samsung',
+        [{ name: 'samsung', status: 'approved' }],
+        { status: 'pending', brand: 'samsung' },
+        [{ name: 'samsung', status: 'pending' }]
+      )
+    ).toBe(true);
+  });
+
+  it('does not let duplicate-of-approved rejection block the canonical brand', () => {
+    expect(
+      isBrandApprovedForSupplyChainStep(
+        'Samsung',
+        [{ name: 'Samsung', status: 'approved' }],
+        { status: 'approved', brand: 'Samsung' },
+        [
+          {
+            name: 'samsung',
+            status: 'rejected',
+            rejectionReason: 'Duplicate of approved brand "Samsung".'
+          }
+        ]
+      )
+    ).toBe(true);
+  });
+
+  it('still blocks genuinely rejected brands', () => {
+    expect(
+      isBrandApprovedForSupplyChainStep(
+        'MysteryBrand',
+        [],
+        { status: 'rejected' },
+        [{ name: 'MysteryBrand', status: 'rejected', rejectionReason: 'Incomplete documents' }]
+      )
+    ).toBe(false);
+  });
+});
+
+describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
+  it('blocks Save brand when the pending request details are unchanged', () => {
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'samsung', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: [{ name: 'samsung', status: 'pending' }]
+    };
+    const signature = buildBrandApprovalDetailsSignature(profile, []);
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: [],
+        submittedSignature: signature
+      })
+    ).toBe(true);
+  });
+
+  it('re-enables Save brand after brand details change', () => {
+    const submitted = {
+      companyInfoEntries: [{ id: '1', brands: 'samsung', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: [{ name: 'samsung', status: 'pending' }]
+    };
+    const edited = {
+      ...submitted,
+      companyInfoEntries: [
+        {
+          id: '1',
+          brands: 'samsung',
+          brandApprovalDocumentUrls: ['https://example.com/doc.pdf']
+        }
+      ]
+    };
+    const signature = buildBrandApprovalDetailsSignature(submitted, []);
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile: edited,
+        catalogBrands: [],
+        submittedSignature: signature
+      })
+    ).toBe(false);
+  });
+
+  it('re-enables Save brand when the request was rejected', () => {
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'samsung', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: [{ name: 'samsung', status: 'rejected' }]
+    };
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: [],
+        submittedSignature: buildBrandApprovalDetailsSignature(profile, [])
+      })
+    ).toBe(false);
   });
 });
 

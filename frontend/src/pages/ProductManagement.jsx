@@ -68,6 +68,10 @@ import {
   MIN_SUPPLIER_PRODUCT_PHOTOS
 } from '../utils/supplierProductValidation';
 import {
+  getPreferredUnitsForProduct,
+  validateProductUnitCompatibility
+} from '../utils/productUnitCompatibility';
+import {
   getBrandApprovalWarning,
   isBrandApprovedForProductSubmit
 } from '../utils/brandApprovalStatus';
@@ -1855,6 +1859,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     brandName: ''
   });
   const formRef = useRef(null);
+  const formScrollRef = useRef(null);
   const productPhotosSectionRef = useRef(null);
   const brandFieldRef = useRef(null);
 
@@ -1877,6 +1882,25 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   useEffect(() => {
     productAiImagesRef.current = productAiImages;
   }, [productAiImages]);
+
+  // Keep page behind the full-screen modal from scrolling so wheel/trackpad stays on the form.
+  useEffect(() => {
+    const body = document.body;
+    const html = document.documentElement;
+    const previous = {
+      bodyOverflow: body.style.overflow,
+      bodyOverscroll: body.style.overscrollBehavior,
+      htmlOverflow: html.style.overflow
+    };
+    body.style.overflow = 'hidden';
+    body.style.overscrollBehavior = 'none';
+    html.style.overflow = 'hidden';
+    return () => {
+      body.style.overflow = previous.bodyOverflow;
+      body.style.overscrollBehavior = previous.bodyOverscroll;
+      html.style.overflow = previous.htmlOverflow;
+    };
+  }, []);
 
   useEffect(() => {
     if (showInventoryFields) {
@@ -2131,7 +2155,10 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         );
         const data = await res.json();
         if (data.status === 'success' && data.found && data.unit) {
-          setFormData(prev => ({ ...prev, unit: data.unit }));
+          // Never overwrite a unit the supplier already entered.
+          setFormData((prev) =>
+            String(prev.unit || '').trim() ? prev : { ...prev, unit: data.unit }
+          );
         }
         if (
           data.status === 'success' &&
@@ -2247,8 +2274,22 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     (brandApprovalState.loading ||
       !isBrandApprovedForProductSubmit(brandApprovalState.status));
 
+  const unitCompatibility = useMemo(
+    () =>
+      validateProductUnitCompatibility({
+        unit: formData.unit,
+        productName: formData.name,
+        category: formData.category
+      }),
+    [formData.unit, formData.name, formData.category]
+  );
+  const unitCompatibilityBlocksSubmit =
+    !showInventoryFields && unitCompatibility.severity === 'error';
+
   const isAddOrInventorySubmitBlocked =
-    missingMandatoryFields.length > 0 || brandApprovalBlocksSubmit;
+    missingMandatoryFields.length > 0 ||
+    brandApprovalBlocksSubmit ||
+    unitCompatibilityBlocksSubmit;
 
   useEffect(() => {
     if (!isAddOrInventorySubmitBlocked) {
@@ -2273,6 +2314,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           : formatSupplierProductValidationMessage(missing)
       );
       const formEl = formRef.current;
+      const scrollEl = formScrollRef.current;
       if (photosMissing && productPhotosSectionRef.current) {
         productPhotosSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } else if (formEl) {
@@ -2281,7 +2323,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           firstInvalid.reportValidity();
           firstInvalid.scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else {
-          formEl.scrollTo?.({ top: 0, behavior: 'smooth' });
+          (scrollEl || formEl).scrollTo?.({ top: 0, behavior: 'smooth' });
         }
       }
       return;
@@ -2302,6 +2344,14 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           : 'Brand approval is required before submitting this product.'
       );
       brandFieldRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
+    if (unitCompatibilityBlocksSubmit) {
+      setShowMissingHints(true);
+      setFormValidationError(unitCompatibility.message);
+      unitInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      unitInputRef.current?.focus?.();
       return;
     }
 
@@ -2366,10 +2416,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       delete productData.cgst_rate;
       delete productData.sgst_rate;
       delete productData.lsa;
-      // Editing existing catalog row: specifications only (unit stays on catalog create).
-      if (product) {
-        delete productData.unit;
-      }
+      // Keep unit on create and edit so incompatible units (e.g. bags for a mouse) can be corrected.
     }
 
     setIsSaving(true);
@@ -2805,16 +2852,31 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const handleUnitChange = (e) => {
     const value = e.target.value;
     setFormData({...formData, unit: value});
-    
-    // Filter units based on input
-    if (value.trim().length > 0) {
-      const filtered = units.filter(unit => 
-        (unit.displayName || unit.name).toLowerCase().includes(value.toLowerCase())
+
+    const preferredNames = getPreferredUnitsForProduct({
+      productName: formData.name,
+      category: formData.category
+    }).map((name) => name.toLowerCase());
+
+    const rankUnit = (unit) => {
+      const key = String(unit.name || '').toLowerCase();
+      const display = String(unit.displayName || unit.name || '').toLowerCase();
+      const preferredIndex = preferredNames.findIndex(
+        (name) => key === name || display.includes(name)
       );
+      return preferredIndex === -1 ? 100 : preferredIndex;
+    };
+
+    if (value.trim().length > 0) {
+      const filtered = units
+        .filter((unit) =>
+          (unit.displayName || unit.name).toLowerCase().includes(value.toLowerCase())
+        )
+        .sort((a, b) => rankUnit(a) - rankUnit(b));
       setUnitSuggestions(filtered);
       setShowUnitSuggestions(true);
     } else {
-      setUnitSuggestions(units);
+      setUnitSuggestions([...units].sort((a, b) => rankUnit(a) - rankUnit(b)));
       setShowUnitSuggestions(true);
     }
   };
@@ -2878,11 +2940,25 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     { key: 'category', label: 'Category' }
   ];
 
+  const getManualFormValueForAiField = (data, fieldKey) => {
+    if (fieldKey === 'productName') return String(data?.name || '').trim();
+    return String(data?.[fieldKey] || '').trim();
+  };
+
+  const confirmReplaceManualAiField = (fieldKey, currentValue, candidateValue) => {
+    const label = AI_FIELD_META.find((field) => field.key === fieldKey)?.label || fieldKey;
+    return window.confirm(
+      `Replace your ${label} "${currentValue}" with the AI suggestion "${candidateValue}"?`
+    );
+  };
+
   const openAiSuggestionPopupFromReview = (review, providerName) => {
     const suggestions = review?.suggestions || {};
     const fieldStatus = review?.fieldStatus || {};
     const confidence = review?.confidence || {};
     const threshold = Number(review?.confidenceThreshold ?? 0.8);
+    // Include every AI candidate — high and low confidence. Nothing is written to the
+    // form until the supplier explicitly applies a selection.
     const items = AI_FIELD_META
       .map((field) => {
         const value = String(suggestions[field.key] || '').trim();
@@ -2890,14 +2966,17 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         const status = fieldStatus?.[field.key] || {};
         const score = Number(confidence?.[field.key]);
         const confidenceValue = Number.isFinite(score) ? score : null;
-        if (confidenceValue !== null && confidenceValue >= threshold) {
-          return null;
-        }
+        const currentValue = getManualFormValueForAiField(formData, field.key);
+        const wouldReplace =
+          Boolean(currentValue) &&
+          currentValue.toLowerCase() !== value.toLowerCase();
         return {
           key: field.key,
           label: field.label,
           value,
-          reason: String(status?.reason || '').trim() || 'AI is not fully certain.',
+          currentValue,
+          wouldReplace,
+          reason: String(status?.reason || '').trim() || '',
           confidence: confidenceValue,
           threshold
         };
@@ -2906,8 +2985,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     if (items.length === 0) return;
 
+    // Never pre-select fields that would overwrite supplier-entered values.
     const selected = items.reduce((acc, item) => {
-      acc[item.key] = true;
+      acc[item.key] = !item.wouldReplace;
       return acc;
     }, {});
 
@@ -2930,6 +3010,27 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
 
     const selectedItems = aiSuggestionPopup.items.filter((item) => selectedKeys.includes(item.key));
+    const replacingItems = selectedItems.filter((item) => {
+      const currentValue = getManualFormValueForAiField(formData, item.key);
+      return (
+        Boolean(currentValue) &&
+        currentValue.toLowerCase() !== String(item.value || '').trim().toLowerCase()
+      );
+    });
+
+    if (replacingItems.length > 0) {
+      const summary = replacingItems
+        .map((item) => {
+          const currentValue = getManualFormValueForAiField(formData, item.key);
+          return `• ${item.label}: "${currentValue}" → "${item.value}"`;
+        })
+        .join('\n');
+      const confirmed = window.confirm(
+        `AI will replace values you already entered:\n\n${summary}\n\nContinue?`
+      );
+      if (!confirmed) return;
+    }
+
     const selectedMap = selectedItems.reduce((acc, item) => {
       acc[item.key] = item.value;
       return acc;
@@ -2943,6 +3044,17 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       gtin: selectedMap.gtin || prev.gtin,
       category: selectedMap.category || prev.category
     }));
+
+    setAiDetectionReview((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        accepted: {
+          ...(prev.accepted || {}),
+          ...selectedMap
+        }
+      };
+    });
 
     if (selectedMap.category) {
       setTimeout(async () => {
@@ -2968,6 +3080,15 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const applySingleAiField = async (fieldKey) => {
     const candidate = getAiCandidateValueForField(fieldKey);
     if (!candidate) return;
+
+    const currentValue = getManualFormValueForAiField(formData, fieldKey);
+    if (
+      currentValue &&
+      currentValue.toLowerCase() !== candidate.toLowerCase() &&
+      !confirmReplaceManualAiField(fieldKey, currentValue, candidate)
+    ) {
+      return;
+    }
 
     const mappedKey =
       fieldKey === 'productName'
@@ -3033,33 +3154,25 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       const data = await response.json();
 
       if (data.status === 'success') {
-        setAiDetectionReview(data.review || null);
-        const nextProductName = String(data.productName || '').trim();
-        const nextCategory = String(data.category || '').trim();
-        const nextBrand = String(data.brand || '').trim();
-        const nextUnit = String(data.unit || '').trim();
-        const nextGtin = String(data.gtin || '').trim();
-
-        setFormData((prev) => ({
-          ...prev,
-          name: nextProductName || prev.name,
-          category: nextCategory || prev.category,
-          brand: nextBrand || prev.brand,
-          unit: nextUnit || prev.unit,
-          gtin: nextGtin || prev.gtin
-        }));
-
-        if (nextCategory) {
-          setTimeout(async () => {
-            await loadCategorySpecifications(
-              nextCategory,
-              nextProductName || formData.name || '',
-              { preserveExistingValues: true }
-            );
-          }, 100);
+        const review = data.review || null;
+        // Merge high-confidence "accepted" values into suggestions so the supplier can
+        // choose what to apply. Do not write any AI values into the product form here.
+        const highConfidence = review?.accepted || {};
+        const lowConfidence = review?.suggestions || {};
+        const mergedSuggestions = { ...lowConfidence };
+        for (const [key, value] of Object.entries(highConfidence)) {
+          const trimmed = String(value || '').trim();
+          if (trimmed) mergedSuggestions[key] = trimmed;
         }
-
-        openAiSuggestionPopupFromReview(data.review || null, 'AI');
+        const reviewForUi = review
+          ? {
+              ...review,
+              suggestions: mergedSuggestions,
+              accepted: {}
+            }
+          : null;
+        setAiDetectionReview(reviewForUi);
+        openAiSuggestionPopupFromReview(reviewForUi, 'AI');
       } else {
         setAiDetectionReview(null);
         setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
@@ -3137,25 +3250,17 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
       if (uploadResults.length === 0) return;
 
-      let filesToAnalyze = null;
+      // Attach only — never trigger AI analysis from upload.
       setProductAiImages((prev) => {
         const room = MAX_AI_PRODUCT_IMAGES - prev.length;
         const additions = uploadResults.slice(0, room);
         const next = [...prev, ...additions];
-        if (next.length >= MIN_AI_PRODUCT_IMAGES) {
-          filesToAnalyze = next.map((x) => x.file);
-        }
-        // Keep form images strictly in sync with this add-session upload list only.
         setFormData((prevForm) => ({
           ...prevForm,
           images: next.map((item) => item.uploadedUrl).filter(Boolean)
         }));
         return next;
       });
-
-      if (filesToAnalyze) {
-        await analyzeImagesFromFiles(filesToAnalyze);
-      }
     } catch (error) {
       alert(error.message || 'Failed to upload images');
     } finally {
@@ -3325,8 +3430,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     lastSuccessfulExtractionSourceKey === currentSpecExtractionSourceKey;
 
   const modalNode = (
-    <div className="modal-overlay">
-      <div className="modal">
+    <div className="modal-overlay pm-product-modal-overlay">
+      <div className="modal pm-product-modal">
         <div className="modal-header">
           <h3>{product ? 'Edit Product' : 'Add New Product'}</h3>
           <button className="btn-icon" onClick={onClose}>
@@ -3335,7 +3440,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         </div>
 
         {showAdditionSteps && (
-          <div style={{ padding: '0 1.25rem' }}>
+          <div className="pm-product-modal__steps">
             <SupplierProductAdditionSteps
               variant="add-product"
               compact
@@ -3344,7 +3449,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           </div>
         )}
         
-        <form ref={formRef} onSubmit={handleSubmit} className="modal-form" noValidate>
+        <form ref={formRef} onSubmit={handleSubmit} className="modal-form pm-product-modal__form" noValidate>
+          <div ref={formScrollRef} className="pm-product-modal__scroll">
           <div className="form-grid">
             {product && (
             <div className="form-group" style={{ gridColumn: '1 / -1', marginBottom: '1rem', order: !product ? 100 : 1 }}>
@@ -3588,8 +3694,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     }}
                   >
                     <p style={{ margin: 0, fontSize: '0.75rem', color: '#6b7280', flex: '1 1 200px' }}>
-                      Upload <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong> (you can add them one by
-                      one or together). Use different angles, packaging, or the label.
+                      Upload <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong> to attach them to
+                      this product (one by one or together). AI analysis is optional — only runs when you
+                      click Analyze photos with AI.
                     </p>
                     <span
                       style={{
@@ -3634,7 +3741,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.5rem' }}>
                         <Sparkles size={14} color="#065f46" />
                         <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#065f46' }}>
-                          AI review: confidence {'>='} 80% is auto-filled, below 80% needs your confirmation
+                          AI suggestions ready — nothing is filled in until you apply a value
                         </span>
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
@@ -3650,6 +3757,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                           const status = aiDetectionReview?.fieldStatus?.[field.key] || {};
                           const isAccepted = Boolean(accepted);
                           const candidateValue = getAiCandidateValueForField(field.key);
+                          const currentValue = getManualFormValueForAiField(formData, field.key);
+                          const wouldReplace =
+                            Boolean(currentValue) &&
+                            Boolean(candidateValue) &&
+                            currentValue.toLowerCase() !== String(candidateValue).toLowerCase();
                           const canApply = !isAccepted && Boolean(candidateValue);
                           const score = Number(aiDetectionReview?.confidence?.[field.key]);
                           const confidenceValue = Number.isFinite(score) ? score : null;
@@ -3666,17 +3778,23 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                                   gap: '0.3rem',
                                   padding: '0.35rem 0.5rem',
                                   borderRadius: '999px',
-                                  border: '1px solid #f59e0b',
-                                  background: '#fef3c7',
-                                  color: '#92400e',
+                                  border: wouldReplace ? '1px solid #dc2626' : '1px solid #f59e0b',
+                                  background: wouldReplace ? '#fef2f2' : '#fef3c7',
+                                  color: wouldReplace ? '#991b1b' : '#92400e',
                                   fontSize: '0.73rem',
                                   fontWeight: 600,
                                   cursor: 'pointer'
                                 }}
-                                title={`${reason || 'AI confidence is below 80%'} Click to apply this value.`}
+                                title={
+                                  wouldReplace
+                                    ? `You already entered "${currentValue}". Click to confirm replacing it with "${candidateValue}".`
+                                    : `${reason || 'AI suggestion'} Click to apply this value to the form.`
+                                }
                               >
                                 <Ban size={12} />
-                                {`${field.label}: skipped (${candidateValue})${confidenceValue !== null ? ` ${Math.round(confidenceValue * 100)}%` : ''} - click to use`}
+                                {wouldReplace
+                                  ? `${field.label}: keep "${currentValue}" or replace with "${candidateValue}"`
+                                  : `${field.label}: ${candidateValue}${confidenceValue !== null ? ` ${Math.round(confidenceValue * 100)}%` : ''} — click to apply`}
                               </button>
                             );
                           }
@@ -3704,8 +3822,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                             >
                               {isAccepted ? <CheckCircle size={12} /> : <Ban size={12} />}
                               {isAccepted
-                                ? `${field.label}: ${accepted}${confidenceValue !== null ? ` (${Math.round(confidenceValue * 100)}%)` : ''}`
-                                : `${field.label}: skipped${raw ? ` (${raw})` : ''}${reason ? ` - ${reason}` : ''}`}
+                                ? `${field.label}: applied — ${accepted}${confidenceValue !== null ? ` (${Math.round(confidenceValue * 100)}%)` : ''}`
+                                : `${field.label}: no suggestion${raw ? ` (${raw})` : ''}${reason ? ` - ${reason}` : ''}`}
                             </span>
                           );
                         })}
@@ -3715,11 +3833,15 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <button
                       type="button"
-                      className="btn-secondary"
+                      className="btn-primary"
                       disabled={analyzingImage || uploadingProductImage || productAiImages.length < MIN_AI_PRODUCT_IMAGES}
                       onClick={() => analyzeImagesFromFiles(productAiImages.map((x) => x.file))}
                     >
-                      Re-run AI with all photos
+                      {analyzingImage
+                        ? 'Analyzing…'
+                        : aiDetectionReview
+                          ? 'Re-analyze photos with AI'
+                          : 'Analyze photos with AI'}
                     </button>
                     {productAiImages.length > 0 && (
                       <button
@@ -4107,7 +4229,22 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     onChange={handleUnitChange}
                     onFocus={() => {
                       if (units.length > 0) {
-                        setUnitSuggestions(units);
+                        const preferredNames = getPreferredUnitsForProduct({
+                          productName: formData.name,
+                          category: formData.category
+                        }).map((name) => name.toLowerCase());
+                        const ranked = [...units].sort((a, b) => {
+                          const score = (unit) => {
+                            const key = String(unit.name || '').toLowerCase();
+                            const display = String(unit.displayName || unit.name || '').toLowerCase();
+                            const idx = preferredNames.findIndex(
+                              (name) => key === name || display.includes(name)
+                            );
+                            return idx === -1 ? 100 : idx;
+                          };
+                          return score(a) - score(b);
+                        });
+                        setUnitSuggestions(ranked);
                         setShowUnitSuggestions(true);
                       }
                     }}
@@ -4121,10 +4258,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                         }
                       }, 200);
                     }}
-                    placeholder="Select or type a new unit"
+                    placeholder="e.g. Piece, Unit, Nos"
                     required
                     autoComplete="off"
-                    style={{ width: '100%' }}
+                    aria-invalid={unitCompatibility.severity === 'error'}
+                    style={{
+                      width: '100%',
+                      borderColor:
+                        unitCompatibility.severity === 'error'
+                          ? '#dc2626'
+                          : unitCompatibility.severity === 'warning'
+                            ? '#d97706'
+                            : undefined
+                    }}
                   />
                   {showUnitSuggestions && (
                     <div
@@ -4167,6 +4313,49 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     </div>
                   )}
                 </div>
+                {unitCompatibility.severity !== 'none' ? (
+                  <p
+                    role={unitCompatibility.severity === 'error' ? 'alert' : 'status'}
+                    style={{
+                      margin: '0.4rem 0 0',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      color: unitCompatibility.severity === 'error' ? '#b91c1c' : '#b45309'
+                    }}
+                  >
+                    {unitCompatibility.message}
+                    {Array.isArray(unitCompatibility.suggestedUnits) &&
+                    unitCompatibility.suggestedUnits.length > 0 ? (
+                      <span style={{ display: 'block', marginTop: '0.25rem', fontWeight: 500 }}>
+                        Quick pick:{' '}
+                        {unitCompatibility.suggestedUnits.slice(0, 3).map((suggested, index) => (
+                          <button
+                            key={suggested}
+                            type="button"
+                            onClick={() => setFormData((prev) => ({ ...prev, unit: suggested }))}
+                            style={{
+                              marginLeft: index === 0 ? 0 : '0.35rem',
+                              border: '1px solid currentColor',
+                              background: 'transparent',
+                              borderRadius: '999px',
+                              padding: '0.1rem 0.45rem',
+                              cursor: 'pointer',
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              color: 'inherit'
+                            }}
+                          >
+                            {suggested}
+                          </button>
+                        ))}
+                      </span>
+                    ) : null}
+                  </p>
+                ) : (
+                  <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
+                    Choose a sell unit that matches the product (for electronics use Piece / Unit / Nos, not bags).
+                  </p>
+                )}
               </div>
             )}
             
@@ -4520,17 +4709,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                           ) : null}
                         </div>
                       </div>
-                      <div style={{
-                        display: 'flex',
-                        flexDirection: 'column',
-                        gap: '0.75rem',
-                        maxHeight: '400px',
-                        overflowY: 'auto',
-                        padding: '0.5rem',
-                        background: 'white',
-                        borderRadius: '6px',
-                        border: '1px solid #e5e7eb'
-                      }}>
+                      <div className="pm-product-modal__specs-list">
                         {specKeys.length === 0 && (
                           <div style={{ fontSize: '0.85rem', color: '#64748b', padding: '0.5rem' }}>
                             No keys yet. Click <strong>Add key</strong> to create specifications.
@@ -4630,11 +4809,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
                 <Sparkles size={16} color="#9a3412" />
                 <strong style={{ color: '#9a3412' }}>
-                  AI confidence is below 80%. Do you mean these values?
+                  AI found these product details — apply only what you want
                 </strong>
               </div>
               <p style={{ margin: '0 0 0.55rem 0', fontSize: '0.82rem', color: '#7c2d12' }}>
-                Tick the suggestions that are correct, then apply them.
+                Fields you already filled stay unchecked. Tick a suggestion only if you want to replace
+                your value — nothing is written until you apply.
               </p>
               <div style={{ display: 'grid', gap: '0.45rem' }}>
                 {aiSuggestionPopup.items.map((item) => (
@@ -4645,9 +4825,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       alignItems: 'flex-start',
                       gap: '0.5rem',
                       padding: '0.45rem 0.5rem',
-                      border: '1px solid #fdba74',
+                      border: item.wouldReplace ? '1px solid #f87171' : '1px solid #fdba74',
                       borderRadius: '8px',
-                      background: '#ffedd5',
+                      background: item.wouldReplace ? '#fef2f2' : '#ffedd5',
                       cursor: 'pointer'
                     }}
                   >
@@ -4666,9 +4846,18 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     />
                     <span style={{ fontSize: '0.82rem', color: '#7c2d12' }}>
                       <strong>{item.label}:</strong> {item.value}
+                      {item.wouldReplace ? (
+                        <span style={{ display: 'block', marginTop: '0.15rem', fontWeight: 600, color: '#991b1b' }}>
+                          Your current value: &quot;{item.currentValue}&quot; (kept unless you tick this)
+                        </span>
+                      ) : item.currentValue ? (
+                        <span style={{ display: 'block', marginTop: '0.15rem' }}>
+                          Matches your current value.
+                        </span>
+                      ) : null}
                       {typeof item.confidence === 'number' ? (
                         <span style={{ display: 'block', marginTop: '0.15rem' }}>
-                          Confidence: {Math.round(item.confidence * 100)}% (threshold 80%)
+                          Confidence: {Math.round(item.confidence * 100)}%
                         </span>
                       ) : null}
                       {item.reason ? <span style={{ display: 'block', marginTop: '0.15rem' }}>Reason: {item.reason}</span> : null}
@@ -4690,7 +4879,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               </div>
             </div>
           )}
-          
+          </div>
+
+          <div className="pm-product-modal__footer">
           {isAddOrInventorySubmitBlocked ? (
             <div
               className={
@@ -4701,13 +4892,16 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               role={formValidationError || showMissingHints ? 'alert' : 'status'}
             >
               {formValidationError ||
-                (brandApprovalBlocksSubmit && brandApprovalWarning
+                (unitCompatibilityBlocksSubmit
+                  ? unitCompatibility.message
+                  : brandApprovalBlocksSubmit && brandApprovalWarning
                   ? `${brandApprovalWarning.title}. ${brandApprovalWarning.message}`
                   : photosMissingFromMandatory && missingMandatoryFields.length === 1
                   ? formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)
                   : `Complete required fields to enable ${product ? 'Update Product' : 'Add Product'}: ${[
                       ...missingMandatoryFields,
-                      ...(brandApprovalBlocksSubmit ? ['Brand approval'] : [])
+                      ...(brandApprovalBlocksSubmit ? ['Brand approval'] : []),
+                      ...(unitCompatibilityBlocksSubmit ? ['Compatible unit'] : [])
                     ].join(', ')}.`)}
             </div>
           ) : null}
@@ -4729,6 +4923,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               <Save size={16} />
               {isSaving ? 'Saving…' : product ? 'Update Product' : 'Add Product'}
             </button>
+          </div>
           </div>
         </form>
       </div>

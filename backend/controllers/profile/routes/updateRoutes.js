@@ -419,7 +419,7 @@ export function registerProfileUpdateRoutes(router) {
         };
 
         if (includesChainUpdateIntent()) {
-          if (wantsBrandApprovalSave) {
+          if (wantsBrandApprovalSave || wantsDraftSave) {
             const brandStrings = collectBrandStringsFromChain(incomingChain);
             const uniqueBrands = [
               ...new Set(
@@ -433,7 +433,7 @@ export function registerProfileUpdateRoutes(router) {
               return res.status(400).json({
                 status: 'error',
                 code: 'brand_required_for_brand_approval',
-                message: 'Enter at least one brand name before saving brand approval.'
+                message: 'Select at least one brand before saving.'
               });
             }
           }

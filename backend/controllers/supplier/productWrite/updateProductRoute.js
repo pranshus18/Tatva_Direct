@@ -23,6 +23,7 @@ import {
 import {
   buildSupplierProductUpdatePayload,
   checkDuplicateSupplierVariant,
+  ensureCategoryAndUnit,
   fetchAndValidateSupplierProductForUpdate
 } from '../../../services/supplierProductWriteService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
@@ -32,6 +33,7 @@ import {
   bodyHasInventoryUpdateFields,
   validateSupplierProductUpdateRequest
 } from '../../../services/supplierProductUpdateValidation.js';
+import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
 
 export function registerSupplierProductUpdateRoute(ctx) {
   const {
@@ -74,6 +76,28 @@ export function registerSupplierProductUpdateRoute(ctx) {
         await fetchAndValidateSupplierProductForUpdate(supabase, { id, reqUserId: req.userId });
 
       if (supplierProduct) {
+        if (req.body.unit !== undefined && String(req.body.unit || '').trim()) {
+          const { data: unitContextProduct } = await supabase
+            .from('products')
+            .select('id, name, category, unit, status')
+            .eq('id', supplierProduct.product_id)
+            .maybeSingle();
+          const unitCheck = validateProductUnitCompatibility({
+            unit: req.body.unit,
+            productName: req.body.name || unitContextProduct?.name || '',
+            category: req.body.category || unitContextProduct?.category || ''
+          });
+          if (!unitCheck.ok && unitCheck.severity === 'error') {
+            return res.status(400).json({
+              status: 'error',
+              code: unitCheck.code || 'unit_incompatible',
+              message: unitCheck.message,
+              missingFields: ['unit'],
+              suggestedUnits: unitCheck.suggestedUnits
+            });
+          }
+        }
+
         const payload = buildSupplierProductUpdatePayload({
           reqBody: req.body,
           supplierProduct,
@@ -218,6 +242,27 @@ export function registerSupplierProductUpdateRoute(ctx) {
               ? 'This exact product variation already exists for the selected location.'
               : (spUpdateError?.message || 'Failed to update product')
           });
+        }
+
+        if (req.body.unit !== undefined && String(req.body.unit || '').trim()) {
+          try {
+            const { unitName } = await ensureCategoryAndUnit(supabase, {
+              category: req.body.category,
+              unit: req.body.unit,
+              reqUserId: req.userId
+            });
+            if (unitName) {
+              await supabase
+                .from('products')
+                .update({ unit: unitName })
+                .eq('id', updatedSupplierProduct.product_id);
+            }
+          } catch (unitSyncError) {
+            console.error(
+              '[Supplier Product] Failed to sync catalog unit:',
+              unitSyncError?.message || unitSyncError
+            );
+          }
         }
 
         void syncCatalogProductSnapshotFromOffers(supabase, updatedSupplierProduct.product_id).catch((syncError) => {

@@ -24,6 +24,7 @@ import {
   CGST_SGST_OPTIONS,
   IGST_OPTIONS
 } from '../utils/gstRates';
+import { validateProductUnitCompatibility } from '../utils/productUnitCompatibility';
 import './Auth.css';
 import './SupplierProductSetup.css';
 
@@ -355,6 +356,17 @@ const SupplierProductSetup = ({ user }) => {
       return;
     }
 
+    const unitCheck = validateProductUnitCompatibility({
+      unit: formData.unit,
+      productName: formData.name,
+      category: formData.category
+    });
+    if (!unitCheck.ok && unitCheck.severity === 'error') {
+      setError(unitCheck.message);
+      setLoading(false);
+      return;
+    }
+
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl('/api/supplier/products'), {
@@ -635,8 +647,31 @@ const SupplierProductSetup = ({ user }) => {
                   <option value="sqft">Square Feet (sqft)</option>
                   <option value="meter">Meter</option>
                   <option value="liter">Liter</option>
+                  <option value="piece">Piece</option>
+                  <option value="unit">Unit</option>
                 </select>
               </div>
+              {(() => {
+                const unitCheck = validateProductUnitCompatibility({
+                  unit: formData.unit,
+                  productName: formData.name,
+                  category: formData.category
+                });
+                if (unitCheck.severity === 'none') return null;
+                return (
+                  <p
+                    role={unitCheck.severity === 'error' ? 'alert' : 'status'}
+                    style={{
+                      margin: '0.4rem 0 0',
+                      fontSize: '0.8rem',
+                      fontWeight: 600,
+                      color: unitCheck.severity === 'error' ? '#b91c1c' : '#b45309'
+                    }}
+                  >
+                    {unitCheck.message}
+                  </p>
+                );
+              })()}
             </div>
           </div>
 

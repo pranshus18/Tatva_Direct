@@ -106,41 +106,69 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         excludeId: existingRow.id
       });
       if (duplicateApproved && String(duplicateApproved.status || '').toLowerCase() === 'approved') {
+        // Merge into the canonical approved brand instead of rejecting the supplier request.
+        // Rejecting-as-duplicate previously blocked Step 2 for the same brand identity.
         const canonicalName = pickCanonicalBrandDisplayName(existingRow.name, duplicateApproved.name);
+        const canonicalNormalized = getCanonicalBrandNormalizedName(canonicalName);
         const nowIso = new Date().toISOString();
-        const { data: rejectedDuplicate, error: rejectError } = await supabase
+        const { data: mergedBrand, error: mergeError } = await supabase
           .from('brands')
           .update({
-            status: 'rejected',
-            rejection_reason: `Duplicate of approved brand "${duplicateApproved.name}".`,
-            approved_by: null,
-            approved_at: null,
+            name: canonicalName,
+            normalized_name: canonicalNormalized,
+            status: 'approved',
+            approved_by: req.userId,
+            approved_at: nowIso,
+            rejection_reason: null,
             updated_at: nowIso
           })
           .eq('id', existingRow.id)
           .select('*')
           .single();
 
-        if (rejectError) throw rejectError;
+        if (mergeError) throw mergeError;
 
-        if (rejectedDuplicate?.requested_by) {
+        if (mergedBrand?.requested_by) {
           try {
-            await notifySupplierBrandRejected({
-              supabase,
-              brand: rejectedDuplicate,
-              reason: rejectedDuplicate.rejection_reason
-            });
+            const { data: requester, error: requesterError } = await supabase
+              .from('users')
+              .select('profile')
+              .eq('id', mergedBrand.requested_by)
+              .maybeSingle();
+            if (!requesterError && requester) {
+              await syncApprovedBrandsIntoUserProfile(mergedBrand.requested_by, requester.profile || {});
+            }
+          } catch (syncError) {
+            console.error('Sync merged approved brand into supplier profile:', syncError);
+          }
+
+          try {
+            await insertNotification(
+              {
+                user_id: mergedBrand.requested_by,
+                type: 'brand_approved',
+                title: `Brand approved: ${canonicalName}`,
+                message: `Admin approved your brand request as "${canonicalName}". You can now select your supply-chain role in Select yourself.`,
+                metadata: {
+                  source: 'admin_brand_approve_merge',
+                  brandId: mergedBrand.id,
+                  brandName: canonicalName,
+                  canonicalBrandId: duplicateApproved.id
+                },
+                is_read: false
+              },
+              supabase
+            );
           } catch (notifErr) {
-            console.error('[Admin] duplicate brand reject notification:', notifErr);
+            console.error('[Admin] merged brand approve notification:', notifErr);
           }
         }
 
         return res.json({
           status: 'success',
-          message: `Brand already exists as "${canonicalName}". Duplicate request was rejected.`,
-          brand: duplicateApproved,
-          mergedDuplicate: true,
-          rejectedBrand: rejectedDuplicate
+          message: `Brand approved as "${canonicalName}" (merged with existing catalog entry).`,
+          brand: mergedBrand || duplicateApproved,
+          mergedDuplicate: true
         });
       }
 

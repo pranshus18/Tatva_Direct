@@ -108,6 +108,9 @@ export function getSupplierProductUpdateErrorMessage(data) {
   if (!data || typeof data !== 'object') {
     return 'Failed to update product';
   }
+  if (data.code === 'unit_incompatible' && data.message) {
+    return String(data.message);
+  }
   if (Array.isArray(data.errors) && data.errors.length > 0) {
     return data.errors.filter(Boolean).join(' ');
   }
@@ -123,7 +126,8 @@ export function getSupplierProductCreateErrorMessage(data) {
     (data.code === 'product_photos_required' ||
       data.code === 'brand_approval_required' ||
       data.code === 'brand_approval_pending' ||
-      data.code === 'brand_required') &&
+      data.code === 'brand_required' ||
+      data.code === 'unit_incompatible') &&
     data.message
   ) {
     return String(data.message);

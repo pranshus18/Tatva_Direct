@@ -1,18 +1,28 @@
-import { useEffect, useMemo, useState } from 'react';
-import { getApiUrl } from '../config/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { resolveApiPath } from '../config/api';
 import { dedupeBrandCatalogRows, dedupeBrandNames } from '../utils/supplierChainEntryValidation';
 
 /**
- * @param {{ source?: 'profile' | 'catalog' }} [options]
+ * @param {{ source?: 'profile' | 'catalog', enabled?: boolean }} [options]
  * - profile: brands declared + approved for this supplier (product forms)
- * - catalog: all admin-approved brands (Select yourself Step 1)
+ * - catalog: all admin-approved brands (Select yourself brand setup)
  */
-export function useSupplierBrands({ source = 'profile' } = {}) {
+export function useSupplierBrands({ source = 'profile', enabled = true } = {}) {
   const [brands, setBrands] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(Boolean(enabled));
   const [error, setError] = useState('');
+  const [reloadToken, setReloadToken] = useState(0);
+
+  const reload = useCallback(() => {
+    setReloadToken((value) => value + 1);
+  }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      setLoading(false);
+      return undefined;
+    }
+
     let cancelled = false;
     (async () => {
       setLoading(true);
@@ -24,7 +34,8 @@ export function useSupplierBrands({ source = 'profile' } = {}) {
         }
         const endpoint =
           source === 'catalog' ? '/api/supplier/brands/approved-catalog' : '/api/supplier/brands';
-        const res = await fetch(getApiUrl(endpoint), {
+        // Prefer same-origin /api in Vite dev so the proxy avoids CORS/port mismatches.
+        const res = await fetch(resolveApiPath(endpoint), {
           headers: { Authorization: `Bearer ${token}` },
           cache: 'no-cache'
         });
@@ -54,7 +65,7 @@ export function useSupplierBrands({ source = 'profile' } = {}) {
     return () => {
       cancelled = true;
     };
-  }, [source]);
+  }, [source, enabled, reloadToken]);
 
   const normalizedBrands = useMemo(
     () => (source === 'catalog' ? dedupeBrandCatalogRows(brands) : brands),
@@ -62,9 +73,9 @@ export function useSupplierBrands({ source = 'profile' } = {}) {
   );
 
   const brandNames = useMemo(
-    () => dedupeBrandNames(brands.map((b) => b.name).filter(Boolean)),
-    [brands]
+    () => dedupeBrandNames(normalizedBrands.map((b) => b.name).filter(Boolean)),
+    [normalizedBrands]
   );
 
-  return { brands: normalizedBrands, brandNames, loading, error };
+  return { brands: normalizedBrands, brandNames, loading, error, reload };
 }

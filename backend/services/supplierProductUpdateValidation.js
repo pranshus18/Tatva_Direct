@@ -1,4 +1,5 @@
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
+import { validateProductUnitCompatibility } from '../utils/productUnitCompatibility.js';
 
 const INVENTORY_FIELD_KEYS = [
   'stock',
@@ -20,6 +21,7 @@ const CATALOG_FIELD_KEYS = [
   'brand',
   'brandModel',
   'category',
+  'unit',
   'description',
   'gtin',
   'mpn',
@@ -179,6 +181,17 @@ export function validateSupplierCatalogUpdateFields(body = {}) {
 
   if (body.brandModel !== undefined && !String(body.brandModel || '').trim()) {
     pushError(result, 'brandModel', 'Brand is required.');
+  }
+
+  if (body.unit !== undefined && String(body.unit || '').trim()) {
+    const unitCheck = validateProductUnitCompatibility({
+      unit: body.unit,
+      productName: body.name,
+      category: body.category
+    });
+    if (!unitCheck.ok && unitCheck.severity === 'error') {
+      pushError(result, 'unit', unitCheck.message);
+    }
   }
 
   result.missingFields = [...new Set(result.missingFields.filter(Boolean))];

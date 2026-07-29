@@ -17,12 +17,14 @@ import {
 } from '../../services/supplierChainProfileService.js';
 import {
   SUPPLY_CHAIN_ROLES_IN_ORDER,
-  brandKeysMatchForChainLookup,
   catalogBrandDedupKey,
   findCategorySupplyChainRowForBrandKey,
-  normalizeBrandKey,
-  normalizeChainRolesFromStages
+  normalizeBrandKey
 } from '../../services/supplyChainSharedService.js';
+import {
+  buildChainRoleOptionsMessage,
+  resolveSupplierBrandLayers
+} from '../../services/supplierBrandLayerContract.js';
 import { resolveServiceProviderDisplayFromPm } from '../../services/pmUserService.js';
 
 const SERVICE_PROVIDER_THEME_IDS = new Set([
@@ -155,48 +157,48 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
       brandRow = brandByDedupKey.get(chainBrandKey) || brandRow;
     }
 
-    const roles = normalizeChainRolesFromStages(chainRow?.stages);
-    let brandStatus = String(brandRow?.status || 'missing');
-    let displayBrandName = brandRow?.name || b.original;
-
-    // Supplier spelling may differ from the admin chain row. Only treat the brand as approved
-    // when the brands table has an approved row — never unlock Step 2 for pending requests.
-    if (brandStatus !== 'approved' && roles.length > 0 && chainRow?.category_name) {
+    // Prefer the approved brands-table twin when the supplier typed a catalog spelling variant.
+    if (brandRow && String(brandRow.status || '').toLowerCase() !== 'approved' && chainRow?.category_name) {
       const chainBrandKey = catalogBrandDedupKey(chainRow.category_name);
-      const supplierMatchesChain =
-        b.dedupKey &&
-        chainBrandKey &&
-        (b.dedupKey === chainBrandKey ||
-          brandKeysMatchForChainLookup(b.dedupKey, chainBrandKey) ||
-          brandKeysMatchForChainLookup(b.normalized, normalizeBrandKey(chainRow.category_name)));
-
-      if (supplierMatchesChain) {
-        const approvedChainBrand = brandByDedupKey.get(chainBrandKey) || null;
-        if (String(approvedChainBrand?.status || '').toLowerCase() === 'approved') {
-          brandRow = approvedChainBrand;
-          brandStatus = 'approved';
-          displayBrandName = approvedChainBrand?.name || displayBrandName;
-        }
+      const approvedChainBrand = brandByDedupKey.get(chainBrandKey) || null;
+      if (String(approvedChainBrand?.status || '').toLowerCase() === 'approved') {
+        brandRow = approvedChainBrand;
       }
     }
 
-    if (brandStatus !== 'approved') {
+    const layers = resolveSupplierBrandLayers({
+      brandInput: b.original,
+      brandRow,
+      chainRow
+    });
+
+    if (!layers.supplierHasAccess) {
       if (!blockedReason) blockedReason = 'brand_not_approved';
-      notApprovedBrands.push(displayBrandName);
-    } else if (roles.length > 0) {
-      roleLists.push(roles);
-    } else {
+      notApprovedBrands.push(layers.brand);
+    } else if (!layers.hasSupplyChainDefinition) {
       if (!blockedReason) blockedReason = 'supply_chain_not_defined';
-      missingChainBrands.push(displayBrandName);
+      missingChainBrands.push(layers.brand);
+    } else if (layers.canSelectRoles) {
+      roleLists.push(layers.roles);
     }
-    rolesByBrand[b.normalized] = roles;
+
+    rolesByBrand[b.normalized] = layers.roles;
 
     perBrand.push({
-      brand: displayBrandName,
-      normalizedBrand: b.normalized,
-      status: brandStatus,
-      hasSupplyChainDefinition: roles.length > 0,
-      roles,
+      brand: layers.brand,
+      normalizedBrand: layers.normalizedBrand,
+      // Layer 2 brands-table truth (pending stays pending).
+      approvalStatus: layers.approvalStatus,
+      // Layer 1
+      inApprovedCatalog: layers.inApprovedCatalog,
+      // Layer 2
+      supplierHasAccess: layers.supplierHasAccess,
+      // Layer 3
+      hasSupplyChainDefinition: layers.hasSupplyChainDefinition,
+      roles: layers.roles,
+      canSelectRoles: layers.canSelectRoles,
+      // brands-table approval only — role unlock is canSelectRoles, not status.
+      status: layers.status,
       supplyChainDefinition: chainRow
         ? {
             id: chainRow.id || null,
@@ -219,8 +221,18 @@ export async function resolveChainRoleOptionsForBrands(brandInputs = []) {
       missingChainBrands,
       message:
         blockedReason === 'brand_not_approved'
-          ? 'This brand has not yet been approved by the admin. Please wait until the approval is complete before proceeding.'
-          : `Supply chain is not defined by admin for: ${missingChainBrands.join(', ')}.`
+          ? buildChainRoleOptionsMessage({
+              canSelectRoles: false,
+              supplierHasAccess: false,
+              hasSupplyChainDefinition: false,
+              displayBrandName: notApprovedBrands[0] || 'Brand'
+            })
+          : buildChainRoleOptionsMessage({
+              canSelectRoles: false,
+              supplierHasAccess: true,
+              hasSupplyChainDefinition: false,
+              displayBrandName: missingChainBrands.join(', ')
+            })
     };
   }
 

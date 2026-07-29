@@ -1,18 +1,23 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
-import { getApiUrl } from '../config/api';
+import { getApiUrl, resolveApiPath } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
 import BrandSelect from './BrandSelect';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
-import { brandKeyForDuplicateCheck, findApprovedCatalogBrandMatch, formatApprovedCatalogBrandMatchMessage } from '../utils/supplierChainEntryValidation';
+import { brandKeyForDuplicateCheck, dedupeBrandNames, findApprovedCatalogBrandMatch, formatApprovedCatalogBrandMatchMessage } from '../utils/supplierChainEntryValidation';
 import {
   formatSupplyChainRoleLabel,
   getApprovedRoleForEntry,
   matchCompanyInfoEntry,
   isBrandApprovedForSupplyChainStep,
   findSupplierBrandRequest,
-  BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE
+  BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
+  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
+import {
+  resolveSupplierBrandSetupLayers,
+  supplierCanSelectBrandRoles
+} from '../utils/supplierBrandLayerContract';
 import { formatDateTimeIST } from '../utils/dateTime';
 import {
   appendAuthorizationCertificateUrl,
@@ -189,6 +194,10 @@ const CompanyInfoEntryCard = ({
   allowEntrySave = false,
   allowEntryRemove = false,
   catalogBrandNames = [],
+  catalogBrands = null,
+  catalogBrandsLoading = null,
+  catalogBrandsError = '',
+  onReloadCatalogBrands = null,
   useBrandNameTextInput = false,
   excludeBrands = [],
   duplicateBrandMessage = '',
@@ -250,11 +259,22 @@ const CompanyInfoEntryCard = ({
     !approvedCatalogMatchMessage &&
     !brandRequest;
   const brandStatus = String(
-    brandMeta?.status ||
+    brandMeta?.approvalStatus ||
+      brandMeta?.status ||
       brandRequestStatus ||
       (hasResolvedChainRoles ? 'approved' : selectedBrand ? 'missing' : 'unselected')
   ).toLowerCase();
-  const chainDefined = !!brandMeta?.hasSupplyChainDefinition || hasResolvedChainRoles;
+  const brandLayers = resolveSupplierBrandSetupLayers({
+    brandName: resolvedBrandName || selectedBrand,
+    catalogBrands,
+    supplierApprovedBrands,
+    supplierBrandRequests,
+    brandMeta
+  });
+  const chainDefined =
+    brandLayers.hasSupplyChainDefinition ||
+    !!brandMeta?.hasSupplyChainDefinition ||
+    hasResolvedChainRoles;
   const statusTone = isBrandOnlyStep
     ? !hasBrandValue
       ? 'neutral'
@@ -269,13 +289,15 @@ const CompanyInfoEntryCard = ({
               : brandOnlyReadyToSubmit
                 ? 'neutral'
                 : 'neutral'
-    : brandStatus === 'approved' && chainDefined
+    : brandLayers.canSelectRoles
       ? 'success'
-      : brandStatus === 'pending'
+      : brandLayers.supplierHasAccess
         ? 'warning'
-        : brandStatus === 'rejected'
-          ? 'danger'
-          : 'neutral';
+        : brandLayers.approvalStatus === 'pending'
+          ? 'warning'
+          : brandLayers.approvalStatus === 'rejected'
+            ? 'danger'
+            : 'neutral';
   const statusLabel = isBrandOnlyStep
     ? !hasBrandValue
       ? 'Select a brand first'
@@ -284,7 +306,7 @@ const CompanyInfoEntryCard = ({
         : approvedCatalogMatchMessage
           ? 'Choose approved brand'
           : brandOnlyPendingSubmitted
-            ? 'Request submitted'
+            ? 'Pending admin approval'
             : brandOnlyRejected
               ? 'Rejected by admin'
               : brandOnlyReadyToSubmit
@@ -292,15 +314,15 @@ const CompanyInfoEntryCard = ({
                 : 'Not requested yet'
     : !hasBrandValue
       ? 'Select a brand first'
-      : brandStatus === 'approved' && chainDefined
-        ? 'Approved by admin'
-        : brandStatus === 'approved'
+      : brandLayers.canSelectRoles
+        ? 'Approved — roles available'
+        : brandLayers.supplierHasAccess
           ? 'Approved (chain setup pending)'
-          : brandStatus === 'pending'
-            ? 'Request submitted'
-            : brandStatus === 'rejected'
+          : brandLayers.approvalStatus === 'pending'
+            ? 'Pending admin approval'
+            : brandLayers.approvalStatus === 'rejected'
               ? 'Rejected by admin'
-              : 'Not requested yet';
+              : 'Brand access required';
   const statusDetailLines = (() => {
     const lines = [];
     if (hasBrandValue && resolvedBrandName) {
@@ -309,7 +331,7 @@ const CompanyInfoEntryCard = ({
     if (approvedCatalogMatchMessage) {
       lines.push(approvedCatalogMatchMessage);
     } else if (brandOnlyPendingSubmitted || (!isBrandOnlyStep && brandStatus === 'pending')) {
-      lines.push('Waiting for admin approval.');
+      lines.push('Request already submitted. Waiting for admin approval — no need to submit again.');
       if (brandRequestSubmittedAt) {
         lines.push(`Submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`);
       }
@@ -327,21 +349,32 @@ const CompanyInfoEntryCard = ({
     }
     return lines;
   })();
-  const brandApprovedForSupplyChain = isBrandApprovedForSupplyChainStep(
-    resolvedBrandName || selectedBrand,
-    supplierApprovedBrands,
-    brandMeta,
-    supplierBrandRequests
-  );
+  const brandApprovedForSupplyChain = brandLayers.supplierHasAccess;
+  const brandCanSelectRoles =
+    typeof brandMeta?.canSelectRoles === 'boolean'
+      ? brandMeta.canSelectRoles && brandApprovedForSupplyChain
+      : supplierCanSelectBrandRoles({
+          brandName: resolvedBrandName || selectedBrand,
+          catalogBrands,
+          supplierApprovedBrands,
+          supplierBrandRequests,
+          brandMeta
+        });
+  // Layer 2 access + Layer 3 chain (or already-loaded roles) before role setup UI unlocks.
   const brandApprovalReadyForRole =
-    hasBrandValue &&
-    brandApprovedForSupplyChain &&
-    chainDefined &&
-    hasResolvedChainRoles;
-  const roleSelectionEnabled = editing && brandApprovalReadyForRole && !roleOptionsLoading;
+    hasBrandValue && brandApprovedForSupplyChain && (chainDefined || hasResolvedChainRoles || brandCanSelectRoles);
+  const roleSelectionEnabled =
+    editing && brandApprovalReadyForRole && !roleOptionsLoading && hasResolvedChainRoles;
   const roleDocumentsEnabled = editing && brandApprovalReadyForRole;
   const showBrandNotApprovedStep2Message =
     isSupplyChainOnlyStep && hasBrandValue && !brandApprovedForSupplyChain;
+  const showChainNotDefinedStep2Message =
+    isSupplyChainOnlyStep &&
+    hasBrandValue &&
+    brandApprovedForSupplyChain &&
+    !chainDefined &&
+    !hasResolvedChainRoles &&
+    !roleOptionsLoading;
   const approvedRoleLabel = approvedRole ? formatSupplyChainRoleLabel(approvedRole) : '';
   const pendingRoleChange =
     !!approvedRole && !!entry.role && String(entry.role).trim() !== String(approvedRole).trim();
@@ -466,6 +499,11 @@ const CompanyInfoEntryCard = ({
                       source="catalog"
                       dropdownOnly
                       excludeBrands={excludeBrands}
+                      brands={catalogBrands}
+                      brandNames={catalogBrandNames}
+                      loading={catalogBrandsLoading}
+                      error={catalogBrandsError}
+                      onRetry={onReloadCatalogBrands}
                       className="chain-brand-select"
                     />
                     {isUnifiedRegistration ? (
@@ -479,8 +517,8 @@ const CompanyInfoEntryCard = ({
                     ) : isBrandOnlyStep ? (
                       <p className="chain-field__sublabel">
                         {selectedBrand
-                          ? `"${selectedBrand}" will appear automatically in Step 2 for supply-chain role selection.`
-                          : 'Pick a brand here. Step 2 will show a supply-chain role form with this brand filled in.'}
+                          ? `"${selectedBrand}" will appear automatically below for supply-chain role selection.`
+                          : 'Pick an approved brand here. Your supply-chain role form below will fill in this brand automatically.'}
                       </p>
                     ) : null}
                   </div>
@@ -635,7 +673,7 @@ const CompanyInfoEntryCard = ({
               {isSupplyChainOnlyStep ? (
                 <div className="chain-field chain-field--full">
                   <label className="chain-field__label" htmlFor={`brand-readonly-${entry.id}`}>
-                    Brand (filled from Step 1)
+                    Brand (from your selection above)
                   </label>
                   <input
                     id={`brand-readonly-${entry.id}`}
@@ -647,7 +685,7 @@ const CompanyInfoEntryCard = ({
                     aria-readonly="true"
                   />
                   <p className="chain-field__sublabel">
-                    This is the brand you selected above. Pick your position in the supply chain below.
+                    This is the approved brand you selected. Pick your position in the supply chain below.
                   </p>
                 </div>
               ) : null}
@@ -663,6 +701,10 @@ const CompanyInfoEntryCard = ({
                 <p className="chain-callout chain-callout--warning" role="alert">
                   {BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE}
                 </p>
+              ) : showChainNotDefinedStep2Message ? (
+                <p className="chain-callout chain-callout--warning" role="alert">
+                  {SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}
+                </p>
               ) : roleOptionsMessage && !approvedRole && !hasResolvedChainRoles ? (
                 <p className="chain-callout chain-callout--warning">{roleOptionsMessage}</p>
               ) : adminChainPathText ? (
@@ -674,7 +716,7 @@ const CompanyInfoEntryCard = ({
           ) : (
             <p className="chain-callout chain-callout--warning">
               {isSupplyChainOnlyStep
-                ? 'Brand missing. Go back to Step 1 and select a brand first.'
+                ? 'Brand missing. Select an approved brand above first.'
                 : isUnifiedRegistration
                   ? 'Select a brand in the dropdown above. Your supply-chain role options will appear here automatically.'
                   : 'Select a brand first. Supply-chain role options appear here once the brand is admin-approved and the supply chain is defined.'}
@@ -801,7 +843,11 @@ export default function SupplierSupplyChainEntriesEditor({
   filterBrandName = '',
   supplierApprovedBrands = [],
   supplierBrandRequests = [],
-  startInNewBrandMode = false
+  startInNewBrandMode = false,
+  catalogBrands: catalogBrandsProp = null,
+  catalogBrandsLoading = null,
+  catalogBrandsError = '',
+  onReloadCatalogBrands = null
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -816,9 +862,27 @@ export default function SupplierSupplyChainEntriesEditor({
   const [highlightedEntryId, setHighlightedEntryId] = useState('');
   const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
   const usesBrandCatalogFields = sectionView === 'brand' || sectionView === 'all';
-  const { brandNames: catalogBrandNames } = useSupplierBrands({
-    source: usesBrandCatalogFields ? 'catalog' : 'profile'
+  const parentProvidesCatalog = Array.isArray(catalogBrandsProp);
+  const {
+    brands: fetchedCatalogBrands,
+    brandNames: fetchedCatalogBrandNames,
+    loading: fetchedCatalogLoading,
+    error: fetchedCatalogError,
+    reload: reloadFetchedCatalog
+  } = useSupplierBrands({
+    source: 'catalog',
+    enabled: usesBrandCatalogFields && !parentProvidesCatalog
   });
+  const catalogBrands = parentProvidesCatalog ? catalogBrandsProp : fetchedCatalogBrands;
+  const catalogBrandNames = parentProvidesCatalog
+    ? dedupeBrandNames(
+        catalogBrands.map((row) => (typeof row === 'string' ? row : row?.name)).filter(Boolean)
+      )
+    : fetchedCatalogBrandNames;
+  const catalogLoading =
+    catalogBrandsLoading != null ? Boolean(catalogBrandsLoading) : fetchedCatalogLoading;
+  const catalogError = catalogBrandsError || fetchedCatalogError || '';
+  const reloadCatalogBrands = onReloadCatalogBrands || reloadFetchedCatalog;
 
   const getDisplayEntries = () => {
     const entries = profile?.companyInfoEntries;
@@ -1005,7 +1069,7 @@ export default function SupplierSupplyChainEntriesEditor({
 
         try {
           const response = await fetch(
-            getApiUrl(`/api/profile/supplier/chain-role-options?brands=${encodeURIComponent(brandsValue)}`),
+            resolveApiPath(`/api/profile/supplier/chain-role-options?brands=${encodeURIComponent(brandsValue)}`),
             { headers: { Authorization: `Bearer ${token}` } }
           );
           const data = await response.json().catch(() => ({}));
@@ -1018,14 +1082,16 @@ export default function SupplierSupplyChainEntriesEditor({
           const perBrandChainRoles = Array.isArray(selectedBrandState?.roles)
             ? selectedBrandState.roles
             : [];
-          const brandApprovedForRoleOptions =
-            String(selectedBrandState?.status || '').toLowerCase() === 'approved';
+          const brandCanSelectRoles =
+            typeof selectedBrandState?.canSelectRoles === 'boolean'
+              ? selectedBrandState.canSelectRoles
+              : selectedBrandState?.supplierHasAccess !== false &&
+                !!selectedBrandState?.hasSupplyChainDefinition &&
+                perBrandChainRoles.length > 0;
           const effectiveRoles =
             Array.isArray(data?.roles) && data.roles.length > 0
               ? data.roles
-              : brandApprovedForRoleOptions &&
-                  selectedBrandState?.hasSupplyChainDefinition &&
-                  perBrandChainRoles.length > 0
+              : brandCanSelectRoles && perBrandChainRoles.length > 0
                 ? perBrandChainRoles
                 : [];
           const roleSet = new Set(effectiveRoles);
@@ -1034,11 +1100,19 @@ export default function SupplierSupplyChainEntriesEditor({
             ? data.brands
                 .map((b) => {
                   const brandName = b?.brand || b?.normalizedBrand || 'Brand';
-                  const approved = String(b?.status || '') === 'approved';
+                  const hasAccess =
+                    typeof b?.supplierHasAccess === 'boolean'
+                      ? b.supplierHasAccess
+                      : String(b?.approvalStatus || b?.status || '').toLowerCase() === 'approved' ||
+                        !!b?.inApprovedCatalog;
                   const chainDefined = !!b?.hasSupplyChainDefinition;
-                  if (approved && chainDefined) return `${brandName} approved + chain defined`;
-                  if (!approved) return `${brandName} not admin approved`;
-                  return `${brandName} chain not defined by admin`;
+                  const canSelect =
+                    typeof b?.canSelectRoles === 'boolean'
+                      ? b.canSelectRoles
+                      : hasAccess && chainDefined;
+                  if (canSelect) return `${brandName}: access ok + chain defined`;
+                  if (!hasAccess) return `${brandName}: waiting for brand approval`;
+                  return `${brandName}: chain not defined by admin`;
                 })
                 .join(' | ')
             : '';
@@ -1051,6 +1125,17 @@ export default function SupplierSupplyChainEntriesEditor({
                   .map((role) => SUPPLY_CHAIN_ROLE_LABEL_BY_VALUE[role] || role)
                   .join(' -> ')
               : '';
+          const fallbackMessage = (() => {
+            if (options.length > 0) return '';
+            if (data?.message) return data.message;
+            if (selectedBrandState?.supplierHasAccess === false) {
+              return BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE;
+            }
+            if (selectedBrandState?.hasSupplyChainDefinition) {
+              return BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE;
+            }
+            return SUPPLY_CHAIN_NOT_DEFINED_MESSAGE;
+          })();
           nextState[entry.id] = {
             loading: false,
             options,
@@ -1061,13 +1146,7 @@ export default function SupplierSupplyChainEntriesEditor({
             adminChainPathText: selectedBrandChainPath
               ? `Admin-defined chain for this brand: ${selectedBrandChainPath}`
               : '',
-            message:
-              options.length > 0
-                ? ''
-                : data?.message ||
-                  (selectedBrandState?.hasSupplyChainDefinition
-                    ? 'Brand must be admin approved before you can select a supply-chain role.'
-                    : 'No role available. Brand must be admin approved and supply chain must be defined by admin.')
+            message: fallbackMessage
           };
         } catch (_err) {
           nextState[entry.id] = {
@@ -1326,7 +1405,8 @@ export default function SupplierSupplyChainEntriesEditor({
           targetBrand,
           supplierApprovedBrands,
           roleUi.brandMeta || null,
-          supplierBrandRequests
+          supplierBrandRequests,
+          catalogBrands
         )
       ) {
         alert(BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE);
@@ -1532,8 +1612,9 @@ export default function SupplierSupplyChainEntriesEditor({
             {brandStepOtherExplicit ? (
               <>
                 <p className="chain-field__sublabel chain-entry-selector__intro">
-                  Enter your brand name and upload supporting documents below. This brand is not in the
-                  approved catalog yet and will be sent to admin for approval.
+                  Path B: enter your brand name and upload supporting documents below. This brand is not in the
+                  approved catalog yet and will be sent to admin for approval. After approval, configure your
+                  supply-chain role.
                 </p>
                 <button
                   type="button"
@@ -1541,13 +1622,13 @@ export default function SupplierSupplyChainEntriesEditor({
                   onClick={handleBrandStepShowCatalogPicker}
                   disabled={!editing}
                 >
-                  Choose from approved brands instead
+                  Choose from approved brands instead (Path A)
                 </button>
               </>
             ) : (
               <>
                 <label className="chain-field__label" htmlFor={`entry-selector-${sectionView}`}>
-                  {activeEntryBrandValue ? 'Selected brand' : 'Select brand'}
+                  {activeEntryBrandValue ? 'Selected approved brand' : 'Select approved brand'}
                 </label>
                 <BrandSelect
                   id={`entry-selector-${sectionView}`}
@@ -1571,7 +1652,11 @@ export default function SupplierSupplyChainEntriesEditor({
                   allowOther
                   source="catalog"
                   dropdownOnly
-                  hideHint
+                  brands={catalogBrands}
+                  brandNames={catalogBrandNames}
+                  loading={catalogLoading}
+                  error={catalogError}
+                  onRetry={reloadCatalogBrands}
                   className="chain-brand-select"
                 />
                 <div className="chain-entry-selector__actions">
@@ -1707,6 +1792,10 @@ export default function SupplierSupplyChainEntriesEditor({
               sectionView !== 'brand' && (sectionView === 'all' || allowEntryManagement || !!onRemoveEntry)
             }
             catalogBrandNames={usesBrandCatalogFields ? catalogBrandNames : []}
+            catalogBrands={usesBrandCatalogFields ? catalogBrands : []}
+            catalogBrandsLoading={usesBrandCatalogFields ? catalogLoading : false}
+            catalogBrandsError={usesBrandCatalogFields ? catalogError : ''}
+            onReloadCatalogBrands={usesBrandCatalogFields ? reloadCatalogBrands : null}
             useBrandNameTextInput={usesBrandCatalogFields}
             excludeBrands={reservedBrandsForEntry(displayEntries, entry.id)}
             duplicateBrandMessage={duplicateBrandMessages.get(entry.id) || ''}
@@ -1731,7 +1820,7 @@ export default function SupplierSupplyChainEntriesEditor({
         <div className="chain-add-entry">
           <p className="chain-add-entry__hint">
             {sectionView === 'brand' || sectionView === 'all'
-              ? 'Add another brand in Step 1'
+              ? 'Add another approved brand, or request a new one if it is not listed'
               : 'Need another role or brand? Add a separate entry below.'}
           </p>
           <button type="button" className="chain-add-entry__btn" onClick={addCompanyInfoEntry}>

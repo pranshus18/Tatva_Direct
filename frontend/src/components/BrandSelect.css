@@ -34,3 +34,19 @@
 .brand-select__hint--error {
   color: #b91c1c;
 }
+
+.brand-select__retry {
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  color: #1d4ed8;
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.brand-select__retry:hover {
+  color: #1e40af;
+}

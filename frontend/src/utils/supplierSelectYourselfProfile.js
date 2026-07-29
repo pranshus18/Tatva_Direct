@@ -8,6 +8,12 @@ import {
   normalizeEntryDocumentFields
 } from './authorizationCertificateUrls';
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
+import {
+  resolveSupplierBrandSetupLayers,
+  supplierHasBrandAccess
+} from './supplierBrandLayerContract';
+
+export const BRAND_REQUIRED_BEFORE_SAVE_MESSAGE = 'Select at least one brand before saving.';
 
 export const SUPPLY_CHAIN_ROLE_LABELS = {
   manufacturer: 'Manufacturer (MGF)',
@@ -154,6 +160,9 @@ function normalizeProfileForEditorSnapshot(profileData) {
 export const BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE =
   'This brand has not yet been approved by the admin. Please wait until the approval is complete before proceeding.';
 
+export const SUPPLY_CHAIN_NOT_DEFINED_MESSAGE =
+  'Supply chain roles are not defined by admin for this brand yet. Role selection unlocks once the admin configures the chain.';
+
 function buildSupplierApprovedBrandKeys(supplierApprovedBrands = []) {
   const keys = new Set();
   for (const item of Array.isArray(supplierApprovedBrands) ? supplierApprovedBrands : []) {
@@ -167,6 +176,10 @@ function buildSupplierApprovedBrandKeys(supplierApprovedBrands = []) {
   return keys;
 }
 
+function isDuplicateOfApprovedRejection(reason = '') {
+  return /duplicate of approved brand/i.test(String(reason || ''));
+}
+
 function buildSupplierRejectedBrandKeys(supplierBrandRequests = []) {
   const keys = new Set();
   for (const item of Array.isArray(supplierBrandRequests) ? supplierBrandRequests : []) {
@@ -174,6 +187,8 @@ function buildSupplierRejectedBrandKeys(supplierBrandRequests = []) {
     const status =
       typeof item === 'object' ? String(item?.status || '').trim().toLowerCase() : '';
     if (!name || status !== 'rejected') continue;
+    // Duplicate-merge rejections must not block the canonical approved brand in Step 2.
+    if (typeof item === 'object' && isDuplicateOfApprovedRejection(item?.rejectionReason)) continue;
     const key = brandKeyForDuplicateCheck(name);
     if (key) keys.add(key);
   }
@@ -206,36 +221,195 @@ export function findSupplierBrandRequest(brandName, supplierBrandRequests = []) 
   return null;
 }
 
-/** Whether Step 2 (supply-chain role + docs) may proceed for this brand. */
+/**
+ * Merge pending/approved brand-request rows into profile.supplierBrandRequests so Brand status
+ * updates immediately after Save brand (even if the API profile omits a just-created request).
+ */
+export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = []) {
+  if (!profile || typeof profile !== 'object') return profile;
+  const incoming = (Array.isArray(requestRows) ? requestRows : [])
+    .map((row) => {
+      if (typeof row === 'string') {
+        const name = String(row || '').trim();
+        return name
+          ? {
+              name,
+              normalizedName: brandKeyForDuplicateCheck(name),
+              status: 'pending',
+              requestedAt: null,
+              submittedAt: null,
+              rejectionReason: ''
+            }
+          : null;
+      }
+      const name = String(row?.name || row?.normalizedName || '').trim();
+      if (!name) return null;
+      const status = String(row?.status || 'pending').trim().toLowerCase() || 'pending';
+      const submittedAt = row?.submittedAt || row?.requestedAt || null;
+      return {
+        name,
+        normalizedName: row?.normalizedName || brandKeyForDuplicateCheck(name),
+        status,
+        requestedAt: row?.requestedAt || submittedAt,
+        submittedAt,
+        rejectionReason: String(row?.rejectionReason || '').trim()
+      };
+    })
+    .filter(Boolean);
+
+  if (incoming.length === 0) return profile;
+
+  const byKey = new Map();
+  for (const item of Array.isArray(profile.supplierBrandRequests) ? profile.supplierBrandRequests : []) {
+    const name = typeof item === 'string' ? item : item?.name || item?.normalizedName;
+    const key = brandKeyForDuplicateCheck(typeof item === 'object' ? item?.normalizedName || name : name);
+    if (!key) continue;
+    byKey.set(key, typeof item === 'string' ? { name: item, status: 'pending' } : { ...item, name: String(name || '').trim() });
+  }
+
+  for (const row of incoming) {
+    const key = brandKeyForDuplicateCheck(row.normalizedName || row.name);
+    if (!key) continue;
+    const existing = byKey.get(key) || {};
+    const existingStatus = String(existing.status || '').toLowerCase();
+    const incomingStatus = String(row.status || 'pending').toLowerCase() || 'pending';
+    // Never downgrade an approved catalog/request row to pending from a stale merge.
+    if (existingStatus === 'approved' && incomingStatus === 'pending') {
+      continue;
+    }
+    byKey.set(key, {
+      ...existing,
+      ...row,
+      name: row.name || existing.name,
+      status: incomingStatus || existingStatus || 'pending',
+      submittedAt: row.submittedAt || existing.submittedAt || existing.requestedAt || null,
+      requestedAt: row.requestedAt || existing.requestedAt || row.submittedAt || null
+    });
+  }
+
+  return {
+    ...profile,
+    supplierBrandRequests: [...byKey.values()].sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''))
+    )
+  };
+}
+
+function isLiteralApprovedCatalogBrand(brandName, catalogBrands = []) {
+  const brand = String(brandName || '').trim();
+  if (!brand) return false;
+  const brandKey = brandKeyForDuplicateCheck(brand);
+  return (Array.isArray(catalogBrands) ? catalogBrands : []).some((item) => {
+    const name = typeof item === 'string' ? item : item?.name;
+    const status =
+      typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
+    if (status && status !== 'approved') return false;
+    return brandKeyForDuplicateCheck(name) === brandKey;
+  });
+}
+
+/** Stable snapshot of brand-approval fields (name + docs) for Save brand enablement. */
+export function buildBrandApprovalDetailsSignature(profile, catalogBrands = []) {
+  const rows = getCompanyInfoEntriesForSave(profile || {})
+    .map((entry) => {
+      const brand = String(entry?.brands || '').trim();
+      if (!brand) return null;
+      const docs = resolveBrandApprovalDocumentUrls(entry || {})
+        .map((url) => String(url || '').trim())
+        .filter(Boolean)
+        .sort();
+      return {
+        brand: brandKeyForDuplicateCheck(brand),
+        catalog: isLiteralApprovedCatalogBrand(brand, catalogBrands),
+        docs
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => String(a.brand).localeCompare(String(b.brand)));
+  return JSON.stringify(rows);
+}
+
+/**
+ * True when Save brand should stay disabled: every custom brand is already pending
+ * and brand details have not changed since the last successful submit.
+ * Rejected brands and detail edits re-enable save; approved catalog picks stay savable.
+ */
+export function isBrandApprovalSaveBlockedForPendingRequests({
+  profile,
+  catalogBrands = [],
+  submittedSignature = '',
+  extraPendingBrandNames = []
+} = {}) {
+  const entries = getCompanyInfoEntriesForSave(profile || {}).filter((entry) =>
+    String(entry?.brands || '').trim()
+  );
+  if (entries.length === 0) return false;
+
+  const requests = profile?.supplierBrandRequests || [];
+  const extraPendingKeys = new Set(
+    (Array.isArray(extraPendingBrandNames) ? extraPendingBrandNames : [])
+      .map((name) => brandKeyForDuplicateCheck(name))
+      .filter(Boolean)
+  );
+  let hasPendingCustom = false;
+
+  for (const entry of entries) {
+    const brand = String(entry?.brands || '').trim();
+    const brandKey = brandKeyForDuplicateCheck(brand);
+    if (isLiteralApprovedCatalogBrand(brand, catalogBrands)) {
+      // Selecting/saving an approved catalog brand remains allowed.
+      return false;
+    }
+    const request = findSupplierBrandRequest(brand, requests);
+    const status = String(request?.status || '').toLowerCase();
+    if (status === 'rejected') {
+      return false;
+    }
+    const isPending = status === 'pending' || (brandKey && extraPendingKeys.has(brandKey));
+    if (isPending) {
+      hasPendingCustom = true;
+      continue;
+    }
+    if (!request) {
+      return false;
+    }
+    // Approved custom request — no brand-approval save needed for this row.
+  }
+
+  if (!hasPendingCustom) return false;
+
+  const currentSignature = buildBrandApprovalDetailsSignature(profile, catalogBrands);
+  if (!submittedSignature) return true;
+  return currentSignature === submittedSignature;
+}
+
+/**
+ * Layer 2 — supplier access for Step 2 role setup.
+ * Uses catalog + approved lists; does not conflate with Layer 3 role options.
+ */
 export function isBrandApprovedForSupplyChainStep(
   brandName,
   supplierApprovedBrands = [],
   brandMeta = null,
-  supplierBrandRequests = []
+  supplierBrandRequests = [],
+  catalogBrands = []
 ) {
-  const brand = String(brandName || '').trim();
-  if (!brand) return false;
-
-  const brandKey = brandKeyForDuplicateCheck(brand);
-  if (brandKey && buildSupplierRejectedBrandKeys(supplierBrandRequests).has(brandKey)) {
-    return false;
-  }
-
-  const metaStatus = String(brandMeta?.status || '').trim().toLowerCase();
-  if (metaStatus === 'approved') return true;
-  if (metaStatus === 'pending' || metaStatus === 'rejected') return false;
-
-  if (!brandKey) return false;
-  return buildSupplierApprovedBrandKeys(supplierApprovedBrands).has(brandKey);
+  return supplierHasBrandAccess({
+    brandName,
+    catalogBrands,
+    supplierApprovedBrands,
+    supplierBrandRequests,
+    brandMeta
+  });
 }
 
 /**
- * Summary rows for "Your supply chain by brand": brands ready for Step 2 role setup.
- * Includes:
- * - catalog brands with an admin-defined supply chain
- * - brands this supplier has had approved
- * - approved catalog brands the supplier already selected in Step 1
- * Pending/rejected brand requests stay in Step 1 only.
+ * Layer 2+3 summary for "Your approved brands" / Step 2 picker.
+ * Includes brands the supplier can configure roles for:
+ * - catalog brands with an admin-defined supply chain (Layer 1+3)
+ * - brands this supplier has approved access to (Layer 2)
+ * - catalog-approved brands the supplier already selected
+ * Pending/rejected Path B requests stay out of this list.
  */
 export function buildSupplyChainSummaryRows(
   catalogBrands = [],
@@ -463,6 +637,14 @@ export function getCompanyInfoEntriesForSave(profile) {
       minimumOrderValue: profile?.minimumOrderValue ?? ''
     }
   ];
+}
+
+/** True when at least one company-info entry has a non-empty brand. */
+export function profileHasConfiguredBrand(profileOrEntries) {
+  const entries = Array.isArray(profileOrEntries)
+    ? profileOrEntries
+    : getCompanyInfoEntriesForSave(profileOrEntries || {});
+  return entries.some((entry) => String(entry?.brands || '').trim());
 }
 
 export function ensureAtLeastOneCompanyInfoEntry(profile) {

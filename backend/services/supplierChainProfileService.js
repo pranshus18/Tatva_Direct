@@ -1,6 +1,6 @@
 import { supabase } from '../config/supabase.js';
 import { v4 as uuidv4 } from 'uuid';
-import { normalizeBrandKey } from './supplyChainSharedService.js';
+import { catalogBrandDedupKey, normalizeBrandKey } from './supplyChainSharedService.js';
 import {
   resolveBrandApprovalDocumentUrls,
   setBrandApprovalDocumentUrls,
@@ -18,6 +18,14 @@ const ROLE_SET = new Set([
   'retailer'
 ]);
 
+/** Stable brand identity used for catalog + request matching (collapses spelling variants). */
+function brandIdentityKey(nameOrNormalized) {
+  return catalogBrandDedupKey(nameOrNormalized) || normalizeBrandKey(nameOrNormalized);
+}
+
+function isDuplicateOfApprovedRejection(reason = '') {
+  return /duplicate of approved brand/i.test(String(reason || ''));
+}
 function parseEntryBrandList(brands) {
   if (brands == null || brands === '') return [];
   if (Array.isArray(brands)) {
@@ -270,11 +278,18 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
   if (!userId) return [];
   const byKey = new Map();
 
-  const upsert = (row) => {
+  const upsert = (row, { force = false } = {}) => {
     const name = String(row?.name || '').trim();
-    const key = normalizeBrandKey(row?.normalized_name || name);
+    const key = brandIdentityKey(row?.normalized_name || name);
     if (!name || !key) return;
     const status = String(row?.status || 'pending').trim().toLowerCase();
+    const existing = byKey.get(key);
+    const existingStatus = String(existing?.status || '').toLowerCase();
+    // Prefer approved over pending/rejected for the same brand identity.
+    const rank = { approved: 0, pending: 1, rejected: 2 };
+    if (!force && existing && (rank[existingStatus] ?? 9) < (rank[status] ?? 9)) {
+      return;
+    }
     byKey.set(key, {
       name,
       normalized_name: key,
@@ -291,23 +306,39 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
       .eq('requested_by', userId);
     if (requestedError) throw requestedError;
     for (const row of requestedRows || []) {
+      // Duplicate-of-approved rejections must not poison Step 2 for the canonical brand.
+      if (
+        String(row?.status || '').toLowerCase() === 'rejected' &&
+        isDuplicateOfApprovedRejection(row?.rejection_reason)
+      ) {
+        continue;
+      }
       upsert(row);
     }
 
     const declaredNames = collectDeclaredBrandNamesFromProfiles(profileContext);
-    const declaredKeys = [...new Set(declaredNames.map((name) => normalizeBrandKey(name)).filter(Boolean))];
-    if (declaredKeys.length > 0) {
-      const { data: declaredRows, error: declaredError } = await supabase
+    if (declaredNames.length > 0) {
+      // Match in memory with catalog dedup keys — DB normalized_name spellings can differ
+      // (e.g. Phillips → philips) so .in(normalizeBrandKey) misses approved rows.
+      const { data: allBrandRows, error: allBrandError } = await supabase
         .from('brands')
-        .select('name, normalized_name, status, rejection_reason, requested_by, requested_at, updated_at, created_at')
-        .in('normalized_name', declaredKeys);
-      if (declaredError) throw declaredError;
-      for (const row of declaredRows || []) {
-        const key = normalizeBrandKey(row?.normalized_name || row?.name);
-        if (!key) continue;
-        if (String(row?.requested_by || '').trim() === String(userId)) {
+        .select('name, normalized_name, status, rejection_reason, requested_by, requested_at, updated_at, created_at');
+      if (allBrandError) throw allBrandError;
+
+      const declaredKeys = new Set(declaredNames.map((name) => brandIdentityKey(name)).filter(Boolean));
+      for (const row of allBrandRows || []) {
+        const key = brandIdentityKey(row?.normalized_name || row?.name);
+        if (!key || !declaredKeys.has(key)) continue;
+        const status = String(row?.status || '').toLowerCase();
+        const requestedBy = String(row?.requested_by || '').trim();
+        if (requestedBy === String(userId)) {
+          if (status === 'rejected' && isDuplicateOfApprovedRejection(row?.rejection_reason)) continue;
           upsert(row);
-        } else if (!byKey.has(key) && String(row?.status || '').toLowerCase() === 'rejected') {
+          continue;
+        }
+        // Only surface another account's row when it is approved for a brand this supplier declared.
+        // Never attach someone else's pending/rejected request onto this supplier.
+        if (status === 'approved') {
           upsert(row);
         }
       }
@@ -322,7 +353,8 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
 
 /**
  * Admin-approved brands for this supplier.
- * Includes brands they requested and were approved — never brands they requested that were rejected.
+ * Includes brands they requested and were approved — never brands they requested that were rejected
+ * (except duplicate-of-approved merges, which unlock the canonical approved brand).
  */
 export async function fetchSupplierApprovedBrands(userId, profileContext = null) {
   if (!userId) return [];
@@ -331,7 +363,7 @@ export async function fetchSupplierApprovedBrands(userId, profileContext = null)
   const addRows = (rows = []) => {
     for (const row of rows) {
       const name = String(row?.name || '').trim();
-      const key = normalizeBrandKey(row?.normalized_name || name);
+      const key = brandIdentityKey(row?.normalized_name || name);
       if (!name || !key || String(row?.status || '').toLowerCase() !== 'approved') continue;
       if (!byKey.has(key)) byKey.set(key, { name, normalized_name: key, status: 'approved' });
     }
@@ -342,7 +374,8 @@ export async function fetchSupplierApprovedBrands(userId, profileContext = null)
     const rejectedKeys = new Set(
       brandRequests
         .filter((row) => String(row?.status || '').toLowerCase() === 'rejected')
-        .map((row) => normalizeBrandKey(row?.normalized_name || row?.name))
+        .filter((row) => !isDuplicateOfApprovedRejection(row?.rejectionReason))
+        .map((row) => brandIdentityKey(row?.normalized_name || row?.name))
         .filter(Boolean)
     );
 
@@ -355,17 +388,17 @@ export async function fetchSupplierApprovedBrands(userId, profileContext = null)
     addRows(requestedRows);
 
     const declaredNames = collectDeclaredBrandNamesFromProfiles(profileContext);
-    const declaredKeys = [...new Set(declaredNames.map((name) => normalizeBrandKey(name)).filter(Boolean))];
-    if (declaredKeys.length > 0) {
-      const { data: declaredRows, error: declaredError } = await supabase
+    if (declaredNames.length > 0) {
+      const { data: approvedRows, error: approvedError } = await supabase
         .from('brands')
         .select('name, normalized_name, status')
-        .eq('status', 'approved')
-        .in('normalized_name', declaredKeys);
-      if (declaredError) throw declaredError;
-      const eligibleDeclaredRows = (declaredRows || []).filter((row) => {
-        const key = normalizeBrandKey(row?.normalized_name || row?.name);
-        return key && !rejectedKeys.has(key);
+        .eq('status', 'approved');
+      if (approvedError) throw approvedError;
+
+      const declaredKeys = new Set(declaredNames.map((name) => brandIdentityKey(name)).filter(Boolean));
+      const eligibleDeclaredRows = (approvedRows || []).filter((row) => {
+        const key = brandIdentityKey(row?.normalized_name || row?.name);
+        return key && declaredKeys.has(key) && !rejectedKeys.has(key);
       });
       addRows(eligibleDeclaredRows);
     }

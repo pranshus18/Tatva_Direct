@@ -1368,3 +1368,107 @@
   opacity: 0.55;
   cursor: not-allowed;
 }
+
+/* Add/Edit Product modal — single smooth scroll region + fixed footer */
+.pm-product-modal-overlay {
+  overscroll-behavior: none;
+}
+
+.pm-product-modal {
+  height: 100dvh;
+  max-height: 100dvh;
+  min-height: 100dvh;
+}
+
+.pm-product-modal__steps {
+  flex-shrink: 0;
+  padding: 0 1.25rem 0.35rem;
+  border-bottom: 1px solid #eef2f7;
+  background: #fff;
+}
+
+.pm-product-modal__form.modal-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.pm-product-modal__scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+  padding: 1.25rem 2rem 1.5rem;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: #94a3b8 #f1f5f9;
+}
+
+.pm-product-modal__scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.pm-product-modal__scroll::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+.pm-product-modal__scroll::-webkit-scrollbar-thumb {
+  background: #94a3b8;
+  border-radius: 999px;
+  border: 2px solid #f1f5f9;
+}
+
+.pm-product-modal__scroll::-webkit-scrollbar-thumb:hover {
+  background: #64748b;
+}
+
+.pm-product-modal__scroll .form-grid {
+  margin-bottom: 0.5rem;
+}
+
+.pm-product-modal__specs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  background: #fff;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+}
+
+.pm-product-modal__footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.85rem 2rem 1.15rem;
+  border-top: 1px solid #e5e7eb;
+  background: #fff;
+  box-shadow: 0 -6px 16px rgba(15, 23, 42, 0.04);
+}
+
+.pm-product-modal__footer .pm-form-validation,
+.pm-product-modal__footer .pm-form-validation-hint {
+  margin: 0;
+}
+
+.pm-product-modal__footer .modal-actions {
+  margin: 0;
+}
+
+@media (max-width: 768px) {
+  .pm-product-modal__scroll {
+    padding: 1rem 1.1rem 1.25rem;
+  }
+
+  .pm-product-modal__footer {
+    padding: 0.75rem 1.1rem 1rem;
+  }
+}
+

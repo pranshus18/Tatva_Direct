@@ -71,10 +71,13 @@ function upsertApprovedCatalogRow(brands, row) {
 }
 
 /**
- * All brands available for Select yourself:
- * - admin-approved brands in the catalog
- * - any brand with an admin-defined supply chain (even if brands-table sync lagged)
+ * All brands available for Select yourself Layer 1 (catalog dropdown):
+ * - admin-approved brands in the brands table
+ * - any brand with an admin-defined supply chain (Layer 3), even if brands-table sync lagged
  * Spelling variants (e.g. Philips / Phillips) are merged into one catalog entry.
+ *
+ * Note: catalog membership ≠ supplier access ≠ role eligibility.
+ * See supplierBrandLayerContract.js.
  */
 export async function listApprovedCatalogBrands(supabase) {
   const { data: approvedRows, error } = await supabase
