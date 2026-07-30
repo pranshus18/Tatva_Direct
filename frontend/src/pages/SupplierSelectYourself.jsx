@@ -252,10 +252,22 @@ export default function SupplierSelectYourself() {
     !brandSaveBlockedByPendingRequest &&
     approvedBrandsBlockingSave.length > 0;
 
+  const pendingRequestStatusBrand =
+    pendingBrandsBlockingSave[0] ||
+    (brandSubmissionNotice?.tone === 'pending' && brandSubmissionNotice.brands?.[0]?.name) ||
+    pendingBrandRequests[0]?.name ||
+    '';
+
+  const showPendingRequestStatusLine =
+    activeBrandPath !== 'pathA' &&
+    (brandSaveBlockedByPendingRequest ||
+      brandSubmissionNotice?.tone === 'pending' ||
+      pendingBrandRequests.length > 0);
+
   const brandSaveButtonLabel = useMemo(() => {
     if (savingBrandApproval) return 'Saving…';
     if (!brandSaveBlockedForPending) return 'Save brand';
-    if (brandSaveBlockedByPendingRequest) return 'Request already pending';
+    if (brandSaveBlockedByPendingRequest) return 'Request already submitted';
     if (brandSaveBlockedByApprovedBrand) return 'Already approved';
     return 'Saved';
   }, [
@@ -1654,90 +1666,24 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {brandSaveBlockedByPendingRequest ? (
-            <div className="supplier-select-alert supplier-select-alert--pending" role="status">
-              <strong>Brand request already pending admin approval</strong>
-              <p>
-                {pendingBrandsBlockingSave.length === 1
-                  ? `“${pendingBrandsBlockingSave[0]}” was already submitted. Save brand stays disabled until an admin approves or rejects it. Use Change brand / Cancel setup to pick a different brand.`
-                  : `${pendingBrandsBlockingSave.length} brand requests are already pending. Save brand stays disabled until an admin approves or rejects them.`}
-              </p>
-            </div>
+          {showPendingRequestStatusLine ? (
+            <p className="supplier-select-status-line supplier-select-status-line--pending" role="status">
+              Request already submitted
+              {pendingRequestStatusBrand ? ` — ${pendingRequestStatusBrand}` : ''}
+            </p>
           ) : null}
 
           {brandSaveBlockedByApprovedBrand && activeBrandPath !== 'pathA' ? (
-            <div className="supplier-select-alert supplier-select-alert--draft" role="status">
-              <strong>Brand already approved</strong>
-              <p>
-                {approvedBrandsBlockingSave.length === 1
-                  ? `“${approvedBrandsBlockingSave[0]}” is already approved. Save brand is disabled — use Path A / Switch to Path A to continue with supply-chain role setup.`
-                  : 'These brands are already approved. Save brand is disabled — continue with Path A role setup instead.'}
-              </p>
-            </div>
+            <p className="supplier-select-status-line supplier-select-status-line--approved" role="status">
+              Brand already approved
+              {approvedBrandsBlockingSave[0] ? ` — ${approvedBrandsBlockingSave[0]}` : ''}
+            </p>
           ) : null}
 
-          {brandSubmissionNotice &&
-          !(activeBrandPath === 'pathA' && brandSubmissionNotice.tone === 'pending') ? (
-            <div
-              className={`supplier-select-alert supplier-select-alert--${
-                brandSubmissionNotice.tone === 'success' ? 'draft' : 'pending'
-              }`}
-              role="status"
-            >
-              <strong>{brandSubmissionNotice.title}</strong>
-              <p>{brandSubmissionNotice.message}</p>
-              <p className="supplier-select-alert__meta">
-                Submitted:{' '}
-                {brandSubmissionNotice.submittedAt
-                  ? formatDateTimeIST(brandSubmissionNotice.submittedAt, '—')
-                  : 'just now'}
-              </p>
-              {Array.isArray(brandSubmissionNotice.brands) && brandSubmissionNotice.brands.length > 0 ? (
-                <ul className="supplier-select-alert__list">
-                  {brandSubmissionNotice.brands.map((row) => (
-                    <li key={row.name}>
-                      <strong>{row.name}</strong>
-                      {' — submitted '}
-                      {row.submittedAt
-                        ? formatDateTimeIST(row.submittedAt, '—')
-                        : brandSubmissionNotice.submittedAt
-                          ? formatDateTimeIST(brandSubmissionNotice.submittedAt, '—')
-                          : 'just now'}
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              <button
-                type="button"
-                className="supplier-select-alert__dismiss"
-                onClick={() => setBrandSubmissionNotice(null)}
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : null}
-
-          {!brandSubmissionNotice && pendingBrandRequests.length > 0 && activeBrandPath !== 'pathA' ? (
-            <div className="supplier-select-alert supplier-select-alert--pending" role="status">
-              <strong>
-                {pendingBrandRequests.length === 1
-                  ? `Brand request submitted for “${pendingBrandRequests[0].name}”`
-                  : `${pendingBrandRequests.length} brand requests submitted`}
-              </strong>
-              <p>
-                These Path B requests are awaiting admin approval. After approval, select the brand and configure your
-                supply-chain role below.
-              </p>
-              <ul className="supplier-select-alert__list">
-                {pendingBrandRequests.map((row) => (
-                  <li key={row.name}>
-                    <strong>{row.name}</strong>
-                    {' — submitted '}
-                    {row.submittedAt ? formatDateTimeIST(row.submittedAt, '—') : 'date unavailable'}
-                  </li>
-                ))}
-              </ul>
-            </div>
+          {brandSubmissionNotice?.tone === 'success' && activeBrandPath !== 'pathB' ? (
+            <p className="supplier-select-status-line supplier-select-status-line--approved" role="status">
+              {brandSubmissionNotice.title || 'Brand already approved'}
+            </p>
           ) : null}
 
           {brandSectionExpanded ? (
