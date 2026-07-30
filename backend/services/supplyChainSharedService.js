@@ -41,7 +41,12 @@ export function collapseRepeatedLetters(value) {
 export function catalogBrandDedupKey(value) {
   const key = normalizeBrandKey(value);
   if (!key) return '';
-  return collapseRepeatedLetters(key);
+  // Spelling-collapse only for complete names so short/partial tokens cannot
+  // collide with acronyms (AB must not equal ABB) while Philips ≈ Phillips.
+  if (key.length >= 5) {
+    return collapseRepeatedLetters(key);
+  }
+  return key;
 }
 
 export function brandKeysMatchForChainLookup(wantedKey, categoryKey) {

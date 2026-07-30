@@ -5,40 +5,6 @@ import {
 } from './supplyChainSharedService.js';
 import { brandIsAllowedForSupplier, getDeclaredBrandLabels } from './supplierBrandGuardService.js';
 
-function upsertCatalogBrand(brands, name, extra = {}) {
-  const trimmed = String(name || '').trim();
-  if (!trimmed) return;
-  const dedupKey = catalogBrandDedupKey(trimmed);
-  if (!dedupKey) return;
-
-  const existingIdx = brands.findIndex((row) => catalogBrandDedupKey(row.name) === dedupKey);
-  if (existingIdx >= 0) {
-    const existing = brands[existingIdx];
-    const nextName =
-      trimmed.length < String(existing.name || '').length ? trimmed : String(existing.name || '').trim();
-    brands[existingIdx] = {
-      ...existing,
-      name: nextName,
-      normalizedName: normalizeBrandKey(nextName),
-      status: 'approved',
-      source: extra.source || existing.source || 'catalog',
-      fromProfile: extra.fromProfile === true || existing.fromProfile === true,
-      hasAdminSupplyChain:
-        extra.hasAdminSupplyChain === true || existing.hasAdminSupplyChain === true
-    };
-    return;
-  }
-
-  brands.push({
-    name: trimmed,
-    normalizedName: normalizeBrandKey(trimmed),
-    status: 'approved',
-    source: extra.source || 'catalog',
-    ...(extra.fromProfile ? { fromProfile: true } : {}),
-    ...(extra.hasAdminSupplyChain ? { hasAdminSupplyChain: true } : {})
-  });
-}
-
 function upsertApprovedCatalogRow(brands, row) {
   const name = String(row?.name || '').trim();
   if (!name) return;
@@ -72,9 +38,10 @@ function upsertApprovedCatalogRow(brands, row) {
 
 /**
  * All brands available for Select yourself Layer 1 (catalog dropdown):
- * - admin-approved brands in the brands table
- * - any brand with an admin-defined supply chain (Layer 3), even if brands-table sync lagged
- * Spelling variants (e.g. Philips / Phillips) are merged into one catalog entry.
+ * - admin-approved brands in the brands table only (same source as Admin → Brand Approvals)
+ *
+ * Supply-chain definitions (Layer 3) do NOT make a brand "approved". They only set
+ * hasAdminSupplyChain on brands that are already approved in the brands table.
  *
  * Note: catalog membership ≠ supplier access ≠ role eligibility.
  * See supplierBrandLayerContract.js.
@@ -101,11 +68,20 @@ export async function listApprovedCatalogBrands(supabase) {
     .order('category_name', { ascending: true });
 
   if (!chainError) {
+    const chainReadyKeys = new Set();
     for (const row of chainRows || []) {
       const name = String(row?.category_name || '').trim();
       const roles = normalizeChainRolesFromStages(row?.stages);
       if (!name || roles.length === 0) continue;
-      upsertCatalogBrand(brands, name, { source: 'admin_chain', hasAdminSupplyChain: true });
+      const key = catalogBrandDedupKey(name);
+      if (key) chainReadyKeys.add(key);
+    }
+
+    for (const brand of brands) {
+      const key = catalogBrandDedupKey(brand.name);
+      if (key && chainReadyKeys.has(key)) {
+        brand.hasAdminSupplyChain = true;
+      }
     }
   }
 

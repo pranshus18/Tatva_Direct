@@ -4,10 +4,12 @@
  * Mirror of backend/services/supplierBrandLayerContract.js
  *
  * Layer 1 — CATALOG: Select brand dropdown (approved-catalog API)
+ *   Source: brands.status === 'approved' only (Admin Brand Approvals).
  * Layer 2 — SUPPLIER ACCESS: may configure role / use brand
  * Layer 3 — ROLES: admin supply-chain stages (chain-role-options API)
  *
  * Do not treat catalog membership, request status, and role availability as one field.
+ * Supply-chain definition alone is never brand approval.
  */
 
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';

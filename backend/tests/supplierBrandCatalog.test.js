@@ -6,7 +6,7 @@ test('normalizeBrandKey: case-insensitive brand keys', () => {
   assert.equal(normalizeBrandKey('ACC'), normalizeBrandKey('acc'));
 });
 
-test('listApprovedCatalogBrands merges Philips and Phillips spellings', async () => {
+test('listApprovedCatalogBrands uses brands-table approval only and marks supply-chain readiness', async () => {
   const { listApprovedCatalogBrands } = await import('../services/supplierBrandCatalogService.js');
   const supabase = {
     from(table) {
@@ -34,6 +34,10 @@ test('listApprovedCatalogBrands merges Philips and Phillips spellings', async ()
                 {
                   category_name: 'samsung',
                   stages: [{ role: 'manufacturer' }, { role: 'retailer' }]
+                },
+                {
+                  category_name: 'ACC',
+                  stages: [{ role: 'manufacturer' }, { role: 'dealer' }]
                 }
               ],
               error: null
@@ -47,11 +51,13 @@ test('listApprovedCatalogBrands merges Philips and Phillips spellings', async ()
   };
 
   const brands = await listApprovedCatalogBrands(supabase);
-  assert.equal(brands.length, 3);
+  // samsung has a supply chain but is NOT in brands.status=approved — must not appear.
+  assert.equal(brands.length, 2);
   assert.deepEqual(
     brands.map((row) => row.name).sort(),
-    ['ACC', 'Philips', 'samsung']
+    ['ACC', 'Philips']
   );
-  const samsung = brands.find((row) => row.name === 'samsung');
-  assert.equal(samsung?.hasAdminSupplyChain, true);
+  const acc = brands.find((row) => row.name === 'ACC');
+  assert.equal(acc?.hasAdminSupplyChain, true);
+  assert.equal(brands.some((row) => /samsung/i.test(row.name)), false);
 });

@@ -41,7 +41,7 @@ test('resolveBrandApprovalStatus requires a brand name', async () => {
   assert.equal(result.code, 'brand_required');
 });
 
-test('ensureBrandApprovedOrRequest auto-approves brands with an admin supply chain', async () => {
+test('ensureBrandApprovedOrRequest does not auto-approve from supply-chain alone', async () => {
   const pendingSamsung = {
     id: 'brand-samsung',
     name: 'Samsung',
@@ -98,6 +98,23 @@ test('ensureBrandApprovedOrRequest auto-approves brands with an admin supply cha
           })
         };
       }
+      if (table === 'supplier_products') {
+        return {
+          select() {
+            return {
+              eq() {
+                return {
+                  eq() {
+                    return {
+                      limit: async () => ({ data: [], error: null })
+                    };
+                  }
+                };
+              }
+            };
+          }
+        };
+      }
       return {
         select() {
           return {
@@ -122,7 +139,9 @@ test('ensureBrandApprovedOrRequest auto-approves brands with an admin supply cha
     requesterUserId: 'user-1'
   });
 
-  assert.equal(result.ok, true);
-  assert.equal(result.brand?.status, 'approved');
-  assert.equal(updatedPayload?.status, 'approved');
+  // Supply-chain definition ≠ brand approval. Pending brands stay pending for admin review.
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'brand_approval_pending');
+  assert.equal(result.brand?.status, 'pending');
+  assert.equal(updatedPayload, null);
 });

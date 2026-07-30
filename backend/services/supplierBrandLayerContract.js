@@ -5,7 +5,8 @@
  *
  * Layer 1 — CATALOG (Select brand dropdown)
  *   Purpose: brands a supplier may pick.
- *   Source: brands.status === 'approved'  ∪  category_supply_chains with roles.
+ *   Source: brands.status === 'approved' ONLY (same as Admin → Brand Approvals).
+ *   Supply-chain rows only enrich hasAdminSupplyChain on already-approved brands.
  *   API: GET /api/supplier/brands/approved-catalog
  *   Flag: inApprovedCatalog
  *

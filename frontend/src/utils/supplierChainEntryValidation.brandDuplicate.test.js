@@ -20,6 +20,12 @@ describe('brand duplicate matching', () => {
     ).toBe(true);
   });
 
+  it('does not treat short partials / acronym fragments as the same brand', () => {
+    expect(areBrandNamesExactDuplicates('AB', 'ABB')).toBe(false);
+    expect(areBrandNamesExactDuplicates('ES', 'ESS')).toBe(false);
+    expect(brandKeyForDuplicateCheck('AB')).not.toBe(brandKeyForDuplicateCheck('ABB'));
+  });
+
   it('flags the same complete brand name regardless of case', () => {
     expect(areBrandNamesExactDuplicates('HP', 'hp')).toBe(true);
     expect(
@@ -38,13 +44,18 @@ describe('brand duplicate matching', () => {
     const catalog = [
       { name: 'Sparsh', status: 'approved' },
       { name: 'samsung', status: 'approved' },
-      { name: 'Stella', status: 'approved' }
+      { name: 'Stella', status: 'approved' },
+      { name: 'ABB', status: 'approved' },
+      { name: 'Phillips', status: 'approved' }
     ];
 
     expect(findApprovedCatalogBrandMatch('SPARSGA', catalog)).toBeNull();
     expect(findApprovedCatalogBrandMatch('samsun', catalog)).toBeNull();
+    expect(findApprovedCatalogBrandMatch('sam', catalog)).toBeNull();
+    expect(findApprovedCatalogBrandMatch('AB', catalog)).toBeNull();
     expect(findApprovedCatalogBrandMatch('Sparsh', catalog)?.name).toBe('Sparsh');
     expect(findApprovedCatalogBrandMatch('sparsh', catalog)?.matchType).toBe('exact');
+    expect(findApprovedCatalogBrandMatch('Philips', catalog)?.name).toBe('Phillips');
     expect(formatApprovedCatalogBrandMatchMessage('Sparsh', 'Sparsh')).toMatch(
       /approved brands list/i
     );

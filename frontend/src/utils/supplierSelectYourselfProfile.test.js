@@ -9,6 +9,8 @@ import {
   isBrandApprovalSaveBlockedForPendingRequests,
   mergeCompanyInfoEntriesById,
   mergeSupplierBrandRequestsIntoProfile,
+  resolveSelectYourselfBrandStepStatus,
+  listPendingBrandNamesBlockingSave,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from './supplierSelectYourselfProfile';
@@ -83,6 +85,60 @@ describe('mergeSupplierBrandRequestsIntoProfile', () => {
   });
 });
 
+describe('resolveSelectYourselfBrandStepStatus', () => {
+  it('shows Ready to submit only when there is no request and no approved access', () => {
+    const status = resolveSelectYourselfBrandStepStatus({
+      brandName: 'NOKIA',
+      catalogBrandNames: [],
+      supplierBrandRequests: [],
+      supplierApprovedBrands: []
+    });
+    expect(status.label).toBe('Ready to submit for approval');
+    expect(status.tone).toBe('neutral');
+  });
+
+  it('after Path B submit, pending request wins over Ready to submit', () => {
+    const status = resolveSelectYourselfBrandStepStatus({
+      brandName: 'NOKIA',
+      catalogBrandNames: [],
+      supplierBrandRequests: [
+        { name: 'NOKIA', status: 'pending', submittedAt: '2026-07-30T10:00:00.000Z' }
+      ],
+      supplierApprovedBrands: []
+    });
+    expect(status.label).toBe('Request submitted — pending admin approval');
+    expect(status.tone).toBe('warning');
+    expect(status.detailLines.some((line) => /Submitted:/i.test(line))).toBe(true);
+    expect(status.label).not.toBe('Ready to submit for approval');
+    expect(status.label).not.toBe('Approved by admin');
+  });
+
+  it('already-approved save outcome never stays on Ready to submit', () => {
+    const status = resolveSelectYourselfBrandStepStatus({
+      brandName: 'Haier',
+      catalogBrandNames: [],
+      supplierBrandRequests: [
+        { name: 'Haier', status: 'approved', submittedAt: '2026-07-30T10:00:00.000Z' }
+      ],
+      supplierApprovedBrands: [{ name: 'Haier', status: 'approved' }]
+    });
+    expect(status.label).toBe('Approved by admin');
+    expect(status.tone).toBe('success');
+    expect(status.label).not.toBe('Ready to submit for approval');
+  });
+
+  it('pending request wins even if a soft catalog match message is present', () => {
+    const status = resolveSelectYourselfBrandStepStatus({
+      brandName: 'Samsun',
+      catalogBrandNames: ['samsung'],
+      supplierBrandRequests: [{ name: 'Samsun', status: 'pending' }],
+      supplierApprovedBrands: [],
+      approvedCatalogMatchMessage: '"Samsun" looks like approved brand "samsung".'
+    });
+    expect(status.label).toBe('Request submitted — pending admin approval');
+  });
+});
+
 describe('isBrandApprovedForSupplyChainStep', () => {
   it('treats supplierApprovedBrands as approved even when brandMeta is still pending', () => {
     expect(
@@ -140,7 +196,7 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
     ).toBe(true);
   });
 
-  it('re-enables Save brand after brand details change', () => {
+  it('blocks duplicate Save brand even after document edits while request is pending', () => {
     const submitted = {
       companyInfoEntries: [{ id: '1', brands: 'samsung', brandApprovalDocumentUrls: [] }],
       supplierBrandRequests: [{ name: 'samsung', status: 'pending' }]
@@ -162,6 +218,63 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
         catalogBrands: [],
         submittedSignature: signature
       })
+    ).toBe(true);
+    expect(
+      listPendingBrandNamesBlockingSave({ profile: edited })
+    ).toEqual(['samsung']);
+  });
+
+  it('blocks Save brand for pending request even without a stored signature', () => {
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'NOKIA', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: [{ name: 'NOKIA', status: 'pending' }]
+    };
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: [],
+        submittedSignature: ''
+      })
+    ).toBe(true);
+  });
+
+  it('blocks Save brand after a successful Path A save with no further edits', () => {
+    const catalog = [{ name: 'acc', status: 'approved' }];
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'acc', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: []
+    };
+    const signature = buildBrandApprovalDetailsSignature(profile, catalog);
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: catalog,
+        submittedSignature: signature
+      })
+    ).toBe(true);
+  });
+
+  it('blocks Save brand when there is no brand configured', () => {
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile: { companyInfoEntries: [{ id: '1', brands: '' }] },
+        catalogBrands: [],
+        submittedSignature: ''
+      })
+    ).toBe(true);
+  });
+
+  it('re-enables Save brand when switching to a different new brand name', () => {
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'FreshBrand', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: [{ name: 'samsung', status: 'pending' }]
+    };
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: [],
+        submittedSignature: 'old-signature'
+      })
     ).toBe(false);
   });
 
@@ -174,7 +287,28 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
       isBrandApprovalSaveBlockedForPendingRequests({
         profile,
         catalogBrands: [],
-        submittedSignature: buildBrandApprovalDetailsSignature(profile, [])
+        submittedSignature: ''
+      })
+    ).toBe(false);
+  });
+
+  it('re-enables Save brand when a new approved catalog brand is selected', () => {
+    const catalog = [
+      { name: 'acc', status: 'approved' },
+      { name: 'Dell', status: 'approved' }
+    ];
+    const saved = {
+      companyInfoEntries: [{ id: '1', brands: 'acc', brandApprovalDocumentUrls: [] }]
+    };
+    const edited = {
+      companyInfoEntries: [{ id: '1', brands: 'Dell', brandApprovalDocumentUrls: [] }]
+    };
+    const signature = buildBrandApprovalDetailsSignature(saved, catalog);
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile: edited,
+        catalogBrands: catalog,
+        submittedSignature: signature
       })
     ).toBe(false);
   });
@@ -333,6 +467,25 @@ describe('buildSupplyChainSummaryRows', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].role).toBe('retailer');
     expect(rows[0].roleLabel).toBe('Retailer');
+  });
+
+  it('keeps a stable brand-* row id before and after the supplier selects the catalog brand', () => {
+    const before = buildSupplyChainSummaryRows(
+      [{ name: 'Samsung', status: 'approved', hasAdminSupplyChain: true }],
+      [],
+      [],
+      []
+    );
+    const after = buildSupplyChainSummaryRows(
+      [{ name: 'Samsung', status: 'approved', hasAdminSupplyChain: true }],
+      [{ id: 'entry-uuid-1', brands: 'Samsung', role: '' }],
+      [],
+      []
+    );
+
+    expect(before[0].id).toBe(after[0].id);
+    expect(before[0].id).toMatch(/^brand-/);
+    expect(after[0].entryId).toBe('entry-uuid-1');
   });
 
   it('shows all admin-approved catalog brands, not only chain-ready ones', () => {

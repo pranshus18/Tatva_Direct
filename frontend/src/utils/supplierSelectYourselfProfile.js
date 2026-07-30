@@ -12,6 +12,7 @@ import {
   resolveSupplierBrandSetupLayers,
   supplierHasBrandAccess
 } from './supplierBrandLayerContract';
+import { formatDateTimeIST } from './dateTime';
 
 export const BRAND_REQUIRED_BEFORE_SAVE_MESSAGE = 'Select at least one brand before saving.';
 
@@ -312,6 +313,110 @@ export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [])
   };
 }
 
+/**
+ * Brand-step status card (Path A / Path B). Single source of truth so the UI never
+ * shows "Ready to submit" alongside an approved/pending request state.
+ *
+ * Precedence: empty → pending request → rejected → approved access → catalog match hint → ready.
+ */
+export function resolveSelectYourselfBrandStepStatus({
+  brandName = '',
+  catalogBrandNames = [],
+  catalogBrands = null,
+  supplierBrandRequests = [],
+  supplierApprovedBrands = [],
+  approvedCatalogMatchMessage = '',
+  approvedCatalogSuggestionMessage = ''
+} = {}) {
+  const selectedBrand = String(brandName || '').trim();
+  const detailLines = [];
+  if (!selectedBrand) {
+    return { tone: 'neutral', label: 'Select a brand first', detailLines };
+  }
+
+  detailLines.push(selectedBrand);
+
+  const brandRequest = findSupplierBrandRequest(selectedBrand, supplierBrandRequests);
+  const requestStatus = String(brandRequest?.status || '').toLowerCase();
+  const submittedAt =
+    brandRequest?.submittedAt || brandRequest?.requestedAt || brandRequest?.createdAt || null;
+  const namesForExact =
+    Array.isArray(catalogBrandNames) && catalogBrandNames.length > 0
+      ? catalogBrandNames
+      : (Array.isArray(catalogBrands) ? catalogBrands : []).map((item) =>
+          typeof item === 'string' ? item : item?.name
+        );
+  const catalogBrandSelected = namesForExact.some(
+    (name) => brandKeyForDuplicateCheck(name) === brandKeyForDuplicateCheck(selectedBrand)
+  );
+  const layers = resolveSupplierBrandSetupLayers({
+    brandName: selectedBrand,
+    catalogBrands: catalogBrands != null ? catalogBrands : namesForExact,
+    supplierApprovedBrands,
+    supplierBrandRequests,
+    brandMeta: null
+  });
+
+  if (requestStatus === 'pending') {
+    detailLines.push(
+      'Your brand approval request was submitted. Waiting for admin review — no need to submit again.'
+    );
+    detailLines.push(
+      submittedAt
+        ? `Submitted: ${formatDateTimeIST(submittedAt, '—')}`
+        : 'Submitted: date will appear after refresh if admin review is still pending.'
+    );
+    return {
+      tone: 'warning',
+      label: 'Request submitted — pending admin approval',
+      detailLines
+    };
+  }
+
+  if (requestStatus === 'rejected') {
+    if (brandRequest?.rejectionReason) detailLines.push(brandRequest.rejectionReason);
+    detailLines.push(
+      submittedAt
+        ? `Originally submitted: ${formatDateTimeIST(submittedAt, '—')}`
+        : 'Originally submitted: date unavailable'
+    );
+    return { tone: 'danger', label: 'Rejected by admin', detailLines };
+  }
+
+  const isApproved =
+    catalogBrandSelected ||
+    requestStatus === 'approved' ||
+    layers.supplierHasAccess === true;
+
+  if (isApproved) {
+    if (submittedAt) {
+      detailLines.push(`Submitted: ${formatDateTimeIST(submittedAt, '—')}`);
+    }
+    return { tone: 'success', label: 'Approved by admin', detailLines };
+  }
+
+  if (approvedCatalogMatchMessage) {
+    detailLines.push(approvedCatalogMatchMessage);
+    detailLines.push('Select the approved brand below to continue with role setup.');
+    return {
+      tone: 'warning',
+      label: 'Already approved — select from list',
+      detailLines
+    };
+  }
+
+  if (approvedCatalogSuggestionMessage) {
+    detailLines.push(approvedCatalogSuggestionMessage);
+  }
+
+  detailLines.push('Click Save brand to send this request to admin.');
+  return {
+    tone: 'neutral',
+    label: 'Ready to submit for approval',
+    detailLines
+  };
+}
+
 function isLiteralApprovedCatalogBrand(brandName, catalogBrands = []) {
   const brand = String(brandName || '').trim();
   if (!brand) return false;
@@ -347,10 +452,43 @@ export function buildBrandApprovalDetailsSignature(profile, catalogBrands = []) 
 }
 
 /**
- * True when Save brand should stay disabled: every custom brand is already pending
- * and brand details have not changed since the last successful submit.
- * Rejected brands and detail edits re-enable save; approved catalog picks stay savable.
+ * True when Save brand should stay disabled because there is nothing new to submit:
+ * - no brand rows, OR
+ * - brand details are unchanged since the last successful save, OR
+ * - only pending Path B requests (duplicate submit is never allowed while pending)
+ * Rejected brands and new brands (no request yet) re-enable save.
+ * Document-only edits on an already-pending brand do NOT re-enable Save brand.
  */
+export const BRAND_REQUEST_ALREADY_PENDING_MESSAGE =
+  'This brand request is already pending admin approval. Wait for admin to approve or reject it before submitting again.';
+
+export function listPendingBrandNamesBlockingSave({
+  profile,
+  extraPendingBrandNames = []
+} = {}) {
+  const entries = getCompanyInfoEntriesForSave(profile || {}).filter((entry) =>
+    String(entry?.brands || '').trim()
+  );
+  const requests = profile?.supplierBrandRequests || [];
+  const extraPendingKeys = new Set(
+    (Array.isArray(extraPendingBrandNames) ? extraPendingBrandNames : [])
+      .map((name) => brandKeyForDuplicateCheck(name))
+      .filter(Boolean)
+  );
+  const pendingNames = [];
+  for (const entry of entries) {
+    const brand = String(entry?.brands || '').trim();
+    if (!brand) continue;
+    const brandKey = brandKeyForDuplicateCheck(brand);
+    const request = findSupplierBrandRequest(brand, requests);
+    const status = String(request?.status || '').toLowerCase();
+    if (status === 'pending' || (brandKey && extraPendingKeys.has(brandKey))) {
+      pendingNames.push(brand);
+    }
+  }
+  return pendingNames;
+}
+
 export function isBrandApprovalSaveBlockedForPendingRequests({
   profile,
   catalogBrands = [],
@@ -360,7 +498,7 @@ export function isBrandApprovalSaveBlockedForPendingRequests({
   const entries = getCompanyInfoEntriesForSave(profile || {}).filter((entry) =>
     String(entry?.brands || '').trim()
   );
-  if (entries.length === 0) return false;
+  if (entries.length === 0) return true;
 
   const requests = profile?.supplierBrandRequests || [];
   const extraPendingKeys = new Set(
@@ -368,19 +506,25 @@ export function isBrandApprovalSaveBlockedForPendingRequests({
       .map((name) => brandKeyForDuplicateCheck(name))
       .filter(Boolean)
   );
+
+  let hasActionableBrand = false;
   let hasPendingCustom = false;
+  let hasRejectedCustom = false;
 
   for (const entry of entries) {
     const brand = String(entry?.brands || '').trim();
     const brandKey = brandKeyForDuplicateCheck(brand);
     if (isLiteralApprovedCatalogBrand(brand, catalogBrands)) {
-      // Selecting/saving an approved catalog brand remains allowed.
-      return false;
+      // Path A catalog pick still needs an initial save when signature is empty/different.
+      hasActionableBrand = true;
+      continue;
     }
     const request = findSupplierBrandRequest(brand, requests);
     const status = String(request?.status || '').toLowerCase();
     if (status === 'rejected') {
-      return false;
+      hasRejectedCustom = true;
+      hasActionableBrand = true;
+      continue;
     }
     const isPending = status === 'pending' || (brandKey && extraPendingKeys.has(brandKey));
     if (isPending) {
@@ -388,16 +532,29 @@ export function isBrandApprovalSaveBlockedForPendingRequests({
       continue;
     }
     if (!request) {
-      return false;
+      hasActionableBrand = true;
+      continue;
     }
     // Approved custom request — no brand-approval save needed for this row.
   }
 
-  if (!hasPendingCustom) return false;
+  // Rejected Path B always needs another Save brand attempt.
+  if (hasRejectedCustom) return false;
+
+  // Pending Path B: never allow duplicate submit of the same brand (docs/name tweaks included).
+  // Change brand / Cancel setup, wait for admin, or enter a different brand name to submit again.
+  if (hasPendingCustom && !hasActionableBrand) {
+    return true;
+  }
 
   const currentSignature = buildBrandApprovalDetailsSignature(profile, catalogBrands);
-  if (!submittedSignature) return true;
-  return currentSignature === submittedSignature;
+  if (submittedSignature && currentSignature === submittedSignature) {
+    return true;
+  }
+
+  if (hasActionableBrand) return false;
+  // Only approved custom brands remain — nothing left for Save brand.
+  return true;
 }
 
 /**
@@ -454,7 +611,19 @@ export function buildSupplyChainSummaryRows(
     const key = brandKeyForDuplicateCheck(row?.brand);
     if (!key || seenKeys.has(key) || supplierRejectedBrandKeys.has(key)) return;
     seenKeys.add(key);
-    rows.push(row);
+    const existingId = String(row?.id || '').trim();
+    const entryId =
+      String(row?.entryId || '').trim() ||
+      (existingId && !existingId.startsWith('catalog-') && !existingId.startsWith('brand-')
+        ? existingId
+        : '');
+    // Stable id by brand key — must not flip from catalog-* → entry UUID after selection,
+    // or the Select Yourself page clears the assignment and loops back to brand picking.
+    rows.push({
+      ...row,
+      id: `brand-${key}`,
+      entryId
+    });
   };
 
   for (const item of Array.isArray(catalogBrands) ? catalogBrands : []) {
@@ -474,13 +643,15 @@ export function buildSupplyChainSummaryRows(
     if (assignment) {
       pushRow({
         ...assignment,
+        entryId: assignment.id,
         hasAdminSupplyChain: assignment.hasAdminSupplyChain === true || catalogHasAdminSupplyChain
       });
       continue;
     }
 
     pushRow({
-      id: `catalog-${catalogKey}`,
+      id: `brand-${catalogKey}`,
+      entryId: '',
       brand,
       role: '',
       roleLabel: 'Not set',
@@ -499,6 +670,7 @@ export function buildSupplyChainSummaryRows(
     if (!supplierApproved) continue;
     pushRow({
       ...assignment,
+      entryId: assignment.id,
       hasAdminSupplyChain: assignment.hasAdminSupplyChain === true
     });
   }

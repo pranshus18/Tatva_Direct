@@ -26,26 +26,48 @@ function collapseRepeatedLetters(value) {
   return String(value || '').replace(/(.)\1+/g, '$1');
 }
 
-/**
- * Case-insensitive brand key for duplicate detection across entries.
- * Uses the complete normalized name only — prefixes must not match
- * (e.g. "H" is not a duplicate of "HP"; "Philips" still matches "Phillips").
- */
-export function brandKeyForDuplicateCheck(raw) {
-  const token = String(raw || '')
+/** Normalize brand text without spelling-collapse (spaces/punctuation only). */
+export function normalizeBrandIdentity(raw) {
+  return String(raw || '')
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return collapseRepeatedLetters(token);
+}
+
+/**
+ * Case-insensitive brand key for duplicate detection across entries.
+ * Uses the complete normalized name only — prefixes must not match
+ * (e.g. "H" is not a duplicate of "HP"; "Philips" still matches "Phillips").
+ *
+ * Spelling-collapse (Phillips → Philips) applies only to complete names (length ≥ 5)
+ * so partial/short typing cannot collide with acronyms (AB must not equal ABB).
+ */
+export function brandKeyForDuplicateCheck(raw) {
+  const token = normalizeBrandIdentity(raw);
+  if (!token) return '';
+  if (token.length >= 5) {
+    return collapseRepeatedLetters(token);
+  }
+  return token;
 }
 
 /** True only when both values refer to the same complete brand name. */
 export function areBrandNamesExactDuplicates(left, right) {
+  const leftNorm = normalizeBrandIdentity(left);
+  const rightNorm = normalizeBrandIdentity(right);
+  if (!leftNorm || !rightNorm) return false;
+  if (leftNorm === rightNorm) return true;
+
   const leftKey = brandKeyForDuplicateCheck(left);
   const rightKey = brandKeyForDuplicateCheck(right);
-  return Boolean(leftKey && rightKey && leftKey === rightKey);
+  if (!leftKey || !rightKey || leftKey !== rightKey) return false;
+
+  // Collapsed-key equality is only trusted for complete-looking names.
+  const minLen = Math.min(leftNorm.length, rightNorm.length);
+  const lengthDelta = Math.abs(leftNorm.length - rightNorm.length);
+  return minLen >= 5 && lengthDelta <= 2;
 }
 
 function brandNameEditDistance(left, right) {
@@ -82,7 +104,7 @@ function collectApprovedCatalogRows(catalogBrands = []) {
     if (status && status !== 'approved') continue;
     const key = brandKeyForDuplicateCheck(name);
     if (!key) continue;
-    rows.push({ name, key });
+    rows.push({ name, key, norm: normalizeBrandIdentity(name) });
   }
   return rows;
 }
@@ -90,17 +112,23 @@ function collectApprovedCatalogRows(catalogBrands = []) {
 /**
  * Exact / controlled approved-catalog match used to block a Path B "new brand" request.
  * Only complete brand identity matches (including Philips/Phillips spelling collapse).
- * Never matches partial typing such as SPARSGA → Sparsh.
+ * Never matches partial typing such as SPARSGA → Sparsh, samsun → samsung, or AB → ABB.
  * @returns {{ name: string, matchType: 'exact' } | null}
  */
 export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
   const typed = String(typedName || '').trim();
-  const typedKey = brandKeyForDuplicateCheck(typed);
-  if (!typedKey) return null;
+  const typedNorm = normalizeBrandIdentity(typed);
+  if (!typedNorm) return null;
 
   const rows = collectApprovedCatalogRows(catalogBrands);
-  const exact = rows.find((row) => row.key === typedKey);
-  return exact ? { name: exact.name, matchType: 'exact' } : null;
+
+  // Literal normalized identity (no spelling collapse).
+  const exact = rows.find((row) => normalizeBrandIdentity(row.name) === typedNorm);
+  if (exact) return { name: exact.name, matchType: 'exact' };
+
+  // Controlled spelling variant only (Philips ↔ Phillips), never prefixes/partials.
+  const variant = rows.find((row) => areBrandNamesExactDuplicates(typed, row.name));
+  return variant ? { name: variant.name, matchType: 'exact' } : null;
 }
 
 /**
@@ -113,8 +141,8 @@ export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
  */
 export function findApprovedCatalogBrandSuggestions(typedName, catalogBrands = []) {
   const typed = String(typedName || '').trim();
-  const typedKey = brandKeyForDuplicateCheck(typed);
-  if (!typedKey || typedKey.length < 3) return [];
+  const typedNorm = normalizeBrandIdentity(typed);
+  if (!typedNorm || typedNorm.length < 3) return [];
 
   // Exact identity is handled by findApprovedCatalogBrandMatch — not a soft suggestion.
   if (findApprovedCatalogBrandMatch(typed, catalogBrands)) return [];
@@ -125,16 +153,16 @@ export function findApprovedCatalogBrandSuggestions(typedName, catalogBrands = [
 
   for (const row of rows) {
     if (seen.has(row.key)) continue;
-    // Only when the supplier appears mid-name for an approved brand.
-    if (row.key.startsWith(typedKey) && row.key.length > typedKey.length) {
+    // Prefix tip only — never treat as selected / approved / workflow change.
+    if (row.norm.startsWith(typedNorm) && row.norm.length > typedNorm.length) {
       seen.add(row.key);
       suggestions.push({ name: row.name, matchType: 'prefix' });
       continue;
     }
-    const maxLen = Math.max(typedKey.length, row.key.length);
-    const lengthDelta = Math.abs(typedKey.length - row.key.length);
+    const maxLen = Math.max(typedNorm.length, row.norm.length);
+    const lengthDelta = Math.abs(typedNorm.length - row.norm.length);
     if (maxLen < 5 || lengthDelta > 1) continue;
-    const distance = brandNameEditDistance(typedKey, row.key);
+    const distance = brandNameEditDistance(typedNorm, row.norm);
     if (distance === 1) {
       seen.add(row.key);
       suggestions.push({ name: row.name, matchType: 'typo' });

@@ -171,6 +171,17 @@
   pointer-events: none;
 }
 
+.supplier-select-flow-card--active-path {
+  opacity: 1;
+  pointer-events: auto;
+  border-color: #93c5fd;
+  background: linear-gradient(180deg, #eff6ff 0%, #f8fbff 100%);
+}
+
+.supplier-select-flow-card--active-path .supplier-select-flow-card__step {
+  width: 100%;
+}
+
 .supplier-select-assignments {
   display: flex;
   flex-direction: column;

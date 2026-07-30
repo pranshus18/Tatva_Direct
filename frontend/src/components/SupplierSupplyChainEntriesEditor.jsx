@@ -4,13 +4,14 @@ import { getApiUrl, resolveApiPath } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
 import BrandSelect from './BrandSelect';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
-import { brandKeyForDuplicateCheck, dedupeBrandNames, findApprovedCatalogBrandMatch, findApprovedCatalogBrandSuggestions, formatApprovedCatalogBrandMatchMessage, formatApprovedCatalogBrandSuggestionMessage } from '../utils/supplierChainEntryValidation';
+import { brandKeyForDuplicateCheck, dedupeBrandNames, findApprovedCatalogBrandMatch, findApprovedCatalogBrandSuggestions, formatApprovedCatalogBrandMatchMessage, formatApprovedCatalogBrandSuggestionMessage, areBrandNamesExactDuplicates } from '../utils/supplierChainEntryValidation';
 import {
   formatSupplyChainRoleLabel,
   getApprovedRoleForEntry,
   matchCompanyInfoEntry,
   isBrandApprovedForSupplyChainStep,
   findSupplierBrandRequest,
+  resolveSelectYourselfBrandStepStatus,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
@@ -214,7 +215,7 @@ const CompanyInfoEntryCard = ({
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const catalogBrandSelected =
     !!selectedBrand &&
-    catalogBrandNames.some((name) => name.toLowerCase() === selectedBrand.toLowerCase());
+    catalogBrandNames.some((name) => areBrandNamesExactDuplicates(name, selectedBrand));
   const brandNameEditable = editing && (!useBrandNameTextInput || !catalogBrandSelected);
   const hasBrandValue = !!selectedBrand;
   const approvedCatalogMatch =
@@ -289,20 +290,6 @@ const CompanyInfoEntryCard = ({
     return opts;
   })();
   const brandOnlyApproved = isBrandOnlyStep && catalogBrandSelected;
-  const brandOnlyPendingSubmitted =
-    isBrandOnlyStep &&
-    hasBrandValue &&
-    !catalogBrandSelected &&
-    !approvedCatalogMatchMessage &&
-    isPendingBrandRequest;
-  const brandOnlyRejected =
-    isBrandOnlyStep && hasBrandValue && isRejectedBrandRequest;
-  const brandOnlyReadyToSubmit =
-    isBrandOnlyStep &&
-    hasBrandValue &&
-    !catalogBrandSelected &&
-    !approvedCatalogMatchMessage &&
-    !brandRequest;
   const brandStatus = String(
     brandMeta?.approvalStatus ||
       brandMeta?.status ||
@@ -320,20 +307,19 @@ const CompanyInfoEntryCard = ({
     brandLayers.hasSupplyChainDefinition ||
     !!brandMeta?.hasSupplyChainDefinition ||
     hasResolvedChainRoles;
+  const brandStepStatus = isBrandOnlyStep
+    ? resolveSelectYourselfBrandStepStatus({
+        brandName: selectedBrand,
+        catalogBrandNames,
+        catalogBrands,
+        supplierBrandRequests,
+        supplierApprovedBrands,
+        approvedCatalogMatchMessage,
+        approvedCatalogSuggestionMessage
+      })
+    : null;
   const statusTone = isBrandOnlyStep
-    ? !hasBrandValue
-      ? 'neutral'
-      : brandOnlyApproved || brandRequestStatus === 'approved'
-        ? 'success'
-        : approvedCatalogMatchMessage
-          ? 'warning'
-          : brandOnlyPendingSubmitted
-            ? 'warning'
-            : brandOnlyRejected
-              ? 'danger'
-              : brandOnlyReadyToSubmit
-                ? 'neutral'
-                : 'neutral'
+    ? brandStepStatus.tone
     : brandLayers.canSelectRoles
       ? 'success'
       : brandLayers.supplierHasAccess
@@ -344,19 +330,7 @@ const CompanyInfoEntryCard = ({
             ? 'danger'
             : 'neutral';
   const statusLabel = isBrandOnlyStep
-    ? !hasBrandValue
-      ? 'Select a brand first'
-      : brandOnlyApproved || brandRequestStatus === 'approved'
-        ? 'Approved by admin'
-        : approvedCatalogMatchMessage
-          ? 'Already approved — select from list'
-          : brandOnlyPendingSubmitted
-            ? 'Request submitted — pending admin approval'
-            : brandOnlyRejected
-              ? 'Rejected by admin'
-              : brandOnlyReadyToSubmit
-                ? 'Ready to submit for approval'
-                : 'Not requested yet'
+    ? brandStepStatus.label
     : !hasBrandValue
       ? 'Select a brand first'
       : brandLayers.canSelectRoles
@@ -368,45 +342,47 @@ const CompanyInfoEntryCard = ({
             : brandLayers.approvalStatus === 'rejected' || isRejectedBrandRequest
               ? 'Rejected by admin'
               : 'Brand access required';
-  const statusDetailLines = (() => {
-    const lines = [];
-    if (hasBrandValue && resolvedBrandName) {
-      lines.push(resolvedBrandName);
-    }
-    const showPendingDetails =
-      brandOnlyPendingSubmitted ||
-      isPendingBrandRequest ||
-      (!isBrandOnlyStep && (brandStatus === 'pending' || brandLayers.approvalStatus === 'pending'));
-    const showRejectedDetails = brandOnlyRejected || isRejectedBrandRequest;
+  const statusDetailLines = isBrandOnlyStep
+    ? brandStepStatus.detailLines
+    : (() => {
+        const lines = [];
+        if (hasBrandValue && resolvedBrandName) {
+          lines.push(resolvedBrandName);
+        }
+        const showPendingDetails =
+          isPendingBrandRequest ||
+          brandStatus === 'pending' ||
+          brandLayers.approvalStatus === 'pending';
+        const showRejectedDetails = isRejectedBrandRequest;
 
-    if (approvedCatalogMatchMessage && !showPendingDetails && !showRejectedDetails) {
-      lines.push(approvedCatalogMatchMessage);
-      lines.push('Select the approved brand below to continue with role setup.');
-    } else if (showPendingDetails) {
-      lines.push('Your brand approval request was submitted. Waiting for admin review — no need to submit again.');
-      lines.push(
-        brandRequestSubmittedAt
-          ? `Submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`
-          : 'Submitted: date will appear after refresh if admin review is still pending.'
-      );
-    } else if (showRejectedDetails) {
-      if (brandRequest?.rejectionReason) {
-        lines.push(brandRequest.rejectionReason);
-      }
-      lines.push(
-        brandRequestSubmittedAt
-          ? `Originally submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`
-          : 'Originally submitted: date unavailable'
-      );
-    } else if (approvedCatalogSuggestionMessage) {
-      lines.push(approvedCatalogSuggestionMessage);
-    } else if (brandOnlyReadyToSubmit) {
-      lines.push('Click Save brand to send this request to admin.');
-    } else if ((brandOnlyApproved || brandRequestStatus === 'approved') && brandRequestSubmittedAt) {
-      lines.push(`Submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`);
-    }
-    return lines;
-  })();
+        if (approvedCatalogMatchMessage && !showPendingDetails && !showRejectedDetails) {
+          lines.push(approvedCatalogMatchMessage);
+          lines.push('Select the approved brand below to continue with role setup.');
+        } else if (showPendingDetails) {
+          lines.push(
+            'Your brand approval request was submitted. Waiting for admin review — no need to submit again.'
+          );
+          lines.push(
+            brandRequestSubmittedAt
+              ? `Submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`
+              : 'Submitted: date will appear after refresh if admin review is still pending.'
+          );
+        } else if (showRejectedDetails) {
+          if (brandRequest?.rejectionReason) {
+            lines.push(brandRequest.rejectionReason);
+          }
+          lines.push(
+            brandRequestSubmittedAt
+              ? `Originally submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`
+              : 'Originally submitted: date unavailable'
+          );
+        } else if (approvedCatalogSuggestionMessage) {
+          lines.push(approvedCatalogSuggestionMessage);
+        } else if ((brandOnlyApproved || brandRequestStatus === 'approved') && brandRequestSubmittedAt) {
+          lines.push(`Submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`);
+        }
+        return lines;
+      })();
   const brandApprovedForSupplyChain = brandLayers.supplierHasAccess;
   const brandCanSelectRoles =
     typeof brandMeta?.canSelectRoles === 'boolean'
@@ -651,8 +627,8 @@ const CompanyInfoEntryCard = ({
                     </div>
                     <p className="chain-field__sublabel">
                       {catalogBrandSelected
-                        ? 'Path A is locked for this setup. Use Change brand or Start over above to pick a different brand.'
-                        : 'Path B request is in progress. Use Change brand or Start over above to switch paths.'}
+                        ? 'Path A is locked for this setup. Use Change brand or Cancel setup above to pick a different brand.'
+                        : 'Path B request is in progress. Use Change brand or Cancel setup above to switch paths.'}
                     </p>
                   </div>
                 ) : catalogBrandSelected && isUnifiedRegistration ? (
@@ -988,7 +964,12 @@ export default function SupplierSupplyChainEntriesEditor({
   catalogBrandsError = '',
   onReloadCatalogBrands = null,
   onRequestChainConfiguration = null,
-  onBrandSelectionCleared = null
+  onBrandSelectionCleared = null,
+  /** When set, Path A brand selection is locked to this brand until Change/Cancel. */
+  lockedBrandName = '',
+  /** Controlled path: null | 'pathA' | 'pathB' — keeps Path A and Path B mutually exclusive. */
+  brandPathMode = null,
+  onBrandPathModeChange = null
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -1002,6 +983,11 @@ export default function SupplierSupplyChainEntriesEditor({
   const newBrandModeInitializedRef = useRef(false);
   const [highlightedEntryId, setHighlightedEntryId] = useState('');
   const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
+  const lockedBrandKey = brandKeyForDuplicateCheck(lockedBrandName);
+  const brandSetupLocked = isBrandStepPicker && !!lockedBrandKey;
+  const pathAExclusive = brandSetupLocked || brandPathMode === 'pathA';
+  const pathBExclusive =
+    isBrandStepPicker && !pathAExclusive && (brandPathMode === 'pathB' || brandStepOtherExplicit);
   const usesBrandCatalogFields = sectionView === 'brand' || sectionView === 'all';
   const parentProvidesCatalog = Array.isArray(catalogBrandsProp);
   const {
@@ -1103,13 +1089,18 @@ export default function SupplierSupplyChainEntriesEditor({
 
   const displayEntries = getDisplayEntries();
   const duplicateBrandMessages = buildDuplicateBrandMessages(displayEntries);
-  const shouldShowAddEntry = showAddEntry ?? allowEntryManagement;
+  const shouldShowAddEntry = (showAddEntry ?? allowEntryManagement) && !brandSetupLocked;
   const indexedEntries = displayEntries.map((entry, index) => ({ entry, index }));
   const entryIdsSignature = JSON.stringify(displayEntries.map((entry) => entry.id));
   const firstEmptyBrandEntryId =
     displayEntries.find((entry) => !normalizeSingleBrand(entry?.brands))?.id || '';
+  const lockedBrandEntryId = lockedBrandKey
+    ? displayEntries.find(
+        (entry) => brandKeyForDuplicateCheck(normalizeSingleBrand(entry?.brands)) === lockedBrandKey
+      )?.id || ''
+    : '';
   const defaultEntryId = isBrandStepPicker
-    ? firstEmptyBrandEntryId
+    ? lockedBrandEntryId || firstEmptyBrandEntryId
     : displayEntries[0]?.id || '';
   const resolvedSelectedEntryId =
     selectionMode === 'dropdown'
@@ -1119,15 +1110,29 @@ export default function SupplierSupplyChainEntriesEditor({
       : '';
 
   const activeEntryForBrandPicker = displayEntries.find((entry) => entry.id === resolvedSelectedEntryId) || null;
-  const activeEntryBrandValue = normalizeSingleBrand(activeEntryForBrandPicker?.brands);
+  const activeEntryBrandValue = brandSetupLocked
+    ? String(lockedBrandName || '').trim() || normalizeSingleBrand(activeEntryForBrandPicker?.brands)
+    : normalizeSingleBrand(activeEntryForBrandPicker?.brands);
   const brandStepHasActiveDraft =
     isBrandStepPicker && (brandStepOtherMode || brandStepOtherExplicit || !!activeEntryBrandValue);
 
   useEffect(() => {
     if (selectionMode !== 'dropdown') return;
+    if (brandSetupLocked && lockedBrandEntryId) {
+      if (selectedEntryId !== lockedBrandEntryId) setSelectedEntryId(lockedBrandEntryId);
+      return;
+    }
     if (selectedEntryId && displayEntries.some((entry) => entry.id === selectedEntryId)) return;
     setSelectedEntryId(defaultEntryId);
-  }, [selectionMode, entryIdsSignature, defaultEntryId, selectedEntryId, displayEntries]);
+  }, [
+    selectionMode,
+    entryIdsSignature,
+    defaultEntryId,
+    selectedEntryId,
+    displayEntries,
+    brandSetupLocked,
+    lockedBrandEntryId
+  ]);
 
   const entriesToRender =
     selectionMode === 'dropdown'
@@ -1355,6 +1360,11 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const handleBrandStepOtherSelection = () => {
+    if (brandSetupLocked || pathAExclusive) return;
+    setBrandStepOtherMode(true);
+    setBrandStepOtherExplicit(true);
+    onBrandPathModeChange?.('pathB');
+
     const currentEntries = getDisplayEntries();
     const activeEntry = currentEntries.find((entry) => entry.id === resolvedSelectedEntryId);
     const activeBrandEmpty = !normalizeSingleBrand(activeEntry?.brands);
@@ -1578,9 +1588,19 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const handleBrandStepClearSelection = (entryId = resolvedSelectedEntryId) => {
+    // Parent owns the active role-setup lock — clear incomplete draft there first.
+    if (brandSetupLocked || pathAExclusive) {
+      setBrandStepOtherMode(false);
+      setBrandStepOtherExplicit(false);
+      onBrandPathModeChange?.(null);
+      onBrandSelectionCleared?.();
+      return;
+    }
+
     const targetId = String(entryId || '').trim();
     setBrandStepOtherMode(false);
     setBrandStepOtherExplicit(false);
+    onBrandPathModeChange?.(null);
     if (targetId) {
       const currentEntries = getDisplayEntries();
       const target = currentEntries.find((entry) => entry.id === targetId);
@@ -1595,7 +1615,14 @@ export default function SupplierSupplyChainEntriesEditor({
           if (updatedOne) return entry;
           if (!matchCompanyInfoEntry(entry, { entryId: targetId, brand: targetBrand })) return entry;
           updatedOne = true;
-          return { ...entry, brands: '', role: '' };
+          return {
+            ...entry,
+            brands: '',
+            role: '',
+            authorizationCertificateUrl: '',
+            authorizationCertificateUrls: [],
+            supplyChainRegistrationStarted: false
+          };
         });
         if (updatedOne) {
           setProfile(syncProfileFromEntries(profile, entries));
@@ -1610,18 +1637,31 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const handleBrandStepChangeBrand = (entryId) => {
+    if (brandSetupLocked || pathAExclusive || pathBExclusive) {
+      const confirmed = window.confirm(
+        pathBExclusive
+          ? 'Leave Path B?\n\nThis clears the new-brand request draft so you can choose Path A or Path B again.'
+          : 'Change brand?\n\nThis cancels the current Path A supply-chain setup for the selected brand and clears its incomplete role details.'
+      );
+      if (!confirmed) return;
+    }
     handleBrandStepClearSelection(entryId || resolvedSelectedEntryId);
   };
 
   const handleBrandStepStartOver = (entryId) => {
     const confirmed = window.confirm(
-      'Clear the selected brand and start over?\n\nYou can then choose Path A (approved brand) or Path B (request a new brand).'
+      brandSetupLocked || pathAExclusive
+        ? 'Cancel Path A setup?\n\nThis clears the selected approved brand and its incomplete supply-chain role details so you can choose Path A or Path B again.'
+        : pathBExclusive
+          ? 'Cancel Path B?\n\nThis clears the new-brand request draft so you can choose Path A or Path B again.'
+          : 'Clear the selected brand and start over?\n\nYou can then choose Path A (approved brand) or Path B (request a new brand).'
     );
     if (!confirmed) return;
     handleBrandStepClearSelection(entryId || resolvedSelectedEntryId);
   };
 
   const handleBrandStepCatalogPick = (nextBrand) => {
+    if (brandSetupLocked || pathBExclusive) return;
     const brand = sanitizeCustomBrandInput(nextBrand);
     if (!brand) {
       handleBrandStepClearSelection(resolvedSelectedEntryId);
@@ -1630,6 +1670,7 @@ export default function SupplierSupplyChainEntriesEditor({
 
     setBrandStepOtherMode(false);
     setBrandStepOtherExplicit(false);
+    onBrandPathModeChange?.('pathA');
 
     const currentEntries = getDisplayEntries();
     const matchKey = brandKeyForDuplicateCheck(brand);
@@ -1692,40 +1733,71 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const handleBrandStepShowCatalogPicker = () => {
-    // Clear the custom typed brand so Path A picker stays visible and selection can progress.
+    if (brandSetupLocked || pathAExclusive) return;
+    // Leaving Path B returns to the chooser so Path A can be selected cleanly.
     handleBrandStepClearSelection(resolvedSelectedEntryId);
   };
 
   useEffect(() => {
     if (!isBrandStepPicker || !startInNewBrandMode || newBrandModeInitializedRef.current) return;
+    if (brandSetupLocked || pathAExclusive) return;
     newBrandModeInitializedRef.current = true;
     handleBrandStepOtherSelection();
-  }, [isBrandStepPicker, startInNewBrandMode]);
+  }, [isBrandStepPicker, startInNewBrandMode, brandSetupLocked, pathAExclusive]);
+
+  useEffect(() => {
+    if (!isBrandStepPicker) return;
+    // Sync from parent-controlled path only. Do not clear local Path B when mode is
+    // still null — that races the "Or use Path B" click before the parent updates.
+    // Change brand / Cancel / Switch clear local state explicitly.
+    if (brandPathMode === 'pathB' && !brandStepOtherExplicit) {
+      setBrandStepOtherMode(true);
+      setBrandStepOtherExplicit(true);
+      return;
+    }
+    if (brandPathMode === 'pathA' || brandSetupLocked) {
+      setBrandStepOtherMode(false);
+      setBrandStepOtherExplicit(false);
+    }
+  }, [isBrandStepPicker, brandPathMode, brandStepOtherExplicit, brandSetupLocked]);
 
   const activeEntryUsesCustomBrand =
     !!activeEntryBrandValue &&
-    !catalogBrandNames.some((name) => name.toLowerCase() === activeEntryBrandValue.toLowerCase());
-  const showBrandStepCustomInput = isBrandStepPicker && (brandStepOtherMode || activeEntryUsesCustomBrand);
-  // Path A lock: approved catalog brand is chosen — hide Path A/B pickers until Change brand / Start over.
-  const brandStepPathALocked =
+    !catalogBrandNames.some((name) => areBrandNamesExactDuplicates(name, activeEntryBrandValue));
+  const showBrandStepCustomInput =
     isBrandStepPicker &&
-    !!activeEntryBrandValue &&
-    !brandStepOtherMode &&
-    !brandStepOtherExplicit &&
-    !activeEntryUsesCustomBrand &&
-    catalogBrandNames.some((name) => name.toLowerCase() === activeEntryBrandValue.toLowerCase());
-  // Path B lock: supplier is mid-request for a new brand — don't keep Path A picker active beside it.
+    !pathAExclusive &&
+    (pathBExclusive || brandStepOtherMode || activeEntryUsesCustomBrand);
+  // Path A lock: approved catalog brand is chosen — hide Path B entirely until Change/Cancel.
+  const brandStepPathALocked =
+    pathAExclusive ||
+    (isBrandStepPicker &&
+      !!activeEntryBrandValue &&
+      !brandStepOtherMode &&
+      !brandStepOtherExplicit &&
+      !activeEntryUsesCustomBrand &&
+      catalogBrandNames.some((name) => areBrandNamesExactDuplicates(name, activeEntryBrandValue)));
+  // Path B lock: supplier is mid-request for a new brand — hide Path A picker.
   const brandStepPathBLocked =
-    isBrandStepPicker && (brandStepOtherExplicit || (brandStepOtherMode && activeEntryUsesCustomBrand));
+    isBrandStepPicker &&
+    !pathAExclusive &&
+    (pathBExclusive || brandStepOtherExplicit || (brandStepOtherMode && activeEntryUsesCustomBrand));
 
   useEffect(() => {
-    if (!isBrandStepPicker || brandStepOtherExplicit) return;
+    if (!isBrandStepPicker || brandStepOtherExplicit || brandSetupLocked || pathAExclusive) return;
     if (!activeEntryBrandValue) return;
-    const inCatalog = catalogBrandNames.some(
-      (name) => name.toLowerCase() === activeEntryBrandValue.toLowerCase()
+    const inCatalog = catalogBrandNames.some((name) =>
+      areBrandNamesExactDuplicates(name, activeEntryBrandValue)
     );
     setBrandStepOtherMode(!inCatalog);
-  }, [isBrandStepPicker, brandStepOtherExplicit, activeEntryBrandValue, catalogBrandNames]);
+  }, [
+    isBrandStepPicker,
+    brandStepOtherExplicit,
+    activeEntryBrandValue,
+    catalogBrandNames,
+    brandSetupLocked,
+    pathAExclusive
+  ]);
 
   useEffect(() => {
     if (!isBrandStepPicker || !showBrandStepCustomInput || !resolvedSelectedEntryId) return;
@@ -1777,8 +1849,8 @@ export default function SupplierSupplyChainEntriesEditor({
             {brandStepPathALocked ? (
               <>
                 <p className="chain-field__sublabel chain-entry-selector__intro">
-                  Path A selected. Continue with supply-chain role setup for this brand below. Use Change brand or
-                  Start over if you need a different brand.
+                  Path A only — approved brand locked for this supply-chain setup. Path B is not available until you
+                  Change brand or Cancel setup.
                 </p>
                 <span className="chain-field__label">Selected approved brand</span>
                 <div className="chain-selected-brand-row">
@@ -1801,56 +1873,23 @@ export default function SupplierSupplyChainEntriesEditor({
                     onClick={() => handleBrandStepStartOver(resolvedSelectedEntryId)}
                     disabled={!editing}
                   >
-                    Start over
+                    Cancel setup
                   </button>
                 </div>
               </>
-            ) : brandStepOtherExplicit ? (
+            ) : brandStepOtherExplicit || brandStepPathBLocked ? (
               <>
                 <p className="chain-field__sublabel chain-entry-selector__intro">
-                  Path B: enter your brand name and upload supporting documents below. This brand is not in the
-                  approved catalog yet and will be sent to admin for approval. After approval, configure your
-                  supply-chain role.
+                  Path B only — request a new brand for admin approval. Path A stays hidden until you switch or cancel.
                 </p>
-                <div className="chain-entry-selector__actions">
-                  <button
-                    type="button"
-                    className="chain-entry-selector__link"
-                    onClick={handleBrandStepShowCatalogPicker}
-                    disabled={!editing}
-                  >
-                    Choose from approved brands instead (Path A)
-                  </button>
-                  <button
-                    type="button"
-                    className="chain-entry-selector__link"
-                    onClick={() => handleBrandStepStartOver(resolvedSelectedEntryId)}
-                    disabled={!editing}
-                  >
-                    Start over
-                  </button>
-                </div>
-              </>
-            ) : brandStepPathBLocked ? (
-              <>
-                <p className="chain-field__sublabel chain-entry-selector__intro">
-                  Path B in progress for “{activeEntryBrandValue}”. Finish this request, or change path with the
-                  actions below.
-                </p>
-                <div className="chain-selected-brand-row">
-                  <div className="chain-selected-brand-pill" aria-live="polite">
-                    {activeEntryBrandValue}
+                {activeEntryBrandValue ? (
+                  <div className="chain-selected-brand-row">
+                    <div className="chain-selected-brand-pill" aria-live="polite">
+                      {activeEntryBrandValue}
+                    </div>
                   </div>
-                </div>
+                ) : null}
                 <div className="chain-entry-selector__actions">
-                  <button
-                    type="button"
-                    className="chain-change-brand-btn"
-                    onClick={() => handleBrandStepChangeBrand(resolvedSelectedEntryId)}
-                    disabled={!editing}
-                  >
-                    Change brand
-                  </button>
                   <button
                     type="button"
                     className="chain-entry-selector__link"
@@ -1865,14 +1904,14 @@ export default function SupplierSupplyChainEntriesEditor({
                     onClick={() => handleBrandStepStartOver(resolvedSelectedEntryId)}
                     disabled={!editing}
                   >
-                    Start over
+                    Cancel setup
                   </button>
                 </div>
               </>
             ) : (
               <>
                 <label className="chain-field__label" htmlFor={`entry-selector-${sectionView}`}>
-                  Select approved brand (Path A)
+                  Path A — select approved brand
                 </label>
                 <BrandSelect
                   id={`entry-selector-${sectionView}`}
@@ -1880,19 +1919,19 @@ export default function SupplierSupplyChainEntriesEditor({
                   value={brandStepHasActiveDraft ? activeEntryBrandValue : ''}
                   onChange={handleBrandStepCatalogPick}
                   onSelectionModeChange={(mode) => {
-                    if (mode === 'other') {
-                      handleBrandStepOtherSelection();
-                    } else if (mode === 'catalog') {
+                    if (mode === 'catalog') {
                       setBrandStepOtherMode(false);
                       setBrandStepOtherExplicit(false);
+                      onBrandPathModeChange?.('pathA');
                     } else if (mode === 'empty') {
                       setBrandStepOtherMode(false);
                       setBrandStepOtherExplicit(false);
+                      onBrandPathModeChange?.(null);
                     }
                   }}
                   disabled={!editing}
                   required={false}
-                  allowOther
+                  allowOther={false}
                   source="catalog"
                   dropdownOnly
                   brands={catalogBrands}
@@ -1909,7 +1948,7 @@ export default function SupplierSupplyChainEntriesEditor({
                     onClick={handleBrandStepOtherSelection}
                     disabled={!editing}
                   >
-                    Request a new brand instead (Path B)
+                    Or use Path B — request a new brand
                   </button>
                 </div>
               </>

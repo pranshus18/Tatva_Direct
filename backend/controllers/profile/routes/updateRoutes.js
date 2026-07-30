@@ -118,6 +118,7 @@ export function registerProfileUpdateRoutes(router) {
       let brandApprovalRequested = false;
       let brandApprovalFailures = [];
       let brandAlreadyApproved = false;
+      let brandAlreadyPending = false;
       let pmSyncWarning = null;
 
       if (profileData.userType === 'service_provider') {
@@ -418,7 +419,8 @@ export function registerProfileUpdateRoutes(router) {
                 status: approval.brand?.status || null,
                 message: approval.message,
                 requestedAt: submittedAt,
-                submittedAt
+                submittedAt,
+                alreadyPending: approval.alreadyPending === true
               });
             }
           }
@@ -478,8 +480,16 @@ export function registerProfileUpdateRoutes(router) {
                 brands: nonApprovalErrors
               });
             }
-            brandApprovalRequested = true;
             brandApprovalFailures = brandFailures;
+            const allAlreadyPending = brandFailures.every(
+              (f) =>
+                String(f?.code || '') === 'brand_approval_pending' && f?.alreadyPending === true
+            );
+            if (allAlreadyPending) {
+              brandAlreadyPending = true;
+            } else {
+              brandApprovalRequested = true;
+            }
           } else {
             brandAlreadyApproved = true;
           }
@@ -883,7 +893,9 @@ export function registerProfileUpdateRoutes(router) {
       const profile = await createProfileResponse(finalUser);
       const payload = {
         status: 'success',
-        message: brandApprovalRequested
+        message: brandAlreadyPending
+          ? 'This brand request is already pending admin approval. Wait for admin to approve or reject it before submitting again.'
+          : brandApprovalRequested
           ? 'Brand request submitted for admin approval. It will appear in supplier catalog after admin approval.'
           : brandAlreadyApproved
             ? 'This brand is already approved by admin.'
@@ -898,6 +910,9 @@ export function registerProfileUpdateRoutes(router) {
       };
       if (brandApprovalRequested) {
         payload.brandApprovalRequested = true;
+      }
+      if (brandAlreadyPending) {
+        payload.brandAlreadyPending = true;
       }
       if (brandApprovalFailures.length > 0) {
         payload.brandApprovals = brandApprovalFailures;

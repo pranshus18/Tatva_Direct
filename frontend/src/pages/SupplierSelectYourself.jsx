@@ -7,7 +7,8 @@ import {
   brandKeyForDuplicateCheck,
   findApprovedCatalogBrandMatch,
   formatApprovedCatalogBrandMatchMessage,
-  validateUniqueBrandsAcrossEntries
+  validateUniqueBrandsAcrossEntries,
+  areBrandNamesExactDuplicates
 } from '../utils/supplierChainEntryValidation';
 import { validateSelectYourselfChainEntries } from '../utils/supplierSelectYourselfValidation';
 import {
@@ -32,9 +33,13 @@ import {
   buildBrandApprovalDetailsSignature,
   isBrandApprovalSaveBlockedForPendingRequests,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
+  BRAND_REQUEST_ALREADY_PENDING_MESSAGE,
+  listPendingBrandNamesBlockingSave,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
+import { resolveActiveBrandPath } from '../utils/supplierSelectYourselfPaths';
 import { formatDateTimeIST } from '../utils/dateTime';
+import { resolveRoleVerificationDocumentUrls } from '../utils/authorizationCertificateUrls';
 import './Profile.css';
 import './Dashboard.css';
 import './SupplierSelectYourself.css';
@@ -83,6 +88,8 @@ export default function SupplierSelectYourself() {
   const [brandApprovalSubmittedSignature, setBrandApprovalSubmittedSignature] = useState('');
   const [chainConfigNotice, setChainConfigNotice] = useState(null);
   const [requestingChainConfigBrand, setRequestingChainConfigBrand] = useState('');
+  /** null = choose path; pathA / pathB = mutually exclusive supplier scenarios */
+  const [brandPathMode, setBrandPathMode] = useState(null);
   const supplyChainSectionRef = useRef(null);
 
   const hasUnsavedChanges = useMemo(() => {
@@ -207,6 +214,40 @@ export default function SupplierSelectYourself() {
       extraPendingBrandNames: noticePendingNames
     });
   }, [profile, catalogBrands, brandApprovalSubmittedSignature, brandSubmissionNotice]);
+
+  const pendingBrandsBlockingSave = useMemo(() => {
+    const noticePendingNames =
+      brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
+        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+        : [];
+    return listPendingBrandNamesBlockingSave({
+      profile,
+      extraPendingBrandNames: noticePendingNames
+    });
+  }, [profile, brandSubmissionNotice]);
+
+  const brandSaveBlockedByPendingRequest =
+    brandSaveBlockedForPending && pendingBrandsBlockingSave.length > 0;
+
+  const brandSaveButtonLabel = useMemo(() => {
+    if (savingBrandApproval) return 'Saving…';
+    if (!brandSaveBlockedForPending) return 'Save brand';
+    if (brandSaveBlockedByPendingRequest) {
+      return 'Request already pending';
+    }
+    return 'Saved';
+  }, [
+    savingBrandApproval,
+    brandSaveBlockedForPending,
+    brandSaveBlockedByPendingRequest
+  ]);
+
+  const brandSaveButtonTitle = brandSaveBlockedForPending
+    ? brandSaveBlockedByPendingRequest
+      ? BRAND_REQUEST_ALREADY_PENDING_MESSAGE
+      : 'Brand setup is saved. Change the brand or documents to enable Save brand again.'
+    : undefined;
+
   const chainReadyBrandCount = useMemo(
     () => supplyChainSummaryRows.filter((row) => row.hasAdminSupplyChain).length,
     [supplyChainSummaryRows]
@@ -217,6 +258,12 @@ export default function SupplierSelectYourself() {
     () => supplyChainSummaryRows.find((row) => row.id === selectedAssignmentId) || null,
     [supplyChainSummaryRows, selectedAssignmentId]
   );
+
+  // Path A selection always wins for mutual exclusion while role setup is locked.
+  const activeBrandPath = resolveActiveBrandPath({
+    selectedAssignmentId,
+    brandPathMode
+  });
 
   useEffect(() => {
     if (supplyChainSummaryRows.length === 0) {
@@ -232,7 +279,19 @@ export default function SupplierSelectYourself() {
       supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId);
     if (selectionStillValid) return;
 
-    if (selectedAssignmentId) setSelectedAssignmentId('');
+    // Remap stale ids (legacy catalog-* / entry UUID) onto the stable brand-* row.
+    if (selectedAssignmentId) {
+      const staleKey = String(selectedAssignmentId).replace(/^(catalog-|brand-)/, '');
+      const remapped =
+        supplyChainSummaryRows.find((row) => row.id === `brand-${staleKey}`) ||
+        supplyChainSummaryRows.find((row) => String(row.entryId || '') === selectedAssignmentId) ||
+        null;
+      if (remapped?.id) {
+        setSelectedAssignmentId(remapped.id);
+        return;
+      }
+      setSelectedAssignmentId('');
+    }
   }, [supplyChainSummaryRows, selectedAssignmentId]);
 
   const selectedAssignmentChainState = useMemo(() => {
@@ -308,11 +367,13 @@ export default function SupplierSelectYourself() {
     // Discard must compare against the last saved editor state, not an approved-only
     // subset — otherwise the button stays active with no local edits.
     setBaseline(cloneProfileSnapshot(snapshot));
-    const hasPendingRequest = (Array.isArray(snapshot.supplierBrandRequests) ? snapshot.supplierBrandRequests : [])
-      .some((row) => String(row?.status || '').toLowerCase() === 'pending');
-    setBrandApprovalSubmittedSignature(
-      hasPendingRequest ? buildBrandApprovalDetailsSignature(snapshot, catalogBrands) : ''
+    const brandSignature = buildBrandApprovalDetailsSignature(snapshot, catalogBrands);
+    const hasConfiguredBrand = getCompanyInfoEntriesForSave(snapshot).some((entry) =>
+      String(entry?.brands || '').trim()
     );
+    // Treat the loaded brand-setup state as already saved so Save brand stays idle
+    // until the supplier changes a brand name or documents.
+    setBrandApprovalSubmittedSignature(hasConfiguredBrand ? brandSignature : '');
     return true;
   };
 
@@ -344,6 +405,16 @@ export default function SupplierSelectYourself() {
   useEffect(() => {
     fetchProfile();
   }, []);
+
+  // Catalog brands often load after profile. Refresh the idle Save-brand signature once
+  // catalog data arrives, but only when the supplier has not edited brand details locally.
+  useEffect(() => {
+    if (!profile || !baseline || catalogBrandsLoading) return;
+    const profileBrandSig = buildBrandApprovalDetailsSignature(profile, catalogBrands);
+    const baselineBrandSig = buildBrandApprovalDetailsSignature(baseline, catalogBrands);
+    if (!profileBrandSig || profileBrandSig !== baselineBrandSig) return;
+    setBrandApprovalSubmittedSignature((prev) => (prev === profileBrandSig ? prev : profileBrandSig));
+  }, [profile, baseline, catalogBrands, catalogBrandsLoading]);
 
   // Keep approved brands / role options fresh after admin approval in another session.
   useEffect(() => {
@@ -522,19 +593,18 @@ export default function SupplierSelectYourself() {
         return;
       }
 
+      const brandKey = brandKeyForDuplicateCheck(brandLabel);
       const assignmentRow =
         row?.id && supplyChainSummaryRows.some((item) => item.id === row.id)
           ? row
           : supplyChainSummaryRows.find(
-              (item) =>
-                brandKeyForDuplicateCheck(item.brand) === brandKeyForDuplicateCheck(brandLabel)
+              (item) => brandKeyForDuplicateCheck(item.brand) === brandKey
             ) || null;
-      if (assignmentRow?.id) {
-        setSelectedAssignmentId(assignmentRow.id);
-      } else {
-        // Entry exists locally; summary row may appear on next render — use entry id as fallback key.
-        setSelectedAssignmentId(entryId);
-      }
+      // Prefer stable brand-* summary id so selection survives entry creation.
+      const stableAssignmentId =
+        assignmentRow?.id || (brandKey ? `brand-${brandKey}` : '') || entryId;
+      setBrandPathMode('pathA');
+      setSelectedAssignmentId(stableAssignmentId);
       setFocusSupplyChainEntryId(entryId);
       window.requestAnimationFrame(() => {
         supplyChainSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -543,31 +613,118 @@ export default function SupplierSelectYourself() {
     [ensureBrandEntryForSupplyChain, supplyChainSummaryRows]
   );
 
-  const handleClearBrandSelection = useCallback(() => {
-    setSelectedAssignmentId('');
-    setFocusSupplyChainEntryId('');
-    setChainConfigNotice(null);
-  }, []);
+  const clearIncompleteBrandSetup = useCallback(
+    (brandLabel) => {
+      const label = String(brandLabel || '').trim();
+      if (!label || !profile) return null;
+
+      const brandKey = brandKeyForDuplicateCheck(label);
+      const baselineEntry =
+        approvedBaselineEntries.find(
+          (entry) => brandKeyForDuplicateCheck(entry?.brands) === brandKey
+        ) || null;
+      const baselineRole = String(baselineEntry?.role || '').trim();
+      const baselineComplete =
+        !!baselineRole && resolveRoleVerificationDocumentUrls(baselineEntry).length > 0;
+
+      const entries = getCompanyInfoEntriesForSave(profile).map((entry) => {
+        if (brandKeyForDuplicateCheck(entry?.brands) !== brandKey) return entry;
+
+        // Keep a previously approved completed assignment; only drop the incomplete draft.
+        if (baselineComplete) {
+          return {
+            ...entry,
+            ...baselineEntry,
+            id: entry.id || baselineEntry.id,
+            brands: baselineEntry.brands || label,
+            role: baselineEntry.role || '',
+            supplyChainRegistrationStarted: true
+          };
+        }
+
+        return {
+          ...entry,
+          brands: '',
+          role: '',
+          gstin: '',
+          companyName: '',
+          ownershipDetails: '',
+          minimumOrderValue: '',
+          authorizationCertificateUrl: '',
+          authorizationCertificateUrls: [],
+          supplyChainRegistrationStarted: false
+        };
+      });
+
+      const nextProfile = buildSupplierChainSavePayload(
+        profile,
+        syncBrandEntriesForSupplyChainStep(entries)
+      );
+      setProfile(nextProfile);
+      // Cancel/Change must not leave a dirty Save-brand state for an unchanged setup.
+      setBaseline(cloneProfileSnapshot(nextProfile));
+      const nextSignature = buildBrandApprovalDetailsSignature(nextProfile, catalogBrands);
+      const hasConfiguredBrand = getCompanyInfoEntriesForSave(nextProfile).some((entry) =>
+        String(entry?.brands || '').trim()
+      );
+      setBrandApprovalSubmittedSignature(hasConfiguredBrand ? nextSignature : '');
+      setBrandSubmissionNotice(null);
+      return nextProfile;
+    },
+    [approvedBaselineEntries, catalogBrands, profile]
+  );
+
+  const unlockBrandSelection = useCallback(
+    (brandLabel) => {
+      setSelectedAssignmentId('');
+      setFocusSupplyChainEntryId('');
+      setChainConfigNotice(null);
+      setBrandPathMode(null);
+      if (brandLabel) clearIncompleteBrandSetup(brandLabel);
+    },
+    [clearIncompleteBrandSetup]
+  );
 
   const handleChangeSelectedAssignment = useCallback(() => {
     const brandLabel = String(selectedAssignment?.brand || '').trim();
-    setSelectedAssignmentId('');
-    setFocusSupplyChainEntryId('');
-    setChainConfigNotice(null);
-    if (!brandLabel || !profile) return;
+    const hasIncompleteDraft =
+      !!brandLabel &&
+      (!selectedAssignment?.hasRole || !selectedAssignment?.hasRoleDocuments);
 
-    const brandKey = brandKeyForDuplicateCheck(brandLabel);
-    const entries = getCompanyInfoEntriesForSave(profile).map((entry) => {
-      if (brandKeyForDuplicateCheck(entry?.brands) !== brandKey) return entry;
-      return { ...entry, brands: '', role: '' };
-    });
-    setProfile(
-      buildSupplierChainSavePayload(profile, syncBrandEntriesForSupplyChainStep(entries))
+    if (hasIncompleteDraft) {
+      const confirmed = window.confirm(
+        'Change brand?\n\nThis cancels the current supply-chain setup for the selected brand and clears its incomplete role details before you pick another brand.'
+      );
+      if (!confirmed) return;
+    }
+
+    unlockBrandSelection(brandLabel);
+  }, [selectedAssignment, unlockBrandSelection]);
+
+  const handleCancelBrandSetup = useCallback(() => {
+    const brandLabel = String(selectedAssignment?.brand || '').trim();
+    const confirmed = window.confirm(
+      'Cancel setup?\n\nThis clears the selected brand and its incomplete supply-chain role details so you can start again.'
     );
-  }, [profile, selectedAssignment?.brand]);
+    if (!confirmed) return;
+    unlockBrandSelection(brandLabel);
+  }, [selectedAssignment?.brand, unlockBrandSelection]);
+
+  const handleBrandSelectionClearedFromEditor = useCallback(() => {
+    const brandLabel = String(selectedAssignment?.brand || '').trim();
+    unlockBrandSelection(brandLabel);
+  }, [selectedAssignment?.brand, unlockBrandSelection]);
 
   const handleAssignmentBrandChange = (event) => {
+    if (selectedAssignmentId) return;
     const nextId = event.target.value;
+    if (!nextId) {
+      setSelectedAssignmentId('');
+      setBrandPathMode(null);
+      setFocusSupplyChainEntryId('');
+      return;
+    }
+    setBrandPathMode('pathA');
     setSelectedAssignmentId(nextId);
     setChainConfigNotice(null);
     const nextRow = supplyChainSummaryRows.find((row) => row.id === nextId);
@@ -590,6 +747,10 @@ export default function SupplierSelectYourself() {
     const entryId = ensureBrandEntryForSupplyChain(nextRow.brand);
     setFocusSupplyChainEntryId(entryId || '');
   };
+
+  const handleBrandPathModeChange = useCallback((mode) => {
+    setBrandPathMode(mode === 'pathA' || mode === 'pathB' ? mode : null);
+  }, []);
 
   const handleBrandPickedWithoutRole = useCallback(
     (brandName) => {
@@ -643,7 +804,8 @@ export default function SupplierSelectYourself() {
       alert(BRAND_REQUIRED_BEFORE_SAVE_MESSAGE);
       setBrandSectionExpanded(true);
       return;
-    }    const selectedBrandState = assignmentChainInfo.data?.brands?.find(
+    }
+    const selectedBrandState = assignmentChainInfo.data?.brands?.find(
       (row) =>
         brandKeyForDuplicateCheck(row?.brand || row?.normalizedBrand) ===
         brandKeyForDuplicateCheck(selectedBrand)
@@ -753,17 +915,35 @@ export default function SupplierSelectYourself() {
 
   const handleSaveBrandApproval = async () => {
     if (!profile || savingBrandApproval || discarding || !!savingEntryId) return;
+    // Path A uses an already-approved brand — brand-request save is Path B only.
+    if (activeBrandPath === 'pathA') return;
+    const noticePendingNames =
+      brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
+        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+        : [];
     if (
       isBrandApprovalSaveBlockedForPendingRequests({
         profile,
         catalogBrands,
         submittedSignature: brandApprovalSubmittedSignature,
-        extraPendingBrandNames:
-          brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
-            ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
-            : []
+        extraPendingBrandNames: noticePendingNames
       })
     ) {
+      const pendingNames = listPendingBrandNamesBlockingSave({
+        profile,
+        extraPendingBrandNames: noticePendingNames
+      });
+      if (pendingNames.length > 0) {
+        const brandLabel =
+          pendingNames.length === 1
+            ? `"${pendingNames[0]}"`
+            : `${pendingNames.length} brand requests`;
+        alert(
+          pendingNames.length === 1
+            ? `Brand request for ${brandLabel} is already pending admin approval. Wait for admin to approve or reject it before submitting again.`
+            : `${brandLabel} are already pending admin approval. Wait for admin to approve or reject them before submitting again.`
+        );
+      }
       return;
     }
 
@@ -800,7 +980,7 @@ export default function SupplierSelectYourself() {
       const isLiteralCatalogPick = (Array.isArray(catalogBrands) ? catalogBrands : []).some(
         (item) => {
           const name = typeof item === 'string' ? item : item?.name;
-          return String(name || '').trim().toLowerCase() === brandName.toLowerCase();
+          return areBrandNamesExactDuplicates(name, brandName);
         }
       );
       if (isLiteralCatalogPick) continue;
@@ -882,21 +1062,22 @@ export default function SupplierSelectYourself() {
           ...approvalFailureRows
         ]);
         const brandKey = brandKeyForDuplicateCheck(brandName);
+        const requestStatus = String(request?.status || '').toLowerCase();
+        // Only treat as approved when brands-table / admin approved catalog says so.
+        // Never default Path B saves to approved from UI heuristics alone.
         const alreadyApproved =
-          (brandKey &&
-            (approvedCatalogKeys.has(brandKey) ||
-              adminApprovedKeys.has(brandKey) ||
-              effectiveApprovedBrands.some(
-                (row) => brandKeyForDuplicateCheck(row?.name) === brandKey
-              ))) ||
-          String(request?.status || '').toLowerCase() === 'approved';
-        // Prefer real request status; never default catalog-approved brands to pending.
-        const status = alreadyApproved
-          ? 'approved'
-          : String(
-              request?.status ||
-                (data.brandApprovalRequested || approvalFailureRows.length > 0 ? 'pending' : 'approved')
-            ).toLowerCase();
+          requestStatus === 'approved' ||
+          (brandKey && (approvedCatalogKeys.has(brandKey) || adminApprovedKeys.has(brandKey)));
+        let status = 'pending';
+        if (alreadyApproved) {
+          status = 'approved';
+        } else if (requestStatus === 'pending' || requestStatus === 'rejected') {
+          status = requestStatus;
+        } else if (data.brandApprovalRequested || approvalFailureRows.length > 0) {
+          status = 'pending';
+        } else if (data.brandAlreadyApproved) {
+          status = 'approved';
+        }
         return {
           name: brandName,
           status,
@@ -909,44 +1090,100 @@ export default function SupplierSelectYourself() {
       const pendingRows = submittedRows.filter((row) => row.status === 'pending');
       const approvedRows = submittedRows.filter((row) => row.status === 'approved');
 
+      // Always merge submitted request outcomes into profile so Brand status cannot stay
+      // on "Ready to submit" while the page notice says pending/already approved.
       const profileWithRequests = mergeSupplierBrandRequestsIntoProfile(
         nextProfile || profile,
         [
           ...requestSource,
           ...approvalFailureRows,
-          ...pendingRows
+          ...pendingRows,
+          ...approvedRows.map((row) => ({
+            name: row.name,
+            status: 'approved',
+            submittedAt: row.submittedAt || null,
+            requestedAt: row.submittedAt || null
+          }))
         ]
       );
 
       if (!applyProfileFromResponse(profileWithRequests)) {
         const fetched = await fetchProfile();
-        if (fetched && pendingRows.length > 0) {
-          setProfile((prev) => mergeSupplierBrandRequestsIntoProfile(prev, pendingRows));
+        if (fetched && (pendingRows.length > 0 || approvedRows.length > 0 || approvalFailureRows.length > 0)) {
+          setProfile((prev) =>
+            mergeSupplierBrandRequestsIntoProfile(prev, [
+              ...approvalFailureRows,
+              ...pendingRows,
+              ...approvedRows.map((row) => ({
+                name: row.name,
+                status: 'approved',
+                submittedAt: row.submittedAt || null,
+                requestedAt: row.submittedAt || null
+              }))
+            ])
+          );
         }
-      } else if (pendingRows.length > 0 || approvalFailureRows.length > 0) {
-        // Ensure Brand status flips to pending even if API profile omitted the request row.
+      } else if (pendingRows.length > 0 || approvedRows.length > 0 || approvalFailureRows.length > 0) {
+        // Ensure Brand status flips even if API profile omitted the request row.
         setProfile((prev) =>
           mergeSupplierBrandRequestsIntoProfile(prev, [
             ...approvalFailureRows,
-            ...pendingRows
+            ...pendingRows,
+            ...approvedRows.map((row) => ({
+              name: row.name,
+              status: 'approved',
+              submittedAt: row.submittedAt || null,
+              requestedAt: row.submittedAt || null
+            }))
           ])
         );
       }
 
       // API flags win when the server already classified this save.
-      if (data.brandAlreadyApproved && pendingRows.length === 0) {
+      // "Already approved" only when the brand is truly in the approved catalog / brands table.
+      const savedBrandSignature = buildBrandApprovalDetailsSignature(
+        profileWithRequests || nextProfile || profile,
+        catalogBrands
+      );
+      if (data.brandAlreadyPending) {
+        setBrandPathMode('pathB');
+        const alreadyPendingRows =
+          pendingRows.length > 0
+            ? pendingRows
+            : brandsBeingSaved.map((name) => ({
+                name,
+                status: 'pending',
+                submittedAt: new Date().toISOString()
+              }));
+        setBrandSubmissionNotice({
+          tone: 'pending',
+          title:
+            alreadyPendingRows.length === 1
+              ? `Brand request for "${alreadyPendingRows[0].name}" is already pending`
+              : 'Brand request already pending admin approval',
+          brands: alreadyPendingRows,
+          submittedAt:
+            alreadyPendingRows.find((row) => row.submittedAt)?.submittedAt || new Date().toISOString(),
+          message: data.message || BRAND_REQUEST_ALREADY_PENDING_MESSAGE
+        });
+        setBrandSectionExpanded(true);
+        setBrandApprovalSubmittedSignature(savedBrandSignature);
+      } else if (data.brandAlreadyApproved && pendingRows.length === 0 && approvedRows.length > 0) {
+        setBrandPathMode('pathA');
         setBrandSubmissionNotice({
           tone: 'success',
           title: approvedRows.length === 1
             ? `"${approvedRows[0].name}" is already approved`
             : 'Selected brands are already approved',
-          brands: approvedRows.length > 0 ? approvedRows : submittedRows,
+          brands: approvedRows,
           submittedAt: null,
           message:
             data.message ||
             'Path A: this brand is already approved by admin. You can continue with supply-chain role selection below.'
         });
+        setBrandApprovalSubmittedSignature(savedBrandSignature);
       } else if (data.brandApprovalRequested || pendingRows.length > 0) {
+        setBrandPathMode('pathB');
         const rowsForNotice = pendingRows.length > 0 ? pendingRows : submittedRows;
         const submittedAt =
           rowsForNotice.find((row) => row.submittedAt)?.submittedAt || new Date().toISOString();
@@ -957,7 +1194,7 @@ export default function SupplierSelectYourself() {
             : `${rowsForNotice.length} brand requests submitted`,
           brands: rowsForNotice,
           submittedAt,
-              message:
+          message:
             data.message ||
             (rowsForNotice.length === 1
               ? 'Path B: your brand request was sent for admin approval. After it is approved, select it and configure your supply-chain role below.'
@@ -983,14 +1220,19 @@ export default function SupplierSelectYourself() {
           submittedAt: approvedRows.find((row) => row.submittedAt)?.submittedAt || null,
           message: 'Path A: these brands are ready for supply-chain role selection below.'
         });
+        setBrandApprovalSubmittedSignature(savedBrandSignature);
       } else {
         setBrandSubmissionNotice({
-          tone: 'success',
-          title: 'Brand saved',
+          tone: 'pending',
+          title: 'Brand request submitted',
           brands: submittedRows,
           submittedAt: new Date().toISOString(),
-          message: data.message || 'Brand saved. Supply-chain role setup is ready below.'
+          message:
+            data.message ||
+            'Your brand was submitted for admin approval. It will appear in Path A after an admin approves it.'
         });
+        setBrandSectionExpanded(true);
+        setBrandApprovalSubmittedSignature(savedBrandSignature);
       }
     } catch (e) {
       console.error('Failed to save brand approval:', e);
@@ -1074,39 +1316,65 @@ export default function SupplierSelectYourself() {
           </div>
         ) : null}
 
-        <div
-          className={`supplier-select-flow-card${
-            selectedAssignmentId ? ' supplier-select-flow-card--inactive' : ''
-          }`}
-          aria-label="Two ways to set up your brand"
-        >
-          <div className="supplier-select-flow-card__step supplier-select-flow-card__step--primary">
-            <span className="supplier-select-flow-card__badge supplier-select-flow-card__badge--primary">
-              Path A
-            </span>
-            <div className="supplier-select-flow-card__copy">
-              <strong>Use an approved brand</strong>
-              <span>Select from the approved list, then choose your supply-chain role.</span>
+        {activeBrandPath === 'pathA' ? (
+          <div className="supplier-select-flow-card supplier-select-flow-card--active-path" role="status">
+            <div className="supplier-select-flow-card__step supplier-select-flow-card__step--primary">
+              <span className="supplier-select-flow-card__badge supplier-select-flow-card__badge--primary">
+                Path A active
+              </span>
+              <div className="supplier-select-flow-card__copy">
+                <strong>Using approved brand{selectedAssignment?.brand ? `: ${selectedAssignment.brand}` : ''}</strong>
+                <span>
+                  Path B is hidden while this setup is in progress. Use Change brand or Cancel setup to choose a
+                  different scenario.
+                </span>
+              </div>
             </div>
           </div>
-          <div className="supplier-select-flow-card__divider" aria-hidden>
-            or
-          </div>
-          <div className="supplier-select-flow-card__step">
-            <span className="supplier-select-flow-card__badge">Path B</span>
-            <div className="supplier-select-flow-card__copy">
-              <strong>Request a new brand</strong>
-              <span>If your brand is unlisted, request approval. Configure your role after admin approves it.</span>
+        ) : activeBrandPath === 'pathB' ? (
+          <div className="supplier-select-flow-card supplier-select-flow-card--active-path" role="status">
+            <div className="supplier-select-flow-card__step">
+              <span className="supplier-select-flow-card__badge">Path B active</span>
+              <div className="supplier-select-flow-card__copy">
+                <strong>Requesting a new brand</strong>
+                <span>
+                  Path A is hidden while this request is in progress. Use Switch to Path A or Cancel setup to choose a
+                  different scenario.
+                </span>
+              </div>
             </div>
           </div>
-        </div>
+        ) : (
+          <div className="supplier-select-flow-card" aria-label="Choose one supplier scenario">
+            <div className="supplier-select-flow-card__step supplier-select-flow-card__step--primary">
+              <span className="supplier-select-flow-card__badge supplier-select-flow-card__badge--primary">
+                Path A
+              </span>
+              <div className="supplier-select-flow-card__copy">
+                <strong>Use an approved brand</strong>
+                <span>Select from the approved list, then choose your supply-chain role.</span>
+              </div>
+            </div>
+            <div className="supplier-select-flow-card__divider" aria-hidden>
+              or
+            </div>
+            <div className="supplier-select-flow-card__step">
+              <span className="supplier-select-flow-card__badge">Path B</span>
+              <div className="supplier-select-flow-card__copy">
+                <strong>Request a new brand</strong>
+                <span>If your brand is unlisted, request approval. Configure your role after admin approves it.</span>
+              </div>
+            </div>
+          </div>
+        )}
 
-        {supplyChainSummaryRows.length > 0 ? (
+        {supplyChainSummaryRows.length > 0 && activeBrandPath !== 'pathB' ? (
           <div className="supplier-select-assignments" aria-label="Your supply chain by brand">
             <strong>Approved brands ({approvedBrandCount})</strong>
             <p className="supplier-select-assignments__hint">
-              Path A: these are the same admin-approved brands from the catalog. Brands marked “supply chain ready”
-              already have roles you can select below.
+              {activeBrandPath === 'pathA'
+                ? 'Path A is locked for this brand. Finish role setup below, or use Change brand / Cancel setup to leave Path A.'
+                : 'Path A: pick one approved brand to continue. After you select it, Path B stays hidden until you cancel this setup.'}
             </p>
             {selectedAssignment ? (
               <div className="supplier-select-assignments__locked" role="status">
@@ -1123,18 +1391,9 @@ export default function SupplierSelectYourself() {
                     <button
                       type="button"
                       className="supplier-select-assignments__change-btn supplier-select-assignments__change-btn--ghost"
-                      onClick={() => {
-                        if (
-                          !window.confirm(
-                            'Clear the selected brand and start over?\n\nYou can then choose Path A (approved brand) or Path B (request a new brand).'
-                          )
-                        ) {
-                          return;
-                        }
-                        handleChangeSelectedAssignment();
-                      }}
+                      onClick={handleCancelBrandSetup}
                     >
-                      Start over
+                      Cancel setup
                     </button>
                   </div>
                 </div>
@@ -1275,7 +1534,11 @@ export default function SupplierSelectYourself() {
           <div className="supplier-select-section__head">
             <h2>
               <span className="supplier-select-section__label">Brand setup</span>
-              Select or request a brand
+              {activeBrandPath === 'pathA'
+                ? 'Path A — approved brand'
+                : activeBrandPath === 'pathB'
+                  ? 'Path B — request a new brand'
+                  : 'Select or request a brand'}
             </h2>
             <div className="supplier-select-section__head-actions">
               <button
@@ -1285,46 +1548,45 @@ export default function SupplierSelectYourself() {
               >
                 {brandSectionExpanded ? 'Collapse' : 'Expand'}
               </button>
-              <button
-                type="button"
-                className="btn-primary supplier-select-section__save-btn"
-                onClick={handleSaveBrandApproval}
-                disabled={
-                  savingBrandApproval ||
-                  !!savingEntryId ||
-                  discarding ||
-                  brandSaveBlockedForPending
-                }
-                title={
-                  brandSaveBlockedForPending
-                    ? 'Brand request already submitted. Change the brand name or documents to enable Save brand again, or wait for admin approval.'
-                    : undefined
-                }
-              >
-                {savingBrandApproval
-                  ? 'Saving…'
-                  : brandSaveBlockedForPending
-                    ? 'Request submitted'
-                    : 'Save brand'}
-              </button>
+              {activeBrandPath !== 'pathA' ? (
+                <button
+                  type="button"
+                  className="btn-primary supplier-select-section__save-btn"
+                  onClick={handleSaveBrandApproval}
+                  disabled={
+                    savingBrandApproval ||
+                    !!savingEntryId ||
+                    discarding ||
+                    brandSaveBlockedForPending
+                  }
+                  title={brandSaveButtonTitle}
+                >
+                  {brandSaveButtonLabel}
+                </button>
+              ) : null}
             </div>
           </div>
           <p className="supplier-select-section__intro">
-            {selectedAssignmentId ? (
+            {activeBrandPath === 'pathA' ? (
               <>
-                An approved brand is selected for this setup. Continue with role configuration below. Use{' '}
-                <strong>Change brand</strong> or <strong>Start over</strong> above if you need a different brand.
+                <strong>Path A in progress.</strong> Continue with role configuration for the selected approved brand
+                below. Path B is hidden until you use <strong>Change brand</strong> or <strong>Cancel setup</strong>.
+              </>
+            ) : activeBrandPath === 'pathB' ? (
+              <>
+                <strong>Path B in progress.</strong> Enter the new brand name and upload documents, then save for admin
+                approval. Path A is hidden until you switch or cancel this request.
               </>
             ) : (
               <>
-                <strong>Path A (recommended):</strong> pick an already-approved brand from the list.
-                <strong> Path B (optional):</strong> if your brand is not listed, use{' '}
-                <strong>Request a new brand instead</strong> — after admin approval you can configure your role below.
+                Choose <strong>one</strong> scenario:{' '}
+                <strong>Path A</strong> — pick an already-approved brand, or <strong>Path B</strong> — request a new
+                brand if it is not listed. The other path stays hidden once you start.
               </>
             )}
           </p>
 
-          {catalogBrandsError ? (
+          {catalogBrandsError && activeBrandPath !== 'pathB' ? (
             <div className="supplier-select-alert supplier-select-alert--rejected" role="alert">
               <strong>Could not load approved brands</strong>
               <p>
@@ -1336,7 +1598,10 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {!catalogBrandsLoading && !catalogBrandsError && catalogBrandNames.length === 0 ? (
+          {!catalogBrandsLoading &&
+          !catalogBrandsError &&
+          catalogBrandNames.length === 0 &&
+          activeBrandPath !== 'pathA' ? (
             <div className="supplier-select-alert supplier-select-alert--draft" role="status">
               <strong>No approved brands in the catalog yet</strong>
               <p>
@@ -1349,7 +1614,19 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {brandSubmissionNotice ? (
+          {brandSaveBlockedByPendingRequest ? (
+            <div className="supplier-select-alert supplier-select-alert--pending" role="status">
+              <strong>Brand request already pending admin approval</strong>
+              <p>
+                {pendingBrandsBlockingSave.length === 1
+                  ? `“${pendingBrandsBlockingSave[0]}” was already submitted. Save brand stays disabled until an admin approves or rejects it. Use Change brand / Cancel setup to pick a different brand.`
+                  : `${pendingBrandsBlockingSave.length} brand requests are already pending. Save brand stays disabled until an admin approves or rejects them.`}
+              </p>
+            </div>
+          ) : null}
+
+          {brandSubmissionNotice &&
+          !(activeBrandPath === 'pathA' && brandSubmissionNotice.tone === 'pending') ? (
             <div
               className={`supplier-select-alert supplier-select-alert--${
                 brandSubmissionNotice.tone === 'success' ? 'draft' : 'pending'
@@ -1389,7 +1666,7 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {!brandSubmissionNotice && pendingBrandRequests.length > 0 ? (
+          {!brandSubmissionNotice && pendingBrandRequests.length > 0 && activeBrandPath !== 'pathA' ? (
             <div className="supplier-select-alert supplier-select-alert--pending" role="status">
               <strong>
                 {pendingBrandRequests.length === 1
@@ -1424,7 +1701,10 @@ export default function SupplierSelectYourself() {
               showAddEntry={false}
               approvedBaselineEntries={approvedBaselineEntries}
               onBrandPickedWithoutRole={handleBrandPickedWithoutRole}
-              onBrandSelectionCleared={handleClearBrandSelection}
+              onBrandSelectionCleared={handleBrandSelectionClearedFromEditor}
+              lockedBrandName={selectedAssignment?.brand || ''}
+              brandPathMode={activeBrandPath}
+              onBrandPathModeChange={handleBrandPathModeChange}
               startInNewBrandMode={false}
               supplierApprovedBrands={effectiveApprovedBrands}
               supplierBrandRequests={profile?.supplierBrandRequests || []}
@@ -1475,14 +1755,18 @@ export default function SupplierSelectYourself() {
           {!selectedAssignmentId ? (
             <div className="supplier-select-alert supplier-select-alert--draft">
               <strong>
-                {supplyChainSummaryRows.length === 0
-                  ? 'No approved brands ready yet'
-                  : 'Select an approved brand to continue'}
+                {activeBrandPath === 'pathB'
+                  ? 'Finish Path B brand request first'
+                  : supplyChainSummaryRows.length === 0
+                    ? 'No approved brands ready yet'
+                    : 'Select an approved brand to continue'}
               </strong>
               <p>
-                {supplyChainSummaryRows.length === 0
-                  ? 'Select an approved brand in Path A above, or request a new brand (Path B) and wait for admin approval. Once the brand is approved, choose your supply-chain role here.'
-                  : 'Pick any brand from Your approved brands above. If admin has defined its supply chain, your role options appear here automatically.'}
+                {activeBrandPath === 'pathB'
+                  ? 'Path A role setup stays hidden while you request a new brand. After admin approves it, select that brand and configure your supply-chain role here.'
+                  : supplyChainSummaryRows.length === 0
+                    ? 'Select an approved brand in Path A above, or request a new brand (Path B) and wait for admin approval. Once the brand is approved, choose your supply-chain role here.'
+                    : 'Pick any brand from Your approved brands above. If admin has defined its supply chain, your role options appear here automatically.'}
               </p>
             </div>
           ) : null}
