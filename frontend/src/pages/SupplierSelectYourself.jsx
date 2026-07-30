@@ -543,6 +543,29 @@ export default function SupplierSelectYourself() {
     [ensureBrandEntryForSupplyChain, supplyChainSummaryRows]
   );
 
+  const handleClearBrandSelection = useCallback(() => {
+    setSelectedAssignmentId('');
+    setFocusSupplyChainEntryId('');
+    setChainConfigNotice(null);
+  }, []);
+
+  const handleChangeSelectedAssignment = useCallback(() => {
+    const brandLabel = String(selectedAssignment?.brand || '').trim();
+    setSelectedAssignmentId('');
+    setFocusSupplyChainEntryId('');
+    setChainConfigNotice(null);
+    if (!brandLabel || !profile) return;
+
+    const brandKey = brandKeyForDuplicateCheck(brandLabel);
+    const entries = getCompanyInfoEntriesForSave(profile).map((entry) => {
+      if (brandKeyForDuplicateCheck(entry?.brands) !== brandKey) return entry;
+      return { ...entry, brands: '', role: '' };
+    });
+    setProfile(
+      buildSupplierChainSavePayload(profile, syncBrandEntriesForSupplyChainStep(entries))
+    );
+  }, [profile, selectedAssignment?.brand]);
+
   const handleAssignmentBrandChange = (event) => {
     const nextId = event.target.value;
     setSelectedAssignmentId(nextId);
@@ -572,9 +595,7 @@ export default function SupplierSelectYourself() {
     (brandName) => {
       const label = String(brandName || '').trim();
       if (!label) return;
-      if (hasEffectiveRoleForBrand(label)) return;
-      // Suppliers never create supply-chain roles — only select admin-configured ones.
-      // Navigate to role setup so the form can show role options or the admin-wait message.
+      // Path A selection always proceeds to role setup for that brand (locked until Change brand / Start over).
       navigateToAddRole(label);
       if (!brandHasAdminConfiguredRoles(label)) {
         setChainConfigNotice({
@@ -587,7 +608,7 @@ export default function SupplierSelectYourself() {
         setChainConfigNotice(null);
       }
     },
-    [brandHasAdminConfiguredRoles, hasEffectiveRoleForBrand, navigateToAddRole]
+    [brandHasAdminConfiguredRoles, navigateToAddRole]
   );
 
   const handleFocusEntryHandled = useCallback(() => {
@@ -1053,7 +1074,12 @@ export default function SupplierSelectYourself() {
           </div>
         ) : null}
 
-        <div className="supplier-select-flow-card" aria-label="Two ways to set up your brand">
+        <div
+          className={`supplier-select-flow-card${
+            selectedAssignmentId ? ' supplier-select-flow-card--inactive' : ''
+          }`}
+          aria-label="Two ways to set up your brand"
+        >
           <div className="supplier-select-flow-card__step supplier-select-flow-card__step--primary">
             <span className="supplier-select-flow-card__badge supplier-select-flow-card__badge--primary">
               Path A
@@ -1082,104 +1108,135 @@ export default function SupplierSelectYourself() {
               Path A: these are the same admin-approved brands from the catalog. Brands marked “supply chain ready”
               already have roles you can select below.
             </p>
-            <div className="supplier-select-assignments__picker">
-              <label className="supplier-select-assignments__picker-label" htmlFor="assignment-brand-select">
-                Select approved brand
-              </label>
-              <select
-                id="assignment-brand-select"
-                className="supplier-select-assignments__picker-select"
-                value={selectedAssignmentId}
-                onChange={handleAssignmentBrandChange}
-              >
-                <option value="">Select approved brand</option>
-                {supplyChainSummaryRows.map((row) => (
-                  <option key={row.id} value={row.id}>
-                    {row.brand}
-                    {row.hasAdminSupplyChain ? ' — supply chain ready' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
             {selectedAssignment ? (
-              <div className="supplier-select-assignments__detail">
-                <div className="supplier-select-assignments__detail-row">
-                  <span className="supplier-select-assignments__detail-label">Brand</span>
-                  <span className="supplier-select-assignments__detail-value">{selectedAssignment.brand}</span>
-                </div>
-                <div className="supplier-select-assignments__detail-row">
-                  <span className="supplier-select-assignments__detail-label">Your role in supply chain</span>
-                  <span
-                    className={`supplier-select-assignments__role${
-                      selectedAssignment.hasRole ? '' : ' supplier-select-assignments__role--pending'
-                    }`}
-                  >
-                    {selectedAssignment.roleLabel}
-                  </span>
-                </div>
-                <div className="supplier-select-assignments__detail-row">
-                  <span className="supplier-select-assignments__detail-label">Admin supply chain</span>
-                  {assignmentChainInfo.loading ? (
-                    <span className="supplier-select-assignments__chain-hint">Loading…</span>
-                  ) : selectedAssignmentHasAdminChain ? (
-                    <span className="supplier-select-assignments__chain-value">
-                      {(selectedAssignmentChainState?.roles || [])
-                        .map((role) => formatSupplyChainRoleLabel(role))
-                        .join(' → ') || 'Defined by admin'}
-                    </span>
-                  ) : (
-                    <span className="supplier-select-assignments__chain-hint supplier-select-assignments__chain-hint--missing">
-                      Not defined by admin yet
-                    </span>
-                  )}
-                </div>
-                <div className="supplier-select-assignments__detail-row">
-                  <span className="supplier-select-assignments__detail-label">Status</span>
-                  {selectedAssignment.hasRole && selectedAssignment.hasRoleDocuments ? (
-                    <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
-                      Complete
-                    </span>
-                  ) : !selectedAssignmentHasAdminChain && !assignmentChainInfo.loading ? (
-                    <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
-                      Waiting for admin
-                    </span>
-                  ) : selectedAssignment.hasRole ? (
-                    <span className="supplier-select-assignments__status supplier-select-assignments__status--draft">
-                      Add documents
-                    </span>
-                  ) : (
-                    <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
-                      Select role
-                    </span>
-                  )}
-                </div>
-                {!assignmentChainInfo.loading && !selectedAssignmentHasAdminChain ? (
-                  <div className="supplier-select-alert supplier-select-alert--pending" role="status">
-                    <strong>No supply-chain roles configured</strong>
-                    <p>{SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}</p>
+              <div className="supplier-select-assignments__locked" role="status">
+                <div className="supplier-select-assignments__locked-head">
+                  <span className="supplier-select-assignments__picker-label">Selected approved brand</span>
+                  <div className="supplier-select-assignments__locked-actions">
                     <button
                       type="button"
-                      className="supplier-select-alert__dismiss"
-                      disabled={requestingChainConfigBrand === selectedAssignment.brand}
-                      onClick={async () => {
-                        setRequestingChainConfigBrand(selectedAssignment.brand);
-                        const result = await requestChainConfigurationForBrand(selectedAssignment.brand);
-                        setRequestingChainConfigBrand('');
-                        setChainConfigNotice({
-                          brand: selectedAssignment.brand,
-                          tone: result.ok ? 'success' : 'warning',
-                          message: result.message
-                        });
+                      className="supplier-select-assignments__change-btn"
+                      onClick={handleChangeSelectedAssignment}
+                    >
+                      Change brand
+                    </button>
+                    <button
+                      type="button"
+                      className="supplier-select-assignments__change-btn supplier-select-assignments__change-btn--ghost"
+                      onClick={() => {
+                        if (
+                          !window.confirm(
+                            'Clear the selected brand and start over?\n\nYou can then choose Path A (approved brand) or Path B (request a new brand).'
+                          )
+                        ) {
+                          return;
+                        }
+                        handleChangeSelectedAssignment();
                       }}
                     >
-                      {requestingChainConfigBrand === selectedAssignment.brand
-                        ? 'Notifying admin…'
-                        : 'Request Role Configuration'}
+                      Start over
                     </button>
                   </div>
-                ) : null}
+                </div>
+                <div className="supplier-select-assignments__detail">
+                  <div className="supplier-select-assignments__detail-row">
+                    <span className="supplier-select-assignments__detail-label">Brand</span>
+                    <span className="supplier-select-assignments__detail-value">{selectedAssignment.brand}</span>
+                  </div>
+                  <div className="supplier-select-assignments__detail-row">
+                    <span className="supplier-select-assignments__detail-label">Your role in supply chain</span>
+                    <span
+                      className={`supplier-select-assignments__role${
+                        selectedAssignment.hasRole ? '' : ' supplier-select-assignments__role--pending'
+                      }`}
+                    >
+                      {selectedAssignment.roleLabel}
+                    </span>
+                  </div>
+                  <div className="supplier-select-assignments__detail-row">
+                    <span className="supplier-select-assignments__detail-label">Admin supply chain</span>
+                    {assignmentChainInfo.loading ? (
+                      <span className="supplier-select-assignments__chain-hint">Loading…</span>
+                    ) : selectedAssignmentHasAdminChain ? (
+                      <span className="supplier-select-assignments__chain-value">
+                        {(selectedAssignmentChainState?.roles || [])
+                          .map((role) => formatSupplyChainRoleLabel(role))
+                          .join(' → ') || 'Defined by admin'}
+                      </span>
+                    ) : (
+                      <span className="supplier-select-assignments__chain-hint supplier-select-assignments__chain-hint--missing">
+                        Not defined by admin yet
+                      </span>
+                    )}
+                  </div>
+                  <div className="supplier-select-assignments__detail-row">
+                    <span className="supplier-select-assignments__detail-label">Status</span>
+                    {selectedAssignment.hasRole && selectedAssignment.hasRoleDocuments ? (
+                      <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
+                        Complete
+                      </span>
+                    ) : !selectedAssignmentHasAdminChain && !assignmentChainInfo.loading ? (
+                      <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
+                        Waiting for admin
+                      </span>
+                    ) : selectedAssignment.hasRole ? (
+                      <span className="supplier-select-assignments__status supplier-select-assignments__status--draft">
+                        Add documents
+                      </span>
+                    ) : (
+                      <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
+                        Select role
+                      </span>
+                    )}
+                  </div>
+                  {!assignmentChainInfo.loading && !selectedAssignmentHasAdminChain ? (
+                    <div className="supplier-select-alert supplier-select-alert--pending" role="status">
+                      <strong>No supply-chain roles configured</strong>
+                      <p>{SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}</p>
+                      <button
+                        type="button"
+                        className="supplier-select-alert__dismiss"
+                        disabled={requestingChainConfigBrand === selectedAssignment.brand}
+                        onClick={async () => {
+                          setRequestingChainConfigBrand(selectedAssignment.brand);
+                          const result = await requestChainConfigurationForBrand(selectedAssignment.brand);
+                          setRequestingChainConfigBrand('');
+                          setChainConfigNotice({
+                            brand: selectedAssignment.brand,
+                            tone: result.ok ? 'success' : 'warning',
+                            message: result.message
+                          });
+                        }}
+                      >
+                        {requestingChainConfigBrand === selectedAssignment.brand
+                          ? 'Notifying admin…'
+                          : 'Request Role Configuration'}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               </div>
-            ) : null}
+            ) : (
+              <div className="supplier-select-assignments__picker">
+                <label className="supplier-select-assignments__picker-label" htmlFor="assignment-brand-select">
+                  Select approved brand
+                </label>
+                <select
+                  id="assignment-brand-select"
+                  className="supplier-select-assignments__picker-select"
+                  value={selectedAssignmentId}
+                  onChange={handleAssignmentBrandChange}
+                >
+                  <option value="">Select approved brand</option>
+                  {supplyChainSummaryRows.map((row) => (
+                    <option key={row.id} value={row.id}>
+                      {row.brand}
+                      {row.hasAdminSupplyChain ? ' — supply chain ready' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         ) : null}
 
@@ -1253,9 +1310,18 @@ export default function SupplierSelectYourself() {
             </div>
           </div>
           <p className="supplier-select-section__intro">
-            <strong>Path A (recommended):</strong> pick an already-approved brand from the list and save.
-            <strong> Path B (optional):</strong> if your brand is not listed, use{' '}
-            <strong>Request a new brand instead</strong> — after admin approval you can configure your role below.
+            {selectedAssignmentId ? (
+              <>
+                An approved brand is selected for this setup. Continue with role configuration below. Use{' '}
+                <strong>Change brand</strong> or <strong>Start over</strong> above if you need a different brand.
+              </>
+            ) : (
+              <>
+                <strong>Path A (recommended):</strong> pick an already-approved brand from the list.
+                <strong> Path B (optional):</strong> if your brand is not listed, use{' '}
+                <strong>Request a new brand instead</strong> — after admin approval you can configure your role below.
+              </>
+            )}
           </p>
 
           {catalogBrandsError ? (
@@ -1358,6 +1424,7 @@ export default function SupplierSelectYourself() {
               showAddEntry={false}
               approvedBaselineEntries={approvedBaselineEntries}
               onBrandPickedWithoutRole={handleBrandPickedWithoutRole}
+              onBrandSelectionCleared={handleClearBrandSelection}
               startInNewBrandMode={false}
               supplierApprovedBrands={effectiveApprovedBrands}
               supplierBrandRequests={profile?.supplierBrandRequests || []}

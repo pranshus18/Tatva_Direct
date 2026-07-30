@@ -166,6 +166,11 @@
   font-weight: 700;
 }
 
+.supplier-select-flow-card--inactive {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .supplier-select-assignments {
   display: flex;
   flex-direction: column;
@@ -186,6 +191,51 @@
   font-size: 0.82rem;
   color: #1d4ed8;
   line-height: 1.45;
+}
+
+.supplier-select-assignments__locked {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.supplier-select-assignments__locked-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem 0.9rem;
+}
+
+.supplier-select-assignments__locked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 0.65rem;
+}
+
+.supplier-select-assignments__change-btn {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid #93c5fd;
+  border-radius: 8px;
+  background: #fff;
+  color: #1d4ed8;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.supplier-select-assignments__change-btn:hover {
+  background: #dbeafe;
+}
+
+.supplier-select-assignments__change-btn--ghost {
+  border-color: transparent;
+  background: transparent;
+  text-decoration: underline;
+}
+
+.supplier-select-assignments__change-btn--ghost:hover {
+  background: transparent;
 }
 
 .supplier-select-assignments__picker {

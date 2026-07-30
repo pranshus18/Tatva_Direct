@@ -58,16 +58,16 @@ export default function BrandSelect({
   const excludedBrandKeys = useMemo(() => {
     const keys = new Set();
     for (const brand of excludeBrands) {
-      const key = collapseRepeatedLetters(String(brand || '').trim().toLowerCase());
+      const key = brandKeyForDuplicateCheck(brand);
       if (key) keys.add(key);
     }
     return keys;
   }, [excludeBrands]);
 
   const visibleBrandNames = useMemo(() => {
-    const currentKey = collapseRepeatedLetters(normalizedValue.toLowerCase());
+    const currentKey = brandKeyForDuplicateCheck(normalizedValue);
     return brandNames.filter((name) => {
-      const key = collapseRepeatedLetters(name.toLowerCase());
+      const key = brandKeyForDuplicateCheck(name);
       if (currentKey && key === currentKey) return true;
       return !excludedBrandKeys.has(key);
     });

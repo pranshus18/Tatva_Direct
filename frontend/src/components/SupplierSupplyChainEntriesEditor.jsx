@@ -638,26 +638,22 @@ const CompanyInfoEntryCard = ({
                 </div>
                 ) : brandPickerAtTop && selectedBrand ? (
                   <div className="chain-field chain-field--full">
-                    <span className="chain-field__label">Selected brand</span>
+                    <span className="chain-field__label">Selected brand for this setup</span>
                     <div className="chain-selected-brand-row">
-                      <div className="chain-selected-brand-pill" aria-live="polite">
+                      <div
+                        className={`chain-selected-brand-pill${
+                          catalogBrandSelected ? ' chain-selected-brand-pill--locked' : ''
+                        }`}
+                        aria-live="polite"
+                      >
                         {selectedBrand}
                       </div>
-                      {editing && onChangeBrand ? (
-                        <button
-                          type="button"
-                          className="chain-change-brand-btn"
-                          onClick={() => onChangeBrand(entry.id)}
-                        >
-                          Change brand
-                        </button>
-                      ) : null}
                     </div>
-                    {editing && onChangeBrand ? (
-                      <p className="chain-field__sublabel">
-                        Click Change brand to clear this selection and choose a different brand above.
-                      </p>
-                    ) : null}
+                    <p className="chain-field__sublabel">
+                      {catalogBrandSelected
+                        ? 'Path A is locked for this setup. Use Change brand or Start over above to pick a different brand.'
+                        : 'Path B request is in progress. Use Change brand or Start over above to switch paths.'}
+                    </p>
                   </div>
                 ) : catalogBrandSelected && isUnifiedRegistration ? (
                   <div className="chain-field chain-field--full">
@@ -991,7 +987,8 @@ export default function SupplierSupplyChainEntriesEditor({
   catalogBrandsLoading = null,
   catalogBrandsError = '',
   onReloadCatalogBrands = null,
-  onRequestChainConfiguration = null
+  onRequestChainConfiguration = null,
+  onBrandSelectionCleared = null
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -1587,17 +1584,40 @@ export default function SupplierSupplyChainEntriesEditor({
     if (targetId) {
       const currentEntries = getDisplayEntries();
       const target = currentEntries.find((entry) => entry.id === targetId);
-      if (target && normalizeSingleBrand(target?.brands)) {
-        updateCompanyInfoEntry(targetId, 'brands', '');
+      if (target && (normalizeSingleBrand(target?.brands) || String(target?.role || '').trim())) {
+        const targetBrand = normalizeSingleBrand(target?.brands);
+        const baseEntries =
+          Array.isArray(profile?.companyInfoEntries) && profile.companyInfoEntries.length > 0
+            ? profile.companyInfoEntries.map((entry) => ({ ...entry }))
+            : currentEntries.map((entry) => ({ ...entry }));
+        let updatedOne = false;
+        const entries = baseEntries.map((entry) => {
+          if (updatedOne) return entry;
+          if (!matchCompanyInfoEntry(entry, { entryId: targetId, brand: targetBrand })) return entry;
+          updatedOne = true;
+          return { ...entry, brands: '', role: '' };
+        });
+        if (updatedOne) {
+          setProfile(syncProfileFromEntries(profile, entries));
+        }
       }
       setSelectedEntryId(targetId);
     }
+    onBrandSelectionCleared?.();
     window.requestAnimationFrame(() => {
       document.getElementById(`entry-selector-${sectionView}`)?.focus();
     });
   };
 
   const handleBrandStepChangeBrand = (entryId) => {
+    handleBrandStepClearSelection(entryId || resolvedSelectedEntryId);
+  };
+
+  const handleBrandStepStartOver = (entryId) => {
+    const confirmed = window.confirm(
+      'Clear the selected brand and start over?\n\nYou can then choose Path A (approved brand) or Path B (request a new brand).'
+    );
+    if (!confirmed) return;
     handleBrandStepClearSelection(entryId || resolvedSelectedEntryId);
   };
 
@@ -1617,17 +1637,14 @@ export default function SupplierSupplyChainEntriesEditor({
       (entry) => brandKeyForDuplicateCheck(normalizeSingleBrand(entry?.brands)) === matchKey
     );
 
-    const notifyIfRoleMissing = (entry) => {
-      const currentRole = String(entry?.role || '').trim();
-      const approvedRole = getApprovedRoleForEntry(approvedBaselineEntries, entry);
-      if (!currentRole && !approvedRole) {
-        onBrandPickedWithoutRole?.(brand);
-      }
+    const notifyBrandSelectedForSetup = () => {
+      // Always hand off to role setup / assignment lock — Path A and Path B stay mutually exclusive.
+      onBrandPickedWithoutRole?.(brand);
     };
 
     if (existing) {
       setSelectedEntryId(existing.id);
-      notifyIfRoleMissing(existing);
+      notifyBrandSelectedForSetup();
       return;
     }
 
@@ -1636,8 +1653,8 @@ export default function SupplierSupplyChainEntriesEditor({
     // Replace brand on the active entry (change selection) instead of locking it.
     if (activeEntry) {
       updateCompanyInfoEntry(activeEntry.id, 'brands', brand);
-      notifyIfRoleMissing({ ...activeEntry, brands: brand });
       setSelectedEntryId(activeEntry.id);
+      notifyBrandSelectedForSetup();
       return;
     }
 
@@ -1671,18 +1688,7 @@ export default function SupplierSupplyChainEntriesEditor({
     const next = [...base, newEntry];
     setProfile(syncProfileFromEntries(profile, next));
     setSelectedEntryId(newEntry.id);
-    notifyIfRoleMissing(newEntry);
-  };
-
-  const handleBrandStepAddAnother = () => {
-    const newEntryId = appendEmptyBrandEntry();
-    setSelectedEntryId(newEntryId);
-    setBrandStepOtherMode(false);
-    setBrandStepOtherExplicit(false);
-    setExpandedEntryIds((prev) => (prev.includes(newEntryId) ? prev : [...prev, newEntryId]));
-    window.requestAnimationFrame(() => {
-      document.getElementById(`entry-selector-${sectionView}`)?.focus();
-    });
+    notifyBrandSelectedForSetup();
   };
 
   const handleBrandStepShowCatalogPicker = () => {
@@ -1700,6 +1706,17 @@ export default function SupplierSupplyChainEntriesEditor({
     !!activeEntryBrandValue &&
     !catalogBrandNames.some((name) => name.toLowerCase() === activeEntryBrandValue.toLowerCase());
   const showBrandStepCustomInput = isBrandStepPicker && (brandStepOtherMode || activeEntryUsesCustomBrand);
+  // Path A lock: approved catalog brand is chosen — hide Path A/B pickers until Change brand / Start over.
+  const brandStepPathALocked =
+    isBrandStepPicker &&
+    !!activeEntryBrandValue &&
+    !brandStepOtherMode &&
+    !brandStepOtherExplicit &&
+    !activeEntryUsesCustomBrand &&
+    catalogBrandNames.some((name) => name.toLowerCase() === activeEntryBrandValue.toLowerCase());
+  // Path B lock: supplier is mid-request for a new brand — don't keep Path A picker active beside it.
+  const brandStepPathBLocked =
+    isBrandStepPicker && (brandStepOtherExplicit || (brandStepOtherMode && activeEntryUsesCustomBrand));
 
   useEffect(() => {
     if (!isBrandStepPicker || brandStepOtherExplicit) return;
@@ -1752,27 +1769,110 @@ export default function SupplierSupplyChainEntriesEditor({
     >
       <div className="chain-entries">
         {isBrandStepPicker ? (
-          <div className="chain-entry-selector chain-entry-selector--brand-step">
-            {brandStepOtherExplicit ? (
+          <div
+            className={`chain-entry-selector chain-entry-selector--brand-step${
+              brandStepPathALocked || brandStepPathBLocked ? ' chain-entry-selector--locked' : ''
+            }`}
+          >
+            {brandStepPathALocked ? (
+              <>
+                <p className="chain-field__sublabel chain-entry-selector__intro">
+                  Path A selected. Continue with supply-chain role setup for this brand below. Use Change brand or
+                  Start over if you need a different brand.
+                </p>
+                <span className="chain-field__label">Selected approved brand</span>
+                <div className="chain-selected-brand-row">
+                  <div className="chain-selected-brand-pill chain-selected-brand-pill--locked" aria-live="polite">
+                    {activeEntryBrandValue}
+                  </div>
+                </div>
+                <div className="chain-entry-selector__actions">
+                  <button
+                    type="button"
+                    className="chain-change-brand-btn"
+                    onClick={() => handleBrandStepChangeBrand(resolvedSelectedEntryId)}
+                    disabled={!editing}
+                  >
+                    Change brand
+                  </button>
+                  <button
+                    type="button"
+                    className="chain-entry-selector__link"
+                    onClick={() => handleBrandStepStartOver(resolvedSelectedEntryId)}
+                    disabled={!editing}
+                  >
+                    Start over
+                  </button>
+                </div>
+              </>
+            ) : brandStepOtherExplicit ? (
               <>
                 <p className="chain-field__sublabel chain-entry-selector__intro">
                   Path B: enter your brand name and upload supporting documents below. This brand is not in the
                   approved catalog yet and will be sent to admin for approval. After approval, configure your
                   supply-chain role.
                 </p>
-                <button
-                  type="button"
-                  className="chain-entry-selector__link"
-                  onClick={handleBrandStepShowCatalogPicker}
-                  disabled={!editing}
-                >
-                  Choose from approved brands instead (Path A)
-                </button>
+                <div className="chain-entry-selector__actions">
+                  <button
+                    type="button"
+                    className="chain-entry-selector__link"
+                    onClick={handleBrandStepShowCatalogPicker}
+                    disabled={!editing}
+                  >
+                    Choose from approved brands instead (Path A)
+                  </button>
+                  <button
+                    type="button"
+                    className="chain-entry-selector__link"
+                    onClick={() => handleBrandStepStartOver(resolvedSelectedEntryId)}
+                    disabled={!editing}
+                  >
+                    Start over
+                  </button>
+                </div>
+              </>
+            ) : brandStepPathBLocked ? (
+              <>
+                <p className="chain-field__sublabel chain-entry-selector__intro">
+                  Path B in progress for “{activeEntryBrandValue}”. Finish this request, or change path with the
+                  actions below.
+                </p>
+                <div className="chain-selected-brand-row">
+                  <div className="chain-selected-brand-pill" aria-live="polite">
+                    {activeEntryBrandValue}
+                  </div>
+                </div>
+                <div className="chain-entry-selector__actions">
+                  <button
+                    type="button"
+                    className="chain-change-brand-btn"
+                    onClick={() => handleBrandStepChangeBrand(resolvedSelectedEntryId)}
+                    disabled={!editing}
+                  >
+                    Change brand
+                  </button>
+                  <button
+                    type="button"
+                    className="chain-entry-selector__link"
+                    onClick={handleBrandStepShowCatalogPicker}
+                    disabled={!editing}
+                  >
+                    Switch to Path A
+                  </button>
+                  <button
+                    type="button"
+                    className="chain-entry-selector__link"
+                    onClick={() => handleBrandStepStartOver(resolvedSelectedEntryId)}
+                    disabled={!editing}
+                  >
+                    Start over
+                  </button>
+                </div>
               </>
             ) : (
               <>
                 <label className="chain-field__label" htmlFor={`entry-selector-${sectionView}`}>
-                  {activeEntryBrandValue ? 'Selected approved brand' : 'Select approved brand'}
+                  Select approved brand (Path A)
                 </label>
                 <BrandSelect
                   id={`entry-selector-${sectionView}`}
@@ -1786,7 +1886,6 @@ export default function SupplierSupplyChainEntriesEditor({
                       setBrandStepOtherMode(false);
                       setBrandStepOtherExplicit(false);
                     } else if (mode === 'empty') {
-                      // Clearing is handled by onChange('') → handleBrandStepCatalogPick.
                       setBrandStepOtherMode(false);
                       setBrandStepOtherExplicit(false);
                     }
@@ -1804,33 +1903,13 @@ export default function SupplierSupplyChainEntriesEditor({
                   className="chain-brand-select"
                 />
                 <div className="chain-entry-selector__actions">
-                  {activeEntryBrandValue ? (
-                    <button
-                      type="button"
-                      className="chain-entry-selector__link"
-                      onClick={() => handleBrandStepChangeBrand(resolvedSelectedEntryId)}
-                      disabled={!editing}
-                    >
-                      Change brand
-                    </button>
-                  ) : null}
-                  {activeEntryBrandValue || displayEntries.some((entry) => normalizeSingleBrand(entry?.brands)) ? (
-                    <button
-                      type="button"
-                      className="chain-entry-selector__link"
-                      onClick={handleBrandStepAddAnother}
-                      disabled={!editing}
-                    >
-                      Add another brand
-                    </button>
-                  ) : null}
                   <button
                     type="button"
                     className="chain-entry-selector__link"
                     onClick={handleBrandStepOtherSelection}
                     disabled={!editing}
                   >
-                    Request a new brand instead
+                    Request a new brand instead (Path B)
                   </button>
                 </div>
               </>

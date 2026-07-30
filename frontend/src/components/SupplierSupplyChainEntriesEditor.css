@@ -37,8 +37,13 @@
   background: #f8fafc;
 }
 
+.chain-entry-selector--brand-step.chain-entry-selector--locked {
+  border-color: #bbf7d0;
+  background: linear-gradient(180deg, #f0fdf4 0%, #f8fafc 100%);
+}
+
 .chain-entry-selector__intro {
-  margin: 0;
+  margin: 0 0 0.65rem;
 }
 
 .chain-entry-selector__link {
