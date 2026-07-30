@@ -455,12 +455,16 @@ export function buildBrandApprovalDetailsSignature(profile, catalogBrands = []) 
  * True when Save brand should stay disabled because there is nothing new to submit:
  * - no brand rows, OR
  * - brand details are unchanged since the last successful save, OR
- * - only pending Path B requests (duplicate submit is never allowed while pending)
- * Rejected brands and new brands (no request yet) re-enable save.
+ * - only pending Path B requests (duplicate submit is never allowed while pending), OR
+ * - all brands are already approved (catalog / approved request — no brand-request save needed)
+ * Rejected brands and new unlisted brands re-enable save.
  * Document-only edits on an already-pending brand do NOT re-enable Save brand.
  */
 export const BRAND_REQUEST_ALREADY_PENDING_MESSAGE =
   'This brand request is already pending admin approval. Wait for admin to approve or reject it before submitting again.';
+
+export const BRAND_ALREADY_APPROVED_SAVE_MESSAGE =
+  'This brand is already approved by admin. Use Path A to select it for supply-chain role setup — Save brand is not needed.';
 
 export function listPendingBrandNamesBlockingSave({
   profile,
@@ -489,11 +493,56 @@ export function listPendingBrandNamesBlockingSave({
   return pendingNames;
 }
 
+/** Brands that are already approved (catalog or approved request) — Save brand must stay off. */
+export function listApprovedBrandNamesBlockingSave({
+  profile,
+  catalogBrands = [],
+  extraApprovedBrandNames = []
+} = {}) {
+  const entries = getCompanyInfoEntriesForSave(profile || {}).filter((entry) =>
+    String(entry?.brands || '').trim()
+  );
+  const requests = profile?.supplierBrandRequests || [];
+  const adminApproved = Array.isArray(profile?.adminApprovedBrands)
+    ? profile.adminApprovedBrands
+    : [];
+  const extraApprovedKeys = new Set(
+    (Array.isArray(extraApprovedBrandNames) ? extraApprovedBrandNames : [])
+      .map((name) => brandKeyForDuplicateCheck(name))
+      .filter(Boolean)
+  );
+  const approvedNames = [];
+  for (const entry of entries) {
+    const brand = String(entry?.brands || '').trim();
+    if (!brand) continue;
+    const brandKey = brandKeyForDuplicateCheck(brand);
+    const request = findSupplierBrandRequest(brand, requests);
+    const status = String(request?.status || '').toLowerCase();
+    const inCatalog = isLiteralApprovedCatalogBrand(brand, catalogBrands);
+    const inAdminApproved = adminApproved.some((item) => {
+      const name = typeof item === 'string' ? item : item?.name;
+      const itemStatus =
+        typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
+      return itemStatus === 'approved' && brandKeyForDuplicateCheck(name) === brandKey;
+    });
+    if (
+      inCatalog ||
+      inAdminApproved ||
+      status === 'approved' ||
+      (brandKey && extraApprovedKeys.has(brandKey))
+    ) {
+      approvedNames.push(brand);
+    }
+  }
+  return approvedNames;
+}
+
 export function isBrandApprovalSaveBlockedForPendingRequests({
   profile,
   catalogBrands = [],
   submittedSignature = '',
-  extraPendingBrandNames = []
+  extraPendingBrandNames = [],
+  extraApprovedBrandNames = []
 } = {}) {
   const entries = getCompanyInfoEntriesForSave(profile || {}).filter((entry) =>
     String(entry?.brands || '').trim()
@@ -506,21 +555,43 @@ export function isBrandApprovalSaveBlockedForPendingRequests({
       .map((name) => brandKeyForDuplicateCheck(name))
       .filter(Boolean)
   );
+  const extraApprovedKeys = new Set(
+    (Array.isArray(extraApprovedBrandNames) ? extraApprovedBrandNames : [])
+      .map((name) => brandKeyForDuplicateCheck(name))
+      .filter(Boolean)
+  );
+  const adminApproved = Array.isArray(profile?.adminApprovedBrands)
+    ? profile.adminApprovedBrands
+    : [];
 
   let hasActionableBrand = false;
   let hasPendingCustom = false;
   let hasRejectedCustom = false;
+  let hasApprovedOnly = false;
 
   for (const entry of entries) {
     const brand = String(entry?.brands || '').trim();
     const brandKey = brandKeyForDuplicateCheck(brand);
-    if (isLiteralApprovedCatalogBrand(brand, catalogBrands)) {
-      // Path A catalog pick still needs an initial save when signature is empty/different.
-      hasActionableBrand = true;
-      continue;
-    }
     const request = findSupplierBrandRequest(brand, requests);
     const status = String(request?.status || '').toLowerCase();
+    const inCatalog = isLiteralApprovedCatalogBrand(brand, catalogBrands);
+    const inAdminApproved = adminApproved.some((item) => {
+      const name = typeof item === 'string' ? item : item?.name;
+      const itemStatus =
+        typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
+      return itemStatus === 'approved' && brandKeyForDuplicateCheck(name) === brandKey;
+    });
+    const alreadyApproved =
+      inCatalog ||
+      inAdminApproved ||
+      status === 'approved' ||
+      (brandKey && extraApprovedKeys.has(brandKey));
+
+    if (alreadyApproved) {
+      // Path A / already-approved brands never need Save brand (role setup is separate).
+      hasApprovedOnly = true;
+      continue;
+    }
     if (status === 'rejected') {
       hasRejectedCustom = true;
       hasActionableBrand = true;
@@ -535,15 +606,18 @@ export function isBrandApprovalSaveBlockedForPendingRequests({
       hasActionableBrand = true;
       continue;
     }
-    // Approved custom request — no brand-approval save needed for this row.
   }
 
   // Rejected Path B always needs another Save brand attempt.
   if (hasRejectedCustom) return false;
 
   // Pending Path B: never allow duplicate submit of the same brand (docs/name tweaks included).
-  // Change brand / Cancel setup, wait for admin, or enter a different brand name to submit again.
   if (hasPendingCustom && !hasActionableBrand) {
+    return true;
+  }
+
+  // All configured brands are already approved — keep Save brand disabled.
+  if (hasApprovedOnly && !hasActionableBrand && !hasPendingCustom) {
     return true;
   }
 

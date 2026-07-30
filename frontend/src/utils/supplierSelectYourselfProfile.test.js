@@ -11,6 +11,7 @@ import {
   mergeSupplierBrandRequestsIntoProfile,
   resolveSelectYourselfBrandStepStatus,
   listPendingBrandNamesBlockingSave,
+  listApprovedBrandNamesBlockingSave,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from './supplierSelectYourselfProfile';
@@ -264,6 +265,38 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
     ).toBe(true);
   });
 
+  it('blocks Save brand when a catalog brand is already approved (Path B must not re-submit)', () => {
+    const catalog = [{ name: 'HP', status: 'approved' }];
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'Hp', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: []
+    };
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: catalog,
+        submittedSignature: ''
+      })
+    ).toBe(true);
+    expect(
+      listApprovedBrandNamesBlockingSave({ profile, catalogBrands: catalog })
+    ).toEqual(['Hp']);
+  });
+
+  it('blocks Save brand when request status is already approved', () => {
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'Haier', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: [{ name: 'Haier', status: 'approved' }]
+    };
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: [],
+        submittedSignature: ''
+      })
+    ).toBe(true);
+  });
+
   it('re-enables Save brand when switching to a different new brand name', () => {
     const profile = {
       companyInfoEntries: [{ id: '1', brands: 'FreshBrand', brandApprovalDocumentUrls: [] }],
@@ -292,7 +325,25 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
     ).toBe(false);
   });
 
-  it('re-enables Save brand when a new approved catalog brand is selected', () => {
+  it('does not block Save brand for a longer distinct name when a shorter approved brand exists', () => {
+    const catalog = [{ name: 'pran', status: 'approved' }];
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'pransh', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: []
+    };
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: catalog,
+        submittedSignature: ''
+      })
+    ).toBe(false);
+    expect(
+      listApprovedBrandNamesBlockingSave({ profile, catalogBrands: catalog })
+    ).toEqual([]);
+  });
+
+  it('blocks Save brand when switching between already-approved catalog brands', () => {
     const catalog = [
       { name: 'acc', status: 'approved' },
       { name: 'Dell', status: 'approved' }
@@ -310,7 +361,7 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
         catalogBrands: catalog,
         submittedSignature: signature
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 

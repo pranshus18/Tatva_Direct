@@ -34,7 +34,9 @@ import {
   isBrandApprovalSaveBlockedForPendingRequests,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   BRAND_REQUEST_ALREADY_PENDING_MESSAGE,
+  BRAND_ALREADY_APPROVED_SAVE_MESSAGE,
   listPendingBrandNamesBlockingSave,
+  listApprovedBrandNamesBlockingSave,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
 import { resolveActiveBrandPath } from '../utils/supplierSelectYourselfPaths';
@@ -207,11 +209,16 @@ export default function SupplierSelectYourself() {
       brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
         ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
+    const noticeApprovedNames =
+      brandSubmissionNotice?.tone === 'success' && Array.isArray(brandSubmissionNotice.brands)
+        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+        : [];
     return isBrandApprovalSaveBlockedForPendingRequests({
       profile,
       catalogBrands,
       submittedSignature: brandApprovalSubmittedSignature,
-      extraPendingBrandNames: noticePendingNames
+      extraPendingBrandNames: noticePendingNames,
+      extraApprovedBrandNames: noticeApprovedNames
     });
   }, [profile, catalogBrands, brandApprovalSubmittedSignature, brandSubmissionNotice]);
 
@@ -226,26 +233,44 @@ export default function SupplierSelectYourself() {
     });
   }, [profile, brandSubmissionNotice]);
 
+  const approvedBrandsBlockingSave = useMemo(() => {
+    const noticeApprovedNames =
+      brandSubmissionNotice?.tone === 'success' && Array.isArray(brandSubmissionNotice.brands)
+        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+        : [];
+    return listApprovedBrandNamesBlockingSave({
+      profile,
+      catalogBrands,
+      extraApprovedBrandNames: noticeApprovedNames
+    });
+  }, [profile, catalogBrands, brandSubmissionNotice]);
+
   const brandSaveBlockedByPendingRequest =
     brandSaveBlockedForPending && pendingBrandsBlockingSave.length > 0;
+  const brandSaveBlockedByApprovedBrand =
+    brandSaveBlockedForPending &&
+    !brandSaveBlockedByPendingRequest &&
+    approvedBrandsBlockingSave.length > 0;
 
   const brandSaveButtonLabel = useMemo(() => {
     if (savingBrandApproval) return 'Saving…';
     if (!brandSaveBlockedForPending) return 'Save brand';
-    if (brandSaveBlockedByPendingRequest) {
-      return 'Request already pending';
-    }
+    if (brandSaveBlockedByPendingRequest) return 'Request already pending';
+    if (brandSaveBlockedByApprovedBrand) return 'Already approved';
     return 'Saved';
   }, [
     savingBrandApproval,
     brandSaveBlockedForPending,
-    brandSaveBlockedByPendingRequest
+    brandSaveBlockedByPendingRequest,
+    brandSaveBlockedByApprovedBrand
   ]);
 
   const brandSaveButtonTitle = brandSaveBlockedForPending
     ? brandSaveBlockedByPendingRequest
       ? BRAND_REQUEST_ALREADY_PENDING_MESSAGE
-      : 'Brand setup is saved. Change the brand or documents to enable Save brand again.'
+      : brandSaveBlockedByApprovedBrand
+        ? BRAND_ALREADY_APPROVED_SAVE_MESSAGE
+        : 'Brand setup is saved. Change the brand or documents to enable Save brand again.'
     : undefined;
 
   const chainReadyBrandCount = useMemo(
@@ -921,12 +946,17 @@ export default function SupplierSelectYourself() {
       brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
         ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
+    const noticeApprovedNames =
+      brandSubmissionNotice?.tone === 'success' && Array.isArray(brandSubmissionNotice.brands)
+        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+        : [];
     if (
       isBrandApprovalSaveBlockedForPendingRequests({
         profile,
         catalogBrands,
         submittedSignature: brandApprovalSubmittedSignature,
-        extraPendingBrandNames: noticePendingNames
+        extraPendingBrandNames: noticePendingNames,
+        extraApprovedBrandNames: noticeApprovedNames
       })
     ) {
       const pendingNames = listPendingBrandNamesBlockingSave({
@@ -943,6 +973,15 @@ export default function SupplierSelectYourself() {
             ? `Brand request for ${brandLabel} is already pending admin approval. Wait for admin to approve or reject it before submitting again.`
             : `${brandLabel} are already pending admin approval. Wait for admin to approve or reject them before submitting again.`
         );
+        return;
+      }
+      const approvedNames = listApprovedBrandNamesBlockingSave({
+        profile,
+        catalogBrands,
+        extraApprovedBrandNames: noticeApprovedNames
+      });
+      if (approvedNames.length > 0) {
+        alert(BRAND_ALREADY_APPROVED_SAVE_MESSAGE);
       }
       return;
     }
@@ -1211,6 +1250,7 @@ export default function SupplierSelectYourself() {
           )
         );
       } else if (approvedRows.length > 0) {
+        setBrandPathMode('pathA');
         setBrandSubmissionNotice({
           tone: 'success',
           title: approvedRows.length === 1
@@ -1621,6 +1661,17 @@ export default function SupplierSelectYourself() {
                 {pendingBrandsBlockingSave.length === 1
                   ? `“${pendingBrandsBlockingSave[0]}” was already submitted. Save brand stays disabled until an admin approves or rejects it. Use Change brand / Cancel setup to pick a different brand.`
                   : `${pendingBrandsBlockingSave.length} brand requests are already pending. Save brand stays disabled until an admin approves or rejects them.`}
+              </p>
+            </div>
+          ) : null}
+
+          {brandSaveBlockedByApprovedBrand && activeBrandPath !== 'pathA' ? (
+            <div className="supplier-select-alert supplier-select-alert--draft" role="status">
+              <strong>Brand already approved</strong>
+              <p>
+                {approvedBrandsBlockingSave.length === 1
+                  ? `“${approvedBrandsBlockingSave[0]}” is already approved. Save brand is disabled — use Path A / Switch to Path A to continue with supply-chain role setup.`
+                  : 'These brands are already approved. Save brand is disabled — continue with Path A role setup instead.'}
               </p>
             </div>
           ) : null}

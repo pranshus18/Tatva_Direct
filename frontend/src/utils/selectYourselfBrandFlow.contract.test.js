@@ -66,7 +66,7 @@ describe('Select Yourself brand flow contract', () => {
     ).toBe(true);
   });
 
-  it('3b) Save brand re-enables when the supplier switches to another catalog brand', () => {
+  it('3b) Save brand stays idle when switching between approved catalog brands', () => {
     const saved = {
       companyInfoEntries: [{ id: '1', brands: 'acc', brandApprovalDocumentUrls: [] }]
     };
@@ -80,7 +80,7 @@ describe('Select Yourself brand flow contract', () => {
         catalogBrands: catalog,
         submittedSignature: signature
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('4) short acronyms are not collapsed into longer approved brands', () => {

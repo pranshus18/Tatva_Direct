@@ -81,4 +81,19 @@ describe('brand duplicate matching', () => {
     // SPARSGA is not a prefix of Sparsh and is more than one edit away.
     expect(findApprovedCatalogBrandSuggestions('SPARSGA', catalog)).toEqual([]);
   });
+
+  it('does not treat longer distinct brands as the approved shorter brand (pran ≠ pransh)', () => {
+    const catalog = [{ name: 'pran', status: 'approved' }];
+
+    expect(areBrandNamesExactDuplicates('pran', 'pransh')).toBe(false);
+    expect(brandKeyForDuplicateCheck('pran')).not.toBe(brandKeyForDuplicateCheck('pransh'));
+    expect(findApprovedCatalogBrandMatch('pransh', catalog)).toBeNull();
+    expect(findApprovedCatalogBrandMatch('prans', catalog)).toBeNull();
+    expect(findApprovedCatalogBrandMatch('pran', catalog)?.name).toBe('pran');
+
+    // Incomplete typing may soft-suggest the shorter approved brand without blocking.
+    const tip = findApprovedCatalogBrandSuggestions('pra', catalog);
+    expect(tip.some((row) => row.name === 'pran')).toBe(true);
+    expect(findApprovedCatalogBrandMatch('pra', catalog)).toBeNull();
+  });
 });

@@ -216,10 +216,14 @@ const CompanyInfoEntryCard = ({
   const catalogBrandSelected =
     !!selectedBrand &&
     catalogBrandNames.some((name) => areBrandNamesExactDuplicates(name, selectedBrand));
-  const brandNameEditable = editing && (!useBrandNameTextInput || !catalogBrandSelected);
+  // Path B must keep the text field editable even when the typed value momentarily equals
+  // an approved brand (e.g. typing "pransh" passes through "pran").
+  const pathBTypingMode = !!showBrandStepCustomInput;
+  const brandNameEditable =
+    editing && (!useBrandNameTextInput || !catalogBrandSelected || pathBTypingMode);
   const hasBrandValue = !!selectedBrand;
   const approvedCatalogMatch =
-    useBrandNameTextInput && hasBrandValue && !catalogBrandSelected
+    useBrandNameTextInput && hasBrandValue && (!catalogBrandSelected || pathBTypingMode)
       ? findApprovedCatalogBrandMatch(selectedBrand, catalogBrandNames)
       : null;
   const brandRequest = findSupplierBrandRequest(selectedBrand, supplierBrandRequests);
@@ -239,7 +243,9 @@ const CompanyInfoEntryCard = ({
       : [];
   const primarySuggestion = approvedCatalogSuggestions[0] || null;
   const approvedCatalogMatchMessage = approvedCatalogMatch?.name
-    ? formatApprovedCatalogBrandMatchMessage(selectedBrand, approvedCatalogMatch.name)
+    ? pathBTypingMode
+      ? `"${approvedCatalogMatch.name}" is already approved. Keep typing if your brand name is longer, or switch to Path A to use “${approvedCatalogMatch.name}”.`
+      : formatApprovedCatalogBrandMatchMessage(selectedBrand, approvedCatalogMatch.name)
     : '';
   const approvedCatalogSuggestionMessage = primarySuggestion?.name
     ? formatApprovedCatalogBrandSuggestionMessage(selectedBrand, primarySuggestion.name)
@@ -308,15 +314,24 @@ const CompanyInfoEntryCard = ({
     !!brandMeta?.hasSupplyChainDefinition ||
     hasResolvedChainRoles;
   const brandStepStatus = isBrandOnlyStep
-    ? resolveSelectYourselfBrandStepStatus({
-        brandName: selectedBrand,
-        catalogBrandNames,
-        catalogBrands,
-        supplierBrandRequests,
-        supplierApprovedBrands,
-        approvedCatalogMatchMessage,
-        approvedCatalogSuggestionMessage
-      })
+    ? pathBTypingMode && catalogBrandSelected
+      ? {
+          tone: 'warning',
+          label: 'Approved name exists — keep typing or use Path A',
+          detailLines: [
+            selectedBrand,
+            `"${selectedBrand}" is already an approved brand. Keep typing if your full brand name is longer (for example continues after this), or switch to Path A to select it.`
+          ]
+        }
+      : resolveSelectYourselfBrandStepStatus({
+          brandName: selectedBrand,
+          catalogBrandNames,
+          catalogBrands,
+          supplierBrandRequests,
+          supplierApprovedBrands,
+          approvedCatalogMatchMessage,
+          approvedCatalogSuggestionMessage
+        })
     : null;
   const statusTone = isBrandOnlyStep
     ? brandStepStatus.tone
@@ -415,8 +430,10 @@ const CompanyInfoEntryCard = ({
   const showCustomBrandNameField =
     useBrandNameTextInput &&
     editing &&
-    (!selectedBrand || !catalogBrandSelected) &&
-    (!brandPickerAtTop || showBrandStepCustomInput);
+    // Path B: never swap the text input for a locked pill while the supplier is still typing,
+    // even if the current value exactly matches an approved brand (pran → pransh).
+    (pathBTypingMode || !selectedBrand || !catalogBrandSelected) &&
+    (!brandPickerAtTop || pathBTypingMode);
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave && brandApprovalReadyForRole;
@@ -608,7 +625,9 @@ const CompanyInfoEntryCard = ({
                   ) : null}
                   <p className="chain-field__sublabel">
                     {approvedCatalogMatchMessage
-                      ? 'This exact brand is already approved — select it to continue.'
+                      ? pathBTypingMode
+                        ? 'You can keep typing a longer brand name, or switch to Path A to use the approved brand.'
+                        : 'This exact brand is already approved — select it to continue.'
                       : 'Finish typing your full brand name. Matching approved brands appear as suggestions only.'}
                   </p>
                 </div>
