@@ -422,6 +422,13 @@
   line-height: 1.45;
 }
 
+.supplier-select-alert__meta {
+  margin: 0.45rem 0 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .supplier-select-alert__list li + li {
   margin-top: 0.2rem;
 }
@@ -501,10 +508,18 @@
   color: #334155;
 }
 
-.supplier-select-yourself-page .profile-page-header-actions .btn-secondary:hover {
+.supplier-select-yourself-page .profile-page-header-actions .btn-secondary:hover:not(:disabled) {
   border-color: #94a3b8;
   color: #0f172a;
   background: #f8fafc;
+}
+
+.supplier-select-yourself-page .profile-page-header-actions .btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  color: #94a3b8;
+  background: #f8fafc;
+  border-color: #e5e7eb;
 }
 
 .supplier-select-yourself-page .supplier-select-yourself-editor .chain-entry-selector {

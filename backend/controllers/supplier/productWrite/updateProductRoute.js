@@ -252,10 +252,28 @@ export function registerSupplierProductUpdateRoute(ctx) {
               reqUserId: req.userId
             });
             if (unitName) {
-              await supabase
+              const { error: unitUpdateError } = await supabase
                 .from('products')
                 .update({ unit: unitName })
                 .eq('id', updatedSupplierProduct.product_id);
+              if (unitUpdateError) {
+                console.error(
+                  '[Supplier Product] Failed to sync catalog unit:',
+                  unitUpdateError.message || unitUpdateError
+                );
+              } else {
+                // Keep offer attributes aligned with catalog unit for list/detail reads.
+                const nextAttributes = {
+                  ...(updatedSupplierProduct.attributes || {}),
+                  unit: unitName
+                };
+                updatedSupplierProduct.attributes = nextAttributes;
+                await supabase
+                  .from('supplier_products')
+                  .update({ attributes: nextAttributes })
+                  .eq('id', updatedSupplierProduct.id)
+                  .eq('supplier_id', req.userId);
+              }
             }
           } catch (unitSyncError) {
             console.error(
@@ -302,6 +320,11 @@ export function registerSupplierProductUpdateRoute(ctx) {
         }).catch((err) => console.log('upsertModelSpecProfile failed:', err?.message || err));
 
         const ra = updatedSupplierProduct.attributes || {};
+        const resolvedUnit =
+          String(ra.unit || '').trim() ||
+          String(baseProduct?.unit || '').trim() ||
+          String(req.body.unit || '').trim() ||
+          '';
         const responseProduct = {
           ...(baseProduct || {}),
           name: (ra.listingName != null && String(ra.listingName).trim() !== '') ? String(ra.listingName).trim() : baseProduct?.name,
@@ -309,6 +332,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
           publishedDescription: baseProduct?.description || '',
           description: ra.supplierDescription || ra.description || '',
           brand: ra.brand || baseProduct?.brand,
+          unit: resolvedUnit,
           gtin: ra.gtin || baseProduct?.gtin,
           mpn: ra.mpn || baseProduct?.mpn,
           specifications: {

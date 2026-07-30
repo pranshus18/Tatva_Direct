@@ -161,7 +161,7 @@ export const BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE =
   'This brand has not yet been approved by the admin. Please wait until the approval is complete before proceeding.';
 
 export const SUPPLY_CHAIN_NOT_DEFINED_MESSAGE =
-  'Supply chain roles are not defined by admin for this brand yet. Role selection unlocks once the admin configures the chain.';
+  'No supply-chain roles are currently configured for this brand. Please contact Admin or wait until a role is configured.';
 
 function buildSupplierApprovedBrandKeys(supplierApprovedBrands = []) {
   const keys = new Set();
@@ -212,8 +212,9 @@ export function findSupplierBrandRequest(brandName, supplierBrandRequests = []) 
       return {
         name: name || brandName,
         status: String(item?.status || 'pending').trim().toLowerCase() || 'pending',
-        requestedAt: item?.requestedAt || item?.submittedAt || null,
-        submittedAt: item?.submittedAt || item?.requestedAt || null,
+        requestedAt: item?.requestedAt || item?.submittedAt || item?.createdAt || null,
+        submittedAt: item?.submittedAt || item?.requestedAt || item?.createdAt || null,
+        createdAt: item?.createdAt || null,
         rejectionReason: String(item?.rejectionReason || '').trim()
       };
     }
@@ -245,13 +246,14 @@ export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [])
       const name = String(row?.name || row?.normalizedName || '').trim();
       if (!name) return null;
       const status = String(row?.status || 'pending').trim().toLowerCase() || 'pending';
-      const submittedAt = row?.submittedAt || row?.requestedAt || null;
+      const submittedAt = row?.submittedAt || row?.requestedAt || row?.createdAt || null;
       return {
         name,
         normalizedName: row?.normalizedName || brandKeyForDuplicateCheck(name),
         status,
         requestedAt: row?.requestedAt || submittedAt,
         submittedAt,
+        createdAt: row?.createdAt || null,
         rejectionReason: String(row?.rejectionReason || '').trim()
       };
     })
@@ -282,8 +284,23 @@ export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [])
       ...row,
       name: row.name || existing.name,
       status: incomingStatus || existingStatus || 'pending',
-      submittedAt: row.submittedAt || existing.submittedAt || existing.requestedAt || null,
-      requestedAt: row.requestedAt || existing.requestedAt || row.submittedAt || null
+      submittedAt:
+        row.submittedAt ||
+        existing.submittedAt ||
+        existing.requestedAt ||
+        row.requestedAt ||
+        existing.createdAt ||
+        row.createdAt ||
+        null,
+      requestedAt:
+        row.requestedAt ||
+        existing.requestedAt ||
+        row.submittedAt ||
+        existing.submittedAt ||
+        existing.createdAt ||
+        row.createdAt ||
+        null,
+      createdAt: row.createdAt || existing.createdAt || null
     });
   }
 
@@ -404,12 +421,11 @@ export function isBrandApprovedForSupplyChainStep(
 }
 
 /**
- * Layer 2+3 summary for "Your approved brands" / Step 2 picker.
- * Includes brands the supplier can configure roles for:
- * - catalog brands with an admin-defined supply chain (Layer 1+3)
- * - brands this supplier has approved access to (Layer 2)
- * - catalog-approved brands the supplier already selected
- * Pending/rejected Path B requests stay out of this list.
+ * Layer 1+2 summary for Path A "Approved brands" picker.
+ * Includes every admin-approved catalog brand (same Layer 1 source as Admin approvals),
+ * plus supplier-approved brands missing from the catalog payload.
+ * Pending/rejected Path B requests stay out (except duplicate-of-approved noise).
+ * Role readiness is exposed via hasAdminSupplyChain — not used to hide brands.
  */
 export function buildSupplyChainSummaryRows(
   catalogBrands = [],
@@ -453,12 +469,6 @@ export function buildSupplyChainSummaryRows(
 
     const catalogHasAdminSupplyChain =
       typeof item === 'object' && item?.hasAdminSupplyChain === true;
-    const supplierApproved = supplierApprovedBrandKeys.has(catalogKey);
-    const selectedInStep1 = assignmentByKey.has(catalogKey);
-
-    // Step 2: catalog-approved brands the supplier selected, supplier-approved brands,
-    // or brands with an admin-defined supply chain.
-    if (!catalogHasAdminSupplyChain && !supplierApproved && !selectedInStep1) continue;
 
     const assignment = assignmentByKey.get(catalogKey);
     if (assignment) {

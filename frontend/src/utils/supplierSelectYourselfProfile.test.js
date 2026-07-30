@@ -9,9 +9,17 @@ import {
   isBrandApprovalSaveBlockedForPendingRequests,
   mergeCompanyInfoEntriesById,
   mergeSupplierBrandRequestsIntoProfile,
-  BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE
+  BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
+  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from './supplierSelectYourselfProfile';
 import { resolveRoleVerificationDocumentUrls } from './authorizationCertificateUrls';
+
+describe('supply-chain admin-only messaging', () => {
+  it('tells suppliers to wait for admin instead of creating roles', () => {
+    expect(SUPPLY_CHAIN_NOT_DEFINED_MESSAGE).toMatch(/contact Admin/i);
+    expect(SUPPLY_CHAIN_NOT_DEFINED_MESSAGE).not.toMatch(/create/i);
+  });
+});
 
 describe('findSupplierBrandRequest', () => {
   it('returns pending request with submitted date for matching brand', () => {
@@ -28,12 +36,25 @@ describe('findSupplierBrandRequest', () => {
       status: 'pending',
       requestedAt: '2026-07-28T10:15:00.000Z',
       submittedAt: '2026-07-28T10:15:00.000Z',
+      createdAt: null,
       rejectionReason: ''
     });
   });
 
   it('returns null when brand has not been submitted', () => {
     expect(findSupplierBrandRequest('Haier', [{ name: 'HP', status: 'pending' }])).toBeNull();
+  });
+
+  it('falls back to createdAt when submittedAt is missing', () => {
+    const request = findSupplierBrandRequest('Bosch', [
+      {
+        name: 'Bosch',
+        status: 'pending',
+        createdAt: '2026-07-28T09:00:00.000Z'
+      }
+    ]);
+    expect(request?.submittedAt).toBe('2026-07-28T09:00:00.000Z');
+    expect(request?.requestedAt).toBe('2026-07-28T09:00:00.000Z');
   });
 });
 
@@ -314,7 +335,7 @@ describe('buildSupplyChainSummaryRows', () => {
     expect(rows[0].roleLabel).toBe('Retailer');
   });
 
-  it('shows catalog-approved brands the supplier selected in Step 1', () => {
+  it('shows all admin-approved catalog brands, not only chain-ready ones', () => {
     const rows = buildSupplyChainSummaryRows(
       [
         { name: 'Titan', status: 'approved' },
@@ -326,10 +347,12 @@ describe('buildSupplyChainSummaryRows', () => {
       []
     );
 
-    expect(rows.map((row) => row.brand).sort()).toEqual(['Fossil', 'Titan']);
+    expect(rows.map((row) => row.brand).sort()).toEqual(['Fossil', 'Titan', 'hp']);
+    expect(rows.find((row) => row.brand === 'Fossil')?.hasAdminSupplyChain).toBe(true);
+    expect(rows.find((row) => row.brand === 'hp')?.hasAdminSupplyChain).toBe(false);
   });
 
-  it('hides catalog brands the supplier has not selected and that lack a supply chain', () => {
+  it('lists every approved catalog brand even when none are selected and some lack a supply chain', () => {
     const rows = buildSupplyChainSummaryRows(
       [
         { name: 'Titan', status: 'approved' },
@@ -341,7 +364,7 @@ describe('buildSupplyChainSummaryRows', () => {
       []
     );
 
-    expect(rows.map((row) => row.brand)).toEqual(['Fossil']);
+    expect(rows.map((row) => row.brand).sort()).toEqual(['Fossil', 'Titan', 'hp']);
   });
 
   it('shows supplier-approved brands even without admin supply chain', () => {

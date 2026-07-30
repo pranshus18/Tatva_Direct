@@ -673,14 +673,18 @@ export async function createProfileResponse(user) {
         normalizedName: row.normalized_name || normalizeBrandKey(row.name),
         status: 'approved'
       })),
-      supplierBrandRequests: supplierBrandRequests.map((row) => ({
-        name: row.name,
-        normalizedName: row.normalized_name || normalizeBrandKey(row.name),
-        status: row.status || 'pending',
-        rejectionReason: row.rejectionReason || '',
-        requestedAt: row.requestedAt || null,
-        submittedAt: row.requestedAt || null
-      }))
+      supplierBrandRequests: supplierBrandRequests.map((row) => {
+        const submittedAt = row.requestedAt || row.createdAt || null;
+        return {
+          name: row.name,
+          normalizedName: row.normalized_name || normalizeBrandKey(row.name),
+          status: row.status || 'pending',
+          rejectionReason: row.rejectionReason || '',
+          requestedAt: submittedAt,
+          submittedAt,
+          createdAt: row.createdAt || null
+        };
+      })
     };
   }
 

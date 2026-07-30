@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getApiUrl } from '../config/api';
 import { CheckCircle, Clock, Copy, RefreshCw, Search, Tag, XCircle } from 'lucide-react';
 import { formatDateTimeIST } from '../utils/dateTime';
+import { brandKeyForDuplicateCheck } from '../utils/supplierChainEntryValidation';
 import './AdminDashboard.css';
 
 const AdminBrandApprovals = () => {
@@ -23,6 +24,16 @@ const AdminBrandApprovals = () => {
       .filter((b) => (q ? String(b?.name || '').toLowerCase().includes(q) : true))
       .sort((a, b) => String(a?.name || '').localeCompare(String(b?.name || '')));
   }, [brands, approvedSearch]);
+
+  /** Unique approved identities — same dedupe key as supplier approved-catalog. */
+  const uniqueApprovedBrandCount = useMemo(() => {
+    const keys = new Set();
+    for (const brand of approvedBrands) {
+      const key = brandKeyForDuplicateCheck(brand?.name);
+      if (key) keys.add(key);
+    }
+    return keys.size;
+  }, [approvedBrands]);
 
   const fetchBrands = async () => {
     setLoading(true);
@@ -255,7 +266,10 @@ const AdminBrandApprovals = () => {
             <div>
               <h3 style={{ margin: 0, color: '#0f172a' }}>Approved brands</h3>
               <p style={{ margin: '0.25rem 0 0', color: '#64748b', fontSize: '0.9rem' }}>
-                Reference list for admins and suppliers
+                Same catalog suppliers see in Select yourself
+                {approvedBrands.length !== uniqueApprovedBrandCount
+                  ? ` (${approvedBrands.length} rows, ${uniqueApprovedBrandCount} unique names)`
+                  : ''}
               </p>
             </div>
             <button
@@ -304,8 +318,11 @@ const AdminBrandApprovals = () => {
                   background: 'transparent'
                 }}
               />
-              <span style={{ color: '#94a3b8', fontSize: '0.85rem', whiteSpace: 'nowrap' }}>
-                {approvedBrands.length}
+              <span
+                style={{ color: '#94a3b8', fontSize: '0.85rem', whiteSpace: 'nowrap' }}
+                title="Unique approved brands (matches supplier catalog)"
+              >
+                {uniqueApprovedBrandCount}
               </span>
             </div>
           </div>

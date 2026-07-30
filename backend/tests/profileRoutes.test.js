@@ -31,6 +31,7 @@ test('profileRouter exposes all expected profile endpoints', () => {
     'GET /supplier/theme',
     'POST /photo',
     'POST /shipping-addresses',
+    'POST /supplier/request-chain-configuration',
     'DELETE /supplier/authorization-certificate',
     'POST /supplier/authorization-certificate',
     'PUT /',

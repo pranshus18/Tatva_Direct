@@ -507,6 +507,7 @@ const ProductManagement = ({ user }) => {
           : Array.isArray(data.product?.images)
             ? data.product.images
             : [];
+        const savedUnit = String(productData.unit || data.product?.unit || '').trim();
         const updatedProduct = {
           ...data.product,
           specifications: data.product.specifications || {},
@@ -517,8 +518,10 @@ const ProductManagement = ({ user }) => {
             ...(data.product?.attributes && typeof data.product.attributes === 'object'
               ? data.product.attributes
               : {}),
-            ...(Array.isArray(productData.images) ? { images: savedImages } : {})
+            ...(Array.isArray(productData.images) ? { images: savedImages } : {}),
+            ...(savedUnit ? { unit: savedUnit } : {})
           },
+          ...(savedUnit ? { unit: savedUnit } : {}),
           ...(savedStock != null ? { stock: savedStock } : {})
         };
 
@@ -1205,13 +1208,14 @@ const ProductManagement = ({ user }) => {
               description: data.description,
               category: data.category,
               brand: brandValue,
+              unit: data.unit,
               gtin: data.gtin,
               images: Array.isArray(data.images) ? data.images : [],
               specifications: data.specifications
             };
             const catalogMissing = getSupplierCatalogMandatoryMissingFields(catalogPayload, {
               isCreate: false,
-              requireUnit: false
+              requireUnit: true
             });
             if (catalogMissing.length > 0) {
               alert(formatSupplierProductValidationMessage(catalogMissing));
@@ -2224,7 +2228,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     // Catalog create and catalog edit both require identity fields.
     return getSupplierCatalogMandatoryMissingFields(formData, {
       isCreate: !product,
-      requireUnit: !product,
+      requireUnit: true,
       requirePhotos: !product,
       minPhotos: MIN_AI_PRODUCT_IMAGES,
       photoCount: imageCount

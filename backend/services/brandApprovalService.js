@@ -237,8 +237,8 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
       return { ok: true, brand: chainApprovedMissing };
     }
 
-    // Block new approval requests when an approved catalog brand already matches
-    // (including near-typos like "samsun" → "Samsung").
+    // Block new approval requests only when an approved catalog brand already matches
+    // by exact / controlled identity (not partial typing or fuzzy near-typos).
     const catalogMatch = await findApprovedCatalogBrandCloseMatch(name, supabase);
     if (catalogMatch.data && String(catalogMatch.data.status || '').toLowerCase() === 'approved') {
       const matchedName = String(catalogMatch.data.name || name).trim() || name;
@@ -283,7 +283,7 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     return { ok: true, brand: brandRow };
   }
 
-  // If lookup found a non-approved row but an approved catalog spelling/near-match exists,
+  // If lookup found a non-approved row but an approved catalog identity match exists,
   // do not open another pending request — send the supplier back to the approved list.
   const catalogMatchExisting = await findApprovedCatalogBrandCloseMatch(name, supabase);
   if (

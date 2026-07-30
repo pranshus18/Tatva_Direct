@@ -6,21 +6,6 @@ import './BrandSelect.css';
 export const BRAND_SELECT_OTHER_VALUE = '__other__';
 const OTHER_VALUE = BRAND_SELECT_OTHER_VALUE;
 
-function collapseRepeatedLetters(value) {
-  return String(value || '').replace(/(.)\1+/g, '$1');
-}
-
-function findClosestBrandName(typed, brandNames = []) {
-  const normalizedTyped = String(typed || '').trim().toLowerCase();
-  if (!normalizedTyped) return null;
-  const exact = brandNames.find((name) => name.toLowerCase() === normalizedTyped);
-  if (exact) return exact;
-  const collapsedTyped = collapseRepeatedLetters(normalizedTyped);
-  return (
-    brandNames.find((name) => collapseRepeatedLetters(name.toLowerCase()) === collapsedTyped) || null
-  );
-}
-
 /**
  * Brand picker: approved brands from the database. Selecting a brand only sets the brand name.
  */
@@ -156,15 +141,9 @@ export default function BrandSelect({
           className="brand-select__input"
           value={normalizedValue}
           onChange={(e) => onChange?.(e.target.value)}
-          onBlur={(e) => {
-            const typed = String(e.target.value || '').trim();
-            if (!typed) return;
-            const matched = findClosestBrandName(typed, visibleBrandNames);
-            if (matched && matched !== typed) onChange?.(matched);
-          }}
           disabled={disabled || loading}
           required={required}
-          placeholder={loading ? 'Loading brands…' : 'Select brand…'}
+          placeholder={loading ? 'Loading brands…' : 'Type full brand name…'}
           autoComplete="off"
           list={dataListId}
           aria-label="Enter brand name"
@@ -191,7 +170,8 @@ export default function BrandSelect({
           <p className="brand-select__hint">{hint}</p>
         ) : (
           <p className="brand-select__hint">
-            Type a brand name. Matching approved brands appear in suggestions as you type.
+            Type the complete brand name. Matching approved brands appear in suggestions — your text is not
+            replaced automatically.
           </p>
         )}
       </div>

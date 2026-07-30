@@ -4,7 +4,7 @@ import { getApiUrl, resolveApiPath } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
 import BrandSelect from './BrandSelect';
 import { useSupplierBrands } from '../hooks/useSupplierBrands';
-import { brandKeyForDuplicateCheck, dedupeBrandNames, findApprovedCatalogBrandMatch, formatApprovedCatalogBrandMatchMessage } from '../utils/supplierChainEntryValidation';
+import { brandKeyForDuplicateCheck, dedupeBrandNames, findApprovedCatalogBrandMatch, findApprovedCatalogBrandSuggestions, formatApprovedCatalogBrandMatchMessage, formatApprovedCatalogBrandSuggestionMessage } from '../utils/supplierChainEntryValidation';
 import {
   formatSupplyChainRoleLabel,
   getApprovedRoleForEntry,
@@ -204,10 +204,12 @@ const CompanyInfoEntryCard = ({
   brandPickerAtTop = false,
   showBrandStepCustomInput = false,
   onChangeBrand = null,
+  onSelectApprovedCatalogBrand = null,
   approvedRole = '',
   supplierApprovedBrands = [],
   supplierBrandRequests = [],
-  highlighted = false
+  highlighted = false,
+  onRequestChainConfiguration = null
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const catalogBrandSelected =
@@ -219,9 +221,55 @@ const CompanyInfoEntryCard = ({
     useBrandNameTextInput && hasBrandValue && !catalogBrandSelected
       ? findApprovedCatalogBrandMatch(selectedBrand, catalogBrandNames)
       : null;
+  const brandRequest = findSupplierBrandRequest(selectedBrand, supplierBrandRequests);
+  const brandRequestStatus = String(brandRequest?.status || '').toLowerCase();
+  const brandRequestSubmittedAt =
+    brandRequest?.submittedAt || brandRequest?.requestedAt || brandRequest?.createdAt || null;
+  const isPendingBrandRequest = brandRequestStatus === 'pending';
+  const isRejectedBrandRequest = brandRequestStatus === 'rejected';
+  const approvedCatalogSuggestions =
+    useBrandNameTextInput &&
+    hasBrandValue &&
+    !catalogBrandSelected &&
+    !approvedCatalogMatch &&
+    !isPendingBrandRequest &&
+    !isRejectedBrandRequest
+      ? findApprovedCatalogBrandSuggestions(selectedBrand, catalogBrandNames)
+      : [];
+  const primarySuggestion = approvedCatalogSuggestions[0] || null;
   const approvedCatalogMatchMessage = approvedCatalogMatch?.name
     ? formatApprovedCatalogBrandMatchMessage(selectedBrand, approvedCatalogMatch.name)
     : '';
+  const approvedCatalogSuggestionMessage = primarySuggestion?.name
+    ? formatApprovedCatalogBrandSuggestionMessage(selectedBrand, primarySuggestion.name)
+    : '';
+  const applySuggestedApprovedBrand = (brandName) => {
+    const next = String(brandName || '').trim();
+    if (!next) return;
+    if (typeof onSelectApprovedCatalogBrand === 'function') {
+      onSelectApprovedCatalogBrand(next);
+      return;
+    }
+    onUpdate('brands', next);
+  };
+  const [requestingChainConfig, setRequestingChainConfig] = useState(false);
+  const [chainConfigRequestFeedback, setChainConfigRequestFeedback] = useState('');
+  const handleRequestChainConfiguration = async () => {
+    if (typeof onRequestChainConfiguration !== 'function' || !selectedBrand || requestingChainConfig) return;
+    setRequestingChainConfig(true);
+    setChainConfigRequestFeedback('');
+    try {
+      const result = await onRequestChainConfiguration(selectedBrand);
+      setChainConfigRequestFeedback(
+        result?.message ||
+          (result?.ok
+            ? 'Admin has been notified to configure supply-chain roles for this brand.'
+            : 'Failed to notify admin. Please try again.')
+      );
+    } finally {
+      setRequestingChainConfig(false);
+    }
+  };
   const roleLabel = SUPPLY_CHAIN_ROLE_OPTIONS.find((o) => o.value === entry.role)?.label || null;
   const brandDocUrls = resolveBrandApprovalDocumentUrls(entry);
   const roleDocUrls = resolveRoleVerificationDocumentUrls(entry);
@@ -241,17 +289,14 @@ const CompanyInfoEntryCard = ({
     return opts;
   })();
   const brandOnlyApproved = isBrandOnlyStep && catalogBrandSelected;
-  const brandRequest = findSupplierBrandRequest(selectedBrand, supplierBrandRequests);
-  const brandRequestStatus = String(brandRequest?.status || '').toLowerCase();
-  const brandRequestSubmittedAt = brandRequest?.submittedAt || brandRequest?.requestedAt || null;
   const brandOnlyPendingSubmitted =
     isBrandOnlyStep &&
     hasBrandValue &&
     !catalogBrandSelected &&
     !approvedCatalogMatchMessage &&
-    brandRequestStatus === 'pending';
+    isPendingBrandRequest;
   const brandOnlyRejected =
-    isBrandOnlyStep && hasBrandValue && brandRequestStatus === 'rejected';
+    isBrandOnlyStep && hasBrandValue && isRejectedBrandRequest;
   const brandOnlyReadyToSubmit =
     isBrandOnlyStep &&
     hasBrandValue &&
@@ -281,7 +326,7 @@ const CompanyInfoEntryCard = ({
       : brandOnlyApproved || brandRequestStatus === 'approved'
         ? 'success'
         : approvedCatalogMatchMessage
-          ? 'danger'
+          ? 'warning'
           : brandOnlyPendingSubmitted
             ? 'warning'
             : brandOnlyRejected
@@ -304,9 +349,9 @@ const CompanyInfoEntryCard = ({
       : brandOnlyApproved || brandRequestStatus === 'approved'
         ? 'Approved by admin'
         : approvedCatalogMatchMessage
-          ? 'Choose approved brand'
+          ? 'Already approved — select from list'
           : brandOnlyPendingSubmitted
-            ? 'Pending admin approval'
+            ? 'Request submitted — pending admin approval'
             : brandOnlyRejected
               ? 'Rejected by admin'
               : brandOnlyReadyToSubmit
@@ -318,9 +363,9 @@ const CompanyInfoEntryCard = ({
         ? 'Approved — roles available'
         : brandLayers.supplierHasAccess
           ? 'Approved (chain setup pending)'
-          : brandLayers.approvalStatus === 'pending'
-            ? 'Pending admin approval'
-            : brandLayers.approvalStatus === 'rejected'
+          : brandLayers.approvalStatus === 'pending' || isPendingBrandRequest
+            ? 'Request submitted — pending admin approval'
+            : brandLayers.approvalStatus === 'rejected' || isRejectedBrandRequest
               ? 'Rejected by admin'
               : 'Brand access required';
   const statusDetailLines = (() => {
@@ -328,20 +373,33 @@ const CompanyInfoEntryCard = ({
     if (hasBrandValue && resolvedBrandName) {
       lines.push(resolvedBrandName);
     }
-    if (approvedCatalogMatchMessage) {
+    const showPendingDetails =
+      brandOnlyPendingSubmitted ||
+      isPendingBrandRequest ||
+      (!isBrandOnlyStep && (brandStatus === 'pending' || brandLayers.approvalStatus === 'pending'));
+    const showRejectedDetails = brandOnlyRejected || isRejectedBrandRequest;
+
+    if (approvedCatalogMatchMessage && !showPendingDetails && !showRejectedDetails) {
       lines.push(approvedCatalogMatchMessage);
-    } else if (brandOnlyPendingSubmitted || (!isBrandOnlyStep && brandStatus === 'pending')) {
-      lines.push('Request already submitted. Waiting for admin approval — no need to submit again.');
-      if (brandRequestSubmittedAt) {
-        lines.push(`Submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`);
-      }
-    } else if (brandOnlyRejected) {
+      lines.push('Select the approved brand below to continue with role setup.');
+    } else if (showPendingDetails) {
+      lines.push('Your brand approval request was submitted. Waiting for admin review — no need to submit again.');
+      lines.push(
+        brandRequestSubmittedAt
+          ? `Submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`
+          : 'Submitted: date will appear after refresh if admin review is still pending.'
+      );
+    } else if (showRejectedDetails) {
       if (brandRequest?.rejectionReason) {
         lines.push(brandRequest.rejectionReason);
       }
-      if (brandRequestSubmittedAt) {
-        lines.push(`Originally submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`);
-      }
+      lines.push(
+        brandRequestSubmittedAt
+          ? `Originally submitted: ${formatDateTimeIST(brandRequestSubmittedAt, '—')}`
+          : 'Originally submitted: date unavailable'
+      );
+    } else if (approvedCatalogSuggestionMessage) {
+      lines.push(approvedCatalogSuggestionMessage);
     } else if (brandOnlyReadyToSubmit) {
       lines.push('Click Save brand to send this request to admin.');
     } else if ((brandOnlyApproved || brandRequestStatus === 'approved') && brandRequestSubmittedAt) {
@@ -546,14 +604,36 @@ const CompanyInfoEntryCard = ({
                       {duplicateBrandMessage}
                     </p>
                   ) : approvedCatalogMatchMessage ? (
-                    <p className="chain-field__error" role="alert">
-                      {approvedCatalogMatchMessage}
-                    </p>
+                    <div className="chain-field__hint-block" role="status">
+                      <p className="chain-field__error">{approvedCatalogMatchMessage}</p>
+                      {approvedCatalogMatch?.name ? (
+                        <button
+                          type="button"
+                          className="chain-entry-selector__link"
+                          onClick={() => applySuggestedApprovedBrand(approvedCatalogMatch.name)}
+                        >
+                          Use approved brand “{approvedCatalogMatch.name}”
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : approvedCatalogSuggestionMessage ? (
+                    <div className="chain-field__hint-block" role="status">
+                      <p className="chain-field__sublabel">{approvedCatalogSuggestionMessage}</p>
+                      {primarySuggestion?.name ? (
+                        <button
+                          type="button"
+                          className="chain-entry-selector__link"
+                          onClick={() => applySuggestedApprovedBrand(primarySuggestion.name)}
+                        >
+                          Use “{primarySuggestion.name}”
+                        </button>
+                      ) : null}
+                    </div>
                   ) : null}
                   <p className="chain-field__sublabel">
                     {approvedCatalogMatchMessage
-                      ? 'Use “Choose from approved brands instead” and select the matching brand.'
-                      : 'Type the brand name when requesting admin approval for a brand not in the list.'}
+                      ? 'This exact brand is already approved — select it to continue.'
+                      : 'Finish typing your full brand name. Matching approved brands appear as suggestions only.'}
                   </p>
                 </div>
                 ) : brandPickerAtTop && selectedBrand ? (
@@ -611,7 +691,16 @@ const CompanyInfoEntryCard = ({
                   <div className={`chain-status-card chain-status-card--${statusTone}`}>
                     <strong>{statusLabel}</strong>
                     {statusDetailLines.map((line, index) => (
-                      <span key={`${index}-${line}`}>{line}</span>
+                      <span
+                        key={`${index}-${line}`}
+                        className={
+                          /^Submitted:|^Originally submitted:/i.test(line)
+                            ? 'chain-status-card__submitted'
+                            : undefined
+                        }
+                      >
+                        {line}
+                      </span>
                     ))}
                   </div>
                 </div>
@@ -637,7 +726,16 @@ const CompanyInfoEntryCard = ({
                   <div className={`chain-status-card chain-status-card--${statusTone}`}>
                     <strong>{statusLabel}</strong>
                     {statusDetailLines.map((line, index) => (
-                      <span key={`${index}-${line}`}>{line}</span>
+                      <span
+                        key={`${index}-${line}`}
+                        className={
+                          /^Submitted:|^Originally submitted:/i.test(line)
+                            ? 'chain-status-card__submitted'
+                            : undefined
+                        }
+                      >
+                        {line}
+                      </span>
                     ))}
                   </div>
                 </div>
@@ -693,7 +791,16 @@ const CompanyInfoEntryCard = ({
               <div className={`chain-status-card chain-status-card--${statusTone}`}>
                 <strong>{statusLabel}</strong>
                 {statusDetailLines.map((line, index) => (
-                  <span key={`${index}-${line}`}>{line}</span>
+                  <span
+                    key={`${index}-${line}`}
+                    className={
+                      /^Submitted:|^Originally submitted:/i.test(line)
+                        ? 'chain-status-card__submitted'
+                        : undefined
+                    }
+                  >
+                    {line}
+                  </span>
                 ))}
               </div>
               ) : null}
@@ -702,11 +809,40 @@ const CompanyInfoEntryCard = ({
                   {BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE}
                 </p>
               ) : showChainNotDefinedStep2Message ? (
-                <p className="chain-callout chain-callout--warning" role="alert">
-                  {SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}
-                </p>
+                <div className="chain-callout chain-callout--warning" role="alert">
+                  <p>{SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}</p>
+                  {typeof onRequestChainConfiguration === 'function' ? (
+                    <button
+                      type="button"
+                      className="chain-entry-selector__link"
+                      disabled={requestingChainConfig}
+                      onClick={handleRequestChainConfiguration}
+                    >
+                      {requestingChainConfig ? 'Notifying admin…' : 'Request Role Configuration'}
+                    </button>
+                  ) : null}
+                  {chainConfigRequestFeedback ? (
+                    <p className="chain-field__sublabel">{chainConfigRequestFeedback}</p>
+                  ) : null}
+                </div>
               ) : roleOptionsMessage && !approvedRole && !hasResolvedChainRoles ? (
-                <p className="chain-callout chain-callout--warning">{roleOptionsMessage}</p>
+                <div className="chain-callout chain-callout--warning">
+                  <p>{roleOptionsMessage}</p>
+                  {roleOptionsMessage === SUPPLY_CHAIN_NOT_DEFINED_MESSAGE &&
+                  typeof onRequestChainConfiguration === 'function' ? (
+                    <button
+                      type="button"
+                      className="chain-entry-selector__link"
+                      disabled={requestingChainConfig}
+                      onClick={handleRequestChainConfiguration}
+                    >
+                      {requestingChainConfig ? 'Notifying admin…' : 'Request Role Configuration'}
+                    </button>
+                  ) : null}
+                  {chainConfigRequestFeedback ? (
+                    <p className="chain-field__sublabel">{chainConfigRequestFeedback}</p>
+                  ) : null}
+                </div>
               ) : adminChainPathText ? (
                 <p className="chain-callout chain-callout--info">{adminChainPathText}</p>
               ) : adminChainStatusText ? (
@@ -741,7 +877,14 @@ const CompanyInfoEntryCard = ({
                   required={editing && brandApprovalReadyForRole}
                   aria-required={editing && brandApprovalReadyForRole ? 'true' : 'false'}
                 >
-                  <option value="">Select your role</option>
+                  <option value="">
+                    {showChainNotDefinedStep2Message ||
+                    (!roleOptionsLoading &&
+                      !hasResolvedChainRoles &&
+                      roleOptionsMessage === SUPPLY_CHAIN_NOT_DEFINED_MESSAGE)
+                      ? 'No roles configured by admin'
+                      : 'Select your role'}
+                  </option>
                   {roleSelectOptions.map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
@@ -847,7 +990,8 @@ export default function SupplierSupplyChainEntriesEditor({
   catalogBrands: catalogBrandsProp = null,
   catalogBrandsLoading = null,
   catalogBrandsError = '',
-  onReloadCatalogBrands = null
+  onReloadCatalogBrands = null,
+  onRequestChainConfiguration = null
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -1542,8 +1686,8 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const handleBrandStepShowCatalogPicker = () => {
-    setBrandStepOtherMode(false);
-    setBrandStepOtherExplicit(false);
+    // Clear the custom typed brand so Path A picker stays visible and selection can progress.
+    handleBrandStepClearSelection(resolvedSelectedEntryId);
   };
 
   useEffect(() => {
@@ -1802,10 +1946,12 @@ export default function SupplierSupplyChainEntriesEditor({
             brandPickerAtTop={isBrandStepPicker}
             showBrandStepCustomInput={showBrandStepCustomInput}
             onChangeBrand={isBrandStepPicker ? handleBrandStepChangeBrand : null}
+            onSelectApprovedCatalogBrand={isBrandStepPicker ? handleBrandStepCatalogPick : null}
             approvedRole={getApprovedRoleForEntry(approvedBaselineEntries, entry)}
             supplierApprovedBrands={supplierApprovedBrands}
             supplierBrandRequests={supplierBrandRequests}
             highlighted={highlightedEntryId === entry.id}
+            onRequestChainConfiguration={onRequestChainConfiguration}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]

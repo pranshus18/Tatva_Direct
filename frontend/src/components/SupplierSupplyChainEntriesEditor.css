@@ -509,6 +509,11 @@
   margin-top: 0.2rem;
 }
 
+.supplier-select-yourself-editor .chain-status-card__submitted {
+  font-weight: 700;
+  color: inherit;
+}
+
 .supplier-select-yourself-editor .chain-status-card--success {
   border-color: #bbf7d0;
   background: #f0fdf4;
@@ -558,6 +563,18 @@
   color: #92400e;
   background: #fffbeb;
   border: 1px solid #fde68a;
+}
+
+.supplier-select-yourself-editor .chain-callout p {
+  margin: 0;
+}
+
+.supplier-select-yourself-editor .chain-callout .chain-entry-selector__link {
+  margin-top: 0.55rem;
+}
+
+.supplier-select-yourself-editor .chain-callout .chain-field__sublabel {
+  margin-top: 0.45rem;
 }
 
 .supplier-select-yourself-editor .chain-add-entry {

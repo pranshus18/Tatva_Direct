@@ -73,9 +73,11 @@ export function getSupplierCatalogMandatoryMissingFields(formData = {}, options 
   if (!String(formData.brand || '').trim()) missing.push('Brand');
   if (!String(formData.category || '').trim()) missing.push('Category');
 
-  if (options.requireUnit !== false && !String(formData.unit || '').trim()) {
-    // Updates often keep existing unit; creates must provide one.
-    if (options.isCreate) missing.push('Unit');
+  const shouldRequireUnit =
+    options.requireUnit === true ||
+    (options.requireUnit !== false && options.isCreate === true);
+  if (shouldRequireUnit && !String(formData.unit || '').trim()) {
+    missing.push('Unit');
   }
 
   const resolvedPhotoCount =

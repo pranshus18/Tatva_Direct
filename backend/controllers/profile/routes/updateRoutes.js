@@ -407,11 +407,18 @@ export function registerProfileUpdateRoutes(router) {
               requesterUserId: req.userId
             });
             if (!approval.ok) {
+              const submittedAt =
+                approval.brand?.requested_at ||
+                approval.brand?.updated_at ||
+                approval.brand?.created_at ||
+                null;
               failures.push({
                 brand: b,
                 code: approval.code,
                 status: approval.brand?.status || null,
-                message: approval.message
+                message: approval.message,
+                requestedAt: submittedAt,
+                submittedAt
               });
             }
           }
@@ -1050,6 +1057,75 @@ export function registerProfileUpdateRoutes(router) {
       }
       console.error('Create profile shipping address error:', error);
       return res.status(500).json({ status: 'error', message: 'Failed to save shipping address' });
+    }
+  });
+
+  // Supplier asks Admin to configure supply-chain roles for an approved brand (roles are admin-only).
+  router.post('/supplier/request-chain-configuration', authenticateToken, async (req, res) => {
+    try {
+      const brand = String(req.body?.brand || '').trim();
+      if (!brand) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Brand name is required'
+        });
+      }
+
+      const { data: currentUser, error: fetchError } = await supabase
+        .from('users')
+        .select('id, name, email, user_type')
+        .eq('id', req.userId)
+        .single();
+
+      if (fetchError || !currentUser) {
+        return res.status(404).json({ status: 'error', message: 'User not found' });
+      }
+
+      const userType = String(currentUser.user_type || '').toLowerCase();
+      if (userType !== 'supplier') {
+        return res.status(403).json({
+          status: 'error',
+          message: 'Only suppliers can request supply-chain role configuration'
+        });
+      }
+
+      const adminEmail = process.env.ADMIN_EMAIL || 'admin@tatvadirect.com';
+      const { data: adminRows } = await findAdmins(adminEmail, supabase);
+      const adminIds = [...new Set((adminRows || []).map((row) => row?.id).filter(Boolean))];
+      if (adminIds.length === 0) {
+        return res.status(503).json({
+          status: 'error',
+          message: 'No admin is available to receive this request right now'
+        });
+      }
+
+      const supplierName = String(currentUser.name || 'Supplier').trim() || 'Supplier';
+      const supplierEmail = String(currentUser.email || '').trim();
+      const notifications = adminIds.map((adminId) => ({
+        user_id: adminId,
+        type: 'supplier_chain_configuration_requested',
+        title: `Supply-chain roles needed: ${brand}`,
+        message: `${supplierName}${supplierEmail ? ` (${supplierEmail})` : ''} requested Admin to configure supply-chain roles for brand "${brand}". Suppliers cannot create roles themselves.`,
+        related_supplier_id: req.userId,
+        metadata: {
+          source: 'supplier_request_chain_configuration',
+          supplierId: req.userId,
+          brand
+        },
+        is_read: false
+      }));
+      await insertNotifications(notifications, supabase);
+
+      return res.json({
+        status: 'success',
+        message: 'Admin has been notified to configure supply-chain roles for this brand.'
+      });
+    } catch (error) {
+      console.error('request-chain-configuration error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Failed to notify admin about supply-chain role configuration'
+      });
     }
   });
 }

@@ -42,6 +42,15 @@ describe('supplierProductValidation', () => {
     ).toEqual(['Product name', 'Brand', 'Category']);
   });
 
+  it('requires unit on catalog update when requireUnit is true', () => {
+    expect(
+      getSupplierCatalogMandatoryMissingFields(
+        { name: 'Mouse', brand: 'Logitech', category: 'Electronics', unit: '' },
+        { isCreate: false, requireUnit: true }
+      )
+    ).toEqual(['Unit']);
+  });
+
   it('requires at least 3 uploaded product photos on create', () => {
     expect(
       getSupplierCatalogMandatoryMissingFields(

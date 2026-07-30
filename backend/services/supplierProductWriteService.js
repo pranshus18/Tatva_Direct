@@ -343,7 +343,10 @@ export function buildSupplierProductUpdatePayload({
       reqBody.packSize !== undefined ? reqBody.packSize : reqBody.pack_size
     || '').toString().trim();
   }
-  if (reqBody.unit !== undefined) updatedAttributes.unit = (reqBody.unit || '').toString().trim();
+  if (reqBody.unit !== undefined) {
+    const nextUnit = (reqBody.unit || '').toString().trim();
+    if (nextUnit) updatedAttributes.unit = nextUnit;
+  }
   if (reqBody.images !== undefined) updatedAttributes.images = sanitizeImageUrls(reqBody.images);
 
   const nextSpecifications =

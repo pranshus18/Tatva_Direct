@@ -11,7 +11,6 @@ import {
 } from '../utils/supplierChainEntryValidation';
 import { validateSelectYourselfChainEntries } from '../utils/supplierSelectYourselfValidation';
 import {
-  buildApprovedBaselineSnapshot,
   buildSupplierChainSavePayload,
   buildSupplyChainFormProfile,
   buildSupplyChainSummaryRows,
@@ -32,7 +31,8 @@ import {
   mergeSupplierBrandRequestsIntoProfile,
   buildBrandApprovalDetailsSignature,
   isBrandApprovalSaveBlockedForPendingRequests,
-  BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE
+  BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
+  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
 import { formatDateTimeIST } from '../utils/dateTime';
 import './Profile.css';
@@ -81,6 +81,8 @@ export default function SupplierSelectYourself() {
   const [assignmentChainInfo, setAssignmentChainInfo] = useState({ loading: false, data: null });
   const [brandSubmissionNotice, setBrandSubmissionNotice] = useState(null);
   const [brandApprovalSubmittedSignature, setBrandApprovalSubmittedSignature] = useState('');
+  const [chainConfigNotice, setChainConfigNotice] = useState(null);
+  const [requestingChainConfigBrand, setRequestingChainConfigBrand] = useState('');
   const supplyChainSectionRef = useRef(null);
 
   const hasUnsavedChanges = useMemo(() => {
@@ -142,10 +144,8 @@ export default function SupplierSelectYourself() {
       if (!brand || status !== 'approved') continue;
       const key = brandKeyForDuplicateCheck(brand);
       if (key) catalogApprovedKeys.add(key);
-      // Admin-defined supply chain brands are immediately usable for role setup.
-      if (typeof item === 'object' && item?.hasAdminSupplyChain === true) {
-        push(brand, 'approved');
-      }
+      // Path A: every admin-approved catalog brand is eligible to select (Layer 1 → access).
+      push(brand, 'approved');
     }
 
     for (const entry of getCompanyInfoEntriesForSave(profile || {})) {
@@ -189,7 +189,7 @@ export default function SupplierSelectYourself() {
       .filter((row) => String(row?.status || '').toLowerCase() === 'pending')
       .map((row) => ({
         name: String(row?.name || '').trim(),
-        submittedAt: row?.submittedAt || row?.requestedAt || null
+        submittedAt: row?.submittedAt || row?.requestedAt || row?.createdAt || null
       }))
       .filter((row) => row.name)
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
@@ -211,6 +211,7 @@ export default function SupplierSelectYourself() {
     () => supplyChainSummaryRows.filter((row) => row.hasAdminSupplyChain).length,
     [supplyChainSummaryRows]
   );
+  const approvedBrandCount = supplyChainSummaryRows.length;
 
   const selectedAssignment = useMemo(
     () => supplyChainSummaryRows.find((row) => row.id === selectedAssignmentId) || null,
@@ -223,40 +224,16 @@ export default function SupplierSelectYourself() {
       return;
     }
 
+    // Keep an existing manual selection if it is still in the list.
+    // Do not auto-pick a brand — the dropdown should stay on the placeholder
+    // until the supplier selects one.
     const selectionStillValid =
       selectedAssignmentId &&
       supplyChainSummaryRows.some((row) => row.id === selectedAssignmentId);
     if (selectionStillValid) return;
 
-    // Prefer a brand the supplier already has in their entries, then chain-ready brands.
-    const entryBrandKeys = new Set(
-      getCompanyInfoEntriesForSave(profile || {})
-        .map((entry) => brandKeyForDuplicateCheck(entry?.brands))
-        .filter(Boolean)
-    );
-    const preferred =
-      supplyChainSummaryRows.find(
-        (row) => entryBrandKeys.has(brandKeyForDuplicateCheck(row.brand)) && row.hasAdminSupplyChain
-      ) ||
-      supplyChainSummaryRows.find((row) =>
-        entryBrandKeys.has(brandKeyForDuplicateCheck(row.brand))
-      ) ||
-      supplyChainSummaryRows.find((row) => row.hasAdminSupplyChain) ||
-      supplyChainSummaryRows[0];
-
-    if (!preferred?.id) {
-      setSelectedAssignmentId('');
-      return;
-    }
-
-    setSelectedAssignmentId(preferred.id);
-    const preferredKey = brandKeyForDuplicateCheck(preferred.brand);
-    const matchingEntry = getCompanyInfoEntriesForSave(profile || {}).find(
-      (entry) => brandKeyForDuplicateCheck(entry?.brands) === preferredKey
-    );
-    const entryId = String(matchingEntry?.id || '').trim();
-    if (entryId) setFocusSupplyChainEntryId(entryId);
-  }, [supplyChainSummaryRows, selectedAssignmentId, profile]);
+    if (selectedAssignmentId) setSelectedAssignmentId('');
+  }, [supplyChainSummaryRows, selectedAssignmentId]);
 
   const selectedAssignmentChainState = useMemo(() => {
     const brand = String(selectedAssignment?.brand || '').trim();
@@ -328,7 +305,9 @@ export default function SupplierSelectYourself() {
     const snapshot = normalizeProfileForEditor(profileData);
     if (!snapshot) return false;
     setProfile(snapshot);
-    setBaseline(cloneProfileSnapshot(buildApprovedBaselineSnapshot(profileData)));
+    // Discard must compare against the last saved editor state, not an approved-only
+    // subset — otherwise the button stays active with no local edits.
+    setBaseline(cloneProfileSnapshot(snapshot));
     const hasPendingRequest = (Array.isArray(snapshot.supplierBrandRequests) ? snapshot.supplierBrandRequests : [])
       .some((row) => String(row?.status || '').toLowerCase() === 'pending');
     setBrandApprovalSubmittedSignature(
@@ -428,18 +407,6 @@ export default function SupplierSelectYourself() {
     [approvedBaselineEntries, profile]
   );
 
-  const promptAddRoleForBrand = useCallback(
-    (brandLabel) => {
-      const label = String(brandLabel || '').trim();
-      if (!label) return false;
-      if (hasEffectiveRoleForBrand(label)) return false;
-      return window.confirm(
-        `${label} does not have a supply-chain role yet.\n\nDo you want to add a role?`
-      );
-    },
-    [hasEffectiveRoleForBrand]
-  );
-
   const ensureBrandEntryForSupplyChain = useCallback(
     (brandLabel) => {
       const label = String(brandLabel || '').trim();
@@ -476,6 +443,61 @@ export default function SupplierSelectYourself() {
     },
     [findProfileEntryIdForBrand, profile]
   );
+
+  const brandHasAdminConfiguredRoles = useCallback(
+    (brandName) => {
+      const brandKey = brandKeyForDuplicateCheck(brandName);
+      if (!brandKey) return false;
+      if (
+        supplyChainSummaryRows.some(
+          (row) =>
+            brandKeyForDuplicateCheck(row?.brand) === brandKey && row.hasAdminSupplyChain === true
+        )
+      ) {
+        return true;
+      }
+      return catalogBrands.some((item) => {
+        const name = typeof item === 'string' ? item : item?.name;
+        return (
+          brandKeyForDuplicateCheck(name) === brandKey &&
+          typeof item === 'object' &&
+          item?.hasAdminSupplyChain === true
+        );
+      });
+    },
+    [catalogBrands, supplyChainSummaryRows]
+  );
+
+  const requestChainConfigurationForBrand = useCallback(async (brandName) => {
+    const brand = String(brandName || '').trim();
+    if (!brand) return { ok: false, message: 'Brand name is required' };
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(resolveApiPath('/api/profile/supplier/request-chain-configuration'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ brand })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.status !== 'success') {
+        return {
+          ok: false,
+          message: data.message || 'Failed to notify admin. Please try again.'
+        };
+      }
+      return {
+        ok: true,
+        message:
+          data.message ||
+          'Admin has been notified to configure supply-chain roles for this brand.'
+      };
+    } catch (_err) {
+      return { ok: false, message: 'Failed to notify admin. Please try again.' };
+    }
+  }, []);
 
   const navigateToAddRole = useCallback(
     (rowOrBrand) => {
@@ -524,12 +546,24 @@ export default function SupplierSelectYourself() {
   const handleAssignmentBrandChange = (event) => {
     const nextId = event.target.value;
     setSelectedAssignmentId(nextId);
+    setChainConfigNotice(null);
     const nextRow = supplyChainSummaryRows.find((row) => row.id === nextId);
     if (!nextRow?.brand) {
       setFocusSupplyChainEntryId('');
       return;
     }
 
+    // Prefer an existing saved entry. Only create a local draft when the brand has no
+    // profile row yet — that draft is discardable until the supplier saves.
+    const existingId = findProfileEntryIdForBrand(nextRow.brand);
+    if (existingId) {
+      setFocusSupplyChainEntryId(existingId);
+      return;
+    }
+    if (hasEffectiveRoleForBrand(nextRow.brand)) {
+      setFocusSupplyChainEntryId('');
+      return;
+    }
     const entryId = ensureBrandEntryForSupplyChain(nextRow.brand);
     setFocusSupplyChainEntryId(entryId || '');
   };
@@ -538,10 +572,22 @@ export default function SupplierSelectYourself() {
     (brandName) => {
       const label = String(brandName || '').trim();
       if (!label) return;
-      if (!promptAddRoleForBrand(label)) return;
+      if (hasEffectiveRoleForBrand(label)) return;
+      // Suppliers never create supply-chain roles — only select admin-configured ones.
+      // Navigate to role setup so the form can show role options or the admin-wait message.
       navigateToAddRole(label);
+      if (!brandHasAdminConfiguredRoles(label)) {
+        setChainConfigNotice({
+          brand: label,
+          tone: 'warning',
+          message:
+            'No supply-chain roles are currently configured for this brand. Please contact Admin or wait until a role is configured.'
+        });
+      } else {
+        setChainConfigNotice(null);
+      }
     },
-    [navigateToAddRole, promptAddRoleForBrand]
+    [brandHasAdminConfiguredRoles, hasEffectiveRoleForBrand, navigateToAddRole]
   );
 
   const handleFocusEntryHandled = useCallback(() => {
@@ -725,8 +771,8 @@ export default function SupplierSelectYourself() {
       setBrandSectionExpanded(true);
       return;
     }
-    // Block brand requests that match the approved catalog master (including near-typos).
-    // Suppliers must choose the existing approved brand from the list instead.
+    // Block brand requests that match an approved catalog brand by exact identity only.
+    // Soft suggestions while typing must not block save — suppliers pick from the list to use Path A.
     for (const brandName of brandsBeingSaved) {
       const catalogMatch = findApprovedCatalogBrandMatch(brandName, catalogBrands);
       if (!catalogMatch?.name) continue;
@@ -775,11 +821,13 @@ export default function SupplierSelectYourself() {
             String(row?.status || '').toLowerCase() ||
             (code === 'brand_approval_pending' || code === 'brand_approval_required' ? 'pending' : '');
           if (status !== 'pending' && code !== 'brand_approval_pending') return null;
+          const submittedAt =
+            row?.submittedAt || row?.requestedAt || new Date().toISOString();
           return {
             name,
             status: 'pending',
-            submittedAt: new Date().toISOString(),
-            requestedAt: new Date().toISOString()
+            submittedAt,
+            requestedAt: row?.requestedAt || submittedAt
           };
         })
         .filter(Boolean);
@@ -968,16 +1016,18 @@ export default function SupplierSelectYourself() {
           <h1>Select yourself</h1>
         </div>
         <div className="profile-actions profile-page-header-actions">
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleDiscard}
-            disabled={savingBrandApproval || !!savingEntryId || discarding || !hasUnsavedChanges}
-            title={hasUnsavedChanges ? 'Revert unsaved edits' : 'No changes to discard'}
-          >
-            <RotateCcw size={18} strokeWidth={2} aria-hidden />
-            {discarding ? 'Discarding…' : 'Discard changes'}
-          </button>
+          {hasUnsavedChanges ? (
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={handleDiscard}
+              disabled={savingBrandApproval || !!savingEntryId || discarding}
+              title="Revert unsaved edits"
+            >
+              <RotateCcw size={18} strokeWidth={2} aria-hidden />
+              {discarding ? 'Discarding…' : 'Discard changes'}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -988,13 +1038,17 @@ export default function SupplierSelectYourself() {
           approved.
         </p>
 
-        {!hasSavedBrandEntries && chainReadyBrandCount > 0 ? (
+        {!hasSavedBrandEntries && approvedBrandCount > 0 ? (
           <div className="supplier-select-alert supplier-select-alert--draft">
             <strong>Welcome — start with an approved brand</strong>
             <p>
-              Admin has already set up supply chains for {chainReadyBrandCount} brand
-              {chainReadyBrandCount === 1 ? '' : 's'}. Select an approved brand below, then choose your supply-chain
-              role. You only need to request a new brand if yours is not in the approved list.
+              There {approvedBrandCount === 1 ? 'is' : 'are'} {approvedBrandCount} admin-approved brand
+              {approvedBrandCount === 1 ? '' : 's'} available
+              {chainReadyBrandCount > 0
+                ? ` (${chainReadyBrandCount} with a supply chain ready for role setup)`
+                : ''}
+              . Select an approved brand below, then choose your supply-chain role. You only need to request a new
+              brand if yours is not in the approved list.
             </p>
           </div>
         ) : null}
@@ -1023,9 +1077,10 @@ export default function SupplierSelectYourself() {
 
         {supplyChainSummaryRows.length > 0 ? (
           <div className="supplier-select-assignments" aria-label="Your supply chain by brand">
-            <strong>Your approved brands ({supplyChainSummaryRows.length})</strong>
+            <strong>Approved brands ({approvedBrandCount})</strong>
             <p className="supplier-select-assignments__hint">
-              Path A: pick an approved brand here to configure or review your supply-chain role below.
+              Path A: these are the same admin-approved brands from the catalog. Brands marked “supply chain ready”
+              already have roles you can select below.
             </p>
             <div className="supplier-select-assignments__picker">
               <label className="supplier-select-assignments__picker-label" htmlFor="assignment-brand-select">
@@ -1084,6 +1139,10 @@ export default function SupplierSelectYourself() {
                     <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
                       Complete
                     </span>
+                  ) : !selectedAssignmentHasAdminChain && !assignmentChainInfo.loading ? (
+                    <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
+                      Waiting for admin
+                    </span>
                   ) : selectedAssignment.hasRole ? (
                     <span className="supplier-select-assignments__status supplier-select-assignments__status--draft">
                       Add documents
@@ -1094,6 +1153,31 @@ export default function SupplierSelectYourself() {
                     </span>
                   )}
                 </div>
+                {!assignmentChainInfo.loading && !selectedAssignmentHasAdminChain ? (
+                  <div className="supplier-select-alert supplier-select-alert--pending" role="status">
+                    <strong>No supply-chain roles configured</strong>
+                    <p>{SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}</p>
+                    <button
+                      type="button"
+                      className="supplier-select-alert__dismiss"
+                      disabled={requestingChainConfigBrand === selectedAssignment.brand}
+                      onClick={async () => {
+                        setRequestingChainConfigBrand(selectedAssignment.brand);
+                        const result = await requestChainConfigurationForBrand(selectedAssignment.brand);
+                        setRequestingChainConfigBrand('');
+                        setChainConfigNotice({
+                          brand: selectedAssignment.brand,
+                          tone: result.ok ? 'success' : 'warning',
+                          message: result.message
+                        });
+                      }}
+                    >
+                      {requestingChainConfigBrand === selectedAssignment.brand
+                        ? 'Notifying admin…'
+                        : 'Request Role Configuration'}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : null}
           </div>
@@ -1208,17 +1292,23 @@ export default function SupplierSelectYourself() {
             >
               <strong>{brandSubmissionNotice.title}</strong>
               <p>{brandSubmissionNotice.message}</p>
-              {brandSubmissionNotice.submittedAt ? (
-                <p>
-                  Submitted: {formatDateTimeIST(brandSubmissionNotice.submittedAt, '—')}
-                </p>
-              ) : null}
-              {Array.isArray(brandSubmissionNotice.brands) && brandSubmissionNotice.brands.length > 1 ? (
+              <p className="supplier-select-alert__meta">
+                Submitted:{' '}
+                {brandSubmissionNotice.submittedAt
+                  ? formatDateTimeIST(brandSubmissionNotice.submittedAt, '—')
+                  : 'just now'}
+              </p>
+              {Array.isArray(brandSubmissionNotice.brands) && brandSubmissionNotice.brands.length > 0 ? (
                 <ul className="supplier-select-alert__list">
                   {brandSubmissionNotice.brands.map((row) => (
                     <li key={row.name}>
-                      {row.name}
-                      {row.submittedAt ? ` — ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
+                      <strong>{row.name}</strong>
+                      {' — submitted '}
+                      {row.submittedAt
+                        ? formatDateTimeIST(row.submittedAt, '—')
+                        : brandSubmissionNotice.submittedAt
+                          ? formatDateTimeIST(brandSubmissionNotice.submittedAt, '—')
+                          : 'just now'}
                     </li>
                   ))}
                 </ul>
@@ -1237,18 +1327,19 @@ export default function SupplierSelectYourself() {
             <div className="supplier-select-alert supplier-select-alert--pending" role="status">
               <strong>
                 {pendingBrandRequests.length === 1
-                  ? 'Brand request awaiting admin approval'
-                  : `${pendingBrandRequests.length} brand requests awaiting admin approval`}
+                  ? `Brand request submitted for “${pendingBrandRequests[0].name}”`
+                  : `${pendingBrandRequests.length} brand requests submitted`}
               </strong>
               <p>
-                Path B requests stay here until admin approves them. After approval, select the brand and configure
-                your supply-chain role below.
+                These Path B requests are awaiting admin approval. After approval, select the brand and configure your
+                supply-chain role below.
               </p>
               <ul className="supplier-select-alert__list">
                 {pendingBrandRequests.map((row) => (
                   <li key={row.name}>
-                    {row.name}
-                    {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
+                    <strong>{row.name}</strong>
+                    {' — submitted '}
+                    {row.submittedAt ? formatDateTimeIST(row.submittedAt, '—') : 'date unavailable'}
                   </li>
                 ))}
               </ul>
@@ -1290,6 +1381,29 @@ export default function SupplierSelectYourself() {
             After you select an approved brand above, choose your role in that brand&apos;s admin-defined supply chain
             and upload documents. The brand name is filled automatically.
           </p>
+
+          {chainConfigNotice ? (
+            <div
+              className={`supplier-select-alert supplier-select-alert--${
+                chainConfigNotice.tone === 'success' ? 'draft' : 'pending'
+              }`}
+              role="status"
+            >
+              <strong>
+                {chainConfigNotice.tone === 'success'
+                  ? 'Admin notified'
+                  : `No roles configured${chainConfigNotice.brand ? ` for ${chainConfigNotice.brand}` : ''}`}
+              </strong>
+              <p>{chainConfigNotice.message}</p>
+              <button
+                type="button"
+                className="supplier-select-alert__dismiss"
+                onClick={() => setChainConfigNotice(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : null}
 
           {!selectedAssignmentId ? (
             <div className="supplier-select-alert supplier-select-alert--draft">
@@ -1338,6 +1452,7 @@ export default function SupplierSelectYourself() {
               catalogBrandsLoading={catalogBrandsLoading}
               catalogBrandsError={catalogBrandsError}
               onReloadCatalogBrands={reloadCatalogBrands}
+              onRequestChainConfiguration={requestChainConfigurationForBrand}
             />
           ) : null}
         </div>

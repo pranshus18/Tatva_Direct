@@ -295,7 +295,8 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
       normalized_name: key,
       status,
       rejectionReason: String(row?.rejection_reason || '').trim(),
-      requestedAt: row?.requested_at || row?.updated_at || row?.created_at || null
+      requestedAt: row?.requested_at || row?.updated_at || row?.created_at || null,
+      createdAt: row?.created_at || null
     });
   };
 

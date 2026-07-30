@@ -15,6 +15,76 @@ test('pickCanonicalBrandDisplayName prefers shorter spelling', () => {
   assert.equal(pickCanonicalBrandDisplayName('Phillips', 'Philips'), 'Philips');
 });
 
+test('findApprovedCatalogBrandCloseMatch is exact identity only', async () => {
+  const { findApprovedCatalogBrandCloseMatch } = await import('../services/brandDedupService.js');
+  const rows = [
+    {
+      id: '1',
+      name: 'Sparsh',
+      normalized_name: 'sparsh',
+      status: 'approved',
+      created_at: '2026-06-13T05:27:26.000Z'
+    },
+    {
+      id: '2',
+      name: 'samsung',
+      normalized_name: 'samsung',
+      status: 'approved',
+      created_at: '2026-06-12T00:00:00.000Z'
+    }
+  ];
+
+  const dbClient = {
+    from() {
+      return {
+        select() {
+          return this;
+        },
+        order() {
+          return Promise.resolve({ data: rows, error: null });
+        }
+      };
+    }
+  };
+
+  const sparsga = await findApprovedCatalogBrandCloseMatch('SPARSGA', dbClient);
+  assert.equal(sparsga.data, null);
+  assert.equal(sparsga.matchType, null);
+
+  const samsun = await findApprovedCatalogBrandCloseMatch('samsun', dbClient);
+  assert.equal(samsun.data, null);
+
+  const exact = await findApprovedCatalogBrandCloseMatch('Sparsh', dbClient);
+  assert.equal(exact.data?.name, 'Sparsh');
+  assert.equal(exact.matchType, 'exact');
+
+  const phillipsVariant = await findApprovedCatalogBrandCloseMatch('phillips', {
+    from() {
+      return {
+        select() {
+          return this;
+        },
+        order() {
+          return Promise.resolve({
+            data: [
+              {
+                id: '3',
+                name: 'Philips',
+                normalized_name: 'philips',
+                status: 'approved',
+                created_at: '2026-06-13T05:27:26.000Z'
+              }
+            ],
+            error: null
+          });
+        }
+      };
+    }
+  });
+  assert.equal(phillipsVariant.data?.name, 'Philips');
+  assert.equal(phillipsVariant.matchType, 'exact');
+});
+
 test('consolidateDuplicateBrands keeps one approved Philips row', async () => {
   const rows = [
     {

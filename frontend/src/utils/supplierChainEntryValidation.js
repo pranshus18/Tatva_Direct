@@ -72,16 +72,7 @@ function brandNameEditDistance(left, right) {
   return matrix[a.length][b.length];
 }
 
-/**
- * Find an approved catalog brand that matches a typed "new brand" request.
- * Exact keys, spelling variants, prefixes (min 4 chars), and near-typos are treated as matches.
- * @returns {{ name: string, matchType: 'exact'|'prefix'|'typo' } | null}
- */
-export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
-  const typed = String(typedName || '').trim();
-  const typedKey = brandKeyForDuplicateCheck(typed);
-  if (!typedKey) return null;
-
+function collectApprovedCatalogRows(catalogBrands = []) {
   const rows = [];
   for (const item of Array.isArray(catalogBrands) ? catalogBrands : []) {
     const name = String(typeof item === 'string' ? item : item?.name || '').trim();
@@ -93,30 +84,64 @@ export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
     if (!key) continue;
     rows.push({ name, key });
   }
-  if (rows.length === 0) return null;
+  return rows;
+}
 
+/**
+ * Exact / controlled approved-catalog match used to block a Path B "new brand" request.
+ * Only complete brand identity matches (including Philips/Phillips spelling collapse).
+ * Never matches partial typing such as SPARSGA → Sparsh.
+ * @returns {{ name: string, matchType: 'exact' } | null}
+ */
+export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
+  const typed = String(typedName || '').trim();
+  const typedKey = brandKeyForDuplicateCheck(typed);
+  if (!typedKey) return null;
+
+  const rows = collectApprovedCatalogRows(catalogBrands);
   const exact = rows.find((row) => row.key === typedKey);
-  if (exact) return { name: exact.name, matchType: 'exact' };
+  return exact ? { name: exact.name, matchType: 'exact' } : null;
+}
 
-  const prefix = rows.find((row) => {
-    const shorter = typedKey.length <= row.key.length ? typedKey : row.key;
-    const longer = typedKey.length <= row.key.length ? row.key : typedKey;
-    return shorter.length >= 4 && longer.startsWith(shorter);
-  });
-  if (prefix) return { name: prefix.name, matchType: 'prefix' };
+/**
+ * Soft suggestions while the supplier is still typing a new brand name.
+ * Does not change workflow by itself — UI may show a tip without blocking.
+ * - Prefix: typed is a prefix of an approved brand (min 3 chars), e.g. "sams" → Samsung
+ * - Near-typo: distance 1 with nearly equal length (optional tip only)
+ * Never suggests when the typed name is longer/different (SPARSGA ↛ Sparsh).
+ * @returns {Array<{ name: string, matchType: 'prefix'|'typo' }>}
+ */
+export function findApprovedCatalogBrandSuggestions(typedName, catalogBrands = []) {
+  const typed = String(typedName || '').trim();
+  const typedKey = brandKeyForDuplicateCheck(typed);
+  if (!typedKey || typedKey.length < 3) return [];
 
-  let best = null;
+  // Exact identity is handled by findApprovedCatalogBrandMatch — not a soft suggestion.
+  if (findApprovedCatalogBrandMatch(typed, catalogBrands)) return [];
+
+  const rows = collectApprovedCatalogRows(catalogBrands);
+  const suggestions = [];
+  const seen = new Set();
+
   for (const row of rows) {
+    if (seen.has(row.key)) continue;
+    // Only when the supplier appears mid-name for an approved brand.
+    if (row.key.startsWith(typedKey) && row.key.length > typedKey.length) {
+      seen.add(row.key);
+      suggestions.push({ name: row.name, matchType: 'prefix' });
+      continue;
+    }
     const maxLen = Math.max(typedKey.length, row.key.length);
-    if (maxLen < 5) continue;
+    const lengthDelta = Math.abs(typedKey.length - row.key.length);
+    if (maxLen < 5 || lengthDelta > 1) continue;
     const distance = brandNameEditDistance(typedKey, row.key);
-    const allowed = maxLen >= 7 ? 2 : 1;
-    if (distance > allowed) continue;
-    if (!best || distance < best.distance) {
-      best = { name: row.name, matchType: 'typo', distance };
+    if (distance === 1) {
+      seen.add(row.key);
+      suggestions.push({ name: row.name, matchType: 'typo' });
     }
   }
-  return best ? { name: best.name, matchType: best.matchType } : null;
+
+  return suggestions.slice(0, 5);
 }
 
 export function formatApprovedCatalogBrandMatchMessage(typedName, matchedName) {
@@ -129,6 +154,13 @@ export function formatApprovedCatalogBrandMatchMessage(typedName, matchedName) {
     return `"${matched}" is already an approved brand. Choose it from the approved brands list instead of requesting a new brand.`;
   }
   return `"${typed}" looks like approved brand "${matched}". Choose "${matched}" from the approved brands list instead of requesting a new brand.`;
+}
+
+export function formatApprovedCatalogBrandSuggestionMessage(typedName, matchedName) {
+  const typed = String(typedName || '').trim() || 'This';
+  const matched = String(matchedName || '').trim();
+  if (!matched) return '';
+  return `Suggestion: “${typed}” may refer to approved brand “${matched}”. You can keep typing, or select “${matched}” from the approved list.`;
 }
 
 /** Merge spelling variants (e.g. Philips / Phillips) into one display name. */
