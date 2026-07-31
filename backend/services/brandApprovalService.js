@@ -199,9 +199,42 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     }
   }
 
-  const status = String(brandRow?.status || 'pending').toLowerCase();
+  let status = String(brandRow?.status || 'pending').toLowerCase();
   if (status === 'approved') {
-    return { ok: true, brand: brandRow };
+    // Admin Brand Approvals always set approved_by. Legacy product-evidence auto-approve
+    // only set approved_at — those must not count as admin approval on Path B.
+    const hasAdminApproval = Boolean(String(brandRow?.approved_by || '').trim());
+    if (hasAdminApproval) {
+      return { ok: true, brand: brandRow };
+    }
+
+    if (brandRow?.id) {
+      const nowIso = new Date().toISOString();
+      const { data: reopened, error: reopenErr } = await updateBrandById(
+        brandRow.id,
+        {
+          status: 'pending',
+          approved_by: null,
+          approved_at: null,
+          rejection_reason: null,
+          requested_by: requesterUserId || brandRow.requested_by || null,
+          requested_at: brandRow.requested_at || nowIso,
+          updated_at: nowIso
+        },
+        supabase
+      );
+      if (!reopenErr && reopened) {
+        brandRow = reopened;
+      } else {
+        brandRow = {
+          ...brandRow,
+          status: 'pending',
+          approved_by: null,
+          approved_at: null
+        };
+      }
+      status = 'pending';
+    }
   }
 
   // If lookup found a non-approved row but an approved catalog identity match exists,

@@ -19,7 +19,6 @@ import {
   deduplicateCompanyInfoEntriesByBrand,
   detectEntryRoleChanges,
   ensureAtLeastOneCompanyInfoEntry,
-  findSupplierBrandRequest,
   formatSupplyChainRoleLabel,
   getApprovedBaselineEntries,
   getCompanyInfoEntriesForSave,
@@ -37,6 +36,7 @@ import {
   BRAND_ALREADY_APPROVED_SAVE_MESSAGE,
   listPendingBrandNamesBlockingSave,
   listApprovedBrandNamesBlockingSave,
+  classifyPathBBrandSaveRows,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
 import { resolveActiveBrandPath } from '../utils/supplierSelectYourselfPaths';
@@ -1180,46 +1180,16 @@ export default function SupplierSelectYourself() {
           .filter(Boolean)
       );
 
-      const submittedRows = brandsBeingSaved.map((brandName) => {
-        const request = findSupplierBrandRequest(brandName, [
-          ...requestSource,
-          ...approvalFailureRows
-        ]);
-        const brandKey = brandKeyForDuplicateCheck(brandName);
-        const requestStatus = String(request?.status || '').toLowerCase();
-        const failureForBrand = approvalFailureRows.find(
-          (row) => brandKeyForDuplicateCheck(row?.name) === brandKey
-        );
-        const inApprovedCatalog =
-          !!brandKey && (approvedCatalogKeys.has(brandKey) || adminApprovedKeys.has(brandKey));
-
-        // Path B "Save brand" must stay pending until admin acts.
-        // Only mark approved when the brands table / API already had this brand approved —
-        // never from a missing request row or UI heuristics alone.
-        let status = 'pending';
-        if (failureForBrand || requestStatus === 'pending') {
-          status = 'pending';
-        } else if (requestStatus === 'rejected') {
-          status = 'rejected';
-        } else if (
-          requestStatus === 'approved' ||
-          (data.brandAlreadyApproved === true && inApprovedCatalog) ||
-          (inApprovedCatalog && !data.brandApprovalRequested && !data.brandAlreadyPending)
-        ) {
-          status = 'approved';
-        } else if (data.brandApprovalRequested || data.brandAlreadyPending) {
-          status = 'pending';
-        }
-
-        return {
-          name: brandName,
-          status,
-          submittedAt:
-            request?.submittedAt ||
-            request?.requestedAt ||
-            failureForBrand?.submittedAt ||
-            (status === 'pending' ? new Date().toISOString() : null)
-        };
+      // Path B must stay pending until admin acts — never default missing rows to approved.
+      const submittedRows = classifyPathBBrandSaveRows({
+        brandsBeingSaved,
+        requestSource,
+        approvalFailureRows,
+        approvedCatalogKeys,
+        adminApprovedKeys,
+        brandAlreadyApproved: data.brandAlreadyApproved === true,
+        brandApprovalRequested: data.brandApprovalRequested === true,
+        brandAlreadyPending: data.brandAlreadyPending === true
       });
       const pendingRows = submittedRows.filter((row) => row.status === 'pending');
       const approvedRows = submittedRows.filter((row) => row.status === 'approved');
@@ -1282,18 +1252,18 @@ export default function SupplierSelectYourself() {
         );
       }
 
-      // API flags win when the server already classified this save.
-      // "Already approved" only when the brand is truly in the approved catalog / brands table.
-      // Path B brand requests always show pending until admin explicitly approves.
+      // Prefer pending for any Path B save that created/kept a request.
+      // "Already approved" only when the server confirmed admin-approved catalog status.
       const savedBrandSignature = buildBrandApprovalDetailsSignature(
         profileWithRequests || nextProfile || profile,
         catalogBrands
       );
       const showPendingNotice =
-        data.brandAlreadyPending ||
-        data.brandApprovalRequested ||
+        data.brandAlreadyPending === true ||
+        data.brandApprovalRequested === true ||
         pendingRows.length > 0 ||
-        (approvedRows.length === 0 && brandsBeingSaved.length > 0);
+        approvalFailureRows.length > 0 ||
+        (data.brandAlreadyApproved !== true && brandsBeingSaved.length > 0);
       const showAlreadyApprovedNotice =
         !showPendingNotice &&
         data.brandAlreadyApproved === true &&

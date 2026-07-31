@@ -519,6 +519,64 @@ export const BRAND_REQUEST_ALREADY_PENDING_MESSAGE =
 export const BRAND_ALREADY_APPROVED_SAVE_MESSAGE =
   'This brand is already approved by admin. Use Path A to select it for supply-chain role setup — Save brand is not needed.';
 
+/**
+ * Classify Path B "Save brand" API outcomes for UI notices.
+ * Defaults to pending — never treat a just-submitted request as approved unless
+ * the server explicitly reported brandAlreadyApproved and the brand is in the
+ * approved catalog / request list.
+ */
+export function classifyPathBBrandSaveRows({
+  brandsBeingSaved = [],
+  requestSource = [],
+  approvalFailureRows = [],
+  approvedCatalogKeys = new Set(),
+  adminApprovedKeys = new Set(),
+  brandAlreadyApproved = false,
+  brandApprovalRequested = false,
+  brandAlreadyPending = false
+} = {}) {
+  return (Array.isArray(brandsBeingSaved) ? brandsBeingSaved : []).map((brandName) => {
+    const name = String(brandName || '').trim();
+    const request = findSupplierBrandRequest(name, [
+      ...(Array.isArray(requestSource) ? requestSource : []),
+      ...(Array.isArray(approvalFailureRows) ? approvalFailureRows : [])
+    ]);
+    const brandKey = brandKeyForDuplicateCheck(name);
+    const requestStatus = String(request?.status || '').toLowerCase();
+    const failureForBrand = (Array.isArray(approvalFailureRows) ? approvalFailureRows : []).find(
+      (row) => brandKeyForDuplicateCheck(row?.name) === brandKey
+    );
+    const inApprovedCatalog =
+      !!brandKey &&
+      ((approvedCatalogKeys instanceof Set
+        ? approvedCatalogKeys.has(brandKey)
+        : false) ||
+        (adminApprovedKeys instanceof Set ? adminApprovedKeys.has(brandKey) : false));
+
+    let status = 'pending';
+    if (failureForBrand || requestStatus === 'pending' || brandApprovalRequested || brandAlreadyPending) {
+      status = 'pending';
+    } else if (requestStatus === 'rejected') {
+      status = 'rejected';
+    } else if (
+      brandAlreadyApproved === true &&
+      (requestStatus === 'approved' || inApprovedCatalog)
+    ) {
+      status = 'approved';
+    }
+
+    return {
+      name,
+      status,
+      submittedAt:
+        request?.submittedAt ||
+        request?.requestedAt ||
+        failureForBrand?.submittedAt ||
+        (status === 'pending' ? new Date().toISOString() : null)
+    };
+  });
+}
+
 export function listPendingBrandNamesBlockingSave({
   profile,
   extraPendingBrandNames = []

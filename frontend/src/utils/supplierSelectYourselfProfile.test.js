@@ -3,6 +3,7 @@ import {
   buildSupplyChainFormProfile,
   buildSupplyChainSummaryRows,
   buildBrandApprovalDetailsSignature,
+  classifyPathBBrandSaveRows,
   deduplicateCompanyInfoEntriesByBrand,
   findSupplierBrandRequest,
   isBrandApprovedForSupplyChainStep,
@@ -17,6 +18,55 @@ import {
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from './supplierSelectYourselfProfile';
 import { resolveRoleVerificationDocumentUrls } from './authorizationCertificateUrls';
+import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
+
+describe('classifyPathBBrandSaveRows', () => {
+  it('keeps a just-submitted brand pending even if a stale approved request exists', () => {
+    const rows = classifyPathBBrandSaveRows({
+      brandsBeingSaved: ['srushti'],
+      requestSource: [{ name: 'srushti', status: 'approved', submittedAt: '2026-07-31T08:00:00.000Z' }],
+      approvalFailureRows: [
+        { name: 'srushti', status: 'pending', submittedAt: '2026-07-31T09:00:00.000Z' }
+      ],
+      approvedCatalogKeys: new Set(),
+      adminApprovedKeys: new Set([brandKeyForDuplicateCheck('srushti')]),
+      brandAlreadyApproved: false,
+      brandApprovalRequested: true,
+      brandAlreadyPending: false
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('pending');
+  });
+
+  it('defaults missing request rows to pending, never approved', () => {
+    const rows = classifyPathBBrandSaveRows({
+      brandsBeingSaved: ['brand-new'],
+      requestSource: [],
+      approvalFailureRows: [],
+      approvedCatalogKeys: new Set(),
+      adminApprovedKeys: new Set(),
+      brandAlreadyApproved: false,
+      brandApprovalRequested: false,
+      brandAlreadyPending: false
+    });
+    expect(rows[0].status).toBe('pending');
+  });
+
+  it('marks approved only when server confirms brandAlreadyApproved and catalog match', () => {
+    const key = brandKeyForDuplicateCheck('Hp');
+    const rows = classifyPathBBrandSaveRows({
+      brandsBeingSaved: ['Hp'],
+      requestSource: [{ name: 'Hp', status: 'approved' }],
+      approvalFailureRows: [],
+      approvedCatalogKeys: new Set([key]),
+      adminApprovedKeys: new Set(),
+      brandAlreadyApproved: true,
+      brandApprovalRequested: false,
+      brandAlreadyPending: false
+    });
+    expect(rows[0].status).toBe('approved');
+  });
+});
 
 describe('supply-chain admin-only messaging', () => {
   it('tells suppliers to wait for admin instead of creating roles', () => {
