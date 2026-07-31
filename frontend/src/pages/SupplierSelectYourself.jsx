@@ -806,7 +806,7 @@ export default function SupplierSelectYourself() {
     // Always apply the pick. A stale selectedAssignmentId (id not in the current list)
     // used to return early here while the dropdown was still visible — so approved brands
     // appeared selectable but never populated Select yourself.
-    handleBrandPickedWithoutRole(nextRow);
+    handleBrandPickedWithoutRole(nextRow.brand);
   };
 
   const handleBrandPathModeChange = useCallback((mode) => {
@@ -814,11 +814,16 @@ export default function SupplierSelectYourself() {
   }, []);
 
   const handleBrandPickedWithoutRole = useCallback(
-    (brandName) => {
-      const label = String(brandName || '').trim();
-      if (!label) return;
+    (brandOrRow) => {
+      // Callers may pass a brand string or a summary row object ({ brand, id, ... }).
+      const label =
+        brandOrRow && typeof brandOrRow === 'object'
+          ? String(brandOrRow.brand || brandOrRow.name || '').trim()
+          : String(brandOrRow || '').trim();
+      if (!label || label === '[object Object]') return;
+
       // Path A selection always proceeds to role setup for that brand (locked until Change brand / Start over).
-      navigateToAddRole(label);
+      navigateToAddRole(brandOrRow && typeof brandOrRow === 'object' ? brandOrRow : label);
       if (!brandHasAdminConfiguredRoles(label)) {
         setChainConfigNotice({
           brand: label,
@@ -1924,7 +1929,11 @@ export default function SupplierSelectYourself() {
               <strong>
                 {chainConfigNotice.tone === 'success'
                   ? 'Admin notified'
-                  : `No roles configured${chainConfigNotice.brand ? ` for ${chainConfigNotice.brand}` : ''}`}
+                  : `No roles configured${
+                      chainConfigNotice.brand && typeof chainConfigNotice.brand === 'string'
+                        ? ` for ${chainConfigNotice.brand}`
+                        : ''
+                    }`}
               </strong>
               <p>{chainConfigNotice.message}</p>
               <button
