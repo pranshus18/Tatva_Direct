@@ -41,6 +41,107 @@ test('resolveBrandApprovalStatus requires a brand name', async () => {
   assert.equal(result.code, 'brand_required');
 });
 
+test('ensureBrandApprovedOrRequest does not auto-approve from approved product evidence', async () => {
+  const pendingBrand = {
+    id: 'brand-srushti',
+    name: 'srushti',
+    normalized_name: 'srushti',
+    status: 'pending',
+    requested_by: 'user-1'
+  };
+  let updatedPayload = null;
+
+  const supabase = {
+    from(table) {
+      if (table === 'brands') {
+        return {
+          select() {
+            return {
+              order: async () => ({ data: [pendingBrand], error: null }),
+              eq() {
+                return {
+                  maybeSingle: async () => ({ data: pendingBrand, error: null })
+                };
+              }
+            };
+          },
+          update(payload) {
+            updatedPayload = payload;
+            return {
+              eq() {
+                return {
+                  select() {
+                    return {
+                      single: async () => ({
+                        data: { ...pendingBrand, ...payload },
+                        error: null
+                      })
+                    };
+                  }
+                };
+              }
+            };
+          }
+        };
+      }
+      if (table === 'category_supply_chains') {
+        return {
+          select: async () => ({ data: [], error: null })
+        };
+      }
+      if (table === 'supplier_products') {
+        return {
+          select() {
+            return {
+              eq() {
+                return {
+                  eq() {
+                    return {
+                      limit: async () => ({
+                        data: [
+                          {
+                            status: 'approved',
+                            is_active: true,
+                            attributes: { brand: 'srushti' },
+                            product: { status: 'approved', brand: 'srushti' }
+                          }
+                        ],
+                        error: null
+                      })
+                    };
+                  }
+                };
+              }
+            };
+          }
+        };
+      }
+      return {
+        select() {
+          return {
+            eq() {
+              return {
+                maybeSingle: async () => ({ data: null, error: null })
+              };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const result = await ensureBrandApprovedOrRequest({
+    supabase,
+    brandName: 'srushti',
+    requesterUserId: 'user-1'
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'brand_approval_pending');
+  assert.equal(result.brand?.status, 'pending');
+  assert.equal(updatedPayload, null);
+});
+
 test('ensureBrandApprovedOrRequest does not auto-approve from supply-chain alone', async () => {
   const pendingSamsung = {
     id: 'brand-samsung',

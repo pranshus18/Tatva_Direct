@@ -69,6 +69,14 @@
   border-radius: 10px;
 }
 
+.supplier-select-yourself-page .supplier-select-section__save-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: #94a3b8;
+  border-color: #94a3b8;
+  color: #fff;
+}
+
 .supplier-select-page-intro {
   margin: 0 0 1rem;
   color: #475569;

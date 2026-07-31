@@ -208,8 +208,11 @@
 }
 
 .supplier-select-yourself-editor .chain-entry-save:disabled {
-  opacity: 0.7;
+  opacity: 0.45;
   cursor: not-allowed;
+  background: #94a3b8;
+  border-color: #94a3b8;
+  color: #fff;
 }
 
 .supplier-select-yourself-editor .chain-entry-toggle {

@@ -16,6 +16,11 @@ import {
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
 import {
+  getSelectYourselfEntrySaveReadiness,
+  SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE,
+  SELECT_YOURSELF_MOV_REQUIRED_MESSAGE
+} from '../utils/supplierSelectYourselfValidation';
+import {
   resolveSupplierBrandSetupLayers,
   supplierCanSelectBrandRoles
 } from '../utils/supplierBrandLayerContract';
@@ -437,6 +442,15 @@ const CompanyInfoEntryCard = ({
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave && brandApprovalReadyForRole;
+  const entrySaveReadiness = showEntrySave
+    ? getSelectYourselfEntrySaveReadiness(entry)
+    : { ok: true, message: '', field: '', missing: [] };
+  const entrySaveEnabled = entrySaveReadiness.ok && !savingThisEntry;
+  const entrySaveTitle = savingThisEntry
+    ? 'Saving this entry…'
+    : entrySaveReadiness.ok
+      ? 'Save this entry'
+      : entrySaveReadiness.message;
   const showEntryRemove = canRemove && editing && allowEntryRemove && isBrandOnlyStep;
   const showHeader =
     sectionView === 'brand'
@@ -487,8 +501,9 @@ const CompanyInfoEntryCard = ({
               type="button"
               className="chain-entry-save"
               onClick={() => onSaveEntry?.(entry.id, entryIndex - 1)}
-              disabled={savingThisEntry}
-              title="Save this entry"
+              disabled={!entrySaveEnabled}
+              title={entrySaveTitle}
+              aria-disabled={!entrySaveEnabled}
             >
               {savingThisEntry ? 'Saving…' : 'Save entry'}
             </button>
@@ -918,6 +933,11 @@ const CompanyInfoEntryCard = ({
                   onRemove={(url) => onRoleDocumentRemove?.(entry.id, url)}
                   resolveUrls={resolveRoleVerificationDocumentUrls}
                 />
+                {showEntrySave && entrySaveReadiness.missing.includes('documents') ? (
+                  <p className="chain-field__error" role="status">
+                    {SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE}
+                  </p>
+                ) : null}
               </div>
             </div>
           </section>
@@ -943,9 +963,15 @@ const CompanyInfoEntryCard = ({
                   required={editing}
                   aria-required="true"
                 />
-                <p className="chain-callout chain-callout--info">
-                  Downstream partners must meet this order total when buying from you in this layer.
-                </p>
+                {showEntrySave && entrySaveReadiness.missing.includes('minimumOrderValue') ? (
+                  <p className="chain-field__error" role="status">
+                    {SELECT_YOURSELF_MOV_REQUIRED_MESSAGE}
+                  </p>
+                ) : (
+                  <p className="chain-callout chain-callout--info">
+                    Downstream partners must meet this order total when buying from you in this layer.
+                  </p>
+                )}
               </div>
             </section>
           ) : null}
@@ -994,6 +1020,7 @@ export default function SupplierSupplyChainEntriesEditor({
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
   const [removingRoleDocument, setRemovingRoleDocument] = useState(null);
   const [removingBrandDocument, setRemovingBrandDocument] = useState(null);
+  const [documentSaveNotice, setDocumentSaveNotice] = useState('');
   const [entryRoleOptions, setEntryRoleOptions] = useState({});
   const [expandedEntryIds, setExpandedEntryIds] = useState([]);
   const [selectedEntryId, setSelectedEntryId] = useState('');
@@ -1522,7 +1549,7 @@ export default function SupplierSupplyChainEntriesEditor({
       applyDocumentUrlToEntry(entryId, url, 'remove', documentType);
 
       if (data.savedToProfile === false) {
-        alert(
+        setDocumentSaveNotice(
           data.message ||
             'Document removed in this form. Click Save on Select yourself to persist the change.'
         );
@@ -1594,7 +1621,9 @@ export default function SupplierSupplyChainEntriesEditor({
         if (data.savedToProfile === false) pendingSaveNotice = true;
       }
       if (pendingSaveNotice) {
-        alert(
+        // Inline notice — native alert() steals focus and previously triggered a profile
+        // reload that cleared the selected supply-chain role before Save.
+        setDocumentSaveNotice(
           'Documents uploaded. Click Save on this page to keep them linked to your profile entry.'
         );
       }
@@ -1819,6 +1848,23 @@ export default function SupplierSupplyChainEntriesEditor({
   ]);
 
   useEffect(() => {
+    if (!isBrandStepPicker || !editing) return;
+    if (!brandStepPathALocked || !activeEntryBrandValue) return;
+    if (pathAExclusive || brandPathMode === 'pathA') return;
+    // Align parent path only. Do not auto-call onBrandPickedWithoutRole — that forced a
+    // locked assignment and made the Approved brands dropdown look selectable but inert.
+    onBrandPathModeChange?.('pathA');
+  }, [
+    isBrandStepPicker,
+    editing,
+    brandStepPathALocked,
+    activeEntryBrandValue,
+    pathAExclusive,
+    brandPathMode,
+    onBrandPathModeChange
+  ]);
+
+  useEffect(() => {
     if (!isBrandStepPicker || !showBrandStepCustomInput || !resolvedSelectedEntryId) return;
     setExpandedEntryIds((prev) =>
       prev.includes(resolvedSelectedEntryId) ? prev : [...prev, resolvedSelectedEntryId]
@@ -2017,6 +2063,19 @@ export default function SupplierSupplyChainEntriesEditor({
                 })}
               </div>
             ) : null}
+          </div>
+        ) : null}
+
+        {documentSaveNotice ? (
+          <div className="chain-callout chain-callout--info" role="status">
+            <p>{documentSaveNotice}</p>
+            <button
+              type="button"
+              className="chain-entry-selector__link"
+              onClick={() => setDocumentSaveNotice('')}
+            >
+              Dismiss
+            </button>
           </div>
         ) : null}
 

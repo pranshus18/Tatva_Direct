@@ -226,9 +226,13 @@ export function findSupplierBrandRequest(brandName, supplierBrandRequests = []) 
 /**
  * Merge pending/approved brand-request rows into profile.supplierBrandRequests so Brand status
  * updates immediately after Save brand (even if the API profile omits a just-created request).
+ * @param {object} profile
+ * @param {Array} requestRows
+ * @param {{ allowPendingToReplaceApproved?: boolean }} [options]
  */
-export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = []) {
+export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [], options = {}) {
   if (!profile || typeof profile !== 'object') return profile;
+  const allowPendingToReplaceApproved = options?.allowPendingToReplaceApproved === true;
   const incoming = (Array.isArray(requestRows) ? requestRows : [])
     .map((row) => {
       if (typeof row === 'string') {
@@ -276,8 +280,13 @@ export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [])
     const existing = byKey.get(key) || {};
     const existingStatus = String(existing.status || '').toLowerCase();
     const incomingStatus = String(row.status || 'pending').toLowerCase() || 'pending';
-    // Never downgrade an approved catalog/request row to pending from a stale merge.
-    if (existingStatus === 'approved' && incomingStatus === 'pending') {
+    // Never downgrade an approved catalog/request row to pending from a stale merge —
+    // unless this is a fresh Path B submit that must show pending until admin acts.
+    if (
+      existingStatus === 'approved' &&
+      incomingStatus === 'pending' &&
+      !allowPendingToReplaceApproved
+    ) {
       continue;
     }
     byKey.set(key, {
@@ -368,7 +377,7 @@ export function resolveSelectYourselfBrandStepStatus({
     );
     return {
       tone: 'warning',
-      label: 'Request submitted — pending admin approval',
+      label: 'Pending Admin Approval',
       detailLines
     };
   }
@@ -427,6 +436,50 @@ function isLiteralApprovedCatalogBrand(brandName, catalogBrands = []) {
       typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
     if (status && status !== 'approved') return false;
     return brandKeyForDuplicateCheck(name) === brandKey;
+  });
+}
+
+/**
+ * True when this brand must not be submitted via Path B Save brand —
+ * it is already admin-approved (catalog, supplier access, or approved request).
+ */
+export function isBrandAlreadyApprovedForSaveBrand(
+  brandName,
+  {
+    catalogBrands = [],
+    supplierApprovedBrands = [],
+    supplierBrandRequests = [],
+    adminApprovedBrands = []
+  } = {}
+) {
+  const brand = String(brandName || '').trim();
+  if (!brand) return false;
+  const brandKey = brandKeyForDuplicateCheck(brand);
+  if (!brandKey) return false;
+
+  if (isLiteralApprovedCatalogBrand(brand, catalogBrands)) return true;
+
+  const request = findSupplierBrandRequest(brand, supplierBrandRequests);
+  if (String(request?.status || '').toLowerCase() === 'approved') return true;
+
+  const adminList = Array.isArray(adminApprovedBrands) ? adminApprovedBrands : [];
+  if (
+    adminList.some((item) => {
+      const name = typeof item === 'string' ? item : item?.name;
+      const itemStatus =
+        typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
+      return itemStatus === 'approved' && brandKeyForDuplicateCheck(name) === brandKey;
+    })
+  ) {
+    return true;
+  }
+
+  return supplierHasBrandAccess({
+    brandName: brand,
+    catalogBrands,
+    supplierApprovedBrands,
+    supplierBrandRequests,
+    brandMeta: null
   });
 }
 
@@ -497,6 +550,7 @@ export function listPendingBrandNamesBlockingSave({
 export function listApprovedBrandNamesBlockingSave({
   profile,
   catalogBrands = [],
+  supplierApprovedBrands = [],
   extraApprovedBrandNames = []
 } = {}) {
   const entries = getCompanyInfoEntriesForSave(profile || {}).filter((entry) =>
@@ -516,19 +570,16 @@ export function listApprovedBrandNamesBlockingSave({
     const brand = String(entry?.brands || '').trim();
     if (!brand) continue;
     const brandKey = brandKeyForDuplicateCheck(brand);
-    const request = findSupplierBrandRequest(brand, requests);
-    const status = String(request?.status || '').toLowerCase();
-    const inCatalog = isLiteralApprovedCatalogBrand(brand, catalogBrands);
-    const inAdminApproved = adminApproved.some((item) => {
-      const name = typeof item === 'string' ? item : item?.name;
-      const itemStatus =
-        typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
-      return itemStatus === 'approved' && brandKeyForDuplicateCheck(name) === brandKey;
-    });
     if (
-      inCatalog ||
-      inAdminApproved ||
-      status === 'approved' ||
+      isBrandAlreadyApprovedForSaveBrand(brand, {
+        catalogBrands,
+        supplierApprovedBrands:
+          Array.isArray(supplierApprovedBrands) && supplierApprovedBrands.length > 0
+            ? supplierApprovedBrands
+            : adminApproved,
+        supplierBrandRequests: requests,
+        adminApprovedBrands: adminApproved
+      }) ||
       (brandKey && extraApprovedKeys.has(brandKey))
     ) {
       approvedNames.push(brand);
@@ -540,6 +591,7 @@ export function listApprovedBrandNamesBlockingSave({
 export function isBrandApprovalSaveBlockedForPendingRequests({
   profile,
   catalogBrands = [],
+  supplierApprovedBrands = [],
   submittedSignature = '',
   extraPendingBrandNames = [],
   extraApprovedBrandNames = []
@@ -563,6 +615,10 @@ export function isBrandApprovalSaveBlockedForPendingRequests({
   const adminApproved = Array.isArray(profile?.adminApprovedBrands)
     ? profile.adminApprovedBrands
     : [];
+  const approvedListForAccess =
+    Array.isArray(supplierApprovedBrands) && supplierApprovedBrands.length > 0
+      ? supplierApprovedBrands
+      : adminApproved;
 
   let hasActionableBrand = false;
   let hasPendingCustom = false;
@@ -574,17 +630,13 @@ export function isBrandApprovalSaveBlockedForPendingRequests({
     const brandKey = brandKeyForDuplicateCheck(brand);
     const request = findSupplierBrandRequest(brand, requests);
     const status = String(request?.status || '').toLowerCase();
-    const inCatalog = isLiteralApprovedCatalogBrand(brand, catalogBrands);
-    const inAdminApproved = adminApproved.some((item) => {
-      const name = typeof item === 'string' ? item : item?.name;
-      const itemStatus =
-        typeof item === 'object' ? String(item?.status || 'approved').toLowerCase() : 'approved';
-      return itemStatus === 'approved' && brandKeyForDuplicateCheck(name) === brandKey;
-    });
     const alreadyApproved =
-      inCatalog ||
-      inAdminApproved ||
-      status === 'approved' ||
+      isBrandAlreadyApprovedForSaveBrand(brand, {
+        catalogBrands,
+        supplierApprovedBrands: approvedListForAccess,
+        supplierBrandRequests: requests,
+        adminApprovedBrands: adminApproved
+      }) ||
       (brandKey && extraApprovedKeys.has(brandKey));
 
     if (alreadyApproved) {
@@ -959,6 +1011,8 @@ export function buildSupplyChainFormProfile(profile, baselineEntries = []) {
 
 /**
  * Merge Step 2 form edits back into the full profile without dropping other brand entries.
+ * Empty role/docs from a stale form snapshot must not wipe a newer draft on the full profile
+ * (e.g. role selected, then document upload applies against a briefly stale form prop).
  */
 export function mergeFormStepProfile(fullProfile, formProfile) {
   const formEntries = ensureCompanyInfoEntryIds(
@@ -988,11 +1042,30 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
     const formId = String(formEntry?.id || '').trim();
     if (formId) matchedFormIds.add(formId);
     if (brandKey) matchedBrandKeys.add(brandKey);
-    merged.push(normalizeEntryDocumentFields({
-      ...(entry || {}),
-      ...formEntry,
-      id: id || formId
-    }));
+    const existingRoleDocs = resolveAuthorizationCertificateUrls(entry || {});
+    const formRoleDocs = resolveAuthorizationCertificateUrls(formEntry || {});
+    const existingBrandDocs = resolveBrandApprovalDocumentUrls(entry || {});
+    const formBrandDocs = resolveBrandApprovalDocumentUrls(formEntry || {});
+    merged.push(
+      normalizeEntryDocumentFields({
+        ...(entry || {}),
+        ...formEntry,
+        id: id || formId,
+        role: String(formEntry?.role || '').trim() || String(entry?.role || '').trim(),
+        minimumOrderValue:
+          formEntry?.minimumOrderValue !== '' &&
+          formEntry?.minimumOrderValue !== null &&
+          formEntry?.minimumOrderValue !== undefined
+            ? formEntry.minimumOrderValue
+            : entry?.minimumOrderValue ?? '',
+        supplyChainRegistrationStarted:
+          formEntry?.supplyChainRegistrationStarted === true ||
+          entry?.supplyChainRegistrationStarted === true ||
+          !!String(formEntry?.role || entry?.role || '').trim(),
+        ...setAuthorizationCertificateUrls({}, [...new Set([...existingRoleDocs, ...formRoleDocs])]),
+        ...setBrandApprovalDocumentUrls({}, [...new Set([...existingBrandDocs, ...formBrandDocs])])
+      })
+    );
   }
 
   for (const entry of formEntries) {

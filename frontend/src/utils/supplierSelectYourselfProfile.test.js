@@ -8,6 +8,7 @@ import {
   isBrandApprovedForSupplyChainStep,
   isBrandApprovalSaveBlockedForPendingRequests,
   mergeCompanyInfoEntriesById,
+  mergeFormStepProfile,
   mergeSupplierBrandRequestsIntoProfile,
   resolveSelectYourselfBrandStepStatus,
   listPendingBrandNamesBlockingSave,
@@ -107,7 +108,7 @@ describe('resolveSelectYourselfBrandStepStatus', () => {
       ],
       supplierApprovedBrands: []
     });
-    expect(status.label).toBe('Request submitted — pending admin approval');
+    expect(status.label).toBe('Pending Admin Approval');
     expect(status.tone).toBe('warning');
     expect(status.detailLines.some((line) => /Submitted:/i.test(line))).toBe(true);
     expect(status.label).not.toBe('Ready to submit for approval');
@@ -136,7 +137,7 @@ describe('resolveSelectYourselfBrandStepStatus', () => {
       supplierApprovedBrands: [],
       approvedCatalogMatchMessage: '"Samsun" looks like approved brand "samsung".'
     });
-    expect(status.label).toBe('Request submitted — pending admin approval');
+    expect(status.label).toBe('Pending Admin Approval');
   });
 });
 
@@ -280,6 +281,28 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
     ).toBe(true);
     expect(
       listApprovedBrandNamesBlockingSave({ profile, catalogBrands: catalog })
+    ).toEqual(['Hp']);
+  });
+
+  it('blocks Save brand when brand is approved via supplierApprovedBrands even if catalog prop is empty', () => {
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'Hp', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: []
+    };
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: [],
+        supplierApprovedBrands: [{ name: 'Hp', status: 'approved' }],
+        submittedSignature: ''
+      })
+    ).toBe(true);
+    expect(
+      listApprovedBrandNamesBlockingSave({
+        profile,
+        catalogBrands: [],
+        supplierApprovedBrands: [{ name: 'HP', status: 'approved' }]
+      })
     ).toEqual(['Hp']);
   });
 
@@ -447,6 +470,51 @@ describe('buildSupplyChainFormProfile', () => {
     };
 
     expect(resolveRoleVerificationDocumentUrls(entry)).toEqual([]);
+  });
+});
+
+describe('mergeFormStepProfile', () => {
+  it('keeps an existing draft role when a stale form snapshot only adds documents', () => {
+    const fullProfile = {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: [],
+          supplyChainRegistrationStarted: true
+        }
+      ]
+    };
+    const staleFormProfile = {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'Samsung',
+          role: '',
+          authorizationCertificateUrls: ['https://cdn.example.com/role-doc.pdf'],
+          supplyChainRegistrationStarted: true
+        }
+      ]
+    };
+
+    const merged = mergeFormStepProfile(fullProfile, staleFormProfile);
+    expect(merged.companyInfoEntries[0].role).toBe('dealer');
+    expect(merged.companyInfoEntries[0].authorizationCertificateUrls).toEqual([
+      'https://cdn.example.com/role-doc.pdf'
+    ]);
+  });
+
+  it('keeps the newer form role when both sides have values', () => {
+    const fullProfile = {
+      companyInfoEntries: [{ id: 'entry-1', brands: 'Samsung', role: 'dealer' }]
+    };
+    const formProfile = {
+      companyInfoEntries: [{ id: 'entry-1', brands: 'Samsung', role: 'retailer' }]
+    };
+
+    const merged = mergeFormStepProfile(fullProfile, formProfile);
+    expect(merged.companyInfoEntries[0].role).toBe('retailer');
   });
 });
 

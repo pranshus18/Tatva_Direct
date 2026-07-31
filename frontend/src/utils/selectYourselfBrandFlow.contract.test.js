@@ -141,7 +141,7 @@ describe('Select Yourself brand flow contract', () => {
         brandName: 'NOKIA',
         supplierBrandRequests: [{ name: 'NOKIA', status: 'pending' }]
       }).label
-    ).toBe('Request submitted — pending admin approval');
+    ).toBe('Pending Admin Approval');
 
     expect(
       resolveSelectYourselfBrandStepStatus({

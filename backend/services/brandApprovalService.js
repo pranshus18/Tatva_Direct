@@ -247,65 +247,9 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     }
   }
 
-  const { data: approvedOffers, error: offerErr } = await supabase
-    .from('supplier_products')
-    .select(`
-      status,
-      is_active,
-      attributes,
-      product:products (
-        status,
-        brand,
-        specifications
-      )
-    `)
-    .eq('status', 'approved')
-    .eq('is_active', true)
-    .limit(5000);
-
-  if (!offerErr) {
-    const hasApprovedEvidence = (approvedOffers || []).some((row) => {
-      const productStatus = String(row?.product?.status || '').toLowerCase();
-      if (productStatus && productStatus !== 'approved') return false;
-      const approvedBrand =
-        row?.attributes?.brand ||
-        row?.attributes?.brandModel ||
-        row?.product?.brand ||
-        row?.product?.specifications?.brand ||
-        row?.product?.specifications?.brandModel ||
-        '';
-      return normalizeBrandKey(approvedBrand) === normalized || catalogBrandDedupKey(approvedBrand) === normalized;
-    });
-
-    if (hasApprovedEvidence) {
-      const nowIso = new Date().toISOString();
-      if (brandRow?.id) {
-        const { data: updated, error: upErr } = await updateBrandById(brandRow.id, {
-          status: 'approved',
-          approved_at: nowIso,
-          updated_at: nowIso,
-          rejection_reason: null
-        }, supabase);
-        if (!upErr && updated) {
-          return { ok: true, brand: updated };
-        }
-      } else {
-        const { data: createdApproved, error: createApprovedErr } = await createBrand({
-          name: pickCanonicalBrandDisplayName(name),
-          normalized_name: normalized,
-          status: 'approved',
-          requested_by: requesterUserId,
-          requested_at: nowIso,
-          approved_at: nowIso,
-          created_at: nowIso,
-          updated_at: nowIso
-        }, supabase);
-        if (!createApprovedErr && createdApproved) {
-          return { ok: true, brand: createdApproved };
-        }
-      }
-    }
-  }
+  // Rejected brands can be re-opened as pending above.
+  // Never auto-approve from product catalog evidence here — brand approval is admin-only.
+  // (Auto-approval previously marked Path B "Save brand" requests as approved immediately.)
 
   const finalStatus = String(brandRow?.status || 'pending').toLowerCase();
   return {
