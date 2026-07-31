@@ -49,8 +49,15 @@ test('keeps SP request-status system notifications', () => {
     metadata: { source: 'service_provider_request_rejected' },
     is_read: true
   };
+  const submitted = {
+    type: 'system',
+    title: 'Product request submitted: Widget',
+    metadata: { source: 'service_provider_product_request' },
+    is_read: false
+  };
   assert.equal(isNotificationVisibleToRole(approved, 'service_provider'), true);
   assert.equal(isNotificationVisibleToRole(rejected, 'service_provider'), true);
+  assert.equal(isNotificationVisibleToRole(submitted, 'service_provider'), true);
   assert.equal(isNotificationVisibleToRole(approved, 'supplier'), false);
 });
 

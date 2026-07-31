@@ -12,6 +12,7 @@ import {
   findExistingBoqProductRequest,
   recordBoqProductRequest
 } from '../../services/boqProductRequestDedupService.js';
+import { notifyServiceProviderProductRequestSubmitted } from '../../services/serviceProviderRequestNotificationService.js';
 import { SUPPLY_CHAIN_ROLE_LABELS } from '../../services/supplyChainSharedService.js';
 
 function buildSuccessMessage({ productName, suppliersNotified, terminalRole, notifyScope }) {
@@ -31,13 +32,29 @@ async function deliverProductRequestNotifications({
   db,
   userId,
   payload,
-  productName
+  productName,
+  requestId = null
 }) {
-  const { name, category, unit, description, boqId, brand } = payload;
+  const { category, unit, description, boqId, brand } = payload;
   const { data: serviceProvider } = await findUserBasicById(userId, db);
   const resolved = await resolveBrandAndTerminalRoleForProductRequest(db, productName, brand);
   const resolvedBrand = resolved.brandName || brand || productName;
   const terminalRole = resolved.terminalRole;
+
+  try {
+    await notifyServiceProviderProductRequestSubmitted({
+      db,
+      userId,
+      productName,
+      requestId,
+      category: String(category || '').trim().toLowerCase() || null,
+      unit: String(unit || '').trim().toLowerCase() || null,
+      brand: resolvedBrand || brand || null,
+      boqId: boqId || null
+    });
+  } catch (spNotifError) {
+    console.error('[BOQ Product Request] Failed to notify requesting service provider:', spNotifError);
+  }
 
   const supplierResult = await notifyTerminalSuppliersAboutProductRequest({
     db,
@@ -124,7 +141,7 @@ router.post('/request-product', authenticateToken, isServiceProvider, async (req
       });
     }
 
-    await recordBoqProductRequest(supabase, req.userId, {
+    const recordedRequest = await recordBoqProductRequest(supabase, req.userId, {
       ...payload,
       name: productName
     });
@@ -152,7 +169,8 @@ router.post('/request-product', authenticateToken, isServiceProvider, async (req
       db: supabase,
       userId: req.userId,
       payload,
-      productName
+      productName,
+      requestId: recordedRequest?.id || null
     }).catch((error) => {
       console.error('[BOQ Product Request] Background delivery failed:', error);
     });

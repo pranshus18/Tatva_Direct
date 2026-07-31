@@ -36,6 +36,7 @@ import {
   validateMinSupplierProductPhotos
 } from '../../../utils/supplierProductPhotos.js';
 import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
+import { notifyServiceProvidersForFulfilledBoqRequests } from '../../../services/serviceProviderRequestNotificationService.js';
 
 export function buildSupplierProductCreateHandler(ctx) {
   const {
@@ -487,7 +488,8 @@ export function buildSupplierProductCreateHandler(ctx) {
             await insertNotifications(notifications, supabase);
           }
 
-          if (!isNewProduct && responseProduct?.requested_by_service_provider_id) {
+          let alreadyNotifiedSpId = null;
+          if (responseProduct?.requested_by_service_provider_id) {
             await insertNotification(
               {
                 user_id: responseProduct.requested_by_service_provider_id,
@@ -498,9 +500,18 @@ export function buildSupplierProductCreateHandler(ctx) {
                 related_supplier_id: req.userId,
                 metadata: { productId, source: 'service_provider_request_fulfilled' }
               },
-              supabase
+              supabase,
+              { skipEmail: true }
             );
+            alreadyNotifiedSpId = responseProduct.requested_by_service_provider_id;
           }
+
+          await notifyServiceProvidersForFulfilledBoqRequests({
+            db: supabase,
+            product: responseProduct,
+            supplier: { id: req.userId, ...(supplier || {}) },
+            alreadyNotifiedUserId: alreadyNotifiedSpId
+          });
         } catch (notifErr) {
           console.log('Product create notifications failed:', notifErr?.message || notifErr);
         }

@@ -35,6 +35,20 @@ describe('spNotificationAudience', () => {
         metadata: { source: 'service_provider_request_rejected' }
       })
     ).toBe(true);
+    expect(
+      isSpVisibleNotification({
+        type: 'system',
+        title: 'Product request submitted: Widget',
+        metadata: { source: 'service_provider_product_request' }
+      })
+    ).toBe(true);
+    expect(
+      isSpVisibleNotification({
+        type: 'system',
+        title: 'Supplier added your requested product: Widget',
+        metadata: { source: 'service_provider_request_fulfilled' }
+      })
+    ).toBe(true);
   });
 
   it('filters list and unread count', () => {

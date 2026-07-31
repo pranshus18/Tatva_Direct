@@ -34,6 +34,7 @@ const SP_SYSTEM_SOURCES = new Set([
 
 const SUPPLIER_ONLY_SYSTEM_SOURCES = new Set([
   'service_provider_request',
+  'service_provider_boq_customer_lookup',
   'low_inventory',
   'mov_alert',
   'brand_rejected'

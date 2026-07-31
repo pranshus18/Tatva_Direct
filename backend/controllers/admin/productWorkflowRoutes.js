@@ -3,6 +3,7 @@ import {
   adminSpecTemplateCreateSchema
 } from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
+import { notifyServiceProviderRequestReviewDecision } from '../../services/serviceProviderRequestNotificationService.js';
 
 export function registerProductWorkflowRoutes({ router, authenticateToken, isAdmin, supabase }) {
   // ============================
@@ -142,6 +143,19 @@ export function registerProductWorkflowRoutes({ router, authenticateToken, isAdm
           final_decision: decision === 'approved' ? 'approved' : (decision === 'rejected' ? 'rejected' : 'queued_review'),
           actor_id: req.userId
         });
+
+      try {
+        await notifyServiceProviderRequestReviewDecision({
+          db: supabase,
+          request: updated,
+          decision
+        });
+      } catch (spNotifError) {
+        console.error(
+          '[ADMIN PRODUCT REQUEST REVIEW] Failed to notify service provider:',
+          spNotifError
+        );
+      }
 
       res.json({ status: 'success', message: `Request marked ${decision}`, request: updated });
     } catch (error) {

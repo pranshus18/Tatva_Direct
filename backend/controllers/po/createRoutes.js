@@ -729,12 +729,15 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         throw createHttpError(400, invErr?.message || 'Failed to finalize inventory for purchase order');
       }
 
-      // Create notification for the supplier about the new order
+      // Create notifications for supplier and the service provider about the new order
       try {
         const serviceProviderName =
           String(serviceProvider?.name || '').trim() ||
           String(serviceProvider?.company || '').trim() ||
           'Service Provider';
+        const supplierName =
+          String(group?.vendorName || supplier?.name || supplier?.company || '').trim() ||
+          'Supplier';
 
         await insertNotification(
           {
@@ -743,12 +746,37 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             title: 'New Order Received',
             message: `You have received a new order ${order.order_number} from ${serviceProviderName} for ₹${totalAmount.toLocaleString('en-IN')}`,
             related_order_id: order.id,
-            is_read: false
+            is_read: false,
+            metadata: {
+              orderNumber: order.order_number,
+              newStatus: order.status || 'pending',
+              event: 'order_created'
+            }
           },
           supabase
         );
-        
-        logger.debug(`Notification created for supplier ${supplier.id} about new order ${order.order_number}`);
+
+        await insertNotification(
+          {
+            user_id: req.userId,
+            type: 'order_status',
+            title: `Order placed: ${order.order_number}`,
+            message: `Your order ${order.order_number} was placed with ${supplierName} for ₹${totalAmount.toLocaleString('en-IN')}.`,
+            related_order_id: order.id,
+            is_read: false,
+            metadata: {
+              orderNumber: order.order_number,
+              newStatus: order.status || 'pending',
+              supplierId: supplier.id,
+              event: 'order_created'
+            }
+          },
+          supabase
+        );
+
+        logger.debug(
+          `Notifications created for supplier ${supplier.id} and service provider ${req.userId} about new order ${order.order_number}`
+        );
       } catch (notifError) {
         logger.error('Error creating order notification:', notifError);
         // Don't fail the order creation if notification creation fails
