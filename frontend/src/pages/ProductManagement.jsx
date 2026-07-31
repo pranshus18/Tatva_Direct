@@ -2064,7 +2064,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     try {
       const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl(`/api/supplier/products/search?q=${encodeURIComponent(query)}`), {
+      const params = new URLSearchParams({
+        q: query,
+        brandScoped: '1'
+      });
+      const response = await fetch(getApiUrl(`/api/supplier/products/search?${params.toString()}`), {
         headers: {
           'Authorization': `Bearer ${token}`
         }

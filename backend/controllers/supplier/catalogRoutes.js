@@ -26,6 +26,30 @@ function isAuthenticatedSupplier(req) {
   return hasEffectiveRegisteredRole(req.user, 'supplier');
 }
 
+/**
+ * Buyer Product Discovery / voice search must return the full listed catalog.
+ * Supplier Product Management autocomplete opts in via brandScoped=1 (or scope=supplier).
+ * Dual-role users often keep supplier registeredRoles while browsing SP discovery; never
+ * infer brand lock from that alone or an empty Select Yourself profile hides every product.
+ */
+export function shouldBrandScopeDiscoverySearch(query = {}) {
+  const scopedFlag = String(query.brandScoped ?? query.brand_scoped ?? '')
+    .trim()
+    .toLowerCase();
+  if (scopedFlag === '1' || scopedFlag === 'true' || scopedFlag === 'yes') return true;
+  return String(query.scope || '').trim().toLowerCase() === 'supplier';
+}
+
+export function filterSuggestionsBySupplierBrandAccess(suggestions, profile) {
+  return (suggestions || []).filter((s) => {
+    const brandLabel = resolveUpstreamBrandLabel(
+      { brandModel: s?.brandModel || s?.modelBrand || s?.brand, brand: s?.brand },
+      s?.brand
+    );
+    return supplierCanAccessBrandStrict(profile || {}, brandLabel).allowed;
+  });
+}
+
 export function registerSupplierCatalogRoutes(ctx) {
   const {
     router,
@@ -56,17 +80,11 @@ router.get('/products/search', authenticateToken, async (req, res) => {
       offset,
       legacyManualDiscoveryCategoryFilter: true
     });
-    const isSupplierUser = isAuthenticatedSupplier(req);
-    const visibleSuggestions = isSupplierUser
-      ? (result.suggestions || []).filter((s) => {
-          const brandLabel = resolveUpstreamBrandLabel(
-            { brandModel: s?.brandModel || s?.modelBrand || s?.brand, brand: s?.brand },
-            s?.brand
-          );
-          return supplierCanAccessBrandStrict(req.user?.profile || {}, brandLabel).allowed;
-        })
+    const brandScoped = shouldBrandScopeDiscoverySearch(req.query);
+    const visibleSuggestions = brandScoped
+      ? filterSuggestionsBySupplierBrandAccess(result.suggestions, req.user?.profile)
       : (result.suggestions || []);
-    const responseTotal = isSupplierUser ? visibleSuggestions.length : result.total;
+    const responseTotal = brandScoped ? visibleSuggestions.length : result.total;
 
     return res.json({
       status: 'success',
