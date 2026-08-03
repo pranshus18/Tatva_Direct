@@ -200,6 +200,17 @@ export const buildSpecificationTemplateFromFields = (fields = []) => {
   return template;
 };
 
+/** Keep specification keys from a map but clear all values (for supplier data entry). */
+export const specificationTemplateKeysOnly = (specs = {}) => {
+  const parsed = parseSpecificationsObject(specs) || {};
+  const result = {};
+  Object.keys(parsed).forEach((key) => {
+    const normalizedKey = String(key || '').trim();
+    if (normalizedKey) result[normalizedKey] = '';
+  });
+  return result;
+};
+
 export const normalizeBcovBrand = (value) =>
   String(value || '')
     .trim()

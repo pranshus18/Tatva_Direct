@@ -296,6 +296,7 @@ const SupplierProductSetup = ({ user }) => {
         setLoadingSpecs(true);
         const token = localStorage.getItem('token');
         const queryParams = new URLSearchParams();
+        queryParams.set('keysOnly', '1');
         if (modelHint) queryParams.set('model', modelHint);
         if (brand) queryParams.set('brand', brand);
         const query = queryParams.toString() ? `?${queryParams.toString()}` : '';
@@ -322,7 +323,7 @@ const SupplierProductSetup = ({ user }) => {
           const next = { ...prevObj };
           keys.forEach((k) => {
             if (!Object.prototype.hasOwnProperty.call(next, k)) {
-              next[k] = specsObj[k];
+              next[k] = '';
             }
           });
           return next;

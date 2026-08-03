@@ -4,7 +4,8 @@ import {
   mergeSpecificationMaps,
   parseSpecificationsObject,
   buildSpecificationTemplateFromFields,
-  countMeaningfulSpecValues
+  countMeaningfulSpecValues,
+  specificationTemplateKeysOnly
 } from '../services/supplierCatalogHelpersService.js';
 
 test('parseSpecificationsObject: parses JSON string and legacy array rows', () => {
@@ -27,6 +28,19 @@ test('mergeSpecificationMaps: keeps template keys and fills values from catalog'
   assert.equal(merged.finish, 'Matt');
   assert.equal(merged.volume, null);
   assert.equal(merged.coverage, '140 sq ft/L');
+});
+
+test('specificationTemplateKeysOnly: keeps keys and clears values', () => {
+  const keysOnly = specificationTemplateKeysOnly({
+    'Product Type': 'OPC 53 Grade',
+    Color: 'Grey',
+    'Net Weight': '50 kg'
+  });
+  assert.deepEqual(keysOnly, {
+    'Product Type': '',
+    Color: '',
+    'Net Weight': ''
+  });
 });
 
 test('buildSpecificationTemplateFromFields: returns null-valued keys', () => {

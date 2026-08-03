@@ -5,7 +5,8 @@ import {
   countMeaningfulSpecValues,
   mergeSpecificationMaps,
   buildSpecificationTemplateFromFields,
-  mergeVariantSpecificationTemplate
+  mergeVariantSpecificationTemplate,
+  specificationTemplateKeysOnly
 } from '../../services/supplierCatalogHelpersService.js';
 import { normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 
@@ -119,7 +120,8 @@ export async function resolveAdminSpecificationTemplate(supabase, {
   categoryName: rawCategory,
   modelRaw = '',
   brandRaw = '',
-  excludeProductId = null
+  excludeProductId = null,
+  keysOnly = false
 } = {}) {
   const categoryName = String(rawCategory || '').trim().toLowerCase();
   if (!categoryName) return {};
@@ -154,6 +156,10 @@ export async function resolveAdminSpecificationTemplate(supabase, {
   const fieldTemplate = buildSpecificationTemplateFromFields(fields);
   if (Object.keys(fieldTemplate).length > 0) {
     templateSkeleton = mergeSpecificationMaps(fieldTemplate, templateSkeleton);
+  }
+
+  if (keysOnly) {
+    return specificationTemplateKeysOnly(templateSkeleton);
   }
 
   let specs = { ...templateSkeleton };

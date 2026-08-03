@@ -304,7 +304,8 @@ router.post('/products/extract-specifications', authenticateToken, async (req, r
     const adminTemplate = await resolveAdminSpecificationTemplate({
       categoryName: category,
       modelRaw: productName,
-      brandRaw: productName
+      brandRaw: productName,
+      keysOnly: true
     });
 
     if (Object.keys(adminTemplate).length > 0) {

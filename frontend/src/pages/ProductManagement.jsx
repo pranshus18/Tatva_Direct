@@ -31,6 +31,7 @@ import ProductImageCarousel from '../components/ProductImageCarousel';
 import { getProductImageList, getSupplierOfferImagesForForm } from '../utils/productImages';
 import {
   mergeSpecificationObjects,
+  mergeVariantSpecificationTemplate,
   parseSpecInputToValue,
   specValueToInput,
   specificationEntriesForDetails
@@ -1326,7 +1327,7 @@ const ProductDetailsModal = ({
         const adminTemplate =
           data?.specifications && typeof data.specifications === 'object' ? data.specifications : {};
         setDisplaySpecifications(
-          mergeSpecificationObjects(adminTemplate, product?.specifications || {})
+          mergeVariantSpecificationTemplate(adminTemplate, product?.specifications || {})
         );
       } catch {
         // Keep product snapshot when template fetch fails.
@@ -2643,6 +2644,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     try {
       const token = localStorage.getItem('token');
       const queryParams = new URLSearchParams();
+      queryParams.set('keysOnly', '1');
       if (normalizedModel) queryParams.set('model', normalizedModel);
       if (brandValue) queryParams.set('brand', brandValue);
       const modelQuery = queryParams.toString() ? `?${queryParams.toString()}` : '';
@@ -2674,14 +2676,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             specKeys.forEach((k) => {
               if (preserveExistingValues && Object.prototype.hasOwnProperty.call(existingSpecsSnapshot, k)) {
                 const existingValue = existingSpecsSnapshot[k];
-                const incomingValue = specsObj[k];
                 const existingFilled =
                   existingValue !== null &&
                   existingValue !== undefined &&
                   String(existingValue).trim() !== '';
-                newSpecs[k] = existingFilled ? existingValue : incomingValue;
+                newSpecs[k] = existingFilled ? existingValue : '';
               } else {
-                newSpecs[k] = specsObj[k];
+                newSpecs[k] = '';
               }
             });
             // Keep any supplier-added keys that are not in the template.

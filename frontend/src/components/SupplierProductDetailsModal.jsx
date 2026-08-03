@@ -5,7 +5,7 @@ import { getApiUrl } from '../config/api';
 import ProductImageCarousel from './ProductImageCarousel';
 import { collectProductImages } from './UpstreamProductDisplay';
 import {
-  mergeSpecificationObjects,
+  mergeVariantSpecificationTemplate,
   specificationEntriesForDetails
 } from '../utils/specifications';
 import { isMeaningfulProductDescription } from '../utils/productDisplay';
@@ -67,7 +67,9 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
         if (data?.status !== 'success' || cancelled) return;
         const adminTemplate =
           data?.specifications && typeof data.specifications === 'object' ? data.specifications : {};
-        setDisplaySpecifications(mergeSpecificationObjects(adminTemplate, product?.specifications || {}));
+        setDisplaySpecifications(
+          mergeVariantSpecificationTemplate(adminTemplate, product?.specifications || {})
+        );
       } catch {
         // Keep product snapshot when template fetch fails.
       }

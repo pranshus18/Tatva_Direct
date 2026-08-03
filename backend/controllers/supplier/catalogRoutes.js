@@ -490,10 +490,16 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
 
     console.log(`✅ [GET SPECS] Category "${categoryName}" found`);
 
+    const keysOnlyRaw = String(req.query.keysOnly ?? req.query.keys_only ?? '1')
+      .trim()
+      .toLowerCase();
+    const keysOnly = !['0', 'false', 'no'].includes(keysOnlyRaw);
+
     const specs = await resolveAdminSpecificationTemplate({
       categoryName,
       modelRaw,
-      brandRaw: brandRaw || modelRaw
+      brandRaw: brandRaw || modelRaw,
+      keysOnly
     });
 
     return res.json({
@@ -502,7 +508,7 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
         name: category.name,
         displayName: category.display_name || category.name
       },
-      source: 'resolved',
+      source: keysOnly ? 'template_keys' : 'resolved',
       model: modelIdentifier
         ? { modelIdentifier, displayModel: modelRaw || modelIdentifier }
         : null,
