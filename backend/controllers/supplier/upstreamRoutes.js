@@ -55,6 +55,7 @@ import {
   ORDER_INSERT_MAX_RETRIES,
   isOrderNumberConflictError,
   isSupplierOfferAvailableForUpstream,
+  isSupplierOfferEligibleForUpstreamSelection,
   resolveEffectiveSupplierOfferState,
   syncSupplierOfferApprovalFromCatalog
 } from './shared/productHelpers.js';
@@ -554,7 +555,7 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
     const { data: myRows, error: myErr } = await supabase
       .from('supplier_products')
       .select(
-        'id, product_id, variant_key, variant_asin, stock, min_order_quantity, outlet_id, location, attributes, is_active, status, product:products(brand)'
+        'id, product_id, variant_key, variant_asin, stock, min_order_quantity, outlet_id, location, attributes, is_active, status, product:products(brand, status)'
       )
       .eq('supplier_id', req.userId)
       .in('id', supplierProductIds)
@@ -563,8 +564,10 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
 
     if (myErr) throw myErr;
 
-    const myOffers = (myRows || []).filter((r) =>
-      isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, r?.attributes, r?.product?.brand)
+    const myOffers = (myRows || []).filter(
+      (r) =>
+        isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, r?.attributes, r?.product?.brand) &&
+        isSupplierOfferEligibleForUpstreamSelection(r, r.product)
     );
     if (myOffers.length === 0) {
       return res.json({ status: 'success', parentRole: null, parentRoles: [], items: [] });
@@ -1472,18 +1475,29 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     // Validate my selected supplier products
     const { data: myRows, error: myErr } = await supabase
       .from('supplier_products')
-      .select('id, product_id, variant_key, variant_asin, attributes, product:products(brand)')
+      .select('id, product_id, variant_key, variant_asin, attributes, status, is_active, product:products(brand, status)')
       .eq('supplier_id', req.userId)
       .in('id', mineIds);
     if (myErr) throw myErr;
     const myByMineId = {};
     (myRows || [])
-      .filter((r) =>
-        isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, r?.attributes, null)
+      .filter(
+        (r) =>
+          isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, r?.attributes, r?.product?.brand) &&
+          isSupplierOfferEligibleForUpstreamSelection(r, r.product)
       )
       .forEach((r) => {
         myByMineId[r.id] = r;
       });
+
+    const invalidMineIds = mineIds.filter((id) => !myByMineId[id]);
+    if (invalidMineIds.length > 0) {
+      return res.status(403).json({
+        status: 'error',
+        message:
+          'One or more selected products are rejected or pending approval and cannot be used for upstream sourcing.'
+      });
+    }
 
     const { data: upstreamOffers, error: upstreamErr } = await supabase
       .from('supplier_products')
@@ -1940,13 +1954,20 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
 
     const { data: mineRow, error: mineError } = await supabase
       .from('supplier_products')
-      .select('id, supplier_id, min_order_quantity, attributes, product:products(brand)')
+      .select('id, supplier_id, min_order_quantity, attributes, status, is_active, product:products(brand, status)')
       .eq('id', mineSupplierProductId)
       .eq('supplier_id', req.userId)
       .maybeSingle();
     if (mineError) throw mineError;
     if (!mineRow) {
       return res.status(404).json({ status: 'error', message: 'Selected product was not found in your inventory' });
+    }
+    if (!isSupplierOfferEligibleForUpstreamSelection(mineRow, mineRow.product)) {
+      return res.status(403).json({
+        status: 'error',
+        message:
+          'This product is not approved for upstream sourcing. Rejected or pending products cannot be sourced from upstream partners.'
+      });
     }
     if (!isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, mineRow?.attributes, mineRow?.product?.brand)) {
       return res.status(403).json({

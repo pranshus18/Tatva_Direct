@@ -112,8 +112,7 @@ function getSupplierApprovalStatus(product) {
   const raw = String(product?.status || 'pending').trim().toLowerCase();
   if (raw === 'rejected') return 'rejected';
   if (raw === 'approved' || raw === 'active') return 'approved';
-  // Admin-approved offers are marked active even if a stale status string remains.
-  if (product?.is_active === true || product?.isActive === true) return 'approved';
+  // Pending / unknown never become "Approved / Active" just because is_active is true.
   return 'pending';
 }
 
@@ -329,14 +328,15 @@ const ProductManagement = ({ user }) => {
       const data = await response.json();
       if (data.status === 'success') {
         const productsWithStatus = normalizeSupplierProductsFromApi(data.products || []).map(
-          (product) => ({
-            ...product,
-            status: getSupplierApprovalStatus(product),
-            is_active:
-              product.is_active === true ||
-              product.isActive === true ||
-              getSupplierApprovalStatus(product) === 'approved'
-          })
+          (product) => {
+            const approval = getSupplierApprovalStatus(product);
+            return {
+              ...product,
+              status: approval,
+              // Keep is_active aligned with the status badge so counters stay consistent.
+              is_active: approval === 'approved'
+            };
+          }
         );
         setProducts(productsWithStatus);
         if (data.stats && typeof data.stats === 'object') {
@@ -1859,7 +1859,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [hasAdminSpecTemplate, setHasAdminSpecTemplate] = useState(false);
-  const [aiProvider, setAiProvider] = useState('auto'); // 'auto', 'openai', 'gemini', 'claude' - for extract specs only
+  const [aiProvider, setAiProvider] = useState('gemini'); // product photo analyze always uses Gemini on server
+  const [aiAnalysisMeta, setAiAnalysisMeta] = useState(null);
   // Initialize specifications: for existing products, use their specs; for new products, start empty
   const [specifications, setSpecifications] = useState(() => {
     if (product && product.specifications) {
@@ -3187,7 +3188,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         },
         body: JSON.stringify({
           images,
-          provider: aiProvider === 'auto' ? 'auto' : aiProvider
+          provider: 'gemini'
         })
       });
 
@@ -3217,15 +3218,18 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             }
           : null;
         setAiDetectionReview(reviewForUi);
-        openAiSuggestionPopupFromReview(reviewForUi, 'AI');
+        setAiAnalysisMeta(data.analysisMeta || null);
+        openAiSuggestionPopupFromReview(reviewForUi, data.provider || 'gemini');
       } else {
         setAiDetectionReview(null);
+        setAiAnalysisMeta(null);
         setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
         alert(data.message || 'Failed to analyze images. Please try again.');
       }
     } catch (error) {
       console.error('Image analysis error:', error);
       setAiDetectionReview(null);
+      setAiAnalysisMeta(null);
       setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
       alert('Failed to analyze images. Please try again.');
     } finally {
@@ -3788,6 +3792,18 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                         <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#065f46' }}>
                           AI suggestions ready — nothing is filled in until you apply a value
                         </span>
+                        {aiAnalysisMeta?.cacheHit ? (
+                          <span
+                            style={{
+                              fontSize: '0.72rem',
+                              fontWeight: 600,
+                              color: '#047857',
+                              marginLeft: 'auto'
+                            }}
+                          >
+                            Matched prior analysis for these photos
+                          </span>
+                        ) : null}
                       </div>
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
                         {[
@@ -4904,6 +4920,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               <p style={{ margin: '0 0 0.55rem 0', fontSize: '0.82rem', color: '#7c2d12' }}>
                 Fields you already filled stay unchecked. Tick a suggestion only if you want to replace
                 your value — nothing is written until you apply.
+                {aiAnalysisMeta?.cacheHit ? (
+                  <span style={{ display: 'block', marginTop: '0.35rem', fontWeight: 600 }}>
+                    These details were reused from a prior analysis of the same photos.
+                  </span>
+                ) : null}
               </p>
               <div style={{ display: 'grid', gap: '0.45rem' }}>
                 {aiSuggestionPopup.items.map((item) => (

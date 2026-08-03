@@ -214,7 +214,7 @@ export function buildSupplierProductCreateHandler(ctx) {
       if (posLookupGsku) normalizedSpecs = { ...normalizedSpecs, gsku: posLookupGsku };
 
       const selectedCatalogProductId = String(catalogProductId || '').trim();
-      const existingProduct = await findExistingProductCandidate(supabase, {
+      const existingMatch = await findExistingProductCandidate(supabase, {
         selectedCatalogProductId,
         canonicalProductFromIdentifier,
         identityBundle,
@@ -223,6 +223,8 @@ export function buildSupplierProductCreateHandler(ctx) {
         categoryName,
         normalizeText
       });
+      const existingProduct = existingMatch?.product || null;
+      const matchStrength = existingMatch?.matchStrength || 'none';
 
       const baseProductResult = await createBaseProductIfNeeded(supabase, {
         existingProduct,
@@ -320,7 +322,9 @@ export function buildSupplierProductCreateHandler(ctx) {
       const shouldBeApproved = shouldAutoApproveSupplierOfferOnCreate({
         hasApprovedSameVariantOffer: Boolean(approvedVariantOffer?.id),
         catalogProductStatus: resolvedCatalogStatus,
-        hasAnyApprovedOfferForProduct: Boolean(anyApprovedOfferForProduct?.id)
+        hasAnyApprovedOfferForProduct: Boolean(anyApprovedOfferForProduct?.id),
+        // New catalog rows are always pending; only confirmed re-lists may auto-approve.
+        matchStrength: isNewProduct ? 'none' : matchStrength
       });
       const variantAsin = buildVariantAsinLikeId(
         catalogAsin || identityBundle.asinLikeId,
@@ -346,7 +350,10 @@ export function buildSupplierProductCreateHandler(ctx) {
           supplierDescription: String(otherData.description || '').trim(),
           description: String(otherData.description || '').trim(),
           specifications: otherData.specifications || normalizedSpecs,
+          // Keep the supplier's submitted title on the offer so the portal never silently
+          // rewrites it to a different catalog product's name after a weak attach.
           name: otherData.name,
+          listingName: String(otherData.name || '').trim(),
           category: category,
           brandModel: (brandModel || '').toString().trim(),
           brand: effectiveBrandInput,
@@ -396,8 +403,11 @@ export function buildSupplierProductCreateHandler(ctx) {
 
       const createdOffer = newSupplierProduct;
       const supplierSubmittedDescription = String(otherData.description || '').trim();
+      const submittedName = String(otherData.name || '').trim();
       const responseProduct = {
         ...(baseProduct || {}),
+        // Prefer the name the supplier just typed for this row, not a shared catalog rename.
+        name: submittedName || baseProduct?.name || 'Product',
         supplierDescription: supplierSubmittedDescription,
         publishedDescription: baseProduct?.description || '',
         description: supplierSubmittedDescription,

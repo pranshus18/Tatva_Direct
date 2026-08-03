@@ -35,7 +35,7 @@ import {
   reserveUpstreamCheckoutInventory,
   SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY
 } from '../utils/upstreamCheckoutReservation';
-import { normalizeSupplierProductsFromApi } from '../utils/supplierProductRow';
+import { filterSupplierProductsForUpstream } from '../utils/supplierProductRow';
 import {
   UPSTREAM_SOURCING_PATH,
   openUpstreamProductDetailInNewTab
@@ -272,12 +272,12 @@ const SupplierUpstream = ({ user }) => {
 
   const fetchMyProducts = async () => {
     try {
-      const res = await authFetch('/api/supplier/products', {
+      const res = await authFetch('/api/supplier/products?forUpstream=true', {
         cache: 'no-cache'
       });
       const data = await res.json();
       if (data.status === 'success') {
-        setProducts(normalizeSupplierProductsFromApi(data.products || []));
+        setProducts(filterSupplierProductsForUpstream(data.products || []));
       }
     } catch (e) {
       console.error('Failed to fetch supplier products:', e);
@@ -1142,8 +1142,12 @@ const SupplierUpstream = ({ user }) => {
       {filteredProducts.length === 0 ? (
         <SpEmptyState
           icon={Package}
-          title="No matching products"
-          description="Try a different search or category filter."
+          title={products.length === 0 ? 'No approved products for upstream sourcing' : 'No matching products'}
+          description={
+            products.length === 0
+              ? 'Only admin-approved products appear here. Rejected or pending products stay on Manage Products until approved.'
+              : 'Try a different search or category filter.'
+          }
         />
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">

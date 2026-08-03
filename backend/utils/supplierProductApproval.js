@@ -28,17 +28,28 @@ function isApprovedStatus(status) {
 }
 
 /**
- * Auto-approve a new supplier offer when the shared catalog product is already known/live.
- * Different variants of an existing product do not need a separate admin approval gate.
+ * Auto-approve a new supplier offer only when the attach is a clear re-list of a product
+ * that is already live — not when a weak name-only match or a brand-new catalog row is used.
  *
- * Still requires approval for brand-new catalog products (nothing approved yet).
+ * matchStrength:
+ * - explicit: supplier picked an existing catalog product in the UI
+ * - strong: GTIN / brand+MPN / identifier / exact catalog_key match
+ * - weak: name+category only — always needs admin approval for the new offer
+ * - none: brand-new catalog product
  */
 export function shouldAutoApproveSupplierOfferOnCreate({
   hasApprovedSameVariantOffer = false,
   catalogProductStatus = '',
-  hasAnyApprovedOfferForProduct = false
+  hasAnyApprovedOfferForProduct = false,
+  matchStrength = 'none'
 } = {}) {
   if (hasApprovedSameVariantOffer) return true;
+
+  const strength = String(matchStrength || 'none').trim().toLowerCase();
+  const isConfirmedReList = strength === 'explicit' || strength === 'strong';
+  if (!isConfirmedReList) return false;
+
+  // Confirmed re-lists of a live marketplace product skip another admin gate.
   if (isApprovedStatus(catalogProductStatus)) return true;
   if (hasAnyApprovedOfferForProduct) return true;
   return false;

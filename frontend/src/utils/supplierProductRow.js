@@ -39,13 +39,18 @@ export function normalizeSupplierProductFromApi(product) {
     return Number.isFinite(num) ? num : null;
   })();
   const rawStatus = String(product.status || 'pending').trim().toLowerCase();
-  const isActive = product.is_active === true || product.isActive === true;
+  // Approval is the status string — never promote pending solely because is_active is true
+  // (catalog products default is_active=true while still awaiting admin review).
   const status =
     rawStatus === 'rejected'
       ? 'rejected'
-      : rawStatus === 'approved' || rawStatus === 'active' || isActive
+      : rawStatus === 'approved' || rawStatus === 'active'
         ? 'approved'
         : 'pending';
+  const isActive =
+    status === 'approved'
+      ? product.is_active !== false && product.isActive !== false
+      : false;
   const rejectionReason = String(
     product.rejectionReason || product.rejection_reason || ''
   ).trim();
@@ -53,7 +58,7 @@ export function normalizeSupplierProductFromApi(product) {
     ...product,
     ...(offerId ? { supplier_product_id: offerId } : {}),
     status,
-    is_active: status === 'approved' ? true : Boolean(isActive),
+    is_active: isActive,
     rejection_reason: rejectionReason || product.rejection_reason || null,
     rejectionReason: rejectionReason || null,
     price: parsedPrice != null ? parsedPrice : Number(product.price) || 0,
@@ -66,6 +71,20 @@ export function normalizeSupplierProductFromApi(product) {
 export function normalizeSupplierProductsFromApi(products) {
   if (!Array.isArray(products)) return [];
   return products.map(normalizeSupplierProductFromApi);
+}
+
+/** Approved active offers only — rejected/pending products stay on manage catalog, not upstream sourcing. */
+export function isSupplierProductEligibleForUpstream(product) {
+  const status = String(product?.status || 'pending').trim().toLowerCase();
+  if (status === 'rejected') return false;
+  if (status === 'approved' || status === 'active') {
+    return product?.is_active !== false && product?.isActive !== false;
+  }
+  return false;
+}
+
+export function filterSupplierProductsForUpstream(products) {
+  return normalizeSupplierProductsFromApi(products).filter(isSupplierProductEligibleForUpstream);
 }
 
 export function buildSupplierProductLookupMap(products) {

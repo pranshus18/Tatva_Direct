@@ -11,6 +11,7 @@ import {
   resolveEffectiveSupplierOfferState
 } from './shared/productHelpers.js';
 import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
+import { resolveSupplierOfferDisplayName } from '../../services/supplierProductWriteService.js';
 import { catalogBrandDedupKey, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 
 export function registerSupplierProductListRoutes(ctx) {
@@ -24,6 +25,13 @@ export function registerSupplierProductListRoutes(ctx) {
 
 router.get('/products', authenticateToken, async (req, res) => {
   try {
+    const forUpstream =
+      String(req.query.forUpstream || req.query.context || '')
+        .trim()
+        .toLowerCase() === 'upstream' ||
+      req.query.forUpstream === '1' ||
+      req.query.forUpstream === 'true';
+
     // Scoped to this supplier's own holds — no need to sweep the whole platform on every page load.
     await expireStaleReservations({ supplierId: req.userId });
 
@@ -57,8 +65,7 @@ router.get('/products', authenticateToken, async (req, res) => {
       });
     }
     
-    // Heal stale junction rows before building the response so Total/Active counters
-    // and card status match Admin approval immediately.
+    // Heal approved offers that lost their is_active flag (never force-approve pending rows).
     const offerIdsNeedingSync = (supplierProducts || [])
       .filter((sp) => resolveEffectiveSupplierOfferState(sp, sp.product).needsCatalogSync)
       .map((sp) => sp.id)
@@ -75,7 +82,7 @@ router.get('/products', authenticateToken, async (req, res) => {
         .in('id', offerIdsNeedingSync);
       if (syncErr) {
         console.warn(
-          '[SupplierProducts] Failed to sync approved catalog status onto offers:',
+          '[SupplierProducts] Failed to restore active flag on approved offers:',
           syncErr.message || syncErr
         );
       } else {
@@ -120,13 +127,10 @@ router.get('/products', authenticateToken, async (req, res) => {
         // Catalog/admin specs win over stale offer copies for the same keys.
         // Offer-only keys that are not on the catalog product are still preserved.
         const storedSpecs = { ...offerSpecs, ...baseSpecs };
-        const listingName =
-          attributes?.listingName != null && String(attributes.listingName).trim() !== ''
-            ? String(attributes.listingName).trim()
-            : baseProduct?.name ||
-              (attributes?.name != null && String(attributes.name).trim() !== ''
-                ? String(attributes.name).trim()
-                : 'Product');
+        const listingName = resolveSupplierOfferDisplayName({
+          attributes,
+          catalogName: baseProduct?.name
+        });
         const displayBrand = attributes?.brand || baseProduct?.brand || '';
         const effective = resolveEffectiveSupplierOfferState(sp, baseProduct);
         const rejectionReason =
@@ -242,7 +246,13 @@ router.get('/products', authenticateToken, async (req, res) => {
       );
     }
 
-    const list = products || [];
+    let list = products || [];
+    if (forUpstream) {
+      list = list.filter(
+        (product) =>
+          String(product?.status || '').toLowerCase() === 'approved' && product?.is_active === true
+      );
+    }
     const stats = {
       total: list.length,
       active: 0,

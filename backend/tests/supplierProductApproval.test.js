@@ -47,31 +47,46 @@ test('shouldAutoApproveSupplierOfferOnCreate approves when same variant already 
     shouldAutoApproveSupplierOfferOnCreate({
       hasApprovedSameVariantOffer: true,
       catalogProductStatus: 'pending',
-      hasAnyApprovedOfferForProduct: false
+      hasAnyApprovedOfferForProduct: false,
+      matchStrength: 'none'
     }),
     true
   );
 });
 
-test('shouldAutoApproveSupplierOfferOnCreate approves different variant when catalog is approved', () => {
+test('shouldAutoApproveSupplierOfferOnCreate approves explicit re-list of approved catalog', () => {
   assert.equal(
     shouldAutoApproveSupplierOfferOnCreate({
       hasApprovedSameVariantOffer: false,
       catalogProductStatus: 'approved',
-      hasAnyApprovedOfferForProduct: false
+      hasAnyApprovedOfferForProduct: false,
+      matchStrength: 'explicit'
     }),
     true
   );
 });
 
-test('shouldAutoApproveSupplierOfferOnCreate approves different variant when another offer is already approved', () => {
+test('shouldAutoApproveSupplierOfferOnCreate approves strong identity match when catalog is approved', () => {
   assert.equal(
     shouldAutoApproveSupplierOfferOnCreate({
       hasApprovedSameVariantOffer: false,
-      catalogProductStatus: 'pending',
-      hasAnyApprovedOfferForProduct: true
+      catalogProductStatus: 'approved',
+      hasAnyApprovedOfferForProduct: false,
+      matchStrength: 'strong'
     }),
     true
+  );
+});
+
+test('shouldAutoApproveSupplierOfferOnCreate keeps weak name-only match pending', () => {
+  assert.equal(
+    shouldAutoApproveSupplierOfferOnCreate({
+      hasApprovedSameVariantOffer: false,
+      catalogProductStatus: 'approved',
+      hasAnyApprovedOfferForProduct: true,
+      matchStrength: 'weak'
+    }),
+    false
   );
 });
 
@@ -80,7 +95,20 @@ test('shouldAutoApproveSupplierOfferOnCreate keeps brand-new products pending', 
     shouldAutoApproveSupplierOfferOnCreate({
       hasApprovedSameVariantOffer: false,
       catalogProductStatus: 'pending',
-      hasAnyApprovedOfferForProduct: false
+      hasAnyApprovedOfferForProduct: false,
+      matchStrength: 'none'
+    }),
+    false
+  );
+});
+
+test('shouldAutoApproveSupplierOfferOnCreate does not approve mere catalog status without strong match', () => {
+  assert.equal(
+    shouldAutoApproveSupplierOfferOnCreate({
+      hasApprovedSameVariantOffer: false,
+      catalogProductStatus: 'approved',
+      hasAnyApprovedOfferForProduct: false,
+      matchStrength: 'none'
     }),
     false
   );

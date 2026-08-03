@@ -218,14 +218,9 @@ export function isOrderNumberConflictError(error) {
 
 export { isRevenueRecognizedOrder } from '../../../utils/salesMetrics.js';
 
-function isCatalogProductApproved(catalogProduct) {
-  return String(catalogProduct?.status ?? '').trim().toLowerCase() === 'approved';
-}
-
 /**
- * Align supplier_products visibility with supplier inventory UI:
- * when the shared catalog product is approved but the junction row is still pending,
- * treat the offer as approved + active (legacy / race after catalog approval).
+ * Catalog approval alone must not re-label a brand-new pending offer as approved —
+ * admin moderation writes approved onto junction rows when the product goes live.
  * Rejected catalog or offer status always wins so suppliers keep a clear approval outcome.
  */
 export function resolveEffectiveSupplierOfferState(row, catalogProduct = null) {
@@ -233,16 +228,20 @@ export function resolveEffectiveSupplierOfferState(row, catalogProduct = null) {
   const rawStatus = String(row?.status ?? '').trim().toLowerCase();
   const catalogStatus = String(product?.status ?? '').trim().toLowerCase();
   const rejected = rawStatus === 'rejected' || catalogStatus === 'rejected';
-  const pendingLike = !rawStatus || rawStatus === 'pending';
-  const catalogApproved = isCatalogProductApproved(product);
 
   let effectiveStatus = row?.status ?? 'pending';
   let effectiveActive = row?.is_active === true;
 
-  if (!rejected && pendingLike && catalogApproved) {
+  if (rawStatus === 'approved' || rawStatus === 'active') {
     effectiveStatus = 'approved';
+    // Approved status means the offer is live even if is_active lagged behind.
     effectiveActive = true;
+  } else if (rawStatus === 'pending' || !rawStatus) {
+    effectiveStatus = 'pending';
+    // Explicit is_active on a pending row does not mean admin approved the listing.
+    effectiveActive = false;
   }
+
   if (rejected) {
     effectiveStatus = 'rejected';
     effectiveActive = false;
@@ -250,8 +249,9 @@ export function resolveEffectiveSupplierOfferState(row, catalogProduct = null) {
 
   const stock = parseSupplierStockQuantity(row?.stock) ?? 0;
   const availableForUpstream = !rejected && effectiveActive && stock > 0;
+  // Heal only when an approved offer row lost its active flag (never when still pending).
   const needsCatalogSync =
-    !rejected && pendingLike && catalogApproved && (row?.is_active !== true || rawStatus !== 'approved');
+    !rejected && effectiveStatus === 'approved' && row?.is_active !== true;
 
   return {
     rawStatus: row?.status ?? null,
@@ -267,7 +267,13 @@ export function isSupplierOfferAvailableForUpstream(row, catalogProduct = null) 
   return resolveEffectiveSupplierOfferState(row, catalogProduct).availableForUpstream;
 }
 
-/** Persist approved catalog state onto stale pending supplier_products rows. */
+/** Approved active offers a supplier may pick as "mine" on upstream sourcing (not pending/rejected). */
+export function isSupplierOfferEligibleForUpstreamSelection(row, catalogProduct = null) {
+  const state = resolveEffectiveSupplierOfferState(row, catalogProduct);
+  return state.effectiveStatus === 'approved' && state.effectiveActive;
+}
+
+/** Persist approved + active on offers that were approved but left inactive (stale row). */
 export async function syncSupplierOfferApprovalFromCatalog(supabase, row) {
   const state = resolveEffectiveSupplierOfferState(row);
   if (!state.needsCatalogSync || !row?.id || !supabase) return row;

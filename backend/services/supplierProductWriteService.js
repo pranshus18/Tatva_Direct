@@ -127,6 +127,17 @@ export async function ensureCategoryAndUnit(supabase, { category, unit, reqUserI
   return { categoryName, unitName };
 }
 
+/**
+ * Resolve a shared catalog product to attach this offer to.
+ * Returns { product, matchStrength } where matchStrength is one of:
+ *   - explicit: UI catalog pick
+ *   - strong: GTIN / brand+MPN / identifier / catalog_key
+ *   - weak: exact name + category only (never auto-approves)
+ *   - none
+ *
+ * Never falls back to a partial name match, and never links when both sides declare
+ * conflicting brands (prevents reusing an unrelated product's name/TSIN).
+ */
 export async function findExistingProductCandidate(
   supabase,
   {
@@ -139,54 +150,110 @@ export async function findExistingProductCandidate(
     normalizeText
   }
 ) {
-  let existingProduct = null;
+  const candidateBrand = normalizeText?.(identityBundle?.catalog?.brand) || '';
+
+  const brandsCompatible = (product) => {
+    const existingBrand = normalizeText?.(product?.brand) || '';
+    if (!candidateBrand || !existingBrand) return true;
+    return candidateBrand === existingBrand;
+  };
+
   if (selectedCatalogProductId) {
     const { data: bySelectedId } = await supabase
       .from('products')
       .select('id, status, brand, gtin, barcode, name, category, asin, catalog_key, specifications')
       .eq('id', selectedCatalogProductId)
       .maybeSingle();
-    if (bySelectedId) existingProduct = bySelectedId;
+    if (bySelectedId) {
+      return { product: bySelectedId, matchStrength: 'explicit' };
+    }
   }
 
-  if (!existingProduct && canonicalProductFromIdentifier) existingProduct = canonicalProductFromIdentifier;
-  if (!existingProduct && identityBundle.catalog.gtin) {
+  if (canonicalProductFromIdentifier) {
+    return { product: canonicalProductFromIdentifier, matchStrength: 'strong' };
+  }
+
+  if (identityBundle?.catalog?.gtin) {
     const { data: byGtin } = await supabase
       .from('products')
       .select('*')
       .eq('gtin', identityBundle.catalog.gtin)
       .maybeSingle();
-    if (byGtin) existingProduct = byGtin;
+    if (byGtin) {
+      return { product: byGtin, matchStrength: 'strong' };
+    }
   }
-  if (!existingProduct && identityBundle.catalog.brand && identityBundle.catalog.mpn) {
+
+  if (identityBundle?.catalog?.brand && identityBundle?.catalog?.mpn) {
     const { data: byBrandMpn } = await supabase
       .from('products')
       .select('*')
       .eq('brand', identityBundle.catalog.brand)
       .eq('mpn', identityBundle.catalog.mpn)
       .maybeSingle();
-    if (byBrandMpn) existingProduct = byBrandMpn;
+    if (byBrandMpn) {
+      return { product: byBrandMpn, matchStrength: 'strong' };
+    }
   }
-  if (!existingProduct && identityBundle.catalogKey) {
+
+  if (identityBundle?.catalogKey) {
     const { data: byCatalogKey } = await supabase
       .from('products')
       .select('*')
       .eq('catalog_key', identityBundle.catalogKey)
       .maybeSingle();
-    if (byCatalogKey) existingProduct = byCatalogKey;
+    if (byCatalogKey) {
+      // catalog_key includes name/category/brand/unit — treat as strong when brands agree.
+      if (brandsCompatible(byCatalogKey)) {
+        return { product: byCatalogKey, matchStrength: 'strong' };
+      }
+    }
   }
-  if (!existingProduct && productName && categoryName) {
+
+  if (productName && categoryName) {
+    // Escape ILIKE wildcards so product names with %/_ do not partial-match others.
+    const escapedName = String(productNameRaw || productName || '')
+      .replace(/\\/g, '\\\\')
+      .replace(/%/g, '\\%')
+      .replace(/_/g, '\\_');
     const { data: productsByName, error: nameSearchError } = await supabase
       .from('products')
       .select('*')
       .eq('category', categoryName)
-      .ilike('name', productNameRaw);
+      .ilike('name', escapedName);
     if (!nameSearchError && productsByName?.length) {
-      const exactMatch = productsByName.find((p) => normalizeText(p.name) === normalizeText(productNameRaw));
-      existingProduct = exactMatch || productsByName[0];
+      const exactMatch = productsByName.find(
+        (p) =>
+          normalizeText?.(p.name) === normalizeText?.(productNameRaw || productName) &&
+          brandsCompatible(p)
+      );
+      if (exactMatch) {
+        return { product: exactMatch, matchStrength: 'weak' };
+      }
     }
   }
-  return existingProduct;
+
+  return { product: null, matchStrength: 'none' };
+}
+
+/**
+ * Supplier portal display name for an offer:
+ * prefer the supplier's own listing title over the shared catalog name so a
+ * mis-linked or multi-offer row cannot silently steal another product's name.
+ */
+export function resolveSupplierOfferDisplayName({ attributes = {}, catalogName = '' } = {}) {
+  const listingName =
+    attributes?.listingName != null && String(attributes.listingName).trim() !== ''
+      ? String(attributes.listingName).trim()
+      : '';
+  if (listingName) return listingName;
+  const offerName =
+    attributes?.name != null && String(attributes.name).trim() !== ''
+      ? String(attributes.name).trim()
+      : '';
+  if (offerName) return offerName;
+  const catalog = catalogName != null && String(catalogName).trim() !== '' ? String(catalogName).trim() : '';
+  return catalog || 'Product';
 }
 
 export async function createBaseProductIfNeeded(
@@ -225,7 +292,10 @@ export async function createBaseProductIfNeeded(
     gtin: identityBundle.catalog.gtin || null,
     mpn: identityBundle.catalog.mpn || null,
     brand: identityBundle.catalog.brand || null,
-    catalog_key: identityBundle.catalogKey
+    catalog_key: identityBundle.catalogKey,
+    // Explicit pending so DB is_active defaults (true) cannot be mistaken for admin approval.
+    status: 'pending',
+    is_active: false
   };
   if (resolvedBarcodeForPos) productData.barcode = resolvedBarcodeForPos;
 
