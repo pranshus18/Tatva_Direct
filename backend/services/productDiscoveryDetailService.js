@@ -322,7 +322,57 @@ export async function enrichDiscoverySuggestionsWithVariantCounts(supabase, sugg
   });
 }
 
-export async function getProductDiscoveryDetail(supabase, { productId, enrichSpecifications = null }) {
+export const DISCOVERY_DETAIL_AUDIENCES = {
+  SERVICE_PROVIDER: 'service_provider',
+  SUPPLIER_UPSTREAM: 'supplier_upstream'
+};
+
+/**
+ * Service providers may only buy from the brand's terminal (retailer-facing) tier, so their
+ * discovery view keeps offers filtered to that tier. Suppliers sourcing upstream buy from the
+ * tier above them instead, and must still see their own catalog product before any upstream
+ * seller has listed it.
+ */
+export function resolveDiscoveryAudienceRules(audience) {
+  const normalized = String(audience || '').trim().toLowerCase();
+  const supplierUpstream =
+    normalized === DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM || normalized === 'supplier';
+  return {
+    audience: supplierUpstream
+      ? DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM
+      : DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER,
+    enforceTerminalRole: !supplierUpstream,
+    requireEligibleOffers: !supplierUpstream,
+    // Suppliers open details for listings they already own, including ones still awaiting
+    // catalog approval; buyer-facing discovery stays limited to approved products.
+    allowUnapprovedOwnListing: supplierUpstream
+  };
+}
+
+async function supplierOwnsCatalogProduct(supabase, productId, supplierId) {
+  const normalizedSupplierId = String(supplierId || '').trim();
+  if (!normalizedSupplierId) return false;
+  const { data, error } = await supabase
+    .from('supplier_products')
+    .select('id')
+    .eq('product_id', productId)
+    .eq('supplier_id', normalizedSupplierId)
+    .limit(1);
+  if (error) throw error;
+  if (Array.isArray(data)) return data.length > 0;
+  return Boolean(data);
+}
+
+export async function getProductDiscoveryDetail(
+  supabase,
+  {
+    productId,
+    enrichSpecifications = null,
+    audience = DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER,
+    viewerSupplierId = null
+  }
+) {
+  const audienceRules = resolveDiscoveryAudienceRules(audience);
   const normalizedProductId = String(productId || '').trim();
   if (!normalizedProductId) {
     return { ok: false, status: 404, message: 'Product not found' };
@@ -361,8 +411,16 @@ export async function getProductDiscoveryDetail(supabase, { productId, enrichSpe
     .maybeSingle();
 
   if (productError) throw productError;
-  if (!baseProduct?.id || String(baseProduct.status || '').toLowerCase() !== 'approved') {
+  if (!baseProduct?.id) {
     return { ok: false, status: 404, message: 'Product not found' };
+  }
+  if (String(baseProduct.status || '').toLowerCase() !== 'approved') {
+    const viewerOwnsListing =
+      audienceRules.allowUnapprovedOwnListing &&
+      (await supplierOwnsCatalogProduct(supabase, baseProduct.id, viewerSupplierId));
+    if (!viewerOwnsListing) {
+      return { ok: false, status: 404, message: 'Product not found' };
+    }
   }
 
   let family = null;
@@ -451,13 +509,17 @@ export async function getProductDiscoveryDetail(supabase, { productId, enrichSpe
   if (offersError) throw offersError;
 
   const brandCandidates = enrichedProducts.map((p) => detectDiscoveryBrand(p)).filter(Boolean);
-  const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, brandCandidates);
+  const terminalRoleByBrandMap = audienceRules.enforceTerminalRole
+    ? await loadAdminBrandTerminalRoleMap(supabase, brandCandidates)
+    : new Map();
   const offerAggregates = aggregateEligibleDiscoveryOffers({
     offerRows: offerRows || [],
     productById,
     detectDiscoveryBrand,
     terminalRoleByBrandMap,
-    supplierMatchesBrandTerminalRoleFn: supplierMatchesBrandTerminalRole
+    supplierMatchesBrandTerminalRoleFn: audienceRules.enforceTerminalRole
+      ? supplierMatchesBrandTerminalRole
+      : () => true
   });
 
   const variantMetaByProductId = new Map();
@@ -484,7 +546,7 @@ export async function getProductDiscoveryDetail(supabase, { productId, enrichSpe
 
   for (const product of enrichedProducts) {
     const reconciled = reconcileDiscoveryProductFields(product, offerAggregates);
-    if (Number(reconciled?.supplierCount || 0) <= 0) continue;
+    if (audienceRules.requireEligibleOffers && Number(reconciled?.supplierCount || 0) <= 0) continue;
 
     const productOffers = (offersByProductId.get(product.id) || []).filter(
       (row) => String(row?.status || '').toLowerCase() === 'approved' && row?.is_active === true
@@ -572,6 +634,7 @@ export async function getProductDiscoveryDetail(supabase, { productId, enrichSpe
 
   return {
     ok: true,
+    audience: audienceRules.audience,
     product: {
       id: summaryProduct.id,
       // Always use the selected catalog product's name — family canonical names are

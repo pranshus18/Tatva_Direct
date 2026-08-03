@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
@@ -36,6 +36,10 @@ import {
   SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY
 } from '../utils/upstreamCheckoutReservation';
 import { normalizeSupplierProductsFromApi } from '../utils/supplierProductRow';
+import {
+  UPSTREAM_SOURCING_PATH,
+  openUpstreamProductDetailInNewTab
+} from '../utils/discoveryNavigation';
 import { getProductImageList } from '../utils/productImages';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import { Button } from '@/components/ui/button';
@@ -285,6 +289,23 @@ const SupplierUpstream = ({ user }) => {
   useEffect(() => {
     fetchMyProducts();
   }, []);
+
+  // Handoff from the product detail page: `?add=<supplier_product_id>` reopens the cart dialog
+  // for that listing so sourcing decisions stay on this page.
+  const handledAddParamRef = useRef('');
+  useEffect(() => {
+    if (loading) return;
+    const requestedMineId = normalizeSupplierProductKey(
+      new URLSearchParams(window.location.search).get('add')
+    );
+    if (!requestedMineId || handledAddParamRef.current === requestedMineId) return;
+    handledAddParamRef.current = requestedMineId;
+    navigate(UPSTREAM_SOURCING_PATH, { replace: true });
+    const product = (products || []).find(
+      (p) => normalizeSupplierProductKey(p?.supplier_product_id) === requestedMineId
+    );
+    if (product) openAddToCartDialog(product);
+  }, [loading, products, navigate]);
 
   const applyActiveCartProject = (project) => {
     if (!project || typeof project !== 'object') return;
@@ -1002,7 +1023,16 @@ const SupplierUpstream = ({ user }) => {
 
   const openProductDetails = (product) => {
     if (!product) return;
-    setViewingProduct(product);
+    const catalogProductId =
+      product?.catalogMissing === true ? '' : String(product?.id || product?.product_id || '').trim();
+    const openedDetailPage = catalogProductId
+      ? openUpstreamProductDetailInNewTab(catalogProductId, {
+          variantKey: product?.variantKey || product?.variant_key || '',
+          mineSupplierProductId: normalizeSupplierProductKey(product?.supplier_product_id)
+        })
+      : false;
+    // Listings without a shared catalog id (or when the tab is blocked) keep the inline snapshot.
+    if (!openedDetailPage) setViewingProduct(product);
   };
 
   const offerLocationText = useMemo(() => {

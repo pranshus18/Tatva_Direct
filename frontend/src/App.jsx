@@ -497,6 +497,10 @@ function App() {
         />
         <Route path="/supplier-select-yourself" element={supplierPortal(<SupplierSelectYourself />)} />
         <Route path="/supplier-upstream" element={supplierPortal(<SupplierUpstream user={user} />)} />
+        <Route
+          path="/supplier-upstream/product/:productId"
+          element={supplierPortal(<ProductDiscoveryDetail portal="supplier" />)}
+        />
         <Route path="/supplier-upstream-orders" element={supplierPortal(<SupplierUpstreamOrders />)} />
         <Route
           path="/supplier-upstream-returns"

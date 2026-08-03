@@ -27,7 +27,11 @@ import {
   specificationEntriesForCustomerDisplay
 } from '../utils/specifications';
 import { resolveDiscoveryProductDescription } from '../utils/productDisplay';
-import { returnToDiscovery } from '../utils/discoveryNavigation';
+import {
+  buildUpstreamSourcingUrl,
+  returnToDiscovery,
+  returnToUpstreamSourcing
+} from '../utils/discoveryNavigation';
 import './ProductDiscoveryDetail.css';
 import './ProductDiscovery.css';
 
@@ -255,10 +259,12 @@ function SpecTable({ title, entries, sectionId = 'specifications' }) {
   );
 }
 
-export default function ProductDiscoveryDetail() {
+export default function ProductDiscoveryDetail({ portal = 'service_provider' }) {
   const { productId } = useParams();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const isUpstreamPortal = portal === 'supplier';
+  const mineSupplierProductId = String(searchParams.get('mine') || '').trim();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [detail, setDetail] = useState(null);
@@ -287,7 +293,10 @@ export default function ProductDiscoveryDetail() {
       setLoading(true);
       setError('');
       try {
-        const response = await fetch(getApiUrl(`/api/supplier/products/${productId}/detail`), {
+        const detailPath = isUpstreamPortal
+          ? `/api/supplier/upstream/products/${productId}/detail`
+          : `/api/supplier/products/${productId}/detail`;
+        const response = await fetch(getApiUrl(detailPath), {
           headers: { Authorization: `Bearer ${token}` }
         });
         const data = await response.json();
@@ -310,7 +319,7 @@ export default function ProductDiscoveryDetail() {
     return () => {
       cancelled = true;
     };
-  }, [productId]);
+  }, [productId, isUpstreamPortal]);
 
   const variants = useMemo(
     () => (Array.isArray(detail?.variants) ? detail.variants : []),
@@ -391,11 +400,23 @@ export default function ProductDiscoveryDetail() {
   const rangeLabel = formatPriceRange(productSummary.priceRange, productSummary.unit);
   const inStock = Number(activeListing?.stock) > 0;
 
-  const handleBackToDiscovery = () => {
+  const backLabel = isUpstreamPortal ? 'Back to upstream sourcing' : 'Back to discovery';
+
+  const handleBackToList = () => {
+    if (isUpstreamPortal) {
+      returnToUpstreamSourcing({ navigate, searchParams });
+      return;
+    }
     returnToDiscovery({ navigate, searchParams });
   };
 
   const openAddToCart = () => {
+    // Upstream sourcing keeps quantity, project and upstream-seller selection on the sourcing
+    // page, so the detail page hands the supplier back to that flow for this listing.
+    if (isUpstreamPortal) {
+      navigate(buildUpstreamSourcingUrl({ addSupplierProductId: mineSupplierProductId }));
+      return;
+    }
     if (!inStock) {
       setError('Product is out of stock');
       return;
@@ -462,7 +483,7 @@ export default function ProductDiscoveryDetail() {
         ) : null}
         {Number(activeListing.supplierCount) > 0 ? (
           <div className="pdd-buybox__fact">
-            <dt>Suppliers</dt>
+            <dt>{isUpstreamPortal ? 'Listings' : 'Suppliers'}</dt>
             <dd>{activeListing.supplierCount}</dd>
           </div>
         ) : null}
@@ -473,12 +494,16 @@ export default function ProductDiscoveryDetail() {
         size="lg"
         onClick={openAddToCart}
         disabled={
-          !inStock ||
-          (!activeListing.canAddToCart && !productSummary.canAddToCart)
+          !isUpstreamPortal &&
+          (!inStock || (!activeListing.canAddToCart && !productSummary.canAddToCart))
         }
-        title={!inStock ? 'Product is out of stock' : undefined}
+        title={!isUpstreamPortal && !inStock ? 'Product is out of stock' : undefined}
       >
-        {cartAdded ? (
+        {isUpstreamPortal ? (
+          <>
+            <ShoppingCart className="mr-2 h-4 w-4" /> Source upstream
+          </>
+        ) : cartAdded ? (
           <>
             <Check className="mr-2 h-4 w-4" /> Added to cart
           </>
@@ -492,21 +517,23 @@ export default function ProductDiscoveryDetail() {
       </Button>
 
       <p className="pdd-buybox__note">
-        Prices and stock reflect eligible supplier listings for your supply chain.
+        {isUpstreamPortal
+          ? 'Upstream sellers, quantities and projects are chosen on the Upstream Sourcing page.'
+          : 'Prices and stock reflect eligible supplier listings for your supply chain.'}
       </p>
     </aside>
   ) : null;
 
   return (
-    <SpPageLayout>
+    <SpPageLayout showStepper={!isUpstreamPortal}>
       <SpPageHeader
         title="Product Details"
         description=""
         icon={Package}
         actions={
-          <Button variant="outline" type="button" onClick={handleBackToDiscovery}>
+          <Button variant="outline" type="button" onClick={handleBackToList}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            Back to discovery
+            {backLabel}
           </Button>
         }
       />
@@ -532,10 +559,14 @@ export default function ProductDiscoveryDetail() {
         <SpEmptyState
           icon={Package}
           title="Product not found"
-          description="This product may have been removed or is not available for discovery."
+          description={
+            isUpstreamPortal
+              ? 'This product may have been removed or is no longer available in the catalog.'
+              : 'This product may have been removed or is not available for discovery.'
+          }
           action={
-            <Button type="button" onClick={handleBackToDiscovery}>
-              Return to discovery
+            <Button type="button" onClick={handleBackToList}>
+              {isUpstreamPortal ? 'Return to upstream sourcing' : 'Return to discovery'}
             </Button>
           }
         />
@@ -797,24 +828,26 @@ export default function ProductDiscoveryDetail() {
         </div>
       )}
 
-      <DiscoveryAddToCartDialog
-        open={projectPickerOpen}
-        onOpenChange={setProjectPickerOpen}
-        product={
-          activeListing
-            ? {
-                id: activeListing.productId,
-                productId: activeListing.productId,
-                name: displayProductName,
-                variantKey: activeListing.variantKey || undefined
-              }
-            : null
-        }
-        onAdded={() => {
-          setCartAdded(true);
-          setTimeout(() => setCartAdded(false), 1400);
-        }}
-      />
+      {isUpstreamPortal ? null : (
+        <DiscoveryAddToCartDialog
+          open={projectPickerOpen}
+          onOpenChange={setProjectPickerOpen}
+          product={
+            activeListing
+              ? {
+                  id: activeListing.productId,
+                  productId: activeListing.productId,
+                  name: displayProductName,
+                  variantKey: activeListing.variantKey || undefined
+                }
+              : null
+          }
+          onAdded={() => {
+            setCartAdded(true);
+            setTimeout(() => setCartAdded(false), 1400);
+          }}
+        />
+      )}
     </SpPageLayout>
   );
 }

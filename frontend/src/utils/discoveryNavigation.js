@@ -1,42 +1,40 @@
 export const DISCOVERY_PATH = '/product-discovery';
+export const UPSTREAM_SOURCING_PATH = '/supplier-upstream';
+export const UPSTREAM_PRODUCT_DETAIL_PATH = '/supplier-upstream/product';
 
 const DETAIL_PATH_PATTERN = /^\/product-discovery\/[^/?]+/;
+const UPSTREAM_DETAIL_PATH_PATTERN = /^\/supplier-upstream\/product\/[^/?]+/;
 
-export function resolveDiscoveryReturnPath(searchParams) {
+function resolveReturnPath(searchParams, listPath, detailPattern) {
   const raw = String(searchParams?.get?.('return') || '').trim();
-  if (!raw.startsWith(DISCOVERY_PATH) || DETAIL_PATH_PATTERN.test(raw)) {
-    return DISCOVERY_PATH;
+  if (!raw.startsWith(listPath) || detailPattern.test(raw)) {
+    return listPath;
   }
   return raw;
 }
 
-export function buildProductDetailUrl(productId, returnPath = null) {
+function buildDetailUrl({ productId, listPath, detailPath, detailPattern, returnPath, extraParams }) {
   const id = String(productId || '').trim();
   if (!id) return null;
 
   const params = new URLSearchParams();
-  const resolvedReturn =
-    returnPath || `${window.location.pathname}${window.location.search}`;
-  if (resolvedReturn.startsWith(DISCOVERY_PATH) && !DETAIL_PATH_PATTERN.test(resolvedReturn)) {
-    params.set('return', resolvedReturn);
-  } else {
-    params.set('return', DISCOVERY_PATH);
+  const resolvedReturn = returnPath || `${window.location.pathname}${window.location.search}`;
+  params.set(
+    'return',
+    resolvedReturn.startsWith(listPath) && !detailPattern.test(resolvedReturn)
+      ? resolvedReturn
+      : listPath
+  );
+  for (const [key, value] of Object.entries(extraParams || {})) {
+    const normalized = String(value ?? '').trim();
+    if (normalized) params.set(key, normalized);
   }
 
-  const query = params.toString();
-  return `${window.location.origin}${DISCOVERY_PATH}/${encodeURIComponent(id)}?${query}`;
+  return `${window.location.origin}${detailPath}/${encodeURIComponent(id)}?${params.toString()}`;
 }
 
-export function openProductDetailInNewTab(productId, returnPath = null) {
-  const url = buildProductDetailUrl(productId, returnPath);
-  if (!url) return;
-  window.open(url, '_blank');
-}
-
-/** Close detail tab when opened from discovery; otherwise navigate back in-place. */
-export function returnToDiscovery({ navigate, searchParams }) {
-  const returnPath = resolveDiscoveryReturnPath(searchParams);
-
+/** Close the detail tab when it was opened from the list; otherwise navigate back in-place. */
+function leaveDetailView({ navigate, returnPath }) {
   if (window.opener && !window.opener.closed) {
     try {
       window.opener.focus();
@@ -50,4 +48,66 @@ export function returnToDiscovery({ navigate, searchParams }) {
   window.setTimeout(() => {
     navigate(returnPath);
   }, 120);
+}
+
+export function resolveDiscoveryReturnPath(searchParams) {
+  return resolveReturnPath(searchParams, DISCOVERY_PATH, DETAIL_PATH_PATTERN);
+}
+
+export function buildProductDetailUrl(productId, returnPath = null) {
+  return buildDetailUrl({
+    productId,
+    listPath: DISCOVERY_PATH,
+    detailPath: DISCOVERY_PATH,
+    detailPattern: DETAIL_PATH_PATTERN,
+    returnPath
+  });
+}
+
+export function openProductDetailInNewTab(productId, returnPath = null) {
+  const url = buildProductDetailUrl(productId, returnPath);
+  if (!url) return;
+  window.open(url, '_blank');
+}
+
+export function returnToDiscovery({ navigate, searchParams }) {
+  leaveDetailView({ navigate, returnPath: resolveDiscoveryReturnPath(searchParams) });
+}
+
+export function resolveUpstreamReturnPath(searchParams) {
+  return resolveReturnPath(searchParams, UPSTREAM_SOURCING_PATH, UPSTREAM_DETAIL_PATH_PATTERN);
+}
+
+/**
+ * Upstream sourcing detail link. `mine` carries the supplier's own listing id so the detail page
+ * can hand the supplier back to the sourcing flow for exactly that listing.
+ */
+export function buildUpstreamProductDetailUrl(
+  productId,
+  { variantKey = '', mineSupplierProductId = '', returnPath = null } = {}
+) {
+  return buildDetailUrl({
+    productId,
+    listPath: UPSTREAM_SOURCING_PATH,
+    detailPath: UPSTREAM_PRODUCT_DETAIL_PATH,
+    detailPattern: UPSTREAM_DETAIL_PATH_PATTERN,
+    returnPath,
+    extraParams: { variant: variantKey, mine: mineSupplierProductId }
+  });
+}
+
+export function openUpstreamProductDetailInNewTab(productId, options = {}) {
+  const url = buildUpstreamProductDetailUrl(productId, options);
+  if (!url) return false;
+  return Boolean(window.open(url, '_blank'));
+}
+
+export function buildUpstreamSourcingUrl({ addSupplierProductId = '' } = {}) {
+  const mineId = String(addSupplierProductId || '').trim();
+  if (!mineId) return UPSTREAM_SOURCING_PATH;
+  return `${UPSTREAM_SOURCING_PATH}?add=${encodeURIComponent(mineId)}`;
+}
+
+export function returnToUpstreamSourcing({ navigate, searchParams }) {
+  leaveDetailView({ navigate, returnPath: resolveUpstreamReturnPath(searchParams) });
 }

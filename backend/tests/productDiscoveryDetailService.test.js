@@ -1,9 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  DISCOVERY_DETAIL_AUDIENCES,
   buildVariantOptions,
-  enrichDiscoverySuggestionsWithVariantCounts
+  enrichDiscoverySuggestionsWithVariantCounts,
+  resolveDiscoveryAudienceRules
 } from '../services/productDiscoveryDetailService.js';
+
+test('service-provider detail keeps terminal-tier offer eligibility', () => {
+  for (const audience of [undefined, '', 'service_provider']) {
+    const rules = resolveDiscoveryAudienceRules(audience);
+    assert.equal(rules.audience, DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER);
+    assert.equal(rules.enforceTerminalRole, true);
+    assert.equal(rules.requireEligibleOffers, true);
+    assert.equal(rules.allowUnapprovedOwnListing, false);
+  }
+});
+
+test('supplier upstream detail ignores terminal tier and shows products without offers', () => {
+  for (const audience of ['supplier', 'supplier_upstream', 'Supplier_Upstream']) {
+    const rules = resolveDiscoveryAudienceRules(audience);
+    assert.equal(rules.audience, DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM);
+    assert.equal(rules.enforceTerminalRole, false);
+    assert.equal(rules.requireEligibleOffers, false);
+    assert.equal(rules.allowUnapprovedOwnListing, true);
+  }
+});
 
 test('discovery detail summary uses selected product name, not family canonical name', () => {
   const selectedProduct = { id: 'p1', name: 'Apex Ultima Protek 10L' };

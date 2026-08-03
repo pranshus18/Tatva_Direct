@@ -84,6 +84,10 @@ import {
   upstreamOffersMatchForSupplyChain
 } from '../../services/upstreamOfferMatchService.js';
 import {
+  DISCOVERY_DETAIL_AUDIENCES,
+  getProductDiscoveryDetail
+} from '../../services/productDiscoveryDetailService.js';
+import {
   CHECKOUT_RESERVATION_MINUTES,
   computeAvailableStock,
   consumeCheckoutReservationsForOrder,
@@ -480,6 +484,46 @@ export function registerSupplierUpstreamRoutes(ctx) {
       searchTerm: latestProject?.searchTerm || ''
     };
   };
+
+// Catalog detail for a product a supplier is sourcing upstream. Same payload as service-provider
+// discovery detail, but offers are not restricted to the brand's retailer-facing terminal tier.
+router.get('/upstream/products/:productId/detail', authenticateToken, async (req, res) => {
+  try {
+    if (req.user?.user_type !== 'supplier') {
+      return res
+        .status(403)
+        .json({ status: 'error', message: 'Only suppliers can view upstream product details' });
+    }
+
+    const productId = String(req.params.productId || '').trim();
+    const result = await getProductDiscoveryDetail(supabase, {
+      productId,
+      audience: DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM,
+      viewerSupplierId: req.userId
+    });
+
+    if (!result.ok) {
+      return res.status(result.status || 404).json({
+        status: 'error',
+        message: result.message || 'Product not found'
+      });
+    }
+
+    return res.json({
+      status: 'success',
+      audience: result.audience,
+      product: result.product,
+      family: result.family,
+      hasVariants: result.hasVariants,
+      variantCount: result.variantCount,
+      variantOptions: result.variantOptions,
+      variants: result.variants
+    });
+  } catch (error) {
+    console.error('Upstream product detail error:', error);
+    return res.status(500).json({ status: 'error', message: 'Internal server error' });
+  }
+});
 
 router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
   try {
