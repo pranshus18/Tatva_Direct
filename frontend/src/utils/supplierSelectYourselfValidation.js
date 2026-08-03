@@ -3,6 +3,7 @@ import {
   parseBrandsListForValidation,
   validateUniqueBrandsAcrossEntries
 } from './supplierChainEntryValidation';
+import { matchCompanyInfoEntry } from './supplierSelectYourselfProfile';
 
 export const SELECT_YOURSELF_ROLE_AND_DOCS_REQUIRED_MESSAGE =
   'Please select your role and upload the required document before saving.';
@@ -24,6 +25,43 @@ function entryRequiresSupplyChainCompletion(entry = {}) {
   const mov = entry?.minimumOrderValue;
   const hasMov = mov !== '' && mov !== null && mov !== undefined;
   return !!(role || roleCertificateUrls.length > 0 || hasMov);
+}
+
+/** Compare supply-chain fields for a single entry (Save entry dirty check). */
+export function buildChainEntrySaveSignature(entry = {}) {
+  const roleDocs = resolveRoleVerificationDocumentUrls(entry);
+  return JSON.stringify({
+    id: entry?.id || '',
+    role: entry?.role || '',
+    brands: entry?.brands || '',
+    gstin: entry?.gstin || '',
+    companyName: entry?.companyName || '',
+    brandApprovalDocumentUrl: entry?.brandApprovalDocumentUrl || '',
+    brandApprovalDocumentUrls: Array.isArray(entry?.brandApprovalDocumentUrls)
+      ? [...entry.brandApprovalDocumentUrls].sort()
+      : [],
+    authorizationCertificateUrl: entry?.authorizationCertificateUrl || '',
+    authorizationCertificateUrls: [...roleDocs].sort(),
+    minimumOrderValue: entry?.minimumOrderValue ?? ''
+  });
+}
+
+export function findSavedBaselineEntry(entry, savedBaselineEntries = []) {
+  return (
+    (Array.isArray(savedBaselineEntries) ? savedBaselineEntries : []).find((row) =>
+      matchCompanyInfoEntry(row, {
+        entryId: entry?.id,
+        brand: entry?.brands
+      })
+    ) || null
+  );
+}
+
+/** True when the entry matches the last saved profile snapshot for this row. */
+export function entryMatchesSavedBaseline(entry, savedBaselineEntries = []) {
+  const savedEntry = findSavedBaselineEntry(entry, savedBaselineEntries);
+  if (!savedEntry) return false;
+  return buildChainEntrySaveSignature(entry) === buildChainEntrySaveSignature(savedEntry);
 }
 
 /**
@@ -111,6 +149,17 @@ export function getSelectYourselfEntrySaveReadiness(entry = {}) {
     message: SELECT_YOURSELF_MOV_REQUIRED_MESSAGE,
     field: 'minimumOrderValue',
     missing
+  };
+}
+
+/** Save button state for a single supply-chain entry card. */
+export function getSelectYourselfEntrySaveState(entry = {}, savedBaselineEntries = []) {
+  const readiness = getSelectYourselfEntrySaveReadiness(entry);
+  const alreadySaved = readiness.ok && entryMatchesSavedBaseline(entry, savedBaselineEntries);
+  return {
+    ...readiness,
+    alreadySaved,
+    enabled: readiness.ok && !alreadySaved
   };
 }
 

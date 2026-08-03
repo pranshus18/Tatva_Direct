@@ -898,7 +898,7 @@ export function registerProfileUpdateRoutes(router) {
           : brandApprovalRequested
           ? 'Brand request submitted for admin approval. It will appear in supplier catalog after admin approval.'
           : brandAlreadyApproved
-            ? 'This brand is already approved by admin.'
+            ? 'This brand is already approved by admin. Select it from Path A, then continue with supply-chain role setup.'
           : chainApprovalPending
             ? 'Your supply-chain role and brand assignment was submitted for admin approval. Until it is approved, your previous approved assignment stays active.'
             : chainDraftSaved

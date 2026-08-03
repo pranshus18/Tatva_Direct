@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import {
   validateSupplierCatalogUpdateFields,
   validateSupplierInventoryUpdateFields,
-  validateSupplierProductUpdateRequest
+  validateSupplierProductUpdateRequest,
+  validateSupplierMrpUpdateAllowed,
+  isSupplierMrpLocked,
+  SUPPLIER_MRP_LOCKED_MESSAGE
 } from '../services/supplierProductUpdateValidation.js';
 
 test('inventory update rejects missing MRP, stock, and tax rates', () => {
@@ -65,4 +68,19 @@ test('product update request blocks incomplete inventory payload', () => {
   assert.equal(result.ok, false);
   assert.equal(result.code, 'inventory_validation_error');
   assert.ok(result.missingFields.includes('price'));
+});
+
+test('isSupplierMrpLocked is true when saved MRP is greater than zero', () => {
+  assert.equal(isSupplierMrpLocked({ price: 120 }), true);
+  assert.equal(isSupplierMrpLocked({ price: 0 }), false);
+  assert.equal(isSupplierMrpLocked({ price: null }), false);
+});
+
+test('validateSupplierMrpUpdateAllowed blocks supplier MRP changes after first save', () => {
+  const offer = { price: 120 };
+  assert.equal(validateSupplierMrpUpdateAllowed(offer, { price: 150 }).ok, false);
+  assert.match(validateSupplierMrpUpdateAllowed(offer, { price: 150 }).message, /cannot be changed/i);
+  assert.equal(validateSupplierMrpUpdateAllowed(offer, { price: 120 }).ok, true);
+  assert.equal(validateSupplierMrpUpdateAllowed({ price: 0 }, { price: 99 }).ok, true);
+  assert.equal(SUPPLIER_MRP_LOCKED_MESSAGE.includes('admin'), true);
 });

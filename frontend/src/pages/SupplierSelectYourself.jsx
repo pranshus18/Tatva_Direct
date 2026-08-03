@@ -34,6 +34,7 @@ import {
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   BRAND_REQUEST_ALREADY_PENDING_MESSAGE,
   BRAND_ALREADY_APPROVED_SAVE_MESSAGE,
+  BRAND_APPROVAL_REQUEST_LABEL,
   listPendingBrandNamesBlockingSave,
   listApprovedBrandNamesBlockingSave,
   classifyPathBBrandSaveRows,
@@ -126,6 +127,11 @@ export default function SupplierSelectYourself() {
   const approvedBaselineEntries = useMemo(
     () => getApprovedBaselineEntries(baseline || profile || {}),
     [baseline, profile]
+  );
+
+  const savedBaselineEntries = useMemo(
+    () => getCompanyInfoEntriesForSave(baseline || {}),
+    [baseline]
   );
 
   /** Brands the supplier may use for Step 2 role setup after admin approval / catalog selection. */
@@ -288,8 +294,8 @@ export default function SupplierSelectYourself() {
       pendingBrandRequests.length > 0);
 
   const brandSaveButtonLabel = useMemo(() => {
-    if (savingBrandApproval) return 'Saving…';
-    if (!brandSaveBlockedForPending) return 'Save brand';
+    if (savingBrandApproval) return 'Submitting…';
+    if (!brandSaveBlockedForPending) return BRAND_APPROVAL_REQUEST_LABEL;
     if (brandSaveBlockedByPendingRequest) return 'Request already submitted';
     if (brandSaveBlockedByApprovedBrand) return 'Already approved';
     return 'Saved';
@@ -305,7 +311,7 @@ export default function SupplierSelectYourself() {
       ? BRAND_REQUEST_ALREADY_PENDING_MESSAGE
       : brandSaveBlockedByApprovedBrand
         ? BRAND_ALREADY_APPROVED_SAVE_MESSAGE
-        : 'Brand setup is saved. Change the brand or documents to enable Save brand again.'
+        : 'Brand setup is saved. Change the brand or documents to enable another brand approval request.'
     : undefined;
 
   const chainReadyBrandCount = useMemo(
@@ -653,6 +659,20 @@ export default function SupplierSelectYourself() {
       const brandLabel = String(row?.brand || rowOrBrand || '').trim();
       if (!brandLabel) return;
 
+      if (
+        !isBrandApprovedForSupplyChainStep(
+          brandLabel,
+          effectiveApprovedBrands,
+          null,
+          profile?.supplierBrandRequests || [],
+          catalogBrands
+        )
+      ) {
+        alert(BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE);
+        setBrandSectionExpanded(true);
+        return;
+      }
+
       const entryId = ensureBrandEntryForSupplyChain(brandLabel);
       if (!entryId) {
         setBrandSectionExpanded(true);
@@ -681,7 +701,7 @@ export default function SupplierSelectYourself() {
         supplyChainSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     },
-    [ensureBrandEntryForSupplyChain, supplyChainSummaryRows]
+    [ensureBrandEntryForSupplyChain, supplyChainSummaryRows, effectiveApprovedBrands, profile, catalogBrands]
   );
 
   const clearIncompleteBrandSetup = useCallback(
@@ -1017,14 +1037,7 @@ export default function SupplierSelectYourself() {
     if (!profile || savingBrandApproval || discarding || !!savingEntryId) return;
     // Path A uses an already-approved brand — brand-request save is Path B only.
     if (activeBrandPath === 'pathA' || hideSaveBrandForApprovedBrand) {
-      const brand =
-        approvedBrandsBlockingSave[0] ||
-        String(selectedAssignment?.brand || '').trim() ||
-        '';
-      if (brand) {
-        alert(BRAND_ALREADY_APPROVED_SAVE_MESSAGE);
-        handleBrandPickedWithoutRole(brand);
-      }
+      alert(BRAND_ALREADY_APPROVED_SAVE_MESSAGE);
       return;
     }
     const noticePendingNames =
@@ -1676,32 +1689,7 @@ export default function SupplierSelectYourself() {
               >
                 {brandSectionExpanded ? 'Collapse' : 'Expand'}
               </button>
-              {hideSaveBrandForApprovedBrand ? (
-                <button
-                  type="button"
-                  className="btn-primary supplier-select-section__save-btn"
-                  onClick={() => {
-                    const brand =
-                      approvedBrandsBlockingSave[0] ||
-                      String(selectedAssignment?.brand || '').trim() ||
-                      getCompanyInfoEntriesForSave(profile || {}).find((entry) =>
-                        String(entry?.brands || '').trim()
-                      )?.brands ||
-                      '';
-                    if (brand) {
-                      handleBrandPickedWithoutRole(brand);
-                    } else {
-                      supplyChainSectionRef.current?.scrollIntoView({
-                        behavior: 'smooth',
-                        block: 'start'
-                      });
-                    }
-                  }}
-                  title={BRAND_ALREADY_APPROVED_SAVE_MESSAGE}
-                >
-                  Continue to role setup
-                </button>
-              ) : activeBrandPath !== 'pathA' ? (
+              {activeBrandPath !== 'pathA' && !hideSaveBrandForApprovedBrand ? (
                 <button
                   type="button"
                   className="btn-primary supplier-select-section__save-btn"
@@ -1727,8 +1715,9 @@ export default function SupplierSelectYourself() {
               </>
             ) : activeBrandPath === 'pathB' ? (
               <>
-                <strong>Path B in progress.</strong> Enter the new brand name and upload documents, then save for admin
-                approval. Path A is hidden until you switch or cancel this request.
+                <strong>Path B in progress.</strong> Enter the new brand name and upload documents, then click{' '}
+                <strong>{BRAND_APPROVAL_REQUEST_LABEL}</strong> for admin approval. Path A is hidden until you switch
+                or cancel this request. You can configure your supply-chain role only after admin approves the brand.
               </>
             ) : (
               <>
@@ -1958,6 +1947,7 @@ export default function SupplierSelectYourself() {
               showAddEntry={false}
               onSaveEntry={handleSaveEntry}
               savingEntryId={savingEntryId}
+              savedBaselineEntries={savedBaselineEntries}
               focusEntryId={focusSupplyChainEntryId}
               onFocusEntryHandled={handleFocusEntryHandled}
               filterBrandName={selectedAssignment?.brand || ''}

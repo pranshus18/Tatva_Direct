@@ -257,7 +257,7 @@ export default function BrandSelect({
             <>
               Choose an admin-approved brand from the list. For a brand not listed, select{' '}
               <strong>Other brand (request admin approval)</strong>, enter the name, then click{' '}
-              <strong>Save brand</strong>.
+              <strong>Brand approval request</strong>.
             </>
           ) : (
             <>

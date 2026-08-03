@@ -234,3 +234,41 @@ export function validateSupplierProductUpdateRequest(body = {}) {
     code: null
   };
 }
+
+function parseStoredOfferPrice(rawValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') return null;
+  const parsed = Number(rawValue);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+/** True once a supplier offer has a saved MRP greater than zero. */
+export function isSupplierMrpLocked(supplierProduct = {}) {
+  const price = parseStoredOfferPrice(supplierProduct?.price);
+  return price !== null && price > 0;
+}
+
+export const SUPPLIER_MRP_LOCKED_MESSAGE =
+  'MRP cannot be changed after it has been saved. Contact admin to update MRP.';
+
+/** Block supplier attempts to change a locked MRP. */
+export function validateSupplierMrpUpdateAllowed(supplierProduct = {}, body = {}) {
+  if (body?.price === undefined) {
+    return { ok: true, message: '', code: null };
+  }
+  if (!isSupplierMrpLocked(supplierProduct)) {
+    return { ok: true, message: '', code: null };
+  }
+
+  const currentPrice = parseStoredOfferPrice(supplierProduct.price);
+  const nextPrice = parseStoredOfferPrice(body.price);
+  if (currentPrice === null || nextPrice === null || nextPrice !== currentPrice) {
+    return {
+      ok: false,
+      message: SUPPLIER_MRP_LOCKED_MESSAGE,
+      code: 'mrp_locked',
+      missingFields: ['price']
+    };
+  }
+
+  return { ok: true, message: '', code: null };
+}

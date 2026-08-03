@@ -4,7 +4,9 @@ import {
   SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE,
   SELECT_YOURSELF_MOV_REQUIRED_MESSAGE,
   SELECT_YOURSELF_ROLE_REQUIRED_MESSAGE,
+  entryMatchesSavedBaseline,
   getSelectYourselfEntrySaveReadiness,
+  getSelectYourselfEntrySaveState,
   validateSelectYourselfChainEntries
 } from './supplierSelectYourselfValidation';
 
@@ -120,5 +122,47 @@ describe('getSelectYourselfEntrySaveReadiness', () => {
 
     expect(result.ok).toBe(true);
     expect(result.missing).toEqual([]);
+  });
+});
+
+describe('getSelectYourselfEntrySaveState', () => {
+  const savedBaselineEntries = [
+    {
+      id: 'e1',
+      brands: 'acc',
+      role: 'retailer',
+      authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf']
+    }
+  ];
+
+  it('disables save when entry matches the saved baseline', () => {
+    const state = getSelectYourselfEntrySaveState(
+      {
+        id: 'e1',
+        brands: 'acc',
+        role: 'retailer',
+        authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf']
+      },
+      savedBaselineEntries
+    );
+
+    expect(state.ok).toBe(true);
+    expect(state.alreadySaved).toBe(true);
+    expect(state.enabled).toBe(false);
+  });
+
+  it('re-enables save when the entry changes after save', () => {
+    const entry = {
+      id: 'e1',
+      brands: 'acc',
+      role: 'retailer',
+      authorizationCertificateUrls: ['https://cdn.example.com/new-doc.pdf']
+    };
+    const state = getSelectYourselfEntrySaveState(entry, savedBaselineEntries);
+
+    expect(state.ok).toBe(true);
+    expect(entryMatchesSavedBaseline(entry, savedBaselineEntries)).toBe(false);
+    expect(state.alreadySaved).toBe(false);
+    expect(state.enabled).toBe(true);
   });
 });

@@ -31,7 +31,9 @@ import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 import {
   bodyHasInventoryUpdateFields,
-  validateSupplierProductUpdateRequest
+  validateSupplierProductUpdateRequest,
+  validateSupplierMrpUpdateAllowed,
+  SUPPLIER_MRP_LOCKED_MESSAGE
 } from '../../../services/supplierProductUpdateValidation.js';
 import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
 
@@ -76,6 +78,16 @@ export function registerSupplierProductUpdateRoute(ctx) {
         await fetchAndValidateSupplierProductForUpdate(supabase, { id, reqUserId: req.userId });
 
       if (supplierProduct) {
+        const mrpValidation = validateSupplierMrpUpdateAllowed(supplierProduct, req.body || {});
+        if (!mrpValidation.ok) {
+          return res.status(403).json({
+            status: 'error',
+            code: mrpValidation.code || 'mrp_locked',
+            message: mrpValidation.message || SUPPLIER_MRP_LOCKED_MESSAGE,
+            missingFields: mrpValidation.missingFields || ['price']
+          });
+        }
+
         if (req.body.unit !== undefined && String(req.body.unit || '').trim()) {
           const { data: unitContextProduct } = await supabase
             .from('products')

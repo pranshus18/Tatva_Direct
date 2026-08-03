@@ -48,3 +48,12 @@ export function parseSupplierOfferPrice(raw) {
   const num = Number(normalized);
   return Number.isFinite(num) && num >= 0 ? num : null;
 }
+
+/** True once a supplier offer has a saved MRP — only admin may change it afterward. */
+export function isSupplierMrpLocked(product) {
+  const price = parseSupplierOfferPrice(product?.price);
+  return price !== null && price > 0;
+}
+
+export const SUPPLIER_MRP_LOCKED_MESSAGE =
+  'MRP is locked after the first save. Contact admin if you need to change it.';

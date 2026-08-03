@@ -16,7 +16,7 @@ import {
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
 import {
-  getSelectYourselfEntrySaveReadiness,
+  getSelectYourselfEntrySaveState,
   SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE,
   SELECT_YOURSELF_MOV_REQUIRED_MESSAGE
 } from '../utils/supplierSelectYourselfValidation';
@@ -198,6 +198,7 @@ const CompanyInfoEntryCard = ({
   onSaveEntry = null,
   savingThisEntry = false,
   allowEntrySave = false,
+  savedBaselineEntries = [],
   allowEntryRemove = false,
   catalogBrandNames = [],
   catalogBrands = null,
@@ -442,15 +443,17 @@ const CompanyInfoEntryCard = ({
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave && brandApprovalReadyForRole;
-  const entrySaveReadiness = showEntrySave
-    ? getSelectYourselfEntrySaveReadiness(entry)
-    : { ok: true, message: '', field: '', missing: [] };
-  const entrySaveEnabled = entrySaveReadiness.ok && !savingThisEntry;
+  const entrySaveState = showEntrySave
+    ? getSelectYourselfEntrySaveState(entry, savedBaselineEntries)
+    : { ok: true, message: '', field: '', missing: [], alreadySaved: false, enabled: true };
+  const entrySaveEnabled = entrySaveState.enabled && !savingThisEntry;
   const entrySaveTitle = savingThisEntry
     ? 'Saving this entry…'
-    : entrySaveReadiness.ok
-      ? 'Save this entry'
-      : entrySaveReadiness.message;
+    : entrySaveState.alreadySaved
+      ? 'This entry is already saved'
+      : entrySaveState.ok
+        ? 'Save this entry'
+        : entrySaveState.message;
   const showEntryRemove = canRemove && editing && allowEntryRemove && isBrandOnlyStep;
   const showHeader =
     sectionView === 'brand'
@@ -505,7 +508,7 @@ const CompanyInfoEntryCard = ({
               title={entrySaveTitle}
               aria-disabled={!entrySaveEnabled}
             >
-              {savingThisEntry ? 'Saving…' : 'Save entry'}
+              {savingThisEntry ? 'Saving…' : entrySaveState.alreadySaved ? 'Saved' : 'Save entry'}
             </button>
           ) : null}
           {!forceExpanded ? (
@@ -933,7 +936,7 @@ const CompanyInfoEntryCard = ({
                   onRemove={(url) => onRoleDocumentRemove?.(entry.id, url)}
                   resolveUrls={resolveRoleVerificationDocumentUrls}
                 />
-                {showEntrySave && entrySaveReadiness.missing.includes('documents') ? (
+                {showEntrySave && entrySaveState.missing.includes('documents') ? (
                   <p className="chain-field__error" role="status">
                     {SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE}
                   </p>
@@ -963,7 +966,7 @@ const CompanyInfoEntryCard = ({
                   required={editing}
                   aria-required="true"
                 />
-                {showEntrySave && entrySaveReadiness.missing.includes('minimumOrderValue') ? (
+                {showEntrySave && entrySaveState.missing.includes('minimumOrderValue') ? (
                   <p className="chain-field__error" role="status">
                     {SELECT_YOURSELF_MOV_REQUIRED_MESSAGE}
                   </p>
@@ -995,6 +998,7 @@ export default function SupplierSupplyChainEntriesEditor({
   onSaveEntry = null,
   onRemoveEntry = null,
   savingEntryId = null,
+  savedBaselineEntries = [],
   showAddEntry = null,
   approvedBaselineEntries = [],
   focusEntryId = '',
@@ -2127,6 +2131,7 @@ export default function SupplierSupplyChainEntriesEditor({
             expanded={expanded}
             onSaveEntry={onSaveEntry}
             savingThisEntry={savingEntryId === entry.id}
+            savedBaselineEntries={savedBaselineEntries}
             allowEntrySave={allowEntryManagement || !!onSaveEntry}
             allowEntryRemove={
               sectionView !== 'brand' && (sectionView === 'all' || allowEntryManagement || !!onRemoveEntry)

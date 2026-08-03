@@ -161,6 +161,8 @@ function normalizeProfileForEditorSnapshot(profileData) {
 export const BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE =
   'This brand has not yet been approved by the admin. Please wait until the approval is complete before proceeding.';
 
+export const BRAND_APPROVAL_REQUEST_LABEL = 'Brand approval request';
+
 export const SUPPLY_CHAIN_NOT_DEFINED_MESSAGE =
   'No supply-chain roles are currently configured for this brand. Please contact Admin or wait until a role is configured.';
 
@@ -418,7 +420,7 @@ export function resolveSelectYourselfBrandStepStatus({
     detailLines.push(approvedCatalogSuggestionMessage);
   }
 
-  detailLines.push('Click Save brand to send this request to admin.');
+  detailLines.push(`Click ${BRAND_APPROVAL_REQUEST_LABEL} to send this request to admin.`);
   return {
     tone: 'neutral',
     label: 'Ready to submit for approval',
@@ -517,7 +519,7 @@ export const BRAND_REQUEST_ALREADY_PENDING_MESSAGE =
   'This brand request is already pending admin approval. Wait for admin to approve or reject it before submitting again.';
 
 export const BRAND_ALREADY_APPROVED_SAVE_MESSAGE =
-  'This brand is already approved by admin. Use Path A to select it for supply-chain role setup — Save brand is not needed.';
+  'This brand is already approved by admin. Select it from Path A above, then continue with supply-chain role setup.';
 
 /**
  * Classify Path B "Save brand" API outcomes for UI notices.

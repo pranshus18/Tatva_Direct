@@ -46,8 +46,11 @@ import {
   SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
   SUPPLIER_MRP_FIELD_LABEL,
   SUPPLIER_MRP_LABEL,
+  SUPPLIER_MRP_LOCKED_MESSAGE,
   formatSupplierStockAvailability,
-  isSupplierInventoryConfigured
+  isSupplierInventoryConfigured,
+  isSupplierMrpLocked,
+  parseSupplierOfferPrice
 } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
 import RupeeInput from '../components/RupeeInput';
@@ -450,7 +453,9 @@ const ProductManagement = ({ user }) => {
     }
 
     const stock = parseSupplierStockQuantity(data.stock);
-    const price = parseFloat(data.price);
+    const price = isSupplierMrpLocked(item)
+      ? parseSupplierOfferPrice(item.price)
+      : parseFloat(data.price);
     const payload = {
       stock,
       price,
@@ -1788,6 +1793,7 @@ const ProductDetailsModal = ({
 };
 
 const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, showAdditionSteps = false }) => {
+  const mrpLocked = Boolean(product && isSupplierMrpLocked(product));
   const [formData, setFormData] = useState({
     catalogProductId: product?.catalogProductId || product?.id || '',
     name: product?.name || '',
@@ -2413,6 +2419,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     // Inventory edit: stock, price, tax, location only — never specifications
     if (showInventoryFields && product) {
       delete productData.specifications;
+      if (mrpLocked) {
+        productData.price = parseSupplierOfferPrice(product.price);
+      }
     }
 
     // Catalog view (Manage Products): never persist inventory fields here.
@@ -4439,12 +4448,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     step="0.01"
                     value={formData.price}
                     onChange={(e) => {
+                      if (mrpLocked) return;
                       setPriceTouched(true);
                       setFormData({...formData, price: e.target.value});
                     }}
+                    disabled={mrpLocked}
                     required
                   />
-                  {typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
+                  {mrpLocked ? (
+                    <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
+                      {SUPPLIER_MRP_LOCKED_MESSAGE}
+                    </p>
+                  ) : null}
+                  {!mrpLocked && typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
                     <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#0369a1' }}>
                       Recommended avg {SUPPLIER_MRP_LABEL}: <strong>{formatRupee(recommendedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
                       {recommendedPriceStats?.supplierCountOthers > 0 && (

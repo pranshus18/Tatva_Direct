@@ -1,7 +1,8 @@
 import {
   SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
   formatSupplierStockAvailability,
-  isSupplierInventoryConfigured
+  isSupplierInventoryConfigured,
+  isSupplierMrpLocked
 } from './supplierStockLabel';
 
 describe('isSupplierInventoryConfigured', () => {
@@ -19,6 +20,14 @@ describe('isSupplierInventoryConfigured', () => {
     expect(isSupplierInventoryConfigured({ price: 0, stock: 0, location: 'Pune warehouse' })).toBe(
       true
     );
+  });
+});
+
+describe('isSupplierMrpLocked', () => {
+  it('locks MRP after a saved amount greater than zero', () => {
+    expect(isSupplierMrpLocked({ price: 250 })).toBe(true);
+    expect(isSupplierMrpLocked({ price: 0 })).toBe(false);
+    expect(isSupplierMrpLocked(null)).toBe(false);
   });
 });
 
