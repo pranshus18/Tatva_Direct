@@ -14,6 +14,10 @@ import {
 } from 'lucide-react';
 import { formatRupeePerUnit } from '../utils/formatRupee';
 import RupeeInput from './RupeeInput';
+import {
+  getAdminProductApprovalReadiness,
+  isAdminProductReadyForApproval
+} from '../utils/adminProductApprovalReadiness';
 
 const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
 const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
@@ -67,6 +71,14 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
   };
 
   const handleApprove = async () => {
+    const readiness = getAdminProductApprovalReadiness(product);
+    if (!readiness.ok) {
+      alert(
+        `${readiness.message}\n\n${readiness.missingRequirements.map((row) => `• ${row.message}`).join('\n')}`
+      );
+      return;
+    }
+
     if (!confirm('Are you sure you want to approve this product?')) return;
     
     setLoading(true);
@@ -184,6 +196,8 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
   };
 
   const currentProduct = isEditing ? editedProduct : product;
+  const approvalReadiness = getAdminProductApprovalReadiness(product);
+  const canApproveProduct = approvalReadiness.ok && !isEditing;
   const gtinValue = currentProduct?.gtin || '';
   
   const productSchema = {
@@ -259,7 +273,18 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
                 </button>
                 
                 {product.status !== 'approved' && (
-                  <button onClick={handleApprove} disabled={loading} className="btn-modal btn-approve-modal">
+                  <button
+                    onClick={handleApprove}
+                    disabled={loading || !canApproveProduct}
+                    className="btn-modal btn-approve-modal"
+                    title={
+                      canApproveProduct
+                        ? 'Approve this product'
+                        : isEditing
+                          ? 'Save changes before approving'
+                          : approvalReadiness.message
+                    }
+                  >
                     <Check size={16} />
                     Approve
                   </button>

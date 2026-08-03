@@ -1,5 +1,9 @@
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 import { validateProductUnitCompatibility } from '../utils/productUnitCompatibility.js';
+import {
+  isMeaningfullyFilledSpecValue,
+  parseSpecificationsObject
+} from './supplierCatalogHelpersService.js';
 
 const INVENTORY_FIELD_KEYS = [
   'stock',
@@ -268,6 +272,51 @@ export function validateSupplierMrpUpdateAllowed(supplierProduct = {}, body = {}
       code: 'mrp_locked',
       missingFields: ['price']
     };
+  }
+
+  return { ok: true, message: '', code: null };
+}
+
+function normalizeSpecValueForCompare(value) {
+  if (value === null || value === undefined) return '';
+  if (Array.isArray(value)) return value.map(String).join(', ').trim();
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value).trim();
+}
+
+export const SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE =
+  'Specification values cannot be changed after they have been saved. Contact admin if a correction is needed.';
+
+/** Block edits to specification values that were already saved with data. */
+export function validateSupplierSpecificationUpdateAllowed(supplierProduct = {}, body = {}) {
+  if (body?.specifications === undefined) {
+    return { ok: true, message: '', code: null };
+  }
+
+  const existing =
+    parseSpecificationsObject(supplierProduct?.attributes?.specifications) ||
+    parseSpecificationsObject(supplierProduct?.specifications) ||
+    {};
+  const next = parseSpecificationsObject(body.specifications) || {};
+
+  for (const [key, value] of Object.entries(existing)) {
+    if (!isMeaningfullyFilledSpecValue(value)) continue;
+    if (!Object.prototype.hasOwnProperty.call(next, key)) {
+      return {
+        ok: false,
+        message: SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE,
+        code: 'spec_values_locked',
+        missingFields: ['specifications']
+      };
+    }
+    if (normalizeSpecValueForCompare(value) !== normalizeSpecValueForCompare(next[key])) {
+      return {
+        ok: false,
+        message: SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE,
+        code: 'spec_values_locked',
+        missingFields: ['specifications']
+      };
+    }
   }
 
   return { ok: true, message: '', code: null };

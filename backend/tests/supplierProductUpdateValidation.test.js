@@ -5,8 +5,10 @@ import {
   validateSupplierInventoryUpdateFields,
   validateSupplierProductUpdateRequest,
   validateSupplierMrpUpdateAllowed,
+  validateSupplierSpecificationUpdateAllowed,
   isSupplierMrpLocked,
-  SUPPLIER_MRP_LOCKED_MESSAGE
+  SUPPLIER_MRP_LOCKED_MESSAGE,
+  SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE
 } from '../services/supplierProductUpdateValidation.js';
 
 test('inventory update rejects missing MRP, stock, and tax rates', () => {
@@ -83,4 +85,23 @@ test('validateSupplierMrpUpdateAllowed blocks supplier MRP changes after first s
   assert.equal(validateSupplierMrpUpdateAllowed(offer, { price: 120 }).ok, true);
   assert.equal(validateSupplierMrpUpdateAllowed({ price: 0 }, { price: 99 }).ok, true);
   assert.equal(SUPPLIER_MRP_LOCKED_MESSAGE.includes('admin'), true);
+});
+
+test('validateSupplierSpecificationUpdateAllowed allows first-time value fill', () => {
+  const offer = { attributes: { specifications: { Brand: '', Model: null } } };
+  const result = validateSupplierSpecificationUpdateAllowed(offer, {
+    specifications: { Brand: 'Milton', Model: '600 ml' }
+  });
+  assert.equal(result.ok, true);
+});
+
+test('validateSupplierSpecificationUpdateAllowed blocks changing saved values', () => {
+  const offer = { attributes: { specifications: { Brand: 'Milton', Model: '600 ml' } } };
+  const result = validateSupplierSpecificationUpdateAllowed(offer, {
+    specifications: { Brand: 'Other', Model: '600 ml' }
+  });
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'spec_values_locked');
+  assert.match(result.message, /cannot be changed/i);
+  assert.equal(SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE.includes('admin'), true);
 });

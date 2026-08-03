@@ -83,7 +83,22 @@ const isMeaningfullyFilled = (value) => {
   if (value === undefined || value === null || value === '') return false;
   if (Array.isArray(value)) return value.length > 0;
   if (typeof value === 'object') return Object.keys(value).length > 0;
-  return true;
+  return String(value).trim() !== '';
+};
+
+export const isMeaningfullyFilledSpecValue = isMeaningfullyFilled;
+
+export const hasMeaningfulSpecValues = (specifications) => {
+  const parsed = parseSpecificationsObject(specifications);
+  if (!parsed) return false;
+  return Object.values(parsed).some(isMeaningfullyFilled);
+};
+
+/** Supplier spec values lock after first save with filled values, or when offer is approved. */
+export const supplierSpecificationValuesLocked = ({ specifications, status } = {}) => {
+  const normalizedStatus = String(status || 'pending').trim().toLowerCase();
+  if (normalizedStatus === 'approved') return true;
+  return hasMeaningfulSpecValues(specifications);
 };
 
 /** Flatten product/order specifications for chip display in supplier portals. */

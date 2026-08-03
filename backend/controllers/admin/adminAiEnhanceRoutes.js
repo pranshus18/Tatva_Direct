@@ -8,8 +8,7 @@ import { polishSupplierListingWithAi } from '../../services/adminProductListingP
 import { detectCategoryMismatch } from '../../utils/categoryMismatch.js';
 
 export function registerAdminAiEnhanceRoutes({ router, authenticateToken, isAdmin }) {
-  // AI Fetch endpoint - Fetch product description and attributes from AI platforms (ChatGPT, Gemini, Claude)
-  // Same as supplier endpoint but for admin use
+  // AI Fetch endpoint — generate specification keys only (not product description).
   router.post('/products/ai-enhance', authenticateToken, isAdmin, async (req, res) => {
     try {
       const { productName, category, description, prompt: adminPrompt, provider = 'auto' } = parseWithSchema(
@@ -581,22 +580,11 @@ IMPORTANT: Return ONLY the JSON object with specification key names (all values 
         console.error('Failed to parse AI response as JSON:', parseError);
         console.error('Raw AI response:', aiResponse);
 
-        // Fallback: use the raw response as description
-        result = {
-          enhancedDescription: aiResponse,
-          extractedAttributes: {
-            grade: null,
-            brand: null,
-            dimensions: null,
-            weight: null,
-            color: null,
-            material: null,
-            certification: []
-          },
-          specifications: {}
-        };
-
-        console.log('⚠️  Using raw response as description (JSON parsing failed)');
+        return res.status(502).json({
+          status: 'error',
+          message: 'AI returned an invalid specification response. Try again or adjust your instructions.',
+          provider: selectedProvider
+        });
       }
 
       // Extract specifications (key-value pairs) from the result
@@ -653,22 +641,10 @@ IMPORTANT: Return ONLY the JSON object with specification key names (all values 
         }
       }
 
-      // Never echo admin AI instructions back as the product description
-      const finalDescription = result.enhancedDescription || result.description || productDescription || '';
-
+      // Specification assistant returns keys only — never product description copy.
       res.json({
         status: 'success',
-        enhancedDescription: finalDescription,
-        extractedAttributes: result.extractedAttributes || {
-          grade: null,
-          brand: null,
-          dimensions: null,
-          weight: null,
-          color: null,
-          material: null,
-          certification: []
-        },
-        specifications: specifications,
+        specifications,
         provider: selectedProvider,
         categoryMismatchWarning: categoryMismatchWarning || null
       });
@@ -972,7 +948,7 @@ ${aiResponse}`;
     }
   });
 
-  // Polish supplier-submitted description into customer-facing copy + cleaned specs.
+  // Polish supplier-submitted description into customer-facing copy (description only).
   router.post('/products/ai-polish-listing', authenticateToken, isAdmin, async (req, res) => {
     try {
       const payload = parseWithSchema(adminAiPolishListingSchema, req.body || {});

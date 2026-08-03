@@ -15,9 +15,6 @@ import { buildAdminReviewChainPayload } from '../../../services/supplierChainAdm
 import { insertNotifications } from '../../../repositories/notificationsRepository.js';
 import { findAdmins } from '../../../repositories/usersRepository.js';
 import { profileUpdateSchema, profileShippingAddressCreateSchema } from '../../../contracts/profileContracts.js';
-import {
-  isSupplierBranchAddressComplete
-} from '../../../services/upstreamOrderInputService.js';
 import { getContractErrorMessage, parseWithSchema } from '../../../utils/contractValidation.js';
 import {
   resolveCompanyInfoEntriesForValidation,
@@ -34,7 +31,7 @@ import {
   normalizeShippingAddressEntry,
   parseBrandTokens,
   resolveChainRoleOptionsForBrands,
-  shippingAddressEntryFromBranch,
+  resolveSupplierProfileShippingAddresses,
   validateShippingAddressEntries
 } from '../profileHelpers.js';
 import { syncPmCustomerProfileForUser, resolvePmPortalFlag } from '../../../services/pmUserService.js';
@@ -200,39 +197,44 @@ export function registerProfileUpdateRoutes(router) {
           };
         }
       } else if (profileData.userType === 'supplier') {
-        const updatingBranches = profileData.branches !== undefined;
+        const updatingShippingAddresses = profileData.shippingAddresses !== undefined;
         const updatingBillingAddress = profileData.address !== undefined;
 
-        if (updatingBranches) {
-          const branches = (profileData.branches || []).map((branch) => ({
-            ...branch,
-            id: branch.id || uuidv4()
-          }));
-          const hasCompleteShippingBranch = branches.some((branch) => isSupplierBranchAddressComplete(branch));
-          if (!hasCompleteShippingBranch) {
+        if (updatingShippingAddresses) {
+          const shippingAddresses = Array.isArray(profileData.shippingAddresses)
+            ? profileData.shippingAddresses.map((entry) =>
+                normalizeShippingAddressEntry({
+                  ...entry,
+                  id: entry.id || uuidv4()
+                })
+              )
+            : [];
+          const shippingValidation = validateShippingAddressEntries(shippingAddresses, {
+            userType: 'supplier'
+          });
+          if (!shippingValidation.ok) {
             return res.status(400).json({
               status: 'error',
-              code: 'supplier_shipping_branch_required',
-              message:
-                'At least one complete branch location (shipping address) is required. Fill address, city, state, PIN, and country.'
+              code: shippingValidation.code,
+              message: shippingValidation.message
             });
           }
-          for (let i = 0; i < branches.length; i += 1) {
-            const branch = branches[i] || {};
-            const hasAnyField = ['address', 'city', 'state', 'zipCode', 'pincode', 'country'].some((field) =>
-              String(branch?.[field] || '').trim()
-            );
-            if (!hasAnyField) continue;
-            if (!isSupplierBranchAddressComplete(branch)) {
-              const label = String(branch?.name || '').trim() || `Branch ${i + 1}`;
-              return res.status(400).json({
-                status: 'error',
-                code: 'supplier_branch_address_incomplete',
-                message: `Branch "${label}" is missing required address fields.`
-              });
-            }
+          const hasCompleteShippingAddress = shippingAddresses.some((entry) =>
+            isAddressComplete(normalizeShippingAddressEntry(entry))
+          );
+          if (!hasCompleteShippingAddress) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'supplier_shipping_address_required',
+              message:
+                'At least one complete shipping address is required. Fill street, city, state, PIN, and country.'
+            });
           }
-          profileUpdate.branches = branches;
+          profileUpdate.shippingAddresses = shippingAddresses.map((entry, index) => ({
+            ...entry,
+            displayName: formatShippingAddressDisplayName(entry, index)
+          }));
+          profileUpdate.branches = [];
         }
 
         if (updatingBillingAddress) {
@@ -965,31 +967,27 @@ export function registerProfileUpdateRoutes(router) {
       const currentProfile = currentUser.profile || {};
 
       if (userType === 'supplier') {
-        const existingBranches = Array.isArray(currentProfile.branches) ? currentProfile.branches : [];
-        const newBranch = {
+        const existing = resolveSupplierProfileShippingAddresses(currentProfile);
+        const newEntry = normalizeShippingAddressEntry({
           id: uuidv4(),
-          name: String(payload.label || '').trim() || normalized.city || 'Shipping address',
-          address: normalized.line1,
-          city: normalized.city,
-          state: normalized.state,
-          zipCode: normalized.pincode,
-          country: normalized.country,
-          phone: '',
+          label: String(payload.label || '').trim() || normalized.city || 'Shipping address',
+          ...normalized,
           ...(payload.latitude != null ? { latitude: payload.latitude } : {}),
           ...(payload.longitude != null ? { longitude: payload.longitude } : {}),
           ...(payload.geoLocation ? { geoLocation: payload.geoLocation } : {})
-        };
-        const nextBranches = [...existingBranches, newBranch];
-        for (let i = 0; i < nextBranches.length; i += 1) {
-          const branch = nextBranches[i] || {};
-          if (!isSupplierBranchAddressComplete(branch)) {
-            const label = String(branch?.name || '').trim() || `Branch ${i + 1}`;
-            return res.status(400).json({
-              status: 'error',
-              code: 'supplier_branch_address_incomplete',
-              message: `Shipping address "${label}" is missing required fields.`
-            });
-          }
+        });
+        newEntry.displayName = formatShippingAddressDisplayName(newEntry, existing.length);
+
+        const nextShippingAddresses = [...existing, newEntry];
+        const shippingValidation = validateShippingAddressEntries(nextShippingAddresses, {
+          userType: 'supplier'
+        });
+        if (!shippingValidation.ok) {
+          return res.status(400).json({
+            status: 'error',
+            code: shippingValidation.code,
+            message: shippingValidation.message
+          });
         }
 
         const { error: updateError } = await supabase
@@ -997,21 +995,19 @@ export function registerProfileUpdateRoutes(router) {
           .update({
             profile: {
               ...currentProfile,
-              branches: nextBranches
+              shippingAddresses: nextShippingAddresses,
+              branches: []
             }
           })
           .eq('id', req.userId);
 
         if (updateError) throw updateError;
 
-        const savedEntry = shippingAddressEntryFromBranch(newBranch);
         return res.json({
           status: 'success',
           message: 'Shipping address saved to profile',
-          shippingAddress: savedEntry,
-          shippingAddresses: nextBranches
-            .filter((branch) => isSupplierBranchAddressComplete(branch))
-            .map((branch) => shippingAddressEntryFromBranch(branch))
+          shippingAddress: newEntry,
+          shippingAddresses: nextShippingAddresses
         });
       }
 

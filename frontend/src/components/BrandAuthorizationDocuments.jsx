@@ -17,6 +17,7 @@ export default function BrandAuthorizationDocuments({
   removingUrl,
   onUpload,
   onRemove,
+  onUploadIntent = null,
   resolveUrls = resolveAuthorizationCertificateUrls,
   maxBytes = 15 * 1024 * 1024
 }) {
@@ -91,6 +92,7 @@ export default function BrandAuthorizationDocuments({
               htmlFor={inputId}
               className={`brand-auth-docs__add${uploading ? ' brand-auth-docs__add--busy' : ''}`}
               title="Upload brand authorisation documents"
+              onMouseDown={() => onUploadIntent?.()}
             >
               {uploading ? (
                 <Loader2 size={22} className="brand-auth-docs__spin" aria-hidden />

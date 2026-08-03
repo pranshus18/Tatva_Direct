@@ -3,6 +3,8 @@ import {
   buildSupplyChainFormProfile,
   buildSupplyChainSummaryRows,
   buildBrandApprovalDetailsSignature,
+  buildSelectYourselfChainFormSignature,
+  buildSelectYourselfChainEntryRowsSignature,
   classifyPathBBrandSaveRows,
   deduplicateCompanyInfoEntriesByBrand,
   findSupplierBrandRequest,
@@ -10,15 +12,73 @@ import {
   isBrandApprovalSaveBlockedForPendingRequests,
   mergeCompanyInfoEntriesById,
   mergeFormStepProfile,
+  shouldBlockProfileSnapshotRefresh,
   mergeSupplierBrandRequestsIntoProfile,
   resolveSelectYourselfBrandStepStatus,
   listPendingBrandNamesBlockingSave,
   listApprovedBrandNamesBlockingSave,
+  profileHasBrandsNeedingApprovalRequest,
+  isSelectYourselfBrandAlreadyApproved,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from './supplierSelectYourselfProfile';
-import { resolveRoleVerificationDocumentUrls } from './authorizationCertificateUrls';
+import { resolveRoleVerificationDocumentUrls, entryIncludesDocumentUrl } from './authorizationCertificateUrls';
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
+
+describe('buildSelectYourselfChainFormSignature', () => {
+  it('treats profiles as equal when only entry ids differ', () => {
+    const baseline = {
+      companyInfoEntries: [
+        {
+          id: 'entry-a',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: ['https://cdn.example.com/a.pdf']
+        }
+      ]
+    };
+    const current = {
+      companyInfoEntries: [
+        {
+          id: 'entry-b',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: ['https://cdn.example.com/a.pdf']
+        }
+      ]
+    };
+    expect(buildSelectYourselfChainFormSignature(baseline)).toBe(
+      buildSelectYourselfChainFormSignature(current)
+    );
+  });
+
+  it('detects a real role change', () => {
+    const saved = {
+      companyInfoEntries: [{ id: '1', brands: 'Samsung', role: 'dealer' }]
+    };
+    const edited = {
+      companyInfoEntries: [{ id: '1', brands: 'Samsung', role: 'retailer' }]
+    };
+    expect(buildSelectYourselfChainFormSignature(saved)).not.toBe(
+      buildSelectYourselfChainFormSignature(edited)
+    );
+  });
+
+  it('ignores empty placeholder rows', () => {
+    const withPlaceholder = {
+      companyInfoEntries: [
+        { id: 'empty', brands: '', role: '' },
+        { id: 'saved', brands: 'HP', role: 'dealer' }
+      ]
+    };
+    const savedOnly = {
+      companyInfoEntries: [{ id: 'saved', brands: 'HP', role: 'dealer' }]
+    };
+    expect(buildSelectYourselfChainFormSignature(withPlaceholder)).toBe(
+      buildSelectYourselfChainFormSignature(savedOnly)
+    );
+  });
+});
 
 describe('classifyPathBBrandSaveRows', () => {
   it('keeps a just-submitted brand pending even if a stale approved request exists', () => {
@@ -370,6 +430,18 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
     ).toBe(true);
   });
 
+  it('isSelectYourselfBrandAlreadyApproved matches catalog and supplier access checks', () => {
+    const catalog = [{ name: 'HP', status: 'approved' }];
+    expect(isSelectYourselfBrandAlreadyApproved('Hp', { catalogBrands: catalog })).toBe(true);
+    expect(isSelectYourselfBrandAlreadyApproved('FreshBrand', { catalogBrands: catalog })).toBe(false);
+    expect(
+      isSelectYourselfBrandAlreadyApproved('Hp', {
+        catalogBrands: [],
+        supplierApprovedBrands: [{ name: 'HP', status: 'approved' }]
+      })
+    ).toBe(true);
+  });
+
   it('re-enables Save brand when switching to a different new brand name', () => {
     const profile = {
       companyInfoEntries: [{ id: '1', brands: 'FreshBrand', brandApprovalDocumentUrls: [] }],
@@ -414,6 +486,23 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
     expect(
       listApprovedBrandNamesBlockingSave({ profile, catalogBrands: catalog })
     ).toEqual([]);
+  });
+
+  it('still allows brand approval request when one entry is approved and another is new', () => {
+    const catalog = [{ name: 'acc', status: 'approved' }];
+    const profile = {
+      companyInfoEntries: [
+        { id: '1', brands: 'acc', brandApprovalDocumentUrls: [] },
+        { id: '2', brands: 'Milton', brandApprovalDocumentUrls: ['https://cdn.example.com/doc.png'] }
+      ],
+      supplierBrandRequests: []
+    };
+    expect(
+      profileHasBrandsNeedingApprovalRequest({ profile, catalogBrands: catalog, submittedSignature: '' })
+    ).toBe(true);
+    expect(
+      listApprovedBrandNamesBlockingSave({ profile, catalogBrands: catalog })
+    ).toEqual(['acc']);
   });
 
   it('blocks Save brand when switching between already-approved catalog brands', () => {
@@ -520,6 +609,76 @@ describe('buildSupplyChainFormProfile', () => {
     };
 
     expect(resolveRoleVerificationDocumentUrls(entry)).toEqual([]);
+  });
+});
+
+describe('buildSelectYourselfChainEntryRowsSignature', () => {
+  it('detects a newly added blank Path B row that the semantic signature ignores', () => {
+    const saved = {
+      companyInfoEntries: [{ id: 'entry-1', brands: 'Acc', role: 'dealer' }]
+    };
+    const withBlankRow = {
+      companyInfoEntries: [
+        { id: 'entry-1', brands: 'Acc', role: 'dealer' },
+        { id: 'entry-2', brands: '', role: '' }
+      ]
+    };
+
+    expect(buildSelectYourselfChainFormSignature(withBlankRow)).toBe(
+      buildSelectYourselfChainFormSignature(saved)
+    );
+    expect(buildSelectYourselfChainEntryRowsSignature(withBlankRow)).not.toBe(
+      buildSelectYourselfChainEntryRowsSignature(saved)
+    );
+  });
+
+  it('stays stable when nothing structural changed', () => {
+    const profile = { companyInfoEntries: [{ id: 'entry-1', brands: 'Acc', role: 'dealer' }] };
+    expect(buildSelectYourselfChainEntryRowsSignature(profile)).toBe(
+      buildSelectYourselfChainEntryRowsSignature({
+        companyInfoEntries: [{ id: 'entry-1', brands: 'Acc', role: 'retailer' }]
+      })
+    );
+  });
+});
+
+describe('entryIncludesDocumentUrl', () => {
+  it('detects role and brand documents on an entry', () => {
+    const roleDoc = 'https://cdn.example.com/role.pdf';
+    const brandDoc = 'https://cdn.example.com/brand.pdf';
+    const entry = {
+      authorizationCertificateUrls: [roleDoc],
+      brandApprovalDocumentUrls: [brandDoc]
+    };
+    expect(entryIncludesDocumentUrl(entry, roleDoc, 'role_authorization')).toBe(true);
+    expect(entryIncludesDocumentUrl(entry, brandDoc, 'brand_approval')).toBe(true);
+    expect(entryIncludesDocumentUrl(entry, brandDoc, 'role_authorization')).toBe(false);
+  });
+});
+
+describe('shouldBlockProfileSnapshotRefresh', () => {
+  it('blocks when local drafts exist or a protection window is active', () => {
+    expect(
+      shouldBlockProfileSnapshotRefresh({
+        hasUnsavedChanges: true,
+        blockUntilMs: 0,
+        now: 1000
+      })
+    ).toBe(true);
+    expect(
+      shouldBlockProfileSnapshotRefresh({
+        hasUnsavedChanges: false,
+        blockUntilMs: 2000,
+        now: 1000
+      })
+    ).toBe(true);
+    expect(
+      shouldBlockProfileSnapshotRefresh({
+        hasUnsavedChanges: false,
+        blockUntilMs: 500,
+        now: 1000
+      })
+    ).toBe(false);
   });
 });
 

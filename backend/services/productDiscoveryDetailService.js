@@ -574,7 +574,9 @@ export async function getProductDiscoveryDetail(supabase, { productId, enrichSpe
     ok: true,
     product: {
       id: summaryProduct.id,
-      name: family?.canonicalName || summaryProduct.name,
+      // Always use the selected catalog product's name — family canonical names are
+      // grouping metadata and must not replace the product the user clicked.
+      name: summaryProduct.name,
       description: getPublishedCatalogDescription(summaryProduct) || null,
       publishedDescription: getPublishedCatalogDescription(summaryProduct) || null,
       category: summaryProduct.category,

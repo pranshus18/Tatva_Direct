@@ -1,7 +1,8 @@
 /**
  * Resolve supplier ship-from PIN and structured address from `users.address`,
- * optional `users.profile.branches`, or an `outlets` row (warehouse / store).
+ * optional `users.profile.shippingAddresses`, or an `outlets` row (warehouse / store).
  */
+import { resolveSupplierProfileShippingAddresses } from '../controllers/profile/profileHelpers.js';
 
 /** True for signup / profile placeholders — used by logistics to re-fetch supplier address from DB. */
 export function isPlaceholderStreetLine(value) {
@@ -71,44 +72,35 @@ function buildPickupAddress(line1, city, state, country, pinDigits) {
   };
 }
 
-function mergeSupplierBranchAddress(addr, branch) {
-  const b = branch && typeof branch === 'object' ? branch : {};
+function mergeSupplierShippingAddress(addr, shippingEntry) {
+  const entry = shippingEntry && typeof shippingEntry === 'object' ? shippingEntry : {};
   return {
     ...addr,
-    ...b,
-    line1:
-      b.line1 ||
-      (typeof b.address === 'string' ? b.address : '') ||
-      addr.line1 ||
-      addr.street ||
-      '',
-    street: b.street || addr.street,
-    city: b.city || addr.city,
-    state: b.state || addr.state,
-    country: b.country || addr.country
+    line1: entry.line1 || addr.line1 || addr.street || '',
+    street: entry.street || addr.street,
+    city: entry.city || addr.city,
+    state: entry.state || addr.state,
+    country: entry.country || addr.country,
+    pincode: entry.pincode || entry.zipCode || addr.pincode
   };
 }
 
 /**
- * Ship-from meta for a supplier `users` row (profile + branches fallback).
+ * Ship-from meta for a supplier `users` row (profile + shipping address fallback).
  * @returns {{ pincode: string, summary: string, pickupAddress: object, outletId: null, outletName: null }}
  */
 export function getSupplierPickupMeta(row = {}) {
   const addr = row.address && typeof row.address === 'object' ? row.address : {};
   const profile = row.profile && typeof row.profile === 'object' ? row.profile : {};
-  const branches = Array.isArray(profile.branches) ? profile.branches : [];
+  const shippingAddresses = resolveSupplierProfileShippingAddresses(profile);
 
   let pin = digitsPin6FromAddressFields(addr);
   let { line1, city, state, country } = lineFromAddr(addr);
 
-  // Many suppliers keep a valid PIN on `users.address` but the real street lives in
-  // `profile.branches[].address` (Profile "Branch Locations"). The legacy path only
-  // consulted branches when PIN was missing, so signup placeholders like
-  // "Temporary Address" never got replaced.
   if (!pin) {
-    for (const b of branches) {
-      if (!b || typeof b !== 'object') continue;
-      const merged = mergeSupplierBranchAddress(addr, b);
+    for (const entry of shippingAddresses) {
+      if (!entry || typeof entry !== 'object') continue;
+      const merged = mergeSupplierShippingAddress(addr, entry);
       const p = digitsPin6FromAddressFields(merged);
       if (p) {
         pin = p;
@@ -119,23 +111,21 @@ export function getSupplierPickupMeta(row = {}) {
   }
 
   if (isPlaceholderStreetLine(line1)) {
-    for (const b of branches) {
-      if (!b || typeof b !== 'object') continue;
-      const merged = mergeSupplierBranchAddress(addr, b);
+    for (const entry of shippingAddresses) {
+      if (!entry || typeof entry !== 'object') continue;
+      const merged = mergeSupplierShippingAddress(addr, entry);
       const candidateLine = primaryStreetLine(merged);
       if (!isPlaceholderStreetLine(candidateLine)) {
         ({ line1, city, state, country } = lineFromAddr(merged));
-        // Do not use merged.pincode here — it keeps the signup row PIN and hides the
-        // branch warehouse PIN when the branch has its own zipCode.
         const prevPin = pin;
-        const branchOnlyPin = digitsPin6FromAddressFields({
-          pincode: b.pincode || b.zipCode,
-          zipCode: b.zipCode,
-          postalCode: b.postalCode,
-          postal_code: b.postal_code,
-          zip: b.zip
+        const shippingPin = digitsPin6FromAddressFields({
+          pincode: entry.pincode || entry.zipCode,
+          zipCode: entry.zipCode,
+          postalCode: entry.postalCode,
+          postal_code: entry.postal_code,
+          zip: entry.zip
         });
-        pin = branchOnlyPin || prevPin;
+        pin = shippingPin || prevPin;
         break;
       }
     }

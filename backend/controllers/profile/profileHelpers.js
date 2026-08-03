@@ -4,6 +4,7 @@ import {
   branchRecordToAddressInput,
   isSupplierBranchAddressComplete
 } from '../../services/upstreamOrderInputService.js';
+import { mergeParsedShippingAddress } from '../../utils/parseStructuredShippingAddress.js';
 import { ensureBrandApprovedOrRequest as ensureBrandApprovedOrRequestService } from '../../services/brandApprovalService.js';
 import {
   baselineChainFromProfile,
@@ -377,7 +378,9 @@ export async function ensureBrandApprovedOrRequest({ brandName, requesterUserId 
 const SHIPPING_ADDRESS_REQUIRED_FIELDS = ['line1', 'city', 'state', 'pincode', 'country'];
 
 export function shippingAddressEntryFromBranch(branch) {
-  const normalized = normalizeAddress(branchRecordToAddressInput(branch));
+  const normalized = normalizeAddress(
+    mergeParsedShippingAddress(branchRecordToAddressInput(branch))
+  );
   const entry = {
     id: String(branch?.id || '').trim(),
     label: String(branch?.name || '').trim(),
@@ -391,7 +394,7 @@ export function shippingAddressEntryFromBranch(branch) {
 
 export function normalizeShippingAddressEntry(entry = {}) {
   const nested = entry?.address && typeof entry.address === 'object' ? entry.address : {};
-  const flat = normalizeAddress({ ...nested, ...entry });
+  const flat = normalizeAddress(mergeParsedShippingAddress({ ...nested, ...entry }));
   return {
     ...(entry.latitude != null ? { latitude: entry.latitude } : {}),
     ...(entry.longitude != null ? { longitude: entry.longitude } : {}),
@@ -469,15 +472,31 @@ export function resolveRegisteredBillingAddress(user) {
   return direct;
 }
 
+/** Supplier shipping addresses — prefers profile.shippingAddresses, migrates legacy branches. */
+export function resolveSupplierProfileShippingAddresses(profile = {}) {
+  const saved = (Array.isArray(profile.shippingAddresses) ? profile.shippingAddresses : [])
+    .map((entry) => normalizeShippingAddressEntry(entry))
+    .filter((entry) => entry.id && isAddressComplete(entry));
+
+  if (saved.length > 0) {
+    return saved.map((entry, index) => ({
+      ...entry,
+      displayName: formatShippingAddressDisplayName(entry, index)
+    }));
+  }
+
+  return (Array.isArray(profile.branches) ? profile.branches : [])
+    .filter((branch) => isSupplierBranchAddressComplete(branch))
+    .map((branch) => shippingAddressEntryFromBranch(branch))
+    .filter((entry) => entry.id && isAddressComplete(entry));
+}
+
 export function deriveShippingAddressesFromProfile(user) {
   const profile = user?.profile || {};
   const userType = user?.user_type || profile?.userType;
 
   if (userType === 'supplier') {
-    return (Array.isArray(profile.branches) ? profile.branches : [])
-      .filter((branch) => isSupplierBranchAddressComplete(branch))
-      .map((branch) => shippingAddressEntryFromBranch(branch))
-      .filter((entry) => entry.id && isAddressComplete(entry));
+    return resolveSupplierProfileShippingAddresses(profile);
   }
 
   return (Array.isArray(profile.shippingAddresses) ? profile.shippingAddresses : [])
@@ -487,6 +506,10 @@ export function deriveShippingAddressesFromProfile(user) {
       ...entry,
       displayName: formatShippingAddressDisplayName(entry, index)
     }));
+}
+
+export function supplierHasCompleteShippingAddress(profile = {}) {
+  return resolveSupplierProfileShippingAddresses(profile).length > 0;
 }
 
 export async function createProfileResponse(user) {
@@ -640,7 +663,6 @@ export async function createProfileResponse(user) {
       businessType: base.businessType || '',
       categories: base.categories || [],
       shippingAddresses: deriveShippingAddressesFromProfile(user),
-      branches: base.branches || [],
       skus: base.skus || [],
       supplierRole: displayChain.supplierRole || (firstEntry?.role || ''),
       gstin: base.gstin || (firstEntry?.gstin || ''),

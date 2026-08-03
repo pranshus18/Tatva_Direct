@@ -278,6 +278,11 @@ export default function ProductDiscoveryDetail() {
     }
 
     let cancelled = false;
+    setDetail(null);
+    setSelectedVariantKey('');
+    setOptionSelections({});
+    setActiveImageIndex(0);
+
     const load = async () => {
       setLoading(true);
       setError('');
@@ -359,6 +364,7 @@ export default function ProductDiscoveryDetail() {
   const productSummary = detail?.product || {};
   const variantOptions = Array.isArray(detail?.variantOptions) ? detail.variantOptions : [];
   const activeListing = selectedVariant || (variants[0] ?? null);
+  const displayProductName = activeListing?.name || productSummary.name || 'Product';
   const images = getProductImageList(activeListing || productSummary);
   const safeImageIndex = images.length ? Math.min(activeImageIndex, images.length - 1) : 0;
   const productDescription = resolveDiscoveryProductDescription(productSummary, activeListing);
@@ -547,7 +553,7 @@ export default function ProductDiscoveryDetail() {
                         className={`pdd-image-thumb ${index === safeImageIndex ? 'pdd-image-thumb--active' : ''}`}
                         onClick={() => setActiveImageIndex(index)}
                       >
-                        <img src={url} alt={`${productSummary.name || 'Product'} ${index + 1}`} />
+                        <img src={url} alt={`${displayProductName} ${index + 1}`} />
                       </button>
                     ))}
                   </div>
@@ -558,7 +564,7 @@ export default function ProductDiscoveryDetail() {
                     <>
                       <img
                         src={images[safeImageIndex]}
-                        alt={productSummary.name || 'Product'}
+                        alt={displayProductName}
                         className="pdd-main-image"
                       />
                       {images.length > 1 ? (
@@ -631,7 +637,7 @@ export default function ProductDiscoveryDetail() {
                 {inStock ? <Badge className="pdd-badge--stock">In stock</Badge> : null}
               </div>
 
-              <h1 className="pdd-info__title">{productSummary.name}</h1>
+              <h1 className="pdd-info__title">{displayProductName}</h1>
               {productSummary.brand ? (
                 <p className="pdd-info__brand">
                   Brand: <strong>{productSummary.brand}</strong>
@@ -799,7 +805,7 @@ export default function ProductDiscoveryDetail() {
             ? {
                 id: activeListing.productId,
                 productId: activeListing.productId,
-                name: activeListing.name || productSummary.name,
+                name: displayProductName,
                 variantKey: activeListing.variantKey || undefined
               }
             : null

@@ -1,5 +1,4 @@
 import logger from '../utils/logger.js';
-import { parseSpecificationsObject, sanitizeSpecifications } from './supplierCatalogHelpersService.js';
 
 async function getFetch() {
   if (typeof globalThis.fetch === 'function') return globalThis.fetch;
@@ -144,29 +143,9 @@ async function callClaude({ systemPrompt, userPrompt, anthropicApiKey }) {
   return block?.text?.trim() || '';
 }
 
-function normalizeSpecValue(value) {
-  if (value === null || value === undefined) return '';
-  if (Array.isArray(value)) return value.filter(Boolean).join(', ');
-  return String(value).trim();
-}
-
-function mergePolishedSpecifications(existingSpecifications = {}, aiSpecifications = {}) {
-  const base = parseSpecificationsObject(existingSpecifications) || {};
-  const fromAi = sanitizeSpecifications(parseSpecificationsObject(aiSpecifications) || {});
-  const merged = { ...base };
-
-  Object.entries(fromAi).forEach(([key, value]) => {
-    const normalized = normalizeSpecValue(value);
-    if (normalized) {
-      merged[key] = normalized;
-    }
-  });
-
-  return merged;
-}
-
 /**
- * Turn supplier free-text into customer-ready description + cleaned specifications.
+ * Turn supplier free-text into a customer-ready product description.
+ * Does not modify specifications — use the specification assistant for that.
  */
 export async function polishSupplierListingWithAi({
   productName,
@@ -176,6 +155,8 @@ export async function polishSupplierListingWithAi({
   provider = 'auto',
   adminNotes = ''
 }) {
+  void existingSpecifications;
+
   const supplierText = String(supplierDescription || '').trim();
   if (!String(productName || '').trim()) {
     return { status: 'error', message: 'Product name is required' };
@@ -184,25 +165,17 @@ export async function polishSupplierListingWithAi({
     return { status: 'error', message: 'Description text is required to polish the listing' };
   }
 
-  const existingSpecs = parseSpecificationsObject(existingSpecifications) || {};
-  const existingSpecEntries = Object.entries(existingSpecs)
-    .map(([key, value]) => `${key}: ${normalizeSpecValue(value)}`)
-    .filter((line) => !line.endsWith(':'));
-
   const systemPrompt = `You are a B2B construction materials catalog editor.
 Rewrite supplier-submitted product copy into professional customer-facing content.
 Return ONLY valid JSON:
 {
-  "description": "<2-4 sentence polished product description for buyers>",
-  "specifications": { "<Professional spec key>": "<concise value>" }
+  "description": "<2-4 sentence polished product description for buyers>"
 }
 Rules:
 1) Fix grammar, spelling, and unclear wording without inventing facts.
 2) Description must be plain prose (no bullet lists, no markdown).
-3) Extract and normalize specification key-value pairs from the supplier text and existing specs.
-4) Use professional ecommerce specification labels (Title Case).
-5) Omit empty or unknown specification values.
-6) Do not include pricing, stock, or supplier contact details in the description.`;
+3) Do not return specification keys or values — description text only.
+4) Do not include pricing, stock, or supplier contact details in the description.`;
 
   const userPrompt = `Product name: ${productName}
 Category: ${category || 'Not specified'}
@@ -210,10 +183,7 @@ ${adminNotes ? `Admin notes: ${adminNotes}\n` : ''}
 Source description (may be supplier draft or admin draft — polish for buyers):
 ${supplierText}
 
-Existing specification draft:
-${existingSpecEntries.length > 0 ? existingSpecEntries.join('\n') : 'None'}
-
-Polish the description and return cleaned specifications JSON.`;
+Polish the description for buyers and return JSON with the description field only.`;
 
   try {
     const picked = pickProvider(provider);
@@ -232,19 +202,17 @@ Polish the description and return cleaned specifications JSON.`;
 
     const parsed = parseJsonFromAiText(aiText) || {};
     const polishedDescription = String(parsed.description || parsed.enhancedDescription || '').trim();
-    const specifications = mergePolishedSpecifications(existingSpecs, parsed.specifications || {});
 
-    if (!polishedDescription && Object.keys(specifications).length === 0) {
+    if (!polishedDescription) {
       return {
         status: 'error',
-        message: 'AI did not return a usable description or specifications. Try again or edit manually.'
+        message: 'AI did not return a usable description. Try again or edit manually.'
       };
     }
 
     return {
       status: 'success',
       description: polishedDescription,
-      specifications,
       provider: picked.provider
     };
   } catch (error) {

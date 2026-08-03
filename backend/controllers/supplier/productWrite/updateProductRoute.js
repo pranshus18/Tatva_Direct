@@ -33,7 +33,9 @@ import {
   bodyHasInventoryUpdateFields,
   validateSupplierProductUpdateRequest,
   validateSupplierMrpUpdateAllowed,
-  SUPPLIER_MRP_LOCKED_MESSAGE
+  validateSupplierSpecificationUpdateAllowed,
+  SUPPLIER_MRP_LOCKED_MESSAGE,
+  SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE
 } from '../../../services/supplierProductUpdateValidation.js';
 import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
 
@@ -85,6 +87,16 @@ export function registerSupplierProductUpdateRoute(ctx) {
             code: mrpValidation.code || 'mrp_locked',
             message: mrpValidation.message || SUPPLIER_MRP_LOCKED_MESSAGE,
             missingFields: mrpValidation.missingFields || ['price']
+          });
+        }
+
+        const specValidation = validateSupplierSpecificationUpdateAllowed(supplierProduct, req.body || {});
+        if (!specValidation.ok) {
+          return res.status(403).json({
+            status: 'error',
+            code: specValidation.code || 'spec_values_locked',
+            message: specValidation.message || SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE,
+            missingFields: specValidation.missingFields || ['specifications']
           });
         }
 

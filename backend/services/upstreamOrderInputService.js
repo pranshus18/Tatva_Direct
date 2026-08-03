@@ -3,9 +3,9 @@ import {
   normalizeAddress,
   resolveB2bPaymentFromBody
 } from '../controllers/po/shared/poHelpers.js';
-import { deriveShippingAddressesFromProfile } from '../controllers/profile/profileHelpers.js';
+import { deriveShippingAddressesFromProfile, resolveSupplierProfileShippingAddresses } from '../controllers/profile/profileHelpers.js';
 
-/** Supplier profile branches are the canonical shipping addresses. */
+/** Supplier profile shipping addresses are stored in profile.shippingAddresses. */
 export function branchRecordToAddressInput(branch) {
   if (!branch || typeof branch !== 'object') return {};
   return {
@@ -36,7 +36,12 @@ export function resolveShippingAddressFromProfileBook(profileRow, shippingAddres
   const id = String(shippingAddressId || '').trim();
   if (!id) return null;
 
-  const saved = deriveShippingAddressesFromProfile(profileRow || {});
+  const profile = profileRow?.profile || {};
+  const userType = profileRow?.user_type || profile?.userType;
+  const saved =
+    userType === 'supplier' || (Array.isArray(profile.branches) && profile.branches.length > 0)
+      ? resolveSupplierProfileShippingAddresses(profile)
+      : deriveShippingAddressesFromProfile(profileRow || {});
   const match = saved.find((entry) => String(entry.id) === id);
   if (!match) return null;
 
@@ -55,9 +60,9 @@ export function resolvePrimarySupplierShippingAddress({
   const fromProfileBook = resolveShippingAddressFromProfileBook(profileRow, shippingAddressId);
   if (fromProfileBook) return fromProfileBook;
 
-  const branches = Array.isArray(profileRow?.profile?.branches) ? profileRow.profile.branches : [];
-  for (const branch of branches) {
-    const normalized = normalizeAddress(branchRecordToAddressInput(branch));
+  const saved = resolveSupplierProfileShippingAddresses(profileRow?.profile || {});
+  for (const entry of saved) {
+    const normalized = normalizeAddress(entry);
     if (isAddressComplete(normalized)) return normalized;
   }
 

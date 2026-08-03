@@ -321,6 +321,15 @@
   margin-bottom: 6px;
 }
 
+.upstream-offer-product-title--clickable {
+  cursor: pointer;
+  color: #0f172a;
+}
+
+.upstream-offer-product-title--clickable:hover {
+  color: #4f46e5;
+}
+
 .upstream-offer-product-meta {
   color: #64748b;
   font-size: 0.9rem;
@@ -1638,6 +1647,12 @@
 
 .us-pd-card {
   position: relative;
+  cursor: pointer;
+}
+
+.us-pd-card .pd-card__cart-btn {
+  position: relative;
+  z-index: 3;
 }
 
 .us-pd-card--selected {

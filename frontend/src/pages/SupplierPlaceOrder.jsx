@@ -52,16 +52,16 @@ import {
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
 const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
 
-const isBranchComplete = (branch) =>
-  ['address', 'city', 'state', 'country'].every((key) => String(branch?.[key] || '').trim()) &&
-  String(branch?.zipCode || branch?.pincode || '').trim();
+const isProfileShippingAddressComplete = (entry) =>
+  ['line1', 'city', 'state', 'country'].every((key) => String(entry?.[key] || '').trim()) &&
+  String(entry?.pincode || entry?.zipCode || '').trim();
 
-const branchToShippingAddress = (branch) => ({
-  line1: String(branch?.address || branch?.line1 || '').trim(),
-  city: String(branch?.city || '').trim(),
-  state: String(branch?.state || '').trim(),
-  pincode: String(branch?.zipCode || branch?.pincode || '').trim(),
-  country: String(branch?.country || 'India').trim() || 'India'
+const profileShippingToAddress = (entry) => ({
+  line1: String(entry?.line1 || entry?.address || '').trim(),
+  city: String(entry?.city || '').trim(),
+  state: String(entry?.state || '').trim(),
+  pincode: String(entry?.pincode || entry?.zipCode || '').trim(),
+  country: String(entry?.country || 'India').trim() || 'India'
 });
 
 function AddressFields({ prefix, address, onChange, disabled = false }) {
@@ -169,8 +169,8 @@ const SupplierPlaceOrder = () => {
   });
   const [deliveryDestination, setDeliveryDestination] = useState('shipping'); // shipping | billing
   const [hasGstin, setHasGstin] = useState(false);
-  const [shippingBranches, setShippingBranches] = useState([]);
-  const [selectedShippingBranchId, setSelectedShippingBranchId] = useState('');
+  const [profileShippingAddresses, setProfileShippingAddresses] = useState([]);
+  const [selectedProfileShippingAddressId, setSelectedProfileShippingAddressId] = useState('');
   const [cartShippingLocked, setCartShippingLocked] = useState(false);
   const [cartShippingLabel, setCartShippingLabel] = useState('');
   const [cartShippingAddressId, setCartShippingAddressId] = useState('');
@@ -523,12 +523,14 @@ const SupplierPlaceOrder = () => {
         setHasGstin(Boolean(String(gstinRaw || '').trim()));
 
         if (!cartShippingLockedRef.current) {
-          const branches = (Array.isArray(profile?.branches) ? profile.branches : []).filter(isBranchComplete);
-          setShippingBranches(branches);
-          const primaryBranch = branches[0] || null;
-          if (primaryBranch) {
-            setSelectedShippingBranchId(String(primaryBranch.id || ''));
-            setShippingAddress(branchToShippingAddress(primaryBranch));
+          const savedAddresses = (Array.isArray(profile?.shippingAddresses) ? profile.shippingAddresses : []).filter(
+            isProfileShippingAddressComplete
+          );
+          setProfileShippingAddresses(savedAddresses);
+          const primaryAddress = savedAddresses[0] || null;
+          if (primaryAddress) {
+            setSelectedProfileShippingAddressId(String(primaryAddress.id || ''));
+            setShippingAddress(profileShippingToAddress(primaryAddress));
           }
         }
 
@@ -598,16 +600,18 @@ const SupplierPlaceOrder = () => {
 
   useEffect(() => {
     if (cartShippingLocked || cartShippingLockedRef.current) return;
-    if (!selectedShippingBranchId) return;
-    const branch = shippingBranches.find((b) => String(b.id) === String(selectedShippingBranchId));
-    if (branch) setShippingAddress(branchToShippingAddress(branch));
-  }, [selectedShippingBranchId, shippingBranches, cartShippingLocked]);
+    if (!selectedProfileShippingAddressId) return;
+    const entry = profileShippingAddresses.find(
+      (row) => String(row.id) === String(selectedProfileShippingAddressId)
+    );
+    if (entry) setShippingAddress(profileShippingToAddress(entry));
+  }, [selectedProfileShippingAddressId, profileShippingAddresses, cartShippingLocked]);
 
   const fillShippingFromCurrentLocation = async () => {
     setLocatingShippingAddress(true);
     try {
       const resolved = await resolveAddressFromCurrentLocation();
-      setSelectedShippingBranchId('');
+      setSelectedProfileShippingAddressId('');
       setShippingAddress({
         line1: resolved.line1 || '',
         city: resolved.city || '',
@@ -1162,7 +1166,7 @@ const SupplierPlaceOrder = () => {
                       checked={deliveryDestination === 'shipping'}
                       onChange={() => setDeliveryDestination('shipping')}
                     />
-                    Shipping branch address
+                    Shipping address
                   </label>
                   <label style={!hasGstin ? { opacity: 0.55 } : undefined}>
                     <input
@@ -1179,27 +1183,27 @@ const SupplierPlaceOrder = () => {
                 {deliveryDestination === 'shipping' ? (
                   <div className="spo-address-single checkout-address-card">
                     <div className="checkout-address-card__head">
-                      <h3>Shipping (branch)</h3>
-                      <p>Material will be delivered to this branch location.</p>
+                      <h3>Shipping address</h3>
+                      <p>Material will be delivered to this shipping address.</p>
                     </div>
-                    {shippingBranches.length > 1 ? (
+                    {profileShippingAddresses.length > 1 ? (
                       <div className="spo-field" style={{ marginBottom: '0.75rem' }}>
-                        <label htmlFor="spo-shipping-branch">Branch</label>
+                        <label htmlFor="spo-shipping-address">Shipping address</label>
                         <select
-                          id="spo-shipping-branch"
-                          value={selectedShippingBranchId}
-                          onChange={(e) => setSelectedShippingBranchId(e.target.value)}
+                          id="spo-shipping-address"
+                          value={selectedProfileShippingAddressId}
+                          onChange={(e) => setSelectedProfileShippingAddressId(e.target.value)}
                         >
-                          {shippingBranches.map((branch) => (
-                            <option key={branch.id} value={String(branch.id)}>
-                              {branch.name || 'Branch'} — {branch.city || 'City'}
+                          {profileShippingAddresses.map((entry) => (
+                            <option key={entry.id} value={String(entry.id)}>
+                              {entry.label || entry.displayName || 'Shipping address'} — {entry.city || 'City'}
                             </option>
                           ))}
                         </select>
                       </div>
                     ) : null}
                     <p className="checkout-address-note">
-                      From Company Profile → shipping branches.{' '}
+                      From Company Profile → shipping addresses.{' '}
                       <button
                         type="button"
                         className="btn-secondary"

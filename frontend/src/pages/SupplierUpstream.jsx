@@ -1000,6 +1000,11 @@ const SupplierUpstream = ({ user }) => {
     setSupplierDetailsOpen(true);
   };
 
+  const openProductDetails = (product) => {
+    if (!product) return;
+    setViewingProduct(product);
+  };
+
   const offerLocationText = useMemo(() => {
     const fromOffer = String(supplierOfferDetails?.location || '').trim();
     if (fromOffer) return fromOffer;
@@ -1126,9 +1131,23 @@ const SupplierUpstream = ({ user }) => {
             return (
               <article
                 key={mineId}
-                className={`pd-card us-pd-card flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${isSelected ? 'us-pd-card--selected' : ''}`}
+                className={`pd-card us-pd-card pd-card--clickable flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${isSelected ? 'us-pd-card--selected' : ''}`}
+                onClick={() => openProductDetails(p)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    openProductDetails(p);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                title="View product details"
               >
-                <label className="us-pd-card__select">
+                <label
+                  className="us-pd-card__select"
+                  onClick={(event) => event.stopPropagation()}
+                  onKeyDown={(event) => event.stopPropagation()}
+                >
                   <input
                     type="checkbox"
                     checked={isSelected}
@@ -1138,16 +1157,9 @@ const SupplierUpstream = ({ user }) => {
                   {isSelected ? <span className="us-pd-card__selected-badge"><Check size={12} /></span> : null}
                 </label>
 
-                <div
-                  className="pd-card__image us-pd-card__image"
-                  onClick={() => setViewingProduct(p)}
-                  onKeyDown={(e) => e.key === 'Enter' && setViewingProduct(p)}
-                  role="button"
-                  tabIndex={0}
-                  title="View full details"
-                >
+                <div className="pd-card__image us-pd-card__image" title="View full details">
                   {imgs.length > 0 ? (
-                    <ProductImageCarousel images={imgs} alt={p.name} height={180} rounded={10} stopPropagation />
+                    <ProductImageCarousel images={imgs} alt={p.name} height={180} rounded={10} />
                   ) : (
                     <div className="pd-card__no-image">
                       <ImageOff size={36} />
@@ -1159,13 +1171,7 @@ const SupplierUpstream = ({ user }) => {
 
                 <div className="pd-card__body">
                   <div className="pd-card__header">
-                    <h3
-                      className="pd-card__name us-pd-card__name"
-                      onClick={() => setViewingProduct(p)}
-                      onKeyDown={(e) => e.key === 'Enter' && setViewingProduct(p)}
-                      role="button"
-                      tabIndex={0}
-                    >
+                    <h3 className="pd-card__name us-pd-card__name">
                       {p.name || 'Unnamed Product'}
                     </h3>
                     {brandLabel ? <span className="pd-card__brand">{brandLabel}</span> : null}
@@ -1190,7 +1196,11 @@ const SupplierUpstream = ({ user }) => {
                   </div>
 
                   {isSelected ? (
-                    <div className="us-pd-card__qty-row">
+                    <div
+                      className="us-pd-card__qty-row"
+                      onClick={(event) => event.stopPropagation()}
+                      onKeyDown={(event) => event.stopPropagation()}
+                    >
                       <label className="us-pd-card__qty-label" htmlFor={`qty-${mineId}`}>Quantity</label>
                       <input
                         id={`qty-${mineId}`}
@@ -1213,13 +1223,19 @@ const SupplierUpstream = ({ user }) => {
                 </div>
 
                 <div className="pd-card__footer">
-                  <span className="us-pd-card__hint">
-                    {isSelected ? 'Selected for sourcing' : 'Select to source upstream'}
-                  </span>
+                  <div className="pd-card__suppliers">
+                    <span className="pd-card__view-hint">View details</span>
+                    <span className="us-pd-card__hint">
+                      {isSelected ? 'Selected for sourcing' : 'Select to source upstream'}
+                    </span>
+                  </div>
                   <button
                     type="button"
                     className="pd-card__cart-btn"
-                    onClick={() => openAddToCartDialog(p)}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openAddToCartDialog(p);
+                    }}
                     disabled={isAddingToCart}
                   >
                     {isAddingToCart ? (
@@ -1332,7 +1348,21 @@ const SupplierUpstream = ({ user }) => {
                 return (
                   <div key={it.mineSupplierProductId} className="item-card upstream-offer-card">
                     <div className="item-info upstream-offer-item-info">
-                      <h4 className="upstream-offer-product-title">{mine?.name || 'Product'}</h4>
+                      <h4
+                        className="upstream-offer-product-title upstream-offer-product-title--clickable"
+                        onClick={() => mine && openProductDetails(mine)}
+                        onKeyDown={(event) => {
+                          if ((event.key === 'Enter' || event.key === ' ') && mine) {
+                            event.preventDefault();
+                            openProductDetails(mine);
+                          }
+                        }}
+                        role={mine ? 'button' : undefined}
+                        tabIndex={mine ? 0 : undefined}
+                        title={mine ? 'View product details' : undefined}
+                      >
+                        {mine?.name || 'Product'}
+                      </h4>
                       <p className="upstream-offer-product-meta">
                         Brand: <strong>{it.chainRouting?.brand || it.brandModel || mine?.brand || mine?.brandModel || 'N/A'}</strong> • Qty: <strong>{mineSelectedQty}</strong>
                       </p>
@@ -1752,12 +1782,6 @@ const SupplierUpstream = ({ user }) => {
                     </div>
                   </div>
                 </div>
-              ) : selectedShippingAddressId ? (
-                <p className="text-xs text-muted-foreground">
-                  {formatShippingAddressPreview(
-                    shippingAddressBook.find((entry) => entry.id === selectedShippingAddressId) || {}
-                  )}
-                </p>
               ) : null}
             </div>
           </div>

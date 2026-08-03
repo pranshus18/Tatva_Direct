@@ -333,6 +333,33 @@
   object-fit: contain !important;
 }
 
+.pm-card__image-badges {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  pointer-events: none;
+}
+
+.pm-card__image-badges .pd-card__category-badge {
+  position: static;
+  top: auto;
+  left: auto;
+  margin-right: auto;
+  flex: 1 1 6rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .pm-card__status-badge {
   position: absolute;
   top: 10px;
@@ -345,6 +372,15 @@
   backdrop-filter: blur(4px);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+}
+
+.pm-card__image-badges .pm-card__status-badge {
+  position: static;
+  top: auto;
+  right: auto;
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
 .pm-card__status-badge::before {

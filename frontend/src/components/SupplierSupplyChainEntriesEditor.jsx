@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
@@ -12,6 +12,7 @@ import {
   isBrandApprovedForSupplyChainStep,
   findSupplierBrandRequest,
   resolveSelectYourselfBrandStepStatus,
+  isSelectYourselfBrandAlreadyApproved,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
@@ -36,7 +37,8 @@ import {
   setAuthorizationCertificateUrls,
   setBrandApprovalDocumentUrls,
   stripBrandDocumentsFromRoleFields,
-  normalizeEntryDocumentFields
+  normalizeEntryDocumentFields,
+  entryIncludesDocumentUrl
 } from '../utils/authorizationCertificateUrls';
 import './SupplierSupplyChainEntriesEditor.css';
 
@@ -167,6 +169,39 @@ function syncProfileFromEntries(currentProfile, entries) {
   };
 }
 
+function getDisplayEntriesForProfile(profileSnapshot) {
+  const entries = profileSnapshot?.companyInfoEntries;
+  if (entries && entries.length > 0) return entries;
+  return [
+    {
+      id: 'legacy',
+      role: profileSnapshot?.supplierRole || '',
+      brands: profileSnapshot?.brands || '',
+      gstin: profileSnapshot?.gstin || '',
+      companyName: profileSnapshot?.companyName || '',
+      ownershipDetails: profileSnapshot?.ownershipDetails || '',
+      ...setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(profileSnapshot || {})),
+      ...setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(profileSnapshot || {})),
+      minimumOrderValue: profileSnapshot?.minimumOrderValue ?? ''
+    }
+  ];
+}
+
+function profileSnapshotIncludesDocument(profileSnapshot, entryId, url, documentType, brand = '') {
+  const normalizedUrl = String(url || '').trim();
+  if (!normalizedUrl || !profileSnapshot) return false;
+
+  if (entryId === 'legacy') {
+    return entryIncludesDocumentUrl(profileSnapshot, normalizedUrl, documentType);
+  }
+
+  const entries = getDisplayEntriesForProfile(profileSnapshot);
+  const entry =
+    entries.find((row) => String(row?.id || '').trim() === String(entryId || '').trim()) ||
+    entries.find((row) => matchCompanyInfoEntry(row, { entryId, brand }));
+  return entryIncludesDocumentUrl(entry, normalizedUrl, documentType);
+}
+
 const CompanyInfoEntryCard = ({
   entry,
   entryIndex,
@@ -177,6 +212,7 @@ const CompanyInfoEntryCard = ({
   onBrandDocumentRemove,
   onRoleDocumentUpload,
   onRoleDocumentRemove,
+  onDocumentUploadIntent = null,
   uploadingBrandDocsForThisEntry,
   uploadingRoleDocsForThisEntry,
   removingBrandDocumentUrl,
@@ -302,6 +338,14 @@ const CompanyInfoEntryCard = ({
     return opts;
   })();
   const brandOnlyApproved = isBrandOnlyStep && catalogBrandSelected;
+  const brandAlreadyApproved =
+    !!selectedBrand &&
+    isSelectYourselfBrandAlreadyApproved(selectedBrand, {
+      catalogBrands,
+      supplierApprovedBrands,
+      supplierBrandRequests
+    });
+  const showBrandDocumentsUpload = editing && !brandAlreadyApproved && !isPendingBrandRequest;
   const brandStatus = String(
     brandMeta?.approvalStatus ||
       brandMeta?.status ||
@@ -461,7 +505,26 @@ const CompanyInfoEntryCard = ({
       : !(sectionView === 'brand' && forceExpanded && !allowEntryManagement);
 
   const handleBrandNameInput = (nextBrand) => {
-    onUpdate('brands', sanitizeCustomBrandInput(nextBrand));
+    const sanitized = sanitizeCustomBrandInput(nextBrand);
+    onUpdate('brands', sanitized);
+
+    if (!sanitized || !pathBTypingMode || typeof onSelectApprovedCatalogBrand !== 'function') return;
+
+    const catalogMatch = findApprovedCatalogBrandMatch(sanitized, catalogBrandNames);
+    if (catalogMatch?.name) {
+      onSelectApprovedCatalogBrand(catalogMatch.name);
+      return;
+    }
+
+    if (
+      isSelectYourselfBrandAlreadyApproved(sanitized, {
+        catalogBrands,
+        supplierApprovedBrands,
+        supplierBrandRequests
+      })
+    ) {
+      onSelectApprovedCatalogBrand(sanitized);
+    }
   };
 
   return (
@@ -489,7 +552,11 @@ const CompanyInfoEntryCard = ({
             </span>
             {isBrandOnlyStep ? (
               <span className={`chain-chip ${brandDocUrls.length > 0 ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
-                {brandDocUrls.length > 0 ? `Brand docs: ${brandDocUrls.length}` : 'Brand docs: optional'}
+                {brandAlreadyApproved
+                  ? 'Brand docs: not required'
+                  : brandDocUrls.length > 0
+                    ? `Brand docs: ${brandDocUrls.length}`
+                    : 'Brand docs: optional'}
               </span>
             ) : (
               <span className={`chain-chip ${roleDocUrls.length > 0 ? 'chain-chip--brand' : 'chain-chip--muted'}`}>
@@ -717,18 +784,42 @@ const CompanyInfoEntryCard = ({
                   <label className="chain-field__label">
                     Brand documents
                   </label>
-                  <BrandAuthorizationDocuments
-                    entry={entry}
-                    editing={editing}
-                    uploading={uploadingBrandDocsForThisEntry}
-                    removingUrl={removingBrandDocumentUrl}
-                    onUpload={(files) => onBrandDocumentUpload?.(entry.id, files)}
-                    onRemove={(url) => onBrandDocumentRemove?.(entry.id, url)}
-                    resolveUrls={resolveBrandApprovalDocumentUrls}
-                  />
+                  {showBrandDocumentsUpload ? (
+                    <BrandAuthorizationDocuments
+                      entry={entry}
+                      editing={editing}
+                      uploading={uploadingBrandDocsForThisEntry}
+                      removingUrl={removingBrandDocumentUrl}
+                      onUpload={(files) => onBrandDocumentUpload?.(entry.id, files)}
+                      onRemove={(url) => onBrandDocumentRemove?.(entry.id, url)}
+                      onUploadIntent={onDocumentUploadIntent}
+                      resolveUrls={resolveBrandApprovalDocumentUrls}
+                    />
+                  ) : brandAlreadyApproved ? (
+                    <p className="chain-field__sublabel" role="status">
+                      Document verification is not required — this brand is already approved. Continue with Path A
+                      role setup below.
+                    </p>
+                  ) : isPendingBrandRequest ? (
+                    <p className="chain-field__sublabel" role="status">
+                      Your brand approval request is pending admin review. Documents already submitted cannot be
+                      changed here.
+                    </p>
+                  ) : (
+                    <BrandAuthorizationDocuments
+                      entry={entry}
+                      editing={false}
+                      uploading={false}
+                      removingUrl={null}
+                      onUpload={null}
+                      onRemove={null}
+                      resolveUrls={resolveBrandApprovalDocumentUrls}
+                    />
+                  )}
                 </div>
               </div>
               ) : isBrandOnlyStep ? (
+              <>
               <div className="chain-brand-approval-grid chain-brand-approval-grid--brand-step">
                 <div className="chain-field">
                   <label className="chain-field__label">Brand status</label>
@@ -749,18 +840,44 @@ const CompanyInfoEntryCard = ({
                   </div>
                 </div>
                 <div className="chain-field">
-                  <label className="chain-field__label">Brand documents (optional)</label>
-                  <BrandAuthorizationDocuments
-                    entry={entry}
-                    editing={editing}
-                    uploading={uploadingBrandDocsForThisEntry}
-                    removingUrl={removingBrandDocumentUrl}
-                    onUpload={(files) => onBrandDocumentUpload?.(entry.id, files)}
-                    onRemove={(url) => onBrandDocumentRemove?.(entry.id, url)}
-                    resolveUrls={resolveBrandApprovalDocumentUrls}
-                  />
+                  <label className="chain-field__label">
+                    Brand documents{brandAlreadyApproved ? '' : ' (optional)'}
+                  </label>
+                  {showBrandDocumentsUpload ? (
+                    <BrandAuthorizationDocuments
+                      entry={entry}
+                      editing={editing}
+                      uploading={uploadingBrandDocsForThisEntry}
+                      removingUrl={removingBrandDocumentUrl}
+                      onUpload={(files) => onBrandDocumentUpload?.(entry.id, files)}
+                      onRemove={(url) => onBrandDocumentRemove?.(entry.id, url)}
+                      onUploadIntent={onDocumentUploadIntent}
+                      resolveUrls={resolveBrandApprovalDocumentUrls}
+                    />
+                  ) : brandAlreadyApproved ? (
+                    <p className="chain-field__sublabel" role="status">
+                      Document verification is not required — this brand is already approved. Use Path A above or
+                      continue with supply-chain role setup below.
+                    </p>
+                  ) : isPendingBrandRequest ? (
+                    <p className="chain-field__sublabel" role="status">
+                      Your brand approval request is pending admin review. Documents already submitted cannot be
+                      changed here.
+                    </p>
+                  ) : (
+                    <BrandAuthorizationDocuments
+                      entry={entry}
+                      editing={false}
+                      uploading={false}
+                      removingUrl={null}
+                      onUpload={null}
+                      onRemove={null}
+                      resolveUrls={resolveBrandApprovalDocumentUrls}
+                    />
+                  )}
                 </div>
               </div>
+              </>
               ) : null}
             </div>
           </section>
@@ -934,6 +1051,7 @@ const CompanyInfoEntryCard = ({
                   removingUrl={removingRoleDocumentUrl}
                   onUpload={(files) => onRoleDocumentUpload?.(entry.id, files)}
                   onRemove={(url) => onRoleDocumentRemove?.(entry.id, url)}
+                  onUploadIntent={onDocumentUploadIntent}
                   resolveUrls={resolveRoleVerificationDocumentUrls}
                 />
                 {showEntrySave && entrySaveState.missing.includes('documents') ? (
@@ -1018,7 +1136,11 @@ export default function SupplierSupplyChainEntriesEditor({
   lockedBrandName = '',
   /** Controlled path: null | 'pathA' | 'pathB' — keeps Path A and Path B mutually exclusive. */
   brandPathMode = null,
-  onBrandPathModeChange = null
+  onBrandPathModeChange = null,
+  /** True when parent profile differs from last saved baseline (Select yourself page). */
+  hasUnsavedChanges = false,
+  /** Block parent profile reloads while uploads / local drafts are in flight. */
+  onProtectLocalDraft = null
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -1032,6 +1154,15 @@ export default function SupplierSupplyChainEntriesEditor({
   const [brandStepOtherExplicit, setBrandStepOtherExplicit] = useState(false);
   const newBrandModeInitializedRef = useRef(false);
   const [highlightedEntryId, setHighlightedEntryId] = useState('');
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
+
+  const protectLocalDraft = useCallback(
+    (options = {}) => {
+      onProtectLocalDraft?.(options);
+    },
+    [onProtectLocalDraft]
+  );
   const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
   const lockedBrandKey = brandKeyForDuplicateCheck(lockedBrandName);
   const brandSetupLocked = isBrandStepPicker && !!lockedBrandKey;
@@ -1080,6 +1211,7 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const applyDocumentUrlToEntry = (entryId, url, mode = 'append', documentType = 'role_authorization') => {
+    const currentProfile = profileRef.current;
     const appendDocument =
       documentType === 'brand_approval' ? appendBrandApprovalDocumentUrl : appendAuthorizationCertificateUrl;
     const removeDocument =
@@ -1088,39 +1220,46 @@ export default function SupplierSupplyChainEntriesEditor({
     if (entryId === 'legacy') {
       let certificateFields =
         mode === 'remove'
-          ? removeDocument(profile, url)
-          : appendDocument(profile, url);
+          ? removeDocument(currentProfile, url)
+          : appendDocument(currentProfile, url);
       if (documentType === 'brand_approval' && mode !== 'remove') {
         certificateFields = stripBrandDocumentsFromRoleFields(certificateFields);
       }
-      if (documentType === 'brand_approval') {
-        setProfile({
-          ...stripBrandDocumentsFromRoleFields({
-            ...profile,
-            brandApprovalDocumentUrls: certificateFields.brandApprovalDocumentUrls,
-            brandApprovalDocumentUrl: certificateFields.brandApprovalDocumentUrl
-          }),
-          brandApprovalDocumentPath:
-            certificateFields.brandApprovalDocumentUrl ? profile?.brandApprovalDocumentPath : ''
-        });
-      } else {
-        setProfile({
-          ...profile,
-          authorizationCertificateUrls: certificateFields.authorizationCertificateUrls,
-          authorizationCertificateUrl: certificateFields.authorizationCertificateUrl,
-          authorizationCertificatePath:
-            certificateFields.authorizationCertificateUrl ? profile?.authorizationCertificatePath : ''
-        });
+      const nextProfile =
+        documentType === 'brand_approval'
+          ? {
+              ...stripBrandDocumentsFromRoleFields({
+                ...currentProfile,
+                brandApprovalDocumentUrls: certificateFields.brandApprovalDocumentUrls,
+                brandApprovalDocumentUrl: certificateFields.brandApprovalDocumentUrl
+              }),
+              brandApprovalDocumentPath:
+                certificateFields.brandApprovalDocumentUrl ? currentProfile?.brandApprovalDocumentPath : ''
+            }
+          : {
+              ...currentProfile,
+              authorizationCertificateUrls: certificateFields.authorizationCertificateUrls,
+              authorizationCertificateUrl: certificateFields.authorizationCertificateUrl,
+              authorizationCertificatePath:
+                certificateFields.authorizationCertificateUrl ? currentProfile?.authorizationCertificatePath : ''
+            };
+      if (
+        mode !== 'remove' &&
+        !profileSnapshotIncludesDocument(nextProfile, entryId, url, documentType)
+      ) {
+        throw new Error('Could not attach the uploaded document to this role entry. Please try again.');
       }
-      return;
+      setProfile(nextProfile);
+      profileRef.current = nextProfile;
+      return nextProfile;
     }
 
-    const displayEntries = getDisplayEntries();
+    const displayEntries = getDisplayEntriesForProfile(currentProfile);
     const targetEntry = displayEntries.find((entry) => entry.id === entryId) || null;
     const targetBrand = normalizeSingleBrand(targetEntry?.brands);
     const baseEntries =
-      Array.isArray(profile?.companyInfoEntries) && profile.companyInfoEntries.length > 0
-        ? profile.companyInfoEntries.map((entry) => ({ ...entry }))
+      Array.isArray(currentProfile?.companyInfoEntries) && currentProfile.companyInfoEntries.length > 0
+        ? currentProfile.companyInfoEntries.map((entry) => ({ ...entry }))
         : displayEntries.map((entry) => ({ ...entry }));
 
     let updatedOne = false;
@@ -1134,7 +1273,19 @@ export default function SupplierSupplyChainEntriesEditor({
         ? stripBrandDocumentsFromRoleFields(updated)
         : updated;
     });
-    setProfile(syncProfileFromEntries(profile, entries));
+    if (!updatedOne) {
+      throw new Error('Could not attach the uploaded document to this role entry. Please try again.');
+    }
+    const nextProfile = syncProfileFromEntries(currentProfile, entries);
+    if (
+      mode !== 'remove' &&
+      !profileSnapshotIncludesDocument(nextProfile, entryId, url, documentType, targetBrand)
+    ) {
+      throw new Error('Could not attach the uploaded document to this role entry. Please try again.');
+    }
+    setProfile(nextProfile);
+    profileRef.current = nextProfile;
+    return nextProfile;
   };
 
   const displayEntries = getDisplayEntries();
@@ -1521,6 +1672,7 @@ export default function SupplierSupplyChainEntriesEditor({
       return;
     }
 
+    protectLocalDraft({ blockMs: 15000 });
     const setRemovingState =
       documentType === 'brand_approval' ? setRemovingBrandDocument : setRemovingRoleDocument;
     setRemovingState({ entryId, url });
@@ -1552,17 +1704,19 @@ export default function SupplierSupplyChainEntriesEditor({
 
       applyDocumentUrlToEntry(entryId, url, 'remove', documentType);
 
-      if (data.savedToProfile === false) {
-        setDocumentSaveNotice(
-          data.message ||
-            'Document removed in this form. Click Save on Select yourself to persist the change.'
-        );
+      if (data.savedToProfile === true) {
+        setDocumentSaveNotice('Document removed from your profile.');
+      } else if (
+        !profileSnapshotIncludesDocument(profileRef.current, entryId, url, documentType)
+      ) {
+        alert('Document could not be removed from this entry. Please refresh and try again.');
       }
     } catch (error) {
       console.error('Failed to remove document:', error);
       alert('Failed to remove document. Please try again.');
     } finally {
       setRemovingState(null);
+      protectLocalDraft({ blockMs: 8000 });
     }
   };
 
@@ -1589,6 +1743,11 @@ export default function SupplierSupplyChainEntriesEditor({
     }
 
     applyDocumentUrlToEntry(entryId, data.url, 'append', documentType);
+    if (!profileSnapshotIncludesDocument(profileRef.current, entryId, data.url, documentType)) {
+      throw new Error(
+        'Document uploaded, but it could not be linked to this entry. Select your brand and role, then try again.'
+      );
+    }
     return data;
   };
 
@@ -1615,27 +1774,30 @@ export default function SupplierSupplyChainEntriesEditor({
       }
     }
 
+    protectLocalDraft({ blockMs: 30000 });
     const setUploadingState =
       documentType === 'brand_approval' ? setUploadingBrandDocsEntryId : setUploadingRoleDocsEntryId;
     setUploadingState(entryId);
-    let pendingSaveNotice = false;
+    let savedToProfile = true;
     try {
       for (const file of fileList) {
         const data = await uploadSingleDocumentForEntry(entryId, file, documentType);
-        if (data.savedToProfile === false) pendingSaveNotice = true;
+        if (data.savedToProfile !== true) savedToProfile = false;
       }
-      if (pendingSaveNotice) {
-        // Inline notice — native alert() steals focus and previously triggered a profile
-        // reload that cleared the selected supply-chain role before Save.
+      if (savedToProfile) {
         setDocumentSaveNotice(
-          'Documents uploaded. Click Save on this page to keep them linked to your profile entry.'
+          documentType === 'brand_approval'
+            ? 'Brand documents uploaded and linked to your profile. Submit the brand approval request when you are ready.'
+            : 'Role documents uploaded and linked to your profile. Click Save on this role form when you are ready.'
         );
       }
     } catch (error) {
       console.error('Failed to upload document:', error);
+      setDocumentSaveNotice('');
       alert(error?.message || 'Failed to upload document. Please try again.');
     } finally {
       setUploadingState(null);
+      protectLocalDraft({ blockMs: 8000 });
     }
   };
 
@@ -1690,6 +1852,10 @@ export default function SupplierSupplyChainEntriesEditor({
 
   const handleBrandStepChangeBrand = (entryId) => {
     if (brandSetupLocked || pathAExclusive || pathBExclusive) {
+      if (!hasUnsavedChanges) {
+        handleBrandStepClearSelection(entryId || resolvedSelectedEntryId);
+        return;
+      }
       const confirmed = window.confirm(
         pathBExclusive
           ? 'Leave Path B?\n\nThis clears the new-brand request draft so you can choose Path A or Path B again.'
@@ -1701,24 +1867,34 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const handleBrandStepStartOver = (entryId) => {
-    const confirmed = window.confirm(
-      brandSetupLocked || pathAExclusive
-        ? 'Cancel Path A setup?\n\nThis clears the selected approved brand and its incomplete supply-chain role details so you can choose Path A or Path B again.'
-        : pathBExclusive
-          ? 'Cancel Path B?\n\nThis clears the new-brand request draft so you can choose Path A or Path B again.'
-          : 'Clear the selected brand and start over?\n\nYou can then choose Path A (approved brand) or Path B (request a new brand).'
-    );
-    if (!confirmed) return;
+    if (hasUnsavedChanges) {
+      const confirmed = window.confirm(
+        brandSetupLocked || pathAExclusive
+          ? 'Cancel Path A setup?\n\nThis clears the selected approved brand and its incomplete supply-chain role details so you can choose Path A or Path B again.'
+          : pathBExclusive
+            ? 'Cancel Path B?\n\nThis clears the new-brand request draft so you can choose Path A or Path B again.'
+            : 'Clear the selected brand and start over?\n\nYou can then choose Path A (approved brand) or Path B (request a new brand).'
+      );
+      if (!confirmed) return;
+    }
     handleBrandStepClearSelection(entryId || resolvedSelectedEntryId);
   };
 
   const handleBrandStepCatalogPick = (nextBrand) => {
-    if (brandSetupLocked || pathBExclusive) return;
+    if (brandSetupLocked) return;
     const brand = sanitizeCustomBrandInput(nextBrand);
     if (!brand) {
       handleBrandStepClearSelection(resolvedSelectedEntryId);
       return;
     }
+
+    const approvedForPathA = isSelectYourselfBrandAlreadyApproved(brand, {
+      catalogBrands,
+      supplierApprovedBrands,
+      supplierBrandRequests
+    });
+    // Path B is for new-brand requests only — already-approved names must use Path A.
+    if (pathBExclusive && !approvedForPathA) return;
 
     setBrandStepOtherMode(false);
     setBrandStepOtherExplicit(false);
@@ -1783,6 +1959,26 @@ export default function SupplierSupplyChainEntriesEditor({
     setSelectedEntryId(newEntry.id);
     notifyBrandSelectedForSetup();
   };
+
+  // Path B needs a selectable row to type the new brand into. Recreate it when the profile
+  // has no empty row (e.g. every saved row already holds an approved Path A brand).
+  useEffect(() => {
+    if (!isBrandStepPicker || !editing) return;
+    if (brandSetupLocked || pathAExclusive) return;
+    if (!brandStepOtherExplicit && !brandStepOtherMode && !pathBExclusive) return;
+    if (resolvedSelectedEntryId) return;
+    const nextEntryId = appendEmptyBrandEntry();
+    if (nextEntryId) setSelectedEntryId(nextEntryId);
+  }, [
+    isBrandStepPicker,
+    editing,
+    brandSetupLocked,
+    pathAExclusive,
+    pathBExclusive,
+    brandStepOtherExplicit,
+    brandStepOtherMode,
+    resolvedSelectedEntryId
+  ]);
 
   const handleBrandStepShowCatalogPicker = () => {
     if (brandSetupLocked || pathAExclusive) return;
@@ -2108,6 +2304,7 @@ export default function SupplierSupplyChainEntriesEditor({
             onRoleDocumentRemove={(targetEntryId, url) =>
               handleDocumentRemoveForEntry(targetEntryId, url, 'role_authorization')
             }
+            onDocumentUploadIntent={() => protectLocalDraft({ blockMs: 30000 })}
             uploadingBrandDocsForThisEntry={uploadingBrandDocsEntryId === entry.id}
             uploadingRoleDocsForThisEntry={uploadingRoleDocsEntryId === entry.id}
             removingBrandDocumentUrl={

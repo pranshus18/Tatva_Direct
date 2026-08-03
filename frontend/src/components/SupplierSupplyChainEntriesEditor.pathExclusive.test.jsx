@@ -2,6 +2,10 @@ import React, { useState } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import SupplierSupplyChainEntriesEditor from './SupplierSupplyChainEntriesEditor';
+import {
+  buildSelectYourselfChainEntryRowsSignature,
+  buildSelectYourselfChainFormSignature
+} from '../utils/supplierSelectYourselfProfile';
 
 vi.mock('../hooks/useSupplierBrands', () => ({
   useSupplierBrands: () => ({
@@ -24,7 +28,8 @@ vi.mock('./BrandSelect', () => ({
 }));
 
 vi.mock('./BrandAuthorizationDocuments', () => ({
-  default: () => null
+  default: ({ editing }) =>
+    editing ? <div data-testid="brand-docs-upload">Brand documents upload</div> : null
 }));
 
 function makeProfile(brand = '') {
@@ -136,5 +141,101 @@ describe('SupplierSupplyChainEntriesEditor Path A / Path B exclusivity', () => {
 
     expect(screen.getByText(/Path A — select approved brand/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Or use Path B — request a new brand/i })).toBeInTheDocument();
+  });
+
+  it('opens the Path B brand input when every saved row already holds an approved brand', () => {
+    // Mirrors the Select yourself page: no-op profile updates are discarded, so a new blank
+    // Path B row must be recognised as a structural change.
+    function PathBWithOnlyApprovedRowsHarness() {
+      const [brandPathMode, setBrandPathMode] = useState(null);
+      const [profile, setProfile] = useState(() => makeProfile('acc'));
+
+      const applyBrandStepProfile = (next) => {
+        setProfile((prev) => {
+          const sameContent =
+            buildSelectYourselfChainFormSignature(next) ===
+            buildSelectYourselfChainFormSignature(prev);
+          const sameRows =
+            buildSelectYourselfChainEntryRowsSignature(next) ===
+            buildSelectYourselfChainEntryRowsSignature(prev);
+          if (sameContent && sameRows) return prev;
+          return next;
+        });
+      };
+
+      return (
+        <SupplierSupplyChainEntriesEditor
+          profile={profile}
+          setProfile={applyBrandStepProfile}
+          editing
+          sectionView="brand"
+          selectionMode="dropdown"
+          allowEntryManagement
+          showAddEntry={false}
+          catalogBrands={[{ name: 'acc', status: 'approved' }]}
+          catalogBrandsLoading={false}
+          catalogBrandsError=""
+          onReloadCatalogBrands={vi.fn()}
+          brandPathMode={brandPathMode}
+          onBrandPathModeChange={setBrandPathMode}
+        />
+      );
+    }
+
+    render(<PathBWithOnlyApprovedRowsHarness />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Or use Path B — request a new brand/i }));
+
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Enter your brand name/i)).toBeInTheDocument();
+  });
+
+  it('typing an already-approved brand on Path B switches to Path A and hides brand document upload', () => {
+    const onModeChange = vi.fn();
+    const onBrandPicked = vi.fn();
+
+    function PathBApprovedHarness() {
+      const [brandPathMode, setBrandPathMode] = useState('pathB');
+      const [profile, setProfile] = useState(() => makeProfile(''));
+
+      return (
+        <SupplierSupplyChainEntriesEditor
+          profile={profile}
+          setProfile={setProfile}
+          editing
+          sectionView="brand"
+          selectionMode="dropdown"
+          allowEntryManagement
+          showAddEntry={false}
+          catalogBrands={[{ name: 'acc', status: 'approved' }]}
+          catalogBrandsLoading={false}
+          catalogBrandsError=""
+          onReloadCatalogBrands={vi.fn()}
+          brandPathMode={brandPathMode}
+          onBrandPathModeChange={(mode) => {
+            setBrandPathMode(mode);
+            onModeChange(mode);
+          }}
+          onBrandPickedWithoutRole={onBrandPicked}
+        />
+      );
+    }
+
+    render(<PathBApprovedHarness />);
+
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+    expect(screen.getByTestId('brand-docs-upload')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText(/Enter your brand name/i), {
+      target: { value: 'acc' }
+    });
+
+    expect(onModeChange).toHaveBeenCalledWith('pathA');
+    expect(onBrandPicked).toHaveBeenCalledWith('acc');
+    expect(screen.getByText(/Path A only/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('brand-docs-upload')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Document verification is not required — this brand is already approved/i)
+    ).toBeInTheDocument();
   });
 });

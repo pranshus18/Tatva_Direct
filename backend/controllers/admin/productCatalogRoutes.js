@@ -1,7 +1,13 @@
 /** Admin product catalog routes (list, get, update). */
 import { adminUpdateProductSchema } from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
-import { normalizeModelIdentifier, sanitizeSpecifications } from '../../services/supplierCatalogHelpersService.js';
+import {
+  normalizeModelIdentifier,
+  sanitizeSpecifications,
+  specificationTemplateKeysOnly,
+  mergeVariantSpecificationTemplate,
+  parseSpecificationsObject
+} from '../../services/supplierCatalogHelpersService.js';
 import { buildProductIdentification, firstNonEmpty } from '../../services/procurementSharedService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
 import { buildSupplierDescriptionAttributes } from '../../utils/supplierProductDescriptions.js';
@@ -727,9 +733,14 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
               );
             }
             if (requestedSpecsUpdate) {
-              // Replace offer-level specs with the admin catalog specs so supplier portal,
-              // discovery, and PO grouping all show the latest values.
-              mergedAttrs.specifications = safeAdminSpecs || {};
+              // Sync admin-defined keys only — preserve supplier-filled values on each offer.
+              const adminSpecKeys = specificationTemplateKeysOnly(safeAdminSpecs || {});
+              const existingOfferSpecs =
+                parseSpecificationsObject(mergedAttrs.specifications) || {};
+              mergedAttrs.specifications = mergeVariantSpecificationTemplate(
+                adminSpecKeys,
+                existingOfferSpecs
+              );
             }
 
             await supabase
@@ -882,7 +893,7 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
                   category: categoryName,
                   model_identifier: modelIdentifier,
                   display_model: modelRaw,
-                  specifications: Object.keys(safeSpecs).length > 0 ? safeSpecs : templateSpecs,
+                  specifications: templateSpecs,
                   updated_by: req.userId,
                   updated_at: new Date().toISOString()
                 },

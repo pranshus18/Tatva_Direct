@@ -8,6 +8,7 @@ import {
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
 import { isSupplierUserType } from '../../utils/notificationAudience.js';
+import { validateAdminProductApprovalReadiness, mergeOfferIntoProductForApproval } from '../../services/adminProductApprovalReadinessService.js';
 
 function supplierOfferRecipients(supplierProductRows, fallbackSupplier) {
   const isCatalogSupplierRecipient = (supplier) => {
@@ -31,6 +32,39 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
   router.post('/products/:id/approve', authenticateToken, isAdmin, async (req, res) => {
     try {
       parseWithSchema(adminProductApproveSchema, req.body || {});
+
+      const { data: existingProduct, error: fetchError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', req.params.id)
+        .maybeSingle();
+
+      if (fetchError || !existingProduct) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Product not found'
+        });
+      }
+
+      const { data: offerRow } = await supabase
+        .from('supplier_products')
+        .select('igst_rate, cgst_rate, sgst_rate, attributes, updated_at')
+        .eq('product_id', req.params.id)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      const productForApproval = mergeOfferIntoProductForApproval(existingProduct, offerRow);
+      const readiness = validateAdminProductApprovalReadiness(productForApproval);
+      if (!readiness.ok) {
+        return res.status(400).json({
+          status: 'error',
+          code: 'approval_not_ready',
+          message: readiness.message,
+          missingRequirements: readiness.missingRequirements
+        });
+      }
+
       // Update product status
       const { data: product, error: updateError } = await supabase
         .from('products')
@@ -622,30 +656,54 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
   router.post('/products/approve-all', authenticateToken, isAdmin, async (req, res) => {
     try {
       parseWithSchema(adminApproveAllProductsSchema, req.body || {});
-      // Find ALL products that are NOT already approved or rejected
-      const { data: allProducts } = await supabase
-        .from('products')
-        .select('id, name, status');
+      const { data: allProducts } = await supabase.from('products').select('*');
 
-      // Filter pending products
-      const pendingProducts = (allProducts || []).filter(p => {
+      const pendingProducts = (allProducts || []).filter((p) => {
         const status = p.status;
         return !status || status === '' || (status !== 'approved' && status !== 'rejected');
       });
 
-      console.log(`Found ${pendingProducts.length} products to approve`);
-      console.log('Product names:', pendingProducts.map(p => p.name));
+      const pendingIds = pendingProducts.map((p) => p.id).filter(Boolean);
+      const { data: offerRows } = pendingIds.length
+        ? await supabase
+            .from('supplier_products')
+            .select('product_id, igst_rate, cgst_rate, sgst_rate, attributes, updated_at')
+            .in('product_id', pendingIds)
+        : { data: [] };
 
-      if (pendingProducts.length === 0) {
+      const bestOfferByProduct = new Map();
+      for (const row of offerRows || []) {
+        const productId = row.product_id;
+        if (!productId) continue;
+        const existing = bestOfferByProduct.get(productId);
+        if (!existing || String(row.updated_at || '') > String(existing.updated_at || '')) {
+          bestOfferByProduct.set(productId, row);
+        }
+      }
+
+      const readinessFor = (product) =>
+        validateAdminProductApprovalReadiness(
+          mergeOfferIntoProductForApproval(product, bestOfferByProduct.get(product.id))
+        );
+
+      const readyProducts = pendingProducts.filter((p) => readinessFor(p).ok);
+      const skippedProducts = pendingProducts.filter((p) => !readinessFor(p).ok);
+
+      console.log(`Found ${pendingProducts.length} pending products; ${readyProducts.length} ready to approve`);
+
+      if (readyProducts.length === 0) {
         return res.json({
           status: 'success',
-          message: 'No pending products found',
-          approvedCount: 0
+          message:
+            pendingProducts.length === 0
+              ? 'No pending products found'
+              : 'No pending products are ready for approval. Set description, GST, and specifications first.',
+          approvedCount: 0,
+          skippedCount: skippedProducts.length
         });
       }
 
-      // Update all pending products to approved
-      const productIds = pendingProducts.map(p => p.id);
+      const productIds = readyProducts.map((p) => p.id);
       const nowIso = new Date().toISOString();
       const { data: updatedProducts, error: updateError } = await supabase
         .from('products')
@@ -687,18 +745,16 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         );
       }
 
-      console.log(`Admin ${req.userId} approved ${pendingProducts.length} existing products`);
-
-      console.log('Recently approved products:', (updatedProducts || []).map(p => ({
-        name: p.name,
-        status: p.status,
-        isActive: p.is_active
-      })));
+      console.log(`Admin ${req.userId} approved ${readyProducts.length} ready product(s)`);
 
       res.json({
         status: 'success',
-        message: `Successfully approved ${pendingProducts.length} product(s)`,
-        approvedCount: pendingProducts.length,
+        message:
+          skippedProducts.length > 0
+            ? `Approved ${readyProducts.length} product(s). Skipped ${skippedProducts.length} that still need description, GST, or specifications.`
+            : `Successfully approved ${readyProducts.length} product(s)`,
+        approvedCount: readyProducts.length,
+        skippedCount: skippedProducts.length,
         supplierOffersSynced: updatedOffers?.length || 0,
         products: updatedProducts || []
       });

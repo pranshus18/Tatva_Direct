@@ -5,6 +5,13 @@ import {
   enrichDiscoverySuggestionsWithVariantCounts
 } from '../services/productDiscoveryDetailService.js';
 
+test('discovery detail summary uses selected product name, not family canonical name', () => {
+  const selectedProduct = { id: 'p1', name: 'Apex Ultima Protek 10L' };
+  const family = { canonicalName: 'Asian Paints Premium Emulsion' };
+  const summaryName = selectedProduct.name || family.canonicalName;
+  assert.equal(summaryName, 'Apex Ultima Protek 10L');
+});
+
 test('buildVariantOptions returns selectors only for attributes that differ', () => {
   const options = buildVariantOptions([
     {

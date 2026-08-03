@@ -34,7 +34,8 @@ import {
   mergeVariantSpecificationTemplate,
   parseSpecInputToValue,
   specValueToInput,
-  specificationEntriesForDetails
+  specificationEntriesForDetails,
+  supplierSpecificationValuesLocked
 } from '../utils/specifications';
 import {
   applyExtractResultToSpecs,
@@ -906,12 +907,18 @@ const ProductManagement = ({ user }) => {
                           <span>No image</span>
                         </div>
                       )}
-                      {product.category ? (
-                        <span className="pd-card__category-badge">{product.category}</span>
+                      {product.category || status.label ? (
+                        <div className="pm-card__image-badges">
+                          {product.category ? (
+                            <span className="pd-card__category-badge" title={product.category}>
+                              {product.category}
+                            </span>
+                          ) : null}
+                          <span className={`pm-card__status-badge pm-status ${status.statusClass}`}>
+                            {status.label}
+                          </span>
+                        </div>
                       ) : null}
-                      <span className={`pm-card__status-badge pm-status ${status.statusClass}`}>
-                        {status.label}
-                      </span>
                     </div>
                   </button>
 
@@ -1851,6 +1858,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [extracting, setExtracting] = useState(false); // For extracting specs from description
   const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
+  const [hasAdminSpecTemplate, setHasAdminSpecTemplate] = useState(false);
   const [aiProvider, setAiProvider] = useState('auto'); // 'auto', 'openai', 'gemini', 'claude' - for extract specs only
   // Initialize specifications: for existing products, use their specs; for new products, start empty
   const [specifications, setSpecifications] = useState(() => {
@@ -1859,7 +1867,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
     return {}; // Start with empty object for new products
   });
-  const canEditSpecificationValues = !product;
+  const supplierSpecValuesLocked = useMemo(
+    () =>
+      supplierSpecificationValuesLocked({
+        specifications: product?.specifications,
+        status: product?.status
+      }),
+    [product?.specifications, product?.status]
+  );
+  const canEditSpecificationValues = useMemo(() => {
+    if (showInventoryFields) return false;
+    if (supplierSpecValuesLocked) return false;
+    if (!product) return true;
+    return String(product.status || 'pending').toLowerCase() === 'pending';
+  }, [showInventoryFields, supplierSpecValuesLocked, product]);
+  const canEditSpecificationKeys = canEditSpecificationValues && !hasAdminSpecTemplate;
   const [isSaving, setIsSaving] = useState(false);
   const [formValidationError, setFormValidationError] = useState('');
   const [showMissingHints, setShowMissingHints] = useState(false);
@@ -2640,6 +2662,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     if (!categoryName || !categoryName.trim()) {
       setSpecifications({});
+      setHasAdminSpecTemplate(false);
       return;
     }
 
@@ -2681,6 +2704,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           const specKeys = Object.keys(specsObj);
 
           if (specKeys.length > 0) {
+            setHasAdminSpecTemplate(true);
             const newSpecs = {};
             specKeys.forEach((k) => {
               if (preserveExistingValues && Object.prototype.hasOwnProperty.call(existingSpecsSnapshot, k)) {
@@ -2705,15 +2729,18 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             setSpecifications(newSpecs);
           } else if (!preserveExistingValues) {
             setSpecifications({});
+            setHasAdminSpecTemplate(false);
           }
           selectedSuggestionSpecsRef.current = null;
         } else if (!preserveExistingValues) {
           setSpecifications({});
+          setHasAdminSpecTemplate(false);
           selectedSuggestionSpecsRef.current = null;
         }
       } else if (resp.status === 404) {
         if (!preserveExistingValues) {
           setSpecifications({});
+          setHasAdminSpecTemplate(false);
           selectedSuggestionSpecsRef.current = null;
         }
       } else {
@@ -4718,11 +4745,15 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                         <label style={{ marginBottom: 0, fontWeight: '600', color: '#1e293b', fontSize: '0.875rem' }}>
                           {canEditSpecificationValues
-                            ? 'Specifications — enter keys and values'
-                            : 'Specifications'}
+                            ? hasAdminSpecTemplate
+                              ? 'Specifications — enter values for admin-defined keys'
+                              : 'Specifications — enter keys and values'
+                            : supplierSpecValuesLocked
+                              ? 'Specifications — locked after first save'
+                              : 'Specifications'}
                         </label>
                         <div style={{ display: 'flex', gap: '0.45rem' }}>
-                          {canEditSpecificationValues ? (
+                          {canEditSpecificationKeys ? (
                           <button
                             type="button"
                             className="btn-secondary"
@@ -4734,10 +4765,26 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                           ) : null}
                         </div>
                       </div>
+                      {hasAdminSpecTemplate && canEditSpecificationValues ? (
+                        <p style={{ margin: '0 0 0.75rem', fontSize: '0.82rem', color: '#475569' }}>
+                          Specification keys were set by admin for this category. Fill in your product values below.
+                        </p>
+                      ) : null}
+                      {supplierSpecValuesLocked ? (
+                        <p style={{ margin: '0 0 0.75rem', fontSize: '0.82rem', color: '#64748b' }}>
+                          Values were saved and can no longer be edited. Contact admin if a correction is needed.
+                        </p>
+                      ) : null}
                       <div className="pm-product-modal__specs-list">
                         {specKeys.length === 0 && (
                           <div style={{ fontSize: '0.85rem', color: '#64748b', padding: '0.5rem' }}>
-                            No keys yet. Click <strong>Add key</strong> to create specifications.
+                            {hasAdminSpecTemplate
+                              ? 'Waiting for admin specification keys for this category.'
+                              : (
+                                <>
+                                  No keys yet. Click <strong>Add key</strong> to create specifications.
+                                </>
+                              )}
                           </div>
                         )}
                         {specKeys.map((key, index) => (
@@ -4750,6 +4797,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                             borderRadius: '6px',
                             borderLeft: '3px solid #4f46e5'
                           }}>
+                            {canEditSpecificationKeys ? (
                             <input
                               type="text"
                               defaultValue={key}
@@ -4767,6 +4815,20 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                                 background: 'white'
                               }}
                             />
+                            ) : (
+                              <label
+                                style={{
+                                  fontSize: '0.875rem',
+                                  color: '#1e293b',
+                                  fontWeight: '600',
+                                  minWidth: '180px',
+                                  maxWidth: '260px',
+                                  textTransform: 'uppercase'
+                                }}
+                              >
+                                {key}:
+                              </label>
+                            )}
                             {canEditSpecificationValues ? (
                               <input
                                 type="text"
@@ -4803,6 +4865,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                                 {String(specifications[key] || '').trim() || '—'}
                               </div>
                             )}
+                            {canEditSpecificationKeys ? (
                             <button
                               type="button"
                               onClick={() => removeSpecificationKey(key)}
@@ -4811,6 +4874,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                             >
                               Remove
                             </button>
+                            ) : null}
                           </div>
                         ))}
                       </div>

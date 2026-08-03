@@ -129,6 +129,16 @@ export function isImageCertificateUrl(url) {
   return /\.(jpe?g|png|webp|gif)(\?|#|$)/i.test(String(url || ''));
 }
 
+export function entryIncludesDocumentUrl(entry, url, documentType = 'role_authorization') {
+  const normalizedUrl = String(url || '').trim();
+  if (!normalizedUrl || !entry) return false;
+  const urls =
+    documentType === 'brand_approval'
+      ? resolveBrandApprovalDocumentUrls(entry)
+      : resolveRoleVerificationDocumentUrls(entry);
+  return urls.includes(normalizedUrl);
+}
+
 export function certificateLabelFromUrl(url) {
   const raw = String(url || '').trim();
   if (!raw) return 'Document';

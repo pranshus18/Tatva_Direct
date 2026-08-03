@@ -215,6 +215,12 @@
   color: #fff;
 }
 
+.supplier-select-yourself-editor .chain-entry-save--block {
+  width: 100%;
+  padding: 0.72rem 1rem;
+  font-size: 0.92rem;
+}
+
 .supplier-select-yourself-editor .chain-entry-toggle {
   display: inline-flex;
   align-items: center;

@@ -86,15 +86,40 @@ function handleCertificateUpload(req, res, next) {
   });
 }
 
+function createDraftCompanyInfoEntry(entryId) {
+  return {
+    id: entryId,
+    role: '',
+    brands: '',
+    gstin: '',
+    companyName: '',
+    ownershipDetails: '',
+    minimumOrderValue: '',
+    brandApprovalDocumentUrls: [],
+    brandApprovalDocumentUrl: '',
+    authorizationCertificateUrls: [],
+    authorizationCertificateUrl: '',
+    supplyChainRegistrationStarted: true
+  };
+}
+
+export function upsertEntryDocument(entries, entryId, url, documentType) {
+  const normalized = normalizeCompanyInfoEntries(entries || []);
+  const idx = normalized.findIndex((e) => String(e?.id || '').trim() === String(entryId || '').trim());
+  if (idx === -1) {
+    return [...normalized, appendEntryDocument(createDraftCompanyInfoEntry(entryId), url, documentType)];
+  }
+  return normalized.map((e) =>
+    String(e?.id || '').trim() === String(entryId || '').trim() ? appendEntryDocument(e, url, documentType) : e
+  );
+}
+
 async function attachCertificateToPending(userId, entryId, url, documentType) {
   const pending = await fetchPendingChainRequest(userId);
   if (!pending?.payload) return false;
 
   const p = pending.payload;
-  const entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);
-  if (!entries.some((e) => e.id === entryId)) return false;
-
-  const updatedEntries = entries.map((e) => (e.id === entryId ? appendEntryDocument(e, url, documentType) : e));
+  const updatedEntries = upsertEntryDocument(p.companyInfoEntries || [], entryId, url, documentType);
   const { error: prErr } = await supabase
     .from('supplier_chain_profile_requests')
     .update({
@@ -112,10 +137,7 @@ async function attachCertificateToPending(userId, entryId, url, documentType) {
 }
 
 async function attachCertificateToProfile(userId, currentProfile, entryId, url, documentType) {
-  const entries = normalizeCompanyInfoEntries(currentProfile?.companyInfoEntries || []);
-  if (!entries.some((e) => e.id === entryId)) return false;
-
-  const updatedEntries = entries.map((e) => (e.id === entryId ? appendEntryDocument(e, url, documentType) : e));
+  const updatedEntries = upsertEntryDocument(currentProfile?.companyInfoEntries || [], entryId, url, documentType);
   const updatedProfile = {
     ...(currentProfile || {}),
     companyInfoEntries: updatedEntries
@@ -368,12 +390,12 @@ export function registerProfileCertificateRoutes(router) {
           }
 
           if (!savedToProfile) {
-            return res.status(200).json({
-              status: 'success',
+            return res.status(422).json({
+              status: 'error',
               message:
                 documentType === 'brand_approval'
-                  ? 'Brand document uploaded. It is attached in this form — click Save on Select yourself to store it with your profile.'
-                  : 'Supply-chain role document uploaded. It is attached in this form — click Save on Select yourself to store it with your profile.',
+                  ? 'File uploaded, but it could not be linked to your brand entry. Select your brand, then try uploading again.'
+                  : 'File uploaded, but it could not be linked to your role entry. Select your brand and role, then try uploading again.',
               url,
               entryId,
               documentType,

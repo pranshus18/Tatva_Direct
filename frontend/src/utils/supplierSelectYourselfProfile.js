@@ -7,6 +7,67 @@ import {
   stripBrandDocumentsFromRoleFields,
   normalizeEntryDocumentFields
 } from './authorizationCertificateUrls';
+
+/** Skip background profile reloads while local role/document drafts are in progress. */
+export function shouldBlockProfileSnapshotRefresh({
+  hasUnsavedChanges = false,
+  blockUntilMs = 0,
+  now = Date.now()
+} = {}) {
+  return !!hasUnsavedChanges || Number(blockUntilMs) > now;
+}
+
+/** Semantic snapshot for Select yourself dirty-state (ignores unstable entry ids). */
+export function buildSelectYourselfChainFormSignature(profile) {
+  if (!profile) return '';
+  const rows = getCompanyInfoEntriesForSave(profile)
+    .map(normalizeEntryDocumentFields)
+    .map((entry) => {
+      const brand = String(entry?.brands || '').trim();
+      const roleDocs = resolveRoleVerificationDocumentUrls(entry);
+      const brandDocs = resolveBrandApprovalDocumentUrls(entry);
+      const brandKey = brandKeyForDuplicateCheck(brand);
+      const mov = entry?.minimumOrderValue;
+      return {
+        key: brandKey || String(entry?.id || '').trim(),
+        role: String(entry?.role || '').trim(),
+        brands: brand,
+        gstin: String(entry?.gstin || '').trim(),
+        companyName: String(entry?.companyName || '').trim(),
+        brandApprovalDocumentUrls: [...brandDocs].sort(),
+        authorizationCertificateUrls: [...roleDocs].sort(),
+        minimumOrderValue: mov === null || mov === undefined ? '' : mov
+      };
+    })
+    .filter(
+      (row) =>
+        row.brands ||
+        row.role ||
+        row.gstin ||
+        row.companyName ||
+        row.brandApprovalDocumentUrls.length > 0 ||
+        row.authorizationCertificateUrls.length > 0 ||
+        row.minimumOrderValue !== ''
+    )
+    .sort((a, b) => String(a.key).localeCompare(String(b.key)));
+  return JSON.stringify(rows);
+}
+
+/**
+ * Structural snapshot of chain rows (ids + brand keys).
+ * The semantic signature drops blank rows, so a freshly added empty Path B row looks
+ * like "no change" — comparing this alongside it keeps new rows from being discarded.
+ */
+export function buildSelectYourselfChainEntryRowsSignature(profile) {
+  if (!profile) return '';
+  return JSON.stringify(
+    getCompanyInfoEntriesForSave(profile).map((entry) => ({
+      id: String(entry?.id || '').trim(),
+      brand: brandKeyForDuplicateCheck(entry?.brands) || ''
+    }))
+  );
+}
+
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
 import {
   resolveSupplierBrandSetupLayers,
@@ -420,7 +481,7 @@ export function resolveSelectYourselfBrandStepStatus({
     detailLines.push(approvedCatalogSuggestionMessage);
   }
 
-  detailLines.push(`Click ${BRAND_APPROVAL_REQUEST_LABEL} to send this request to admin.`);
+  detailLines.push(`Use ${BRAND_APPROVAL_REQUEST_LABEL} at the top of this section to send this request to admin.`);
   return {
     tone: 'neutral',
     label: 'Ready to submit for approval',
@@ -483,6 +544,11 @@ export function isBrandAlreadyApprovedForSaveBrand(
     supplierBrandRequests,
     brandMeta: null
   });
+}
+
+/** Whether Step 1 brand-document upload is unnecessary (brand already admin-approved). */
+export function isSelectYourselfBrandAlreadyApproved(brandName, options = {}) {
+  return isBrandAlreadyApprovedForSaveBrand(brandName, options);
 }
 
 /** Stable snapshot of brand-approval fields (name + docs) for Save brand enablement. */
@@ -741,6 +807,52 @@ export function isBrandApprovalSaveBlockedForPendingRequests({
   if (hasActionableBrand) return false;
   // Only approved custom brands remain — nothing left for Save brand.
   return true;
+}
+
+/** True when this brand entry still needs a Path B admin approval request. */
+export function entryNeedsBrandApprovalRequest(
+  entry = {},
+  {
+    catalogBrands = [],
+    supplierApprovedBrands = [],
+    supplierBrandRequests = [],
+    adminApprovedBrands = []
+  } = {}
+) {
+  const brand = String(entry?.brands || '').trim();
+  if (!brand) return false;
+  if (
+    isBrandAlreadyApprovedForSaveBrand(brand, {
+      catalogBrands,
+      supplierApprovedBrands,
+      supplierBrandRequests,
+      adminApprovedBrands
+    })
+  ) {
+    return false;
+  }
+  const request = findSupplierBrandRequest(brand, supplierBrandRequests);
+  const status = String(request?.status || '').toLowerCase();
+  return status !== 'pending';
+}
+
+/** True when at least one configured brand still needs a Path B approval request. */
+export function profileHasBrandsNeedingApprovalRequest({
+  profile,
+  catalogBrands = [],
+  supplierApprovedBrands = [],
+  submittedSignature = '',
+  extraPendingBrandNames = [],
+  extraApprovedBrandNames = []
+} = {}) {
+  return !isBrandApprovalSaveBlockedForPendingRequests({
+    profile,
+    catalogBrands,
+    supplierApprovedBrands,
+    submittedSignature,
+    extraPendingBrandNames,
+    extraApprovedBrandNames
+  });
 }
 
 /**

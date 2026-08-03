@@ -1389,7 +1389,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       return res.status(400).json({
         status: 'error',
         message:
-          'Shipping address is incomplete. Add a complete branch location (shipping address) in your supplier profile.'
+          'Shipping address is incomplete. Add a complete shipping address in your supplier profile.'
       });
     }
     if (hasGstin && !isAddressComplete(normalizedBillingAddress)) {

@@ -54,7 +54,8 @@ const SupplierProductSetup = ({ user }) => {
   const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
   const [priceTouched, setPriceTouched] = useState(false);
   const [specifications, setSpecifications] = useState({});
-  const [isEditingSpecValues, setIsEditingSpecValues] = useState(false);
+  const [hasAdminSpecTemplate, setHasAdminSpecTemplate] = useState(false);
+  const [isEditingSpecValues, setIsEditingSpecValues] = useState(true);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [categories, setCategories] = useState([]);
   const [extractingSpecs, setExtractingSpecs] = useState(false);
@@ -315,6 +316,8 @@ const SupplierProductSetup = ({ user }) => {
           data?.status === 'success' && data?.specifications && typeof data.specifications === 'object'
             ? data.specifications
             : {};
+        const templateKeys = Object.keys(specsObj || {});
+        setHasAdminSpecTemplate(templateKeys.length > 0);
         // IMPORTANT: never wipe existing filled specs when template is empty.
         setSpecifications((prev) => {
           const prevObj = prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {};
@@ -848,7 +851,9 @@ const SupplierProductSetup = ({ user }) => {
             <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: '0.75rem', background: '#f9fafb' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <span style={{ fontSize: '0.85rem', color: '#334155' }}>
-                  Admin/product template keys are auto-loaded when available.
+                  {hasAdminSpecTemplate
+                    ? 'Admin-defined specification keys are loaded for this category. Fill your values below.'
+                    : 'Admin/product template keys are auto-loaded when available.'}
                 </span>
                 <div style={{ display: 'flex', gap: '0.45rem' }}>
                   <button
@@ -858,9 +863,11 @@ const SupplierProductSetup = ({ user }) => {
                   >
                     {isEditingSpecValues ? 'Lock values' : 'Edit values'}
                   </button>
+                  {!hasAdminSpecTemplate ? (
                   <button type="button" className="btn-secondary" onClick={addSpecificationKey}>
                     + Add key
                   </button>
+                  ) : null}
                 </div>
               </div>
               {formData.category && !loadingSpecs && Object.keys(specifications || {}).length === 0 && (
@@ -871,12 +878,16 @@ const SupplierProductSetup = ({ user }) => {
               <div style={{ display: 'grid', gap: '0.55rem' }}>
                 {Object.keys(specifications || {}).map((key) => (
                   <div key={key} style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    {hasAdminSpecTemplate ? (
+                      <label style={{ minWidth: '160px', fontWeight: 600, fontSize: '0.9rem' }}>{key}:</label>
+                    ) : (
                     <input
                       type="text"
                       defaultValue={key}
                       onBlur={(e) => renameSpecificationKey(key, e.target.value)}
                       placeholder="Specification key"
                     />
+                    )}
                     {isEditingSpecValues ? (
                       <input
                         type="text"
@@ -913,9 +924,11 @@ const SupplierProductSetup = ({ user }) => {
                         {String(specifications[key] || '').trim() || '—'}
                       </div>
                     )}
+                    {!hasAdminSpecTemplate ? (
                     <button type="button" className="btn-secondary" onClick={() => removeSpecificationKey(key)}>
                       Remove
                     </button>
+                    ) : null}
                   </div>
                 ))}
               </div>

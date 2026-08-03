@@ -29,6 +29,10 @@ import {
   isMeaningfulProductDescription,
   looksLikeAiInstructions
 } from '../utils/productDisplay';
+import {
+  getAdminProductApprovalReadiness,
+  isAdminProductReadyForApproval
+} from '../utils/adminProductApprovalReadiness';
 
 const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
 const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
@@ -227,6 +231,14 @@ const AdminProductStatus = ({ user }) => {
   };
 
   const handleApprove = async (product) => {
+    const readiness = getAdminProductApprovalReadiness(product);
+    if (!readiness.ok) {
+      alert(
+        `${readiness.message}\n\n${readiness.missingRequirements.map((row) => `• ${row.message}`).join('\n')}`
+      );
+      return;
+    }
+
     if (!confirm(`Are you sure you want to approve "${product.name}"?`)) return;
     
     setActionLoading(true);
@@ -520,6 +532,7 @@ const AdminProductStatus = ({ user }) => {
               const statusInfo = getStatusInfo(product.status);
               const StatusIcon = statusInfo.icon;
               const supplier = product.supplier || {};
+              const approvalReady = isAdminProductReadyForApproval(product);
 
               return (
                 <div
@@ -599,7 +612,12 @@ const AdminProductStatus = ({ user }) => {
                           e.stopPropagation();
                           handleApprove(product);
                         }}
-                        disabled={actionLoading}
+                        disabled={actionLoading || !approvalReady}
+                        title={
+                          approvalReady
+                            ? 'Approve this product'
+                            : 'Set description, GST, and specifications before approval'
+                        }
                       >
                         <Check size={16} />
                         Approve
@@ -773,6 +791,8 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     rejected: { color: '#dc2626', text: 'Rejected' }
   };
   const status = statusInfo[product.status] || statusInfo.pending;
+  const approvalReadiness = getAdminProductApprovalReadiness(product);
+  const canApproveProduct = approvalReadiness.ok && !isEditing;
 
   const handleSave = async () => {
     setSaving(true);
@@ -1061,15 +1081,9 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
           }
         }
         
-        const polishedDescription = String(
-          data.enhancedDescription || data.description || ''
-        ).trim();
-
-        // REPLACE specifications completely (don't merge with existing)
-        // This ensures we get exactly the count requested by the user
+        // Specification assistant only updates specification keys — never the product description.
         setEditedProduct((prev) => ({
           ...prev,
-          ...(polishedDescription ? { description: polishedDescription } : {}),
           specifications: newSpecs
         }));
         setAiEnhancePrompt('');
@@ -1081,8 +1095,8 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
 
         const providerName = data.provider === 'openai' ? 'ChatGPT' : data.provider === 'gemini' ? 'Gemini' : data.provider === 'claude' ? 'Claude' : 'AI';
         const successMessage = data.categoryMismatchWarning 
-          ? `Product description fetched successfully from ${providerName}! However, please verify that the category matches the description.`
-          : `Product description fetched successfully from ${providerName}! Attributes extracted and ready to use.`;
+          ? `Specification keys generated with ${providerName}. Verify the category still matches the product.`
+          : `Specification keys generated with ${providerName}. Enter values manually below, then Save.`;
         alert(successMessage);
       } else {
         alert(data.message || 'Failed to fetch data from AI service. Please try again.');
@@ -1141,8 +1155,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
 
       setEditedProduct((prev) => ({
         ...prev,
-        description: data.description || prev.description || '',
-        specifications: data.specifications || prev.specifications || {}
+        description: data.description || prev.description || ''
       }));
 
       const providerName =
@@ -1154,7 +1167,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               ? 'Claude'
               : 'AI';
       alert(
-        `Listing polished with ${providerName}. Review the customer-facing description and specifications, then Save.`
+        `Description polished with ${providerName}. Review the buyer-facing text below, then Save.`
       );
     } catch (error) {
       console.error('Polish listing error:', error);
@@ -1684,7 +1697,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                     if (specKeys.length === 0) {
                       return (
                         <p style={{ color: '#64748b', fontSize: '0.875rem', fontStyle: 'italic', margin: 0, padding: '1rem', textAlign: 'center' }}>
-                          No specifications available. Click 'AI Fetch' in the Description section to generate specification keys.
+                          No specifications available. Use <strong>AI Fetch</strong> in the specification assistant above to generate keys.
                         </p>
                       );
                     }
@@ -2039,6 +2052,37 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
             </div>
           </div>
 
+          {product.status !== 'approved' ? (
+            <div
+              role="status"
+              style={{
+                margin: '0 0 1rem',
+                padding: '0.85rem 1rem',
+                borderRadius: '8px',
+                border: `1px solid ${approvalReadiness.ok ? '#bbf7d0' : '#fde68a'}`,
+                background: approvalReadiness.ok ? '#ecfdf5' : '#fffbeb'
+              }}
+            >
+              <strong>{approvalReadiness.ok ? 'Ready for approval' : 'Complete before approval'}</strong>
+              {approvalReadiness.ok ? (
+                <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#065f46' }}>
+                  Description, GST, and specifications are saved. You can approve this product.
+                </p>
+              ) : (
+                <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem', fontSize: '0.875rem', color: '#92400e' }}>
+                  {approvalReadiness.missingRequirements.map((row) => (
+                    <li key={row.id}>{row.message}</li>
+                  ))}
+                </ul>
+              )}
+              {isEditing ? (
+                <p style={{ margin: '0.5rem 0 0', fontSize: '0.82rem', color: '#64748b' }}>
+                  Save your changes before approving.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           {product.status === 'rejected' && product.rejectionReason && (
             <div className="rejection-section">
               <h3>Rejection Information</h3>
@@ -2101,7 +2145,14 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 <button
                   className="btn-approve-modal"
                   onClick={onApprove}
-                  disabled={actionLoading}
+                  disabled={actionLoading || !canApproveProduct}
+                  title={
+                    canApproveProduct
+                      ? 'Approve this product'
+                      : isEditing
+                        ? 'Save changes before approving'
+                        : approvalReadiness.message || 'Complete description, GST, and specifications first'
+                  }
                 >
                   <Check size={16} />
                   Approve Product
