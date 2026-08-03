@@ -960,12 +960,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     }
   };
 
-  const goToSubstitutions = () => {
-    onComplete({ ...selections }, [...effectiveItems]);
-    clearSupplierSelectScopeSession();
-    navigate('/substitution');
-  };
-
   const toggleSpecifications = (item, vendorId) => {
     const itemKey = item?.id?.toString() || String(item?.id || '');
     const vendorKey = String(vendorId || '');
@@ -1254,7 +1248,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     </p>
                     <p style={{ color: '#c2410c', fontSize: '0.85rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
                       Listed suppliers are out of stock or unavailable, so none can be recommended or selected.
-                      Request this product so suppliers can add it, or continue to choose a substitute.
+                      Request this product so suppliers can add it.
                     </p>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                       <Button
@@ -1268,13 +1262,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                           : requestingProductKey === itemId
                             ? 'Submitting…'
                             : 'Request new product'}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={goToSubstitutions}
-                      >
-                        Choose a substitute
                       </Button>
                     </div>
                   </div>
@@ -1564,7 +1551,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     No supplier is available for this requirement
                   </p>
                   <p style={{ color: '#c2410c', fontSize: '0.85rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
-                    Request this product so suppliers can add it, or continue to choose a substitute product.
+                    Request this product so suppliers can add it.
                   </p>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <Button
@@ -1578,13 +1565,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                         : requestingProductKey === itemId
                           ? 'Submitting…'
                           : 'Request new product'}
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={goToSubstitutions}
-                    >
-                      Choose a substitute
                     </Button>
                   </div>
                 </div>
