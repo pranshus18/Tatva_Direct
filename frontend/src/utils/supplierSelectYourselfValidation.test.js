@@ -143,6 +143,7 @@ describe('getSelectYourselfEntrySaveState', () => {
         role: 'retailer',
         authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf']
       },
+      savedBaselineEntries,
       savedBaselineEntries
     );
 
@@ -158,11 +159,28 @@ describe('getSelectYourselfEntrySaveState', () => {
       role: 'retailer',
       authorizationCertificateUrls: ['https://cdn.example.com/new-doc.pdf']
     };
-    const state = getSelectYourselfEntrySaveState(entry, savedBaselineEntries);
+    const state = getSelectYourselfEntrySaveState(entry, savedBaselineEntries, savedBaselineEntries);
 
     expect(state.ok).toBe(true);
     expect(entryMatchesSavedBaseline(entry, savedBaselineEntries)).toBe(false);
     expect(state.alreadySaved).toBe(false);
+    expect(state.enabled).toBe(true);
+  });
+
+  it('enables save for an approved role change even before all fields are complete', () => {
+    const state = getSelectYourselfEntrySaveState(
+      {
+        id: 'e1',
+        brands: 'acc',
+        role: 'dealer',
+        authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf']
+      },
+      savedBaselineEntries,
+      savedBaselineEntries
+    );
+
+    expect(state.ok).toBe(false);
+    expect(state.pendingApprovedRoleChange).toBe(true);
     expect(state.enabled).toBe(true);
   });
 });

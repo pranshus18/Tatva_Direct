@@ -35,6 +35,7 @@ import {
 } from '../utils/shippingAddressLabel';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import { openProductDetailInNewTab } from '../utils/discoveryNavigation';
+import { dedupeLabelsCaseInsensitive } from '../utils/categoryNormalize';
 import { cn } from '@/lib/utils';
 import './ProductDiscovery.css';
 
@@ -181,30 +182,21 @@ const ProductDiscovery = () => {
   };
 
   const categories = useMemo(() => {
-    const merged = new Map();
+    const merged = dedupeLabelsCaseInsensitive([
+      ...categoryOptions.map((option) => ({
+        value: String(option?.value || '').trim(),
+        label: String(option?.label || option?.value || '').trim()
+      })),
+      ...products.map((product) => ({
+        value: String(product?.category || '').trim(),
+        label: String(product?.category || '').trim()
+      })),
+      ...(selectedCategory.trim()
+        ? [{ value: selectedCategory.trim(), label: selectedCategory.trim() }]
+        : [])
+    ]);
 
-    categoryOptions.forEach((option) => {
-      const value = String(option?.value || '').trim();
-      if (!value) return;
-      merged.set(value, String(option?.label || value).trim() || value);
-    });
-
-    // Keep discovered categories as fallback when API list is unavailable/incomplete.
-    products.forEach((product) => {
-      const category = String(product?.category || '').trim();
-      if (category && !merged.has(category)) {
-        merged.set(category, category);
-      }
-    });
-
-    const selected = String(selectedCategory || '').trim();
-    if (selected && !merged.has(selected)) {
-      merged.set(selected, selected);
-    }
-
-    return Array.from(merged.entries())
-      .map(([value, label]) => ({ value, label }))
-      .sort((a, b) => a.label.localeCompare(b.label));
+    return merged.sort((a, b) => a.label.localeCompare(b.label));
   }, [categoryOptions, products, selectedCategory]);
 
   useEffect(() => {
@@ -247,20 +239,11 @@ const ProductDiscovery = () => {
           })
           .filter(Boolean);
         if (discoveredCategories.length > 0) {
-          setCategoryOptions((prev) => {
-            if (selectedCategory.trim() && prev.length > 0) {
-              const merged = new Map(prev.map((entry) => [entry.value, entry.label]));
-              discoveredCategories.forEach((entry) => {
-                if (!merged.has(entry.value)) {
-                  merged.set(entry.value, entry.label);
-                }
-              });
-              return Array.from(merged.entries())
-                .map(([value, label]) => ({ value, label }))
-                .sort((a, b) => a.label.localeCompare(b.label));
-            }
-            return discoveredCategories;
-          });
+          setCategoryOptions((prev) =>
+            dedupeLabelsCaseInsensitive([...prev, ...discoveredCategories]).sort((a, b) =>
+              a.label.localeCompare(b.label)
+            )
+          );
         }
       } catch (fetchError) {
         if (controller.signal.aborted || fetchError?.name === 'AbortError') return;

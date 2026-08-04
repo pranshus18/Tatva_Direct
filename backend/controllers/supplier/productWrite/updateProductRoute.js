@@ -30,10 +30,20 @@ import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQua
 import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 import {
+  countMeaningfulSpecValues,
+  mergeCatalogAndOfferSpecificationsForDisplay,
+  parseSpecificationsObject,
+  specificationTemplateKeysOnly
+} from '../../../services/supplierCatalogHelpersService.js';
+import {
+  bodyHasCatalogUpdateFields,
   bodyHasInventoryUpdateFields,
   validateSupplierProductUpdateRequest,
   validateSupplierMrpUpdateAllowed,
   validateSupplierSpecificationUpdateAllowed,
+  validateSupplierOfferSpecificationFillComplete,
+  validateSupplierCategorySpecificationFillComplete,
+  areSupplierOfferSpecificationValuesLocked,
   SUPPLIER_MRP_LOCKED_MESSAGE,
   SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE
 } from '../../../services/supplierProductUpdateValidation.js';
@@ -44,7 +54,8 @@ export function registerSupplierProductUpdateRoute(ctx) {
     router,
     authenticateToken,
     supabase,
-    upsertModelSpecProfile
+    upsertModelSpecProfile,
+    resolveAdminSpecificationTemplate
   } = ctx;
 
   // Update product (supports both shared product data and supplier-specific inventory)
@@ -118,6 +129,61 @@ export function registerSupplierProductUpdateRoute(ctx) {
               message: unitCheck.message,
               missingFields: ['unit'],
               suggestedUnits: unitCheck.suggestedUnits
+            });
+          }
+        }
+
+        const hasCatalogFields = bodyHasCatalogUpdateFields(req.body) && !hasInventoryFields;
+        const specsLocked = areSupplierOfferSpecificationValuesLocked(supplierProduct);
+        const shouldValidateSpecFill =
+          hasCatalogFields && req.body.specifications !== undefined && !specsLocked;
+        if (shouldValidateSpecFill) {
+          const offerStatus = String(supplierProduct.status || 'pending').toLowerCase();
+          const { data: parentProductForTemplate } = await supabase
+            .from('products')
+            .select('name, category')
+            .eq('id', supplierProduct.product_id)
+            .maybeSingle();
+          const categoryForTemplate =
+            req.body.category || parentProductForTemplate?.category || '';
+          const brandForTemplate = String(
+            req.body.brand ||
+              req.body.brandModel ||
+              supplierProduct?.attributes?.brand ||
+              supplierProduct?.attributes?.brandModel ||
+              ''
+          ).trim();
+          const nameForTemplate = String(
+            req.body.name || parentProductForTemplate?.name || ''
+          ).trim();
+
+          const templateValidation =
+            offerStatus === 'approved'
+              ? await validateSupplierOfferSpecificationFillComplete(supabase, {
+                  productId: supplierProduct.product_id,
+                  specifications: req.body.specifications
+                })
+              : await validateSupplierCategorySpecificationFillComplete(
+                  resolveAdminSpecificationTemplate,
+                  {
+                    categoryName: categoryForTemplate,
+                    modelRaw: nameForTemplate,
+                    brandRaw: brandForTemplate,
+                    specifications: req.body.specifications
+                  }
+                );
+
+          if (!templateValidation.ok) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'specifications_required',
+              message:
+                templateValidation.message ||
+                (offerStatus === 'approved'
+                  ? 'Please complete all specification values for the keys provided by admin.'
+                  : 'Please complete all specification values for the selected category.'),
+              missingFields: templateValidation.missingFields || ['specifications'],
+              errors: templateValidation.errors || []
             });
           }
         }
@@ -344,6 +410,9 @@ export function registerSupplierProductUpdateRoute(ctx) {
         }).catch((err) => console.log('upsertModelSpecProfile failed:', err?.message || err));
 
         const ra = updatedSupplierProduct.attributes || {};
+        const baseSpecs = parseSpecificationsObject(baseProduct?.specifications) || {};
+        const offerSpecs = parseSpecificationsObject(ra.specifications) || {};
+        const mergedSpecs = mergeCatalogAndOfferSpecificationsForDisplay(baseSpecs, offerSpecs);
         const resolvedUnit =
           String(ra.unit || '').trim() ||
           String(baseProduct?.unit || '').trim() ||
@@ -359,10 +428,13 @@ export function registerSupplierProductUpdateRoute(ctx) {
           unit: resolvedUnit,
           gtin: ra.gtin || baseProduct?.gtin,
           mpn: ra.mpn || baseProduct?.mpn,
-          specifications: {
-            ...(typeof baseProduct?.specifications === 'object' ? baseProduct.specifications : {}),
-            ...(typeof ra.specifications === 'object' ? ra.specifications : {})
-          },
+          specifications: mergedSpecs,
+          catalogSpecifications: baseSpecs,
+          catalogSpecificationKeys: Object.keys(
+            specificationTemplateKeysOnly(baseSpecs)
+          ),
+          supplierOfferSpecifications: offerSpecs,
+          supplierSpecValuesLocked: countMeaningfulSpecValues(offerSpecs) > 0,
           brandModel: updatedSupplierProduct.attributes?.brandModel,
           lsa: updatedSupplierProduct.attributes?.lsa,
           hsnCode: updatedSupplierProduct.attributes?.hsnCode,

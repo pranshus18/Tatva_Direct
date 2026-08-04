@@ -153,13 +153,28 @@ export function getSelectYourselfEntrySaveReadiness(entry = {}) {
 }
 
 /** Save button state for a single supply-chain entry card. */
-export function getSelectYourselfEntrySaveState(entry = {}, savedBaselineEntries = []) {
+export function getSelectYourselfEntrySaveState(
+  entry = {},
+  savedBaselineEntries = [],
+  approvedBaselineEntries = []
+) {
   const readiness = getSelectYourselfEntrySaveReadiness(entry);
-  const alreadySaved = readiness.ok && entryMatchesSavedBaseline(entry, savedBaselineEntries);
+  const hasChangesFromLastSave = !entryMatchesSavedBaseline(entry, savedBaselineEntries);
+  const approvedEntry = findSavedBaselineEntry(entry, approvedBaselineEntries);
+  const approvedRole = String(approvedEntry?.role || '').trim();
+  const currentRole = String(entry?.role || '').trim();
+  const pendingApprovedRoleChange =
+    !!approvedRole && !!currentRole && approvedRole !== currentRole;
+  const alreadySaved = !hasChangesFromLastSave;
+  // Enable Save whenever this entry differs from the last saved snapshot — including
+  // approved-role changes that still need admin review. Field validation runs on click.
+  const enabled = hasChangesFromLastSave;
+
   return {
     ...readiness,
-    alreadySaved,
-    enabled: readiness.ok && !alreadySaved
+    alreadySaved: alreadySaved && readiness.ok,
+    enabled,
+    pendingApprovedRoleChange
   };
 }
 

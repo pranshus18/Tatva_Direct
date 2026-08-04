@@ -1,5 +1,40 @@
 import { describe, it, expect } from 'vitest';
-import { parseSpecificationsForDisplay } from './specifications.js';
+import {
+  parseSpecificationsForDisplay,
+  mergeCatalogAndOfferSpecificationsForDisplay,
+  resolveSupplierOfferDisplaySpecifications
+} from './specifications.js';
+
+describe('mergeCatalogAndOfferSpecificationsForDisplay', () => {
+  it('keeps admin catalog values when offer placeholders are empty', () => {
+    const merged = mergeCatalogAndOfferSpecificationsForDisplay(
+      { COLOR: 'Red', CAPACITY: '600 ml' },
+      { COLOR: '', CAPACITY: '' }
+    );
+    expect(merged.COLOR).toBe('Red');
+    expect(merged.CAPACITY).toBe('600 ml');
+  });
+
+  it('prefers filled variant offer values over shared catalog values', () => {
+    const merged = mergeCatalogAndOfferSpecificationsForDisplay(
+      { COLOR: 'Red', CAPACITY: '600 ml' },
+      { COLOR: 'Blue', CAPACITY: '750 ml' }
+    );
+    expect(merged.COLOR).toBe('Blue');
+    expect(merged.CAPACITY).toBe('750 ml');
+  });
+});
+
+describe('resolveSupplierOfferDisplaySpecifications', () => {
+  it('merges catalog and offer fields on supplier rows', () => {
+    const specs = resolveSupplierOfferDisplaySpecifications({
+      catalogSpecifications: { MATERIAL: 'Steel' },
+      supplierOfferSpecifications: { COLOR: 'Black' }
+    });
+    expect(specs.MATERIAL).toBe('Steel');
+    expect(specs.COLOR).toBe('Black');
+  });
+});
 
 describe('parseSpecificationsForDisplay', () => {
   it('hides internal identity bundle from order line-item chips', () => {

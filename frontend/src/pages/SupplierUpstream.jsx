@@ -28,6 +28,7 @@ import SupplierProductDetailsModal from '../components/SupplierProductDetailsMod
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
+import { dedupeCategoryStrings } from '../utils/categoryNormalize';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import {
   createUpstreamCheckoutSessionId,
@@ -244,14 +245,10 @@ const SupplierUpstream = ({ user }) => {
     });
   }, [products, searchQuery, selectedCategory]);
 
-  const categories = useMemo(() => {
-    const unique = new Set();
-    (products || []).forEach((product) => {
-      const category = String(product?.category || '').trim();
-      if (category) unique.add(category);
-    });
-    return Array.from(unique).sort((a, b) => a.localeCompare(b));
-  }, [products]);
+  const categories = useMemo(
+    () => dedupeCategoryStrings((products || []).map((product) => product?.category)),
+    [products]
+  );
 
   const pageCount = useMemo(() => {
     const count = filteredProducts.length;

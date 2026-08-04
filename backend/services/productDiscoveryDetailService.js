@@ -17,10 +17,15 @@ import {
   getSupplierSubmittedDescription,
   resolveBuyerFacingProductDescription
 } from '../utils/supplierProductDescriptions.js';
+import {
+  mergeCatalogAndOfferSpecificationsForDisplay,
+  parseSpecificationsObject as parseCatalogSpecificationsObject
+} from './supplierCatalogHelpersService.js';
 
 const VARIANT_OPTION_SKIP_KEYS = new Set([
   'brandmodel',
   'brand',
+  'category',
   'description',
   'images',
   'hsncode',
@@ -104,6 +109,10 @@ function attributeMapKey(rawKey) {
   return normalizeTextField(rawKey).replace(/\s+/g, '_');
 }
 
+function optionValueDedupKey(displayValue) {
+  return String(displayValue || '').trim().toLowerCase();
+}
+
 export function buildVariantOptions(variants = []) {
   const valueSets = new Map();
 
@@ -116,8 +125,13 @@ export function buildVariantOptions(variants = []) {
       if (!displayValue) continue;
       if (!valueSets.has(normalizedKey)) valueSets.set(normalizedKey, new Map());
       const bucket = valueSets.get(normalizedKey);
-      if (!bucket.has(displayValue)) {
-        bucket.set(displayValue, { key: normalizedKey, label: toReadableOptionLabel(key), value: displayValue });
+      const dedupKey = optionValueDedupKey(displayValue);
+      if (!bucket.has(dedupKey)) {
+        bucket.set(dedupKey, {
+          key: normalizedKey,
+          label: toReadableOptionLabel(key),
+          value: displayValue
+        });
       }
     }
   }
@@ -152,7 +166,9 @@ function mergeOfferSpecifications(productSpecs, offer) {
         'specifications',
         'specs',
         'listingName',
-        'supplierDescription'
+        'supplierDescription',
+        'category',
+        'Category'
       ].includes(key)
     ) {
       continue;
@@ -161,10 +177,14 @@ function mergeOfferSpecifications(productSpecs, offer) {
       direct[key] = value;
     }
   }
-  // Catalog/admin product specs win over stale offer attribute copies for the same keys.
-  // Offer-only keys that are not on the catalog product are still preserved.
-  return { ...fromAttrs, ...direct, ...base };
+  const offerSpecs = { ...fromAttrs, ...direct };
+  return mergeCatalogAndOfferSpecificationsForDisplay(
+    parseCatalogSpecificationsObject(base) || base,
+    offerSpecs
+  );
 }
+
+export { mergeOfferSpecifications };
 
 function extractIdentityFields(product, specs = {}, offer = null) {
   const attrs = offer?.attributes && typeof offer.attributes === 'object' ? offer.attributes : {};

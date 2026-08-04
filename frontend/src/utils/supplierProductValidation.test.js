@@ -95,6 +95,44 @@ describe('supplierProductValidation', () => {
     ).toBe(1);
   });
 
+  it('requires every admin specification key when a category template is loaded', () => {
+    expect(
+      getSupplierCatalogMandatoryMissingFields(
+        {
+          name: 'Widget',
+          brand: 'Acme',
+          category: 'Tools',
+          unit: 'pcs'
+        },
+        {
+          isCreate: false,
+          requireUnit: true,
+          specTemplateKeys: ['Material', 'Size'],
+          specifications: { Material: 'Steel', Size: '' }
+        }
+      )
+    ).toEqual(['Specification: Size']);
+  });
+
+  it('passes when all admin specification keys are filled', () => {
+    expect(
+      getSupplierCatalogMandatoryMissingFields(
+        {
+          name: 'Widget',
+          brand: 'Acme',
+          category: 'Tools',
+          unit: 'pcs'
+        },
+        {
+          isCreate: false,
+          requireUnit: true,
+          specTemplateKeys: ['Material', 'Size'],
+          specifications: { Material: 'Steel', Size: 'Large' }
+        }
+      )
+    ).toEqual([]);
+  });
+
   it('formats photo and API error messages', () => {
     expect(formatMissingProductPhotosMessage(1)).toMatch(/currently have 1/i);
     expect(formatSupplierProductValidationMessage(['MRP', 'SGST'])).toBe(

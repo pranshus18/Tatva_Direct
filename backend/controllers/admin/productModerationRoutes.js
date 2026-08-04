@@ -9,6 +9,12 @@ import { getContractErrorMessage, parseWithSchema } from '../../utils/contractVa
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
 import { isSupplierUserType } from '../../utils/notificationAudience.js';
 import { validateAdminProductApprovalReadiness, mergeOfferIntoProductForApproval } from '../../services/adminProductApprovalReadinessService.js';
+import {
+  mergeVariantSpecificationTemplate,
+  parseSpecificationsObject,
+  sanitizeSpecifications,
+  specificationTemplateKeysOnly
+} from '../../services/supplierCatalogHelpersService.js';
 
 function supplierOfferRecipients(supplierProductRows, fallbackSupplier) {
   const isCatalogSupplierRecipient = (supplier) => {
@@ -171,6 +177,37 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
       }
       console.log(`[ADMIN APPROVE PRODUCT] supplier_products updated rows: ${updatedSupplierProducts?.length || 0}`);
 
+      // Push admin-generated specification keys (values cleared) onto each supplier offer
+      // so the supplier portal can collect values once after approval.
+      const adminSpecKeys = specificationTemplateKeysOnly(
+        sanitizeSpecifications(product.specifications || {})
+      );
+      if (Object.keys(adminSpecKeys).length > 0) {
+        const { data: offerRowsForSpecs } = await supabase
+          .from('supplier_products')
+          .select('id, attributes')
+          .eq('product_id', product.id);
+
+        for (const row of offerRowsForSpecs || []) {
+          const existingOfferSpecs =
+            parseSpecificationsObject(row?.attributes?.specifications) || {};
+          const mergedSpecs = mergeVariantSpecificationTemplate(adminSpecKeys, existingOfferSpecs);
+          await supabase
+            .from('supplier_products')
+            .update({
+              attributes: {
+                ...(row.attributes || {}),
+                specifications: mergedSpecs
+              },
+              updated_at: nowIso
+            })
+            .eq('id', row.id);
+        }
+        console.log(
+          `[ADMIN APPROVE PRODUCT] Synced ${Object.keys(adminSpecKeys).length} specification key(s) to supplier offer(s)`
+        );
+      }
+
       void syncCatalogProductSnapshotFromOffers(supabase, product.id).catch((syncError) => {
         console.error('[CatalogSnapshot] admin approve sync failed:', syncError?.message || syncError);
       });
@@ -186,7 +223,9 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
           user_id: supplier.id,
           type: 'product_approval',
           title: `Product Approved: ${product.name}`,
-          message: `Your product "${product.name}" has been approved by admin and is now active in the marketplace.`,
+          message: Object.keys(adminSpecKeys).length > 0
+            ? `Your product "${product.name}" has been approved by admin. Open Manage Products and fill in the specification values for the keys provided by admin.`
+            : `Your product "${product.name}" has been approved by admin and is now active in the marketplace.`,
           related_product_id: product.id,
           metadata: {
             productName: product.name,

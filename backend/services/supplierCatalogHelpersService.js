@@ -171,6 +171,25 @@ export const mergeSpecificationMaps = (...sources) => {
   return merged;
 };
 
+/** Prefer meaningful variant/offer values; fill remaining keys from shared catalog/admin specs. */
+export const mergeCatalogAndOfferSpecificationsForDisplay = (catalogSpecs = {}, offerSpecs = {}) => {
+  const catalog = parseSpecificationsObject(catalogSpecs) || {};
+  const offer = parseSpecificationsObject(offerSpecs) || {};
+  const merged = { ...catalog };
+
+  Object.entries(offer).forEach(([key, value]) => {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) return;
+    if (isMeaningfullyFilledSpecValue(value)) {
+      merged[normalizedKey] = value;
+    } else if (!Object.prototype.hasOwnProperty.call(merged, normalizedKey)) {
+      merged[normalizedKey] = value;
+    }
+  });
+
+  return merged;
+};
+
 /** Union template field keys with variant specs; variant values win (including empty). */
 export const mergeVariantSpecificationTemplate = (templateSpecs = {}, variantSpecs = {}) => {
   const template = parseSpecificationsObject(templateSpecs) || {};

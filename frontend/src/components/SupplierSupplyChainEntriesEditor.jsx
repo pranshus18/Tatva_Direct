@@ -236,6 +236,7 @@ const CompanyInfoEntryCard = ({
   allowEntrySave = false,
   savedBaselineEntries = [],
   allowEntryRemove = false,
+  approvedBaselineEntries = [],
   catalogBrandNames = [],
   catalogBrands = null,
   catalogBrandsLoading = null,
@@ -488,16 +489,22 @@ const CompanyInfoEntryCard = ({
   const showFormDetailsSection = sectionView !== 'brand';
   const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave && brandApprovalReadyForRole;
   const entrySaveState = showEntrySave
-    ? getSelectYourselfEntrySaveState(entry, savedBaselineEntries)
+    ? getSelectYourselfEntrySaveState(entry, savedBaselineEntries, approvedBaselineEntries)
     : { ok: true, message: '', field: '', missing: [], alreadySaved: false, enabled: true };
   const entrySaveEnabled = entrySaveState.enabled && !savingThisEntry;
   const entrySaveTitle = savingThisEntry
     ? 'Saving this entry…'
     : entrySaveState.alreadySaved
       ? 'This entry is already saved'
-      : entrySaveState.ok
-        ? 'Save this entry'
-        : entrySaveState.message;
+      : entrySaveState.enabled && !entrySaveState.ok
+        ? entrySaveState.pendingApprovedRoleChange
+          ? `${entrySaveState.message || 'Complete required fields, then save to submit this role change for admin approval.'}`
+          : entrySaveState.message || 'Complete required fields, then save this entry'
+        : entrySaveState.ok
+          ? entrySaveState.pendingApprovedRoleChange
+            ? 'Save to submit this role change for admin approval'
+            : 'Save this entry'
+          : entrySaveState.message;
   const showEntryRemove = canRemove && editing && allowEntryRemove && isBrandOnlyStep;
   const showHeader =
     sectionView === 'brand'
@@ -2329,6 +2336,7 @@ export default function SupplierSupplyChainEntriesEditor({
             onSaveEntry={onSaveEntry}
             savingThisEntry={savingEntryId === entry.id}
             savedBaselineEntries={savedBaselineEntries}
+            approvedBaselineEntries={approvedBaselineEntries}
             allowEntrySave={allowEntryManagement || !!onSaveEntry}
             allowEntryRemove={
               sectionView !== 'brand' && (sectionView === 'all' || allowEntryManagement || !!onRemoveEntry)

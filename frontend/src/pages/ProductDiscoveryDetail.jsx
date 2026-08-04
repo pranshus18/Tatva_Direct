@@ -83,7 +83,30 @@ function RatingStars({ rating, reviews, size = 16 }) {
 }
 
 function variantSelectionKey(variant) {
-  return `${variant?.productId || ''}::${variant?.variantKey || ''}`;
+  return `${variant?.productId || ''}::${variant?.variantKey || variant?.variantAsin || ''}`;
+}
+
+function variantMatchesUrlToken(variant, token) {
+  const normalized = String(token || '').trim();
+  if (!normalized) return false;
+  return (
+    String(variant?.variantKey || '') === normalized ||
+    String(variant?.variantAsin || '') === normalized ||
+    String(variant?.productId || '') === normalized
+  );
+}
+
+function resolveVariantDisplaySpecifications(variant) {
+  if (!variant) return {};
+  const specs =
+    variant.specifications && typeof variant.specifications === 'object' && !Array.isArray(variant.specifications)
+      ? variant.specifications
+      : {};
+  const canonical =
+    variant.canonicalAttributes && typeof variant.canonicalAttributes === 'object'
+      ? variant.canonicalAttributes
+      : {};
+  return { ...specs, ...canonical };
 }
 
 function variantMatchesSelections(variant, selections) {
@@ -273,7 +296,6 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [cartAdded, setCartAdded] = useState(false);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
-  const [displaySpecifications, setDisplaySpecifications] = useState({});
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -328,17 +350,18 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
 
   const selectedVariant = useMemo(() => {
     if (!variants.length) return null;
-    const urlVariant = String(searchParams.get('variant') || '').trim();
-    if (urlVariant) {
-      const byKey = variants.find((v) => String(v.variantKey || '') === urlVariant);
-      if (byKey) return byKey;
-      const byProduct = variants.find((v) => String(v.productId || '') === urlVariant);
-      if (byProduct) return byProduct;
-    }
+
     if (selectedVariantKey) {
       const explicit = variants.find((v) => variantSelectionKey(v) === selectedVariantKey);
       if (explicit) return explicit;
     }
+
+    const urlVariant = String(searchParams.get('variant') || '').trim();
+    if (urlVariant) {
+      const byToken = variants.find((v) => variantMatchesUrlToken(v, urlVariant));
+      if (byToken) return byToken;
+    }
+
     if (Object.keys(optionSelections).length) {
       const matched = variants.find((v) => variantMatchesSelections(v, optionSelections));
       if (matched) return matched;
@@ -348,16 +371,11 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
 
   useEffect(() => {
     setActiveImageIndex(0);
-    setDisplaySpecifications(selectedVariant?.specifications || {});
-  }, [
-    selectedVariant?.productId,
-    selectedVariant?.variantKey,
-    selectedVariant?.specifications
-  ]);
+  }, [selectedVariantKey, searchParams]);
 
   const syncVariantToUrl = (variant) => {
     if (!variant) return;
-    const token = variant.variantKey || variant.productId;
+    const token = variant.variantKey || variant.variantAsin || variant.productId;
     if (!token) return;
     setSearchParams(
       (prev) => {
@@ -373,6 +391,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const productSummary = detail?.product || {};
   const variantOptions = Array.isArray(detail?.variantOptions) ? detail.variantOptions : [];
   const activeListing = selectedVariant || (variants[0] ?? null);
+  const displaySpecifications = useMemo(
+    () => resolveVariantDisplaySpecifications(activeListing),
+    [activeListing, selectedVariantKey]
+  );
   const displayProductName = activeListing?.name || productSummary.name || 'Product';
   const images = getProductImageList(activeListing || productSummary);
   const safeImageIndex = images.length ? Math.min(activeImageIndex, images.length - 1) : 0;
@@ -753,7 +775,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
               if (section.type === 'spec-table') {
                 return (
                   <SpecTable
-                    key={section.id}
+                    key={`${section.id}-${variantSelectionKey(selectedVariant)}`}
                     title={section.title}
                     entries={section.entries}
                     sectionId={section.id}

@@ -256,6 +256,38 @@ export function resolveSupplierOfferDisplayName({ attributes = {}, catalogName =
   return catalog || 'Product';
 }
 
+/** Move a rejected shared catalog product back to pending when a supplier resubmits it. */
+export async function reopenRejectedCatalogProductForResubmit(supabase, productId) {
+  if (!productId || !supabase) return null;
+  const { data: catalogRow } = await supabase
+    .from('products')
+    .select('id, status')
+    .eq('id', productId)
+    .maybeSingle();
+  if (!catalogRow || String(catalogRow.status || '').toLowerCase() !== 'rejected') {
+    return catalogRow || null;
+  }
+  const nowIso = new Date().toISOString();
+  const { data: reopened, error } = await supabase
+    .from('products')
+    .update({
+      status: 'pending',
+      is_active: false,
+      rejection_reason: null,
+      approved_by: null,
+      approved_at: null,
+      updated_at: nowIso
+    })
+    .eq('id', productId)
+    .select('id, status')
+    .maybeSingle();
+  if (error) {
+    console.warn('[SupplierProductCreate] Failed to reopen rejected catalog product:', error.message || error);
+    return catalogRow;
+  }
+  return reopened || { ...catalogRow, status: 'pending' };
+}
+
 export async function createBaseProductIfNeeded(
   supabase,
   { existingProduct, otherData, categoryName, unitName, normalizedImageUrls, normalizedSpecs, reqUserId, identityBundle, resolvedBarcodeForPos }

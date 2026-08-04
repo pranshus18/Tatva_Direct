@@ -221,13 +221,13 @@ export { isRevenueRecognizedOrder } from '../../../utils/salesMetrics.js';
 /**
  * Catalog approval alone must not re-label a brand-new pending offer as approved —
  * admin moderation writes approved onto junction rows when the product goes live.
- * Rejected catalog or offer status always wins so suppliers keep a clear approval outcome.
+ * Rejection is per offer row: a fresh pending resubmission must not inherit a stale
+ * rejected catalog product that the supplier is listing again.
  */
 export function resolveEffectiveSupplierOfferState(row, catalogProduct = null) {
   const product = catalogProduct ?? row?.product ?? null;
   const rawStatus = String(row?.status ?? '').trim().toLowerCase();
-  const catalogStatus = String(product?.status ?? '').trim().toLowerCase();
-  const rejected = rawStatus === 'rejected' || catalogStatus === 'rejected';
+  const rejected = rawStatus === 'rejected';
 
   let effectiveStatus = row?.status ?? 'pending';
   let effectiveActive = row?.is_active === true;

@@ -32,6 +32,8 @@ import { getProductImageList, getSupplierOfferImagesForForm } from '../utils/pro
 import {
   mergeSpecificationObjects,
   mergeVariantSpecificationTemplate,
+  mergeCatalogAndOfferSpecificationsForDisplay,
+  resolveSupplierOfferDisplaySpecifications,
   parseSpecInputToValue,
   specValueToInput,
   specificationEntriesForDetails,
@@ -58,6 +60,7 @@ import RupeeInput from '../components/RupeeInput';
 import BrandSelect from '../components/BrandSelect';
 import {
   getSupplierOfferRowId,
+  findSupplierOfferRow,
   matchSupplierOfferRow,
   normalizeSupplierProductsFromApi
 } from '../utils/supplierProductRow';
@@ -70,6 +73,8 @@ import {
   getSupplierInventoryUpdateMissingFields,
   getSupplierProductCreateErrorMessage,
   getSupplierProductUpdateErrorMessage,
+  getSupplierSpecificationTemplateMissingFields,
+  isMeaningfullyFilledSpecValue,
   MIN_SUPPLIER_PRODUCT_PHOTOS
 } from '../utils/supplierProductValidation';
 import {
@@ -339,6 +344,12 @@ const ProductManagement = ({ user }) => {
           }
         );
         setProducts(productsWithStatus);
+        setViewingItem((prev) => {
+          if (!prev) return prev;
+          const offerId = getSupplierOfferRowId(prev);
+          if (!offerId) return prev;
+          return findSupplierOfferRow(productsWithStatus, offerId) || prev;
+        });
         if (data.stats && typeof data.stats === 'object') {
           setCatalogStats({
             total: Number(data.stats.total) || productsWithStatus.length,
@@ -562,6 +573,9 @@ const ProductManagement = ({ user }) => {
                 }
               : p
           )
+        );
+        setViewingItem((prev) =>
+          prev && matchSupplierOfferRow(prev, productId) ? { ...prev, ...updatedProduct } : prev
         );
 
         // Confirm save before closing the modal / navigating away.
@@ -1223,9 +1237,27 @@ const ProductManagement = ({ user }) => {
               brand: brandValue,
               unit: data.unit,
               gtin: data.gtin,
-              images: Array.isArray(data.images) ? data.images : [],
-              specifications: data.specifications
+              images: Array.isArray(data.images) ? data.images : []
             };
+            const isApprovedSpecFill =
+              String(editingItem?.status || '').toLowerCase() === 'approved' &&
+              !supplierSpecificationValuesLocked({
+                offerSpecifications:
+                  editingItem?.supplierOfferSpecifications ||
+                  editingItem?.attributes?.specifications,
+                supplierSpecValuesLocked: editingItem?.supplierSpecValuesLocked
+              }) &&
+              (Array.isArray(editingItem?.catalogSpecificationKeys)
+                ? editingItem.catalogSpecificationKeys.length > 0
+                : Object.keys(editingItem?.specifications || {}).length > 0);
+            const isPendingCategorySpecFill =
+              String(editingItem?.status || '').toLowerCase() === 'pending' &&
+              data.specifications &&
+              typeof data.specifications === 'object' &&
+              Object.keys(data.specifications).length > 0;
+            if (isApprovedSpecFill || isPendingCategorySpecFill) {
+              catalogPayload.specifications = data.specifications;
+            }
             const catalogMissing = getSupplierCatalogMandatoryMissingFields(catalogPayload, {
               isCreate: false,
               requireUnit: true
@@ -1234,6 +1266,27 @@ const ProductManagement = ({ user }) => {
               alert(formatSupplierProductValidationMessage(catalogMissing));
               return;
             }
+            if (isApprovedSpecFill) {
+              const specMissing = getSupplierSpecificationTemplateMissingFields(
+                editingItem.catalogSpecificationKeys ||
+                  Object.keys(editingItem.specifications || {}),
+                data.specifications
+              );
+              if (specMissing.length > 0) {
+                alert(formatSupplierProductValidationMessage(specMissing));
+                return;
+              }
+            }
+            if (isPendingCategorySpecFill) {
+              const specMissing = getSupplierSpecificationTemplateMissingFields(
+                Object.keys(data.specifications || {}),
+                data.specifications
+              );
+              if (specMissing.length > 0) {
+                alert(formatSupplierProductValidationMessage(specMissing));
+                return;
+              }
+            }
             await handleUpdateProduct(productId, catalogPayload);
           }}
         />
@@ -1241,9 +1294,17 @@ const ProductManagement = ({ user }) => {
 
       {viewingItem && (
         <ProductDetailsModal
+          key={getSupplierOfferRowId(viewingItem) || viewingItem.id}
           product={viewingItem}
           canEditInventory={isInventoryView}
-          specificationsReadOnly
+          specificationsReadOnly={
+            supplierSpecificationValuesLocked({
+              offerSpecifications:
+                viewingItem?.supplierOfferSpecifications ||
+                viewingItem?.attributes?.specifications,
+              supplierSpecValuesLocked: viewingItem?.supplierSpecValuesLocked
+            })
+          }
           onClose={() => setViewingItem(null)}
           onEdit={
             isInventoryView
@@ -1279,7 +1340,9 @@ const ProductDetailsModal = ({
   onSaveSpecifications
 }) => {
   const detailsNavigate = useNavigate();
-  const [displaySpecifications, setDisplaySpecifications] = useState(product?.specifications || {});
+  const [displaySpecifications, setDisplaySpecifications] = useState(() =>
+    resolveSupplierOfferDisplaySpecifications(product)
+  );
   const [isEditingSpecs, setIsEditingSpecs] = useState(false);
   const [draftSpecs, setDraftSpecs] = useState({});
   const [savingSpecs, setSavingSpecs] = useState(false);
@@ -1306,51 +1369,18 @@ const ProductDetailsModal = ({
     ).trim();
 
   useEffect(() => {
-    setDisplaySpecifications(product?.specifications || {});
+    setDisplaySpecifications(resolveSupplierOfferDisplaySpecifications(product));
     setIsEditingSpecs(false);
     setDraftSpecs({});
     setDescriptionDraft(product?.description || '');
-  }, [product?.specifications, product?.description, product?.id]);
-
-  useEffect(() => {
-    const category = String(product?.category || '').trim().toLowerCase();
-    const model = String(product?.name || '').trim();
-    const brand = String(product?.brand || model || '').trim();
-    if (!category) return;
-
-    let cancelled = false;
-    const loadAdminSpecifications = async () => {
-      try {
-        const token = localStorage.getItem('token');
-        const params = new URLSearchParams();
-        if (model) params.set('model', model);
-        if (brand) params.set('brand', brand);
-        const query = params.toString() ? `?${params.toString()}` : '';
-        const response = await fetch(
-          getApiUrl(`/api/supplier/categories/${encodeURIComponent(category)}/specifications${query}`),
-          {
-            headers: { Authorization: `Bearer ${token}` },
-            cache: 'no-cache'
-          }
-        );
-        if (!response.ok || cancelled) return;
-        const data = await response.json();
-        if (data?.status !== 'success' || cancelled) return;
-        const adminTemplate =
-          data?.specifications && typeof data.specifications === 'object' ? data.specifications : {};
-        setDisplaySpecifications(
-          mergeVariantSpecificationTemplate(adminTemplate, product?.specifications || {})
-        );
-      } catch {
-        // Keep product snapshot when template fetch fails.
-      }
-    };
-
-    loadAdminSpecifications();
-    return () => {
-      cancelled = true;
-    };
-  }, [product?.id, product?.category, product?.name, product?.brand, product?.specifications]);
+  }, [
+    product?.supplier_product_id,
+    product?.specifications,
+    product?.catalogSpecifications,
+    product?.supplierOfferSpecifications,
+    product?.attributes?.specifications,
+    product?.description
+  ]);
 
   const specEntries = specificationEntriesForDetails(displaySpecifications);
 
@@ -1381,9 +1411,11 @@ const ProductDetailsModal = ({
     setSavingSpecs(false);
 
     if (result?.ok) {
-      const merged = mergeSpecificationObjects(
-        displaySpecifications,
-        result.product?.specifications || nextSpecs
+      const merged = mergeCatalogAndOfferSpecificationsForDisplay(
+        product?.catalogSpecifications || {},
+        result.product?.supplierOfferSpecifications ||
+          result.product?.specifications ||
+          nextSpecs
       );
       setDisplaySpecifications(merged);
       setIsEditingSpecs(false);
@@ -1859,6 +1891,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [hasAdminSpecTemplate, setHasAdminSpecTemplate] = useState(false);
+  const [adminSpecTemplateKeys, setAdminSpecTemplateKeys] = useState([]);
   const [aiProvider, setAiProvider] = useState('gemini'); // product photo analyze always uses Gemini on server
   const [aiAnalysisMeta, setAiAnalysisMeta] = useState(null);
   // Initialize specifications: for existing products, use their specs; for new products, start empty
@@ -1871,18 +1904,86 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const supplierSpecValuesLocked = useMemo(
     () =>
       supplierSpecificationValuesLocked({
-        specifications: product?.specifications,
-        status: product?.status
+        offerSpecifications:
+          product?.supplierOfferSpecifications ||
+          product?.attributes?.specifications,
+        supplierSpecValuesLocked: product?.supplierSpecValuesLocked
       }),
-    [product?.specifications, product?.status]
+    [
+      product?.supplierOfferSpecifications,
+      product?.attributes?.specifications,
+      product?.supplierSpecValuesLocked
+    ]
+  );
+  const approvedNeedsSpecFill = useMemo(() => {
+    if (!product) return false;
+    if (String(product.status || '').toLowerCase() !== 'approved') return false;
+    if (supplierSpecValuesLocked) return false;
+    const keys = Array.isArray(product.catalogSpecificationKeys)
+      ? product.catalogSpecificationKeys.filter(Boolean)
+      : Object.keys(product.specifications || {}).filter(Boolean);
+    return keys.length > 0;
+  }, [product, supplierSpecValuesLocked]);
+  const productStatus = product ? String(product.status || 'pending').toLowerCase() : 'pending';
+  const categorySpecFillRequired = useMemo(
+    () =>
+      hasAdminSpecTemplate &&
+      adminSpecTemplateKeys.length > 0 &&
+      (!product || productStatus === 'pending'),
+    [hasAdminSpecTemplate, adminSpecTemplateKeys, product, productStatus]
   );
   const canEditSpecificationValues = useMemo(() => {
     if (showInventoryFields) return false;
     if (supplierSpecValuesLocked) return false;
-    if (!product) return true;
-    return String(product.status || 'pending').toLowerCase() === 'pending';
-  }, [showInventoryFields, supplierSpecValuesLocked, product]);
-  const canEditSpecificationKeys = canEditSpecificationValues && !hasAdminSpecTemplate;
+    if (productStatus === 'rejected') return false;
+    // Existing category with admin template keys: fill while adding or editing a pending product.
+    if (categorySpecFillRequired) return true;
+    // New category / no category template: fill catalog keys once after admin approval.
+    if (productStatus === 'approved' && approvedNeedsSpecFill) return true;
+    return false;
+  }, [
+    showInventoryFields,
+    supplierSpecValuesLocked,
+    productStatus,
+    categorySpecFillRequired,
+    approvedNeedsSpecFill
+  ]);
+  const canEditSpecificationKeys = false;
+
+  // After admin approval, load catalog spec keys when the category had no template at submit time.
+  useEffect(() => {
+    if (!product) {
+      return;
+    }
+    const status = String(product.status || 'pending').toLowerCase();
+    if (status !== 'approved' || supplierSpecValuesLocked || hasAdminSpecTemplate) {
+      return;
+    }
+
+    const keys = Array.isArray(product.catalogSpecificationKeys)
+      ? product.catalogSpecificationKeys.filter(Boolean)
+      : Object.keys(product.specifications || {}).filter(Boolean);
+    setAdminSpecTemplateKeys(keys);
+    setHasAdminSpecTemplate(false);
+    if (keys.length > 0) {
+      const offerSpecs =
+        product.supplierOfferSpecifications ||
+        product.attributes?.specifications ||
+        {};
+      const template = Object.fromEntries(keys.map((key) => [key, '']));
+      setSpecifications(mergeVariantSpecificationTemplate(template, offerSpecs));
+    }
+  }, [
+    product?.id,
+    product?.status,
+    product?.catalogSpecificationKeys,
+    product?.specifications,
+    product?.supplierOfferSpecifications,
+    product?.attributes?.specifications,
+    product,
+    supplierSpecValuesLocked,
+    hasAdminSpecTemplate
+  ]);
   const [isSaving, setIsSaving] = useState(false);
   const [formValidationError, setFormValidationError] = useState('');
   const [showMissingHints, setShowMissingHints] = useState(false);
@@ -1896,12 +1997,14 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const formScrollRef = useRef(null);
   const productPhotosSectionRef = useRef(null);
   const brandFieldRef = useRef(null);
+  const specificationsSectionRef = useRef(null);
 
   const MIN_AI_PRODUCT_IMAGES = MIN_SUPPLIER_PRODUCT_PHOTOS;
   const MAX_AI_PRODUCT_IMAGES = 8;
 
   // Multiple product photos for AI (minimum 3 required before analysis runs)
   const [productAiImages, setProductAiImages] = useState([]);
+  const [photosAttachedForProduct, setPhotosAttachedForProduct] = useState(false);
   const [analyzingImage, setAnalyzingImage] = useState(false);
   const [uploadingProductImage, setUploadingProductImage] = useState(false);
   const [aiDetectionReview, setAiDetectionReview] = useState(null);
@@ -2233,12 +2336,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.name, formData.category, formData.brand]);
 
-  // Keep specification template aligned with admin-defined model profiles while typing product name.
+  // Keep category specification template aligned while typing (create + pending edit only).
   useEffect(() => {
     const category = String(formData.category || '').trim();
     const modelHint = String(formData.name || '').trim();
     if (!category) return;
-    if (product && (product.status || 'pending') !== 'pending') return;
+    if (product && String(product.status || 'pending').toLowerCase() !== 'pending') return;
 
     const timeout = setTimeout(async () => {
       await loadCategorySpecifications(category, modelHint, {
@@ -2249,7 +2352,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.name, formData.category, formData.brand]);
+  }, [formData.name, formData.category, formData.brand, product?.status]);
 
   const getMissingMandatoryFields = () => {
     if (showInventoryFields) {
@@ -2290,6 +2393,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   );
 
   const uploadedPhotoCount = countSupplierProductPhotos(formData.images);
+  const stagedPhotoCount = productAiImages.filter((item) => item.uploadedUrl).length;
   const photosRequirementMet = product
     ? true
     : uploadedPhotoCount >= MIN_AI_PRODUCT_IMAGES;
@@ -2336,6 +2440,109 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
   }, [isAddOrInventorySubmitBlocked]);
 
+  const getStagedProductPhotoUrls = () =>
+    productAiImagesRef.current.map((item) => item.uploadedUrl).filter(Boolean);
+
+  const syncPhotosAttachedState = (urls = []) => {
+    setPhotosAttachedForProduct(countSupplierProductPhotos(urls) >= MIN_AI_PRODUCT_IMAGES);
+  };
+
+  const attachStagedPhotosAsProductImages = ({ showAlertOnFailure = true } = {}) => {
+    const urls = getStagedProductPhotoUrls();
+    if (urls.length < MIN_AI_PRODUCT_IMAGES) {
+      if (showAlertOnFailure) {
+        alert(formatMissingProductPhotosMessage(urls.length, MIN_AI_PRODUCT_IMAGES));
+      }
+      return false;
+    }
+    setFormData((prev) => ({
+      ...prev,
+      images: urls
+    }));
+    syncPhotosAttachedState(urls);
+    setFormValidationError('');
+    setShowMissingHints(false);
+    return true;
+  };
+
+  const handleUsePhotosAsProductIdentification = () => {
+    if (attachStagedPhotosAsProductImages()) {
+      productPhotosSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  };
+
+  const analyzeImagesFromFiles = async (files) => {
+    if (!files || files.length < MIN_AI_PRODUCT_IMAGES) {
+      alert(
+        `Please add at least ${MIN_AI_PRODUCT_IMAGES} product photos (e.g. front, side, label) so AI can identify the product reliably.`
+      );
+      return;
+    }
+
+    if (!attachStagedPhotosAsProductImages({ showAlertOnFailure: false })) {
+      alert(formatMissingProductPhotosMessage(getStagedProductPhotoUrls().length, MIN_AI_PRODUCT_IMAGES));
+      return;
+    }
+
+    setAnalyzingImage(true);
+    try {
+      const images = await Promise.all(files.map((f) => fileToImagePart(f)));
+      const token = localStorage.getItem('token');
+      const response = await fetch(getApiUrl('/api/supplier/products/analyze-image'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          images,
+          provider: 'gemini'
+        })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
+        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.status === 'success') {
+        const review = data.review || null;
+        const highConfidence = review?.accepted || {};
+        const lowConfidence = review?.suggestions || {};
+        const mergedSuggestions = { ...lowConfidence };
+        for (const [key, value] of Object.entries(highConfidence)) {
+          const trimmed = String(value || '').trim();
+          if (trimmed) mergedSuggestions[key] = trimmed;
+        }
+        const reviewForUi = review
+          ? {
+              ...review,
+              suggestions: mergedSuggestions,
+              accepted: {}
+            }
+          : null;
+        setAiDetectionReview(reviewForUi);
+        setAiAnalysisMeta(data.analysisMeta || null);
+        openAiSuggestionPopupFromReview(reviewForUi, data.provider || 'gemini');
+      } else {
+        setAiDetectionReview(null);
+        setAiAnalysisMeta(null);
+        setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
+        alert(data.message || 'Failed to analyze images. Please try again.');
+      }
+    } catch (error) {
+      console.error('Image analysis error:', error);
+      setAiDetectionReview(null);
+      setAiAnalysisMeta(null);
+      setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
+      alert('Failed to analyze images. Please try again.');
+    } finally {
+      setAnalyzingImage(false);
+    }
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isSaving) return;
@@ -2346,6 +2553,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (missing.length > 0) {
       setShowMissingHints(true);
       const photosMissing = missing.some((field) => /product photos/i.test(String(field || '')));
+      const specsMissing = missing.some((field) => /^Specification:/i.test(String(field || '')));
       setFormValidationError(
         photosMissing && missing.length === 1
           ? formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)
@@ -2355,6 +2563,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       const scrollEl = formScrollRef.current;
       if (photosMissing && productPhotosSectionRef.current) {
         productPhotosSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else if (specsMissing && specificationsSectionRef.current) {
+        specificationsSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } else if (formEl) {
         const firstInvalid = formEl.querySelector(':invalid');
         if (firstInvalid && typeof firstInvalid.reportValidity === 'function') {
@@ -2393,9 +2603,31 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       return;
     }
 
+    if (approvedNeedsSpecFill || categorySpecFillRequired) {
+      const templateKeys = categorySpecFillRequired
+        ? adminSpecTemplateKeys
+        : product?.catalogSpecificationKeys ||
+          adminSpecTemplateKeys ||
+          Object.keys(product?.specifications || {});
+      const specMissing = getSupplierSpecificationTemplateMissingFields(
+        templateKeys,
+        specifications
+      );
+      if (specMissing.length > 0) {
+        setShowMissingHints(true);
+        setFormValidationError(formatSupplierProductValidationMessage(specMissing));
+        specificationsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+    }
+
     // Final guard: never submit create with fewer than the required uploaded photos.
     if (!product) {
-      const finalPhotoCount = countSupplierProductPhotos(formData.images);
+      const resolvedImages =
+        countSupplierProductPhotos(formData.images) >= MIN_AI_PRODUCT_IMAGES
+          ? formData.images
+          : getStagedProductPhotoUrls();
+      const finalPhotoCount = countSupplierProductPhotos(resolvedImages);
       if (finalPhotoCount < MIN_AI_PRODUCT_IMAGES) {
         setShowMissingHints(true);
         setFormValidationError(
@@ -2425,15 +2657,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       // Keep null, empty string, and empty arrays - they show keys that need values
     });
     
+    const resolvedCreateImages = !product
+      ? countSupplierProductPhotos(formData.images) >= MIN_AI_PRODUCT_IMAGES
+        ? formData.images
+        : getStagedProductPhotoUrls()
+      : Array.isArray(formData.images)
+        ? formData.images
+        : [];
+
     const productData = {
       ...formData,
-      // Add flow: only photos uploaded in this modal session (AI image list).
+      // Add flow: photos attached for listing, or staged uploads if supplier skipped the attach button.
       // Edit flow: only images currently in the form (offer photos, not catalog history).
-      images: !product
-        ? productAiImages.map((item) => item.uploadedUrl).filter(Boolean)
-        : Array.isArray(formData.images)
-          ? formData.images
-          : [],
+      images: !product ? resolvedCreateImages : Array.isArray(formData.images) ? formData.images : [],
       specifications: allSpecifications
     };
 
@@ -2457,6 +2693,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       delete productData.cgst_rate;
       delete productData.sgst_rate;
       delete productData.lsa;
+      if (!approvedNeedsSpecFill && !categorySpecFillRequired) {
+        delete productData.specifications;
+      }
       // Keep unit on create and edit so incompatible units (e.g. bags for a mouse) can be corrected.
     }
 
@@ -2519,10 +2758,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
   }, [categories, formData.category]);
 
-  // Auto-load specs when category changes (for new products AND pending products).
+  // Auto-load category specification keys when category changes (new products + pending edits).
   useEffect(() => {
-    // If editing an existing product, only auto-load for pending products
-    if (product && (product.status || 'pending') !== 'pending') {
+    if (product && String(product.status || 'pending').toLowerCase() !== 'pending') {
       previousCategoryRef.current = formData.category;
       return;
     }
@@ -2543,6 +2781,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (!currentCategory) {
       previousCategoryRef.current = formData.category;
       setSpecifications({});
+      setHasAdminSpecTemplate(false);
+      setAdminSpecTemplateKeys([]);
       return;
     }
 
@@ -2573,6 +2813,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues });
     } else {
       setSpecifications({});
+      setHasAdminSpecTemplate(false);
+      setAdminSpecTemplateKeys([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.category, categories, product]);
@@ -2637,11 +2879,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const loadCategorySpecifications = async (categoryName, modelValue = '', options = {}) => {
     const preserveExistingValues = options.preserveExistingValues !== false;
     const brandValue = String(options.brand ?? formData?.brand ?? '').trim();
-    // Auto-load specs for:
-    // - new products
-    // - existing products that are still pending approval (supplier can still edit)
-    // Do NOT auto-load for approved/rejected products to avoid overwriting existing data.
-    if (product && (product.status || 'pending') !== 'pending') {
+    const status = product ? String(product.status || 'pending').toLowerCase() : 'pending';
+    // Category templates apply on create and pending edit — not after approval.
+    if (product && status !== 'pending') {
       return;
     }
 
@@ -2664,6 +2904,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (!categoryName || !categoryName.trim()) {
       setSpecifications({});
       setHasAdminSpecTemplate(false);
+      setAdminSpecTemplateKeys([]);
       return;
     }
 
@@ -2706,6 +2947,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
           if (specKeys.length > 0) {
             setHasAdminSpecTemplate(true);
+            setAdminSpecTemplateKeys(specKeys);
             const newSpecs = {};
             specKeys.forEach((k) => {
               if (preserveExistingValues && Object.prototype.hasOwnProperty.call(existingSpecsSnapshot, k)) {
@@ -2731,17 +2973,20 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           } else if (!preserveExistingValues) {
             setSpecifications({});
             setHasAdminSpecTemplate(false);
+            setAdminSpecTemplateKeys([]);
           }
           selectedSuggestionSpecsRef.current = null;
         } else if (!preserveExistingValues) {
           setSpecifications({});
           setHasAdminSpecTemplate(false);
+          setAdminSpecTemplateKeys([]);
           selectedSuggestionSpecsRef.current = null;
         }
       } else if (resp.status === 404) {
         if (!preserveExistingValues) {
           setSpecifications({});
           setHasAdminSpecTemplate(false);
+          setAdminSpecTemplateKeys([]);
           selectedSuggestionSpecsRef.current = null;
         }
       } else {
@@ -2795,6 +3040,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       previousCategoryRef.current = null;
       setFormData((prev) => ({ ...prev, category: '' }));
       setSpecifications({});
+      setHasAdminSpecTemplate(false);
+      setAdminSpecTemplateKeys([]);
       return;
     }
 
@@ -2803,6 +3050,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       previousCategoryRef.current = null;
       setFormData((prev) => ({ ...prev, category: '' }));
       setSpecifications({});
+      setHasAdminSpecTemplate(false);
+      setAdminSpecTemplateKeys([]);
       return;
     }
 
@@ -3168,75 +3417,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     });
   };
 
-  const analyzeImagesFromFiles = async (files) => {
-    if (!files || files.length < MIN_AI_PRODUCT_IMAGES) {
-      alert(
-        `Please add at least ${MIN_AI_PRODUCT_IMAGES} product photos (e.g. front, side, label) so AI can identify the product reliably.`
-      );
-      return;
-    }
-
-    setAnalyzingImage(true);
-    try {
-      const images = await Promise.all(files.map((f) => fileToImagePart(f)));
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/supplier/products/analyze-image'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          images,
-          provider: 'gemini'
-        })
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: 'Unknown error' }));
-        throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-
-      if (data.status === 'success') {
-        const review = data.review || null;
-        // Merge high-confidence "accepted" values into suggestions so the supplier can
-        // choose what to apply. Do not write any AI values into the product form here.
-        const highConfidence = review?.accepted || {};
-        const lowConfidence = review?.suggestions || {};
-        const mergedSuggestions = { ...lowConfidence };
-        for (const [key, value] of Object.entries(highConfidence)) {
-          const trimmed = String(value || '').trim();
-          if (trimmed) mergedSuggestions[key] = trimmed;
-        }
-        const reviewForUi = review
-          ? {
-              ...review,
-              suggestions: mergedSuggestions,
-              accepted: {}
-            }
-          : null;
-        setAiDetectionReview(reviewForUi);
-        setAiAnalysisMeta(data.analysisMeta || null);
-        openAiSuggestionPopupFromReview(reviewForUi, data.provider || 'gemini');
-      } else {
-        setAiDetectionReview(null);
-        setAiAnalysisMeta(null);
-        setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
-        alert(data.message || 'Failed to analyze images. Please try again.');
-      }
-    } catch (error) {
-      console.error('Image analysis error:', error);
-      setAiDetectionReview(null);
-      setAiAnalysisMeta(null);
-      setAiSuggestionPopup((prev) => ({ ...prev, open: false, items: [], selected: {} }));
-      alert('Failed to analyze images. Please try again.');
-    } finally {
-      setAnalyzingImage(false);
-    }
-  };
-
   const handleImageUpload = async (e) => {
     const selectedFiles = Array.from(e.target.files || []);
     e.target.value = '';
@@ -3299,17 +3479,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
       if (uploadResults.length === 0) return;
 
-      // Attach only — never trigger AI analysis from upload.
+      // Stage uploads locally — attach to the product via the action buttons below.
       setProductAiImages((prev) => {
         const room = MAX_AI_PRODUCT_IMAGES - prev.length;
         const additions = uploadResults.slice(0, room);
-        const next = [...prev, ...additions];
-        setFormData((prevForm) => ({
-          ...prevForm,
-          images: next.map((item) => item.uploadedUrl).filter(Boolean)
-        }));
-        return next;
+        return [...prev, ...additions];
       });
+      setPhotosAttachedForProduct(false);
     } catch (error) {
       alert(error.message || 'Failed to upload images');
     } finally {
@@ -3377,15 +3553,18 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
     setProductAiImages((prev) => {
       const next = prev.filter((x) => x.id !== id);
-      setFormData((prevForm) => ({
-        ...prevForm,
-        images: next.map((item) => item.uploadedUrl).filter(Boolean)
-      }));
       if (next.length === 0) {
         setAiDetectionReview(null);
         setAiSuggestionPopup((popup) => ({ ...popup, open: false, items: [], selected: {} }));
       }
       return next;
+    });
+    setFormData((prevForm) => {
+      const nextImages = (Array.isArray(prevForm.images) ? prevForm.images : []).filter(
+        (url) => url !== target?.uploadedUrl
+      );
+      syncPhotosAttachedState(nextImages);
+      return { ...prevForm, images: nextImages };
     });
   };
 
@@ -3399,6 +3578,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     setAiDetectionReview(null);
     setAiSuggestionPopup((popup) => ({ ...popup, open: false, items: [], selected: {} }));
     setFormData((prev) => ({ ...prev, images: [] }));
+    setPhotosAttachedForProduct(false);
   };
 
   const handleExtractSpecifications = async () => {
@@ -3743,9 +3923,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     }}
                   >
                     <p style={{ margin: 0, fontSize: '0.75rem', color: '#6b7280', flex: '1 1 200px' }}>
-                      Upload <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong> to attach them to
-                      this product (one by one or together). AI analysis is optional — only runs when you
-                      click Analyze photos with AI.
+                      Upload <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong>, then either save them as
+                      product identification photos or run optional AI analysis to pre-fill product details.
                     </p>
                     <span
                       style={{
@@ -3755,7 +3934,10 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                         whiteSpace: 'nowrap'
                       }}
                     >
-                      {uploadedPhotoCount} / {MIN_AI_PRODUCT_IMAGES} required
+                      {uploadedPhotoCount} / {MIN_AI_PRODUCT_IMAGES} attached
+                      {stagedPhotoCount > uploadedPhotoCount
+                        ? ` · ${stagedPhotoCount} uploaded`
+                        : ''}
                     </span>
                   </div>
                   {!photosRequirementMet ? (
@@ -3774,7 +3956,25 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                           showMissingHints || photosMissingFromMandatory ? '#991b1b' : '#92400e'
                       }}
                     >
-                      {formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)}
+                      {stagedPhotoCount >= MIN_AI_PRODUCT_IMAGES && uploadedPhotoCount < MIN_AI_PRODUCT_IMAGES
+                        ? `${stagedPhotoCount} photo${stagedPhotoCount === 1 ? '' : 's'} uploaded. Click "Use as product identification photos" below, or analyze with AI first.`
+                        : formatMissingProductPhotosMessage(
+                            Math.max(uploadedPhotoCount, stagedPhotoCount),
+                            MIN_AI_PRODUCT_IMAGES
+                          )}
+                    </p>
+                  ) : photosAttachedForProduct && !aiDetectionReview ? (
+                    <p
+                      role="status"
+                      style={{
+                        margin: '0.65rem 0 0',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        color: '#047857'
+                      }}
+                    >
+                      Product identification photos attached. You can submit the product or optionally run AI analysis
+                      to pre-fill details.
                     </p>
                   ) : null}
                   {aiDetectionReview && (
@@ -3892,6 +4092,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     </div>
                   )}
                   <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={
+                        analyzingImage ||
+                        uploadingProductImage ||
+                        productAiImages.length < MIN_AI_PRODUCT_IMAGES ||
+                        (photosAttachedForProduct && uploadedPhotoCount >= MIN_AI_PRODUCT_IMAGES)
+                      }
+                      onClick={handleUsePhotosAsProductIdentification}
+                    >
+                      {photosAttachedForProduct && uploadedPhotoCount >= MIN_AI_PRODUCT_IMAGES
+                        ? 'Product photos attached'
+                        : 'Use as product identification photos'}
+                    </button>
                     <button
                       type="button"
                       className="btn-primary"
@@ -4430,7 +4645,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   zIndex: 1
                 }}
               >
-                <label htmlFor="pm-category-select">Category</label>
+                <label htmlFor="pm-category-select">Category *</label>
                 <select
                   id="pm-category-select"
                   className="pm-category-select"
@@ -4709,33 +4924,55 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                 {formData.category && formData.category.trim() &&
                  !formData.catalogProductId &&
                  !loadingSpecs &&
+                 !hasAdminSpecTemplate &&
                  (!specifications || Object.keys(specifications).length === 0) && 
                  (!product || (product && (product.status || 'pending') === 'pending')) && (
                   <div className="form-group span-2" style={{
                     marginTop: '1rem',
                     padding: '1rem',
-                    background: '#fef3c7',
+                    background: '#eff6ff',
                     borderRadius: '8px',
-                    border: '1px solid #fbbf24'
+                    border: '1px solid #93c5fd'
                   }}>
                     <div style={{ 
                       display: 'flex', 
                       alignItems: 'center', 
                       gap: '0.5rem',
-                      color: '#92400e',
+                      color: '#1e40af',
                       fontSize: '0.875rem'
                     }}>
                       <span>ℹ️</span>
                       <span>
-                        <strong>Category "{formData.category}" selected:</strong> No pre-defined specification template found for this product/category yet.
-                        You can add specification keys and values manually below, or use "Extract Specifications".
+                        <strong>No category specification template yet.</strong> Submit this product for admin review.
+                        Admin will polish the description, set GST, generate specification keys, and approve —
+                        then you can fill specification values here.
                       </span>
                     </div>
                   </div>
                 )}
+                {formData.category && formData.category.trim() &&
+                 !formData.catalogProductId &&
+                 !loadingSpecs &&
+                 (!specifications || Object.keys(specifications).length === 0) && 
+                 product &&
+                 String(product.status || '').toLowerCase() === 'approved' &&
+                 !approvedNeedsSpecFill &&
+                 !supplierSpecValuesLocked && (
+                  <div className="form-group span-2" style={{
+                    marginTop: '1rem',
+                    padding: '0.85rem 1rem',
+                    background: '#f8fafc',
+                    borderRadius: '8px',
+                    border: '1px solid #e2e8f0',
+                    color: '#475569',
+                    fontSize: '0.875rem'
+                  }}>
+                    Admin has not assigned specification keys for this product yet.
+                  </div>
+                )}
                 
                 {/* Specifications Display Section - Show keys with input fields for manual entry */}
-                {(() => {
+                {(canEditSpecificationValues || supplierSpecValuesLocked || (specifications && Object.keys(specifications).length > 0)) && (() => {
                   // Get all specification keys (we only want the keys, not values)
                   // Remove duplicates (case-insensitive) and filter out empty keys
                   const specKeys = [];
@@ -4751,7 +4988,10 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   });
                   
                   return (
-                    <div className="form-group span-2" style={{
+                    <div
+                      ref={specificationsSectionRef}
+                      className="form-group span-2"
+                      style={{
                       marginTop: '1rem',
                       padding: '1rem',
                       background: '#f9fafb',
@@ -4761,8 +5001,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
                         <label style={{ marginBottom: 0, fontWeight: '600', color: '#1e293b', fontSize: '0.875rem' }}>
                           {canEditSpecificationValues
-                            ? hasAdminSpecTemplate
-                              ? 'Specifications — enter values for admin-defined keys'
+                            ? hasAdminSpecTemplate || approvedNeedsSpecFill
+                              ? 'Specifications * — enter values for admin-defined keys'
                               : 'Specifications — enter keys and values'
                             : supplierSpecValuesLocked
                               ? 'Specifications — locked after first save'
@@ -4783,7 +5023,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       </div>
                       {hasAdminSpecTemplate && canEditSpecificationValues ? (
                         <p style={{ margin: '0 0 0.75rem', fontSize: '0.82rem', color: '#475569' }}>
-                          Specification keys were set by admin for this category. Fill in your product values below.
+                          This category already has admin-defined specification keys. Fill in every value below before submitting.
+                        </p>
+                      ) : null}
+                      {!hasAdminSpecTemplate && approvedNeedsSpecFill && canEditSpecificationValues ? (
+                        <p style={{ margin: '0 0 0.75rem', fontSize: '0.82rem', color: '#475569' }}>
+                          Admin assigned specification keys after approval. Fill in every value below once — they cannot be changed after save.
                         </p>
                       ) : null}
                       {supplierSpecValuesLocked ? (
@@ -4803,7 +5048,22 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                               )}
                           </div>
                         )}
-                        {specKeys.map((key, index) => (
+                        {specKeys.map((key, index) => {
+                          const validationKeys = categorySpecFillRequired
+                            ? adminSpecTemplateKeys
+                            : approvedNeedsSpecFill
+                              ? product?.catalogSpecificationKeys || adminSpecTemplateKeys
+                              : [];
+                          const specValueMissing =
+                            showMissingHints &&
+                            validationKeys.some(
+                              (templateKey) =>
+                                String(templateKey || '').trim().toLowerCase() ===
+                                String(key || '').trim().toLowerCase()
+                            ) &&
+                            !isMeaningfullyFilledSpecValue(specifications[key]);
+
+                          return (
                           <div key={key} style={{
                             display: 'flex',
                             alignItems: 'center',
@@ -4811,7 +5071,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                             padding: '0.75rem',
                             background: index % 2 === 0 ? '#ffffff' : '#f9fafb',
                             borderRadius: '6px',
-                            borderLeft: '3px solid #4f46e5'
+                            borderLeft: specValueMissing ? '3px solid #dc2626' : '3px solid #4f46e5'
                           }}>
                             {canEditSpecificationKeys ? (
                             <input
@@ -4851,10 +5111,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                                 value={specValueToInput(specifications[key])}
                                 onChange={(e) => updateSpecificationValue(key, e.target.value)}
                                 placeholder="Specification value"
+                                required={hasAdminSpecTemplate || approvedNeedsSpecFill}
+                                aria-invalid={specValueMissing}
                                 style={{
                                   flex: '1',
                                   padding: '0.5rem 0.75rem',
-                                  border: '1px solid #d1d5db',
+                                  border: specValueMissing ? '1px solid #dc2626' : '1px solid #d1d5db',
                                   borderRadius: '6px',
                                   fontSize: '0.875rem',
                                   color: '#1e293b',
@@ -4892,7 +5154,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                             </button>
                             ) : null}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   );

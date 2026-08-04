@@ -13,6 +13,12 @@ import {
 import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
 import { resolveSupplierOfferDisplayName } from '../../services/supplierProductWriteService.js';
 import { catalogBrandDedupKey, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
+import {
+  countMeaningfulSpecValues,
+  mergeCatalogAndOfferSpecificationsForDisplay,
+  parseSpecificationsObject,
+  specificationTemplateKeysOnly
+} from '../../services/supplierCatalogHelpersService.js';
 
 export function registerSupplierProductListRoutes(ctx) {
   const {
@@ -124,9 +130,12 @@ router.get('/products', authenticateToken, async (req, res) => {
           attributes?.specifications && typeof attributes.specifications === 'object'
             ? attributes.specifications
             : {};
-        // Catalog/admin specs win over stale offer copies for the same keys.
-        // Offer-only keys that are not on the catalog product are still preserved.
-        const storedSpecs = { ...offerSpecs, ...baseSpecs };
+        const catalogSpecKeys = specificationTemplateKeysOnly(
+          parseSpecificationsObject(baseSpecs) || {}
+        );
+        const storedSpecs = mergeCatalogAndOfferSpecificationsForDisplay(baseSpecs, offerSpecs);
+        const catalogSpecificationKeys = Object.keys(catalogSpecKeys);
+        const supplierSpecValuesLocked = countMeaningfulSpecValues(offerSpecs) > 0;
         const listingName = resolveSupplierOfferDisplayName({
           attributes,
           catalogName: baseProduct?.name
@@ -134,9 +143,9 @@ router.get('/products', authenticateToken, async (req, res) => {
         const displayBrand = attributes?.brand || baseProduct?.brand || '';
         const effective = resolveEffectiveSupplierOfferState(sp, baseProduct);
         const rejectionReason =
-          sp.rejection_reason ||
-          baseProduct?.rejection_reason ||
-          null;
+          effective.effectiveStatus === 'rejected'
+            ? sp.rejection_reason || baseProduct?.rejection_reason || null
+            : null;
 
         return {
           ...(baseProduct || { id: sp.product_id }),
@@ -158,6 +167,10 @@ router.get('/products', authenticateToken, async (req, res) => {
           gtin: attributes?.gtin || baseProduct?.gtin,
           mpn: attributes?.mpn || baseProduct?.mpn,
           specifications: storedSpecs,
+          catalogSpecifications: baseSpecs,
+          catalogSpecificationKeys,
+          supplierOfferSpecifications: offerSpecs,
+          supplierSpecValuesLocked,
           // Pass raw attributes.images so an explicit [] (deleted photos) is not treated as "unset".
           images: resolveSupplierOfferDisplayImages(attributes?.images, baseProduct?.images),
           price: sp.price,

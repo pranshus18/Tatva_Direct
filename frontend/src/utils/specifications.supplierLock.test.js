@@ -14,21 +14,25 @@ describe('supplier specification value locking', () => {
     ).toBe(false);
   });
 
-  it('locks after meaningful values were saved', () => {
+  it('locks after meaningful values were saved on the offer', () => {
     expect(
       supplierSpecificationValuesLocked({
-        specifications: { Brand: 'Milton', 'Model Name': '' },
-        status: 'pending'
+        offerSpecifications: { Brand: 'Milton', 'Model Name': '' }
       })
     ).toBe(true);
     expect(hasMeaningfulSpecValues({ Brand: 'Milton' })).toBe(true);
   });
 
-  it('locks approved offers regardless of spec values', () => {
+  it('does not lock approved offers until supplier values are saved', () => {
     expect(
       supplierSpecificationValuesLocked({
-        specifications: {},
-        status: 'approved'
+        offerSpecifications: { Brand: '', 'Model Name': '' },
+        supplierSpecValuesLocked: false
+      })
+    ).toBe(false);
+    expect(
+      supplierSpecificationValuesLocked({
+        supplierSpecValuesLocked: true
       })
     ).toBe(true);
   });

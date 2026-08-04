@@ -18,6 +18,7 @@ import {
   syncCatalogProductSnapshotFromOffers
 } from './catalogOfferSnapshotService.js';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
+import { dedupeCategoryStrings } from '../utils/categoryNormalize.js';
 import { enrichDiscoverySuggestionsWithVariantCounts } from './productDiscoveryDetailService.js';
 
 /** Stable discovery ordering: relevance when searching, otherwise alphabetical by name. */
@@ -341,13 +342,9 @@ export async function searchProductDiscoveryForUser(
 
   const sortedSuggestions = sortDiscoverySuggestions(suggestionsWithVariants, { query });
 
-  const categories = Array.from(
-    new Set(
-      sortedSuggestions
-        .map((product) => String(product?.category || '').trim())
-        .filter(Boolean)
-    )
-  ).sort((a, b) => a.localeCompare(b));
+  const categories = dedupeCategoryStrings(
+    sortedSuggestions.map((product) => product?.category)
+  );
 
   const paginatedSuggestions = sortedSuggestions.slice(offset, offset + safeLimit);
 

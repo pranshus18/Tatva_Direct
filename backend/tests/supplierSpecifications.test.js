@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   mergeSpecificationMaps,
+  mergeCatalogAndOfferSpecificationsForDisplay,
   parseSpecificationsObject,
   buildSpecificationTemplateFromFields,
   countMeaningfulSpecValues,
@@ -49,6 +50,26 @@ test('buildSpecificationTemplateFromFields: returns null-valued keys', () => {
     { field_key: 'volume' }
   ]);
   assert.deepEqual(template, { finish: null, volume: null });
+});
+
+test('mergeCatalogAndOfferSpecificationsForDisplay: offer values win; catalog fills empty keys', () => {
+  const merged = mergeCatalogAndOfferSpecificationsForDisplay(
+    { COLOR: 'Blue', CAPACITY: '600 ml', MATERIAL: 'Steel' },
+    { COLOR: '', CAPACITY: '750 ml' }
+  );
+  assert.equal(merged.COLOR, 'Blue');
+  assert.equal(merged.CAPACITY, '750 ml');
+  assert.equal(merged.MATERIAL, 'Steel');
+});
+
+test('mergeCatalogAndOfferSpecificationsForDisplay: empty offer does not wipe admin catalog values', () => {
+  const merged = mergeCatalogAndOfferSpecificationsForDisplay(
+    { 'B P A FREE': 'Yes', HEIGHT: '25 cm' },
+    { 'B P A FREE': '', HEIGHT: '', COLOR: '' }
+  );
+  assert.equal(merged['B P A FREE'], 'Yes');
+  assert.equal(merged.HEIGHT, '25 cm');
+  assert.equal(merged.COLOR, '');
 });
 
 test('countMeaningfulSpecValues: ignores null placeholders', () => {

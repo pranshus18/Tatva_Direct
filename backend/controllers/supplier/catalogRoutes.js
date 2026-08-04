@@ -19,6 +19,7 @@ import {
 import { resolveBrandApprovalStatus } from '../../services/brandApprovalService.js';
 import { isSupplierUserType } from '../../utils/notificationAudience.js';
 import { hasEffectiveRegisteredRole } from '../../utils/portalRoles.js';
+import { dedupeCategoryRowsCaseInsensitive } from '../../utils/categoryNormalize.js';
 
 function isAuthenticatedSupplier(req) {
   if (isSupplierUserType(req.user?.user_type)) return true;
@@ -423,11 +424,13 @@ router.get('/categories', authenticateToken, async (req, res) => {
     }
     
     // Transform to match expected format
-    const formattedCategories = (categories || []).map(cat => ({
-      name: cat.name,
-      displayName: cat.display_name,
-      defaultSpecifications: cat.default_specifications || {}
-    }));
+    const formattedCategories = dedupeCategoryRowsCaseInsensitive(
+      (categories || []).map((cat) => ({
+        name: cat.name,
+        displayName: cat.display_name,
+        defaultSpecifications: cat.default_specifications || {}
+      }))
+    );
     
     res.json({ 
       status: 'success',

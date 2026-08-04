@@ -4,6 +4,7 @@ import {
   DISCOVERY_DETAIL_AUDIENCES,
   buildVariantOptions,
   enrichDiscoverySuggestionsWithVariantCounts,
+  mergeOfferSpecifications,
   resolveDiscoveryAudienceRules
 } from '../services/productDiscoveryDetailService.js';
 
@@ -32,6 +33,56 @@ test('discovery detail summary uses selected product name, not family canonical 
   const family = { canonicalName: 'Asian Paints Premium Emulsion' };
   const summaryName = selectedProduct.name || family.canonicalName;
   assert.equal(summaryName, 'Apex Ultima Protek 10L');
+});
+
+test('mergeOfferSpecifications: per-variant offer values win over shared catalog placeholders', () => {
+  const catalog = { COLOR: 'Silver', CAPACITY: '1 L', MATERIAL: 'Steel' };
+  const offerA = {
+    attributes: {
+      specifications: { COLOR: 'Silver', CAPACITY: '1 L' }
+    }
+  };
+  const offerB = {
+    attributes: {
+      specifications: { COLOR: 'Rose Gold', CAPACITY: '600 ml' }
+    }
+  };
+
+  const mergedA = mergeOfferSpecifications(catalog, offerA);
+  const mergedB = mergeOfferSpecifications(catalog, offerB);
+
+  assert.equal(mergedA.COLOR, 'Silver');
+  assert.equal(mergedA.CAPACITY, '1 L');
+  assert.equal(mergedB.COLOR, 'Rose Gold');
+  assert.equal(mergedB.CAPACITY, '600 ml');
+  assert.equal(mergedB.MATERIAL, 'Steel');
+});
+
+test('mergeOfferSpecifications: empty offer placeholders do not wipe admin catalog values', () => {
+  const merged = mergeOfferSpecifications(
+    { HEIGHT: '25 cm', COLOR: 'Blue' },
+    { attributes: { specifications: { HEIGHT: '', COLOR: '' } } }
+  );
+  assert.equal(merged.HEIGHT, '25 cm');
+  assert.equal(merged.COLOR, 'Blue');
+});
+
+test('buildVariantOptions ignores category and case-only attribute differences', () => {
+  const options = buildVariantOptions([
+    {
+      specifications: { category: 'flasks & bottles', color: 'Red' },
+      canonicalAttributes: {}
+    },
+    {
+      specifications: { category: 'Flasks & Bottles', color: 'Blue' },
+      canonicalAttributes: {}
+    }
+  ]);
+
+  assert.equal(options.some((option) => option.key === 'category'), false);
+  assert.equal(options.length, 1);
+  assert.equal(options[0].key, 'color');
+  assert.deepEqual(options[0].values, ['Blue', 'Red']);
 });
 
 test('buildVariantOptions returns selectors only for attributes that differ', () => {

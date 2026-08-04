@@ -28,7 +28,8 @@ import {
   createBaseProductIfNeeded,
   ensureCategoryAndUnit,
   findCanonicalProductFromIdentifiers,
-  findExistingProductCandidate
+  findExistingProductCandidate,
+  reopenRejectedCatalogProductForResubmit
 } from '../../../services/supplierProductWriteService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import {
@@ -36,6 +37,9 @@ import {
   validateMinSupplierProductPhotos
 } from '../../../utils/supplierProductPhotos.js';
 import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
+import {
+  validateSupplierCategorySpecificationFillComplete
+} from '../../../services/supplierProductUpdateValidation.js';
 import { notifyServiceProvidersForFulfilledBoqRequests } from '../../../services/serviceProviderRequestNotificationService.js';
 
 export function buildSupplierProductCreateHandler(ctx) {
@@ -43,12 +47,22 @@ export function buildSupplierProductCreateHandler(ctx) {
     supabase,
     resolveTaxRatesForProductCreate,
     upsertModelSpecProfile,
-    loadSpecTemplateForCategory
+    loadSpecTemplateForCategory,
+    resolveAdminSpecificationTemplate
   } = ctx;
 
   return async function supplierProductCreateHandler(req, res) {
     try {
       const { category, unit, outlet_id, brandModel, lsa, hsnCode, catalogProductId, ...otherData } = req.body;
+
+      if (!String(category || '').trim()) {
+        return res.status(400).json({
+          status: 'error',
+          code: 'category_required',
+          message: 'Category is required.',
+          missingFields: ['category']
+        });
+      }
       const requestSpecs =
         otherData.specifications && typeof otherData.specifications === 'object' && !Array.isArray(otherData.specifications)
           ? { ...otherData.specifications }
@@ -213,6 +227,27 @@ export function buildSupplierProductCreateHandler(ctx) {
 
       if (posLookupGsku) normalizedSpecs = { ...normalizedSpecs, gsku: posLookupGsku };
 
+      const categoryTemplateValidation = await validateSupplierCategorySpecificationFillComplete(
+        resolveAdminSpecificationTemplate,
+        {
+          categoryName: categoryName || category,
+          modelRaw: productNameRaw,
+          brandRaw: effectiveBrandInput,
+          specifications: normalizedSpecs
+        }
+      );
+      if (!categoryTemplateValidation.ok) {
+        return res.status(400).json({
+          status: 'error',
+          code: 'specifications_required',
+          message:
+            categoryTemplateValidation.message ||
+            'Please complete all specification values for the selected category.',
+          missingFields: categoryTemplateValidation.missingFields || ['specifications'],
+          errors: categoryTemplateValidation.errors || []
+        });
+      }
+
       const selectedCatalogProductId = String(catalogProductId || '').trim();
       const existingMatch = await findExistingProductCandidate(supabase, {
         selectedCatalogProductId,
@@ -244,6 +279,8 @@ export function buildSupplierProductCreateHandler(ctx) {
         });
       }
       const { productId, catalogAsin, isNewProduct } = baseProductResult;
+
+      await reopenRejectedCatalogProductForResubmit(supabase, productId);
 
       let parentProductForVariant = existingProduct;
       if (
@@ -279,7 +316,10 @@ export function buildSupplierProductCreateHandler(ctx) {
         .eq('location', currentLocation)
         .eq('variant_key', variantIdentityBundle.variantKey)
         .maybeSingle();
-      if (existingSupplierProduct) {
+      const resubmittingRejectedOffer =
+        existingSupplierProduct &&
+        String(existingSupplierProduct.status || '').toLowerCase() === 'rejected';
+      if (existingSupplierProduct && !resubmittingRejectedOffer) {
         return res.status(400).json({
           status: 'error',
           message: 'You have already added this exact product variation for this location. Please update the existing entry instead.'
@@ -311,7 +351,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         existingProduct?.status ||
         (isNewProduct ? 'pending' : null);
       let resolvedCatalogStatus = catalogProductStatus;
-      if (!resolvedCatalogStatus) {
+      if (!resolvedCatalogStatus || String(resolvedCatalogStatus).toLowerCase() === 'rejected') {
         const { data: catalogRow } = await supabase
           .from('products')
           .select('status')
@@ -373,11 +413,25 @@ export function buildSupplierProductCreateHandler(ctx) {
         }
       };
 
-      const { data: newSupplierProduct, error: supplierProductError } = await supabase
-        .from('supplier_products')
-        .insert(supplierProductData)
-        .select()
-        .single();
+      const { data: newSupplierProduct, error: supplierProductError } = resubmittingRejectedOffer
+        ? await supabase
+            .from('supplier_products')
+            .update({
+              ...supplierProductData,
+              approved_by: null,
+              approved_at: null,
+              rejection_reason: null,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', existingSupplierProduct.id)
+            .eq('supplier_id', req.userId)
+            .select()
+            .single()
+        : await supabase
+            .from('supplier_products')
+            .insert(supplierProductData)
+            .select()
+            .single();
       if (supplierProductError) {
         return res.status(400).json({
           status: 'error',
@@ -527,11 +581,13 @@ export function buildSupplierProductCreateHandler(ctx) {
         }
       })();
 
-      return res.status(201).json({
+      return res.status(resubmittingRejectedOffer ? 200 : 201).json({
         status: 'success',
         message: shouldBeApproved
           ? 'Product added successfully and is immediately available.'
-          : 'Product added successfully and is pending admin approval.',
+          : resubmittingRejectedOffer
+            ? 'Product resubmitted successfully and is pending admin approval.'
+            : 'Product added successfully and is pending admin approval.',
         product: responseProduct
       });
     } catch (error) {

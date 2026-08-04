@@ -6,6 +6,8 @@ import {
   validateSupplierProductUpdateRequest,
   validateSupplierMrpUpdateAllowed,
   validateSupplierSpecificationUpdateAllowed,
+  getMissingSupplierSpecificationTemplateFields,
+  areSupplierOfferSpecificationValuesLocked,
   isSupplierMrpLocked,
   SUPPLIER_MRP_LOCKED_MESSAGE,
   SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE
@@ -104,4 +106,38 @@ test('validateSupplierSpecificationUpdateAllowed blocks changing saved values', 
   assert.equal(result.code, 'spec_values_locked');
   assert.match(result.message, /cannot be changed/i);
   assert.equal(SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE.includes('admin'), true);
+});
+
+test('getMissingSupplierSpecificationTemplateFields requires every admin template key', () => {
+  const result = getMissingSupplierSpecificationTemplateFields(
+    ['Material', 'Size'],
+    { Material: 'Steel', Size: '' }
+  );
+  assert.equal(result.ok, false);
+  assert.ok(result.missingFields.includes('specifications.Size'));
+  assert.match(result.message, /Size/i);
+});
+
+test('areSupplierOfferSpecificationValuesLocked detects saved offer values', () => {
+  assert.equal(
+    areSupplierOfferSpecificationValuesLocked({
+      attributes: { specifications: { finish: 'Matt' } }
+    }),
+    true
+  );
+  assert.equal(
+    areSupplierOfferSpecificationValuesLocked({
+      attributes: { specifications: { finish: '' } }
+    }),
+    false
+  );
+});
+
+test('getMissingSupplierSpecificationTemplateFields passes when all keys filled', () => {
+  const result = getMissingSupplierSpecificationTemplateFields(
+    ['Material', 'Size'],
+    { Material: 'Steel', Size: 'Large' }
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.missingFields, []);
 });

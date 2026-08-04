@@ -94,11 +94,16 @@ export const hasMeaningfulSpecValues = (specifications) => {
   return Object.values(parsed).some(isMeaningfullyFilled);
 };
 
-/** Supplier spec values lock after first save with filled values, or when offer is approved. */
-export const supplierSpecificationValuesLocked = ({ specifications, status } = {}) => {
-  const normalizedStatus = String(status || 'pending').trim().toLowerCase();
-  if (normalizedStatus === 'approved') return true;
-  return hasMeaningfulSpecValues(specifications);
+/** Supplier spec values lock after the offer's specification values are saved once. */
+export const supplierSpecificationValuesLocked = ({
+  specifications,
+  offerSpecifications,
+  supplierSpecValuesLocked
+} = {}) => {
+  if (supplierSpecValuesLocked === true) return true;
+  if (supplierSpecValuesLocked === false) return false;
+  const offerSpecs = offerSpecifications ?? specifications;
+  return hasMeaningfulSpecValues(offerSpecs);
 };
 
 /** Flatten product/order specifications for chip display in supplier portals. */
@@ -343,6 +348,38 @@ export const mergeSpecificationObjects = (templateSpecs = {}, storedSpecs = {}) 
     }
   });
   return merged;
+};
+
+/** Prefer meaningful variant/offer values; fill remaining keys from shared catalog/admin specs. */
+export const mergeCatalogAndOfferSpecificationsForDisplay = (catalogSpecs = {}, offerSpecs = {}) => {
+  const catalog = parseSpecificationsObject(catalogSpecs) || {};
+  const offer = parseSpecificationsObject(offerSpecs) || {};
+  const merged = { ...catalog };
+
+  Object.entries(offer).forEach(([key, value]) => {
+    const normalizedKey = String(key || '').trim();
+    if (!normalizedKey) return;
+    if (isMeaningfullyFilled(value)) {
+      merged[normalizedKey] = value;
+    } else if (!Object.prototype.hasOwnProperty.call(merged, normalizedKey)) {
+      merged[normalizedKey] = value;
+    }
+  });
+
+  return merged;
+};
+
+/** Resolve display specs for a supplier offer row (catalog + per-variant offer). */
+export const resolveSupplierOfferDisplaySpecifications = (product) => {
+  if (!product) return {};
+  const catalog = product.catalogSpecifications;
+  const offer =
+    product.supplierOfferSpecifications ||
+    product.attributes?.specifications;
+  if (catalog || offer) {
+    return mergeCatalogAndOfferSpecificationsForDisplay(catalog || {}, offer || {});
+  }
+  return parseSpecificationsObject(product.specifications) || {};
 };
 
 /** Union template field keys with variant specs; variant values win (including empty). */

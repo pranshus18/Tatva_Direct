@@ -1,8 +1,10 @@
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 import { validateProductUnitCompatibility } from '../utils/productUnitCompatibility.js';
 import {
+  countMeaningfulSpecValues,
   isMeaningfullyFilledSpecValue,
-  parseSpecificationsObject
+  parseSpecificationsObject,
+  specificationTemplateKeysOnly
 } from './supplierCatalogHelpersService.js';
 
 const INVENTORY_FIELD_KEYS = [
@@ -161,8 +163,106 @@ export function validateSupplierInventoryUpdateFields(body = {}) {
 }
 
 /**
- * Validate catalog identity updates when those fields are present in the request.
+ * When admin has defined specification keys for a category, every key must have a value
+ * before the supplier can submit the product.
  */
+export function getMissingSupplierSpecificationTemplateFields(templateKeys = [], specifications = {}) {
+  const specs = parseSpecificationsObject(specifications) || {};
+  const missingFields = [];
+  const errors = [];
+
+  for (const rawKey of templateKeys || []) {
+    const key = String(rawKey || '').trim();
+    if (!key) continue;
+
+    let value = specs[key];
+    if (value === undefined) {
+      const matchedKey = Object.keys(specs).find(
+        (candidate) => String(candidate || '').trim().toLowerCase() === key.toLowerCase()
+      );
+      value = matchedKey ? specs[matchedKey] : undefined;
+    }
+
+    if (!isMeaningfullyFilledSpecValue(value)) {
+      missingFields.push(`specifications.${key}`);
+      errors.push(`Specification "${key}" is required for this category.`);
+    }
+  }
+
+  return {
+    ok: missingFields.length === 0,
+    missingFields,
+    errors,
+    message: errors.join(' ')
+  };
+}
+
+/** True when the supplier offer already saved specification values (one-time fill complete). */
+export function areSupplierOfferSpecificationValuesLocked(supplierProduct = {}) {
+  const offerSpecs =
+    parseSpecificationsObject(supplierProduct?.attributes?.specifications) ||
+    parseSpecificationsObject(supplierProduct?.specifications) ||
+    {};
+  return countMeaningfulSpecValues(offerSpecs) > 0;
+}
+
+/** Require every category template key when that category already has admin-defined specifications. */
+export async function validateSupplierCategorySpecificationFillComplete(
+  resolveAdminSpecificationTemplate,
+  {
+    categoryName = '',
+    modelRaw = '',
+    brandRaw = '',
+    specifications = {}
+  } = {}
+) {
+  const normalizedCategory = String(categoryName || '').trim().toLowerCase();
+  if (!normalizedCategory) {
+    return { ok: true, missingFields: [], errors: [], message: '' };
+  }
+
+  const template =
+    typeof resolveAdminSpecificationTemplate === 'function'
+      ? await resolveAdminSpecificationTemplate({
+          categoryName: normalizedCategory,
+          modelRaw,
+          brandRaw,
+          keysOnly: true
+        })
+      : {};
+  const templateKeys = Object.keys(template || {});
+  if (templateKeys.length === 0) {
+    return { ok: true, missingFields: [], errors: [], message: '' };
+  }
+
+  return getMissingSupplierSpecificationTemplateFields(templateKeys, specifications);
+}
+
+/** Require every admin catalog specification key when the supplier is filling values post-approval. */
+export async function validateSupplierOfferSpecificationFillComplete(
+  supabase,
+  { productId, specifications = {} } = {}
+) {
+  if (!productId || !supabase) {
+    return { ok: true, missingFields: [], errors: [], message: '' };
+  }
+
+  const { data: catalogRow } = await supabase
+    .from('products')
+    .select('specifications')
+    .eq('id', productId)
+    .maybeSingle();
+
+  const templateKeys = Object.keys(
+    specificationTemplateKeysOnly(parseSpecificationsObject(catalogRow?.specifications) || {})
+  );
+  if (templateKeys.length === 0) {
+    return { ok: true, missingFields: [], errors: [], message: '' };
+  }
+
+  return getMissingSupplierSpecificationTemplateFields(templateKeys, specifications);
+}
+
 export function validateSupplierCatalogUpdateFields(body = {}) {
   const result = {
     ok: true,

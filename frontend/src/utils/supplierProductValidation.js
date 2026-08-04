@@ -27,6 +27,45 @@ export function formatMissingProductPhotosMessage(photoCount = 0, minPhotos = MI
   return `At least ${minPhotos} product photos are required. You currently have ${count}. Please upload ${stillNeeded} more photo${stillNeeded === 1 ? '' : 's'}.`;
 }
 
+export function isMeaningfullyFilledSpecValue(value) {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return true;
+  return String(value).trim() !== '';
+}
+
+/** Require every admin-defined specification key when a category template is loaded. */
+export function getSupplierSpecificationTemplateMissingFields(
+  specTemplateKeys = [],
+  specifications = {}
+) {
+  if (!Array.isArray(specTemplateKeys) || specTemplateKeys.length === 0) return [];
+  const specs =
+    specifications && typeof specifications === 'object' && !Array.isArray(specifications)
+      ? specifications
+      : {};
+  const missing = [];
+
+  for (const rawKey of specTemplateKeys) {
+    const key = String(rawKey || '').trim();
+    if (!key) continue;
+    let value = specs[key];
+    if (value === undefined) {
+      const matchedKey = Object.keys(specs).find(
+        (candidate) => String(candidate || '').trim().toLowerCase() === key.toLowerCase()
+      );
+      value = matchedKey ? specs[matchedKey] : undefined;
+    }
+    if (!isMeaningfullyFilledSpecValue(value)) {
+      missing.push(`Specification: ${key}`);
+    }
+  }
+
+  return missing;
+}
+
 /**
  * Mandatory fields for Manage Inventory (step 2) updates.
  * Returns human-readable labels for empty/invalid fields.
@@ -65,7 +104,9 @@ export function getSupplierCatalogMandatoryMissingFields(formData = {}, options 
   const {
     requirePhotos = false,
     minPhotos = MIN_SUPPLIER_PRODUCT_PHOTOS,
-    photoCount
+    photoCount,
+    specTemplateKeys = [],
+    specifications = null
   } = options;
   const missing = [];
 
@@ -88,6 +129,16 @@ export function getSupplierCatalogMandatoryMissingFields(formData = {}, options 
   if (requirePhotos && resolvedPhotoCount < minPhotos) {
     missing.push(`At least ${minPhotos} product photos`);
   }
+
+  const specsSource =
+    specifications != null
+      ? specifications
+      : formData.specifications && typeof formData.specifications === 'object'
+        ? formData.specifications
+        : {};
+  missing.push(
+    ...getSupplierSpecificationTemplateMissingFields(specTemplateKeys, specsSource)
+  );
 
   return missing;
 }
@@ -129,6 +180,8 @@ export function getSupplierProductCreateErrorMessage(data) {
       data.code === 'brand_approval_required' ||
       data.code === 'brand_approval_pending' ||
       data.code === 'brand_required' ||
+      data.code === 'category_required' ||
+      data.code === 'specifications_required' ||
       data.code === 'unit_incompatible') &&
     data.message
   ) {

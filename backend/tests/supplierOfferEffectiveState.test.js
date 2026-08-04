@@ -89,7 +89,7 @@ test('resolveEffectiveSupplierOfferState: rejected offer stays rejected', () => 
   assert.equal(state.availableForUpstream, false);
 });
 
-test('resolveEffectiveSupplierOfferState: rejected catalog marks offer rejected', () => {
+test('resolveEffectiveSupplierOfferState: pending resubmission stays pending when catalog is still rejected', () => {
   const row = {
     status: 'pending',
     is_active: false,
@@ -97,7 +97,7 @@ test('resolveEffectiveSupplierOfferState: rejected catalog marks offer rejected'
     product: { status: 'rejected' }
   };
   const state = resolveEffectiveSupplierOfferState(row);
-  assert.equal(state.effectiveStatus, 'rejected');
+  assert.equal(state.effectiveStatus, 'pending');
   assert.equal(state.effectiveActive, false);
   assert.equal(state.availableForUpstream, false);
 });
