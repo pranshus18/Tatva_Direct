@@ -1,4 +1,5 @@
-import { PM_VERIFY_GST_URL } from '../config/pmAuth';
+import { PM_PLATFORM_FLAG } from '../config/pmAuth';
+import { resolveApiPath } from '../config/api';
 
 async function parseJsonResponse(response) {
   try {
@@ -54,10 +55,17 @@ export async function verifyPmGst(gstNo) {
     throw new Error('Enter a valid 15-character GST number');
   }
 
-  const response = await fetch(PM_VERIFY_GST_URL, {
+  const response = await fetch(resolveApiPath('/api/auth/pm-verify-gst'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ gstNo: normalizedGst })
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body: JSON.stringify({
+      gstNo: normalizedGst,
+      flag: PM_PLATFORM_FLAG,
+      platformFlag: PM_PLATFORM_FLAG
+    })
   });
 
   const data = await parseJsonResponse(response);

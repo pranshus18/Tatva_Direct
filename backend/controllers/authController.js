@@ -35,6 +35,7 @@ import {
 import {
   PM_PLATFORM_FLAG,
   PM_SEND_OTP_URL,
+  PM_VERIFY_GST_URL,
   PM_VERIFY_OTP_URL,
   buildPmPlatformHeaders,
   withPmPlatformFlagBody,
@@ -582,6 +583,69 @@ router.post('/pm-verify-otp', async (req, res) => {
         error?.cause?.code === 'ENOTFOUND'
           ? 'Could not reach PM auth service. Check network/DNS.'
           : error.message || 'Failed to verify OTP'
+    });
+  }
+});
+
+/**
+ * Proxy PM verify-gst through Tatva to avoid browser CORS against devopsapi.withtatva.ai.
+ * Frontend should call POST /api/auth/pm-verify-gst (not PM directly).
+ */
+router.post('/pm-verify-gst', async (req, res) => {
+  try {
+    const normalizedGst = String(req.body?.gstNo || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s/g, '');
+
+    if (!normalizedGst || normalizedGst.length !== 15) {
+      return res.status(400).json({
+        status: 'error',
+        success: false,
+        message: 'Enter a valid 15-character GST number'
+      });
+    }
+
+    const url = withPmPlatformFlagQuery(PM_VERIFY_GST_URL);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: buildPmPlatformHeaders({ json: true }),
+      body: JSON.stringify(
+        withPmPlatformFlagBody({
+          gstNo: normalizedGst
+        })
+      )
+    });
+
+    let data = {};
+    try {
+      data = await response.json();
+    } catch {
+      data = {};
+    }
+
+    if (!response.ok || data.success === false) {
+      return res.status(response.status >= 400 ? response.status : 502).json({
+        status: 'error',
+        success: false,
+        message: data.message || 'GST verification failed'
+      });
+    }
+
+    return res.json({
+      status: 'success',
+      success: true,
+      ...data
+    });
+  } catch (error) {
+    console.error('PM verify-gst proxy error:', error);
+    return res.status(502).json({
+      status: 'error',
+      success: false,
+      message:
+        error?.cause?.code === 'ENOTFOUND'
+          ? 'Could not reach PM auth service. Check network/DNS.'
+          : error.message || 'GST verification failed'
     });
   }
 });
