@@ -3,6 +3,11 @@ import {
   normalizeAddress,
   resolveB2bPaymentFromBody
 } from '../controllers/po/shared/poHelpers.js';
+import {
+  coerceInboundPaymentMethod,
+  isVaultPaymentMethod,
+  toDbVaultPaymentMethod
+} from '../utils/vaultPaymentMethod.js';
 import { deriveShippingAddressesFromProfile, resolveSupplierProfileShippingAddresses } from '../controllers/profile/profileHelpers.js';
 
 /** Supplier profile shipping addresses are stored in profile.shippingAddresses. */
@@ -99,6 +104,14 @@ export function normalizeRequiredDateForUpstream(requiredDate, now = new Date())
 }
 
 export function resolveUpstreamPaymentSelection(paymentMethod) {
-  return resolveB2bPaymentFromBody({ paymentMethod });
+  const raw = coerceInboundPaymentMethod(paymentMethod || 'vault');
+  if (raw === 'credit') {
+    return { payment_method: 'credit', payment_status: 'pending' };
+  }
+  if (isVaultPaymentMethod(raw)) {
+    return { payment_method: toDbVaultPaymentMethod(), payment_status: 'pending' };
+  }
+  // Legacy upstream tokens (cod, online, etc.) map to vault checkout.
+  return resolveB2bPaymentFromBody({ paymentMethod: raw });
 }
 

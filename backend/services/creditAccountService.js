@@ -474,6 +474,7 @@ export async function validateCreditForOrder(params) {
 
 /**
  * Settle the full loan cycle: mark all unpaid credit orders paid so revenue/metrics recognize.
+ * Buyers must pay through vault — manual supplier settlement without vault debit is disabled.
  */
 export async function settleCreditCycle({
   supplierId,
@@ -512,73 +513,12 @@ export async function settleCreditCycle({
     };
   }
 
-  const orderIds = unpaidOrders.map((order) => order.id).filter(Boolean);
-  const settledAmount = roundMoney(
-    unpaidOrders.reduce((sum, order) => sum + (parseFloat(order.total_amount || 0) || 0), 0)
+  const err = new Error(
+    'Credit must be settled by the buyer through vault payment. Ask them to top up their vault and use Pay from vault on each open order (or on Your Orders).'
   );
-
-  const { error: updateError } = await supabase
-    .from('orders')
-    .update({
-      payment_status: 'paid',
-      updated_at: new Date().toISOString()
-    })
-    .in('id', orderIds)
-    .eq('supplier_id', supplierId);
-
-  if (updateError) {
-    throw updateError;
-  }
-
-  for (const order of unpaidOrders) {
-    const amount = parseFloat(order.total_amount || 0) || 0;
-    if (amount <= 0) continue;
-    try {
-      await ensurePaymentTransactionForPaidOrder({
-        order: { ...order, payment_status: 'paid', payment_method: order.payment_method || 'credit' },
-        method: 'credit',
-        provider: 'manual',
-        status: 'captured'
-      });
-    } catch (txnErr) {
-      console.error('[creditAccount] settlement payment transaction error (non-fatal):', txnErr);
-    }
-    try {
-      await recordLedgerEntry({
-        debitAccount: 'Cash/Bank',
-        creditAccount: 'Accounts Receivable',
-        amount,
-        referenceType: 'credit_cycle_settlement',
-        referenceId: order.id,
-        description: `Loan cycle settlement for order ${order.order_number || order.id}`,
-        metadata: {
-          supplierId,
-          buyerUserId: buyerUserId || null,
-          customerId: customerId || null,
-          customerPhone: normalizeCustomerPhone(customerPhone) || null
-        }
-      });
-    } catch (ledgerErr) {
-      console.error('[creditAccount] settlement ledger error (non-fatal):', ledgerErr);
-    }
-  }
-
-  const credit = await buildCreditStatus({
-    supplierId,
-    buyerUserId,
-    customerId,
-    customerPhone,
-    customerName,
-    orderAmount: 0
-  });
-
-  return {
-    settled: true,
-    settledAmount,
-    settledOrderCount: orderIds.length,
-    message: `Settled ₹${settledAmount.toLocaleString('en-IN')} across ${orderIds.length} credit order${orderIds.length === 1 ? '' : 's'}. Revenue and dashboard totals are updated.`,
-    credit
-  };
+  err.code = 'BUYER_VAULT_SETTLEMENT_REQUIRED';
+  err.unpaidOrderCount = unpaidOrders.length;
+  throw err;
 }
 
 export async function listCreditAccountsForSupplier(supplierId) {

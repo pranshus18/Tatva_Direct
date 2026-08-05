@@ -2,10 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   validateAdminProductApprovalReadiness,
-  isAdminProductReadyForApproval
+  isAdminProductReadyForApproval,
+  mergeOfferIntoProductForApproval
 } from '../services/adminProductApprovalReadinessService.js';
 
-const readyProduct = {
+const readyPendingProduct = {
+  status: 'pending',
+  supplierDescription: 'Raw supplier submission.',
+  publishedDescription: 'Durable steel bottle suitable for daily hydration.',
   description: 'Durable steel bottle suitable for daily hydration.',
   hsn_code: '7323',
   igst_rate: 18,
@@ -14,19 +18,37 @@ const readyProduct = {
   specifications: { Brand: null, 'Model Name': null }
 };
 
-test('isAdminProductReadyForApproval passes when description, GST, and spec keys exist', () => {
-  assert.equal(isAdminProductReadyForApproval(readyProduct), true);
+test('isAdminProductReadyForApproval passes when saved buyer-facing description exists', () => {
+  assert.equal(isAdminProductReadyForApproval(readyPendingProduct), true);
 });
 
-test('validateAdminProductApprovalReadiness fails without description', () => {
-  const result = validateAdminProductApprovalReadiness({ ...readyProduct, description: '' });
+test('validateAdminProductApprovalReadiness fails without saved buyer-facing description', () => {
+  const result = validateAdminProductApprovalReadiness({
+    ...readyPendingProduct,
+    publishedDescription: '',
+    description: 'Stale polished catalog copy.'
+  });
   assert.equal(result.ok, false);
   assert.ok(result.missingRequirements.some((row) => row.id === 'description'));
 });
 
+test('mergeOfferIntoProductForApproval attaches publishedDescription from offer attrs', () => {
+  const merged = mergeOfferIntoProductForApproval(
+    { status: 'pending', description: '' },
+    {
+      attributes: {
+        publishedDescription: 'Polished buyer copy.',
+        supplierDescription: 'Raw supplier copy.'
+      }
+    }
+  );
+  assert.equal(merged.publishedDescription, 'Polished buyer copy.');
+  assert.equal(merged.supplierDescription, 'Raw supplier copy.');
+});
+
 test('validateAdminProductApprovalReadiness fails without GST', () => {
   const result = validateAdminProductApprovalReadiness({
-    ...readyProduct,
+    ...readyPendingProduct,
     hsn_code: '',
     igst_rate: null,
     cgst_rate: null,
@@ -38,7 +60,7 @@ test('validateAdminProductApprovalReadiness fails without GST', () => {
 });
 
 test('validateAdminProductApprovalReadiness fails without specification keys', () => {
-  const result = validateAdminProductApprovalReadiness({ ...readyProduct, specifications: {} });
+  const result = validateAdminProductApprovalReadiness({ ...readyPendingProduct, specifications: {} });
   assert.equal(result.ok, false);
   assert.ok(result.missingRequirements.some((row) => row.id === 'specifications'));
 });

@@ -1,4 +1,5 @@
 import { RUPEE_SYMBOL } from './formatRupee';
+import { parseSupplierStockQuantity } from './parseSupplierStockQuantity';
 
 /** Supplier portal label for the logged-in supplier's on-hand quantity */
 export const SUPPLIER_CURRENT_STOCK_LABEL = 'Current stock with you';
@@ -35,6 +36,27 @@ export function formatSupplierStockAvailability(stock) {
   const qty = Number(stock);
   if (!Number.isFinite(qty) || qty <= 0) return 'Out of stock';
   return `${qty} in stock`;
+}
+
+/** Parse supplier-defined LSA (Low Stock Alert) threshold — whole units only. */
+export function parseSupplierLsaThreshold(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const lsa = parseInt(String(raw).trim(), 10);
+  return Number.isFinite(lsa) && lsa > 0 ? lsa : null;
+}
+
+/**
+ * Stock health for supplier catalog cards: out / low / ok.
+ * "Low" uses the variant LSA when set; no LSA means stock above zero is ok.
+ */
+export function getSupplierStockHealth({ stock, lsa } = {}) {
+  const quantity = parseSupplierStockQuantity(stock);
+  if (quantity === null || quantity <= 0) return 'out';
+
+  const lsaThreshold = parseSupplierLsaThreshold(lsa);
+  if (lsaThreshold != null && quantity <= lsaThreshold) return 'low';
+
+  return 'ok';
 }
 
 /** Parse offer MRP from API / form values. */

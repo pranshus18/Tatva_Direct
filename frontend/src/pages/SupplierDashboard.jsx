@@ -25,7 +25,7 @@ import {
 } from '../utils/orderReturnUi';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
-import { isMeaningfulProductDescription } from '../utils/productDisplay';
+import { resolveSupplierPortalDisplayDescription } from '../utils/productDisplay';
 import {
   getBrandRejectionReason,
   getSupplierNotificationMessage,
@@ -1069,11 +1069,11 @@ const SupplierDashboard = ({ user }) => {
                                   <span className="product-category"> ({item.product.category})</span>
                                 )}
                               </div>
-                              {isMeaningfulProductDescription(item.product?.description) && (
+                              {resolveSupplierPortalDisplayDescription(item.product) ? (
                                 <div className="supplier-dashboard-item-description">
-                                  {item.product.description}
+                                  {resolveSupplierPortalDisplayDescription(item.product)}
                                 </div>
-                              )}
+                              ) : null}
                               <SupplierTsinLine
                                 asin={item.asin || item.parentAsin}
                                 variantAsin={item.variantAsin}

@@ -759,6 +759,170 @@ async function resolveOrderBuyerWalletType(order) {
   return String(buyer?.user_type || '').toLowerCase() === 'supplier' ? 'supplier' : 'customer';
 }
 
+async function loadSupplierUserForPayout(supplierId) {
+  if (!supplierId) return null;
+  const { data, error } = await supabase.from('users').select('*').eq('id', supplierId).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+async function loadExistingSupplierPayout(orderId) {
+  const { data, error } = await supabase
+    .from('supplier_payouts')
+    .select('*')
+    .eq('order_id', orderId)
+    .maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+/**
+ * After buyer vault payment, release supplier payout via local ledger when applicable.
+ * PM vault buyer payments stay held — direct supplier PM vault credit is not wired yet.
+ */
+export async function releaseSupplierVaultPayoutForOrder({
+  order,
+  supplierPayoutAmount,
+  platformFeeAmount,
+  pmPaymentRef = null,
+  buyerPmUserId = null,
+  actorUserId = null,
+  pmCredentials = null,
+  idempotencyKey = null,
+  usesPmVault = false
+}) {
+  if (!order?.id || !order?.supplier_id) {
+    throw new Error('Order supplier is required to release vault payout');
+  }
+
+  const existingPayout = await loadExistingSupplierPayout(order.id);
+  if (String(existingPayout?.status || '').toLowerCase() === 'released') {
+    return {
+      payout: existingPayout,
+      alreadyReleased: true,
+      supplierCreditRef: existingPayout?.metadata?.supplierCreditRef || null
+    };
+  }
+
+  const supplierUser = await loadSupplierUserForPayout(order.supplier_id);
+  if (!supplierUser) {
+    const err = new Error('Supplier account not found for payout release');
+    err.code = 'SUPPLIER_NOT_FOUND';
+    throw err;
+  }
+
+  const netAmount = roundMoney(supplierPayoutAmount);
+  const feeAmount = roundMoney(platformFeeAmount);
+  let supplierCreditRef = null;
+  let payoutChannel = usesPmVault ? 'pm_vault' : 'local_wallet';
+
+  if (usesPmVault) {
+    payoutChannel = 'pm_vault';
+  } else if (netAmount > 0 || feeAmount > 0) {
+    const escrowWallet = await getOrCreateWallet({ userId: null, walletType: PLATFORM_ESCROW_WALLET });
+    const supplierWallet = await getOrCreateWallet({
+      userId: order.supplier_id,
+      walletType: 'supplier'
+    });
+    const revenueWallet = await getOrCreateWallet({ userId: null, walletType: PLATFORM_REVENUE_WALLET });
+
+    if (netAmount > 0) {
+      const transfer = await transferBetweenWallets({
+        fromWalletId: escrowWallet.id,
+        toWalletId: supplierWallet.id,
+        amount: netAmount,
+        transactionTypeDebit: 'escrow_release',
+        transactionTypeCredit: 'supplier_payout',
+        referenceType: 'order',
+        referenceId: order.id,
+        description: `Supplier payout for order ${order.order_number || order.id}`,
+        metadata: {
+          orderId: order.id,
+          orderNumber: order.order_number || null,
+          paymentReference: pmPaymentRef,
+          supplierPayoutAmount: netAmount,
+          platformFeeAmount: feeAmount
+        },
+        idempotencyKey: idempotencyKey ? `${idempotencyKey}:supplier` : `supplier-payout:${order.id}`,
+        createdBy: actorUserId
+      });
+      supplierCreditRef = transfer?.transaction?.id || null;
+    }
+
+    if (feeAmount > 0) {
+      await transferBetweenWallets({
+        fromWalletId: escrowWallet.id,
+        toWalletId: revenueWallet.id,
+        amount: feeAmount,
+        transactionTypeDebit: 'escrow_release',
+        transactionTypeCredit: 'platform_fee',
+        referenceType: 'order',
+        referenceId: order.id,
+        description: `Platform fee for order ${order.order_number || order.id}`,
+        metadata: {
+          orderId: order.id,
+          orderNumber: order.order_number || null,
+          paymentReference: pmPaymentRef,
+          platformFeeAmount: feeAmount
+        },
+        idempotencyKey: idempotencyKey ? `${idempotencyKey}:platform-fee` : `platform-fee:${order.id}`,
+        createdBy: actorUserId
+      });
+    }
+    payoutChannel = 'local_wallet';
+  }
+
+  const nowIso = new Date().toISOString();
+  const payoutReleased = !usesPmVault;
+  const { data: payoutRow, error: payoutError } = await supabase
+    .from('supplier_payouts')
+    .upsert(
+      {
+        order_id: order.id,
+        supplier_id: order.supplier_id,
+        gross_amount: roundMoney(order.total_amount),
+        platform_fee_amount: feeAmount,
+        net_amount: netAmount,
+        status: payoutReleased ? 'released' : 'pending',
+        released_at: payoutReleased ? nowIso : null,
+        metadata: {
+          ...(existingPayout?.metadata || {}),
+          payoutChannel,
+          supplierCreditRef,
+          paymentReference: pmPaymentRef || null,
+          buyerPmUserId: buyerPmUserId || null,
+          ...(usesPmVault ? { supplierPmCreditDeferred: true } : {})
+        },
+        updated_at: nowIso
+      },
+      { onConflict: 'order_id' }
+    )
+    .select('*')
+    .single();
+  if (payoutError) throw payoutError;
+
+  const orderReleaseUpdate = {
+    supplier_payout_amount: netAmount,
+    platform_fee_amount: feeAmount,
+    ...(payoutReleased ? { wallet_payment_status: 'released' } : {})
+  };
+  const { data: orderWithRelease, error: orderReleaseError } = await supabase
+    .from('orders')
+    .update(orderReleaseUpdate)
+    .eq('id', order.id)
+    .select('*')
+    .single();
+  if (orderReleaseError) throw orderReleaseError;
+
+  return {
+    payout: payoutRow,
+    order: orderWithRelease,
+    supplierCreditRef,
+    payoutChannel,
+    alreadyReleased: false
+  };
+}
+
 export async function mirrorPmTopupToLocalWallet({
   userId,
   amountInRupees,
@@ -842,6 +1006,71 @@ export async function payOrderFromWallet({
     throw err;
   }
   if (String(order.payment_status || '').toLowerCase() === 'paid') {
+    if (String(order.wallet_payment_status || '').toLowerCase() !== 'released') {
+      const orderItems = await loadOrderItemsForFee(order.id);
+      const feeResult = await calculateOrderPlatformFee({
+        order,
+        orderItems,
+        supplierId: order.supplier_id
+      });
+      const grossAmount = roundMoney(order.total_amount);
+      const platformFeeAmount = Math.min(
+        grossAmount,
+        roundMoney(order.platform_fee_amount ?? feeResult.feeAmount)
+      );
+      const supplierPayoutAmount = roundMoney(
+        order.supplier_payout_amount ?? grossAmount - platformFeeAmount
+      );
+      const pmVault = await import('./pmVaultService.js');
+      const { data: actorUser } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', actorUserId)
+        .maybeSingle();
+      const usesPmVault = Boolean(actorUser && pmVault.usesPlatformVault(actorUser));
+
+      // PM vault supplier credit is not wired yet — do not claim recovery while funds stay deferred.
+      if (usesPmVault) {
+        const err = new Error(
+          'Buyer payment is already recorded. Supplier PM vault credit is not available for automatic recovery yet.'
+        );
+        err.code = 'SUPPLIER_PM_CREDIT_DEFERRED';
+        err.order = order;
+        err.platformFeeAmount = platformFeeAmount;
+        err.supplierPayoutAmount = supplierPayoutAmount;
+        throw err;
+      }
+
+      const payoutRelease = await releaseSupplierVaultPayoutForOrder({
+        order,
+        supplierPayoutAmount,
+        platformFeeAmount,
+        pmPaymentRef: order.payment_provider_payment_id || `pm-vault-${order.id}`,
+        actorUserId,
+        pmCredentials: pmCredentials || {},
+        idempotencyKey: idempotencyKey || `wallet-order-pay:${order.id}`,
+        usesPmVault: false
+      });
+      const releasedStatus = String(
+        payoutRelease?.order?.wallet_payment_status || ''
+      ).toLowerCase();
+      if (releasedStatus !== 'released' && !payoutRelease?.alreadyReleased) {
+        const err = new Error('Supplier payout recovery did not complete');
+        err.code = 'SUPPLIER_PAYOUT_RECOVERY_FAILED';
+        err.order = payoutRelease?.order || order;
+        throw err;
+      }
+      return {
+        order: payoutRelease.order || order,
+        feeBreakdown: feeResult.breakdown,
+        platformFeeAmount,
+        supplierPayoutAmount,
+        supplierPayoutRelease: payoutRelease,
+        receiptDelivery: null,
+        invoiceSummary: null,
+        recoveredPayout: true
+      };
+    }
     const err = new Error('Order is already paid');
     err.code = 'ORDER_ALREADY_PAID';
     throw err;
@@ -866,6 +1095,8 @@ export async function payOrderFromWallet({
 
   const pmVault = await import('./pmVaultService.js');
   const usesPmVault = Boolean(actorUser && pmVault.usesPlatformVault(actorUser));
+  const supplierUser = await loadSupplierUserForPayout(order.supplier_id);
+  const supplierPmUserId = supplierUser ? await pmVault.resolvePmUserIdForTatvaUser(supplierUser) : null;
 
   // SP / supplier vault lives on PM only — never read/write Tatva wallets tables.
   if (usesPmVault) {
@@ -874,11 +1105,15 @@ export async function payOrderFromWallet({
       orderId: order.id,
       orderNumber: order.order_number || null,
       amountInRupees: grossAmount,
+      supplierPmUserId,
+      supplierPayoutAmountInRupees: supplierPayoutAmount,
+      platformFeeAmountInRupees: platformFeeAmount,
       description: `Order payment for ${order.order_number || order.id}`,
       credentials: pmCredentials || {}
     });
 
     const pmPaymentRef = pmPayment?.paymentId || `pm-vault-${order.id}`;
+    const buyerPmUserId = pmPayment?.buyerPmUserId || null;
 
     const inferredRole =
       feeResult.breakdown.find((line) => line.supplyChainRole)?.supplyChainRole || null;
@@ -901,23 +1136,21 @@ export async function payOrderFromWallet({
       .single();
     if (updateError) throw updateError;
 
-    const { error: payoutError } = await supabase.from('supplier_payouts').upsert(
-      {
-        order_id: order.id,
-        supplier_id: order.supplier_id,
-        gross_amount: grossAmount,
-        platform_fee_amount: platformFeeAmount,
-        net_amount: supplierPayoutAmount,
-        status: 'pending',
-        metadata: {},
-        updated_at: new Date().toISOString()
-      },
-      { onConflict: 'order_id' }
-    );
-    if (payoutError) throw payoutError;
+    const payoutRelease = await releaseSupplierVaultPayoutForOrder({
+      order: updatedOrder,
+      supplierPayoutAmount,
+      platformFeeAmount,
+      pmPaymentRef,
+      buyerPmUserId,
+      actorUserId,
+      pmCredentials: pmCredentials || {},
+      idempotencyKey: idempotencyKey || `wallet-order-pay:${order.id}`,
+      usesPmVault: true
+    });
+    const orderAfterRelease = payoutRelease.order || updatedOrder;
 
     await ensurePaymentTransactionForPaidOrder({
-      order: updatedOrder,
+      order: orderAfterRelease,
       method: 'vault',
       paymentReference: pmPaymentRef,
       provider: 'pm_vault',
@@ -926,7 +1159,7 @@ export async function payOrderFromWallet({
     });
 
     const receiptDelivery = await createReceiptAndDeliver({
-      order: updatedOrder,
+      order: orderAfterRelease,
       paymentMethod: 'vault',
       paymentReference: pmPaymentRef,
       actorUserId
@@ -934,7 +1167,7 @@ export async function payOrderFromWallet({
 
     let invoiceSummary = null;
     try {
-      const { invoice } = await createInvoiceForOrder(updatedOrder);
+      const { invoice } = await createInvoiceForOrder(orderAfterRelease);
       invoiceSummary = { invoiceNumber: invoice?.invoice_number || null };
     } catch (invoiceErr) {
       console.error('[Vault] Invoice generation failed after PM vault pay:', invoiceErr);
@@ -952,15 +1185,18 @@ export async function payOrderFromWallet({
         orderId: order.id,
         grossAmount,
         platformFeeAmount,
-        supplierPayoutAmount
+        supplierPayoutAmount,
+        supplierCreditRef: payoutRelease.supplierCreditRef || null,
+        payoutChannel: payoutRelease.payoutChannel || 'pm_vault'
       }
     });
 
     return {
-      order: updatedOrder,
+      order: orderAfterRelease,
       feeBreakdown: feeResult.breakdown,
       platformFeeAmount,
       supplierPayoutAmount,
+      supplierPayoutRelease: payoutRelease,
       receiptDelivery,
       invoiceSummary
     };
@@ -1013,23 +1249,19 @@ export async function payOrderFromWallet({
     .single();
   if (updateError) throw updateError;
 
-  const { error: payoutError } = await supabase.from('supplier_payouts').upsert(
-    {
-      order_id: order.id,
-      supplier_id: order.supplier_id,
-      gross_amount: grossAmount,
-      platform_fee_amount: platformFeeAmount,
-      net_amount: supplierPayoutAmount,
-      status: 'pending',
-      metadata: {},
-      updated_at: new Date().toISOString()
-    },
-    { onConflict: 'order_id' }
-  );
-  if (payoutError) throw payoutError;
+  const payoutRelease = await releaseSupplierVaultPayoutForOrder({
+    order: updatedOrder,
+    supplierPayoutAmount,
+    platformFeeAmount,
+    pmPaymentRef: `vault-${order.id}`,
+    actorUserId,
+    idempotencyKey: idempotencyKey || `wallet-order-pay:${order.id}`,
+    usesPmVault: false
+  });
+  const orderAfterRelease = payoutRelease.order || updatedOrder;
 
   await ensurePaymentTransactionForPaidOrder({
-    order: updatedOrder,
+    order: orderAfterRelease,
     method: 'vault',
     paymentReference: `vault-${order.id}`,
     provider: 'vault',
@@ -1038,7 +1270,7 @@ export async function payOrderFromWallet({
   });
 
   const receiptDelivery = await createReceiptAndDeliver({
-    order: updatedOrder,
+    order: orderAfterRelease,
     paymentMethod: 'vault',
     paymentReference: `vault-${order.id}`,
     actorUserId
@@ -1046,7 +1278,7 @@ export async function payOrderFromWallet({
 
   let invoiceSummary = null;
   try {
-    const { invoice } = await createInvoiceForOrder(updatedOrder);
+    const { invoice } = await createInvoiceForOrder(orderAfterRelease);
     invoiceSummary = {
       invoiceNumber: invoice?.invoice_number || null
     };
@@ -1066,15 +1298,18 @@ export async function payOrderFromWallet({
       orderId: order.id,
       grossAmount,
       platformFeeAmount,
-      supplierPayoutAmount
+      supplierPayoutAmount,
+      supplierCreditRef: payoutRelease.supplierCreditRef || null,
+      payoutChannel: payoutRelease.payoutChannel || 'local_wallet'
     }
   });
 
   return {
-    order: updatedOrder,
+    order: orderAfterRelease,
     feeBreakdown: feeResult.breakdown,
     platformFeeAmount,
     supplierPayoutAmount,
+    supplierPayoutRelease: payoutRelease,
     receiptDelivery,
     invoiceSummary
   };

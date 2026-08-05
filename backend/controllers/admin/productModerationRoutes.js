@@ -15,6 +15,58 @@ import {
   sanitizeSpecifications,
   specificationTemplateKeysOnly
 } from '../../services/supplierCatalogHelpersService.js';
+import { syncOfferAttributesWithSpecifications } from '../../services/productIdentityService.js';
+import { areSupplierOfferSpecificationValuesLocked } from '../../services/supplierProductUpdateValidation.js';
+import { deleteRejectedCatalogProduct } from '../../services/adminProductDeleteService.js';
+
+/** Sync admin spec keys onto supplier offers without wiping values the supplier already saved. */
+async function syncApprovedProductSpecificationOffers(supabase, product, nowIso) {
+  const adminSpecKeys = specificationTemplateKeysOnly(
+    sanitizeSpecifications(product.specifications || {})
+  );
+  const templateKeyList = Object.keys(adminSpecKeys);
+  if (templateKeyList.length === 0) {
+    return { adminSpecKeyCount: 0, offerNeedsFillBySupplierId: new Map() };
+  }
+
+  const { data: offerRowsForSpecs } = await supabase
+    .from('supplier_products')
+    .select('id, supplier_id, attributes')
+    .eq('product_id', product.id);
+
+  const offerNeedsFillBySupplierId = new Map();
+
+  for (const row of offerRowsForSpecs || []) {
+    const existingOfferSpecs =
+      parseSpecificationsObject(row?.attributes?.specifications) || {};
+    const mergedSpecs = mergeVariantSpecificationTemplate(adminSpecKeys, existingOfferSpecs);
+    const syncedAttributes = syncOfferAttributesWithSpecifications({
+      ...(row.attributes || {}),
+      specifications: mergedSpecs
+    });
+
+    await supabase
+      .from('supplier_products')
+      .update({
+        attributes: syncedAttributes,
+        updated_at: nowIso
+      })
+      .eq('id', row.id);
+
+    if (row.supplier_id) {
+      const locked = areSupplierOfferSpecificationValuesLocked(
+        {
+          status: 'approved',
+          attributes: syncedAttributes
+        },
+        templateKeyList
+      );
+      offerNeedsFillBySupplierId.set(row.supplier_id, !locked);
+    }
+  }
+
+  return { adminSpecKeyCount: templateKeyList.length, offerNeedsFillBySupplierId };
+}
 
 function supplierOfferRecipients(supplierProductRows, fallbackSupplier) {
   const isCatalogSupplierRecipient = (supplier) => {
@@ -37,7 +89,10 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
   // Approve product (admin only)
   router.post('/products/:id/approve', authenticateToken, isAdmin, async (req, res) => {
     try {
-      parseWithSchema(adminProductApproveSchema, req.body || {});
+      const approveBody = parseWithSchema(adminProductApproveSchema, req.body || {});
+      const targetSupplierProductId = String(
+        approveBody?.supplier_product_id || approveBody?.supplierProductId || ''
+      ).trim();
 
       const { data: existingProduct, error: fetchError } = await supabase
         .from('products')
@@ -49,6 +104,89 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         return res.status(404).json({
           status: 'error',
           message: 'Product not found'
+        });
+      }
+
+      const catalogAlreadyApproved =
+        String(existingProduct.status || '').toLowerCase() === 'approved';
+
+      if (catalogAlreadyApproved && targetSupplierProductId) {
+        const nowIso = new Date().toISOString();
+        const { data: pendingOffer, error: pendingOfferError } = await supabase
+          .from('supplier_products')
+          .select(`
+            *,
+            supplier:users!supplier_products_supplier_id_fkey (id, name, email, company, user_type)
+          `)
+          .eq('id', targetSupplierProductId)
+          .eq('product_id', req.params.id)
+          .maybeSingle();
+
+        if (pendingOfferError || !pendingOffer) {
+          return res.status(404).json({
+            status: 'error',
+            message: 'Pending supplier offer not found for this product'
+          });
+        }
+
+        if (String(pendingOffer.status || '').toLowerCase() !== 'pending') {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Only pending supplier offers can be approved from an already approved catalog product'
+          });
+        }
+
+        const { data: approvedOffer, error: approveOfferError } = await supabase
+          .from('supplier_products')
+          .update({
+            status: 'approved',
+            is_active: true,
+            approved_by: req.userId,
+            approved_at: nowIso,
+            rejection_reason: null,
+            updated_at: nowIso
+          })
+          .eq('id', pendingOffer.id)
+          .select(`
+            *,
+            supplier:users!supplier_products_supplier_id_fkey (id, name, email, company, user_type)
+          `)
+          .single();
+
+        if (approveOfferError || !approvedOffer) {
+          return res.status(400).json({
+            status: 'error',
+            message: approveOfferError?.message || 'Failed to approve supplier offer'
+          });
+        }
+
+        void syncCatalogProductSnapshotFromOffers(supabase, existingProduct.id).catch((syncError) => {
+          console.error('[CatalogSnapshot] variant approve sync failed:', syncError?.message || syncError);
+        });
+
+        const suppliersToNotify = supplierOfferRecipients([approvedOffer], existingProduct.supplier);
+        if (suppliersToNotify.length > 0) {
+          const notifications = suppliersToNotify.map((supplier) => ({
+            user_id: supplier.id,
+            type: 'product_approval',
+            title: `Variant Approved: ${existingProduct.name}`,
+            message: `Your updated specification variant for "${existingProduct.name}" has been approved by admin and is now active.`,
+            related_product_id: existingProduct.id,
+            metadata: {
+              productName: existingProduct.name,
+              status: 'approved',
+              supplierProductId: approvedOffer.id,
+              reviewType: 'variant_spec'
+            }
+          }));
+          await insertNotifications(notifications, supabase);
+        }
+
+        return res.json({
+          status: 'success',
+          message: 'Supplier variant approved successfully',
+          product: existingProduct,
+          supplierProduct: approvedOffer
         });
       }
 
@@ -177,34 +315,13 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
       }
       console.log(`[ADMIN APPROVE PRODUCT] supplier_products updated rows: ${updatedSupplierProducts?.length || 0}`);
 
-      // Push admin-generated specification keys (values cleared) onto each supplier offer
-      // so the supplier portal can collect values once after approval.
-      const adminSpecKeys = specificationTemplateKeysOnly(
-        sanitizeSpecifications(product.specifications || {})
-      );
-      if (Object.keys(adminSpecKeys).length > 0) {
-        const { data: offerRowsForSpecs } = await supabase
-          .from('supplier_products')
-          .select('id, attributes')
-          .eq('product_id', product.id);
-
-        for (const row of offerRowsForSpecs || []) {
-          const existingOfferSpecs =
-            parseSpecificationsObject(row?.attributes?.specifications) || {};
-          const mergedSpecs = mergeVariantSpecificationTemplate(adminSpecKeys, existingOfferSpecs);
-          await supabase
-            .from('supplier_products')
-            .update({
-              attributes: {
-                ...(row.attributes || {}),
-                specifications: mergedSpecs
-              },
-              updated_at: nowIso
-            })
-            .eq('id', row.id);
-        }
+      // Push admin specification keys onto each supplier offer.
+      // Preserve values the supplier already entered before approval.
+      const { adminSpecKeyCount, offerNeedsFillBySupplierId } =
+        await syncApprovedProductSpecificationOffers(supabase, product, nowIso);
+      if (adminSpecKeyCount > 0) {
         console.log(
-          `[ADMIN APPROVE PRODUCT] Synced ${Object.keys(adminSpecKeys).length} specification key(s) to supplier offer(s)`
+          `[ADMIN APPROVE PRODUCT] Synced ${adminSpecKeyCount} specification key(s) to supplier offer(s)`
         );
       }
 
@@ -219,19 +336,23 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
       );
 
       if (suppliersToNotify.length > 0) {
-        const notifications = suppliersToNotify.map((supplier) => ({
-          user_id: supplier.id,
-          type: 'product_approval',
-          title: `Product Approved: ${product.name}`,
-          message: Object.keys(adminSpecKeys).length > 0
-            ? `Your product "${product.name}" has been approved by admin. Open Manage Products and fill in the specification values for the keys provided by admin.`
-            : `Your product "${product.name}" has been approved by admin and is now active in the marketplace.`,
-          related_product_id: product.id,
-          metadata: {
-            productName: product.name,
-            status: 'approved'
-          }
-        }));
+        const notifications = suppliersToNotify.map((supplier) => {
+          const needsSpecFill = offerNeedsFillBySupplierId.get(supplier.id) === true;
+          return {
+            user_id: supplier.id,
+            type: 'product_approval',
+            title: `Product Approved: ${product.name}`,
+            message:
+              adminSpecKeyCount > 0 && needsSpecFill
+                ? `Your product "${product.name}" has been approved by admin. Open Manage Products and fill in the specification values for the keys provided by admin.`
+                : `Your product "${product.name}" has been approved by admin and is now active in the marketplace.`,
+            related_product_id: product.id,
+            metadata: {
+              productName: product.name,
+              status: 'approved'
+            }
+          };
+        });
 
         await insertNotifications(notifications, supabase);
         console.log(`Created ${notifications.length} supplier notification(s) about product approval`);
@@ -324,7 +445,83 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
   // Reject product (admin only)
   router.post('/products/:id/reject', authenticateToken, isAdmin, async (req, res) => {
     try {
-      const { reason } = parseWithSchema(adminProductRejectSchema, req.body || {});
+      const rejectBody = parseWithSchema(adminProductRejectSchema, req.body || {});
+      const reason = rejectBody.reason;
+      const targetSupplierProductId = String(
+        rejectBody?.supplier_product_id || rejectBody?.supplierProductId || ''
+      ).trim();
+
+      const { data: existingProduct, error: existingProductError } = await supabase
+        .from('products')
+        .select('*')
+        .eq('id', req.params.id)
+        .maybeSingle();
+
+      if (existingProductError || !existingProduct) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Product not found'
+        });
+      }
+
+      const catalogAlreadyApproved =
+        String(existingProduct.status || '').toLowerCase() === 'approved';
+
+      if (catalogAlreadyApproved && targetSupplierProductId) {
+        const nowIso = new Date().toISOString();
+        const rejectionReasonText = reason || 'Variant rejected by admin';
+        const { data: rejectedOffer, error: rejectOfferError } = await supabase
+          .from('supplier_products')
+          .update({
+            status: 'rejected',
+            is_active: false,
+            rejection_reason: rejectionReasonText,
+            approved_by: null,
+            approved_at: null,
+            updated_at: nowIso
+          })
+          .eq('id', targetSupplierProductId)
+          .eq('product_id', req.params.id)
+          .eq('status', 'pending')
+          .select(`
+            *,
+            supplier:users!supplier_products_supplier_id_fkey (id, name, email, company, user_type)
+          `)
+          .maybeSingle();
+
+        if (rejectOfferError || !rejectedOffer) {
+          return res.status(404).json({
+            status: 'error',
+            message: 'Pending supplier offer not found for this product'
+          });
+        }
+
+        const suppliersToNotify = supplierOfferRecipients([rejectedOffer], existingProduct.supplier);
+        if (suppliersToNotify.length > 0) {
+          const notifications = suppliersToNotify.map((supplier) => ({
+            user_id: supplier.id,
+            type: 'product_approval',
+            title: `Variant Rejected: ${existingProduct.name}`,
+            message: `Your updated specification variant for "${existingProduct.name}" was rejected by admin. Reason: ${rejectionReasonText}`,
+            related_product_id: existingProduct.id,
+            metadata: {
+              productName: existingProduct.name,
+              status: 'rejected',
+              rejectionReason: rejectionReasonText,
+              supplierProductId: rejectedOffer.id,
+              reviewType: 'variant_spec'
+            }
+          }));
+          await insertNotifications(notifications, supabase);
+        }
+
+        return res.json({
+          status: 'success',
+          message: 'Supplier variant rejected successfully',
+          product: existingProduct,
+          supplierProduct: rejectedOffer
+        });
+      }
 
       const { data: product, error: updateError } = await supabase
         .from('products')
@@ -544,34 +741,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         });
       }
 
-      // Remove notifications referencing this product to avoid broken references
-      await supabase
-        .from('notifications')
-        .delete()
-        .eq('related_product_id', product.id);
-
-      // Important: `products` cannot be deleted if BOQ items still reference it.
-      // Your DB constraint is: `boq_items.normalized_product_id` -> `products.id`.
-      // So delete dependent BOQ items first to unblock product deletion.
-      const { error: boqItemsDeleteError } = await supabase
-        .from('boq_items')
-        .delete()
-        .eq('normalized_product_id', productId);
-
-      if (boqItemsDeleteError) {
-        console.error('Delete BOQ items error (normalized_product_id):', boqItemsDeleteError);
-        throw boqItemsDeleteError;
-      }
-
-      // Delete the product
-      const { error: deleteError } = await supabase
-        .from('products')
-        .delete()
-        .eq('id', productId);
-
-      if (deleteError) {
-        throw deleteError;
-      }
+      await deleteRejectedCatalogProduct(supabase, productId);
 
       return res.json({
         status: 'success',

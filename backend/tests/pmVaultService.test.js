@@ -9,7 +9,9 @@ const {
   mapPmVaultToWalletView,
   mapPmVaultTransactions,
   summarizePmVaultLedger,
-  usesPlatformVault
+  usesPlatformVault,
+  mergePmVaultTransactionPages,
+  extractPmTransactionPageInfo
 } = await import('../services/pmVaultService.js');
 
 test('convertInrToPaise converts rupee input to paise for Razorpay/PM APIs', () => {
@@ -230,4 +232,49 @@ test('extractPmTransactionRows reads nested results arrays', () => {
   });
   assert.equal(rows.length, 1);
   assert.equal(rows[0].project_id, '0F4532');
+});
+
+test('mergePmVaultTransactionPages deduplicates rows across PM pages', () => {
+  const first = [{ id: 'txn-1', amount: 10 }, { id: 'txn-2', amount: 20 }];
+  const second = [{ id: 'txn-2', amount: 20 }, { id: 'txn-3', amount: 30 }];
+  const merged = mergePmVaultTransactionPages(first, second);
+  assert.equal(merged.length, 3);
+  assert.deepEqual(merged.map((row) => row.id), ['txn-1', 'txn-2', 'txn-3']);
+});
+
+test('extractPmTransactionPageInfo reads cursor pagination from PM payload', () => {
+  const pageInfo = extractPmTransactionPageInfo({
+    success: true,
+    data: {
+      docs: [{ id: 'txn-1', amount: 100, type: 'credit' }],
+      totalDocs: 3,
+      limit: 1,
+      page: 1,
+      hasNextPage: true,
+      nextCursor: 'cursor-2'
+    }
+  });
+  assert.equal(pageInfo.hasMore, true);
+  assert.equal(pageInfo.nextCursor, 'cursor-2');
+  assert.equal(pageInfo.totalCount, 3);
+});
+
+test('resolvePmUserIdForTatvaUser prefers stored pm auth and profile ids', async () => {
+  const { resolvePmUserIdForTatvaUser } = await import('../services/pmVaultService.js');
+  const fromAuth = await resolvePmUserIdForTatvaUser({
+    phone: '9876543210',
+    profile: {
+      pmCustomerAuth: { pmUserId: 'pm-auth-id' },
+      pmCustomerProfile: { pmUserId: 'pm-profile-id' }
+    }
+  });
+  assert.equal(fromAuth, 'pm-auth-id');
+
+  const fromProfile = await resolvePmUserIdForTatvaUser({
+    phone: '9876543210',
+    profile: {
+      pmCustomerProfile: { pmUserId: 'pm-profile-only' }
+    }
+  });
+  assert.equal(fromProfile, 'pm-profile-only');
 });

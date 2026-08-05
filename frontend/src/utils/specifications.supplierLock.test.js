@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasMeaningfulSpecValues,
+  supplierOfferNeedsPostApprovalSpecFill,
   supplierSpecificationValuesLocked
 } from './specifications.js';
 
@@ -9,15 +10,34 @@ describe('supplier specification value locking', () => {
     expect(
       supplierSpecificationValuesLocked({
         specifications: { Brand: '', 'Model Name': null },
-        status: 'pending'
+        productStatus: 'pending'
       })
     ).toBe(false);
   });
 
-  it('locks after meaningful values were saved on the offer', () => {
+  it('allows partial post-approval fill until every admin key is saved on the offer', () => {
     expect(
       supplierSpecificationValuesLocked({
-        offerSpecifications: { Brand: 'Milton', 'Model Name': '' }
+        offerSpecifications: { Brand: 'Milton', 'Model Name': '' },
+        catalogSpecificationKeys: ['Brand', 'Model Name'],
+        productStatus: 'approved'
+      })
+    ).toBe(false);
+    expect(
+      supplierOfferNeedsPostApprovalSpecFill({
+        status: 'approved',
+        catalogSpecificationKeys: ['Brand', 'Model Name'],
+        supplierOfferSpecifications: { Brand: 'Milton', 'Model Name': '' }
+      })
+    ).toBe(true);
+  });
+
+  it('locks after every admin key has a supplier offer value', () => {
+    expect(
+      supplierSpecificationValuesLocked({
+        offerSpecifications: { Brand: 'Milton', 'Model Name': '600 ml' },
+        catalogSpecificationKeys: ['Brand', 'Model Name'],
+        productStatus: 'approved'
       })
     ).toBe(true);
     expect(hasMeaningfulSpecValues({ Brand: 'Milton' })).toBe(true);
@@ -27,7 +47,9 @@ describe('supplier specification value locking', () => {
     expect(
       supplierSpecificationValuesLocked({
         offerSpecifications: { Brand: '', 'Model Name': '' },
-        supplierSpecValuesLocked: false
+        supplierSpecValuesLocked: false,
+        catalogSpecificationKeys: ['Brand', 'Model Name'],
+        productStatus: 'approved'
       })
     ).toBe(false);
     expect(
@@ -35,5 +57,25 @@ describe('supplier specification value locking', () => {
         supplierSpecValuesLocked: true
       })
     ).toBe(true);
+  });
+
+  it('matches template keys with offer keys using punctuation-insensitive comparison', () => {
+    expect(
+      supplierSpecificationValuesLocked({
+        offerSpecifications: { brand: 'Milton', modelname: '600 ml' },
+        catalogSpecificationKeys: ['Brand', 'Model Name'],
+        productStatus: 'approved'
+      })
+    ).toBe(true);
+  });
+
+  it('does not ask for post-approval fill when every admin key was already saved', () => {
+    expect(
+      supplierOfferNeedsPostApprovalSpecFill({
+        status: 'approved',
+        catalogSpecificationKeys: ['Brand', 'Model Name'],
+        supplierOfferSpecifications: { Brand: 'Milton', 'Model Name': '600 ml' }
+      })
+    ).toBe(false);
   });
 });

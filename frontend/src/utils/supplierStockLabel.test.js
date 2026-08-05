@@ -1,8 +1,10 @@
 import {
   SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
   formatSupplierStockAvailability,
+  getSupplierStockHealth,
   isSupplierInventoryConfigured,
-  isSupplierMrpLocked
+  isSupplierMrpLocked,
+  parseSupplierLsaThreshold
 } from './supplierStockLabel';
 
 describe('isSupplierInventoryConfigured', () => {
@@ -28,6 +30,39 @@ describe('isSupplierMrpLocked', () => {
     expect(isSupplierMrpLocked({ price: 250 })).toBe(true);
     expect(isSupplierMrpLocked({ price: 0 })).toBe(false);
     expect(isSupplierMrpLocked(null)).toBe(false);
+  });
+});
+
+describe('parseSupplierLsaThreshold', () => {
+  it('accepts positive whole numbers', () => {
+    expect(parseSupplierLsaThreshold('1')).toBe(1);
+    expect(parseSupplierLsaThreshold(10)).toBe(10);
+  });
+
+  it('rejects missing or invalid values', () => {
+    expect(parseSupplierLsaThreshold('')).toBe(null);
+    expect(parseSupplierLsaThreshold(0)).toBe(null);
+    expect(parseSupplierLsaThreshold('abc')).toBe(null);
+    expect(parseSupplierLsaThreshold(null)).toBe(null);
+  });
+});
+
+describe('getSupplierStockHealth', () => {
+  it('marks out of stock at zero or below', () => {
+    expect(getSupplierStockHealth({ stock: 0, lsa: 10 })).toBe('out');
+    expect(getSupplierStockHealth({ stock: null, lsa: 10 })).toBe('out');
+  });
+
+  it('uses supplier LSA instead of a fixed threshold', () => {
+    expect(getSupplierStockHealth({ stock: 10, lsa: 1 })).toBe('ok');
+    expect(getSupplierStockHealth({ stock: 1, lsa: 1 })).toBe('low');
+    expect(getSupplierStockHealth({ stock: 10, lsa: 10 })).toBe('low');
+    expect(getSupplierStockHealth({ stock: 9, lsa: 10 })).toBe('low');
+  });
+
+  it('does not flag low stock when LSA is unset', () => {
+    expect(getSupplierStockHealth({ stock: 3 })).toBe('ok');
+    expect(getSupplierStockHealth({ stock: 3, lsa: '' })).toBe('ok');
   });
 });
 

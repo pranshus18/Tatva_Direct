@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { getApiUrl } from '../config/api';
@@ -6,9 +6,10 @@ import ProductImageCarousel from './ProductImageCarousel';
 import { collectProductImages } from './UpstreamProductDisplay';
 import {
   mergeVariantSpecificationTemplate,
+  resolveSupplierOfferDisplaySpecifications,
   specificationEntriesForDetails
 } from '../utils/specifications';
-import { isMeaningfulProductDescription } from '../utils/productDisplay';
+import { resolveSupplierPortalDisplayDescription } from '../utils/productDisplay';
 import {
   SUPPLIER_CURRENT_STOCK_LABEL,
   SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
@@ -37,18 +38,32 @@ function resolveGtin(product) {
   ).trim();
 }
 
+function hasSpecificationTemplateKeys(specifications = {}) {
+  return (
+    specifications &&
+    typeof specifications === 'object' &&
+    !Array.isArray(specifications) &&
+    Object.keys(specifications).length > 0
+  );
+}
+
 export default function SupplierProductDetailsModal({ product, onClose }) {
-  const [displaySpecifications, setDisplaySpecifications] = useState(product?.specifications || {});
+  const mergedDisplaySpecs = useMemo(
+    () => resolveSupplierOfferDisplaySpecifications(product),
+    [product]
+  );
+  const [displaySpecifications, setDisplaySpecifications] = useState(mergedDisplaySpecs);
 
   useEffect(() => {
-    setDisplaySpecifications(product?.specifications || {});
-  }, [product?.specifications, product?.supplier_product_id, product?.id]);
+    setDisplaySpecifications(mergedDisplaySpecs);
+  }, [mergedDisplaySpecs]);
 
   useEffect(() => {
     const category = String(product?.category || '').trim().toLowerCase();
     const model = String(product?.name || '').trim();
     const brand = String(product?.brand || product?.brandModel || model || '').trim();
     if (!category) return;
+    if (hasSpecificationTemplateKeys(product?.catalogSpecifications)) return;
 
     let cancelled = false;
     const loadAdminSpecifications = async () => {
@@ -67,11 +82,12 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
         if (data?.status !== 'success' || cancelled) return;
         const adminTemplate =
           data?.specifications && typeof data.specifications === 'object' ? data.specifications : {};
+        if (!Object.keys(adminTemplate).length) return;
         setDisplaySpecifications(
-          mergeVariantSpecificationTemplate(adminTemplate, product?.specifications || {})
+          mergeVariantSpecificationTemplate(adminTemplate, mergedDisplaySpecs)
         );
       } catch {
-        // Keep product snapshot when template fetch fails.
+        // Keep offer merge when template fetch fails.
       }
     };
 
@@ -79,13 +95,22 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
     return () => {
       cancelled = true;
     };
-  }, [product?.id, product?.category, product?.name, product?.brand, product?.brandModel, product?.specifications]);
+  }, [
+    product?.id,
+    product?.category,
+    product?.name,
+    product?.brand,
+    product?.brandModel,
+    product?.catalogSpecifications,
+    mergedDisplaySpecs
+  ]);
 
   if (!product) return null;
 
   const images = collectProductImages(product);
   const gtinValue = resolveGtin(product);
   const specEntries = specificationEntriesForDetails(displaySpecifications);
+  const description = resolveSupplierPortalDisplayDescription(product);
   const brandLabel = product.brandModel || product.brand || '—';
   const statusLabel = String(product.status || 'pending').replace(/_/g, ' ');
 
@@ -192,10 +217,10 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
             ) : null}
           </div>
 
-          {isMeaningfulProductDescription(product.description) ? (
+          {description ? (
             <section className="us-details-section">
               <h3>Description</h3>
-              <p className="us-details-description">{product.description}</p>
+              <p className="us-details-description">{description}</p>
             </section>
           ) : null}
 

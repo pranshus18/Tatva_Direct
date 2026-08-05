@@ -18,6 +18,79 @@ export function areSpecificationsEqual(currentSpecs = {}, nextSpecs = {}) {
   return JSON.stringify(normalizeSpecShape(currentSpecs || {})) === JSON.stringify(normalizeSpecShape(nextSpecs || {}));
 }
 
+function normalizeSpecKeyForComparison(key) {
+  return String(key || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function normalizeSpecValueForComparison(value) {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') return value.trim().toLowerCase();
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) return value.map(normalizeSpecValueForComparison);
+  if (typeof value === 'object') {
+    const out = {};
+    Object.keys(value)
+      .sort()
+      .forEach((key) => {
+        out[key] = normalizeSpecValueForComparison(value[key]);
+      });
+    return out;
+  }
+  return value;
+}
+
+function isMeaningfullyFilledSpecValue(value) {
+  if (value === null || value === undefined) return false;
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'object') return Object.keys(value).length > 0;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'boolean') return true;
+  return String(value).trim() !== '';
+}
+
+function buildNormalizedMeaningfulSpecMap(specs = {}) {
+  const parsed =
+    specs && typeof specs === 'object' && !Array.isArray(specs) ? specs : {};
+  const out = new Map();
+  Object.entries(parsed).forEach(([key, value]) => {
+    const norm = normalizeSpecKeyForComparison(key);
+    if (!norm || !isMeaningfullyFilledSpecValue(value)) return;
+    out.set(norm, normalizeSpecValueForComparison(value));
+  });
+  return out;
+}
+
+/**
+ * True when a supplier re-listing an existing catalog product changed any
+ * meaningful specification value from the catalog baseline.
+ */
+export function hasSupplierSpecificationChangesFromCatalog({
+  catalogSpecs = {},
+  supplierSpecs = {}
+} = {}) {
+  const baseline = buildNormalizedMeaningfulSpecMap(catalogSpecs);
+  const submitted = buildNormalizedMeaningfulSpecMap(supplierSpecs);
+
+  if (baseline.size === 0) return false;
+
+  for (const [norm, baselineValue] of baseline) {
+    const submittedValue = submitted.get(norm);
+    if (submittedValue === undefined) continue;
+    if (JSON.stringify(baselineValue) !== JSON.stringify(submittedValue)) {
+      return true;
+    }
+  }
+
+  for (const norm of submitted.keys()) {
+    if (!baseline.has(norm)) return true;
+  }
+
+  return false;
+}
+
 export function shouldMoveToPendingForSpecChange({ specificationsProvided, currentSpecs, nextSpecs }) {
   if (!specificationsProvided) return false;
   return !areSpecificationsEqual(currentSpecs, nextSpecs);
@@ -41,13 +114,17 @@ export function shouldAutoApproveSupplierOfferOnCreate({
   hasApprovedSameVariantOffer = false,
   catalogProductStatus = '',
   hasAnyApprovedOfferForProduct = false,
-  matchStrength = 'none'
+  matchStrength = 'none',
+  hasSpecificationChanges = false
 } = {}) {
   if (hasApprovedSameVariantOffer) return true;
 
   const strength = String(matchStrength || 'none').trim().toLowerCase();
   const isConfirmedReList = strength === 'explicit' || strength === 'strong';
   if (!isConfirmedReList) return false;
+
+  // Changed spec values on an existing catalog product need the same admin review as a new product.
+  if (hasSpecificationChanges) return false;
 
   // Confirmed re-lists of a live marketplace product skip another admin gate.
   if (isApprovedStatus(catalogProductStatus)) return true;
@@ -70,9 +147,27 @@ export function shouldRequireApprovalForVariantSpecChange({
   return true;
 }
 
+/**
+ * Only re-hash variant_key when the client explicitly sent specification changes.
+ * Inventory-only saves (price/stock/location/tax) must not migrate an offer onto
+ * another variant's identity key.
+ */
+export function shouldRecomputeSupplierVariantKeyOnUpdate({
+  specificationsProvided = false,
+  specificationsChanged = false,
+  computedVariantKey = '',
+  storedVariantKey = ''
+} = {}) {
+  if (!specificationsProvided) return false;
+  if (specificationsChanged) return true;
+  return String(computedVariantKey || '') !== String(storedVariantKey || '');
+}
+
 export default {
   areSpecificationsEqual,
+  hasSupplierSpecificationChangesFromCatalog,
   shouldMoveToPendingForSpecChange,
   shouldAutoApproveSupplierOfferOnCreate,
-  shouldRequireApprovalForVariantSpecChange
+  shouldRequireApprovalForVariantSpecChange,
+  shouldRecomputeSupplierVariantKeyOnUpdate
 };

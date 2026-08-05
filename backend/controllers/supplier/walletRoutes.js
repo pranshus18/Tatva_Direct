@@ -297,12 +297,25 @@ export function registerSupplierWalletRoutes(ctx) {
       if (e?.code === 'ORDER_ALREADY_PAID') {
         return res.status(400).json({ status: 'error', message: e.message });
       }
+      if (
+        e?.code === 'SUPPLIER_PM_CREDIT_DEFERRED' ||
+        e?.code === 'SUPPLIER_PAYOUT_RECOVERY_FAILED'
+      ) {
+        return res.status(409).json({
+          status: 'error',
+          code: e.code,
+          message: e.message || 'Supplier payout could not be completed for this paid order'
+        });
+      }
       if (e?.code === 'INSUFFICIENT_WALLET_BALANCE' || e?.code === 'INSUFFICIENT_VAULT_BALANCE') {
         return res.status(400).json({
           status: 'error',
           code: 'INSUFFICIENT_VAULT_BALANCE',
           message: e.message || 'Insufficient vault balance'
         });
+      }
+      if (e?.code === 'SUPPLIER_NOT_FOUND') {
+        return res.status(400).json({ status: 'error', code: e.code, message: e.message });
       }
       if (
         e?.code === 'PM_VAULT_PAY_NOT_CONFIGURED' ||

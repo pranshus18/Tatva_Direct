@@ -174,6 +174,60 @@ test('upstream detail hides a pending product the supplier does not list', async
   assert.equal(result.status, 404);
 });
 
+test('discovery detail exposes per-variant offer prices in compare table data', async () => {
+  const product = {
+    ...APPROVED_PRODUCT,
+    price: 100
+  };
+  const offerRows = [
+    {
+      id: 'sp-1',
+      product_id: 'prod-1',
+      price: 100,
+      stock: 120,
+      min_order_quantity: 1,
+      location: 'Pune',
+      variant_key: 'silver-600',
+      variant_asin: 'TS1B2N',
+      product_variant_id: null,
+      attributes: { unit: '600 ml', specifications: { color: 'Silver', CAPACITY: '600 ml' } },
+      status: 'approved',
+      is_active: true,
+      supplier: { profile: { supplyChainRole: 'retailer' } }
+    },
+    {
+      id: 'sp-2',
+      product_id: 'prod-1',
+      price: 150,
+      stock: 120,
+      min_order_quantity: 1,
+      location: 'Pune',
+      variant_key: 'silver-1000',
+      variant_asin: 'TS1B1H',
+      product_variant_id: null,
+      attributes: { unit: '1 L', specifications: { color: 'Silver', CAPACITY: '1 L' } },
+      status: 'approved',
+      is_active: true,
+      supplier: { profile: { supplyChainRole: 'retailer' } }
+    }
+  ];
+
+  const { supabase } = makeSupabaseStub({ product, offerRows });
+
+  const result = await getProductDiscoveryDetail(supabase, {
+    productId: 'prod-1',
+    audience: DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM,
+    viewerSupplierId: 'supplier-1'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.variants.length, 2);
+  const prices = result.variants.map((variant) => Number(variant.price)).sort((a, b) => a - b);
+  assert.deepEqual(prices, [100, 150]);
+  const units = result.variants.map((variant) => variant.unit).sort();
+  assert.deepEqual(units, ['1 L', '600 ml']);
+});
+
 test('service-provider detail never exposes unapproved catalog products', async () => {
   const { supabase } = makeSupabaseStub({
     product: PENDING_PRODUCT,

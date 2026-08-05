@@ -54,6 +54,15 @@ export function normalizeSupplierProductFromApi(product) {
   const rejectionReason = String(
     product.rejectionReason || product.rejection_reason || ''
   ).trim();
+  // Offer rows: never borrow catalog price. Preserve null/unset instead of fake ₹0.
+  const resolvedPrice =
+    offerId
+      ? parsedPrice
+      : parsedPrice != null
+        ? parsedPrice
+        : Number.isFinite(Number(product.price))
+          ? Number(product.price)
+          : null;
   return {
     ...product,
     ...(offerId ? { supplier_product_id: offerId } : {}),
@@ -61,7 +70,7 @@ export function normalizeSupplierProductFromApi(product) {
     is_active: isActive,
     rejection_reason: rejectionReason || product.rejection_reason || null,
     rejectionReason: rejectionReason || null,
-    price: parsedPrice != null ? parsedPrice : Number(product.price) || 0,
+    price: resolvedPrice,
     stock: stock != null ? stock : 0,
     location: product.location == null ? '' : String(product.location),
     min_order_quantity: minOrder != null && minOrder > 0 ? minOrder : 1
@@ -71,6 +80,16 @@ export function normalizeSupplierProductFromApi(product) {
 export function normalizeSupplierProductsFromApi(products) {
   if (!Array.isArray(products)) return [];
   return products.map(normalizeSupplierProductFromApi);
+}
+
+/** Normalized approval status for supplier offer rows (pending / approved / rejected). */
+export function getSupplierOfferApprovalStatus(product) {
+  return normalizeSupplierProductFromApi(product).status;
+}
+
+/** Trim upstream / offer id keys for consistent map lookups. */
+export function normalizeSupplierProductKey(value) {
+  return String(value ?? '').trim();
 }
 
 /** Approved active offers only — rejected/pending products stay on manage catalog, not upstream sourcing. */

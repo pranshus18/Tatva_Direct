@@ -14,8 +14,10 @@ import {
   parseWithSchema,
   shouldMoveToPendingForSpecChange,
   shouldRequireApprovalForVariantSpecChange,
+  shouldRecomputeSupplierVariantKeyOnUpdate,
   supplierProductUpdateSchema
 } from '../supplierImports.js';
+import { areSpecificationsEqual } from '../../../utils/supplierProductApproval.js';
 import {
   sanitizeImageUrls,
   validateAndNormalizeTaxRates
@@ -30,11 +32,12 @@ import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQua
 import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 import {
-  countMeaningfulSpecValues,
   mergeCatalogAndOfferSpecificationsForDisplay,
   parseSpecificationsObject,
+  resolveSupplierOfferDisplaySpecifications,
   specificationTemplateKeysOnly
 } from '../../../services/supplierCatalogHelpersService.js';
+import { syncOfferAttributesWithSpecifications } from '../../../services/productIdentityService.js';
 import {
   bodyHasCatalogUpdateFields,
   bodyHasInventoryUpdateFields,
@@ -134,16 +137,24 @@ export function registerSupplierProductUpdateRoute(ctx) {
         }
 
         const hasCatalogFields = bodyHasCatalogUpdateFields(req.body) && !hasInventoryFields;
-        const specsLocked = areSupplierOfferSpecificationValuesLocked(supplierProduct);
+        const { data: parentProductForTemplate } = await supabase
+          .from('products')
+          .select('name, category, specifications')
+          .eq('id', supplierProduct.product_id)
+          .maybeSingle();
+        const catalogSpecKeys = Object.keys(
+          specificationTemplateKeysOnly(
+            parseSpecificationsObject(parentProductForTemplate?.specifications) || {}
+          )
+        );
+        const specsLocked = areSupplierOfferSpecificationValuesLocked(
+          supplierProduct,
+          catalogSpecKeys
+        );
         const shouldValidateSpecFill =
           hasCatalogFields && req.body.specifications !== undefined && !specsLocked;
         if (shouldValidateSpecFill) {
           const offerStatus = String(supplierProduct.status || 'pending').toLowerCase();
-          const { data: parentProductForTemplate } = await supabase
-            .from('products')
-            .select('name, category')
-            .eq('id', supplierProduct.product_id)
-            .maybeSingle();
           const categoryForTemplate =
             req.body.category || parentProductForTemplate?.category || '';
           const brandForTemplate = String(
@@ -253,19 +264,15 @@ export function registerSupplierProductUpdateRoute(ctx) {
           },
           parentProduct
         );
-        const variantKeyChanged =
-          specificationsChanged ||
-          String(variantIdentity.variantKey || '') !== String(supplierProduct.variant_key || '');
+        const variantKeyChanged = shouldRecomputeSupplierVariantKeyOnUpdate({
+          specificationsProvided: req.body.specifications !== undefined,
+          specificationsChanged,
+          computedVariantKey: variantIdentity.variantKey,
+          storedVariantKey: supplierProduct.variant_key
+        });
 
         if (variantKeyChanged) {
           updateSupplierProductData.variant_key = variantIdentity.variantKey;
-          updatedAttributes.variantAttributes = variantIdentity.variant.variantAttributes;
-          if (updateSupplierProductData.attributes) {
-            updateSupplierProductData.attributes = {
-              ...updateSupplierProductData.attributes,
-              variantAttributes: variantIdentity.variant.variantAttributes
-            };
-          }
           updateSupplierProductData.variant_asin = buildVariantAsinLikeId(
             parentProduct?.asin || '',
             variantIdentity.variantKey
@@ -281,7 +288,10 @@ export function registerSupplierProductUpdateRoute(ctx) {
           if (duplicateVariant) {
             return res.status(400).json({
               status: 'error',
-              message: 'An identical product variation already exists for this location. Update that offer instead.'
+              code: 'variant_already_exists',
+              message:
+                'A listing with these specification values already exists for this location. Open Manage Inventory and edit that variant row instead.',
+              existingSupplierProductId: duplicateVariant.id
             });
           }
         }
@@ -308,6 +318,26 @@ export function registerSupplierProductUpdateRoute(ctx) {
             updateSupplierProductData.approved_at = null;
             updateSupplierProductData.rejection_reason = null;
           }
+        }
+
+        if (Object.keys(updateSupplierProductData).length === 0) {
+          if (req.body.specifications !== undefined) {
+            const existingSpecs =
+              parseSpecificationsObject(supplierProduct?.attributes?.specifications) || {};
+            const nextSpecs = parseSpecificationsObject(req.body.specifications) || {};
+            if (!areSpecificationsEqual(existingSpecs, nextSpecs)) {
+              updateSupplierProductData.attributes = syncOfferAttributesWithSpecifications({
+                ...(supplierProduct.attributes || {}),
+                specifications: nextSpecs
+              });
+            }
+          }
+        }
+
+        if (updateSupplierProductData.attributes) {
+          updateSupplierProductData.attributes = syncOfferAttributesWithSpecifications(
+            updateSupplierProductData.attributes
+          );
         }
 
         if (Object.keys(updateSupplierProductData).length === 0) {
@@ -396,6 +426,21 @@ export function registerSupplierProductUpdateRoute(ctx) {
           await syncCatalogProductImages(supabase, updatedSupplierProduct.product_id, offerImages);
         }
 
+        if (req.body.description !== undefined) {
+          const { data: catalogRow } = await supabase
+            .from('products')
+            .select('status')
+            .eq('id', updatedSupplierProduct.product_id)
+            .maybeSingle();
+          const catalogStatus = String(catalogRow?.status || '').toLowerCase();
+          if (catalogStatus !== 'approved') {
+            await supabase
+              .from('products')
+              .update({ description: '' })
+              .eq('id', updatedSupplierProduct.product_id);
+          }
+        }
+
         const { data: baseProduct } = await supabase
           .from('products')
           .select('id, name, description, category, unit, brand, gtin, mpn, specifications, images, asin, status')
@@ -412,7 +457,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
         const ra = updatedSupplierProduct.attributes || {};
         const baseSpecs = parseSpecificationsObject(baseProduct?.specifications) || {};
         const offerSpecs = parseSpecificationsObject(ra.specifications) || {};
-        const mergedSpecs = mergeCatalogAndOfferSpecificationsForDisplay(baseSpecs, offerSpecs);
+        const mergedSpecs = resolveSupplierOfferDisplaySpecifications(baseSpecs, ra);
         const resolvedUnit =
           String(ra.unit || '').trim() ||
           String(baseProduct?.unit || '').trim() ||
@@ -422,7 +467,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
           ...(baseProduct || {}),
           name: (ra.listingName != null && String(ra.listingName).trim() !== '') ? String(ra.listingName).trim() : baseProduct?.name,
           supplierDescription: ra.supplierDescription || ra.description || '',
-          publishedDescription: baseProduct?.description || '',
+          publishedDescription: ra.publishedDescription || '',
           description: ra.supplierDescription || ra.description || '',
           brand: ra.brand || baseProduct?.brand,
           unit: resolvedUnit,
@@ -434,7 +479,10 @@ export function registerSupplierProductUpdateRoute(ctx) {
             specificationTemplateKeysOnly(baseSpecs)
           ),
           supplierOfferSpecifications: offerSpecs,
-          supplierSpecValuesLocked: countMeaningfulSpecValues(offerSpecs) > 0,
+          supplierSpecValuesLocked: areSupplierOfferSpecificationValuesLocked(
+            updatedSupplierProduct,
+            Object.keys(specificationTemplateKeysOnly(baseSpecs))
+          ),
           brandModel: updatedSupplierProduct.attributes?.brandModel,
           lsa: updatedSupplierProduct.attributes?.lsa,
           hsnCode: updatedSupplierProduct.attributes?.hsnCode,
@@ -518,8 +566,9 @@ export function registerSupplierProductUpdateRoute(ctx) {
         req.body.price !== undefined ||
         req.body.location !== undefined ||
         req.body.min_order_quantity !== undefined;
+      const specificationFieldsTouched = req.body.specifications !== undefined;
 
-      if (inventoryFieldsTouched) {
+      if (inventoryFieldsTouched || specificationFieldsTouched) {
         const { data: offerRows, error: offerRowsError } = await supabase
           .from('supplier_products')
           .select('id')

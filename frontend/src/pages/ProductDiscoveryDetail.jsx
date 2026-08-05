@@ -26,6 +26,14 @@ import { formatRupeePerUnit } from '../utils/formatRupee';
 import {
   specificationEntriesForCustomerDisplay
 } from '../utils/specifications';
+import {
+  buildOptionSelectionsForVariant,
+  resolveActiveDiscoveryVariant,
+  resolveDiscoveryVariantLabel,
+  resolveVariantDisplaySpecifications,
+  variantMatchesSelections,
+  variantSelectionKey
+} from '../utils/discoveryVariantSelection';
 import { resolveDiscoveryProductDescription } from '../utils/productDisplay';
 import {
   buildUpstreamSourcingUrl,
@@ -80,60 +88,6 @@ function RatingStars({ rating, reviews, size = 16 }) {
       ) : null}
     </div>
   );
-}
-
-function variantSelectionKey(variant) {
-  return `${variant?.productId || ''}::${variant?.variantKey || variant?.variantAsin || ''}`;
-}
-
-function variantMatchesUrlToken(variant, token) {
-  const normalized = String(token || '').trim();
-  if (!normalized) return false;
-  return (
-    String(variant?.variantKey || '') === normalized ||
-    String(variant?.variantAsin || '') === normalized ||
-    String(variant?.productId || '') === normalized
-  );
-}
-
-function resolveVariantDisplaySpecifications(variant) {
-  if (!variant) return {};
-  const specs =
-    variant.specifications && typeof variant.specifications === 'object' && !Array.isArray(variant.specifications)
-      ? variant.specifications
-      : {};
-  const canonical =
-    variant.canonicalAttributes && typeof variant.canonicalAttributes === 'object'
-      ? variant.canonicalAttributes
-      : {};
-  return { ...specs, ...canonical };
-}
-
-function variantMatchesSelections(variant, selections) {
-  const attrs = {
-    ...(variant?.specifications || {}),
-    ...(variant?.canonicalAttributes || {})
-  };
-  return Object.entries(selections).every(([key, value]) => {
-    const normalizedKey = String(key || '').trim().toLowerCase();
-    const matchEntry = Object.entries(attrs).find(
-      ([attrKey]) => String(attrKey || '').trim().toLowerCase().replace(/\s+/g, '_') === normalizedKey
-    );
-    if (!matchEntry) return false;
-    const [, rawValue] = matchEntry;
-    if (Array.isArray(rawValue)) return rawValue.map(String).join(', ') === value;
-    return String(rawValue).trim() === value;
-  });
-}
-
-function variantLabel(variant) {
-  const specs = variant?.specifications || {};
-  const attrs = variant?.canonicalAttributes || {};
-  const color = specs.color || specs.Color || attrs.color;
-  const size = specs.size || specs.Size || attrs.size;
-  const parts = [color, size].filter(Boolean).map(String);
-  if (parts.length) return parts.join(' · ');
-  return variant?.variantName || variant?.name || 'Variant';
 }
 
 function buildIdentificationRows(variant, product) {
@@ -348,34 +302,58 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     [detail?.variants]
   );
 
-  const selectedVariant = useMemo(() => {
-    if (!variants.length) return null;
+  const variantOptions = Array.isArray(detail?.variantOptions) ? detail.variantOptions : [];
 
-    if (selectedVariantKey) {
-      const explicit = variants.find((v) => variantSelectionKey(v) === selectedVariantKey);
-      if (explicit) return explicit;
-    }
+  const selectedVariant = useMemo(
+    () =>
+      resolveActiveDiscoveryVariant({
+        variants,
+        selectedVariantKey,
+        optionSelections,
+        urlVariantToken: searchParams.get('variant')
+      }),
+    [variants, searchParams, selectedVariantKey, optionSelections]
+  );
 
-    const urlVariant = String(searchParams.get('variant') || '').trim();
-    if (urlVariant) {
-      const byToken = variants.find((v) => variantMatchesUrlToken(v, urlVariant));
-      if (byToken) return byToken;
+  // Hydrate option chips from URL / default / explicit variant so first paint matches the active listing.
+  useEffect(() => {
+    if (!variants.length || !variantOptions.length) return;
+    if (Object.keys(optionSelections || {}).length > 0) return;
+    const source =
+      selectedVariant ||
+      resolveActiveDiscoveryVariant({
+        variants,
+        selectedVariantKey,
+        optionSelections: {},
+        urlVariantToken: searchParams.get('variant')
+      });
+    if (!source) return;
+    const next = buildOptionSelectionsForVariant(source, variantOptions);
+    if (Object.keys(next).length === 0) return;
+    setOptionSelections(next);
+    if (!selectedVariantKey) {
+      setSelectedVariantKey(variantSelectionKey(source));
     }
-
-    if (Object.keys(optionSelections).length) {
-      const matched = variants.find((v) => variantMatchesSelections(v, optionSelections));
-      if (matched) return matched;
-    }
-    return variants[0];
-  }, [variants, searchParams, selectedVariantKey, optionSelections]);
+  }, [
+    variants,
+    variantOptions,
+    optionSelections,
+    selectedVariant,
+    selectedVariantKey,
+    searchParams
+  ]);
 
   useEffect(() => {
     setActiveImageIndex(0);
-  }, [selectedVariantKey, searchParams]);
+  }, [selectedVariantKey, searchParams, optionSelections]);
 
   const syncVariantToUrl = (variant) => {
     if (!variant) return;
-    const token = variant.variantKey || variant.variantAsin || variant.productId;
+    const token =
+      variant.variantKey ||
+      variant.variantAsin ||
+      variant.supplierProductId ||
+      variant.productId;
     if (!token) return;
     setSearchParams(
       (prev) => {
@@ -389,8 +367,8 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   };
 
   const productSummary = detail?.product || {};
-  const variantOptions = Array.isArray(detail?.variantOptions) ? detail.variantOptions : [];
-  const activeListing = selectedVariant || (variants[0] ?? null);
+  // Do not fall back to variants[0] when option chips form an incompatible combo.
+  const activeListing = selectedVariant;
   const displaySpecifications = useMemo(
     () => resolveVariantDisplaySpecifications(activeListing),
     [activeListing, selectedVariantKey]
@@ -418,7 +396,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
       productDescription
     ]
   );
-  const priceLabel = formatPrice(activeListing?.price, activeListing?.unit || productSummary.unit);
+  const priceLabel = useMemo(
+    () => formatPrice(activeListing?.price, activeListing?.unit || productSummary.unit),
+    [activeListing?.price, activeListing?.unit, productSummary.unit, selectedVariantKey]
+  );
   const rangeLabel = formatPriceRange(productSummary.priceRange, productSummary.unit);
   const inStock = Number(activeListing?.stock) > 0;
 
@@ -436,7 +417,13 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     // Upstream sourcing keeps quantity, project and upstream-seller selection on the sourcing
     // page, so the detail page hands the supplier back to that flow for this listing.
     if (isUpstreamPortal) {
-      navigate(buildUpstreamSourcingUrl({ addSupplierProductId: mineSupplierProductId }));
+      const offerId =
+        activeListing?.supplierProductId || mineSupplierProductId || '';
+      navigate(buildUpstreamSourcingUrl({ addSupplierProductId: offerId }));
+      return;
+    }
+    if (!activeListing) {
+      setError('Choose a valid combination of options to continue.');
       return;
     }
     if (!inStock) {
@@ -451,19 +438,25 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   };
 
   const handleOptionSelect = (optionKey, value) => {
-    setOptionSelections((prev) => ({ ...prev, [optionKey]: value }));
-    const matched = variants.find((variant) =>
-      variantMatchesSelections(variant, { ...optionSelections, [optionKey]: value })
-    );
+    const nextSelections = { ...optionSelections, [optionKey]: value };
+    setOptionSelections(nextSelections);
+    const matched = variants.find((variant) => variantMatchesSelections(variant, nextSelections));
     if (matched) {
       setSelectedVariantKey(variantSelectionKey(matched));
       syncVariantToUrl(matched);
+      return;
     }
+    // Leave chips as partial combo; active listing becomes null until a match exists.
+    setSelectedVariantKey('');
   };
 
   const handleVariantChipSelect = (variant) => {
     setSelectedVariantKey(variantSelectionKey(variant));
-    setOptionSelections({});
+    if (variantOptions.length > 0) {
+      setOptionSelections(buildOptionSelectionsForVariant(variant, variantOptions));
+    } else {
+      setOptionSelections({});
+    }
     syncVariantToUrl(variant);
   };
 
@@ -542,6 +535,13 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         {isUpstreamPortal
           ? 'Upstream sellers, quantities and projects are chosen on the Upstream Sourcing page.'
           : 'Prices and stock reflect eligible supplier listings for your supply chain.'}
+      </p>
+    </aside>
+  ) : variants.length > 0 ? (
+    <aside className="pdd-buybox">
+      <div className="pdd-buybox__price pdd-buybox__price--na">Select a valid option combination</div>
+      <p className="pdd-buybox__note">
+        That combination is not available. Choose options that match a listed variant.
       </p>
     </aside>
   ) : null;
@@ -668,12 +668,12 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                           type="button"
                           className={`pdd-thumb ${active ? 'pdd-thumb--active' : ''}`}
                           onClick={() => handleVariantChipSelect(variant)}
-                          title={variantLabel(variant)}
+                          title={resolveDiscoveryVariantLabel(variant, variantOptions)}
                         >
                           {thumb ? (
-                            <img src={thumb} alt={variantLabel(variant)} />
+                            <img src={thumb} alt={resolveDiscoveryVariantLabel(variant, variantOptions)} />
                           ) : (
-                            <span className="pdd-thumb__placeholder">{variantLabel(variant).slice(0, 2)}</span>
+                            <span className="pdd-thumb__placeholder">{resolveDiscoveryVariantLabel(variant, variantOptions).slice(0, 2)}</span>
                           )}
                         </button>
                       );
@@ -738,7 +738,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                           className={`pdd-option-chip ${active ? 'pdd-option-chip--active' : ''}`}
                           onClick={() => handleVariantChipSelect(variant)}
                         >
-                          {variantLabel(variant)}
+                          {resolveDiscoveryVariantLabel(variant, variantOptions)}
                         </button>
                       );
                     })}
@@ -825,7 +825,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                                     className="pdd-variant-table__link"
                                     onClick={() => handleVariantChipSelect(variant)}
                                   >
-                                    {variantLabel(variant)}
+                                    {resolveDiscoveryVariantLabel(variant, variantOptions)}
                                   </button>
                                 </td>
                                 <td>{rowPrice || 'On request'}</td>

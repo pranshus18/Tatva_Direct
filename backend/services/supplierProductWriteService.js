@@ -1,4 +1,6 @@
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
+import { buildSupplierDescriptionAttributes } from '../utils/supplierProductDescriptions.js';
+import { syncOfferAttributesWithSpecifications } from './productIdentityService.js';
 
 function normalizeOfferPrice(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === '') return null;
@@ -403,11 +405,12 @@ export function buildSupplierProductUpdatePayload({
   }
 
   const existingAttributes = supplierProduct.attributes || {};
-  const updatedAttributes = { ...existingAttributes };
+  let updatedAttributes = { ...existingAttributes };
   if (reqBody.description !== undefined) {
-    const supplierText = String(reqBody.description || '').trim();
-    updatedAttributes.supplierDescription = supplierText;
-    updatedAttributes.description = supplierText;
+    updatedAttributes = buildSupplierDescriptionAttributes(
+      updatedAttributes,
+      reqBody.description
+    );
   }
   if (reqBody.name !== undefined) updatedAttributes.listingName = (reqBody.name || '').toString().trim();
   if (reqBody.brand !== undefined) {
@@ -424,7 +427,10 @@ export function buildSupplierProductUpdatePayload({
   }
   if (reqBody.mpn !== undefined) updatedAttributes.mpn = (reqBody.mpn || '').toString().trim();
   if (reqBody.specifications !== undefined) {
-    updatedAttributes.specifications = reqBody.specifications || existingAttributes.specifications || {};
+    updatedAttributes = syncOfferAttributesWithSpecifications({
+      ...updatedAttributes,
+      specifications: reqBody.specifications || existingAttributes.specifications || {}
+    });
   }
   if (reqBody.brandModel !== undefined) {
     const nextBrandModel = (reqBody.brandModel || '').toString().trim();
@@ -465,7 +471,7 @@ export function buildSupplierProductUpdatePayload({
       updatedAttributes.cgstRate = updateSupplierProductData.cgst_rate;
       updatedAttributes.sgstRate = updateSupplierProductData.sgst_rate;
     }
-    updateSupplierProductData.attributes = updatedAttributes;
+    updateSupplierProductData.attributes = syncOfferAttributesWithSpecifications(updatedAttributes);
   }
 
   return {

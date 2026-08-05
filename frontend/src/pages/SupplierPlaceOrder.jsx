@@ -9,6 +9,8 @@ import {
   specificationsObjectForLogistics
 } from '../utils/specifications';
 import { formatRupee } from '../utils/formatRupee';
+import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
+import { isVaultPaymentMethod, VAULT_PAYMENT_METHOD } from '../utils/vaultPaymentMethod';
 import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import { formatShippingAddressLabel, formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import {
@@ -26,7 +28,8 @@ import {
   buildShippingAddressKey,
   buildTransportGroupId,
   consolidatePoTransportGroups,
-  normalizeShippingAddress
+  normalizeShippingAddress,
+  isCompleteShippingAddress
 } from '../utils/poTransportSelection';
 import './Dashboard.css';
 import './CreatePO.css';
@@ -51,10 +54,10 @@ import {
 
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
 const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
-
-const isProfileShippingAddressComplete = (entry) =>
-  ['line1', 'city', 'state', 'country'].every((key) => String(entry?.[key] || '').trim()) &&
-  String(entry?.pincode || entry?.zipCode || '').trim();
+const PAY_LATER_UNAVAILABLE_MESSAGE =
+  'Pay later is unavailable. You can place the order with vault instead.';
+const PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE =
+  'Unable to verify pay-later limit right now. Please retry in a few seconds.';
 
 const profileShippingToAddress = (entry) => ({
   line1: String(entry?.line1 || entry?.address || '').trim(),
@@ -63,6 +66,9 @@ const profileShippingToAddress = (entry) => ({
   pincode: String(entry?.pincode || entry?.zipCode || '').trim(),
   country: String(entry?.country || 'India').trim() || 'India'
 });
+
+const isProfileShippingAddressComplete = (entry) =>
+  isCompleteShippingAddress(profileShippingToAddress(entry));
 
 function AddressFields({ prefix, address, onChange, disabled = false }) {
   const set = (field, value) => onChange({ ...address, [field]: value });
@@ -147,11 +153,15 @@ const SupplierPlaceOrder = () => {
 
   const [draft, setDraft] = useState(null);
   const [requiredDate, setRequiredDate] = useState('');
-  const [paymentMethod] = useState('vault');
+  const [paymentMethod, setPaymentMethod] = useState(VAULT_PAYMENT_METHOD);
   const [placing, setPlacing] = useState(false);
   const [loadingDraft, setLoadingDraft] = useState(true);
-  const [walletBalance, setWalletBalance] = useState(0);
-  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
+  const [vaultBalance, setVaultBalance] = useState(0);
+  const [loadingVaultBalance, setLoadingVaultBalance] = useState(false);
+  const [creditChecks, setCreditChecks] = useState([]);
+  const [creditCheckLoading, setCreditCheckLoading] = useState(false);
+  const [creditCheckFailed, setCreditCheckFailed] = useState(false);
+  const [payLaterEligibility, setPayLaterEligibility] = useState([]);
 
   const [shippingAddress, setShippingAddress] = useState({
     line1: '',
@@ -232,6 +242,8 @@ const SupplierPlaceOrder = () => {
 
       setDraft(parsed);
       setRequiredDate(typeof parsed.requiredDate === 'string' ? parsed.requiredDate : '');
+      const savedPaymentMethod = String(parsed.paymentMethod || VAULT_PAYMENT_METHOD).trim();
+      setPaymentMethod(savedPaymentMethod === 'credit' ? 'credit' : VAULT_PAYMENT_METHOD);
       const expiresAt = typeof parsed.reservationExpiresAt === 'string' ? parsed.reservationExpiresAt : '';
       setReservationExpiresAt(expiresAt);
       reservationHoldRef.current = Boolean(parsed.checkoutSessionId && expiresAt);
@@ -240,6 +252,15 @@ const SupplierPlaceOrder = () => {
           ? normalizeTransportSelection(parsed.transportSelection)
           : null
       );
+      if (parsed.billingAddress && typeof parsed.billingAddress === 'object') {
+        setBillingAddress((prev) => ({
+          ...prev,
+          ...normalizeShippingAddress(parsed.billingAddress)
+        }));
+      }
+      if (parsed.deliveryDestination === 'billing' || parsed.deliveryDestination === 'shipping') {
+        setDeliveryDestination(parsed.deliveryDestination);
+      }
       if (parsed.checkoutShippingAddress && typeof parsed.checkoutShippingAddress === 'object') {
         const normalized = normalizeShippingAddress(parsed.checkoutShippingAddress);
         setShippingAddress((prev) => ({
@@ -534,14 +555,10 @@ const SupplierPlaceOrder = () => {
           }
         }
 
-        const billingFromProfile = profile?.address || {};
+        const billingFromProfile = normalizeShippingAddress(profile?.address || {});
         setBillingAddress((prev) => ({
           ...prev,
-          line1: billingFromProfile?.line1 || billingFromProfile?.street || prev.line1,
-          city: billingFromProfile?.city || prev.city,
-          state: billingFromProfile?.state || prev.state,
-          pincode: billingFromProfile?.pincode || billingFromProfile?.zipCode || prev.pincode,
-          country: billingFromProfile?.country || prev.country
+          ...billingFromProfile
         }));
       } catch (e) {
         // Non-fatal; user can still fill manually.
@@ -699,32 +716,107 @@ const SupplierPlaceOrder = () => {
     if (!poGroups.length) return 0;
     return poGroups.reduce((s, g) => s + (Number(g.total) || 0), 0);
   }, [poGroups]);
-  const walletShortage = Math.max(0, Number(grandTotalAllPos || 0) - Number(walletBalance || 0));
-  const hasSufficientWalletBalance = walletShortage <= 0;
+  const vaultShortage = Math.max(0, Number(grandTotalAllPos || 0) - Number(vaultBalance || 0));
+  const hasSufficientVaultBalance = vaultShortage <= 0;
 
   useEffect(() => {
+    if (!poGroups?.length) {
+      setCreditChecks([]);
+      setPayLaterEligibility([]);
+      setCreditCheckFailed(false);
+      return;
+    }
+    const token = localStorage.getItem('token');
+    const checks = poGroups
+      .filter((g) => g?.vendorId !== null && g?.vendorId !== undefined)
+      .map((g) => ({
+        supplierId: g.vendorId,
+        orderAmount: Number(g.total) || 0
+      }));
+    if (!checks.length) {
+      setCreditChecks([]);
+      setPayLaterEligibility([]);
+      setCreditCheckFailed(true);
+      return;
+    }
     let cancelled = false;
-    const loadWalletBalance = async () => {
-      setLoadingWalletBalance(true);
+    (async () => {
       try {
-        const token = localStorage.getItem('token');
-        if (!token) return;
-        const resp = await fetch(getApiUrl('/api/supplier/wallet/balance'), {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: 'no-cache'
+        setCreditCheckLoading(true);
+        setCreditCheckFailed(false);
+        const res = await fetch(getApiUrl('/api/po/credit-check'), {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ checks })
         });
-        const data = await resp.json().catch(() => ({}));
-        if (cancelled || !resp.ok || data.status !== 'success') return;
-        setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
+        const data = await res.json();
+        if (!cancelled && data.status === 'success') {
+          const results = data.results || [];
+          setPayLaterEligibility(results);
+          setCreditChecks(results);
+          setCreditCheckFailed(false);
+        } else if (!cancelled) {
+          setCreditChecks([]);
+          setPayLaterEligibility([]);
+          setCreditCheckFailed(true);
+        }
+      } catch {
+        if (!cancelled) {
+          setCreditChecks([]);
+          setPayLaterEligibility([]);
+          setCreditCheckFailed(true);
+        }
       } finally {
-        if (!cancelled) setLoadingWalletBalance(false);
+        if (!cancelled) setCreditCheckLoading(false);
       }
-    };
-    void loadWalletBalance();
+    })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [poGroups]);
+
+  const payLaterOptionAvailable = useMemo(() => {
+    if (!poGroups?.length) return false;
+    if (creditCheckFailed) return false;
+    if (!payLaterEligibility.length) return false;
+    const bySupplier = new Map(payLaterEligibility.map((r) => [String(r.supplierId), r]));
+    return poGroups.every((g) => {
+      const row = bySupplier.get(String(g.vendorId));
+      return Boolean(row?.allowed && row?.payLaterOffered);
+    });
+  }, [creditCheckFailed, payLaterEligibility, poGroups]);
+
+  const creditAllAllowed = useMemo(() => {
+    if (paymentMethod !== 'credit') return true;
+    if (creditCheckFailed) return false;
+    if (!creditChecks.length) return false;
+    return creditChecks.every((r) => r.allowed);
+  }, [paymentMethod, creditChecks, creditCheckFailed]);
+
+  useEffect(() => {
+    if (!isVaultPaymentMethod(paymentMethod)) return;
+    let cancelled = false;
+    const loadVaultBalance = async () => {
+      setLoadingVaultBalance(true);
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        const balance = await getVaultBalanceForUi();
+        if (!cancelled) setVaultBalance(balance);
+      } catch {
+        if (!cancelled) setVaultBalance(0);
+      } finally {
+        if (!cancelled) setLoadingVaultBalance(false);
+      }
+    };
+    void loadVaultBalance();
+    return () => {
+      cancelled = true;
+    };
+  }, [paymentMethod, poGroups]);
 
   const handleTransportSuggestion = (group) => {
     if (placing) return;
@@ -755,21 +847,15 @@ const SupplierPlaceOrder = () => {
     const focusTransportGroupId = group ? getTransportGroupKey(group) : '';
     const baseTransport = normalizeTransportSelection(selectedTransport);
 
-    const missingShipping = ['line1', 'city', 'state', 'pincode', 'country'].find(
-      (key) => !String(shippingAddress?.[key] || '').trim()
-    );
-    if (missingShipping) {
+    const normalizedShipping = normalizeShippingAddress(shippingAddress);
+    if (!isCompleteShippingAddress(normalizedShipping)) {
       window.alert('Please complete the shipping address before transport suggestions.');
       return;
     }
-    if (hasGstin) {
-      const missingBilling = ['line1', 'city', 'state', 'pincode', 'country'].find(
-        (key) => !String(billingAddress?.[key] || '').trim()
-      );
-      if (missingBilling) {
-        window.alert('Please complete the billing address before transport suggestions.');
-        return;
-      }
+    const needBilling = hasGstin && deliveryDestination === 'billing';
+    if (needBilling && !isCompleteShippingAddress(billingAddress)) {
+      window.alert('Please complete the billing address before transport suggestions.');
+      return;
     }
 
     navigate('/supplier-transport-suggestion', {
@@ -806,15 +892,27 @@ const SupplierPlaceOrder = () => {
       return;
     }
 
-    if (loadingWalletBalance) {
-      alert('Checking your vault balance. Please wait a moment.');
-      return;
+    if (paymentMethod === 'credit') {
+      if (creditCheckLoading || creditCheckFailed) {
+        alert(PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE);
+        return;
+      }
+      if (!payLaterOptionAvailable || !creditAllAllowed) {
+        alert(PAY_LATER_UNAVAILABLE_MESSAGE);
+        return;
+      }
     }
-    if (!hasSufficientWalletBalance) {
-      alert(
-        `Insufficient vault balance. Please add ${formatRupee(walletShortage)} to your supplier vault and try again.`
-      );
-      return;
+    if (isVaultPaymentMethod(paymentMethod)) {
+      if (loadingVaultBalance) {
+        alert('Checking your vault balance. Please wait a moment.');
+        return;
+      }
+      if (!hasSufficientVaultBalance) {
+        alert(
+          `Insufficient vault balance. Please add ${formatRupee(vaultShortage)} to your vault and try again.`
+        );
+        return;
+      }
     }
 
     if (!requiredDate) {
@@ -865,9 +963,9 @@ const SupplierPlaceOrder = () => {
 
       const createdOrders = Array.isArray(data.orders) ? data.orders : [];
 
-      // If the user picked transport quotes, book the chosen transport against created orders.
-      if (selectedTransport && createdOrders.length > 0 && selectedTransport.byVendorId) {
-        const perOrderTransport = createdOrders.map((o) => {
+      const buildPerOrderTransport = () => {
+        if (!selectedTransport?.byVendorId || createdOrders.length === 0) return null;
+        return createdOrders.map((o) => {
           const transportKey = String(o.transportGroupId || o.supplierId || '').trim();
           const shippingProvider =
             selectedTransport?.byVendorId?.[transportKey] ||
@@ -906,19 +1004,21 @@ const SupplierPlaceOrder = () => {
             quotedTransportAmount: det?.fareValue ?? det?.rate ?? null
           };
         });
+      };
 
+      const perOrderTransport = buildPerOrderTransport();
+      const orderIds = createdOrders.map((o) => o.id).filter(Boolean);
+
+      // Save transport selection first so order totals include freight before vault debit.
+      if (perOrderTransport?.length) {
         const confirmRes = await fetch(getApiUrl('/api/po/transport/confirm'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`
           },
-          body: JSON.stringify({
-            orderIds: createdOrders.map((o) => o.id).filter(Boolean),
-            perOrderTransport
-          })
+          body: JSON.stringify({ orderIds, perOrderTransport })
         });
-
         const confirmData = await confirmRes.json().catch(() => ({}));
         if (!confirmRes.ok || confirmData?.status !== 'success') {
           alert(confirmData?.message || 'Upstream order(s) created, but transport selection failed.');
@@ -926,44 +1026,48 @@ const SupplierPlaceOrder = () => {
           navigate('/supplier-upstream-orders');
           return;
         }
+      }
 
-        // Vault debit first — logistics book/tracking only after payment succeeds.
+      // Vault checkout: debit immediately at placement (includes saved transport when selected).
+      if (isVaultPaymentMethod(paymentMethod)) {
         for (const order of createdOrders) {
           if (!order?.id) continue;
-          const payRes = await fetch(getApiUrl(`/api/supplier/wallet/orders/${encodeURIComponent(order.id)}/pay`), {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${token}`
-            },
-            body: JSON.stringify({
+          try {
+            const payData = await payOrderFromVault(order.id, {
               idempotencyKey: `supplier-place-vault-${order.id}`
-            })
-          });
-          const payData = await payRes.json().catch(() => ({}));
-          const alreadyPaid =
-            payData?.code === 'ORDER_ALREADY_PAID' || /already paid/i.test(String(payData?.message || ''));
-          if ((!payRes.ok || payData?.status !== 'success') && !alreadyPaid) {
-            alert(
-              payData?.message ||
-                `Order(s) created and transport saved, but vault payment failed for ${order.orderNumber || order.id}. Tracking will not be booked until payment succeeds.`
-            );
-            localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-            navigate('/supplier-upstream-orders');
-            return;
+            });
+            if (payData?.status && payData.status !== 'success') {
+              throw new Error(
+                payData.message ||
+                  `Vault payment failed for ${order.orderNumber || order.id}.`
+              );
+            }
+          } catch (payErr) {
+            const alreadyPaid =
+              payErr?.code === 'ORDER_ALREADY_PAID' ||
+              /already paid/i.test(String(payErr?.message || ''));
+            if (!alreadyPaid) {
+              alert(
+                payErr?.message ||
+                  `Order(s) created, but vault payment failed for ${order.orderNumber || order.id}. Open Upstream Orders and pay from vault once your balance is sufficient.`
+              );
+              localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+              navigate('/supplier-upstream-orders');
+              return;
+            }
           }
         }
+      }
 
+      // After vault payment succeeds, book carrier / persist tracking.
+      if (perOrderTransport?.length) {
         const bookRes = await fetch(getApiUrl('/api/po/transport/confirm'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`
           },
-          body: JSON.stringify({
-            orderIds: createdOrders.map((o) => o.id).filter(Boolean),
-            perOrderTransport
-          })
+          body: JSON.stringify({ orderIds, perOrderTransport })
         });
         const bookData = await bookRes.json().catch(() => ({}));
         if (!bookRes.ok || bookData?.status !== 'success') {
@@ -974,7 +1078,14 @@ const SupplierPlaceOrder = () => {
         }
       }
 
-      alert(data.message || 'Upstream order(s) placed successfully.');
+      alert(
+        isVaultPaymentMethod(paymentMethod)
+          ? data.message || 'Upstream order(s) placed and paid from vault.'
+          : paymentMethod === 'credit'
+            ? data.message ||
+              'Upstream order(s) placed on pay later. Settle from your vault before the due date.'
+            : data.message || 'Upstream order(s) placed successfully.'
+      );
       localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
       navigate('/supplier-upstream-orders');
     } catch (e) {
@@ -1099,30 +1210,79 @@ const SupplierPlaceOrder = () => {
               </div>
               <div className="spo-field">
                 <label htmlFor="spo-payment-method">Payment method</label>
-                <input id="spo-payment-method" value="Vault only" readOnly />
-                <p className="spo-hint">
-                  Upstream purchases are vault-only. Credit supplier vault first, then place/pay orders.
-                </p>
+                <select
+                  id="spo-payment-method"
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                >
+                  <option value={VAULT_PAYMENT_METHOD}>Vault balance (direct supplier settlement)</option>
+                  <option value="credit" disabled={creditCheckLoading || !payLaterOptionAvailable}>
+                    Pay later (credit account)
+                  </option>
+                </select>
+                {isVaultPaymentMethod(paymentMethod) ? (
+                  <p className="spo-hint">
+                    On confirm, vault is debited for the order total. Credit your shared vault first if needed.
+                  </p>
+                ) : (
+                  <p className="spo-hint">
+                    Pay later keeps the order unpaid until you settle from your vault (top up first if
+                    needed). All payments on this platform go through vault only.
+                  </p>
+                )}
               </div>
             </div>
-            <div className="spo-alert" style={{ marginTop: '0.75rem' }}>
-              <strong>Vault readiness:</strong> Order total {formatRupee(grandTotalAllPos)} | Vault balance{' '}
-              {loadingWalletBalance ? 'Loading…' : formatRupee(walletBalance)}.
-              {!loadingWalletBalance && !hasSufficientWalletBalance ? (
-                <>
-                  {' '}
-                  Need {formatRupee(walletShortage)} more.
-                  <button
-                    type="button"
-                    className="btn-secondary"
-                    style={{ marginLeft: '0.6rem' }}
-                    onClick={() => navigate('/supplier-wallet')}
-                  >
-                    Credit vault
-                  </button>
-                </>
-              ) : null}
-            </div>
+            {isVaultPaymentMethod(paymentMethod) ? (
+              <div className="spo-alert" style={{ marginTop: '0.75rem' }}>
+                <strong>Vault readiness:</strong> Order total {formatRupee(grandTotalAllPos)} | Vault balance{' '}
+                {loadingVaultBalance ? 'Loading…' : formatRupee(vaultBalance)}.
+                {!loadingVaultBalance && !hasSufficientVaultBalance ? (
+                  <>
+                    {' '}
+                    Need {formatRupee(vaultShortage)} more.
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      style={{ marginLeft: '0.6rem' }}
+                      onClick={() => navigate('/supplier-wallet')}
+                    >
+                      Credit vault
+                    </button>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
+            {paymentMethod === 'credit' && creditCheckFailed ? (
+              <div className="spo-alert spo-alert--warning" style={{ marginTop: '0.75rem' }}>
+                {PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE}
+              </div>
+            ) : null}
+            {paymentMethod === 'credit' && !creditCheckFailed && !payLaterOptionAvailable ? (
+              <div className="spo-alert spo-alert--warning" style={{ marginTop: '0.75rem' }}>
+                {PAY_LATER_UNAVAILABLE_MESSAGE}
+              </div>
+            ) : null}
+            {paymentMethod === 'credit' && creditChecks.length > 0 ? (
+              <div
+                className="spo-alert"
+                style={{
+                  marginTop: '0.75rem',
+                  background: creditAllAllowed ? '#f0fdf4' : '#fef2f2',
+                  borderColor: creditAllAllowed ? '#86efac' : '#fecaca'
+                }}
+              >
+                <strong>Supplier credit limits {creditCheckLoading ? '(checking…)' : ''}</strong>
+                <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem' }}>
+                  {creditChecks.map((row) => (
+                    <li key={String(row.supplierId)} style={{ marginBottom: '0.35rem' }}>
+                      {row.allowed
+                        ? `Pay later OK — limit ${formatRupee(row.creditLimit || 0)}, up to ${formatRupee(row.available ?? row.remainingCredit ?? 0)} for this order. Settlement: ${Number(row.creditPeriodDays || 30)} days.`
+                        : row.message || 'Pay later unavailable for this supplier.'}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </section>
 
           <section className="spo-section">
@@ -1441,21 +1601,27 @@ const SupplierPlaceOrder = () => {
               onClick={handlePlaceOrder}
               disabled={
                 placing ||
-                loadingWalletBalance ||
-                !hasSufficientWalletBalance ||
+                (isVaultPaymentMethod(paymentMethod) &&
+                  (loadingVaultBalance || !hasSufficientVaultBalance)) ||
+                (paymentMethod === 'credit' &&
+                  (creditCheckLoading || creditCheckFailed || !payLaterOptionAvailable || !creditAllAllowed)) ||
                 poGroups.length === 0 ||
                 !isTransportSelectionReady(selectedTransport, poGroups)
               }
             >
               {placing
                 ? 'Placing…'
-                : loadingWalletBalance
+                : loadingVaultBalance && isVaultPaymentMethod(paymentMethod)
                   ? 'Checking vault…'
+                  : creditCheckLoading && paymentMethod === 'credit'
+                    ? 'Checking credit…'
                   : !isTransportSelectionReady(selectedTransport, poGroups)
                     ? 'Select transport for all suppliers'
-                    : !hasSufficientWalletBalance
+                    : isVaultPaymentMethod(paymentMethod) && !hasSufficientVaultBalance
                       ? 'Insufficient vault balance'
-                      : 'Place order'}
+                      : paymentMethod === 'credit' && !payLaterOptionAvailable
+                        ? 'Pay later unavailable'
+                        : 'Place order'}
             </button>
           </footer>
         </div>

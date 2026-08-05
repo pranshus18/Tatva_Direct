@@ -31,6 +31,7 @@ import './SupplierProductSetup.css';
 const SupplierProductSetup = ({ user }) => {
   const [formData, setFormData] = useState({
     name: '', // Product name, not supplier name
+    catalogProductId: '',
     brand: '',
     gtin: '',
     hsnCode: '',
@@ -260,6 +261,13 @@ const SupplierProductSetup = ({ user }) => {
         ) {
           setSpecifications(data.specifications);
         }
+        if (data.status === 'success' && data.found && data.product?.id) {
+          setFormData((prev) =>
+            prev.catalogProductId
+              ? prev
+              : { ...prev, catalogProductId: data.product.id }
+          );
+        }
         if (data.status === 'success' && data.found) {
           setRecommendedPrice(
             typeof data.recommendedPrice === 'number' ? data.recommendedPrice : null
@@ -381,6 +389,7 @@ const SupplierProductSetup = ({ user }) => {
         },
         body: JSON.stringify({
           name: formData.name,
+          catalogProductId: formData.catalogProductId || undefined,
           brand: formData.brand || '',
           gtin: formData.gtin || '',
           hsnCode: (formData.hsnCode || '').trim(),
@@ -415,7 +424,12 @@ const SupplierProductSetup = ({ user }) => {
         if (nextProductName) params.set('productName', nextProductName);
         params.set('from', 'product-setup');
 
-        alert('Inventory saved. Final step: set ProductCOV levels for this product variant.');
+        alert(
+          data.message ||
+            (data.requiresAdminApproval
+              ? 'Product saved and is pending admin approval.'
+              : 'Inventory saved. Final step: set ProductCOV levels for this product variant.')
+        );
         navigate(`/supplier-bcov?${params.toString()}`);
       } else {
         if (response.status === 403 && data?.code === 'brand_approval_required') {

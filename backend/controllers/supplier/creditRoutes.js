@@ -117,6 +117,13 @@ export function registerSupplierCreditRoutes(ctx) {
         return res.status(400).json({ status: 'error', message: getContractErrorMessage(e) });
       }
       console.error('[Supplier Credit] settle error:', e);
+      if (e?.code === 'BUYER_VAULT_SETTLEMENT_REQUIRED') {
+        return res.status(400).json({
+          status: 'error',
+          code: e.code,
+          message: e.message
+        });
+      }
       return res.status(500).json({ status: 'error', message: e.message || 'Failed to settle credit cycle' });
     }
   });

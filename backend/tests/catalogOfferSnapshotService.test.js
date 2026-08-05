@@ -65,9 +65,8 @@ test('syncCatalogProductSnapshotFromOffers writes summed stock to products table
 
   assert.equal(result.ok, true);
   assert.equal(result.stock, 76);
-  assert.equal(result.price, 299);
   assert.equal(updates[0].stock, 76);
-  assert.equal(updates[0].price, 299);
+  assert.equal(updates[0].price, undefined);
 });
 
 test('buildCatalogSnapshotPatch returns zero stock when no listed offers remain', () => {
@@ -83,7 +82,6 @@ test('buildCatalogSnapshotPatch returns zero stock when no listed offers remain'
 
   assert.deepEqual(buildCatalogSnapshotPatch(aggregates.byProduct.get('product-1')), {
     stock: 0,
-    price: 0,
     min_order_quantity: null,
     location: null
   });

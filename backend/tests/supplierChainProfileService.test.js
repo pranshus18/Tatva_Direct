@@ -5,7 +5,8 @@ import {
   detectSupplyChainRoleChanges,
   chainRequiresAdminApproval,
   mergeApprovedBrandsIntoChainEntries,
-  normalizeCompanyInfoEntries
+  normalizeCompanyInfoEntries,
+  syncLegacyMinimumOrderValue
 } from '../services/supplierChainProfileService.js';
 
 test('normalizeCompanyInfoEntries splits multi-brand row into single-brand entries', () => {
@@ -161,4 +162,37 @@ test('chainRequiresAdminApproval is true when supply-chain role changes on saved
     companyInfoEntries: [{ id: 'e1', role: 'retailer', brands: 'Philips' }]
   };
   assert.equal(chainRequiresAdminApproval(baseline, incoming), true);
+});
+
+test('chainRequiresAdminApproval is false when only minimum order value changes', () => {
+  const baseline = {
+    supplierRole: 'dealer',
+    brands: 'Milton',
+    companyInfoEntries: [
+      { id: 'e1', role: 'dealer', brands: 'Milton', minimumOrderValue: 2500 }
+    ]
+  };
+  const incoming = {
+    supplierRole: 'dealer',
+    brands: 'Milton',
+    companyInfoEntries: [
+      { id: 'e1', role: 'dealer', brands: 'Milton', minimumOrderValue: 5000 }
+    ]
+  };
+  assert.equal(chainRequiresAdminApproval(baseline, incoming), false);
+});
+
+test('syncLegacyMinimumOrderValue copies saved entry MOV to legacy profile field', () => {
+  const profileUpdate = {};
+  syncLegacyMinimumOrderValue(
+    profileUpdate,
+    {
+      companyInfoEntries: [
+        { id: 'e1', role: 'dealer', brands: 'Milton', minimumOrderValue: 3200 },
+        { id: 'e2', role: 'dealer', brands: 'Other', minimumOrderValue: 1000 }
+      ]
+    },
+    { saveSupplyChainEntryId: 'e1' }
+  );
+  assert.equal(profileUpdate.minimumOrderValue, 3200);
 });

@@ -604,16 +604,17 @@ const YourOrders = () => {
   const selfServeLockReason = orderDetails ? getSelfServeLockReason(orderDetails) : '';
   const canRateOrder = orderStatus === 'delivered' && String(orderDetails?.paymentStatus || '').toLowerCase() === 'paid';
   const orderPm = String(orderDetails?.paymentMethod || orderDetails?.payment_method || '').toLowerCase();
-  const showVaultPayForOrder = orderPaymentPending;
-  const nonVaultPending = orderPaymentPending && orderPm && !isVaultPaymentMethod(orderPm);
-  const orderAmount = Number(orderDetails?.totalAmount || 0);
-  const vaultShortage = Math.max(0, orderAmount - Number(vaultBalance || 0));
-  const hasEnoughVaultBalance = vaultShortage <= 0;
+  const orderIsPayLater = orderPm === 'credit';
   const payLaterMeta =
     orderDetails?.deliveryAddress && typeof orderDetails.deliveryAddress === 'object'
       ? orderDetails.deliveryAddress.payLater
       : null;
   const payLaterDueAt = payLaterMeta?.settlementDueAt || null;
+  const showVaultPayForOrder = orderPaymentPending;
+  const nonVaultPending = orderPaymentPending && orderPm && !isVaultPaymentMethod(orderPm);
+  const orderAmount = Number(orderDetails?.totalAmount || 0);
+  const vaultShortage = Math.max(0, orderAmount - Number(vaultBalance || 0));
+  const hasEnoughVaultBalance = vaultShortage <= 0;
 
   useEffect(() => {
     if (!selectedOrderId) return;
@@ -947,19 +948,26 @@ const YourOrders = () => {
                       <strong className="text-[#0f172a]">Payment method:</strong>{' '}
                       {paymentMethodLabel(orderDetails)}
                     </p>
-                    {orderPm === 'credit' && (
+                    <p className="mb-3 text-sm text-[#475569]">
+                      {orderIsPayLater
+                        ? 'This order is on pay later. Settle anytime by debiting your vault — top up first if your balance is short. Payment is not tied to delivery status.'
+                        : isVaultPaymentMethod(orderPm)
+                          ? 'Vault checkout debits at order placement. If payment is still pending, complete it here before dispatch — not after delivery.'
+                          : 'Complete payment from your vault. All order payments on this platform go through vault only.'}
+                    </p>
+                    {orderIsPayLater && (
                       <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                        <div className="font-semibold">Pay later settlement timeline</div>
+                        <div className="font-semibold">Pay later settlement</div>
                         <div className="mt-1">
                           Due date: <strong>{formatDateOnly(payLaterDueAt)}</strong>
                         </div>
                         <div className="mt-1">
-                          Settle from customer vault before due date to complete supplier payout.
+                          Credit your vault, then use Pay from vault below before the due date.
                         </div>
                       </div>
                     )}
                     <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                      <div className="font-medium text-slate-800">Vault payment readiness</div>
+                      <div className="font-medium text-slate-800">Vault payment</div>
                       <div className="mt-1 text-slate-700">
                         Order amount: <strong>₹{orderAmount.toLocaleString('en-IN')}</strong>
                       </div>
@@ -973,14 +981,14 @@ const YourOrders = () => {
                       </div>
                       {!loadingVaultBalance && !hasEnoughVaultBalance ? (
                         <div className="mt-1 text-rose-700">
-                          Additional credit needed: <strong>₹{vaultShortage.toLocaleString('en-IN')}</strong>
+                          Add to vault: <strong>₹{vaultShortage.toLocaleString('en-IN')}</strong>
                         </div>
                       ) : null}
                     </div>
                     <div className="space-y-3">
                       {nonVaultPending ? (
                         <p className="yo-payment-hint yo-payment-hint--credit">
-                          This order uses legacy payment mode `{orderPm}`. You can still complete it via vault payment.
+                          Legacy payment mode `{orderPm}` — you can still settle via vault below.
                         </p>
                       ) : null}
                       {showVaultPayForOrder && (
@@ -1005,7 +1013,11 @@ const YourOrders = () => {
                       )}
                     </div>
                   </OrderDialogSection>
-                ) : null}
+                ) : (
+                  <OrderDialogSection title="Payment">
+                    <p className="text-sm text-[#166534]">✓ Paid from vault</p>
+                  </OrderDialogSection>
+                )}
 
                 {(orderDetails.invoicePdfUrl || orderDetails.receiptPdfUrl || !orderDetails.receiptPdfUrl) && (
                   <OrderDialogSection title="Documents">

@@ -1,6 +1,8 @@
-import { enrichProductsWithOfferImages, mergeProductImageLists } from './productImageService.js';
+import { enrichProductsWithOfferImages, resolveSupplierOfferDisplayImages } from './productImageService.js';
 import {
   aggregateEligibleDiscoveryOffers,
+  isListedSupplierOffer,
+  parseOfferPrice,
   reconcileDiscoveryProductFields
 } from './catalogOfferSnapshotService.js';
 import {
@@ -18,9 +20,10 @@ import {
   resolveBuyerFacingProductDescription
 } from '../utils/supplierProductDescriptions.js';
 import {
-  mergeCatalogAndOfferSpecificationsForDisplay,
-  parseSpecificationsObject as parseCatalogSpecificationsObject
+  mergeOfferSpecifications,
+  parseCanonicalAttributes
 } from './supplierCatalogHelpersService.js';
+import { resolveSupplierOfferDisplayName } from './supplierProductWriteService.js';
 
 const VARIANT_OPTION_SKIP_KEYS = new Set([
   'brandmodel',
@@ -145,46 +148,12 @@ export function buildVariantOptions(variants = []) {
     }));
 }
 
-function mergeOfferSpecifications(productSpecs, offer) {
-  const base = parseSpecificationsObject(productSpecs);
-  const attrs = offer?.attributes && typeof offer.attributes === 'object' ? offer.attributes : {};
-  const fromAttrs =
-    parseSpecificationsObject(attrs.specifications) ||
-    parseSpecificationsObject(attrs.specs) ||
-    {};
-  const direct = {};
-  for (const [key, value] of Object.entries(attrs)) {
-    if (
-      [
-        'description',
-        'name',
-        'images',
-        'brandModel',
-        'lsa',
-        'hsnCode',
-        'hsn_code',
-        'specifications',
-        'specs',
-        'listingName',
-        'supplierDescription',
-        'category',
-        'Category'
-      ].includes(key)
-    ) {
-      continue;
-    }
-    if (value !== null && value !== undefined && String(value).trim() !== '') {
-      direct[key] = value;
-    }
-  }
-  const offerSpecs = { ...fromAttrs, ...direct };
-  return mergeCatalogAndOfferSpecificationsForDisplay(
-    parseCatalogSpecificationsObject(base) || base,
-    offerSpecs
-  );
-}
-
-export { mergeOfferSpecifications };
+export {
+  mergeOfferSpecifications,
+  resolveVariantCatalogProduct,
+  resolveVariantDisplayImages,
+  indexListedOffersByCatalogProduct
+};
 
 function extractIdentityFields(product, specs = {}, offer = null) {
   const attrs = offer?.attributes && typeof offer.attributes === 'object' ? offer.attributes : {};
@@ -204,13 +173,110 @@ function extractIdentityFields(product, specs = {}, offer = null) {
   };
 }
 
-function mergeVariantImages(product, offers = []) {
-  const lists = [product?.images];
-  for (const offer of offers) {
-    const attrs = offer?.attributes || {};
-    lists.push(attrs?.images);
+/** Per-variant gallery: only this offer's photos, not every variant merged on the catalog row. */
+function resolveVariantDisplayImages(product, offer) {
+  const offerImages = offer?.attributes?.images;
+  return resolveSupplierOfferDisplayImages(offerImages, product?.images);
+}
+
+function resolveVariantOfferBucketKey(row = {}) {
+  const variantAsin = String(row?.variant_asin || '').trim();
+  if (variantAsin) return `va:${variantAsin}`;
+  const variantKey = String(row?.variant_key || '').trim();
+  if (variantKey) return `vk:${variantKey}`;
+  const offerId = String(row?.id || '').trim();
+  if (offerId) return `offer:${offerId}`;
+  return 'default';
+}
+
+function resolveVariantDisplayUnit(product, offer, mergedSpecs = {}) {
+  const attrs = offer?.attributes && typeof offer.attributes === 'object' ? offer.attributes : {};
+  const candidates = [
+    attrs.unit,
+    mergedSpecs?.CAPACITY,
+    mergedSpecs?.capacity,
+    mergedSpecs?.packSize,
+    mergedSpecs?.pack_size,
+    product?.unit
+  ];
+  for (const candidate of candidates) {
+    const normalized = String(candidate || '').trim();
+    if (normalized) return normalized;
   }
-  return mergeProductImageLists(...lists);
+  return 'nos';
+}
+
+function resolveVariantOfferPrice(offer, reconciled) {
+  if (offer) {
+    return parseOfferPrice(offer.price ?? offer._price);
+  }
+  return parseOfferPrice(reconciled?.price);
+}
+
+/** Map listed offers onto the catalog product each variant row represents (supports family siblings). */
+function indexListedOffersByCatalogProduct({
+  enrichedProducts,
+  offersByProductId,
+  productById,
+  variantMetaByProductId,
+  variantMetaByKey
+}) {
+  const byCatalogProductId = new Map();
+
+  for (const anchorProduct of enrichedProducts) {
+    for (const offer of offersByProductId.get(anchorProduct.id) || []) {
+      if (!isListedSupplierOffer(offer)) continue;
+      const variantMeta = resolveVariantMeta(
+        variantMetaByProductId,
+        variantMetaByKey,
+        anchorProduct.id,
+        offer
+      );
+      const catalogProduct = resolveVariantCatalogProduct(productById, anchorProduct, variantMeta);
+      const catalogId = catalogProduct?.id;
+      if (!catalogId) continue;
+      if (!byCatalogProductId.has(catalogId)) byCatalogProductId.set(catalogId, []);
+      byCatalogProductId.get(catalogId).push({
+        offer,
+        anchorProduct,
+        variantMeta,
+        catalogProduct
+      });
+    }
+  }
+
+  return byCatalogProductId;
+}
+
+function resolveVariantMeta(variantMetaByProductId, variantMetaByKey, productId, offer) {
+  // Asin-first matches vendor ranking / resolveOfferCatalogProductId so list and detail agree.
+  const variantAsin = String(offer?.variant_asin || '').trim();
+  if (variantAsin && variantMetaByKey.has(`asin:${variantAsin}`)) {
+    return variantMetaByKey.get(`asin:${variantAsin}`);
+  }
+  const variantKey = String(offer?.variant_key || '').trim();
+  if (variantKey && variantMetaByKey.has(variantKey)) {
+    return variantMetaByKey.get(variantKey);
+  }
+  return variantMetaByProductId.get(productId) || null;
+}
+
+/** Prefer the catalog product linked to product_variants when family siblings diverge. */
+function resolveVariantCatalogProduct(productById, fallbackProduct, variantMeta) {
+  const metaProductId = String(variantMeta?.product_id || '').trim();
+  if (metaProductId && productById.has(metaProductId)) {
+    return productById.get(metaProductId);
+  }
+  return fallbackProduct;
+}
+
+function variantCandidateDedupKey(record = {}) {
+  return [
+    record.productId || '',
+    record.variantKey || '',
+    record.variantAsin || '',
+    record.supplierProductId || ''
+  ].join('::');
 }
 
 async function buildVariantRecord({
@@ -222,42 +288,45 @@ async function buildVariantRecord({
   variantKey,
   enrichSpecifications
 }) {
-  const mergedSpecs = mergeOfferSpecifications(product.specifications, offer);
+  const mergedSpecs = mergeOfferSpecifications(product.specifications, offer, variantMeta);
   const tsin = supplierOfferTsinFields(product, offer || {});
   const identity = extractIdentityFields(product, mergedSpecs, offer);
   const attrs = offer?.attributes || {};
   const supplierDescription = getSupplierSubmittedDescription(attrs);
-  const publishedDescription = getPublishedCatalogDescription(product);
-  const displayDescription = resolveBuyerFacingProductDescription({
+  const publishedDescription = resolveBuyerFacingProductDescription({
     product,
     offerAttributes: attrs
   });
+  const displayDescription = publishedDescription;
+  const displayName = resolveSupplierOfferDisplayName({
+    attributes: attrs,
+    catalogName: product.name
+  });
+  const canonicalAttributes = parseCanonicalAttributes(variantMeta?.canonical_attributes);
   const stock =
     offer != null
       ? parseSupplierStockQuantity(offer?.stock) ?? 0
       : reconciled.stock;
-  const price =
-    offer != null
-      ? Number.parseFloat(String(offer?.price ?? ''))
-      : Number(reconciled.price);
-  const resolvedPrice = Number.isFinite(price) && price >= 0 ? price : reconciled.price;
+  const resolvedPrice = resolveVariantOfferPrice(offer, reconciled);
+  const resolvedUnit = resolveVariantDisplayUnit(product, offer, mergedSpecs);
 
   return {
     productId: product.id,
-    name: product.name,
+    name: displayName,
     description: displayDescription || null,
     supplierDescription: supplierDescription || null,
     publishedDescription: publishedDescription || null,
     variantKey: variantKey === 'default' ? null : variantKey || offer?.variant_key || variantMeta?.variant_key || null,
     variantAsin: tsin.variantAsin,
-    variantName: variantMeta?.variant_name || product.name,
+    variantName: variantMeta?.variant_name || displayName,
     asin: tsin.asin,
     specifications: mergedSpecs,
-    canonicalAttributes: variantMeta?.canonical_attributes || {},
-    images: mergeVariantImages(product, offers || (offer ? [offer] : [])),
+    canonicalAttributes,
+    images: resolveVariantDisplayImages(product, offer),
     price: resolvedPrice,
     stock,
-    unit: product.unit || 'nos',
+    unit: resolvedUnit,
+    supplierProductId: offer?.id || null,
     min_order_quantity: offer?.min_order_quantity ?? reconciled.min_order_quantity,
     location: String(offer?.location || reconciled.location || '').trim() || null,
     supplierCount: offer ? 1 : reconciled.supplierCount,
@@ -274,18 +343,25 @@ async function buildVariantRecord({
   };
 }
 
-function aggregateOffersByVariantKey(offers = []) {
+export function aggregateOffersByVariantIdentity(offers = []) {
   const byKey = new Map();
   for (const row of offers) {
-    const variantKey = String(row?.variant_key || 'default').trim() || 'default';
-    const existing = byKey.get(variantKey);
+    const bucketKey = resolveVariantOfferBucketKey(row);
+    const existing = byKey.get(bucketKey);
     const stock = parseSupplierStockQuantity(row?.stock) ?? 0;
-    const price = Number.parseFloat(String(row?.price ?? ''));
-    const candidate = { ...row, _stock: stock, _price: Number.isFinite(price) ? price : 0 };
+    const price = parseOfferPrice(row?.price);
+    const candidate = { ...row, _stock: stock, _price: price };
     if (!existing || candidate._stock > existing._stock) {
-      byKey.set(variantKey, candidate);
-    } else if (candidate._stock === existing._stock && candidate._price > 0 && existing._price <= 0) {
-      byKey.set(variantKey, candidate);
+      byKey.set(bucketKey, candidate);
+      continue;
+    }
+    if (candidate._stock < existing._stock) continue;
+    if (candidate._price > 0 && existing._price <= 0) {
+      byKey.set(bucketKey, candidate);
+      continue;
+    }
+    if (candidate._price > 0 && existing._price > 0 && candidate._price < existing._price) {
+      byKey.set(bucketKey, candidate);
     }
   }
   return byKey;
@@ -543,6 +619,7 @@ export async function getProductDiscoveryDetail(
   });
 
   const variantMetaByProductId = new Map();
+  const variantMetaByKey = new Map();
   const variantIds = [...new Set(enrichedProducts.map((p) => p?.variant_id).filter(Boolean))];
   if (variantIds.length) {
     const { data: variantRows } = await supabase
@@ -551,6 +628,21 @@ export async function getProductDiscoveryDetail(
       .in('id', variantIds);
     for (const row of variantRows || []) {
       if (row?.product_id) variantMetaByProductId.set(row.product_id, row);
+      if (row?.variant_key) variantMetaByKey.set(String(row.variant_key), row);
+      if (row?.variant_asin) variantMetaByKey.set(`asin:${String(row.variant_asin)}`, row);
+    }
+  }
+  if (baseProduct.family_id) {
+    const { data: familyVariantRows } = await supabase
+      .from('product_variants')
+      .select('id, product_id, variant_name, variant_key, variant_asin, canonical_attributes')
+      .eq('family_id', baseProduct.family_id);
+    for (const row of familyVariantRows || []) {
+      if (row?.product_id && !variantMetaByProductId.has(row.product_id)) {
+        variantMetaByProductId.set(row.product_id, row);
+      }
+      if (row?.variant_key) variantMetaByKey.set(String(row.variant_key), row);
+      if (row?.variant_asin) variantMetaByKey.set(`asin:${String(row.variant_asin)}`, row);
     }
   }
 
@@ -563,72 +655,108 @@ export async function getProductDiscoveryDetail(
   }
 
   const variantCandidates = [];
+  const seenVariantKeys = new Set();
+  const offersByCatalogProductId = indexListedOffersByCatalogProduct({
+    enrichedProducts,
+    offersByProductId,
+    productById,
+    variantMetaByProductId,
+    variantMetaByKey
+  });
 
   for (const product of enrichedProducts) {
     const reconciled = reconcileDiscoveryProductFields(product, offerAggregates);
-    if (audienceRules.requireEligibleOffers && Number(reconciled?.supplierCount || 0) <= 0) continue;
-
-    const productOffers = (offersByProductId.get(product.id) || []).filter(
-      (row) => String(row?.status || '').toLowerCase() === 'approved' && row?.is_active === true
-    );
-    const offersByVariantKey = aggregateOffersByVariantKey(productOffers);
-    const variantMeta = variantMetaByProductId.get(product.id) || null;
-
-    if (offersByVariantKey.size <= 1) {
-      const offer = offersByVariantKey.values().next().value || null;
-      variantCandidates.push(
-        await buildVariantRecord({
-          product,
-          reconciled,
-          offer,
-          offers: productOffers,
-          variantMeta,
-          variantKey: offer?.variant_key || variantMeta?.variant_key || null,
-          enrichSpecifications
-        })
-      );
+    const attachedEntries = offersByCatalogProductId.get(product.id) || [];
+    if (
+      audienceRules.requireEligibleOffers &&
+      Number(reconciled?.supplierCount || 0) <= 0 &&
+      attachedEntries.length === 0
+    ) {
       continue;
     }
 
-    for (const [variantKey, offer] of offersByVariantKey.entries()) {
+    const offersByIdentity = aggregateOffersByVariantIdentity(attachedEntries.map((entry) => entry.offer));
+    const entryByOfferId = new Map(
+      attachedEntries
+        .filter((entry) => entry?.offer?.id)
+        .map((entry) => [String(entry.offer.id), entry])
+    );
+
+    if (offersByIdentity.size === 0) {
+      const variantMeta = resolveVariantMeta(variantMetaByProductId, variantMetaByKey, product.id, null);
+      const record = await buildVariantRecord({
+        product,
+        reconciled,
+        offer: null,
+        offers: [],
+        variantMeta,
+        variantKey: variantMeta?.variant_key || null,
+        enrichSpecifications
+      });
+      const dedupKey = variantCandidateDedupKey(record);
+      if (!seenVariantKeys.has(dedupKey)) {
+        seenVariantKeys.add(dedupKey);
+        variantCandidates.push(record);
+      }
+      continue;
+    }
+
+    for (const [, offer] of offersByIdentity.entries()) {
+      const entry =
+        entryByOfferId.get(String(offer?.id || '')) ||
+        attachedEntries.find(
+          (candidate) =>
+            resolveVariantOfferBucketKey(candidate.offer) === resolveVariantOfferBucketKey(offer)
+        );
+      const variantMeta =
+        entry?.variantMeta ||
+        resolveVariantMeta(variantMetaByProductId, variantMetaByKey, offer?.product_id, offer);
+      const catalogProduct =
+        entry?.catalogProduct || resolveVariantCatalogProduct(productById, product, variantMeta);
+      const catalogReconciled = reconcileDiscoveryProductFields(catalogProduct, offerAggregates);
+      const record = await buildVariantRecord({
+        product: catalogProduct,
+        reconciled: catalogReconciled,
+        offer,
+        offers: [offer],
+        variantMeta,
+        variantKey: offer?.variant_key || variantMeta?.variant_key || null,
+        enrichSpecifications
+      });
+      const dedupKey = variantCandidateDedupKey(record);
+      if (seenVariantKeys.has(dedupKey)) continue;
+      seenVariantKeys.add(dedupKey);
+      variantCandidates.push(record);
+    }
+  }
+
+  if (variantCandidates.length === 0) {
+    for (const product of enrichedProducts) {
+      const reconciled = reconcileDiscoveryProductFields(product, offerAggregates);
+      if (audienceRules.requireEligibleOffers && Number(reconciled?.supplierCount || 0) <= 0) {
+        continue;
+      }
+      const variantMeta = resolveVariantMeta(variantMetaByProductId, variantMetaByKey, product.id, null);
       variantCandidates.push(
         await buildVariantRecord({
           product,
           reconciled,
-          offer,
-          offers: [offer],
+          offer: null,
+          offers: [],
           variantMeta,
-          variantKey,
+          variantKey: variantMeta?.variant_key || null,
           enrichSpecifications
         })
       );
+      if (variantCandidates.length > 0) break;
     }
   }
 
   variantCandidates.sort((a, b) => {
     const nameDiff = String(a?.name || '').localeCompare(String(b?.name || ''));
     if (nameDiff !== 0) return nameDiff;
-    return String(a?.variantKey || '').localeCompare(String(b?.variantKey || ''));
+    return String(a?.variantKey || a?.variantAsin || '').localeCompare(String(b?.variantKey || b?.variantAsin || ''));
   });
-
-  if (variantCandidates.length === 0) {
-    const product = enrichedProducts.find((p) => p.id === baseProduct.id) || baseProduct;
-    const reconciled = reconcileDiscoveryProductFields(product, offerAggregates);
-    const productOffers = (offersByProductId.get(product.id) || []).filter(
-      (row) => String(row?.status || '').toLowerCase() === 'approved' && row?.is_active === true
-    );
-    variantCandidates.push(
-      await buildVariantRecord({
-        product,
-        reconciled,
-        offer: productOffers[0] || null,
-        offers: productOffers,
-        variantMeta: variantMetaByProductId.get(product.id) || null,
-        variantKey: productOffers[0]?.variant_key || null,
-        enrichSpecifications
-      })
-    );
-  }
 
   const variantOptions = buildVariantOptions(variantCandidates);
   const variantCount = Math.max(variantCandidates.length, 1);

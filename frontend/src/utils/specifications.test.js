@@ -2,8 +2,31 @@ import { describe, it, expect } from 'vitest';
 import {
   parseSpecificationsForDisplay,
   mergeCatalogAndOfferSpecificationsForDisplay,
-  resolveSupplierOfferDisplaySpecifications
+  resolveSupplierOfferDisplaySpecifications,
+  specificationEntriesForCustomerDisplay
 } from './specifications.js';
+
+describe('mergeExtractedValuesOntoSpecificationTemplate', () => {
+  it('maps extracted values onto admin template keys case-insensitively', async () => {
+    const { mergeExtractedValuesOntoSpecificationTemplate } = await import('./specifications.js');
+    const merged = mergeExtractedValuesOntoSpecificationTemplate(
+      { 'AIR CONDITIONER TYPE': '', COLOR: '' },
+      { 'Air Conditioner Type': 'Split', color: 'White' }
+    );
+    expect(merged['AIR CONDITIONER TYPE']).toBe('Split');
+    expect(merged.COLOR).toBe('White');
+  });
+
+  it('matches admin keys with different spacing and punctuation', async () => {
+    const { mergeExtractedValuesOntoSpecificationTemplate } = await import('./specifications.js');
+    const merged = mergeExtractedValuesOntoSpecificationTemplate(
+      { 'COOLING CAPACITY ( TONS )': '', 'STAR RATING': '' },
+      { 'Cooling Capacity (Tons)': '1.5', 'Star Rating': '5' }
+    );
+    expect(merged['COOLING CAPACITY ( TONS )']).toBe('1.5');
+    expect(merged['STAR RATING']).toBe('5');
+  });
+});
 
 describe('mergeCatalogAndOfferSpecificationsForDisplay', () => {
   it('keeps admin catalog values when offer placeholders are empty', () => {
@@ -23,16 +46,44 @@ describe('mergeCatalogAndOfferSpecificationsForDisplay', () => {
     expect(merged.COLOR).toBe('Blue');
     expect(merged.CAPACITY).toBe('750 ml');
   });
+
+  it('dedupes keys that differ only by casing or spacing', () => {
+    const merged = mergeCatalogAndOfferSpecificationsForDisplay(
+      { Color: 'Silver', 'B P A Free': 'Yes', Height: '1 l' },
+      { color: 'silver', 'bpa-free': 'yes', height: '600 ml' }
+    );
+    expect(Object.keys(merged)).toHaveLength(3);
+    expect(merged.height).toBe('600 ml');
+    expect(merged.color).toBe('silver');
+  });
 });
 
 describe('resolveSupplierOfferDisplaySpecifications', () => {
-  it('merges catalog and offer fields on supplier rows', () => {
+  it('uses catalog template keys and per-variant offer values without cross-variant bleed', () => {
     const specs = resolveSupplierOfferDisplaySpecifications({
-      catalogSpecifications: { MATERIAL: 'Steel' },
+      catalogSpecifications: { MATERIAL: 'Steel', COLOR: 'Silver' },
       supplierOfferSpecifications: { COLOR: 'Black' }
     });
-    expect(specs.MATERIAL).toBe('Steel');
     expect(specs.COLOR).toBe('Black');
+    expect(specs.MATERIAL).toBe('');
+  });
+});
+
+describe('specificationEntriesForCustomerDisplay', () => {
+  it('excludes supplier and published description fields from buyer-facing spec lists', () => {
+    const entries = specificationEntriesForCustomerDisplay({
+      Color: 'Silver',
+      Height: '600 ml',
+      supplierDescription: 'The STEEL TAURUS 600 is a durable steel bottle designed for reliable hydration.',
+      publishedDescription: 'Polished buyer-facing copy.',
+      description: 'Legacy description field.'
+    });
+    const labels = entries.map((entry) => entry.label.toLowerCase());
+    expect(labels).toContain('color');
+    expect(labels).toContain('height');
+    expect(labels).not.toContain('supplier description');
+    expect(labels).not.toContain('published description');
+    expect(labels).not.toContain('description');
   });
 });
 
@@ -57,5 +108,27 @@ describe('parseSpecificationsForDisplay', () => {
     expect(labels).not.toContain('match signals');
     expect(labels).toContain('city code');
     expect(labels).toContain('serial number');
+  });
+});
+
+describe('hasSupplierSpecificationChangesFromBaseline', () => {
+  it('detects changed values against catalog baseline', async () => {
+    const { hasSupplierSpecificationChangesFromBaseline } = await import('./specifications.js');
+    expect(
+      hasSupplierSpecificationChangesFromBaseline(
+        { ram: '8GB', storage: '256GB' },
+        { ram: '16GB', storage: '256GB' }
+      )
+    ).toBe(true);
+  });
+
+  it('treats matching baseline values as unchanged', async () => {
+    const { hasSupplierSpecificationChangesFromBaseline } = await import('./specifications.js');
+    expect(
+      hasSupplierSpecificationChangesFromBaseline(
+        { ram: '8GB' },
+        { ram: '8gb' }
+      )
+    ).toBe(false);
   });
 });

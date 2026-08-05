@@ -27,7 +27,7 @@ import {
   labelReturnStatus
 } from '../utils/orderReturnUi';
 import { parseSpecificationsForDisplay } from '../utils/specifications';
-import { isMeaningfulProductDescription } from '../utils/productDisplay';
+import { resolveSupplierPortalDisplayDescription } from '../utils/productDisplay';
 import { filterSpNotifications } from '../utils/spNotificationAudience';
 import { useNotificationPanelScrollLock } from '../hooks/useNotificationPanelScrollLock';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -635,6 +635,15 @@ const ServiceProviderDashboard = ({ user }) => {
     order?.deliveryAddress?.gstSummary ||
     null;
 
+  const orderPaymentMethod = String(
+    orderDetails?.paymentMethod || orderDetails?.payment_method || ''
+  ).toLowerCase();
+  const orderIsPayLater = orderPaymentMethod === 'credit';
+  const payLaterDueAt =
+    orderDetails?.deliveryAddress?.payLater?.settlementDueAt ||
+    orderDetails?.deliveryAddress?.pay_later?.settlementDueAt ||
+    null;
+
   const fetchVaultBalance = async () => {
     try {
       setLoadingVaultBalance(true);
@@ -1120,11 +1129,11 @@ const ServiceProviderDashboard = ({ user }) => {
                                   <span className="product-category"> ({item.product.category})</span>
                                 )}
                               </div>
-                              {isMeaningfulProductDescription(item.product?.description) && (
+                              {resolveSupplierPortalDisplayDescription(item.product) ? (
                                 <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.25rem' }}>
-                                  {item.product.description}
+                                  {resolveSupplierPortalDisplayDescription(item.product)}
                                 </div>
-                              )}
+                              ) : null}
                               <SupplierTsinLine
                                 asin={item.asin || item.parentAsin}
                                 variantAsin={item.variantAsin}
@@ -1296,10 +1305,22 @@ const ServiceProviderDashboard = ({ user }) => {
                     border: '2px solid #e2e8f0'
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                      <h3 style={{ margin: 0, color: '#1e293b' }}>Vault Payment</h3>
+                      <h3 style={{ margin: 0, color: '#1e293b' }}>Vault payment</h3>
                     </div>
-                    <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
-                      Complete this payment from your vault. The platform will hold funds in escrow and release supplier payout after delivery.
+                    <p style={{ color: '#64748b', marginBottom: '1rem', fontSize: '0.9rem', textAlign: 'left' }}>
+                      {orderIsPayLater
+                        ? 'This order is on pay later. Settle anytime from your vault — top up first if needed. Payment is not waiting for delivery.'
+                        : isVaultPaymentMethod(orderPaymentMethod)
+                          ? 'Vault checkout debits at order placement. If payment is still pending, pay here now — not after delivery.'
+                          : 'Complete payment from your vault. All payments go through vault only.'}
+                    </p>
+                    {orderIsPayLater && payLaterDueAt ? (
+                      <p style={{ color: '#92400e', marginBottom: '1rem', fontSize: '0.85rem', textAlign: 'left' }}>
+                        Pay later due: <strong>{formatDateIST(payLaterDueAt, '—')}</strong>
+                      </p>
+                    ) : null}
+                    <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem', textAlign: 'left' }}>
+                      Your vault is debited at payment; the supplier vault is credited immediately (net of platform fee).
                     </p>
                     <div style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: '#334155' }}>
                       <p style={{ margin: '0.25rem 0' }}>
@@ -1346,7 +1367,7 @@ const ServiceProviderDashboard = ({ user }) => {
                         fontWeight: '600'
                       }}
                     >
-                      {updatingPayment ? 'Processing...' : 'Pay from Vault'}
+                      {updatingPayment ? 'Processing...' : 'Pay from vault'}
                     </button>
                     <button
                       className="btn-secondary"
@@ -1354,10 +1375,16 @@ const ServiceProviderDashboard = ({ user }) => {
                       onClick={() => navigate('/vault')}
                       style={{ width: '100%', marginTop: '0.5rem' }}
                     >
-                      Add money to vault
+                      Credit vault
                     </button>
                   </div>
                 )}
+
+                {orderDetails.paymentStatus === 'paid' ? (
+                  <div className="order-info-section">
+                    <p style={{ color: '#166534', fontWeight: 600, margin: 0 }}>✓ Paid from vault</p>
+                  </div>
+                ) : null}
 
                 {orderDetails.boq && (
                   <div className="order-info-section">

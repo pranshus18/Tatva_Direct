@@ -72,6 +72,28 @@ test('mergeCatalogAndOfferSpecificationsForDisplay: empty offer does not wipe ad
   assert.equal(merged.COLOR, '');
 });
 
+test('mergeCatalogAndOfferSpecificationsForDisplay: dedupes keys that differ only by casing/spacing', () => {
+  const merged = mergeCatalogAndOfferSpecificationsForDisplay(
+    {
+      Color: 'Silver',
+      'B P A Free': 'Yes',
+      'Dishwasher Safe': 'No',
+      Height: '1 l'
+    },
+    {
+      color: 'silver',
+      'bpa-free': 'yes',
+      'dishwasher_safe': 'no',
+      height: '600 ml'
+    }
+  );
+
+  assert.equal(Object.keys(merged).length, 4);
+  assert.equal(merged.height, '600 ml');
+  assert.equal(merged.color, 'silver');
+  assert.equal(merged['bpa-free'], 'yes');
+});
+
 test('countMeaningfulSpecValues: ignores null placeholders', () => {
   assert.equal(countMeaningfulSpecValues({ finish: null, volume: '20L' }), 1);
 });

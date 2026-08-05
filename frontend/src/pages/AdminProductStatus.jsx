@@ -26,6 +26,9 @@ import './AdminProductStatus.css';
 import { polishSupplierListingWithAi } from '../utils/adminPolishListingApi';
 import { formatDateTimeIST } from '../utils/dateTime';
 import {
+  getAdminBuyerFacingCatalogDescription,
+  getAdminReviewProductDescription,
+  getAdminSupplierSubmittedDescription,
   isMeaningfulProductDescription,
   looksLikeAiInstructions
 } from '../utils/productDisplay';
@@ -33,9 +36,11 @@ import {
   getAdminProductApprovalReadiness,
   isAdminProductReadyForApproval
 } from '../utils/adminProductApprovalReadiness';
-
-const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
-const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
+import {
+  resolveAdminDisplaySpecifications,
+  getAdminPolishSourceText
+} from '../utils/adminProductDisplay';
+import { IGST_OPTIONS, CGST_SGST_OPTIONS } from '../utils/gstRates';
 
 const normalizeIdPart = (value) => (value === null || value === undefined ? '' : String(value).trim());
 const firstNonEmpty = (...values) => {
@@ -55,26 +60,15 @@ const getProductIdentification = (product = {}) => {
   return parts.join('');
 };
 
-const getDisplayDescription = (product) => {
-  const desc = product?.description;
-  if (!isMeaningfulProductDescription(desc, { allowInlineSpecs: true })) return '';
-  return String(desc).trim();
-};
+const getDisplayDescription = (product) => getAdminBuyerFacingCatalogDescription(product);
 
-/** Raw supplier draft only — never the admin-published catalog description. */
-const getSupplierSubmittedDescription = (product) => {
-  const fromField = product?.supplierDescription;
-  if (fromField && String(fromField).trim()) return String(fromField).trim();
-  return '';
-};
+const getAdminRowEffectiveStatus = (product = {}) =>
+  String(product.displayStatus || product.offerStatus || product.status || 'pending').toLowerCase();
 
-/** Text sent to Polish with AI: current edit box, then supplier draft, then saved description. */
-const getPolishSourceText = ({ product, editedProduct, isEditing }) => {
-  const typed = isEditing ? String(editedProduct?.description || '').trim() : '';
-  if (typed) return typed;
-  const supplierDraft = getSupplierSubmittedDescription(product);
-  if (supplierDraft) return supplierDraft;
-  return getDisplayDescription(product);
+const getAdminRowDisplayName = (product = {}) => {
+  const baseName = product.catalogName || product.name || 'Product';
+  if (product.variantLabel) return `${baseName} — ${product.variantLabel}`;
+  return baseName;
 };
 
 const AdminProductStatus = ({ user }) => {
@@ -222,6 +216,9 @@ const AdminProductStatus = ({ user }) => {
         product.supplier?.name?.toLowerCase().includes(searchLower) ||
         product.supplier?.company?.toLowerCase().includes(searchLower) ||
         product.description?.toLowerCase().includes(searchLower) ||
+        product.supplierDescription?.toLowerCase().includes(searchLower) ||
+        product.publishedDescription?.toLowerCase().includes(searchLower) ||
+        product.variantLabel?.toLowerCase().includes(searchLower) ||
         getProductIdentification(product).toLowerCase().includes(searchLower)
       );
     }
@@ -231,26 +228,35 @@ const AdminProductStatus = ({ user }) => {
   };
 
   const handleApprove = async (product) => {
+    const isVariantReview =
+      product?.pendingReviewType === 'variant_spec' || product?.hasPendingSupplierOffer === true;
     const readiness = getAdminProductApprovalReadiness(product);
-    if (!readiness.ok) {
+    if (!isVariantReview && !readiness.ok) {
       alert(
         `${readiness.message}\n\n${readiness.missingRequirements.map((row) => `• ${row.message}`).join('\n')}`
       );
       return;
     }
 
-    if (!confirm(`Are you sure you want to approve "${product.name}"?`)) return;
+    const approveLabel = isVariantReview
+      ? `approve the updated specification variant for "${product.name}"`
+      : `approve "${product.name}"`;
+    if (!confirm(`Are you sure you want to ${approveLabel}?`)) return;
     
     setActionLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const productId = product._id || product.id;
+      const productId = product.catalogProductId || product._id || product.id;
       const response = await fetch(getApiUrl(`/api/admin/products/${productId}/approve`), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
-        }
+        },
+        body: JSON.stringify({
+          supplier_product_id:
+            product?.supplier_product_id || product?.supplierProductId || undefined
+        })
       });
 
       if (response.ok) {
@@ -281,14 +287,18 @@ const AdminProductStatus = ({ user }) => {
     setActionLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const productId = product._id || product.id;
+      const productId = product.catalogProductId || product._id || product.id;
       const response = await fetch(getApiUrl(`/api/admin/products/${productId}/reject`), {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ reason: reason.trim() })
+        body: JSON.stringify({
+          reason: reason.trim(),
+          supplier_product_id:
+            product?.supplier_product_id || product?.supplierProductId || undefined
+        })
       });
 
       if (response.ok) {
@@ -313,7 +323,7 @@ const AdminProductStatus = ({ user }) => {
   };
 
   const handleDelete = async (product) => {
-    if ((product.status || 'pending') !== 'rejected') {
+    if (getAdminRowEffectiveStatus(product) !== 'rejected') {
       alert('Only rejected products can be deleted.');
       return;
     }
@@ -323,7 +333,7 @@ const AdminProductStatus = ({ user }) => {
     setActionLoading(true);
     try {
       const token = localStorage.getItem('token');
-      const productId = product._id || product.id;
+      const productId = product.catalogProductId || product._id || product.id;
       const response = await fetch(getApiUrl(`/api/admin/products/${productId}`), {
         method: 'DELETE',
         headers: {
@@ -347,8 +357,20 @@ const AdminProductStatus = ({ user }) => {
     }
   };
 
-  const getStatusInfo = (status) => {
-    const statusValue = status || 'pending';
+  const getStatusInfo = (status, product = null) => {
+    const effectiveStatus = getAdminRowEffectiveStatus(product || { status });
+    if (
+      product?.pendingReviewType === 'variant_spec' &&
+      effectiveStatus === 'pending'
+    ) {
+      return {
+        icon: Clock,
+        color: '#d97706',
+        bgColor: '#fef3c7',
+        text: 'Pending Variant Review'
+      };
+    }
+    const statusValue = effectiveStatus || 'pending';
     switch (statusValue) {
       case 'approved':
         return { 
@@ -377,13 +399,9 @@ const AdminProductStatus = ({ user }) => {
 
   const statusCounts = {
     all: products.length,
-    pending: products.filter(p => {
-      const status = p.status;
-      return !status || status === 'pending' || status === '' || 
-             (status !== 'approved' && status !== 'rejected');
-    }).length,
-    approved: products.filter(p => p.status === 'approved').length,
-    rejected: products.filter(p => p.status === 'rejected').length
+    pending: products.filter((p) => getAdminRowEffectiveStatus(p) === 'pending').length,
+    approved: products.filter((p) => getAdminRowEffectiveStatus(p) === 'approved').length,
+    rejected: products.filter((p) => getAdminRowEffectiveStatus(p) === 'rejected').length
   };
 
   if (loading) {
@@ -529,14 +547,18 @@ const AdminProductStatus = ({ user }) => {
         ) : (
           <div className="products-grid" style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '0.85rem' }}>
             {filteredProducts.map((product) => {
-              const statusInfo = getStatusInfo(product.status);
+              const statusInfo = getStatusInfo(product.status, product);
               const StatusIcon = statusInfo.icon;
               const supplier = product.supplier || {};
-              const approvalReady = isAdminProductReadyForApproval(product);
+              const effectiveStatus = getAdminRowEffectiveStatus(product);
+              const isVariantReview =
+                product?.pendingReviewType === 'variant_spec' && effectiveStatus === 'pending';
+              const approvalReady = isVariantReview || isAdminProductReadyForApproval(product);
+              const needsAdminReview = effectiveStatus === 'pending';
 
               return (
                 <div
-                  key={product._id || product.id}
+                  key={product.adminRowKey || product._id || product.id}
                   className="product-card"
                   style={{ padding: '0.85rem 1rem', cursor: 'pointer' }}
                   onClick={() => setSelectedProduct(product)}
@@ -545,7 +567,7 @@ const AdminProductStatus = ({ user }) => {
                   <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
                     <div style={{ flex: 1, minWidth: '260px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', marginBottom: '0.3rem' }}>
-                        <h3 className="product-name" style={{ margin: 0 }}>{product.name}</h3>
+                        <h3 className="product-name" style={{ margin: 0 }}>{getAdminRowDisplayName(product)}</h3>
                         <span
                           className="status-badge"
                           style={{
@@ -567,16 +589,22 @@ const AdminProductStatus = ({ user }) => {
                           <Building size={14} />
                           {supplier.name || supplier.company || 'Unknown supplier'}
                         </span>
-                        {getProductIdentification(product) && (
+                        {getProductIdentification(product) ? (
                           <span className="meta-item">
                             <Tag size={14} />
                             {getProductIdentification(product)}
                           </span>
-                        )}
+                        ) : null}
+                        {product.isVariantRow && product.variantAsin ? (
+                          <span className="meta-item">
+                            <Tag size={14} />
+                            Variant {product.variantAsin}
+                          </span>
+                        ) : null}
                       </div>
 
-                      {getDisplayDescription(product) && (
-                        <p className="product-description" style={{ marginBottom: 0 }}>{getDisplayDescription(product)}</p>
+                      {getAdminReviewProductDescription(product) && (
+                        <p className="product-description" style={{ marginBottom: 0 }}>{getAdminReviewProductDescription(product)}</p>
                       )}
                     </div>
 
@@ -605,7 +633,7 @@ const AdminProductStatus = ({ user }) => {
                       <Eye size={16} />
                       View Details
                     </button>
-                    {product.status !== 'approved' && (
+                    {needsAdminReview && (
                       <button
                         className="btn-approve"
                         onClick={(e) => {
@@ -615,7 +643,9 @@ const AdminProductStatus = ({ user }) => {
                         disabled={actionLoading || !approvalReady}
                         title={
                           approvalReady
-                            ? 'Approve this product'
+                            ? isVariantReview
+                              ? 'Approve this updated specification variant'
+                              : 'Approve this product'
                             : 'Set description, GST, and specifications before approval'
                         }
                       >
@@ -623,7 +653,7 @@ const AdminProductStatus = ({ user }) => {
                         Approve
                       </button>
                     )}
-                    {product.status !== 'rejected' && (
+                    {effectiveStatus !== 'rejected' && needsAdminReview && (
                       <button
                         className="btn-reject"
                         onClick={(e) => {
@@ -636,7 +666,7 @@ const AdminProductStatus = ({ user }) => {
                         Reject
                       </button>
                     )}
-                    {product.status === 'rejected' && (
+                    {effectiveStatus === 'rejected' && !product.isVariantRow && (
                       <button
                         className="btn-delete"
                         onClick={(e) => {
@@ -695,25 +725,25 @@ const AdminProductStatus = ({ user }) => {
             handleDelete(selectedProduct);
           }}
           onUpdate={(updatedProduct) => {
-            // Update the product in the list with full specifications
-            const updatedProducts = products.map(p => {
-              if ((p._id === updatedProduct._id || p.id === updatedProduct.id)) {
-                // Merge specifications to ensure nothing is lost
-                return {
-                  ...updatedProduct,
-                  specifications: updatedProduct.specifications || p.specifications || {}
-                };
+            const mergedProduct = {
+              ...selectedProduct,
+              ...updatedProduct,
+              description: updatedProduct.description ?? selectedProduct?.description ?? '',
+              publishedDescription:
+                updatedProduct.publishedDescription ?? selectedProduct?.publishedDescription ?? '',
+              supplierDescription:
+                updatedProduct.supplierDescription ?? selectedProduct?.supplierDescription ?? '',
+              specifications:
+                updatedProduct.specifications ?? selectedProduct?.specifications ?? {}
+            };
+            const updatedProducts = products.map((p) => {
+              if (p._id === mergedProduct._id || p.id === mergedProduct.id) {
+                return mergedProduct;
               }
               return p;
             });
             setProducts(updatedProducts);
-            // Update selected product with full specifications
-            const updatedSelected = {
-              ...updatedProduct,
-              specifications: updatedProduct.specifications || selectedProduct?.specifications || {}
-            };
-            setSelectedProduct(updatedSelected);
-            // Refresh to get latest from server
+            setSelectedProduct(mergedProduct);
             fetchProducts();
           }}
           actionLoading={actionLoading}
@@ -741,9 +771,9 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
     sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
     location: product?.location || '',
-    description: product?.description || '',
+    description: getAdminBuyerFacingCatalogDescription(product),
     minOrderQuantity: product?.minOrderQuantity || 1,
-    specifications: product?.specifications || {}
+    specifications: resolveAdminDisplaySpecifications(product)
   });
   const [saving, setSaving] = useState(false);
   // AI Fetch state
@@ -760,7 +790,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     if (!isEditing) {
       setAiEnhancePrompt('');
     }
-    const rawDesc = product?.description || '';
+    const rawDesc = getAdminBuyerFacingCatalogDescription(product);
     const instructionInDescription = looksLikeAiInstructions(rawDesc);
     if (isEditing && instructionInDescription) {
       setAiEnhancePrompt(rawDesc);
@@ -779,7 +809,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       location: product?.location || '',
       description: isEditing && instructionInDescription ? '' : rawDesc,
       minOrderQuantity: product?.minOrderQuantity || 1,
-      specifications: product?.specifications || {}
+      specifications: resolveAdminDisplaySpecifications(product)
     });
   }, [product, isEditing]);
   
@@ -790,15 +820,51 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     pending: { color: '#d97706', text: 'Pending Approval' },
     rejected: { color: '#dc2626', text: 'Rejected' }
   };
-  const status = statusInfo[product.status] || statusInfo.pending;
-  const approvalReadiness = getAdminProductApprovalReadiness(product);
-  const canApproveProduct = approvalReadiness.ok && !isEditing;
+  const effectiveStatus = getAdminRowEffectiveStatus(product);
+  const status = statusInfo[effectiveStatus] || statusInfo.pending;
+  const isVariantReview =
+    product?.pendingReviewType === 'variant_spec' &&
+    effectiveStatus === 'pending';
+  // Per-variant admin rows carry offer displayStatus; readiness must use that status
+  // so buyer-facing description gates match pending vs approved offer copy rules.
+  const approvalReadiness = getAdminProductApprovalReadiness({
+    ...product,
+    status: effectiveStatus
+  });
+  const canApproveProduct = (isVariantReview || approvalReadiness.ok) && !isEditing;
+  const needsAdminReview = getAdminRowEffectiveStatus(product) === 'pending';
+
+  const mergeAdminSavedProduct = (savedProduct, draftProduct, sourceProduct) => {
+    const savedDescription = String(savedProduct?.description || '').trim();
+    const savedPublished = String(savedProduct?.publishedDescription || '').trim();
+    const draftDescription = String(draftProduct?.description || '').trim();
+    const buyerFacingDescription = savedPublished || savedDescription || draftDescription;
+
+    return {
+      ...savedProduct,
+      minOrderQuantity: savedProduct.min_order_quantity || savedProduct.minOrderQuantity || 1,
+      name: savedProduct.name || draftProduct.name,
+      category: savedProduct.category || draftProduct.category,
+      price: savedProduct.price ?? draftProduct.price,
+      unit: savedProduct.unit || draftProduct.unit,
+      stock: savedProduct.stock ?? draftProduct.stock,
+      location: savedProduct.location || draftProduct.location,
+      description: buyerFacingDescription,
+      publishedDescription: buyerFacingDescription,
+      supplierDescription:
+        savedProduct.supplierDescription || sourceProduct?.supplierDescription || '',
+      specifications: {
+        ...(draftProduct.specifications || {}),
+        ...(savedProduct.specifications || {})
+      }
+    };
+  };
 
   const handleSave = async () => {
     setSaving(true);
     try {
       const token = localStorage.getItem('token');
-      const productId = product._id || product.id;
+      const productId = product.catalogProductId || product._id || product.id;
       // Prepare product data with specifications
       const productData = {
         ...editedProduct,
@@ -807,7 +873,9 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
         // Ensure category is included (it's needed for syncing specs to category)
         category: editedProduct.category || product.category,
         // Target the correct supplier_products offer when mirroring price/stock/etc.
-        supplier_id: product?.supplier_id || product?.supplier?.id || undefined
+        supplier_id: product?.supplier_id || product?.supplier?.id || undefined,
+        supplier_product_id:
+          product?.supplier_product_id || product?.supplierProductId || undefined
       };
       
       console.log('💾 [ADMIN SAVE] Saving product with category:', productData.category);
@@ -849,52 +917,19 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       }
       
       if (data.status === 'success') {
-        // Update editedProduct with the saved product data to preserve specifications
         const savedProduct = data.product || data;
-        
-        // Convert snake_case to camelCase for frontend
-        const normalizedProduct = {
-          ...savedProduct,
-          minOrderQuantity: savedProduct.min_order_quantity || savedProduct.minOrderQuantity || 1
-        };
-        
-        // Prefer the saved API response as source of truth for displayed specs.
-        const mergedSpecs = {
-          ...(editedProduct.specifications || {}),
-          ...(normalizedProduct.specifications || {})
-        };
-        
-        const updatedProduct = {
-          ...normalizedProduct,
-          name: normalizedProduct.name || editedProduct.name,
-          category: normalizedProduct.category || editedProduct.category,
-          price: normalizedProduct.price || editedProduct.price,
-          unit: normalizedProduct.unit || editedProduct.unit,
-          stock: normalizedProduct.stock || editedProduct.stock,
-          location: normalizedProduct.location || editedProduct.location,
-          description: normalizedProduct.description || editedProduct.description,
-          minOrderQuantity: normalizedProduct.minOrderQuantity || editedProduct.minOrderQuantity || 1,
-          specifications: mergedSpecs
-        };
-        
+        const updatedProduct = mergeAdminSavedProduct(savedProduct, editedProduct, product);
+
         console.log('✅ [ADMIN SAVE] Product updated successfully:', updatedProduct);
-        
+
         setEditedProduct(updatedProduct);
-        
-        // Update the product prop first, then exit edit mode
+
         if (onUpdate) {
-          // Ensure the saved product includes all specifications
-          const productToUpdate = {
-            ...normalizedProduct,
-            specifications: mergedSpecs
-          };
-          onUpdate(productToUpdate);
+          onUpdate(updatedProduct);
         }
-        
+
         setIsEditing(false);
         alert('Product updated successfully!');
-        
-        // Refresh will be handled by onUpdate callback in parent component
       } else {
         console.error('❌ [ADMIN SAVE] Update failed:', data);
         alert(data.message || 'Failed to update product');
@@ -923,9 +958,9 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
       sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
       location: product?.location || '',
-      description: product?.description || '',
+      description: getAdminBuyerFacingCatalogDescription(product),
       minOrderQuantity: product?.minOrderQuantity || 1,
-      specifications: product?.specifications || {}
+      specifications: resolveAdminDisplaySpecifications(product)
     });
   };
 
@@ -1117,7 +1152,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
 
   const performPolishListing = async () => {
     const productToUse = isEditing ? editedProduct : product;
-    const sourceText = getPolishSourceText({ product, editedProduct, isEditing });
+    const sourceText = getAdminPolishSourceText({ product, editedProduct, isEditing });
     if (!productToUse?.name) {
       alert('Product name is required.');
       return;
@@ -1177,9 +1212,15 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     }
   };
 
-  const supplierSubmittedDescription = getSupplierSubmittedDescription(product);
-  const polishSourceText = getPolishSourceText({ product, editedProduct, isEditing });
+  const supplierSubmittedDescription = getAdminSupplierSubmittedDescription(product);
+  const polishSourceText = getAdminPolishSourceText({ product, editedProduct, isEditing });
   const canPolish = Boolean(polishSourceText) && Boolean(product?.name);
+  const displaySpecifications = resolveAdminDisplaySpecifications(product);
+  const buyerFacingDescription = String(
+    isEditing ? editedProduct.description : getDisplayDescription(product)
+  ).trim();
+  const showSupplierSubmittedDescription =
+    Boolean(supplierSubmittedDescription) && !buyerFacingDescription;
 
   const modalNode = (
     <div className="modal-overlay" onClick={onClose}>
@@ -1498,7 +1539,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 marginBottom: '0.75rem'
               }}
             >
-              <span>Product description</span>
+              <span>Buyer-facing description</span>
               <button
                 type="button"
                 onClick={performPolishListing}
@@ -1527,39 +1568,41 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 <span>{polishing ? 'Polishing…' : 'Polish with AI'}</span>
               </button>
             </h3>
-            {supplierSubmittedDescription &&
-            supplierSubmittedDescription !==
-              String(isEditing ? editedProduct.description : getDisplayDescription(product)).trim() ? (
-              <details
+            {showSupplierSubmittedDescription ? (
+              <div
                 style={{
                   marginBottom: '0.75rem',
-                  padding: '0.5rem 0.75rem',
+                  padding: '0.75rem',
                   border: '1px solid #e2e8f0',
                   borderRadius: '8px',
                   background: '#f8fafc'
                 }}
               >
-                <summary style={{ cursor: 'pointer', fontSize: '0.875rem', color: '#475569', fontWeight: 500 }}>
-                  View supplier draft
-                </summary>
-                <p style={{ margin: '0.5rem 0 0', color: '#334155', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                <div style={{ fontSize: '0.875rem', color: '#475569', fontWeight: 600, marginBottom: '0.35rem' }}>
+                  Supplier submitted description
+                </div>
+                <p style={{ margin: 0, color: '#334155', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
                   {supplierSubmittedDescription}
                 </p>
-              </details>
+              </div>
             ) : null}
             {isEditing ? (
               <textarea
                 value={editedProduct.description}
                 onChange={(e) => setEditedProduct({ ...editedProduct, description: e.target.value })}
                 rows="5"
-                placeholder="Write or polish the description buyers will see. Save, then approve the product."
+                placeholder={
+                  showSupplierSubmittedDescription
+                    ? 'Use Polish with AI to draft buyer-facing copy from the supplier text above.'
+                    : 'Write or edit the buyer-facing description buyers will see after approval.'
+                }
                 style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%', fontFamily: 'inherit' }}
               />
             ) : (
-              <p style={{ margin: 0, lineHeight: 1.55 }}>
-                {getDisplayDescription(product) ||
-                  (supplierSubmittedDescription
-                    ? 'No published description yet. Click Edit, then Polish with AI or write one manually.'
+              <p style={{ margin: 0, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                {buyerFacingDescription ||
+                  (showSupplierSubmittedDescription
+                    ? 'Click Edit, then Polish with AI to create the buyer-facing description.'
                     : 'No description yet. Click Edit to add one.')}
               </p>
             )}
@@ -1671,8 +1714,8 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
           )}
 
           {/* Always show specifications section if there are any specs or if editing */}
-          {((product.specifications && Object.keys(product.specifications).length > 0) || 
-            (editedProduct.specifications && Object.keys(editedProduct.specifications).length > 0) || 
+          {((displaySpecifications && Object.keys(displaySpecifications).length > 0) ||
+            (editedProduct.specifications && Object.keys(editedProduct.specifications).length > 0) ||
             isEditing) ? (
             <div className="specifications-section">
               <h3>Specifications {isEditing && <span style={{ fontSize: '0.75rem', color: '#64748b', fontWeight: 'normal' }}>(from AI) - Enter values manually</span>}</h3>
@@ -1995,7 +2038,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 </div>
               ) : (
                 <div className="specifications-grid">
-                  {Object.entries(product.specifications || {}).map(([key, value]) => {
+                  {Object.entries(displaySpecifications).map(([key, value]) => {
                     // Show all keys, even if value is null or empty
                     const displayValue = value !== null && value !== undefined && value !== '' 
                       ? (Array.isArray(value) ? value.join(', ') : String(value))
@@ -2052,19 +2095,32 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
             </div>
           </div>
 
-          {product.status !== 'approved' ? (
+          {needsAdminReview ? (
             <div
               role="status"
               style={{
                 margin: '0 0 1rem',
                 padding: '0.85rem 1rem',
                 borderRadius: '8px',
-                border: `1px solid ${approvalReadiness.ok ? '#bbf7d0' : '#fde68a'}`,
-                background: approvalReadiness.ok ? '#ecfdf5' : '#fffbeb'
+                border: `1px solid ${canApproveProduct ? '#bbf7d0' : '#fde68a'}`,
+                background: canApproveProduct ? '#ecfdf5' : '#fffbeb'
               }}
             >
-              <strong>{approvalReadiness.ok ? 'Ready for approval' : 'Complete before approval'}</strong>
-              {approvalReadiness.ok ? (
+              <strong>
+                {isVariantReview
+                  ? canApproveProduct
+                    ? 'Pending variant review'
+                    : 'Review updated specification variant'
+                  : canApproveProduct
+                    ? 'Ready for approval'
+                    : 'Complete before approval'}
+              </strong>
+              {isVariantReview ? (
+                <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#92400e' }}>
+                  A supplier re-listed this approved product with changed specification values.
+                  Review the variant specs below, then approve or reject this supplier offer.
+                </p>
+              ) : canApproveProduct ? (
                 <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#065f46' }}>
                   Description, GST, and specifications are saved. You can approve this product.
                 </p>
@@ -2141,34 +2197,36 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 <Edit size={16} />
                 Edit Product
               </button>
-              {product.status !== 'approved' && (
+              {needsAdminReview && (
                 <button
                   className="btn-approve-modal"
                   onClick={onApprove}
                   disabled={actionLoading || !canApproveProduct}
                   title={
                     canApproveProduct
-                      ? 'Approve this product'
+                      ? isVariantReview
+                        ? 'Approve this updated specification variant'
+                        : 'Approve this product'
                       : isEditing
                         ? 'Save changes before approving'
                         : approvalReadiness.message || 'Complete description, GST, and specifications first'
                   }
                 >
                   <Check size={16} />
-                  Approve Product
+                  {isVariantReview ? 'Approve Variant' : 'Approve Product'}
                 </button>
               )}
-              {product.status !== 'rejected' && (
+              {needsAdminReview && (
                 <button
                   className="btn-reject-modal"
                   onClick={onReject}
                   disabled={actionLoading}
                 >
                   <Ban size={16} />
-                  Reject Product
+                  {isVariantReview ? 'Reject Variant' : 'Reject Product'}
                 </button>
               )}
-              {product.status === 'rejected' && (
+              {product.status === 'rejected' && !isVariantReview && (
                 <button
                   className="btn-delete-modal"
                   onClick={onDelete}

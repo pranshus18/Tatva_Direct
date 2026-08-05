@@ -11,9 +11,44 @@ import { reconcileWithSupplierOffers } from '../services/vendorProductDiscoveryS
  * site" on the vendor selection screen.
  */
 
-function makeFakeSupabase({ offerRows = [] } = {}) {
+function makeFakeSupabase({ offerRows = [], catalogProducts = [], familyVariantRows = [] } = {}) {
   return {
     from(table) {
+      if (table === 'products') {
+        return {
+          select() {
+            return {
+              in() {
+                return Promise.resolve({ data: catalogProducts, error: null });
+              },
+              eq() {
+                return {
+                  in() {
+                    return Promise.resolve({
+                      data: catalogProducts.map(({ id }) => ({ id })),
+                      error: null
+                    });
+                  }
+                };
+              }
+            };
+          }
+        };
+      }
+      if (table === 'product_variants') {
+        return {
+          select() {
+            return {
+              eq() {
+                return Promise.resolve({ data: familyVariantRows, error: null });
+              },
+              in() {
+                return Promise.resolve({ data: familyVariantRows, error: null });
+              }
+            };
+          }
+        };
+      }
       if (table === 'supplier_products') {
         return {
           select() {
@@ -69,7 +104,7 @@ test('reconcileWithSupplierOffers never fills a blank offer location from the sh
     }
   ];
 
-  const supabase = makeFakeSupabase({ offerRows });
+  const supabase = makeFakeSupabase({ offerRows, catalogProducts: [catalogProduct] });
 
   const result = await reconcileWithSupplierOffers({
     supabase,

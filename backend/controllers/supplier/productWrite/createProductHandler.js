@@ -19,6 +19,7 @@ import {
   resolveSupplierProductBrandGuard,
   scoreOnboardingConfidence,
   shouldAutoApproveSupplierOfferOnCreate,
+  hasSupplierSpecificationChangesFromCatalog,
   validateSpecValues
 } from '../supplierImports.js';
 import { sanitizeImageUrls } from '../shared/productHelpers.js';
@@ -31,6 +32,8 @@ import {
   findExistingProductCandidate,
   reopenRejectedCatalogProductForResubmit
 } from '../../../services/supplierProductWriteService.js';
+import { resolveCatalogBaselineSpecifications } from '../../../services/supplierCatalogHelpersService.js';
+import { syncOfferAttributesWithSpecifications } from '../../../services/productIdentityService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import {
   MIN_SUPPLIER_PRODUCT_PHOTOS,
@@ -359,12 +362,29 @@ export function buildSupplierProductCreateHandler(ctx) {
           .maybeSingle();
         resolvedCatalogStatus = catalogRow?.status || 'pending';
       }
+      const catalogBaselineSpecs =
+        !isNewProduct && existingProduct
+          ? await resolveCatalogBaselineSpecifications(supabase, {
+              productId,
+              catalogSpecs:
+                parentProductForVariant?.specifications || existingProduct?.specifications || {},
+              variantKey: variantIdentityBundle.variantKey
+            })
+          : {};
+      const hasSpecificationChanges =
+        !isNewProduct && existingProduct
+          ? hasSupplierSpecificationChangesFromCatalog({
+              catalogSpecs: catalogBaselineSpecs,
+              supplierSpecs: normalizedSpecs
+            })
+          : false;
       const shouldBeApproved = shouldAutoApproveSupplierOfferOnCreate({
         hasApprovedSameVariantOffer: Boolean(approvedVariantOffer?.id),
         catalogProductStatus: resolvedCatalogStatus,
         hasAnyApprovedOfferForProduct: Boolean(anyApprovedOfferForProduct?.id),
         // New catalog rows are always pending; only confirmed re-lists may auto-approve.
-        matchStrength: isNewProduct ? 'none' : matchStrength
+        matchStrength: isNewProduct ? 'none' : matchStrength,
+        hasSpecificationChanges
       });
       const variantAsin = buildVariantAsinLikeId(
         catalogAsin || identityBundle.asinLikeId,
@@ -386,7 +406,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         sgst_rate: sgstRate,
         variant_key: variantIdentityBundle.variantKey,
         variant_asin: variantAsin,
-        attributes: {
+        attributes: syncOfferAttributesWithSpecifications({
           supplierDescription: String(otherData.description || '').trim(),
           description: String(otherData.description || '').trim(),
           specifications: otherData.specifications || normalizedSpecs,
@@ -404,13 +424,12 @@ export function buildSupplierProductCreateHandler(ctx) {
           sku: (requestSpecs?.skuNo || requestSpecs?.sku || requestSpecs?.gsku || '').toString().trim(),
           packSize: (requestSpecs?.packSize || requestSpecs?.pack_size || '').toString().trim(),
           unit: (unit || '').toString().trim(),
-          variantAttributes: variantIdentityBundle.variant.variantAttributes,
           igstRate,
           cgstRate,
           sgstRate,
           tags: otherData.tags || [],
           images: normalizedImageUrls
-        }
+        })
       };
 
       const { data: newSupplierProduct, error: supplierProductError } = resubmittingRejectedOffer
@@ -463,7 +482,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         // Prefer the name the supplier just typed for this row, not a shared catalog rename.
         name: submittedName || baseProduct?.name || 'Product',
         supplierDescription: supplierSubmittedDescription,
-        publishedDescription: baseProduct?.description || '',
+        publishedDescription: '',
         description: supplierSubmittedDescription,
         price: createdOffer?.price,
         stock: createdOffer?.stock,
@@ -587,8 +606,12 @@ export function buildSupplierProductCreateHandler(ctx) {
           ? 'Product added successfully and is immediately available.'
           : resubmittingRejectedOffer
             ? 'Product resubmitted successfully and is pending admin approval.'
-            : 'Product added successfully and is pending admin approval.',
-        product: responseProduct
+            : hasSpecificationChanges
+              ? 'Product added successfully. Specification changes require admin approval before this listing goes live.'
+              : 'Product added successfully and is pending admin approval.',
+        product: responseProduct,
+        requiresAdminApproval: !shouldBeApproved,
+        specificationChangesDetected: hasSpecificationChanges
       });
     } catch (error) {
       if (String(error?.name || '') === 'ZodError') {

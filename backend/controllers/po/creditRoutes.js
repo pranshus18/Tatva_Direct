@@ -3,9 +3,9 @@ import { poCreditCheckBodySchema } from '../../contracts/creditContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
 
 export function registerPoCreditRoutes(ctx) {
-  const { router, authenticateToken, isServiceProvider } = ctx;
+  const { router, authenticateToken, isServiceProviderOrSupplier } = ctx;
 
-  router.post('/credit-check', authenticateToken, isServiceProvider, async (req, res) => {
+  router.post('/credit-check', authenticateToken, isServiceProviderOrSupplier, async (req, res) => {
     try {
       const payload = parseWithSchema(poCreditCheckBodySchema, req.body || {});
       const results = [];

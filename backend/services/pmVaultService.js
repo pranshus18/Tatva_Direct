@@ -827,6 +827,91 @@ export async function fetchPmVaultTransactions({
   return payload;
 }
 
+function normalizePmTransactionLimit(raw, fallback = 100) {
+  const parsed = Number.parseInt(String(raw ?? fallback), 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(parsed, 200));
+}
+
+function pmTransactionRowKey(row = {}) {
+  return String(
+    row.id || row.transaction_id || row.transactionId || row.reference || ''
+  ).trim();
+}
+
+/** Merge PM ledger pages without duplicating rows when paginating. */
+export function mergePmVaultTransactionPages(existing = [], incoming = []) {
+  const seen = new Set(
+    (Array.isArray(existing) ? existing : [])
+      .map(pmTransactionRowKey)
+      .filter(Boolean)
+  );
+  const merged = [...(Array.isArray(existing) ? existing : [])];
+  for (const row of Array.isArray(incoming) ? incoming : []) {
+    const key = pmTransactionRowKey(row);
+    if (key && seen.has(key)) continue;
+    merged.push(row);
+    if (key) seen.add(key);
+  }
+  return merged;
+}
+
+/** Read pagination metadata from PM /vault/transactions payloads. */
+export function extractPmTransactionPageInfo(payload) {
+  const node = unwrapPmPayload(payload) || payload || {};
+  const pagination =
+    (node.pagination && typeof node.pagination === 'object' ? node.pagination : null) ||
+    (node.pageInfo && typeof node.pageInfo === 'object' ? node.pageInfo : null) ||
+    (node.meta && typeof node.meta === 'object' ? node.meta : null) ||
+    node;
+
+  const nextCursorRaw =
+    pagination.nextCursor ??
+    pagination.next_cursor ??
+    pagination.nextPageCursor ??
+    pagination.next ??
+    node.nextCursor ??
+    node.next_cursor ??
+    null;
+  const nextCursor =
+    nextCursorRaw == null || nextCursorRaw === '' ? null : String(nextCursorRaw).trim() || null;
+
+  const totalDocs = Number(
+    pagination.totalDocs ?? pagination.total ?? pagination.totalCount ?? node.totalDocs ?? NaN
+  );
+  const limit = Number(pagination.limit ?? pagination.pageSize ?? node.limit ?? NaN);
+  const page = Number(pagination.page ?? pagination.currentPage ?? node.page ?? NaN);
+  const currentCount = extractPmTransactionRows(payload).length;
+
+  let inferredHasMore = false;
+  if (Number.isFinite(totalDocs) && totalDocs > 0) {
+    if (Number.isFinite(limit) && Number.isFinite(page)) {
+      inferredHasMore = page * limit < totalDocs;
+    } else if (Number.isFinite(limit) && currentCount >= limit) {
+      inferredHasMore = true;
+    }
+  }
+
+  const explicitHasMore =
+    pagination.hasNextPage ??
+    pagination.has_next_page ??
+    pagination.hasMore ??
+    pagination.has_more ??
+    node.hasNextPage ??
+    node.has_next_page ??
+    node.hasMore ??
+    node.has_more ??
+    null;
+
+  const hasMore = Boolean(explicitHasMore ?? (nextCursor ? true : inferredHasMore));
+
+  return {
+    hasMore,
+    nextCursor,
+    totalCount: Number.isFinite(totalDocs) ? totalDocs : null
+  };
+}
+
 /**
  * Reconciliation statement — full cross-platform ledger for the user.
  * PM GET /api/vault/transactions (no flag filter).
@@ -838,25 +923,68 @@ export async function getPmVaultTransactions(user, credentials = {}, options = {
     options.flag === undefined || options.flag === null || String(options.flag).trim() === ''
       ? null
       : String(options.flag).trim();
-  const query = {
+
+  const hasExplicitLimit = options.limit != null && String(options.limit).trim() !== '';
+  const hasExplicitCursor = options.cursor != null && String(options.cursor).trim() !== '';
+  const fetchAll =
+    options.fetchAll !== false && !hasExplicitLimit && !hasExplicitCursor;
+  const pageLimit = hasExplicitLimit ? normalizePmTransactionLimit(options.limit) : 100;
+
+  const baseQuery = {
     from: options.from || options.fromDate || undefined,
     to: options.to || options.toDate || undefined,
-    limit: options.limit || undefined,
-    cursor: options.cursor || undefined,
     search: options.search || undefined
   };
 
-  const payload = await fetchPmVaultTransactions({
-    accessToken,
-    flag,
-    query
-  });
-  // PM payment writes currently stamp row.flag as "tatvaops" even for Tatva Direct.
-  // Overlay the correct platform for writes we initiated (and details markers).
-  const transactions = applyPmVaultPlatformAttribution(mapPmVaultTransactions(payload));
+  let transactions = [];
+  let lastPayload = null;
+  let pageInfo = { hasMore: false, nextCursor: null, totalCount: null };
+  let cursor = hasExplicitCursor ? String(options.cursor).trim() : undefined;
+  let page = 1;
+  let pagesFetched = 0;
+  const maxPages = fetchAll ? 50 : 1;
+
+  do {
+    const query = {
+      ...baseQuery,
+      limit: pageLimit,
+      ...(cursor ? { cursor } : {}),
+      ...(fetchAll && !cursor && page > 1 ? { page } : {})
+    };
+
+    const payload = await fetchPmVaultTransactions({
+      accessToken,
+      flag,
+      query
+    });
+    lastPayload = payload;
+
+    const pageRows = applyPmVaultPlatformAttribution(mapPmVaultTransactions(payload));
+    transactions = mergePmVaultTransactionPages(transactions, pageRows);
+    pageInfo = extractPmTransactionPageInfo(payload);
+    pagesFetched += 1;
+
+    if (!fetchAll || !pageInfo.hasMore || pagesFetched >= maxPages) break;
+
+    if (pageInfo.nextCursor) {
+      cursor = pageInfo.nextCursor;
+      page += 1;
+      continue;
+    }
+
+    if (Number.isFinite(Number(payload?.data?.page ?? payload?.page)) && pageRows.length >= pageLimit) {
+      page = Number(payload?.data?.page ?? payload?.page ?? page) + 1;
+      cursor = undefined;
+      continue;
+    }
+
+    break;
+  } while (fetchAll && pageInfo.hasMore);
 
   logger.info('[PM vault transactions] mapped rows', {
     count: transactions.length,
+    pagesFetched,
+    fetchAll,
     flag,
     sampleAmount: transactions[0]?.amount,
     sampleDetails: transactions[0]?.details,
@@ -866,7 +994,10 @@ export async function getPmVaultTransactions(user, credentials = {}, options = {
   return {
     transactions,
     summary: summarizePmVaultLedger(transactions),
-    raw: payload,
+    raw: lastPayload,
+    pageInfo: fetchAll
+      ? { hasMore: false, nextCursor: null, totalCount: pageInfo.totalCount ?? transactions.length }
+      : pageInfo,
     source: 'pm_vault_transactions',
     upstream: PM_VAULT_TRANSACTIONS_URL,
     flag
@@ -1078,6 +1209,23 @@ export async function assertPmVaultBalanceSufficient(user, amountInRupees, crede
 }
 
 /**
+ * Resolve a Tatva user's PM platform user id from stored profile/auth or phone directory lookup.
+ */
+export async function resolvePmUserIdForTatvaUser(user) {
+  if (!user) return null;
+  const stored = getPmAuthFromUser(user);
+  const fromProfile = user?.profile?.pmCustomerProfile?.pmUserId;
+  const direct = normalizePmObjectId(stored?.pmUserId || fromProfile || '');
+  if (direct) return direct;
+
+  const phone = normalizeIndianMobile(user?.phone || user?.profile?.pmCustomerProfile?.phoneNumber);
+  if (phone.length !== 10) return null;
+
+  const pmUser = await fetchPmUserByPhone(phone);
+  return normalizePmObjectId(pmUser?._id || pmUser?.id || pmUser?.userId || '');
+}
+
+/**
  * Debit PM vault for a Tatva order (service provider or supplier buyer).
  * PM contract (official):
  *   POST {PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay
@@ -1090,6 +1238,9 @@ export async function payOrderFromPmVault({
   orderId,
   orderNumber = null,
   amountInRupees,
+  supplierPmUserId = null,
+  supplierPayoutAmountInRupees = null,
+  platformFeeAmountInRupees = null,
   description = 'Order payment from PM vault',
   credentials = {}
 }) {
@@ -1137,6 +1288,19 @@ export async function payOrderFromPmVault({
   const amountForPm = payAmountInPaise ? amountPaise : amountInr;
   const orderNo = String(orderNumber || '').trim() || null;
   const desc = String(description || 'Order payment from PM vault').trim();
+  const supplierUserId = String(supplierPmUserId || '').trim() || null;
+  const supplierPayoutForPm =
+    supplierPayoutAmountInRupees != null && Number(supplierPayoutAmountInRupees) > 0
+      ? payAmountInPaise
+        ? Math.round(Number(supplierPayoutAmountInRupees) * 100)
+        : Math.round(Number(supplierPayoutAmountInRupees) * 100) / 100
+      : null;
+  const platformFeeForPm =
+    platformFeeAmountInRupees != null && Number(platformFeeAmountInRupees) > 0
+      ? payAmountInPaise
+        ? Math.round(Number(platformFeeAmountInRupees) * 100)
+        : Math.round(Number(platformFeeAmountInRupees) * 100) / 100
+      : null;
 
   // Official PM body first. Some payment validators also require amount — retry if needed.
   // Always include platform flag so PM routes the debit to the Tatva Direct DB.
@@ -1153,7 +1317,21 @@ export async function payOrderFromPmVault({
       amount: amountForPm,
       ...(orderNo ? { orderNumber: orderNo } : {}),
       description: desc
-    })
+    }),
+    ...(supplierUserId && supplierPayoutForPm != null
+      ? [
+          withPmPlatformFlagBody({
+            orderId: tatvaOrderId,
+            userId: pmUserId,
+            amount: amountForPm,
+            supplierUserId,
+            supplierPayoutAmount: supplierPayoutForPm,
+            ...(platformFeeForPm != null ? { platformFeeAmount: platformFeeForPm } : {}),
+            ...(orderNo ? { orderNumber: orderNo } : {}),
+            description: desc
+          })
+        ]
+      : [])
   ];
 
   async function postVaultPay(body) {
@@ -1231,7 +1409,7 @@ export async function payOrderFromPmVault({
     ...extractAttributionKeysFromPmPayload(data)
   });
 
-  return { paymentId: paymentId || null };
+  return { paymentId: paymentId || null, buyerPmUserId: pmUserId };
 }
 
 export async function getPmVaultWalletView(user, credentials = {}) {

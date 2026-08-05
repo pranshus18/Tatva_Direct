@@ -4,12 +4,12 @@ import { supabase } from '../../../config/supabase.js';
 import {
   baselineChainFromProfile,
   buildChainPayloadFromProfileData,
-  chainPayloadSignature,
   chainRequiresAdminApproval,
   clearPendingChainRequest,
   detectSupplyChainRoleChanges,
   hasAnySupplyChainRole,
-  replacePendingChainRequest
+  replacePendingChainRequest,
+  syncLegacyMinimumOrderValue
 } from '../../../services/supplierChainProfileService.js';
 import { buildAdminReviewChainPayload } from '../../../services/supplierChainAdminService.js';
 import { insertNotifications } from '../../../repositories/notificationsRepository.js';
@@ -503,6 +503,7 @@ export function registerProfileUpdateRoutes(router) {
           profileUpdate.supplierRole = incomingChain.supplierRole;
           profileUpdate.brands = incomingChain.brands;
           profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
+          syncLegacyMinimumOrderValue(profileUpdate, incomingChain, { saveSupplyChainEntryId });
         } else if (isIncompleteChainDraft) {
           // Keep approved profile active; store incomplete edits as draft only.
           profileUpdate.supplierRole = baselineChain.supplierRole;
@@ -519,6 +520,7 @@ export function registerProfileUpdateRoutes(router) {
           profileUpdate.supplierRole = incomingChain.supplierRole;
           profileUpdate.brands = incomingChain.brands;
           profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
+          syncLegacyMinimumOrderValue(profileUpdate, incomingChain, { saveSupplyChainEntryId });
         } else {
           profileUpdate.chainProfileDraft = null;
           profileUpdate.chainProfileDraftUpdatedAt = null;
@@ -738,6 +740,7 @@ export function registerProfileUpdateRoutes(router) {
             profileUpdate.supplierRole = incomingChain.supplierRole;
             profileUpdate.brands = incomingChain.brands;
             profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
+            syncLegacyMinimumOrderValue(profileUpdate, incomingChain, { saveSupplyChainEntryId });
           }
         }
         }

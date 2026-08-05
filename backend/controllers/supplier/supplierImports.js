@@ -163,6 +163,8 @@ export {
 export {
   shouldMoveToPendingForSpecChange,
   shouldAutoApproveSupplierOfferOnCreate,
-  shouldRequireApprovalForVariantSpecChange
+  shouldRequireApprovalForVariantSpecChange,
+  shouldRecomputeSupplierVariantKeyOnUpdate,
+  hasSupplierSpecificationChangesFromCatalog
 } from '../../utils/supplierProductApproval.js';
 export { PRODUCT_IMAGES_BUCKET, uploadFile } from '../../services/storage.js';

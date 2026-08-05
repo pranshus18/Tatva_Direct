@@ -59,7 +59,7 @@ import {
   resolveEffectiveSupplierOfferState,
   syncSupplierOfferApprovalFromCatalog
 } from './shared/productHelpers.js';
-import { validateCreditForOrder } from '../../services/creditAccountService.js';
+import { validateCreditForOrder, maybeNotifySupplierCreditAlert } from '../../services/creditAccountService.js';
 import {
   isAddressComplete,
   mapToDeliveryAddress,
@@ -1751,10 +1751,11 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       const totalAmount = orderItems.reduce((sum, li) => sum + parseFloat(li.total_price || 0), 0);
       let order = null;
       let orderErr = null;
+      let creditCheck = null;
 
       // If buyer chose "credit", validate seller credit-account eligibility for this buyer.
       if (upstreamPaymentMethod === 'credit') {
-        const creditCheck = await validateCreditForOrder({
+        creditCheck = await validateCreditForOrder({
           supplierId,
           buyerUserId: req.userId,
           orderAmount: totalAmount
@@ -1763,11 +1764,32 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         if (!creditCheck.payLaterOffered || !creditCheck.allowed) {
           return res.status(400).json({
             status: 'error',
-            message: `Pay later not available: ${creditCheck.message} Use online, COD, bank transfer, or card instead.`,
+            message: `Pay later not available: ${creditCheck.message} Use vault or another payment method instead.`,
             credit: creditCheck
           });
         }
       }
+
+      const selectedCreditPeriodDays = Math.max(
+        1,
+        Math.floor(Number(creditCheck?.creditPeriodDays || 30) || 30)
+      );
+      const settlementDueAt =
+        upstreamPaymentMethod === 'credit'
+          ? new Date(Date.now() + selectedCreditPeriodDays * 86400000).toISOString()
+          : null;
+      const orderDeliveryAddress =
+        upstreamPaymentMethod === 'credit'
+          ? {
+              ...deliveryAddressForOrder,
+              payLater: {
+                settlementPeriodDays: selectedCreditPeriodDays,
+                settlementDueAt,
+                outstandingAtOrderTime: Number(creditCheck?.outstanding || 0),
+                availableCreditAtOrderTime: Number(creditCheck?.available || 0)
+              }
+            }
+          : deliveryAddressForOrder;
 
       for (let attempt = 0; attempt <= ORDER_INSERT_MAX_RETRIES; attempt++) {
         const orderInsertResult = await supabase
@@ -1777,7 +1799,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
             supplier_id: supplierId, // seller = upstream supplier
             total_amount: totalAmount,
             expected_delivery_date: expectedDeliveryDate,
-            delivery_address: deliveryAddressForOrder,
+            delivery_address: orderDeliveryAddress,
             status: 'confirmed',
             payment_status: upstreamPaymentStatus,
             payment_method: upstreamPaymentMethod,
@@ -1872,6 +1894,18 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         }, supabase);
       } catch (notifErr) {
         console.error('[Upstream Orders] notification error:', notifErr);
+      }
+
+      if (upstreamPaymentMethod === 'credit') {
+        try {
+          await maybeNotifySupplierCreditAlert({
+            supplierId,
+            buyerUserId: req.userId,
+            partyName: buyerName
+          });
+        } catch (creditNotifyErr) {
+          console.error('[Upstream Orders] credit limit notification error (non-fatal):', creditNotifyErr);
+        }
       }
 
       createdOrders.push({

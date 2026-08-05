@@ -4,6 +4,8 @@ export const supplierBcovLevelsUpsertSchema = z.object({
   variantKey: z.string().min(1),
   variantAsin: z.string().optional(),
   variantName: z.string().optional(),
+  productId: z.string().uuid().optional(),
+  catalogProductId: z.string().uuid().optional(),
   levels: z.array(z.record(z.string(), z.any()))
 });
 
@@ -39,14 +41,14 @@ export const supplierUpstreamOrdersSchema = z.object({
   // Mirrors the service-provider PO checkout values:
   // online | cod | bank_transfer | credit | card
   paymentMethod: z
-    .enum(['online', 'cod', 'bank_transfer', 'credit', 'card'])
+    .enum(['online', 'cod', 'bank_transfer', 'credit', 'card', 'vault'])
     .optional()
     .nullable(),
   deliveryDestination: z.enum(['shipping', 'billing']).optional().nullable(),
   // Address objects are validated/normalized in the controller (field-level completeness).
-  shippingAddress: z.record(z.any()).optional().nullable(),
+  shippingAddress: z.record(z.string(), z.any()).optional().nullable(),
   shippingAddressId: z.string().optional().nullable(),
-  billingAddress: z.record(z.any()).optional().nullable(),
+  billingAddress: z.record(z.string(), z.any()).optional().nullable(),
   lines: z
     .array(
       z.object({
@@ -61,8 +63,8 @@ export const supplierUpstreamOrdersSchema = z.object({
 
 export const supplierUpstreamPreviewGroupsSchema = z.object({
   deliveryDestination: z.enum(['shipping', 'billing']).optional().nullable(),
-  shippingAddress: z.record(z.any()).optional().nullable(),
-  billingAddress: z.record(z.any()).optional().nullable(),
+  shippingAddress: z.record(z.string(), z.any()).optional().nullable(),
+  billingAddress: z.record(z.string(), z.any()).optional().nullable(),
   reviewLines: z
     .array(
       z.object({
@@ -73,9 +75,9 @@ export const supplierUpstreamPreviewGroupsSchema = z.object({
         unitPrice: z.union([z.number(), z.string()]).optional(),
         lineTotal: z.union([z.number(), z.string()]).optional(),
         unit: z.string().optional(),
-        specifications: z.record(z.any()).optional().nullable(),
+        specifications: z.record(z.string(), z.any()).optional().nullable(),
         images: z.array(z.any()).optional(),
-        shippingAddress: z.record(z.any()).optional().nullable()
+        shippingAddress: z.record(z.string(), z.any()).optional().nullable()
       })
     )
     .min(1)
@@ -91,7 +93,7 @@ export const supplierUpstreamCartSaveSchema = z.object({
   projectId: z.string().optional().nullable(),
   requiredDate: z.string().optional().nullable(),
   shippingAddressId: z.string().optional().nullable(),
-  shippingAddress: z.record(z.any()).optional().nullable()
+  shippingAddress: z.record(z.string(), z.any()).optional().nullable()
 });
 
 export const supplierInventoryAdjustSchema = z.object({

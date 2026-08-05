@@ -257,7 +257,8 @@ export default function SupplierCreditAccounts() {
             <strong>Credit limit</strong> is the maximum total outstanding a buyer can have on pay-later
             orders at once (e.g. ₹1,00,000 — they can use the full amount across orders, but not more).
             <strong>Pay-later minimum</strong> is a lifetime net revenue gate. <strong>Loan cycle:</strong> when
-            the cycle ends, they must settle the full outstanding before new pay-later orders.
+            the cycle ends, buyers must settle outstanding orders from their vault (top up first if needed) before
+            new pay-later orders.
           </p>
           <div className="supplier-summary-grid">
             <div className="supplier-summary-card">
@@ -398,20 +399,13 @@ export default function SupplierCreditAccounts() {
                               {savingKey === buyer.buyerId ? '…' : 'Save'}
                             </button>
                             {acc && Number(acc.outstanding) > 0 ? (
-                              <button
-                                type="button"
-                                className="btn-primary"
-                                style={{ fontSize: '0.75rem', padding: '0.3rem 0.55rem' }}
-                                disabled={savingKey === `settle-${buyer.buyerId}`}
-                                onClick={() =>
-                                  settleCycle({
-                                    ...buyerCreditTarget(buyer),
-                                    partyName: buyer.name || buyer.company
-                                  })
-                                }
+                              <span
+                                className="upstream-muted-meta"
+                                style={{ fontSize: '0.75rem', display: 'block', marginTop: '0.35rem' }}
+                                title="Buyer must pay open orders from their vault"
                               >
-                                {savingKey === `settle-${buyer.buyerId}` ? '…' : 'Settle cycle'}
-                              </button>
+                                Outstanding — buyer pays via vault
+                              </span>
                             ) : null}
                           </div>
                         </td>

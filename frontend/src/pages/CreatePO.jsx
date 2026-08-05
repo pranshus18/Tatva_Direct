@@ -18,7 +18,9 @@ import {
   isTransportSelectionReadyForVendor,
   mergeTransportSelections,
   normalizeTransportSelection,
-  getTransportGroupKey
+  getTransportGroupKey,
+  normalizeShippingAddress as normalizeAddress,
+  isUsableShippingAddress
 } from '../utils/poTransportSelection';
 import {
   clearCartTransportSelection
@@ -86,21 +88,6 @@ const blankAddress = {
   country: ''
 };
 
-const normalizeAddress = (address = {}) => ({
-  line1: String(address?.line1 || address?.street || '').trim(),
-  city: String(address?.city || '').trim(),
-  state: String(address?.state || '').trim(),
-  pincode: String(
-    address?.pincode || address?.zipCode || address?.postalCode || address?.postal_code || ''
-  ).trim(),
-  country: String(address?.country || '').trim()
-});
-
-
-const isUsableShippingAddress = (address = {}) => {
-  const normalized = normalizeAddress(address);
-  return ['line1', 'city', 'state', 'pincode'].every((key) => String(normalized[key] || '').trim());
-};
 const normalizeSpecifications = (value) => {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
   const seen = new Set();
@@ -1147,7 +1134,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             const alreadyPaid =
               payErr?.code === 'ORDER_ALREADY_PAID' ||
               /already paid/i.test(String(payErr?.message || ''));
-            if (!alreadyPaid) throw payErr;
+            if (!alreadyPaid) {
+              alert(
+                payErr?.message ||
+                  `Order(s) created, but vault payment failed. Open Your Orders and pay from vault once your balance is sufficient.`
+              );
+              navigate('/your-orders');
+              return;
+            }
           }
         }
       }
@@ -1336,7 +1330,11 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         <div className="success-state">
           <Check size={64} className="success-icon" />
           <h2>Purchase Orders Created!</h2>
-          <p>All POs have been successfully generated and sent to vendors.</p>
+          <p>
+            {isVaultPaymentMethod(poPaymentMethod)
+              ? 'Your orders were placed and paid from vault. Product and transport charges were debited at checkout; supplier vaults are credited immediately (net of platform fee).'
+              : 'Your orders were placed on pay later. Settle each order from your vault before the due date — top up your vault first if needed. All payments go through vault only.'}
+          </p>
           <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center' }}>
             <button type="button" className="btn-primary" onClick={() => navigate('/your-orders')}>
               View your orders
@@ -1514,18 +1512,18 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
               color: '#334155'
             }}
           >
-            <option value={VAULT_PAYMENT_METHOD}>Vault balance only (platform escrow model)</option>
+            <option value={VAULT_PAYMENT_METHOD}>Vault balance (direct supplier settlement)</option>
             <option value="credit" disabled={creditCheckLoading || !payLaterOptionAvailable}>
               Pay later (credit account)
             </option>
           </select>
           {isVaultPaymentMethod(poPaymentMethod) ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
-              On confirm, vault is debited for product total plus selected transport charges. Platform escrow then settles supplier payout.
+              On confirm, vault is debited for product total plus selected transport charges. The supplier vault is credited immediately (net of platform fee).
             </p>
           ) : poPaymentMethod === 'credit' ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
-              Pay later uses the credit limit and settlement period configured by each supplier. You cannot change credit terms here.
+              Pay later keeps the order unpaid until you settle from your vault. Top up your vault first, then pay before the due date — all payments go through vault only.
             </p>
           ) : null}
           <div

@@ -1,20 +1,10 @@
+import { normalizeShippingAddress } from './poTransportSelection';
+
 const SIGNUP_PLACEHOLDER_PINCODE = '000000';
 const ADDRESS_FIELDS = ['line1', 'city', 'state', 'pincode', 'country'];
 
 function normalizeAddress(address = {}) {
-  return {
-    line1: String(address?.line1 || address?.street || '').trim(),
-    city: String(address?.city || '').trim(),
-    state: String(address?.state || '').trim(),
-    pincode: String(
-      address?.pincode ||
-        address?.zipCode ||
-        address?.postalCode ||
-        address?.postal_code ||
-        ''
-    ).trim(),
-    country: String(address?.country || '').trim()
-  };
+  return normalizeShippingAddress(address);
 }
 
 function hasSignupPlaceholderCoreFields(address = {}) {

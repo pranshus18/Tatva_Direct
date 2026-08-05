@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button';
 import { formatRupee } from '../utils/formatRupee';
 import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import { formatDateIST } from '../utils/dateTime';
+import { specificationEntriesForCustomerDisplay } from '../utils/specifications';
 import './VendorSelect.css';
 
 /** Prefer in-app history so Back matches the browser back button; otherwise go to the prior workflow step. */
@@ -466,23 +467,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     if (parts.every((p) => !p)) return '';
     return parts.join('');
   };
-  const normalizeSpecifications = (value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-    const seen = new Set();
-    return Object.entries(value).reduce((acc, [key, rawValue]) => {
-      const cleanKey = String(key || '').trim();
-      if (!cleanKey) return acc;
-      if (rawValue === null || rawValue === undefined) return acc;
-      const cleanValue = String(rawValue).trim();
-      if (!cleanValue) return acc;
-      const dedupeKey = cleanKey.toLowerCase();
-      if (seen.has(dedupeKey)) return acc;
-      seen.add(dedupeKey);
-      acc[cleanKey] = cleanValue;
-      return acc;
-    }, {});
-  };
-
   useEffect(() => {
     if (
       boqProject &&
@@ -1271,8 +1255,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                   item
                 ).map((vendor, vendorIndex) => {
                     const vendorIdStr = getVendorSelectionId(vendor);
-                    const vendorSpecifications = normalizeSpecifications(vendor?.specifications);
-                    const specificationEntries = Object.entries(vendorSpecifications);
+                    const specificationEntries = specificationEntriesForCustomerDisplay(vendor?.specifications);
                     const specsKey = `${itemId}::${vendorIdStr}`;
                     const isSpecsExpanded = !!expandedSpecifications[specsKey];
                     const visibleSpecificationEntries = isSpecsExpanded
@@ -1420,9 +1403,9 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                             Specifications
                           </div>
                           <div style={{ display: 'grid', gap: '0.2rem' }}>
-                            {visibleSpecificationEntries.map(([key, value]) => (
-                              <div key={`${vendorIdStr}-${key}`} style={{ fontSize: '0.74rem', color: '#475569' }}>
-                                <strong>{key}:</strong> {value}
+                            {visibleSpecificationEntries.map((entry) => (
+                              <div key={`${vendorIdStr}-${entry.key}`} style={{ fontSize: '0.74rem', color: '#475569' }}>
+                                <strong>{entry.label}:</strong> {entry.displayValue}
                               </div>
                             ))}
                             {hasMoreSpecifications && (

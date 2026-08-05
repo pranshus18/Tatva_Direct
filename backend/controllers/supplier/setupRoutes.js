@@ -169,6 +169,7 @@ router.get('/supply-chain-partners', authenticateToken, async (req, res) => {
 router.get('/bcov-levels', authenticateToken, async (req, res) => {
   try {
     const variantKey = String(req.query.variantKey || '').trim();
+    const productId = String(req.query.productId || req.query.catalogProductId || '').trim() || null;
 
     let query = supabase
       .from('supplier_bcov_levels')
@@ -185,7 +186,9 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
 
     if (error) throw error;
 
-    const catalogMrp = variantKey ? await fetchVariantCatalogMrp(supabase, req.userId, variantKey) : null;
+    const catalogMrp = variantKey
+      ? await fetchVariantCatalogMrp(supabase, req.userId, variantKey, productId)
+      : null;
     const covEligibility = variantKey
       ? await resolveVariantProductCovEligibility(supabase, req.userId, variantKey)
       : { eligible: false, status: 'missing', message: 'No product variant selected for Product_COV.' };
@@ -240,7 +243,12 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
       });
     }
 
-    const catalogMrp = await fetchVariantCatalogMrp(supabase, req.userId, variantKey);
+    const catalogMrp = await fetchVariantCatalogMrp(
+      supabase,
+      req.userId,
+      variantKey,
+      String(payloadInput.productId || payloadInput.catalogProductId || '').trim() || null
+    );
     const parsed = validateAndNormalizeBcovLevels(payloadInput.levels || [], {
       catalogMrp,
       requireCatalogMrp: true

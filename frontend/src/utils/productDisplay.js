@@ -13,7 +13,7 @@ const PLACEHOLDER_DESCRIPTIONS = new Set([
   'no description'
 ]);
 
-function looksLikeSpecificationDump(text) {
+export function looksLikeSpecificationDump(text) {
   const lines = String(text || '')
     .split(/\n/)
     .map((line) => line.trim())
@@ -52,14 +52,84 @@ export function resolveCustomerProductDescription(...candidates) {
   return '';
 }
 
-/** Product description for discovery detail: published catalog copy, then supplier text. */
+/** Raw supplier submission for admin review — never the admin-published catalog copy. */
+export function getAdminSupplierSubmittedDescription(product = {}) {
+  return String(product?.supplierDescription || '').trim();
+}
+
+/**
+ * Buyer-facing description shown in the admin edit box.
+ * Pending/rejected: only admin-saved published copy (offer.publishedDescription), not stale catalog text.
+ * Approved: catalog products.description.
+ */
+export function getAdminBuyerFacingCatalogDescription(product = {}) {
+  const status = String(product?.status || 'pending').trim().toLowerCase();
+  const publishedFromOffer = String(product?.publishedDescription || '').trim();
+  const catalog = String(product?.description || '').trim();
+  const supplier = getAdminSupplierSubmittedDescription(product);
+
+  const isDistinctBuyerFacing = (text) => {
+    const trimmed = String(text || '').trim();
+    if (!isMeaningfulProductDescription(trimmed, { allowInlineSpecs: true })) return false;
+    if (supplier && trimmed === supplier) return false;
+    return true;
+  };
+
+  if (status === 'approved') {
+    return isDistinctBuyerFacing(catalog) ? catalog : '';
+  }
+
+  if (isDistinctBuyerFacing(publishedFromOffer)) {
+    return publishedFromOffer;
+  }
+
+  // After admin Save, catalog.description and offer.publishedDescription should match.
+  if (
+    isDistinctBuyerFacing(catalog) &&
+    publishedFromOffer &&
+    catalog === publishedFromOffer
+  ) {
+    return catalog;
+  }
+
+  return '';
+}
+
+/** Admin list cards: prefer saved buyer-facing copy; else supplier draft while pending. */
+export function getAdminReviewProductDescription(product = {}) {
+  const buyerFacing = getAdminBuyerFacingCatalogDescription(product);
+  if (buyerFacing) return buyerFacing;
+
+  const status = String(product?.status || 'pending').trim().toLowerCase();
+  const supplierDraft = getAdminSupplierSubmittedDescription(product);
+  if (status !== 'approved' && supplierDraft) {
+    return supplierDraft;
+  }
+  return '';
+}
+
+/** Supplier portal: show admin-polished copy when available, else the supplier draft. */
+export function resolveSupplierPortalDisplayDescription(product = {}) {
+  const published = String(product?.publishedDescription || '').trim();
+  if (isMeaningfulProductDescription(published, { allowInlineSpecs: true })) {
+    return published;
+  }
+  return String(product?.supplierDescription || product?.description || '').trim();
+}
+
+export function supplierPortalHasPublishedDescription(product = {}) {
+  const published = String(product?.publishedDescription || '').trim();
+  return isMeaningfulProductDescription(published, { allowInlineSpecs: true });
+}
+
+/** Product description for discovery detail: active variant first, then shared catalog copy. */
 export function resolveDiscoveryProductDescription(productSummary = {}, activeListing = {}) {
   const candidates = [
-    productSummary?.description,
-    productSummary?.publishedDescription,
     activeListing?.publishedDescription,
     activeListing?.description,
-    activeListing?.supplierDescription
+    activeListing?.supplierDescription,
+    productSummary?.publishedDescription,
+    productSummary?.description
   ];
   for (const candidate of candidates) {
     const trimmed = String(candidate || '').trim();

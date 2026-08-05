@@ -18,9 +18,7 @@ import {
   getAdminProductApprovalReadiness,
   isAdminProductReadyForApproval
 } from '../utils/adminProductApprovalReadiness';
-
-const IGST_OPTIONS = ['0', '5', '12', '18', '28'];
-const CGST_SGST_OPTIONS = ['0', '2.5', '6', '9', '14'];
+import { IGST_OPTIONS, CGST_SGST_OPTIONS } from '../utils/gstRates';
 
 const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
   const [isEditing, setIsEditing] = useState(false);

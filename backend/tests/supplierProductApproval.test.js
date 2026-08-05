@@ -4,7 +4,9 @@ import {
   areSpecificationsEqual,
   shouldMoveToPendingForSpecChange,
   shouldAutoApproveSupplierOfferOnCreate,
-  shouldRequireApprovalForVariantSpecChange
+  shouldRequireApprovalForVariantSpecChange,
+  hasSupplierSpecificationChangesFromCatalog,
+  shouldRecomputeSupplierVariantKeyOnUpdate
 } from '../utils/supplierProductApproval.js';
 
 test('areSpecificationsEqual treats same spec object with different key order as equal', () => {
@@ -111,6 +113,83 @@ test('shouldAutoApproveSupplierOfferOnCreate does not approve mere catalog statu
       matchStrength: 'none'
     }),
     false
+  );
+});
+
+test('shouldAutoApproveSupplierOfferOnCreate keeps confirmed re-list pending when specs changed', () => {
+  assert.equal(
+    shouldAutoApproveSupplierOfferOnCreate({
+      hasApprovedSameVariantOffer: false,
+      catalogProductStatus: 'approved',
+      hasAnyApprovedOfferForProduct: true,
+      matchStrength: 'explicit',
+      hasSpecificationChanges: true
+    }),
+    false
+  );
+});
+
+test('hasSupplierSpecificationChangesFromCatalog detects changed values', () => {
+  assert.equal(
+    hasSupplierSpecificationChangesFromCatalog({
+      catalogSpecs: { ram: '8GB', storage: '256GB' },
+      supplierSpecs: { ram: '16GB', storage: '256GB' }
+    }),
+    true
+  );
+});
+
+test('hasSupplierSpecificationChangesFromCatalog treats matching values as unchanged', () => {
+  assert.equal(
+    hasSupplierSpecificationChangesFromCatalog({
+      catalogSpecs: { ram: '8GB', storage: '256GB' },
+      supplierSpecs: { storage: '256GB', ram: '8gb' }
+    }),
+    false
+  );
+});
+
+test('hasSupplierSpecificationChangesFromCatalog treats new supplier keys as changes', () => {
+  assert.equal(
+    hasSupplierSpecificationChangesFromCatalog({
+      catalogSpecs: { ram: '8GB' },
+      supplierSpecs: { ram: '8GB', color: 'Black' }
+    }),
+    true
+  );
+});
+
+test('hasSupplierSpecificationChangesFromCatalog ignores empty catalog baseline', () => {
+  assert.equal(
+    hasSupplierSpecificationChangesFromCatalog({
+      catalogSpecs: { ram: '', storage: null },
+      supplierSpecs: { ram: '8GB', storage: '256GB' }
+    }),
+    false
+  );
+});
+
+test('shouldRecomputeSupplierVariantKeyOnUpdate is false for inventory-only saves', () => {
+  assert.equal(
+    shouldRecomputeSupplierVariantKeyOnUpdate({
+      specificationsProvided: false,
+      specificationsChanged: false,
+      computedVariantKey: 'next-key',
+      storedVariantKey: 'stored-key'
+    }),
+    false
+  );
+});
+
+test('shouldRecomputeSupplierVariantKeyOnUpdate is true when specs changed', () => {
+  assert.equal(
+    shouldRecomputeSupplierVariantKeyOnUpdate({
+      specificationsProvided: true,
+      specificationsChanged: true,
+      computedVariantKey: 'next-key',
+      storedVariantKey: 'stored-key'
+    }),
+    true
   );
 });
 

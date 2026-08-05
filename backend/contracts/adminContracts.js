@@ -22,11 +22,38 @@ export const adminUpdateProductSchema = z.object({
   hsnCode: z.union([z.string(), z.number()]).optional().nullable(),
   hsn_code: z.union([z.string(), z.number()]).optional().nullable(),
   supplier_id: z.string().uuid().optional(),
+  supplier_product_id: z.string().uuid().optional(),
+  supplierProductId: z.string().uuid().optional(),
   supplier: z.any().optional()
 }).passthrough();
 
 export const adminProductRejectSchema = z.object({
-  reason: z.string().optional()
+  reason: z.string().optional(),
+  supplier_product_id: z.string().uuid().optional(),
+  supplierProductId: z.string().uuid().optional()
+}).passthrough();
+
+export const adminProductDeleteSchema = z.object({});
+export const adminBrandApproveSchema = z.object({});
+export const adminSupplierChainApproveSchema = z.object({
+  entryId: z.string().trim().min(1).optional(),
+  brand: z.string().trim().min(1).optional()
+});
+
+export const adminSupplyChainDefinitionUpsertSchema = z.object({
+  brandName: z.string().optional(),
+  categoryName: z.string().optional(),
+  stages: z.array(z.any()).optional(),
+  summary: z.string().optional(),
+  markAsAiSuggested: z.boolean().optional(),
+  aiSuggestedAt: z.string().optional()
+});
+
+export const adminSupplyChainSuggestSchema = z.object({
+  brandName: z.string().optional(),
+  categoryName: z.string().optional(),
+  productName: z.string().optional(),
+  extraContext: z.string().optional()
 });
 
 export const adminApproveAllProductsSchema = z.object({});
@@ -90,27 +117,8 @@ export const adminAiPolishListingSchema = z.object({
   adminNotes: z.string().optional()
 });
 
-export const adminProductApproveSchema = z.object({});
-export const adminProductDeleteSchema = z.object({});
-export const adminBrandApproveSchema = z.object({});
-export const adminSupplierChainApproveSchema = z.object({
-  entryId: z.string().trim().min(1).optional(),
-  brand: z.string().trim().min(1).optional()
-});
-
-export const adminSupplyChainDefinitionUpsertSchema = z.object({
-  brandName: z.string().optional(),
-  categoryName: z.string().optional(),
-  stages: z.array(z.any()).optional(),
-  summary: z.string().optional(),
-  markAsAiSuggested: z.boolean().optional(),
-  aiSuggestedAt: z.string().optional()
-});
-
-export const adminSupplyChainSuggestSchema = z.object({
-  brandName: z.string().optional(),
-  categoryName: z.string().optional(),
-  productName: z.string().optional(),
-  extraContext: z.string().optional()
-});
+export const adminProductApproveSchema = z.object({
+  supplier_product_id: z.string().uuid().optional(),
+  supplierProductId: z.string().uuid().optional()
+}).passthrough();
 

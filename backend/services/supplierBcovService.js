@@ -5,17 +5,24 @@ import { parseCovThresholdNumber } from './procurementSharedService.js';
  * Catalog MRP from supplier_products for a variant (Manage Inventory).
  * @returns {Promise<number|null>}
  */
-export async function fetchVariantCatalogMrp(supabase, supplierId, variantKey) {
+export async function fetchVariantCatalogMrp(supabase, supplierId, variantKey, productId = null) {
   const key = String(variantKey || '').trim();
   if (!key || !supplierId) return null;
 
-  const { data, error } = await supabase
+  let query = supabase
     .from('supplier_products')
     .select('price')
     .eq('supplier_id', supplierId)
     .eq('variant_key', key)
     .order('updated_at', { ascending: false })
     .limit(1);
+
+  const normalizedProductId = String(productId || '').trim();
+  if (normalizedProductId) {
+    query = query.eq('product_id', normalizedProductId);
+  }
+
+  const { data, error } = await query;
 
   if (error || !Array.isArray(data) || data.length === 0) return null;
   const mrp = Number(data[0]?.price);

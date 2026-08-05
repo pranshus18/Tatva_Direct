@@ -1,5 +1,10 @@
 import { getApiUrl } from '../config/api';
-import { mergeSpecificationObjects } from './specifications';
+import {
+  countNewlyFilledSpecificationValues,
+  mergeExtractedValuesOntoSpecificationTemplate,
+  mergeSpecificationObjects,
+  parseSpecificationsObject
+} from './specifications';
 
 /** Stable fingerprint of fields that feed specification extraction. */
 export function buildSpecExtractionSourceKey({
@@ -48,15 +53,14 @@ export function applyExtractResultToSpecs(currentSpecs, data) {
     return { ok: false, error: data?.message || 'Extraction failed' };
   }
 
-  const extracted = data.specifications || {};
-  const merged = mergeSpecificationObjects(currentSpecs || {}, extracted);
+  const extracted = parseSpecificationsObject(data.specifications) || {};
+  const current = parseSpecificationsObject(currentSpecs) || {};
+  const merged =
+    Object.keys(current).length > 0
+      ? mergeExtractedValuesOntoSpecificationTemplate(current, extracted)
+      : mergeSpecificationObjects(current, extracted);
 
-  const filledCount =
-    typeof data.extractedCount === 'number'
-      ? data.extractedCount
-      : Object.values(extracted).filter(
-          (v) => v !== null && v !== undefined && String(v).trim() !== ''
-        ).length;
+  const filledCount = countNewlyFilledSpecificationValues(current, merged);
 
   return {
     ok: true,

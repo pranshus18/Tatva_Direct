@@ -65,7 +65,6 @@ export function buildCatalogSnapshotPatch(aggregate) {
   if (!aggregate || aggregate.listedOfferCount === 0) {
     return {
       stock: 0,
-      price: 0,
       min_order_quantity: null,
       location: null
     };
@@ -78,7 +77,6 @@ export function buildCatalogSnapshotPatch(aggregate) {
 
   return {
     stock: aggregate.totalStock,
-    price: parseOfferPrice(priceSource?.price),
     min_order_quantity: priceSource?.min_order_quantity ?? null,
     location: String(priceSource?.location || '').trim() || null
   };
@@ -138,7 +136,7 @@ export function reconcileDiscoveryProductFields(product, aggregates) {
     supplierCount,
     canAddToCart: supplierCount > 0 && resolvedStock > 0,
     stock: resolvedStock,
-    price: catalogPrice > 0 ? catalogPrice : offerPrice,
+    price: offerPrice > 0 ? offerPrice : catalogPrice,
     min_order_quantity: bestOffer?.min_order_quantity ?? product?.min_order_quantity ?? null,
     location:
       String(product?.location || '').trim() ||
@@ -148,9 +146,11 @@ export function reconcileDiscoveryProductFields(product, aggregates) {
 }
 
 /**
- * Keep shared catalog `products` stock/price aligned with listed supplier offers.
- * Supplier inventory is authoritative in `supplier_products`; this snapshot prevents
- * service-provider discovery and legacy readers from seeing stale zero stock.
+ * Keep shared catalog `products` stock (and MOQ/location) aligned with listed supplier offers.
+ * Price lives on each offer (`supplier_products.price`) — discovery/ranking read offer price;
+ * this snapshot intentionally does not overwrite `products.price`.
+ * Supplier inventory is authoritative; the stock snapshot prevents legacy readers from seeing
+ * stale zero stock when listed offers still have inventory.
  */
 export async function syncCatalogProductSnapshotFromOffers(supabase, productId) {
   const normalizedProductId = String(productId || '').trim();
@@ -177,7 +177,6 @@ export async function syncCatalogProductSnapshotFromOffers(supabase, productId) 
     updated_at: new Date().toISOString()
   };
 
-  if (snapshot.price > 0) patch.price = snapshot.price;
   if (snapshot.min_order_quantity != null) patch.min_order_quantity = snapshot.min_order_quantity;
   if (snapshot.location) patch.location = snapshot.location;
 

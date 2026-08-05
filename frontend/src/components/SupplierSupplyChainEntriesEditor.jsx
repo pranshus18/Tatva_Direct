@@ -1097,7 +1097,8 @@ const CompanyInfoEntryCard = ({
                   </p>
                 ) : (
                   <p className="chain-callout chain-callout--info">
-                    Downstream partners must meet this order total when buying from you in this layer.
+                    Downstream partners must meet this order total when buying from you in this layer. You can
+                    change this anytime — it saves immediately without admin approval.
                   </p>
                 )}
               </div>

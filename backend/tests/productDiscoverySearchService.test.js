@@ -40,7 +40,6 @@ test('aggregateListedSupplierOffers totals stock from approved active offers', (
   assert.equal(aggregate.totalStock, 76);
   assert.deepEqual(buildCatalogSnapshotPatch(aggregate), {
     stock: 76,
-    price: 299,
     min_order_quantity: 1,
     location: 'Pune'
   });
@@ -167,6 +166,35 @@ test('reconcileDiscoveryProductFields disables cart when eligible stock is zero'
   assert.equal(reconciled.supplierCount, 1);
   assert.equal(reconciled.stock, 0);
   assert.equal(reconciled.canAddToCart, false);
+});
+
+test('reconcileDiscoveryProductFields prefers live offer price over stale catalog price', () => {
+  const product = {
+    id: 'product-stale-price',
+    stock: 0,
+    price: 999,
+    location: ''
+  };
+  const aggregates = {
+    eligibleSupplierCountByProduct: new Map([['product-stale-price', 1]]),
+    totalStockByProduct: new Map([['product-stale-price', 12]]),
+    bestOfferByProduct: new Map([
+      [
+        'product-stale-price',
+        {
+          price: 150,
+          stock: 12,
+          location: 'Pune',
+          min_order_quantity: 1,
+          _stock: 12,
+          _price: 150
+        }
+      ]
+    ])
+  };
+
+  const reconciled = reconcileDiscoveryProductFields(product, aggregates);
+  assert.equal(reconciled.price, 150);
 });
 
 test('pickBetterListedOffer prefers higher stock then lower price', () => {

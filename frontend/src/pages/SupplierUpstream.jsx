@@ -36,7 +36,7 @@ import {
   reserveUpstreamCheckoutInventory,
   SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY
 } from '../utils/upstreamCheckoutReservation';
-import { filterSupplierProductsForUpstream } from '../utils/supplierProductRow';
+import { filterSupplierProductsForUpstream, normalizeSupplierProductKey } from '../utils/supplierProductRow';
 import {
   UPSTREAM_SOURCING_PATH,
   openUpstreamProductDetailInNewTab
@@ -130,8 +130,6 @@ function SpecBadges({ specifications }) {
 const UPSTREAM_PAGE_SIZE = 24;
 
 /** Stable keys for supplier_products junction IDs (avoids string/UUID mismatches in selection state). */
-const normalizeSupplierProductKey = (value) => String(value ?? '').trim();
-
 const normalizeSelectionMap = (raw) => {
   if (!raw || typeof raw !== 'object') return {};
   const next = {};

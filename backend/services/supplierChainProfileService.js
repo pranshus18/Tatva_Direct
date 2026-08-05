@@ -493,7 +493,8 @@ export function baselineChainFromProfile(profile) {
   };
 }
 
-export function chainPayloadSignature(payload) {
+/** Fields that require admin review when changed (MOV is supplier-editable anytime). */
+export function chainApprovalSignature(payload) {
   const p = payload || {};
   const entries = (p.companyInfoEntries || []).map((e) => ({
     id: String(e?.id || '').trim(),
@@ -501,14 +502,18 @@ export function chainPayloadSignature(payload) {
     brands: String(e?.brands || '').trim(),
     gstin: String(e?.gstin || '').trim(),
     companyName: String(e?.companyName || '').trim(),
-    ownershipDetails: String(e?.ownershipDetails || '').trim(),
-    minimumOrderValue: e?.minimumOrderValue != null && e.minimumOrderValue !== '' ? Number(e.minimumOrderValue) : null
+    ownershipDetails: String(e?.ownershipDetails || '').trim()
   }));
   return JSON.stringify({
     supplierRole: String(p.supplierRole || '').trim(),
     brands: String(p.brands || '').trim(),
     entries
   });
+}
+
+/** @deprecated Use chainApprovalSignature — kept for imports/tests. */
+export function chainPayloadSignature(payload) {
+  return chainApprovalSignature(payload);
 }
 
 function matchBaselineChainEntry(baselineEntries, entry) {
@@ -547,10 +552,27 @@ export function detectSupplyChainRoleChanges(baseline, incoming) {
 }
 
 export function chainRequiresAdminApproval(baseline, incoming) {
-  if (chainPayloadSignature(baseline) !== chainPayloadSignature(incoming)) {
+  if (chainApprovalSignature(baseline) !== chainApprovalSignature(incoming)) {
     return true;
   }
   return detectSupplyChainRoleChanges(baseline, incoming).length > 0;
+}
+
+export function syncLegacyMinimumOrderValue(profileUpdate, incomingChain, options = {}) {
+  const entries = Array.isArray(incomingChain?.companyInfoEntries)
+    ? incomingChain.companyInfoEntries
+    : [];
+  const saveEntryId = String(options.saveSupplyChainEntryId || '').trim();
+  const target =
+    (saveEntryId && entries.find((entry) => String(entry?.id || '').trim() === saveEntryId)) ||
+    entries.find((entry) => entry?.minimumOrderValue != null && entry.minimumOrderValue !== '') ||
+    entries[0] ||
+    null;
+  if (!target) return profileUpdate;
+  const mov = target.minimumOrderValue;
+  profileUpdate.minimumOrderValue =
+    mov != null && mov !== '' && Number.isFinite(Number(mov)) ? Number(mov) : '';
+  return profileUpdate;
 }
 
 export function hasAnySupplyChainRole(payload) {

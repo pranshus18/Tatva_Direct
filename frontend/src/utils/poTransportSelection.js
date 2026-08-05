@@ -11,6 +11,16 @@ export function normalizeShippingAddress(address = {}) {
   };
 }
 
+export function isCompleteShippingAddress(address = {}) {
+  const normalized = normalizeShippingAddress(address);
+  return ['line1', 'city', 'state', 'pincode', 'country'].every((key) =>
+    String(normalized[key] || '').trim()
+  );
+}
+
+/** Alias used by CreatePO and legacy checkout flows — same rules as isCompleteShippingAddress. */
+export const isUsableShippingAddress = isCompleteShippingAddress;
+
 /** Legacy: single shippingProvider. New: byVendorId map (shipment group id → courier name). */
 export function buildShippingAddressKey(address = {}) {
   const normalized = normalizeShippingAddress(address);

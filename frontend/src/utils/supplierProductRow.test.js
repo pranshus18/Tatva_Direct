@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   normalizeSupplierProductFromApi,
+  getSupplierOfferApprovalStatus,
+  normalizeSupplierProductKey,
   isSupplierProductEligibleForUpstream,
   filterSupplierProductsForUpstream
 } from './supplierProductRow';
@@ -56,6 +58,23 @@ describe('normalizeSupplierProductFromApi approval status', () => {
     expect(row.stock).toBe(8);
     expect(row.location).toBe('Pune');
   });
+
+  it('does not borrow shared catalog price for a different variant offer row', () => {
+    const row = normalizeSupplierProductFromApi({
+      id: 'catalog-product-1',
+      supplier_product_id: 'sp-variant-b',
+      price: 150
+    });
+    expect(row.price).toBe(150);
+  });
+
+  it('keeps offer price unset instead of fabricating zero when price is unparseable', () => {
+    const row = normalizeSupplierProductFromApi({
+      supplier_product_id: 'sp-bad-price',
+      price: 'not-a-price'
+    });
+    expect(row.price).toBeNull();
+  });
 });
 
 describe('upstream sourcing eligibility', () => {
@@ -72,5 +91,21 @@ describe('upstream sourcing eligibility', () => {
       { status: 'pending', is_active: false, supplier_product_id: 'c' }
     ]);
     expect(filtered.map((p) => p.supplier_product_id)).toEqual(['a']);
+  });
+});
+
+describe('getSupplierOfferApprovalStatus', () => {
+  it('delegates to normalizeSupplierProductFromApi status', () => {
+    expect(getSupplierOfferApprovalStatus({ status: 'pending' })).toBe('pending');
+    expect(getSupplierOfferApprovalStatus({ status: 'active' })).toBe('approved');
+    expect(getSupplierOfferApprovalStatus({ status: 'rejected' })).toBe('rejected');
+  });
+});
+
+describe('normalizeSupplierProductKey', () => {
+  it('trims string ids and coerces nullish to empty string', () => {
+    expect(normalizeSupplierProductKey('  offer-1  ')).toBe('offer-1');
+    expect(normalizeSupplierProductKey(null)).toBe('');
+    expect(normalizeSupplierProductKey(undefined)).toBe('');
   });
 });

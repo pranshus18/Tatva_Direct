@@ -1,3 +1,92 @@
+import {
+  buildVariantMetaByKey,
+  mergeOfferSpecifications,
+  parseSpecificationsObject,
+  parseSupplierOfferAttributes,
+  resolveOfferCatalogProductId
+} from './supplierCatalogHelpersService.js';
+
+function buildCatalogProductMeta(product = {}) {
+  return {
+    name: product.name,
+    description: product.description,
+    category: product.category,
+    unit: product.unit,
+    asin: product.asin || null,
+    images: Array.isArray(product.images) ? product.images.filter(Boolean) : [],
+    average_rating: product.average_rating,
+    status: product.status,
+    location: product.location,
+    specifications: parseSpecificationsObject(product.specifications) || product.specifications || {}
+  };
+}
+
+function resolveVariantMetaForOffer(row = {}, variantMetaByKey = new Map()) {
+  const variantAsin = String(row?.variant_asin || '').trim();
+  const variantKey = String(row?.variant_key || '').trim();
+  if (variantAsin && variantMetaByKey.has(`asin:${variantAsin}`)) {
+    return variantMetaByKey.get(`asin:${variantAsin}`);
+  }
+  if (variantKey && variantMetaByKey.has(variantKey)) {
+    return variantMetaByKey.get(variantKey);
+  }
+  return null;
+}
+
+async function loadVariantMetaByKeyForOffers(supabase, { familyId = null, offerRows = [] } = {}) {
+  const variantMetaByKey = new Map();
+
+  const mergeRows = (rows = []) => {
+    for (const [key, row] of buildVariantMetaByKey(rows)) {
+      variantMetaByKey.set(key, row);
+    }
+  };
+
+  if (familyId) {
+    const { data: familyVariantRows, error: familyVariantError } = await supabase
+      .from('product_variants')
+      .select('product_id, variant_key, variant_asin, canonical_attributes')
+      .eq('family_id', familyId);
+    if (familyVariantError) {
+      console.error('[Vendor Ranking] Family variant preload failed:', familyVariantError);
+    } else {
+      mergeRows(familyVariantRows || []);
+    }
+  }
+
+  const variantAsins = [
+    ...new Set((offerRows || []).map((row) => String(row?.variant_asin || '').trim()).filter(Boolean))
+  ];
+  if (variantAsins.length > 0) {
+    const { data: asinVariantRows, error: asinVariantError } = await supabase
+      .from('product_variants')
+      .select('product_id, variant_key, variant_asin, canonical_attributes')
+      .in('variant_asin', variantAsins);
+    if (asinVariantError) {
+      console.error('[Vendor Ranking] Variant-asin preload failed:', asinVariantError);
+    } else {
+      mergeRows(asinVariantRows || []);
+    }
+  }
+
+  const variantKeys = [
+    ...new Set((offerRows || []).map((row) => String(row?.variant_key || '').trim()).filter(Boolean))
+  ].filter((key) => !variantMetaByKey.has(key));
+  if (variantKeys.length > 0) {
+    const { data: keyVariantRows, error: keyVariantError } = await supabase
+      .from('product_variants')
+      .select('product_id, variant_key, variant_asin, canonical_attributes')
+      .in('variant_key', variantKeys);
+    if (keyVariantError) {
+      console.error('[Vendor Ranking] Variant-key preload failed:', keyVariantError);
+    } else {
+      mergeRows(keyVariantRows || []);
+    }
+  }
+
+  return variantMetaByKey;
+}
+
 export async function searchRankableProductsForItem({
   supabase,
   item,
@@ -142,18 +231,25 @@ export async function reconcileWithSupplierOffers({
       const productMetaById = {};
       for (const p of updatedProducts || []) {
         if (!p?.id) continue;
-        productMetaById[p.id] = {
-          name: p.name,
-          description: p.description,
-          category: p.category,
-          unit: p.unit,
-          asin: p.asin || null,
-          images: Array.isArray(p.images) ? p.images.filter(Boolean) : [],
-          average_rating: p.average_rating,
-          status: p.status,
-          location: p.location,
-          specifications: p.specifications || {}
-        };
+        productMetaById[p.id] = buildCatalogProductMeta(p);
+      }
+
+      const { data: catalogProducts, error: catalogProductsError } = await supabase
+        .from('products')
+        .select(
+          'id, name, description, category, unit, asin, images, average_rating, status, location, specifications, family_id'
+        )
+        .in('id', candidateProductIds);
+      if (catalogProductsError) {
+        console.error(
+          `[Vendor Ranking] Catalog preload failed for item ${itemId}:`,
+          catalogProductsError
+        );
+      } else {
+        for (const product of catalogProducts || []) {
+          if (!product?.id) continue;
+          productMetaById[product.id] = buildCatalogProductMeta(product);
+        }
       }
 
       const { data: offerRows, error: offerRowsError } = await supabase
@@ -177,6 +273,11 @@ export async function reconcileWithSupplierOffers({
         .in('product_id', candidateProductIds)
         .in('status', ['approved', 'pending']);
 
+      const variantMetaByKey = await loadVariantMetaByKeyForOffers(supabase, {
+        familyId: referenceProduct?.family_id || null,
+        offerRows: offerRowsError ? [] : offerRows || []
+      });
+
       if (!offerRowsError && Array.isArray(offerRows) && offerRows.length > 0) {
         console.log(
           `[Vendor Ranking] supplier_products offers sample for item ${itemId}:`,
@@ -194,23 +295,38 @@ export async function reconcileWithSupplierOffers({
           .map((row) => {
             const supplier = row?.supplier;
             if (!supplier?.id) return null;
-            const meta = productMetaById[row.product_id] || {};
+            const parsedAttributes = parseSupplierOfferAttributes(row.attributes);
+            const variantMeta = resolveVariantMetaForOffer(row, variantMetaByKey);
+            const catalogProductId = resolveOfferCatalogProductId(row, variantMetaByKey);
+            const meta = productMetaById[catalogProductId] || productMetaById[row.product_id] || {};
+            const catalogSpecifications = meta.specifications || {};
+            const displaySpecifications = mergeOfferSpecifications(
+              catalogSpecifications,
+              { attributes: parsedAttributes },
+              variantMeta
+            );
             return {
               ...meta,
-              id: row.product_id,
+              // Prefer product_variants-linked catalog id so ranking scores the resolved sibling.
+              id: catalogProductId || row.product_id,
+              offerProductId: row.product_id,
               name: meta.name,
               description: meta.description,
               category: meta.category,
               unit: meta.unit || 'nos',
+              catalogSpecifications,
+              specifications: displaySpecifications,
+              offerSpecificationsMerged: true,
+              variantMeta,
               images:
-                Array.isArray(row?.attributes?.images) && row.attributes.images.length > 0
-                  ? row.attributes.images.filter(Boolean)
+                Array.isArray(parsedAttributes?.images) && parsedAttributes.images.length > 0
+                  ? parsedAttributes.images.filter(Boolean)
                   : (Array.isArray(meta.images) ? meta.images : []),
               productImage:
-                Array.isArray(row?.attributes?.images) && row.attributes.images.length > 0
-                  ? row.attributes.images.find(Boolean) || null
+                Array.isArray(parsedAttributes?.images) && parsedAttributes.images.length > 0
+                  ? parsedAttributes.images.find(Boolean) || null
                   : (Array.isArray(meta.images) ? meta.images.find(Boolean) || null : null),
-              attributes: row.attributes || {},
+              attributes: parsedAttributes,
               supplierProductId: row.id || null,
               asin: meta.asin || null,
               variant_key: row.variant_key || null,

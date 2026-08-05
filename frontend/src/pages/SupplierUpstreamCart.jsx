@@ -15,7 +15,8 @@ import { formatRupee } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import {
   buildSupplierProductLookupMap,
-  normalizeSupplierProductsFromApi
+  normalizeSupplierProductsFromApi,
+  normalizeSupplierProductKey
 } from '../utils/supplierProductRow';
 import {
   formatShippingAddressLabel,
@@ -46,8 +47,6 @@ const blankShippingAddress = {
   pincode: '',
   country: 'India'
 };
-
-const normalizeSupplierProductKey = (value) => String(value ?? '').trim();
 
 const normalizeSelectionMap = (raw) => {
   if (!raw || typeof raw !== 'object') return {};

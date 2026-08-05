@@ -1262,25 +1262,29 @@ export function buildSupplierChainSavePayload(profile, entries = null, options =
     entries || getCompanyInfoEntriesForSave(profile)
   ).map(normalizeEntryDocumentFields);
   const first = nextEntries[0] || {};
+  const saveEntryId = String(options.saveSupplyChainEntryId || '').trim();
+  const savedEntry =
+    (saveEntryId && nextEntries.find((entry) => String(entry?.id || '').trim() === saveEntryId)) ||
+    first;
   const chainFields = {
     companyInfoEntries: nextEntries,
-    supplierRole: first.role || profile?.supplierRole || '',
-    brands: first.brands || profile?.brands || '',
-    gstin: first.gstin || profile?.gstin || '',
-    companyName: first.companyName || profile?.companyName || '',
-    minimumOrderValue: first.minimumOrderValue ?? profile?.minimumOrderValue ?? ''
+    supplierRole: savedEntry.role || profile?.supplierRole || '',
+    brands: savedEntry.brands || profile?.brands || '',
+    gstin: savedEntry.gstin || profile?.gstin || '',
+    companyName: savedEntry.companyName || profile?.companyName || '',
+    minimumOrderValue: savedEntry.minimumOrderValue ?? profile?.minimumOrderValue ?? ''
   };
 
   if (options.forApi) {
     const payload = {
       userType: profile?.userType || 'supplier',
       companyInfoEntries: nextEntries,
-      supplierRole: first.role || profile?.supplierRole || '',
-      brands: first.brands || profile?.brands || ''
+      supplierRole: savedEntry.role || profile?.supplierRole || '',
+      brands: savedEntry.brands || profile?.brands || ''
     };
-    const gstin = String(first.gstin || '').trim();
-    const companyName = String(first.companyName || '').trim();
-    const mov = first.minimumOrderValue;
+    const gstin = String(savedEntry.gstin || '').trim();
+    const companyName = String(savedEntry.companyName || '').trim();
+    const mov = savedEntry.minimumOrderValue;
     if (gstin) payload.gstin = gstin;
     if (companyName) payload.companyName = companyName;
     if (mov !== '' && mov !== null && mov !== undefined) payload.minimumOrderValue = mov;

@@ -5,12 +5,210 @@ import {
   normalizeModelIdentifier,
   sanitizeSpecifications,
   specificationTemplateKeysOnly,
+  mergeCatalogAndOfferSpecificationsForDisplay,
   mergeVariantSpecificationTemplate,
-  parseSpecificationsObject
+  parseSpecificationsObject,
+  resolveSupplierOfferDisplaySpecifications,
+  isMeaningfullyFilledSpecValue
 } from '../../services/supplierCatalogHelpersService.js';
+import { syncOfferAttributesWithSpecifications } from '../../services/productIdentityService.js';
 import { buildProductIdentification, firstNonEmpty } from '../../services/procurementSharedService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
-import { buildSupplierDescriptionAttributes } from '../../utils/supplierProductDescriptions.js';
+import { buildAdminPublishedDescriptionAttributes } from '../../utils/supplierProductDescriptions.js';
+
+function scoreSupplierOfferRow(row) {
+  const rowStatus = row.status;
+  const rowIsActive = row.is_active === true;
+  const stock = Number.isFinite(parseInt(row.stock, 10)) ? parseInt(row.stock, 10) : 0;
+  const price = Number.isFinite(parseFloat(row.price)) ? parseFloat(row.price) : 0;
+  const score =
+    rowStatus === 'approved' && rowIsActive ? 2 :
+    rowStatus === 'approved' ? 1 : 0;
+  return { row, _score: score, _stock: stock, _price: price };
+}
+
+/** Pending/rejected review uses the submitting supplier's offer, not another approved listing. */
+export function pickSupplierOfferRowForAdmin(rows = [], { catalogStatus = '', primarySupplierId = null, preferPending = false } = {}) {
+  if (!rows.length) return null;
+
+  if (preferPending) {
+    const pendingRows = rows.filter((row) => String(row?.status || '').toLowerCase() === 'pending');
+    if (pendingRows.length > 0) {
+      return pendingRows
+        .slice()
+        .sort((a, b) => new Date(b?.updated_at || 0).getTime() - new Date(a?.updated_at || 0).getTime())[0];
+    }
+  }
+
+  const normalizedStatus = String(catalogStatus || '').toLowerCase();
+  if (normalizedStatus !== 'approved' && primarySupplierId) {
+    const primaryRow = rows.find((row) => row.supplier_id === primarySupplierId);
+    if (primaryRow) return primaryRow;
+  }
+  return rows
+    .map(scoreSupplierOfferRow)
+    .sort((a, b) => {
+      if (b._score !== a._score) return b._score - a._score;
+      if (b._stock !== a._stock) return b._stock - a._stock;
+      return a._price - b._price;
+    })[0]?.row ?? null;
+}
+
+function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true, hasPendingSupplierOffer = false } = {}) {
+  if (!offerRow) {
+    return { ...product, hasSupplierOffer, hasPendingSupplierOffer };
+  }
+  const catalogSpecs = parseSpecificationsObject(product.specifications) || {};
+  const offerSpecs = parseSpecificationsObject(offerRow?.attributes?.specifications) || {};
+  const mergedSpecifications = resolveSupplierOfferDisplaySpecifications(
+    catalogSpecs,
+    offerRow?.attributes || {}
+  );
+  const catalogApproved = String(product.status || '').toLowerCase() === 'approved';
+  const offerPending = String(offerRow?.status || '').toLowerCase() === 'pending';
+
+  return {
+    ...product,
+    hasSupplierOffer,
+    hasPendingSupplierOffer,
+    adminReviewPending: hasPendingSupplierOffer || String(product.status || 'pending').toLowerCase() === 'pending',
+    pendingReviewType:
+      catalogApproved && offerPending ? 'variant_spec' : 'catalog',
+    supplier_product_id: offerRow.id,
+    supplierProductId: offerRow.id,
+    price: offerRow.price,
+    stock: offerRow.stock,
+    min_order_quantity: offerRow.min_order_quantity ?? product.min_order_quantity,
+    location: offerRow.location ?? product.location,
+    supplier_id: product.supplier_id || offerRow.supplier_id || null,
+    igst_rate: offerRow.igst_rate ?? offerRow?.attributes?.igstRate ?? product.igst_rate ?? null,
+    cgst_rate: offerRow.cgst_rate ?? offerRow?.attributes?.cgstRate ?? product.cgst_rate ?? null,
+    sgst_rate: offerRow.sgst_rate ?? offerRow?.attributes?.sgstRate ?? product.sgst_rate ?? null,
+    hsnCode: offerRow?.attributes?.hsnCode ?? product.hsnCode ?? product.hsn_code ?? null,
+    brandModel: offerRow?.attributes?.brandModel ?? product.brandModel ?? null,
+    catalogSpecifications: catalogSpecs,
+    supplierOfferSpecifications: offerSpecs,
+    specifications: mergedSpecifications,
+    offerStatus: offerRow.status || null,
+    variantKey: offerRow.variant_key || null,
+    variantAsin: offerRow.variant_asin || null,
+    publishedDescription:
+      offerRow?.attributes?.publishedDescription ||
+      '',
+    supplierDescription:
+      offerRow?.attributes?.supplierDescription ||
+      offerRow?.attributes?.description ||
+      ''
+  };
+}
+
+/** Resolve which supplier_products row admin inventory edits should target. */
+export function resolveAdminTargetOfferRow(rows = [], { validatedBody = {}, catalogStatus = '', primarySupplierId = null } = {}) {
+  const explicitId = String(
+    validatedBody?.supplier_product_id || validatedBody?.supplierProductId || ''
+  ).trim();
+  if (explicitId) {
+    const explicitRow = rows.find((row) => String(row?.id || '') === explicitId);
+    if (explicitRow) return explicitRow;
+  }
+  return pickSupplierOfferRowForAdmin(rows, { catalogStatus, primarySupplierId });
+}
+
+async function reconcileAdminProductWithOffers(supabase, product) {
+  if (!product?.id) return product;
+  const { data: spRows, error } = await supabase
+    .from('supplier_products')
+    .select('id, product_id, price, stock, min_order_quantity, location, status, is_active, supplier_id, attributes, igst_rate, cgst_rate, sgst_rate')
+    .eq('product_id', product.id);
+  if (error || !spRows?.length) {
+    return { ...product, hasSupplierOffer: Boolean(product.hasSupplierOffer) };
+  }
+  const best = pickSupplierOfferRowForAdmin(spRows, {
+    catalogStatus: product.status,
+    primarySupplierId: product.supplier_id
+  });
+  return attachSupplierOfferFields(product, best, { hasSupplierOffer: true });
+}
+
+const VARIANT_LABEL_SKIP_KEYS = new Set([
+  'brand',
+  'brandmodel',
+  'gtin',
+  'upc',
+  'ean',
+  'sku',
+  'gsku',
+  'skuno',
+  'mpn',
+  'packsize',
+  'pack_size'
+]);
+
+function buildAdminVariantLabel(offerSpecs = {}, catalogSpecs = {}) {
+  const merged = mergeCatalogAndOfferSpecificationsForDisplay(catalogSpecs, offerSpecs);
+  const parts = Object.entries(merged)
+    .filter(([key, value]) => {
+      const normalized = String(key || '')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '');
+      if (!normalized || VARIANT_LABEL_SKIP_KEYS.has(normalized)) return false;
+      return isMeaningfullyFilledSpecValue(value);
+    })
+    .slice(0, 3)
+    .map(([key, value]) => `${String(key).trim()}: ${String(value).trim()}`);
+  return parts.join(' · ');
+}
+
+/** Expand one catalog product into one admin row per supplier offer variant. */
+export function expandCatalogProductIntoAdminReviewRows(
+  product,
+  offerRows = [],
+  suppliersById = {}
+) {
+  const catalogSpecs = parseSpecificationsObject(product.specifications) || {};
+
+  if (!offerRows.length) {
+    return [
+      {
+        ...attachSupplierOfferFields(product, null, { hasSupplierOffer: false }),
+        adminRowKey: `${product.id}:catalog`,
+        catalogProductId: product.id,
+        displayStatus: String(product.status || 'pending').toLowerCase(),
+        isVariantRow: false
+      }
+    ];
+  }
+
+  return offerRows
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(b?.updated_at || 0).getTime() - new Date(a?.updated_at || 0).getTime()
+    )
+    .map((offerRow) => {
+      const offerSpecs = parseSpecificationsObject(offerRow?.attributes?.specifications) || {};
+      const offerPending = String(offerRow?.status || '').toLowerCase() === 'pending';
+      const attached = attachSupplierOfferFields(product, offerRow, {
+        hasSupplierOffer: true,
+        hasPendingSupplierOffer: offerPending
+      });
+      const variantLabel = buildAdminVariantLabel(offerSpecs, catalogSpecs);
+      const offerSupplier = suppliersById[offerRow.supplier_id] || product.supplier || null;
+
+      return {
+        ...attached,
+        adminRowKey: `${product.id}:${offerRow.id}`,
+        catalogProductId: product.id,
+        displayStatus: String(offerRow.status || product.status || 'pending').toLowerCase(),
+        isVariantRow: true,
+        variantLabel,
+        catalogName: product.name,
+        supplier: offerSupplier,
+        supplier_id: offerRow.supplier_id || product.supplier_id || null
+      };
+    });
+}
 
 export function registerAdminProductCatalogRoutes({ router, authenticateToken, isAdmin, supabase, console }) {
 router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
@@ -87,6 +285,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
     }
 
     let productIdsWithSupplierOffers = new Set();
+    let productIdsWithPendingOffers = new Set();
 
     // Always reconcile price/stock from supplier_products.
     // Supplier portal updates inventory in `supplier_products`, but this admin page
@@ -97,72 +296,44 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
       if (productIds.length > 0) {
         const { data: spRows, error: spRowsError } = await supabase
           .from('supplier_products')
-          .select('product_id, price, stock, min_order_quantity, location, status, is_active, supplier_id, attributes, igst_rate, cgst_rate, sgst_rate')
+          .select('id, product_id, price, stock, min_order_quantity, location, status, is_active, supplier_id, attributes, igst_rate, cgst_rate, sgst_rate, updated_at, variant_key, variant_asin')
           .in('product_id', productIds);
 
         if (!spRowsError && spRows) {
           productIdsWithSupplierOffers = new Set(
             spRows.map((row) => row.product_id).filter(Boolean)
           );
-          const bestRowByProductId = new Map();
-
+          productIdsWithPendingOffers = new Set(
+            spRows
+              .filter((row) => String(row?.status || '').toLowerCase() === 'pending')
+              .map((row) => row.product_id)
+              .filter(Boolean)
+          );
+          const rowsByProductId = new Map();
           for (const row of spRows) {
             if (!row?.product_id) continue;
-
-            const rowStatus = row.status;
-            const rowIsActive = row.is_active === true;
-            const stock = Number.isFinite(parseInt(row.stock)) ? parseInt(row.stock) : 0;
-            const price = Number.isFinite(parseFloat(row.price)) ? parseFloat(row.price) : 0;
-            const score =
-              rowStatus === 'approved' && rowIsActive ? 2 :
-              rowStatus === 'approved' ? 1 : 0;
-
-            const existing = bestRowByProductId.get(row.product_id);
-            if (!existing) {
-              bestRowByProductId.set(row.product_id, { ...row, _score: score, _stock: stock, _price: price });
-              continue;
-            }
-
-            // Choose:
-            // 1) approved+active (score)
-            // 2) higher stock
-            // 3) lower price
-            if (
-              score > existing._score ||
-              (score === existing._score && stock > existing._stock) ||
-              (score === existing._score && stock === existing._stock && price < existing._price)
-            ) {
-              bestRowByProductId.set(row.product_id, { ...row, _score: score, _stock: stock, _price: price });
-            }
+            if (!rowsByProductId.has(row.product_id)) rowsByProductId.set(row.product_id, []);
+            rowsByProductId.get(row.product_id).push(row);
           }
 
-          allProducts = allProducts.map((p) => {
-            const best = bestRowByProductId.get(p.id);
-            const hasSupplierOffer = productIdsWithSupplierOffers.has(p.id);
-            if (!best) {
-              return { ...p, hasSupplierOffer };
-            }
+          const offerSupplierIds = [
+            ...new Set(spRows.map((row) => row.supplier_id).filter(Boolean))
+          ];
+          const suppliersById = {};
+          if (offerSupplierIds.length > 0) {
+            const { data: offerSuppliers } = await supabase
+              .from('users')
+              .select('id, name, email, company')
+              .in('id', offerSupplierIds);
+            (offerSuppliers || []).forEach((supplier) => {
+              suppliersById[supplier.id] = supplier;
+            });
+          }
 
-            return {
-              ...p,
-              hasSupplierOffer,
-              // Admin cards show a single price/stock per product card,
-              // so we show the best available supplier offer.
-              price: best.price,
-              stock: best.stock,
-              min_order_quantity: best.min_order_quantity ?? p.min_order_quantity,
-              location: best.location ?? p.location,
-              supplier_id: p.supplier_id || best.supplier_id || null,
-              igst_rate: best.igst_rate ?? best?.attributes?.igstRate ?? p.igst_rate ?? null,
-              cgst_rate: best.cgst_rate ?? best?.attributes?.cgstRate ?? p.cgst_rate ?? null,
-              sgst_rate: best.sgst_rate ?? best?.attributes?.sgstRate ?? p.sgst_rate ?? null,
-              hsnCode: best?.attributes?.hsnCode ?? p.hsnCode ?? p.hsn_code ?? null,
-              brandModel: best?.attributes?.brandModel ?? p.brandModel ?? null,
-              supplierDescription:
-                best?.attributes?.supplierDescription ||
-                best?.attributes?.description ||
-                ''
-            };
+          allProducts = (allProducts || []).flatMap((p) => {
+            const productRows = rowsByProductId.get(p.id) || [];
+            if (productRows.length === 0) return [p];
+            return expandCatalogProductIntoAdminReviewRows(p, productRows, suppliersById);
           });
         } else {
           console.error('Admin products price/stock reconcile error:', spRowsError);
@@ -276,25 +447,40 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
       };
     });
     
-    // Filter by status in JavaScript
+    // Filter by status in JavaScript — each supplier offer variant is its own admin row.
     let products = allProducts || [];
     if (status && status !== 'all') {
       if (status === 'pending') {
-        // Pending: catalog row pending AND at least one supplier offer exists.
-        // Orphan catalog rows (failed creates) must not appear in admin approval queue.
-        products = (allProducts || []).filter((p) => {
-          const s = p.status;
-          const isPendingStatus =
-            !s || s === 'pending' || s === '' || (s !== 'approved' && s !== 'rejected');
-          return isPendingStatus && productIdsWithSupplierOffers.has(p.id);
+        products = (allProducts || []).filter((row) => {
+          const offerStatus = String(row.displayStatus || row.offerStatus || '').toLowerCase();
+          const catalogStatus = String(row.status || '').toLowerCase();
+          const isPendingCatalog =
+            !catalogStatus ||
+            catalogStatus === 'pending' ||
+            catalogStatus === '' ||
+            (catalogStatus !== 'approved' && catalogStatus !== 'rejected');
+          if (offerStatus === 'pending') return true;
+          return isPendingCatalog && row.hasSupplierOffer !== false;
         });
-        console.log(`Filtered to ${products.length} pending products with supplier offers`);
+        console.log(`Filtered to ${products.length} pending admin review rows`);
       } else if (status === 'approved') {
-        products = (allProducts || []).filter(p => p.status === 'approved');
-        console.log(`Filtered to ${products.length} approved products`);
+        products = (allProducts || []).filter((row) => {
+          const offerStatus = String(row.displayStatus || row.offerStatus || '').toLowerCase();
+          const catalogStatus = String(row.status || '').toLowerCase();
+          if (row.isVariantRow === false && !row.offerStatus) {
+            return catalogStatus === 'approved';
+          }
+          return offerStatus === 'approved' && catalogStatus === 'approved';
+        });
+        console.log(`Filtered to ${products.length} approved variant rows`);
       } else if (status === 'rejected') {
-        products = (allProducts || []).filter(p => p.status === 'rejected');
-        console.log(`Filtered to ${products.length} rejected products`);
+        products = (allProducts || []).filter((row) => {
+          const offerStatus = String(row.displayStatus || row.offerStatus || '').toLowerCase();
+          const catalogStatus = String(row.status || '').toLowerCase();
+          if (offerStatus === 'rejected') return true;
+          return catalogStatus === 'rejected' && row.hasSupplierOffer !== true;
+        });
+        console.log(`Filtered to ${products.length} rejected admin review rows`);
       }
     }
     
@@ -338,7 +524,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
 // Get single product by ID (admin only)
 router.get('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { data: product, error } = await supabase
+    const { data: productRow, error } = await supabase
       .from('products')
       .select(`
         *,
@@ -347,53 +533,29 @@ router.get('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
       .eq('id', req.params.id)
       .single();
     
-    if (error || !product) {
+    if (error || !productRow) {
       return res.status(404).json({ 
         status: 'error',
         message: 'Product not found' 
       });
     }
 
+    let product = productRow;
+
     // Reconcile price/stock from supplier_products so admin sees latest supplier inventory.
     const { data: spRows, error: spRowsError } = await supabase
       .from('supplier_products')
-      .select('product_id, price, stock, min_order_quantity, location, status, is_active, supplier_id, attributes, igst_rate, cgst_rate, sgst_rate')
+      .select('id, product_id, price, stock, min_order_quantity, location, status, is_active, supplier_id, attributes, igst_rate, cgst_rate, sgst_rate')
       .eq('product_id', product.id);
 
     if (!spRowsError && spRows && spRows.length > 0) {
-      const bestRowByScore = spRows
-        .map((row) => {
-          const rowStatus = row.status;
-          const rowIsActive = row.is_active === true;
-          const stock = Number.isFinite(parseInt(row.stock)) ? parseInt(row.stock) : 0;
-          const price = Number.isFinite(parseFloat(row.price)) ? parseFloat(row.price) : 0;
-          const score =
-            rowStatus === 'approved' && rowIsActive ? 2 :
-            rowStatus === 'approved' ? 1 : 0;
-
-          return { row, _score: score, _stock: stock, _price: price };
-        })
-        .sort((a, b) => {
-          if (b._score !== a._score) return b._score - a._score;
-          if (b._stock !== a._stock) return b._stock - a._stock;
-          return a._price - b._price;
-        })[0]?.row;
+      const bestRowByScore = pickSupplierOfferRowForAdmin(spRows, {
+        catalogStatus: product.status,
+        primarySupplierId: product.supplier_id
+      });
 
       if (bestRowByScore) {
-        product.price = bestRowByScore.price;
-        product.stock = bestRowByScore.stock;
-        product.min_order_quantity = bestRowByScore.min_order_quantity ?? product.min_order_quantity;
-        product.location = bestRowByScore.location ?? product.location;
-        product.supplier_id = product.supplier_id || bestRowByScore.supplier_id || null;
-        product.igst_rate = bestRowByScore.igst_rate ?? bestRowByScore?.attributes?.igstRate ?? product.igst_rate ?? null;
-        product.cgst_rate = bestRowByScore.cgst_rate ?? bestRowByScore?.attributes?.cgstRate ?? product.cgst_rate ?? null;
-        product.sgst_rate = bestRowByScore.sgst_rate ?? bestRowByScore?.attributes?.sgstRate ?? product.sgst_rate ?? null;
-        product.hsnCode = bestRowByScore?.attributes?.hsnCode ?? product.hsnCode ?? product.hsn_code ?? null;
-        product.brandModel = bestRowByScore?.attributes?.brandModel ?? product.brandModel ?? null;
-        product.supplierDescription =
-          bestRowByScore?.attributes?.supplierDescription ||
-          bestRowByScore?.attributes?.description ||
-          '';
+        product = attachSupplierOfferFields(product, bestRowByScore);
       }
     }
 
@@ -599,7 +761,7 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
     }
     
     // Ensure specifications are included in response
-    const productResponse = { ...product };
+    let productResponse = { ...product };
     if (!productResponse.specifications) {
       productResponse.specifications = {};
     }
@@ -672,37 +834,50 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
           productResponse?.supplier_id ||
           null;
 
-        // Prefer the product's primary supplier offer(s); fall back to all offers for this catalog product.
-        // Specs sync always targets every linked offer so admin updates appear everywhere.
-        if (requestedSpecsUpdate) {
-          const { data } = await supabase
-            .from('supplier_products')
-            .select('id, product_id, supplier_id, attributes')
-            .eq('product_id', req.params.id);
-          spUpdateResult = data;
-        } else if (primarySupplierId) {
-          const { data } = await supabase
-            .from('supplier_products')
-            .update(offerPatch)
-            .eq('product_id', req.params.id)
-            .eq('supplier_id', primarySupplierId)
-            .select('id, product_id, supplier_id, attributes');
-          spUpdateResult = data;
-        }
+        const { data: allOfferRows } = await supabase
+          .from('supplier_products')
+          .select(
+            'id, product_id, supplier_id, price, stock, min_order_quantity, location, status, is_active, attributes, igst_rate, cgst_rate, sgst_rate'
+          )
+          .eq('product_id', req.params.id);
 
-        if (!spUpdateResult || spUpdateResult.length === 0) {
-          const { data } = await supabase
-            .from('supplier_products')
-            .update(Object.keys(offerPatch).length > 1 ? offerPatch : { updated_at: offerPatch.updated_at })
-            .eq('product_id', req.params.id)
-            .select('id, product_id, supplier_id, attributes');
-          spUpdateResult = data;
-        } else if (requestedSpecsUpdate && Object.keys(offerPatch).length > 1) {
-          // Apply non-spec column patches when we only selected rows for a full specs sync.
-          await supabase
-            .from('supplier_products')
-            .update(offerPatch)
-            .eq('product_id', req.params.id);
+        const offerRows = allOfferRows || [];
+        const explicitOfferId = String(
+          validatedBody?.supplier_product_id || validatedBody?.supplierProductId || ''
+        ).trim();
+        const targetOfferRow = resolveAdminTargetOfferRow(offerRows, {
+          validatedBody,
+          catalogStatus: productResponse?.status,
+          primarySupplierId
+        });
+
+        const inventoryPatchKeys = new Set([
+          'updated_at',
+          'price',
+          'stock',
+          'location',
+          'min_order_quantity',
+          'igst_rate',
+          'cgst_rate',
+          'sgst_rate'
+        ]);
+        const inventoryPatch = Object.fromEntries(
+          Object.entries(offerPatch).filter(([key]) => inventoryPatchKeys.has(key))
+        );
+        const hasInventoryPatch = Object.keys(inventoryPatch).length > 1;
+
+        // Spec template sync: all offers when admin edits shared template keys; one row when targeted.
+        const rowsForAttributeSync = requestedSpecsUpdate
+          ? explicitOfferId && targetOfferRow
+            ? [targetOfferRow]
+            : offerRows
+          : targetOfferRow
+            ? [targetOfferRow]
+            : [];
+        spUpdateResult = rowsForAttributeSync;
+
+        if (hasInventoryPatch && targetOfferRow?.id) {
+          await supabase.from('supplier_products').update(inventoryPatch).eq('id', targetOfferRow.id);
         }
 
         if (spUpdateResult && spUpdateResult.length > 0) {
@@ -726,8 +901,7 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
               mergedAttrs.listingName = String(validatedBody.name || '').trim();
             }
             if (requestedDescriptionUpdate) {
-              // Supplier list prefers attributes.supplierDescription over products.description.
-              mergedAttrs = buildSupplierDescriptionAttributes(
+              mergedAttrs = buildAdminPublishedDescriptionAttributes(
                 mergedAttrs,
                 validatedBody.description || ''
               );
@@ -737,16 +911,16 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
               const adminSpecKeys = specificationTemplateKeysOnly(safeAdminSpecs || {});
               const existingOfferSpecs =
                 parseSpecificationsObject(mergedAttrs.specifications) || {};
-              mergedAttrs.specifications = mergeVariantSpecificationTemplate(
-                adminSpecKeys,
-                existingOfferSpecs
-              );
+              mergedAttrs = syncOfferAttributesWithSpecifications({
+                ...mergedAttrs,
+                specifications: mergeVariantSpecificationTemplate(adminSpecKeys, existingOfferSpecs)
+              });
             }
 
             await supabase
               .from('supplier_products')
               .update({
-                attributes: mergedAttrs,
+                attributes: syncOfferAttributesWithSpecifications(mergedAttrs),
                 updated_at: new Date().toISOString()
               })
               .eq('id', row.id);
@@ -772,6 +946,11 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
             console.log(
               `✅ [ADMIN UPDATE] Synced specifications to ${spUpdateResult.length} supplier offer(s)`
             );
+          }
+          if (requestedDescriptionUpdate) {
+            const publishedText = String(validatedBody.description || '').trim();
+            productResponse.description = publishedText;
+            productResponse.publishedDescription = publishedText;
           }
 
           void syncCatalogProductSnapshotFromOffers(supabase, req.params.id).catch((syncError) => {
@@ -917,8 +1096,14 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
       // Do not block the main response if syncing category template fails
       console.error('❌ [ADMIN SYNC] Failed to sync category defaultSpecifications from admin product update:', syncError);
     }
+
+    try {
+      productResponse = await reconcileAdminProductWithOffers(supabase, productResponse);
+    } catch (reconcileError) {
+      console.warn('[ADMIN UPDATE] Failed to reconcile supplier offer specifications:', reconcileError);
+    }
     
-    res.json({ 
+    res.json({
       status: 'success',
       message: 'Product updated successfully',
       product: productResponse

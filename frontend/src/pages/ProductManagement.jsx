@@ -33,11 +33,21 @@ import {
   mergeSpecificationObjects,
   mergeVariantSpecificationTemplate,
   mergeCatalogAndOfferSpecificationsForDisplay,
+  catalogSpecificationTemplateForVariantMerge,
   resolveSupplierOfferDisplaySpecifications,
   parseSpecInputToValue,
   specValueToInput,
+  normalizeSpecificationKeyForMatch,
+  countNewlyFilledSpecificationValues,
+  mergeExtractedValuesOntoSpecificationTemplate,
+  resolveSpecificationValueForKey,
+  formatSpecDisplayValue,
   specificationEntriesForDetails,
-  supplierSpecificationValuesLocked
+  getSupplierCatalogSpecificationKeys,
+  isSupplierOfferApproved,
+  supplierOfferNeedsPostApprovalSpecFill,
+  supplierSpecificationValuesLocked,
+  hasSupplierSpecificationChangesFromBaseline
 } from '../utils/specifications';
 import {
   applyExtractResultToSpecs,
@@ -51,18 +61,25 @@ import {
   SUPPLIER_MRP_LABEL,
   SUPPLIER_MRP_LOCKED_MESSAGE,
   formatSupplierStockAvailability,
+  getSupplierStockHealth,
   isSupplierInventoryConfigured,
   isSupplierMrpLocked,
   parseSupplierOfferPrice
 } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
+import {
+  resolveSupplierPortalDisplayDescription,
+  supplierPortalHasPublishedDescription
+} from '../utils/productDisplay';
 import RupeeInput from '../components/RupeeInput';
 import BrandSelect from '../components/BrandSelect';
 import {
   getSupplierOfferRowId,
   findSupplierOfferRow,
   matchSupplierOfferRow,
-  normalizeSupplierProductsFromApi
+  normalizeSupplierProductFromApi,
+  normalizeSupplierProductsFromApi,
+  getSupplierOfferApprovalStatus
 } from '../utils/supplierProductRow';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import {
@@ -93,8 +110,6 @@ import {
 
 import { useLocation, useNavigate } from 'react-router-dom';
 
-const LOW_STOCK_THRESHOLD = 10;
-
 const STATUS_CONFIG = {
   pending: {
     label: 'Pending Approval',
@@ -113,17 +128,9 @@ const STATUS_CONFIG = {
   }
 };
 
-function getSupplierApprovalStatus(product) {
-  const raw = String(product?.status || 'pending').trim().toLowerCase();
-  if (raw === 'rejected') return 'rejected';
-  if (raw === 'approved' || raw === 'active') return 'approved';
-  // Pending / unknown never become "Approved / Active" just because is_active is true.
-  return 'pending';
-}
-
 /** ProductCOV / pricing setup is only for offers that are not rejected. */
 function isSupplierProductEligibleForProductCov(product) {
-  return getSupplierApprovalStatus(product) !== 'rejected';
+  return getSupplierOfferApprovalStatus(product) !== 'rejected';
 }
 
 function getSupplierRejectionReason(product) {
@@ -134,11 +141,75 @@ function getSupplierRejectionReason(product) {
   ).trim();
 }
 
-function getStockHealth(stock) {
-  const quantity = parseSupplierStockQuantity(stock);
-  if (quantity === null || quantity === 0) return 'out';
-  if (quantity <= LOW_STOCK_THRESHOLD) return 'low';
-  return 'ok';
+function mergeSupplierProductAfterUpdate(existingRow, apiProduct, productData = {}) {
+  const normalized = normalizeSupplierProductFromApi({
+    ...(existingRow || {}),
+    ...(apiProduct || {})
+  });
+  const savedOfferSpecs =
+    productData.specifications !== undefined
+      ? productData.specifications
+      : normalized.supplierOfferSpecifications ||
+        normalized.attributes?.specifications ||
+        existingRow?.supplierOfferSpecifications ||
+        existingRow?.attributes?.specifications;
+  const catalogSpecs =
+    normalized.catalogSpecifications ||
+    existingRow?.catalogSpecifications ||
+    {};
+  const catalogKeys =
+    Array.isArray(normalized.catalogSpecificationKeys) && normalized.catalogSpecificationKeys.length > 0
+      ? normalized.catalogSpecificationKeys
+      : getSupplierCatalogSpecificationKeys({
+          ...normalized,
+          catalogSpecifications: catalogSpecs,
+          catalogSpecificationKeys: normalized.catalogSpecificationKeys
+        });
+  const offerSpecs =
+    savedOfferSpecs && typeof savedOfferSpecs === 'object' && !Array.isArray(savedOfferSpecs)
+      ? savedOfferSpecs
+      : {};
+  const mergedDisplay = mergeCatalogAndOfferSpecificationsForDisplay(
+    catalogSpecificationTemplateForVariantMerge(catalogSpecs),
+    offerSpecs
+  );
+  const supplierText = String(
+    apiProduct?.supplierDescription ??
+      productData.description ??
+      existingRow?.supplierDescription ??
+      normalized.supplierDescription ??
+      ''
+  ).trim();
+  const publishedText = String(
+    apiProduct?.publishedDescription ?? existingRow?.publishedDescription ?? ''
+  ).trim();
+
+  return {
+    ...normalized,
+    ...(productData.lsa !== undefined ? { lsa: String(productData.lsa || '').trim() } : {}),
+    catalogSpecifications: catalogSpecs,
+    catalogSpecificationKeys: catalogKeys,
+    supplierOfferSpecifications: offerSpecs,
+    specifications: mergedDisplay,
+    supplierDescription: supplierText,
+    description: supplierText,
+    publishedDescription: publishedText,
+    supplierSpecValuesLocked: supplierSpecificationValuesLocked({
+      offerSpecifications: offerSpecs,
+      supplierSpecValuesLocked: normalized.supplierSpecValuesLocked,
+      catalogSpecificationKeys: catalogKeys,
+      productStatus: normalized.status
+    }),
+    attributes: {
+      ...(normalized.attributes && typeof normalized.attributes === 'object'
+        ? normalized.attributes
+        : existingRow?.attributes && typeof existingRow.attributes === 'object'
+          ? existingRow.attributes
+          : {}),
+      ...(productData.specifications !== undefined ? { specifications: offerSpecs } : {}),
+      ...(productData.lsa !== undefined ? { lsa: String(productData.lsa || '').trim() } : {})
+    }
+  };
 }
 
 const ProductManagement = ({ user }) => {
@@ -208,26 +279,6 @@ const ProductManagement = ({ user }) => {
   useEffect(() => {
     resetCatalogViewToDefault();
   }, []);
-
-  useEffect(() => {
-    const refreshCatalog = () => {
-      fetchProducts({ silent: true });
-      fetchNotifications();
-    };
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') refreshCatalog();
-    };
-    const intervalMs = isInventoryView ? 15000 : 20000;
-    const intervalId = window.setInterval(refreshCatalog, intervalMs);
-    window.addEventListener('focus', refreshCatalog);
-    document.addEventListener('visibilitychange', onVisibility);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener('focus', refreshCatalog);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [isInventoryView]);
 
   useEffect(() => {
     const hasApprovalUpdate = (notifications || []).some((n) => {
@@ -334,7 +385,7 @@ const ProductManagement = ({ user }) => {
       if (data.status === 'success') {
         const productsWithStatus = normalizeSupplierProductsFromApi(data.products || []).map(
           (product) => {
-            const approval = getSupplierApprovalStatus(product);
+            const approval = getSupplierOfferApprovalStatus(product);
             return {
               ...product,
               status: approval,
@@ -437,9 +488,12 @@ const ProductManagement = ({ user }) => {
         if (nextBrand) params.set('brand', nextBrand);
         if (nextProductName) params.set('productName', nextProductName);
         params.set('from', 'product-management');
-        alert(
-          `${data.message || 'Product added successfully!'} Next: complete inventory details (step 2), then ProductCOV (step 3).`
-        );
+        const addMessage =
+          data.message ||
+          (data.requiresAdminApproval
+            ? 'Product added successfully and is pending admin approval.'
+            : 'Product added successfully and is immediately available.');
+        alert(`${addMessage} Next: complete inventory details (step 2), then ProductCOV (step 3).`);
         navigate(`/manage-inventory?${params.toString()}`, {
           state: { newlyAddedProduct: addedProduct }
         });
@@ -476,7 +530,8 @@ const ProductManagement = ({ user }) => {
       igst_rate: data.igst_rate,
       cgst_rate: data.cgst_rate,
       sgst_rate: data.sgst_rate,
-      hsnCode: data.hsnCode || data.hsn_code
+      hsnCode: data.hsnCode || data.hsn_code,
+      lsa: data.lsa != null ? String(data.lsa).trim() : ''
     };
     // Persist product photos uploaded in the inventory edit modal.
     if (Array.isArray(data.images)) {
@@ -504,6 +559,7 @@ const ProductManagement = ({ user }) => {
   };
 
   const handleUpdateProduct = async (productId, productData, options = {}) => {
+    const { closeEditModal = true, refreshProducts = false } = options;
     try {
       const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl(`/api/supplier/products/${productId}`), {
@@ -524,76 +580,85 @@ const ProductManagement = ({ user }) => {
           ? productData.images
           : Array.isArray(data.product?.images)
             ? data.product.images
-            : [];
+            : undefined;
         const savedUnit = String(productData.unit || data.product?.unit || '').trim();
-        const updatedProduct = {
-          ...data.product,
-          specifications: data.product.specifications || {},
-          // Prefer images the supplier just saved so catalog extras never reappear in the list.
-          images: savedImages,
-          // Keep attributes.images in sync so thumbnails/forms do not revive deleted photos.
-          attributes: {
-            ...(data.product?.attributes && typeof data.product.attributes === 'object'
-              ? data.product.attributes
+
+        const applyProductMerge = (prevRow) => {
+          const merged = mergeSupplierProductAfterUpdate(prevRow, data.product, productData);
+          return {
+            ...merged,
+            supplier_product_id:
+              getSupplierOfferRowId(prevRow) || getSupplierOfferRowId(merged) || productId,
+            ...(savedImages !== undefined ? { images: savedImages } : {}),
+            ...(savedUnit ? { unit: savedUnit } : {}),
+            stock:
+              savedStock != null
+                ? savedStock
+                : merged.stock != null
+                  ? merged.stock
+                  : prevRow?.stock,
+            price: (() => {
+              const nextPrice = Number(merged.price);
+              if (Number.isFinite(nextPrice) && nextPrice > 0) return nextPrice;
+              const prevPrice = Number(prevRow?.price);
+              return Number.isFinite(prevPrice) && prevPrice > 0 ? prevPrice : nextPrice || 0;
+            })(),
+            location:
+              String(merged.location || '').trim() ||
+              String(prevRow?.location || '').trim() ||
+              '',
+            ...(productData.lsa !== undefined
+              ? { lsa: String(productData.lsa || '').trim() }
               : {}),
-            ...(Array.isArray(productData.images) ? { images: savedImages } : {}),
-            ...(savedUnit ? { unit: savedUnit } : {})
-          },
-          ...(savedUnit ? { unit: savedUnit } : {}),
-          ...(savedStock != null ? { stock: savedStock } : {})
+            attributes: {
+              ...(merged.attributes || {}),
+              ...(savedImages !== undefined ? { images: savedImages } : {}),
+              ...(savedUnit ? { unit: savedUnit } : {}),
+              ...(productData.lsa !== undefined
+                ? { lsa: String(productData.lsa || '').trim() }
+                : {})
+            }
+          };
         };
 
+        let mergedForReturn = null;
         setProducts((prev) =>
-          prev.map((p) =>
-            matchSupplierOfferRow(p, productId)
-              ? {
-                  ...p,
-                  ...updatedProduct,
-                  supplier_product_id:
-                    getSupplierOfferRowId(p) ||
-                    getSupplierOfferRowId(updatedProduct) ||
-                    productId,
-                  // Keep configured inventory values if a catalog-only save omits them.
-                  stock:
-                    savedStock != null
-                      ? savedStock
-                      : updatedProduct.stock != null
-                        ? updatedProduct.stock
-                        : p.stock,
-                  price: (() => {
-                    const nextPrice = Number(updatedProduct.price);
-                    if (Number.isFinite(nextPrice) && nextPrice > 0) return nextPrice;
-                    const prevPrice = Number(p.price);
-                    return Number.isFinite(prevPrice) && prevPrice > 0 ? prevPrice : nextPrice || 0;
-                  })(),
-                  location:
-                    String(updatedProduct.location || '').trim() ||
-                    String(p.location || '').trim() ||
-                    ''
-                }
-              : p
-          )
+          prev.map((p) => {
+            if (!matchSupplierOfferRow(p, productId)) return p;
+            mergedForReturn = applyProductMerge(p);
+            return mergedForReturn;
+          })
         );
         setViewingItem((prev) =>
-          prev && matchSupplierOfferRow(prev, productId) ? { ...prev, ...updatedProduct } : prev
+          prev && matchSupplierOfferRow(prev, productId) ? applyProductMerge(prev) : prev
         );
+        setEditingItem((prev) =>
+          prev && matchSupplierOfferRow(prev, productId) ? applyProductMerge(prev) : prev
+        );
+
+        if (refreshProducts) {
+          await fetchProducts({ silent: true });
+        }
+
+        const updatedProduct = mergedForReturn || mergeSupplierProductAfterUpdate(null, data.product, productData);
 
         // Confirm save before closing the modal / navigating away.
         if (data.message === 'No changes detected') {
-          alert(data.message);
-          setEditingItem(null);
-          return;
+          if (closeEditModal) alert(data.message);
+          return closeEditModal ? undefined : { ok: false, message: data.message };
         }
 
         const successMessage =
           data.message && /pending admin approval/i.test(String(data.message))
             ? data.message
             : 'Product updated successfully! Your changes have been saved.';
-        alert(successMessage);
-        setEditingItem(null);
+        if (closeEditModal) {
+          alert(successMessage);
+          setEditingItem(null);
+        }
 
         // After inventory (step 2), continue to ProductCOV only when the offer is eligible.
-        if (isInventoryView && isSupplierProductEligibleForProductCov(updatedProduct)) {
+        if (closeEditModal && isInventoryView && isSupplierProductEligibleForProductCov(updatedProduct)) {
           const nextBrand = String(
             data?.nextStep?.brand ||
               updatedProduct?.brandModel ||
@@ -618,14 +683,48 @@ const ProductManagement = ({ user }) => {
 
         // Don't call fetchProducts() here as it might load stale data
         // The local state update above is sufficient
+        return { ok: true, product: updatedProduct, message: successMessage };
       } else {
         // Show specific error message from backend (including validation details)
-        alert(getSupplierProductUpdateErrorMessage(data));
+        const message = getSupplierProductUpdateErrorMessage(data);
+        if (closeEditModal) alert(message);
+        return { ok: false, message };
       }
     } catch (error) {
       console.error('Failed to update product:', error);
-      alert('Failed to update product. Please try again.');
+      const message = 'Failed to update product. Please try again.';
+      if (options.closeEditModal !== false) alert(message);
+      return { ok: false, message };
     }
+  };
+
+  const handleSaveApprovedSpecifications = async (item, nextSpecs) => {
+    const productId = getSupplierOfferRowId(item);
+    if (!productId) {
+      return { ok: false, message: 'Missing product id. Refresh and try again.' };
+    }
+
+    const templateKeys = getSupplierCatalogSpecificationKeys(item);
+    const specMissing = getSupplierSpecificationTemplateMissingFields(templateKeys, nextSpecs);
+    if (specMissing.length > 0) {
+      const message = formatSupplierProductValidationMessage(specMissing);
+      alert(message);
+      return { ok: false, message };
+    }
+
+    return handleUpdateProduct(
+      productId,
+      {
+        name: item.name,
+        description: item.supplierDescription || item.description || '',
+        category: item.category,
+        brand: item.brand || item.brandModel || item.attributes?.brand || '',
+        unit: item.unit,
+        gtin: item.gtin,
+        specifications: nextSpecs
+      },
+      { closeEditModal: false, refreshProducts: true }
+    );
   };
 
   const handleDeleteProduct = async (supplierProductId, options = {}) => {
@@ -633,7 +732,7 @@ const ProductManagement = ({ user }) => {
     const productName = product?.name || 'this product';
     const isRejectedCatalogRemove =
       options.fromRejectedCatalog === true ||
-      (!isInventoryView && getSupplierApprovalStatus(product) === 'rejected');
+      (!isInventoryView && getSupplierOfferApprovalStatus(product) === 'rejected');
 
     const confirmMessage = isRejectedCatalogRemove
       ? `Remove "${productName}" from your catalog?\n\nThis rejected product will be permanently deleted from your catalog. This cannot be undone.`
@@ -678,18 +777,18 @@ const ProductManagement = ({ user }) => {
     const filterCategoryLower = filterCategory === 'all' ? 'all' : filterCategory.toLowerCase();
     const matchesCategory = filterCategoryLower === 'all' || productCategory === filterCategoryLower;
     const matchesStatus =
-      filterStatus === 'all' || getSupplierApprovalStatus(product) === filterStatus;
+      filterStatus === 'all' || getSupplierOfferApprovalStatus(product) === filterStatus;
     return matchesSearch && matchesCategory && matchesStatus;
   });
 
   const pageStats = useMemo(() => {
     const derivedTotal = products.length;
-    const derivedPending = products.filter((p) => getSupplierApprovalStatus(p) === 'pending').length;
-    const derivedActive = products.filter((p) => getSupplierApprovalStatus(p) === 'approved').length;
-    const derivedRejected = products.filter((p) => getSupplierApprovalStatus(p) === 'rejected').length;
+    const derivedPending = products.filter((p) => getSupplierOfferApprovalStatus(p) === 'pending').length;
+    const derivedActive = products.filter((p) => getSupplierOfferApprovalStatus(p) === 'approved').length;
+    const derivedRejected = products.filter((p) => getSupplierOfferApprovalStatus(p) === 'rejected').length;
     const lowStock = products.filter((p) => {
       if (!isSupplierInventoryConfigured(p)) return false;
-      const health = getStockHealth(p.stock);
+      const health = getSupplierStockHealth({ stock: p.stock, lsa: p.lsa });
       return health === 'out' || health === 'low';
     }).length;
 
@@ -878,11 +977,13 @@ const ProductManagement = ({ user }) => {
                   product._id ||
                   `row-${productIndex}`
               );
-              const productStatus = getSupplierApprovalStatus(product);
+              const productStatus = getSupplierOfferApprovalStatus(product);
               const status = STATUS_CONFIG[productStatus] || STATUS_CONFIG.pending;
               const rejectionReason = getSupplierRejectionReason(product);
               const inventoryConfigured = isSupplierInventoryConfigured(product);
-              const stockHealth = inventoryConfigured ? getStockHealth(product.stock) : null;
+              const stockHealth = inventoryConfigured
+                ? getSupplierStockHealth({ stock: product.stock, lsa: product.lsa })
+                : null;
               const displayBrand = String(product.brand || product.brandModel || '').trim();
               const imgs = getProductImageList(product);
               const inStock = inventoryConfigured && Number(product.stock) > 0;
@@ -1116,7 +1217,11 @@ const ProductManagement = ({ user }) => {
                             type="button"
                             className="pm-card__action-btn"
                             onClick={() => setEditingItem(product)}
-                            title="Edit product & images"
+                            title={
+                              supplierOfferNeedsPostApprovalSpecFill(product)
+                                ? 'Fill specification values'
+                                : 'Edit product & images'
+                            }
                           >
                             <Edit size={15} />
                           </button>
@@ -1198,6 +1303,7 @@ const ProductManagement = ({ user }) => {
       {/* Edit Product Modal — inventory OR catalog (images / specs) */}
       {editingItem && (
         <ProductModal
+          key={getSupplierOfferRowId(editingItem) || 'edit-product'}
           product={editingItem}
           showInventoryFields={isInventoryView}
           onClose={() => setEditingItem(null)}
@@ -1236,20 +1342,17 @@ const ProductManagement = ({ user }) => {
               category: data.category,
               brand: brandValue,
               unit: data.unit,
-              gtin: data.gtin,
-              images: Array.isArray(data.images) ? data.images : []
+              gtin: data.gtin
             };
-            const isApprovedSpecFill =
-              String(editingItem?.status || '').toLowerCase() === 'approved' &&
-              !supplierSpecificationValuesLocked({
-                offerSpecifications:
-                  editingItem?.supplierOfferSpecifications ||
-                  editingItem?.attributes?.specifications,
-                supplierSpecValuesLocked: editingItem?.supplierSpecValuesLocked
-              }) &&
-              (Array.isArray(editingItem?.catalogSpecificationKeys)
-                ? editingItem.catalogSpecificationKeys.length > 0
-                : Object.keys(editingItem?.specifications || {}).length > 0);
+            const resolvedImages = Array.isArray(data.images)
+              ? data.images
+              : Array.isArray(editingItem?.images)
+                ? editingItem.images
+                : undefined;
+            if (resolvedImages !== undefined) {
+              catalogPayload.images = resolvedImages;
+            }
+            const isApprovedSpecFill = supplierOfferNeedsPostApprovalSpecFill(editingItem);
             const isPendingCategorySpecFill =
               String(editingItem?.status || '').toLowerCase() === 'pending' &&
               data.specifications &&
@@ -1287,7 +1390,9 @@ const ProductManagement = ({ user }) => {
                 return;
               }
             }
-            await handleUpdateProduct(productId, catalogPayload);
+            await handleUpdateProduct(productId, catalogPayload, {
+              refreshProducts: isApprovedSpecFill || isPendingCategorySpecFill
+            });
           }}
         />
       )}
@@ -1297,15 +1402,24 @@ const ProductManagement = ({ user }) => {
           key={getSupplierOfferRowId(viewingItem) || viewingItem.id}
           product={viewingItem}
           canEditInventory={isInventoryView}
+          needsPostApprovalSpecFill={supplierOfferNeedsPostApprovalSpecFill(viewingItem)}
           specificationsReadOnly={
+            !supplierOfferNeedsPostApprovalSpecFill(viewingItem) &&
             supplierSpecificationValuesLocked({
               offerSpecifications:
                 viewingItem?.supplierOfferSpecifications ||
                 viewingItem?.attributes?.specifications,
-              supplierSpecValuesLocked: viewingItem?.supplierSpecValuesLocked
+              supplierSpecValuesLocked: viewingItem?.supplierSpecValuesLocked,
+              catalogSpecificationKeys: getSupplierCatalogSpecificationKeys(viewingItem),
+              productStatus: viewingItem?.status
             })
           }
           onClose={() => setViewingItem(null)}
+          onSaveSpecifications={
+            !isInventoryView && supplierOfferNeedsPostApprovalSpecFill(viewingItem)
+              ? handleSaveApprovedSpecifications
+              : undefined
+          }
           onEdit={
             isInventoryView
               ? (item) => {
@@ -1315,7 +1429,7 @@ const ProductManagement = ({ user }) => {
               : undefined
           }
           onRemoveRejected={
-            !isInventoryView && getSupplierApprovalStatus(viewingItem) === 'rejected'
+            !isInventoryView && getSupplierOfferApprovalStatus(viewingItem) === 'rejected'
               ? async (item) => {
                   const offerId = getSupplierOfferRowId(item) || item.id || item._id;
                   if (!offerId) return;
@@ -1333,6 +1447,7 @@ const ProductManagement = ({ user }) => {
 const ProductDetailsModal = ({
   product,
   canEditInventory = false,
+  needsPostApprovalSpecFill = false,
   specificationsReadOnly = false,
   onClose,
   onEdit,
@@ -1346,9 +1461,24 @@ const ProductDetailsModal = ({
   const [isEditingSpecs, setIsEditingSpecs] = useState(false);
   const [draftSpecs, setDraftSpecs] = useState({});
   const [savingSpecs, setSavingSpecs] = useState(false);
-  const [descriptionDraft, setDescriptionDraft] = useState(product?.description || '');
+  const [descriptionDraft, setDescriptionDraft] = useState(() =>
+    resolveSupplierPortalDisplayDescription(product)
+  );
   const [extractingSpecs, setExtractingSpecs] = useState(false);
   const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
+  const productSyncKey = useMemo(() => {
+    const offerId = getSupplierOfferRowId(product) || String(product?.id || '');
+    return [
+      offerId,
+      product?.updated_at || product?.updatedAt || '',
+      JSON.stringify(product?.specifications || {}),
+      JSON.stringify(product?.catalogSpecifications || {}),
+      JSON.stringify(product?.supplierOfferSpecifications || {}),
+      product?.publishedDescription || '',
+      product?.description || '',
+      product?.supplierDescription || ''
+    ].join('|');
+  }, [product]);
   const specsObject =
     product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
       ? product.specifications
@@ -1372,22 +1502,80 @@ const ProductDetailsModal = ({
     setDisplaySpecifications(resolveSupplierOfferDisplaySpecifications(product));
     setIsEditingSpecs(false);
     setDraftSpecs({});
-    setDescriptionDraft(product?.description || '');
-  }, [
-    product?.supplier_product_id,
-    product?.specifications,
-    product?.catalogSpecifications,
-    product?.supplierOfferSpecifications,
-    product?.attributes?.specifications,
-    product?.description
-  ]);
+    setDescriptionDraft(resolveSupplierPortalDisplayDescription(product));
+    setLastSuccessfulExtractionSourceKey(null);
+  }, [productSyncKey, product]);
 
   const specEntries = specificationEntriesForDetails(displaySpecifications);
+  const catalogSpecKeys = getSupplierCatalogSpecificationKeys(product);
+  const catalogSpecTemplate = Object.fromEntries(catalogSpecKeys.map((key) => [key, '']));
+  const specsForDetailEntries = Object.fromEntries(
+    catalogSpecKeys.map((key) => [
+      key,
+      resolveSpecificationValueForKey(displaySpecifications, key) ?? ''
+    ])
+  );
+  const detailSpecEntries =
+    catalogSpecKeys.length > 0
+      ? specificationEntriesForDetails(specsForDetailEntries)
+      : specEntries.length > 0
+        ? specEntries
+        : specificationEntriesForDetails(catalogSpecTemplate);
+
+  const buildSpecificationTemplateState = () => {
+    if (catalogSpecKeys.length > 0) {
+      return Object.fromEntries(
+        catalogSpecKeys.map((key) => [
+          key,
+          resolveSpecificationValueForKey(displaySpecifications, key) ?? ''
+        ])
+      );
+    }
+    return { ...(displaySpecifications || {}) };
+  };
+
+  const buildDraftFromSpecifications = (specs) => {
+    const draft = {};
+    const keys = catalogSpecKeys.length > 0 ? catalogSpecKeys : detailSpecEntries.map((e) => e.key);
+    keys.forEach((key) => {
+      draft[key] = specValueToInput(resolveSpecificationValueForKey(specs, key));
+    });
+    return draft;
+  };
+
+  const resolveDraftValueForKey = (key) => {
+    if (Object.prototype.hasOwnProperty.call(draftSpecs, key)) {
+      return draftSpecs[key];
+    }
+    const targetNorm = normalizeSpecificationKeyForMatch(key);
+    const matchedDraftKey = Object.keys(draftSpecs || {}).find(
+      (draftKey) => normalizeSpecificationKeyForMatch(draftKey) === targetNorm
+    );
+    return matchedDraftKey ? draftSpecs[matchedDraftKey] : '';
+  };
 
   const beginSpecificationEdit = () => {
+    const offerSpecs =
+      product?.supplierOfferSpecifications ||
+      product?.attributes?.specifications ||
+      {};
+    const hasDraftValues = detailSpecEntries.some((entry) =>
+      isMeaningfullyFilledSpecValue(parseSpecInputToValue(draftSpecs[entry.key], ''))
+    );
     const draft = {};
-    specEntries.forEach((entry) => {
-      draft[entry.key] = specValueToInput(displaySpecifications[entry.key]);
+    detailSpecEntries.forEach((entry) => {
+      let sourceValue = '';
+      if (hasDraftValues && Object.prototype.hasOwnProperty.call(draftSpecs, entry.key)) {
+        sourceValue = parseSpecInputToValue(draftSpecs[entry.key], '');
+      } else if (onSaveSpecifications) {
+        sourceValue =
+          resolveSpecificationValueForKey(offerSpecs, entry.key) ??
+          resolveSpecificationValueForKey(displaySpecifications, entry.key) ??
+          '';
+      } else {
+        sourceValue = resolveSpecificationValueForKey(displaySpecifications, entry.key);
+      }
+      draft[entry.key] = specValueToInput(sourceValue);
     });
     setDraftSpecs(draft);
     setIsEditingSpecs(true);
@@ -1400,10 +1588,11 @@ const ProductDetailsModal = ({
 
   const saveSpecificationEdits = async () => {
     if (!onSaveSpecifications) return;
+    const keysForSave = catalogSpecKeys.length > 0 ? catalogSpecKeys : detailSpecEntries.map((e) => e.key);
     const nextSpecs = {};
-    specEntries.forEach((entry) => {
-      const original = displaySpecifications[entry.key];
-      nextSpecs[entry.key] = parseSpecInputToValue(draftSpecs[entry.key], original);
+    keysForSave.forEach((key) => {
+      const original = resolveSpecificationValueForKey(displaySpecifications, key);
+      nextSpecs[key] = parseSpecInputToValue(resolveDraftValueForKey(key), original);
     });
 
     setSavingSpecs(true);
@@ -1412,14 +1601,16 @@ const ProductDetailsModal = ({
 
     if (result?.ok) {
       const merged = mergeCatalogAndOfferSpecificationsForDisplay(
-        product?.catalogSpecifications || {},
-        result.product?.supplierOfferSpecifications ||
-          result.product?.specifications ||
-          nextSpecs
+        catalogSpecificationTemplateForVariantMerge(product?.catalogSpecifications || {}),
+        result.product?.supplierOfferSpecifications || nextSpecs
       );
       setDisplaySpecifications(merged);
       setIsEditingSpecs(false);
       setDraftSpecs({});
+      setLastSuccessfulExtractionSourceKey(null);
+      alert(result.message || 'Specification values saved successfully.');
+    } else if (result?.message) {
+      alert(result.message);
     }
   };
 
@@ -1441,8 +1632,14 @@ const ProductDetailsModal = ({
       description: descriptionDraft
     });
     if (lastSuccessfulExtractionSourceKey && lastSuccessfulExtractionSourceKey === sourceKey) {
+      setIsEditingSpecs(true);
+      setDraftSpecs((prev) =>
+        Object.keys(prev || {}).length > 0 ? prev : buildDraftFromSpecifications(displaySpecifications)
+      );
       return;
     }
+
+    const templateForExtract = buildSpecificationTemplateState();
 
     setExtractingSpecs(true);
     try {
@@ -1450,14 +1647,14 @@ const ProductDetailsModal = ({
         description: descriptionDraft,
         category,
         productName: product?.name || '',
-        existingSpecifications: displaySpecifications
+        existingSpecifications: templateForExtract
       });
 
       if (!response.ok && data?.status !== 'success' && data?.status !== 'warning') {
         throw new Error(data?.message || `HTTP error! status: ${response.status}`);
       }
 
-      const result = applyExtractResultToSpecs(displaySpecifications, data);
+      const result = applyExtractResultToSpecs(templateForExtract, data);
       if (!result.ok) {
         alert(`⚠️ ${result.warning || result.error}`);
         return;
@@ -1466,22 +1663,25 @@ const ProductDetailsModal = ({
         alert(`⚠️ ${result.categoryMismatchWarning}`);
       }
 
-      setDisplaySpecifications(result.merged);
-      const nextDraft = {};
-      Object.keys(result.merged).forEach((key) => {
-        nextDraft[key] = specValueToInput(result.merged[key]);
-      });
-      setDraftSpecs(nextDraft);
+      const merged = mergeExtractedValuesOntoSpecificationTemplate(templateForExtract, result.merged);
+      const nextDraft = buildDraftFromSpecifications(merged);
+      const filledCount = countNewlyFilledSpecificationValues(templateForExtract, merged);
 
-      if (result.filledCount > 0) {
+      setDisplaySpecifications(merged);
+      setDraftSpecs(nextDraft);
+      setIsEditingSpecs(true);
+
+      if (filledCount > 0) {
         setLastSuccessfulExtractionSourceKey(sourceKey);
-        alert(
-          `Specifications extracted successfully. ${result.filledCount} field${
-            result.filledCount > 1 ? 's were' : ' was'
-          } filled. Review and click Save.`
-        );
+        window.setTimeout(() => {
+          alert(
+            `Specifications extracted successfully. ${filledCount} field${
+              filledCount > 1 ? 's were' : ' was'
+            } filled. Review the values below and click Save.`
+          );
+        }, 0);
       } else {
-        alert('No values found in description. Use lines like "Finish: Matt" or "Sheen: Low".');
+        alert('No values could be matched to the admin specification keys. Enter values manually or update the description.');
       }
     } catch (error) {
       alert('Failed to extract specifications. Please try again.');
@@ -1586,10 +1786,10 @@ const ProductDetailsModal = ({
             <div className="pm-details-field">
               <span className="pm-details-field__label">Status</span>
               <span className="pm-details-field__value">
-                {(STATUS_CONFIG[getSupplierApprovalStatus(product)] || STATUS_CONFIG.pending).label}
+                {(STATUS_CONFIG[getSupplierOfferApprovalStatus(product)] || STATUS_CONFIG.pending).label}
               </span>
             </div>
-            {getSupplierApprovalStatus(product) === 'rejected' ? (
+            {getSupplierOfferApprovalStatus(product) === 'rejected' ? (
               <div className="pm-details-field" style={{ gridColumn: '1 / -1' }}>
                 <span className="pm-details-field__label">Rejection reason</span>
                 <span className="pm-details-field__value">
@@ -1597,7 +1797,7 @@ const ProductDetailsModal = ({
                 </span>
               </div>
             ) : null}
-            {getSupplierApprovalStatus(product) === 'pending' ? (
+            {getSupplierOfferApprovalStatus(product) === 'pending' ? (
               <div className="pm-details-field" style={{ gridColumn: '1 / -1' }}>
                 <span className="pm-details-field__label">Approval</span>
                 <span className="pm-details-field__value">
@@ -1659,19 +1859,18 @@ const ProductDetailsModal = ({
             ) : null}
           </div>
 
-          {(product.description || product.supplierDescription) ? (
+          {(resolveSupplierPortalDisplayDescription(product)) ? (
             <div className="pm-details-section">
-              <h4>Your submitted description</h4>
-              <p style={{ margin: 0, color: '#475569', lineHeight: 1.55 }}>
-                {product.supplierDescription || product.description}
+              <h4>
+                {supplierPortalHasPublishedDescription(product)
+                  ? 'Product description'
+                  : 'Your submitted description'}
+              </h4>
+              <p style={{ margin: 0, color: '#475569', lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
+                {resolveSupplierPortalDisplayDescription(product)}
               </p>
-              {product.publishedDescription &&
-              String(product.publishedDescription).trim() &&
-              product.publishedDescription !== (product.supplierDescription || product.description) ? (
-                <p className="pm-description-hint" style={{ marginTop: '0.5rem' }}>
-                  Published for buyers: {product.publishedDescription}
-                </p>
-              ) : product.status === 'approved' && !product.publishedDescription ? (
+              {!supplierPortalHasPublishedDescription(product) &&
+              String(product?.status || 'pending').toLowerCase() === 'pending' ? (
                 <p className="pm-description-hint" style={{ marginTop: '0.5rem' }}>
                   A polished buyer-facing description will appear here after admin review.
                 </p>
@@ -1679,7 +1878,7 @@ const ProductDetailsModal = ({
             </div>
           ) : null}
 
-          {specEntries.length > 0 ? (
+          {(detailSpecEntries.length > 0 || needsPostApprovalSpecFill) ? (
             <div className="pm-details-section">
               <div
                 style={{
@@ -1695,12 +1894,12 @@ const ProductDetailsModal = ({
                 {!isEditingSpecs && onSaveSpecifications && !specificationsReadOnly ? (
                   <button
                     type="button"
-                    className="btn-secondary"
+                    className="btn-primary"
                     onClick={beginSpecificationEdit}
                     style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
                   >
                     <Edit size={16} />
-                    Edit values
+                    Fill specification values
                   </button>
                 ) : null}
                 {isEditingSpecs ? (
@@ -1728,9 +1927,15 @@ const ProductDetailsModal = ({
               </div>
               {specificationsReadOnly || !onSaveSpecifications ? (
                 <p className="pm-details-spec-readonly-hint">
-                  Specifications cannot be changed after the product is saved.
+                  {specificationsReadOnly
+                    ? 'Specification values were saved and can no longer be changed. Contact admin if a correction is needed.'
+                    : 'Specifications cannot be changed after the product is saved.'}
                 </p>
-              ) : null}
+              ) : (
+                <p className="pm-details-spec-readonly-hint" style={{ color: '#475569' }}>
+                  Admin assigned these specification keys. Fill every value once — they lock after you save.
+                </p>
+              )}
               {isEditingSpecs ? (
                 <div
                   style={{
@@ -1761,7 +1966,7 @@ const ProductDetailsModal = ({
                   <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
                     {detailsSpecsAlreadyExtracted ? (
                       <span style={{ fontSize: '0.75rem', color: '#047857', fontStyle: 'italic' }}>
-                        Specifications extracted for the current description. Edit the description to extract again.
+                        Specifications extracted for the current description. Values are ready below — click Save when done, or edit the description to extract again.
                       </span>
                     ) : (
                       <button
@@ -1786,13 +1991,13 @@ const ProductDetailsModal = ({
                 </div>
               ) : null}
               <div className="pm-spec-grid">
-                {specEntries.map((entry) => (
+                {detailSpecEntries.map((entry) => (
                   <div key={entry.key} className="pm-spec-card">
                     <div className="pm-spec-card__label">{entry.label}</div>
                     {isEditingSpecs ? (
                       <input
                         type="text"
-                        value={draftSpecs[entry.key] ?? ''}
+                        value={resolveDraftValueForKey(entry.key)}
                         onChange={(e) =>
                           setDraftSpecs((prev) => ({ ...prev, [entry.key]: e.target.value }))
                         }
@@ -1809,9 +2014,17 @@ const ProductDetailsModal = ({
                       />
                     ) : (
                       <div
-                        className={`pm-spec-card__value ${entry.hasValue ? '' : 'pm-spec-card__value--empty'}`}
+                        className={`pm-spec-card__value ${
+                          isMeaningfullyFilledSpecValue(
+                            resolveSpecificationValueForKey(displaySpecifications, entry.key)
+                          )
+                            ? ''
+                            : 'pm-spec-card__value--empty'
+                        }`}
                       >
-                        {entry.displayValue}
+                        {formatSpecDisplayValue(
+                          resolveSpecificationValueForKey(displaySpecifications, entry.key)
+                        )}
                       </div>
                     )}
                   </div>
@@ -1839,7 +2052,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     brand: product?.brand || '',
     gtin: product?.gtin || '',
     hsnCode: product?.hsnCode || product?.hsn_code || '',
-    lsa: product?.lsa || '',
+    lsa: product?.lsa || product?.attributes?.lsa || '',
     category: product?.category || '',
     price: product?.price || '',
     unit: product?.unit || '',
@@ -1848,7 +2061,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
     sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
     location: product?.location || '',
-    description: product?.description || '',
+    description: product?.supplierDescription || product?.description || '',
     images: getSupplierOfferImagesForForm(product)
   });
   const [recommendedPrice, setRecommendedPrice] = useState(null);
@@ -1882,8 +2095,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   
   // Track previous category to detect actual changes
   const previousCategoryRef = useRef(null);
+  // Skip the name/brand debounced spec reload when only the category changed.
+  const categoryForSpecTypingRef = useRef(formData.category);
   const preserveSpecsOnNextCategoryLoadRef = useRef(false);
   const selectedSuggestionSpecsRef = useRef(null);
+  const [catalogBaselineSpecs, setCatalogBaselineSpecs] = useState({});
   const loadCategorySpecsRequestRef = useRef(0);
   
   // Extract Specifications state
@@ -1896,34 +2112,50 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [aiAnalysisMeta, setAiAnalysisMeta] = useState(null);
   // Initialize specifications: for existing products, use their specs; for new products, start empty
   const [specifications, setSpecifications] = useState(() => {
-    if (product && product.specifications) {
+    if (!product) return {};
+    const catalogKeys = getSupplierCatalogSpecificationKeys(product);
+    const offerSpecs =
+      product.supplierOfferSpecifications || product.attributes?.specifications || {};
+    if (isSupplierOfferApproved(product.status) && catalogKeys.length > 0) {
+      const template = Object.fromEntries(catalogKeys.map((key) => [key, '']));
+      return mergeVariantSpecificationTemplate(template, offerSpecs);
+    }
+    if (product.specifications) {
       return product.specifications;
     }
-    return {}; // Start with empty object for new products
+    return {};
   });
+  const catalogSpecificationKeys = useMemo(
+    () => (product ? getSupplierCatalogSpecificationKeys(product) : []),
+    [
+      product?.catalogSpecificationKeys,
+      product?.catalogSpecifications,
+      product?.specifications,
+      product
+    ]
+  );
   const supplierSpecValuesLocked = useMemo(
     () =>
       supplierSpecificationValuesLocked({
         offerSpecifications:
           product?.supplierOfferSpecifications ||
           product?.attributes?.specifications,
-        supplierSpecValuesLocked: product?.supplierSpecValuesLocked
+        supplierSpecValuesLocked: product?.supplierSpecValuesLocked,
+        catalogSpecificationKeys,
+        productStatus: product?.status
       }),
     [
       product?.supplierOfferSpecifications,
       product?.attributes?.specifications,
-      product?.supplierSpecValuesLocked
+      product?.supplierSpecValuesLocked,
+      product?.status,
+      catalogSpecificationKeys
     ]
   );
-  const approvedNeedsSpecFill = useMemo(() => {
-    if (!product) return false;
-    if (String(product.status || '').toLowerCase() !== 'approved') return false;
-    if (supplierSpecValuesLocked) return false;
-    const keys = Array.isArray(product.catalogSpecificationKeys)
-      ? product.catalogSpecificationKeys.filter(Boolean)
-      : Object.keys(product.specifications || {}).filter(Boolean);
-    return keys.length > 0;
-  }, [product, supplierSpecValuesLocked]);
+  const approvedNeedsSpecFill = useMemo(
+    () => (product ? supplierOfferNeedsPostApprovalSpecFill(product) : false),
+    [product, supplierSpecValuesLocked, catalogSpecificationKeys]
+  );
   const productStatus = product ? String(product.status || 'pending').toLowerCase() : 'pending';
   const categorySpecFillRequired = useMemo(
     () =>
@@ -1950,19 +2182,26 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   ]);
   const canEditSpecificationKeys = false;
 
+  const isExistingCatalogAttach = Boolean(String(formData.catalogProductId || '').trim());
+  const catalogSpecChangesDetected = useMemo(
+    () =>
+      isExistingCatalogAttach
+        ? hasSupplierSpecificationChangesFromBaseline(catalogBaselineSpecs, specifications)
+        : false,
+    [isExistingCatalogAttach, catalogBaselineSpecs, specifications]
+  );
+
   // After admin approval, load catalog spec keys when the category had no template at submit time.
   useEffect(() => {
     if (!product) {
       return;
     }
     const status = String(product.status || 'pending').toLowerCase();
-    if (status !== 'approved' || supplierSpecValuesLocked || hasAdminSpecTemplate) {
+    if (!isSupplierOfferApproved(status) || supplierSpecValuesLocked || hasAdminSpecTemplate) {
       return;
     }
 
-    const keys = Array.isArray(product.catalogSpecificationKeys)
-      ? product.catalogSpecificationKeys.filter(Boolean)
-      : Object.keys(product.specifications || {}).filter(Boolean);
+    const keys = catalogSpecificationKeys;
     setAdminSpecTemplateKeys(keys);
     setHasAdminSpecTemplate(false);
     if (keys.length > 0) {
@@ -1977,12 +2216,14 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     product?.id,
     product?.status,
     product?.catalogSpecificationKeys,
+    product?.catalogSpecifications,
     product?.specifications,
     product?.supplierOfferSpecifications,
     product?.attributes?.specifications,
     product,
     supplierSpecValuesLocked,
-    hasAdminSpecTemplate
+    hasAdminSpecTemplate,
+    catalogSpecificationKeys
   ]);
   const [isSaving, setIsSaving] = useState(false);
   const [formValidationError, setFormValidationError] = useState('');
@@ -2221,6 +2462,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const handleNameChange = (e) => {
     const value = e.target.value;
     setFormData({ ...formData, name: value, catalogProductId: '' });
+    setCatalogBaselineSpecs({});
     
     // Clear previous timeout
     if (searchTimeout) {
@@ -2263,6 +2505,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (nextSpecs) {
       preserveSpecsOnNextCategoryLoadRef.current = true;
       selectedSuggestionSpecsRef.current = { ...nextSpecs };
+      setCatalogBaselineSpecs({ ...nextSpecs });
       setSpecifications(nextSpecs);
     }
     setSuggestions([]);
@@ -2310,7 +2553,15 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
         ) {
           preserveSpecsOnNextCategoryLoadRef.current = true;
           selectedSuggestionSpecsRef.current = { ...data.specifications };
+          setCatalogBaselineSpecs({ ...data.specifications });
           setSpecifications(data.specifications);
+        }
+        if (data.status === 'success' && data.found && data.product?.id) {
+          setFormData((prev) =>
+            prev.catalogProductId
+              ? prev
+              : { ...prev, catalogProductId: data.product.id }
+          );
         }
         if (data.status === 'success' && data.found) {
           setRecommendedPrice(
@@ -2336,12 +2587,25 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formData.name, formData.category, formData.brand]);
 
-  // Keep category specification template aligned while typing (create + pending edit only).
+  // Reload model/brand-specific template keys while typing within the same category.
+  // Category switches are handled by handleCategoryDropdownChange / the category-change effect.
   useEffect(() => {
     const category = String(formData.category || '').trim();
     const modelHint = String(formData.name || '').trim();
+    const normalizedCategory = category.toLowerCase();
+    const previousCategory = String(categoryForSpecTypingRef.current || '')
+      .trim()
+      .toLowerCase();
+    const categoryChanged =
+      Boolean(normalizedCategory) &&
+      Boolean(previousCategory) &&
+      normalizedCategory !== previousCategory;
+
+    categoryForSpecTypingRef.current = category;
+
     if (!category) return;
     if (product && String(product.status || 'pending').toLowerCase() !== 'pending') return;
+    if (categoryChanged) return;
 
     const timeout = setTimeout(async () => {
       await loadCategorySpecifications(category, modelHint, {
@@ -2693,8 +2957,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       delete productData.cgst_rate;
       delete productData.sgst_rate;
       delete productData.lsa;
-      if (!approvedNeedsSpecFill && !categorySpecFillRequired) {
-        delete productData.specifications;
+      if (!approvedNeedsSpecFill && !categorySpecFillRequired && !String(formData.catalogProductId || '').trim()) {
+        const keepSpecsOnCreate =
+          !product &&
+          Object.values(allSpecifications || {}).some(isMeaningfullyFilledSpecValue);
+        if (!keepSpecsOnCreate) {
+          delete productData.specifications;
+        }
       }
       // Keep unit on create and edit so incompatible units (e.g. bags for a mouse) can be corrected.
     }
@@ -2810,6 +3079,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       const modelHint = String(formData?.name || '').trim();
       const preserveExistingValues = preserveSpecsOnNextCategoryLoadRef.current;
       preserveSpecsOnNextCategoryLoadRef.current = false;
+      categoryForSpecTypingRef.current = matchedCategory.name;
+      if (!preserveExistingValues) {
+        setSpecifications({});
+        setHasAdminSpecTemplate(false);
+        setAdminSpecTemplateKeys([]);
+        selectedSuggestionSpecsRef.current = null;
+      }
       loadCategorySpecifications(matchedCategory.name, modelHint, { preserveExistingValues });
     } else {
       setSpecifications({});
@@ -3038,6 +3314,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (value === '') {
       setProductType('existing_category');
       previousCategoryRef.current = null;
+      categoryForSpecTypingRef.current = '';
       setFormData((prev) => ({ ...prev, category: '' }));
       setSpecifications({});
       setHasAdminSpecTemplate(false);
@@ -3048,6 +3325,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (value === CATEGORY_OTHER_VALUE) {
       setProductType('new_category');
       previousCategoryRef.current = null;
+      categoryForSpecTypingRef.current = '';
       setFormData((prev) => ({ ...prev, category: '' }));
       setSpecifications({});
       setHasAdminSpecTemplate(false);
@@ -3085,6 +3363,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       const matchedCategory = resolveMatchedCategory(value);
 
       if (matchedCategory) {
+        categoryForSpecTypingRef.current = matchedCategory.name;
+        setSpecifications({});
+        setHasAdminSpecTemplate(false);
+        setAdminSpecTemplateKeys([]);
+        selectedSuggestionSpecsRef.current = null;
         const modelHint = String(formData?.name || '').trim();
         await loadCategorySpecifications(matchedCategory.name, modelHint, {
           preserveExistingValues: false
@@ -3100,13 +3383,20 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const handleCategorySelect = async (category) => {
     // Use the actual category name (lowercase) from the database, not displayName.
     const updatedCategory = category.name || category.displayName || category;
-    
+
     // Reset previous category ref to ensure useEffect detects the change
     previousCategoryRef.current = null;
-    
+    categoryForSpecTypingRef.current = updatedCategory;
+
+    // Clear stale keys immediately so the UI does not flash the previous category template.
+    setSpecifications({});
+    setHasAdminSpecTemplate(false);
+    setAdminSpecTemplateKeys([]);
+    selectedSuggestionSpecsRef.current = null;
+
     // Update form data first - this will trigger the useEffect
     // Store the actual category name (lowercase) in formData.
-    setFormData({...formData, category: updatedCategory});
+    setFormData({ ...formData, category: updatedCategory });
     setShowCategorySuggestions(false);
 
     // ALWAYS load admin-defined specs for selected category + current model hint.
@@ -3604,19 +3894,27 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     setExtracting(true);
     try {
+      const templateKeys =
+        adminSpecTemplateKeys.length > 0
+          ? adminSpecTemplateKeys
+          : Object.keys(specifications || {}).filter(Boolean);
+      const templateForExtract = Object.fromEntries(
+        templateKeys.map((key) => [key, resolveSpecificationValueForKey(specifications, key) ?? ''])
+      );
+
       const { response, data } = await extractSpecificationsFromDescription({
         description: formData.description,
         category: formData.category,
         productName: formData.name,
         provider: aiProvider,
-        existingSpecifications: specifications || {}
+        existingSpecifications: templateForExtract
       });
 
       if (!response.ok && data?.status !== 'success' && data?.status !== 'warning') {
         throw new Error(data?.message || `HTTP error! status: ${response.status}`);
       }
 
-      const result = applyExtractResultToSpecs(specifications || {}, data);
+      const result = applyExtractResultToSpecs(templateForExtract, data);
       if (!result.ok) {
         alert(`⚠️ ${result.warning || result.error}`);
         return;
@@ -4972,6 +5270,33 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                 )}
                 
                 {/* Specifications Display Section - Show keys with input fields for manual entry */}
+                {isExistingCatalogAttach && !product ? (
+                  <div
+                    className="form-group span-2"
+                    style={{
+                      marginTop: '1rem',
+                      padding: '0.85rem 1rem',
+                      background: catalogSpecChangesDetected ? '#fffbeb' : '#ecfdf5',
+                      borderRadius: '8px',
+                      border: `1px solid ${catalogSpecChangesDetected ? '#fde68a' : '#bbf7d0'}`,
+                      color: catalogSpecChangesDetected ? '#92400e' : '#065f46',
+                      fontSize: '0.875rem'
+                    }}
+                  >
+                    {catalogSpecChangesDetected ? (
+                      <>
+                        <strong>Admin approval required for specification changes.</strong>{' '}
+                        You selected an existing catalog product but changed one or more specification values.
+                        This listing will follow the same admin review process as a new product.
+                      </>
+                    ) : (
+                      <>
+                        <strong>Existing catalog product selected.</strong>{' '}
+                        Keep the specification values unchanged to list immediately without admin approval.
+                      </>
+                    )}
+                  </div>
+                ) : null}
                 {(canEditSpecificationValues || supplierSpecValuesLocked || (specifications && Object.keys(specifications).length > 0)) && (() => {
                   // Get all specification keys (we only want the keys, not values)
                   // Remove duplicates (case-insensitive) and filter out empty keys

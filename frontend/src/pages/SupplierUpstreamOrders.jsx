@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getApiUrl, authFetch, buildAuthHeaders } from '../config/api';
+import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
+import { isVaultPaymentMethod } from '../utils/vaultPaymentMethod';
 import './Dashboard.css';
 import './SupplierUpstream.css';
 import './SupplierUpstreamOrders.css';
@@ -88,8 +90,8 @@ export default function SupplierUpstreamOrders() {
   const [loadingOrderDetails, setLoadingOrderDetails] = useState(false);
   const [updatingPayment, setUpdatingPayment] = useState(false);
   const [cancellingOrder, setCancellingOrder] = useState(false);
-  const [walletBalance, setWalletBalance] = useState(0);
-  const [loadingWalletBalance, setLoadingWalletBalance] = useState(false);
+  const [vaultBalance, setVaultBalance] = useState(0);
+  const [loadingVaultBalance, setLoadingVaultBalance] = useState(false);
 
   const fetchOrders = useCallback(async () => {
     const res = await authFetch('/api/supplier/upstream/orders?all=true', { cache: 'no-cache' });
@@ -208,6 +210,12 @@ export default function SupplierUpstreamOrders() {
     };
   }, [orders]);
 
+  const orderPaymentMethod = String(orderDetails?.paymentMethod || orderDetails?.payment_method || '').toLowerCase();
+  const orderIsPayLater = orderPaymentMethod === 'credit';
+  const orderVaultPaymentPending =
+    orderDetails && String(orderDetails.paymentStatus || '').toLowerCase() !== 'paid';
+  const canPayFromVaultNow = orderVaultPaymentPending;
+
   const handleMarkAsPaid = async () => {
     if (!orderModalId) return;
     const confirmed = window.confirm(
@@ -217,43 +225,19 @@ export default function SupplierUpstreamOrders() {
 
     setUpdatingPayment(true);
     try {
-      const encodedOrderId = encodeURIComponent(orderDetails?.id || orderModalId);
-      const response = await fetch(getApiUrl(`/api/supplier/wallet/orders/${encodedOrderId}/pay`), {
-        method: 'POST',
-        headers: buildAuthHeaders({
-          'Content-Type': 'application/json',
-          Accept: 'application/json'
-        }),
-        body: JSON.stringify({
-          idempotencyKey: `supplier-wallet-order-pay-${orderDetails?.id || orderModalId}-${Date.now()}`
-        })
+      const data = await payOrderFromVault(orderDetails?.id || orderModalId, {
+        idempotencyKey: `supplier-vault-order-pay-${orderDetails?.id || orderModalId}-${Date.now()}`
       });
-
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && data.status === 'success') {
+      if (data?.status === 'success') {
         alert('Order payment completed from vault successfully.');
         await fetchOrderDetails(orderModalId);
         await fetchOrders();
       } else {
-        const detailErrors = Array.isArray(data?.details?.data?.errors)
-          ? data.details.data.errors
-          : Array.isArray(data?.details?.errors)
-            ? data.details.errors
-            : [];
-        const detailSummary = detailErrors
-          .map((item) => {
-            if (!item || typeof item !== 'object') return String(item || '');
-            const field = item.field || item.param || '';
-            const msg = item.message || item.msg || '';
-            return field && msg ? `${field}: ${msg}` : msg;
-          })
-          .filter(Boolean)
-          .join('; ');
-        alert(detailSummary || data.message || 'Failed to pay from vault. Please try again.');
+        alert(data?.message || 'Failed to pay from vault. Please try again.');
       }
     } catch (error) {
       console.error('Failed to pay from vault:', error);
-      alert('Failed to pay from vault. Please check your connection and try again.');
+      alert(error?.message || 'Failed to pay from vault. Please check your connection and try again.');
     } finally {
       setUpdatingPayment(false);
     }
@@ -262,24 +246,20 @@ export default function SupplierUpstreamOrders() {
   useEffect(() => {
     let cancelled = false;
     if (!orderDetails || String(orderDetails.paymentStatus || '').toLowerCase() === 'paid') return undefined;
-    const loadWalletBalance = async () => {
-      setLoadingWalletBalance(true);
+    const loadVaultBalance = async () => {
+      setLoadingVaultBalance(true);
       try {
         const token = localStorage.getItem('token');
         if (!token) return;
-        const resp = await fetch(getApiUrl('/api/supplier/wallet/balance'), {
-          headers: { Authorization: `Bearer ${token}` },
-          cache: 'no-cache'
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!cancelled && resp.ok && data.status === 'success') {
-          setWalletBalance(Number(data.balance || data.wallet?.balance || 0));
-        }
+        const balance = await getVaultBalanceForUi();
+        if (!cancelled) setVaultBalance(balance);
+      } catch {
+        if (!cancelled) setVaultBalance(0);
       } finally {
-        if (!cancelled) setLoadingWalletBalance(false);
+        if (!cancelled) setLoadingVaultBalance(false);
       }
     };
-    void loadWalletBalance();
+    void loadVaultBalance();
     return () => {
       cancelled = true;
     };
@@ -634,37 +614,62 @@ export default function SupplierUpstreamOrders() {
                     </p>
                   ) : null}
                 </div>
-                {orderDetails.paymentStatus !== 'paid' ? (
+                {canPayFromVaultNow ? (
                   <div className="order-info-section">
-                    <h3>Vault payment readiness</h3>
+                    <h3>Vault payment</h3>
+                    <p className="upstream-muted-meta">
+                      {orderIsPayLater
+                        ? 'This order is on pay later. Settle anytime by debiting your vault — top up first if your balance is short.'
+                        : isVaultPaymentMethod(orderPaymentMethod)
+                          ? 'Vault checkout should debit at order placement. If payment is still pending, complete it here before dispatch.'
+                          : 'Complete payment from your vault. All order payments on this platform go through vault only.'}
+                    </p>
                     <p>
                       <strong>Order amount:</strong> ₹
                       {Number(orderDetails?.totalAmount || 0).toLocaleString('en-IN')}
                     </p>
                     <p>
                       <strong>Vault balance:</strong>{' '}
-                      {loadingWalletBalance
+                      {loadingVaultBalance
                         ? 'Loading...'
-                        : `₹${Number(walletBalance || 0).toLocaleString('en-IN')}`}
+                        : `₹${Number(vaultBalance || 0).toLocaleString('en-IN')}`}
                     </p>
-                    {Number(walletBalance || 0) < Number(orderDetails?.totalAmount || 0) ? (
+                    {Number(vaultBalance || 0) < Number(orderDetails?.totalAmount || 0) ? (
                       <p className="upstream-muted-meta" style={{ color: '#b91c1c' }}>
                         Insufficient balance. Add ₹
-                        {Number((orderDetails?.totalAmount || 0) - (walletBalance || 0)).toLocaleString('en-IN')} to
-                        continue.
+                        {Number((orderDetails?.totalAmount || 0) - (vaultBalance || 0)).toLocaleString('en-IN')} to
+                        your vault, then pay.
                       </p>
                     ) : (
                       <p className="upstream-muted-meta" style={{ color: '#166534' }}>
                         Vault balance is sufficient for this payment.
                       </p>
                     )}
-                    <button
-                      type="button"
-                      className="btn-secondary"
-                      onClick={() => navigate('/supplier-wallet')}
-                    >
-                      Credit vault
-                    </button>
+                    <div className="upstream-delivered-meta" style={{ marginTop: '0.75rem' }}>
+                      <button
+                        type="button"
+                        className="btn-primary upstream-pay-btn"
+                        onClick={handleMarkAsPaid}
+                        disabled={
+                          updatingPayment ||
+                          loadingVaultBalance ||
+                          Number(vaultBalance || 0) < Number(orderDetails?.totalAmount || 0)
+                        }
+                      >
+                        {updatingPayment ? 'Processing…' : 'Pay from vault'}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => navigate('/supplier-wallet')}
+                      >
+                        Credit vault
+                      </button>
+                    </div>
+                  </div>
+                ) : orderDetails.paymentStatus === 'paid' ? (
+                  <div className="order-info-section">
+                    <div className="upstream-paid-badge">✓ Payment completed from vault</div>
                   </div>
                 ) : null}
 
@@ -856,69 +861,35 @@ export default function SupplierUpstreamOrders() {
                   </div>
                 ) : null}
 
-                {orderDetails.status === 'delivered' && (
+                {orderDetails.status === 'delivered' && orderDetails?.paymentMethod === 'online' ? (
                   <div className="order-info-section upstream-delivered-card">
-                    {orderDetails?.paymentMethod === 'online' ? (
-                      <>
-                        <div className="upstream-delivered-title">
-                          <QrCode size={20} color="#4f46e5" />
-                          <h3 className="upstream-delivered-h3">Payment QR code</h3>
-                        </div>
-                        <p className="upstream-delivered-help">
-                          After delivery, scan to pay ₹{Number(orderDetails.totalAmount || 0).toLocaleString()} to the
-                          supplier (UPI).
-                        </p>
-                        <div className="upstream-delivered-qr-wrap">
-                          {(() => {
-                            const upiUri = buildOrderUpiPayUri({
-                              amountRupees: orderDetails.totalAmount,
-                              orderNumber: orderDetails.orderNumber,
-                              payeeName: orderDetails.supplier?.company || orderDetails.supplier?.name,
-                              payeeVpa: orderDetails.supplier?.upiVpa
-                            });
-                            return (
-                              <img
-                                src={qrServerImageUrl(upiUri, 200)}
-                                alt="UPI payment QR"
-                                className="upstream-delivered-qr-image"
-                              />
-                            );
-                          })()}
-                        </div>
-                      </>
-                    ) : (
-                      <p className="upstream-delivered-help">
-                        Payment method: <strong>{paymentMethodLabel(orderDetails?.paymentMethod)}</strong>. After
-                        payment, mark payment as paid.
-                      </p>
-                    )}
-                    <div className="upstream-delivered-meta">
-                      <p>
-                        <strong>Order:</strong> {orderDetails.orderNumber}
-                      </p>
-                      <p>
-                        <strong>Amount:</strong> ₹{Number(orderDetails.totalAmount || 0).toLocaleString()}
-                      </p>
-                      <p>
-                        <strong>Pay to:</strong>{' '}
-                        {orderDetails.supplier?.name || orderDetails.supplier?.company || 'Supplier'}
-                      </p>
+                    <div className="upstream-delivered-title">
+                      <QrCode size={20} color="#4f46e5" />
+                      <h3 className="upstream-delivered-h3">Payment QR code</h3>
                     </div>
-                    {orderDetails.paymentStatus !== 'paid' && (
-                      <button
-                        type="button"
-                        className="btn-primary upstream-pay-btn"
-                        onClick={handleMarkAsPaid}
-                        disabled={updatingPayment || loadingWalletBalance || Number(walletBalance || 0) < Number(orderDetails?.totalAmount || 0)}
-                      >
-                        {updatingPayment ? 'Processing…' : 'Pay from vault'}
-                      </button>
-                    )}
-                    {orderDetails.paymentStatus === 'paid' && (
-                      <div className="upstream-paid-badge">✓ Payment completed</div>
-                    )}
+                    <p className="upstream-delivered-help">
+                      After delivery, scan to pay ₹{Number(orderDetails.totalAmount || 0).toLocaleString()} to the
+                      supplier (UPI).
+                    </p>
+                    <div className="upstream-delivered-qr-wrap">
+                      {(() => {
+                        const upiUri = buildOrderUpiPayUri({
+                          amountRupees: orderDetails.totalAmount,
+                          orderNumber: orderDetails.orderNumber,
+                          payeeName: orderDetails.supplier?.company || orderDetails.supplier?.name,
+                          payeeVpa: orderDetails.supplier?.upiVpa
+                        });
+                        return (
+                          <img
+                            src={qrServerImageUrl(upiUri, 200)}
+                            alt="UPI payment QR"
+                            className="upstream-delivered-qr-image"
+                          />
+                        );
+                      })()}
+                    </div>
                   </div>
-                )}
+                ) : null}
               </div>
             ) : (
               <div className="modal-body upstream-modal-loading">

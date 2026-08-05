@@ -1,3 +1,6 @@
+import {
+  getAdminBuyerFacingDescriptionForApproval
+} from '../utils/supplierProductDescriptions.js';
 import { parseSpecificationsObject } from './supplierCatalogHelpersService.js';
 import { validateAndNormalizeTaxRates } from '../controllers/supplier/shared/productHelpers.js';
 
@@ -54,6 +57,15 @@ export function mergeOfferIntoProductForApproval(product = {}, offerRow = null) 
 
   return {
     ...product,
+    supplierDescription:
+      attrs.supplierDescription ||
+      attrs.description ||
+      product.supplierDescription ||
+      '',
+    publishedDescription:
+      attrs.publishedDescription ||
+      product.publishedDescription ||
+      '',
     igst_rate: product.igst_rate ?? offerRow.igst_rate ?? attrs.igstRate ?? null,
     cgst_rate: product.cgst_rate ?? offerRow.cgst_rate ?? attrs.cgstRate ?? null,
     sgst_rate: product.sgst_rate ?? offerRow.sgst_rate ?? attrs.sgstRate ?? null,
@@ -66,7 +78,9 @@ export function mergeOfferIntoProductForApproval(product = {}, offerRow = null) 
 export function validateAdminProductApprovalReadiness(product = {}) {
   const missingRequirements = [];
 
-  if (!isMeaningfulProductDescription(product.description)) {
+  const buyerFacingDescription = getAdminBuyerFacingDescriptionForApproval(product);
+
+  if (!isMeaningfulProductDescription(buyerFacingDescription)) {
     missingRequirements.push({
       id: 'description',
       label: 'Product description',

@@ -1,7 +1,7 @@
 import React from 'react';
 import ProductImageCarousel from './ProductImageCarousel';
-import { parseSpecificationsForDisplay } from '../utils/specifications';
-import { isMeaningfulProductDescription } from '../utils/productDisplay';
+import { parseSpecificationsForDisplay, resolveSupplierOfferDisplaySpecifications } from '../utils/specifications';
+import { resolveSupplierPortalDisplayDescription } from '../utils/productDisplay';
 import { getProductImageList } from '../utils/productImages';
 
 export const collectProductImages = (product) => getProductImageList(product);
@@ -49,10 +49,9 @@ const UpstreamProductDisplay = ({
   if (!product) return null;
 
   const images = collectProductImages(product);
-  const specEntries = parseSpecificationsForDisplay(product.specifications, { maxEntries: maxSpecs });
-  const description = isMeaningfulProductDescription(product.description)
-    ? String(product.description).trim()
-    : '';
+  const displaySpecs = resolveSupplierOfferDisplaySpecifications(product);
+  const specEntries = parseSpecificationsForDisplay(displaySpecs, { maxEntries: maxSpecs });
+  const description = resolveSupplierPortalDisplayDescription(product);
   const hasBody = (showDescription && description) || (showSpecifications && specEntries.length > 0);
   const hasMedia = showImage && images.length > 0;
 

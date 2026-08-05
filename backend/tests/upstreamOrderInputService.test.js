@@ -29,8 +29,20 @@ test('normalizeRequiredDateForUpstream handles empty required date', () => {
   assert.equal(out.error, null);
 });
 
-test('resolveUpstreamPaymentSelection enforces vault-only payment mapping', () => {
-  for (const method of ['cod', 'bank_transfer', 'credit', 'card', 'online', 'wallet', 'vault', undefined, null]) {
+test('resolveUpstreamPaymentSelection maps vault and credit payment methods', () => {
+  assert.deepEqual(resolveUpstreamPaymentSelection('vault'), {
+    payment_method: 'vault',
+    payment_status: 'pending'
+  });
+  assert.deepEqual(resolveUpstreamPaymentSelection('credit'), {
+    payment_method: 'credit',
+    payment_status: 'pending'
+  });
+  assert.deepEqual(resolveUpstreamPaymentSelection('pay_later'), {
+    payment_method: 'credit',
+    payment_status: 'pending'
+  });
+  for (const method of ['cod', 'bank_transfer', 'card', 'online', 'wallet', undefined, null]) {
     assert.deepEqual(resolveUpstreamPaymentSelection(method), {
       payment_method: 'vault',
       payment_status: 'pending'

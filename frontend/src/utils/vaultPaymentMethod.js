@@ -8,7 +8,7 @@ export function isVaultPaymentMethod(value) {
 }
 
 export function formatVaultPaymentMethodLabel(value) {
-  if (isVaultPaymentMethod(value)) return 'Vault balance (platform escrow)';
+  if (isVaultPaymentMethod(value)) return 'Vault balance (direct supplier settlement)';
   const method = String(value || '').trim();
   if (!method) return '—';
   return method.replace(/_/g, ' ');

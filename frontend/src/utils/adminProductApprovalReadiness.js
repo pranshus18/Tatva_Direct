@@ -1,4 +1,8 @@
-import { isMeaningfulProductDescription } from './productDisplay';
+import {
+  getAdminBuyerFacingCatalogDescription,
+  isMeaningfulProductDescription
+} from './productDisplay';
+import { parseSpecificationsObject } from './specifications';
 
 const IGST_ALLOWED = new Set(['0', '5', '12', '18', '28']);
 const CGST_SGST_ALLOWED = new Set(['0', '2.5', '6', '9', '14']);
@@ -36,18 +40,19 @@ function validateGstRates(product = {}) {
   return { ok: true, message: '' };
 }
 
+/** Match backend admin readiness: parse JSON strings and unwrap { snapshot: {...} }. */
 function countSpecificationKeys(specifications) {
-  if (!specifications || typeof specifications !== 'object' || Array.isArray(specifications)) {
-    return 0;
-  }
-  return Object.keys(specifications).filter((key) => String(key || '').trim()).length;
+  const specs = parseSpecificationsObject(specifications) || {};
+  return Object.keys(specs).filter((key) => String(key || '').trim()).length;
 }
 
 /** Admin catalog products need description, GST, and specification keys before approval. */
 export function getAdminProductApprovalReadiness(product = {}) {
   const missingRequirements = [];
 
-  if (!isMeaningfulProductDescription(product.description, { allowInlineSpecs: true })) {
+  const buyerFacingDescription = getAdminBuyerFacingCatalogDescription(product);
+
+  if (!isMeaningfulProductDescription(buyerFacingDescription, { allowInlineSpecs: true })) {
     missingRequirements.push({
       id: 'description',
       label: 'Product description',

@@ -14,11 +14,12 @@ import { resolveSupplierOfferDisplayImages } from '../../services/productImageSe
 import { resolveSupplierOfferDisplayName } from '../../services/supplierProductWriteService.js';
 import { catalogBrandDedupKey, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 import {
-  countMeaningfulSpecValues,
   mergeCatalogAndOfferSpecificationsForDisplay,
   parseSpecificationsObject,
+  resolveSupplierOfferDisplaySpecifications,
   specificationTemplateKeysOnly
 } from '../../services/supplierCatalogHelpersService.js';
+import { areSupplierOfferSpecificationValuesLocked } from '../../services/supplierProductUpdateValidation.js';
 
 export function registerSupplierProductListRoutes(ctx) {
   const {
@@ -133,15 +134,18 @@ router.get('/products', authenticateToken, async (req, res) => {
         const catalogSpecKeys = specificationTemplateKeysOnly(
           parseSpecificationsObject(baseSpecs) || {}
         );
-        const storedSpecs = mergeCatalogAndOfferSpecificationsForDisplay(baseSpecs, offerSpecs);
+        const storedSpecs = resolveSupplierOfferDisplaySpecifications(baseSpecs, attributes);
         const catalogSpecificationKeys = Object.keys(catalogSpecKeys);
-        const supplierSpecValuesLocked = countMeaningfulSpecValues(offerSpecs) > 0;
+        const effective = resolveEffectiveSupplierOfferState(sp, baseProduct);
+        const supplierSpecValuesLocked = areSupplierOfferSpecificationValuesLocked(
+          { attributes, status: effective.effectiveStatus },
+          catalogSpecificationKeys
+        );
         const listingName = resolveSupplierOfferDisplayName({
           attributes,
           catalogName: baseProduct?.name
         });
         const displayBrand = attributes?.brand || baseProduct?.brand || '';
-        const effective = resolveEffectiveSupplierOfferState(sp, baseProduct);
         const rejectionReason =
           effective.effectiveStatus === 'rejected'
             ? sp.rejection_reason || baseProduct?.rejection_reason || null
@@ -155,11 +159,10 @@ router.get('/products', authenticateToken, async (req, res) => {
             attributes?.supplierDescription ||
             attributes?.description ||
             '',
-          publishedDescription: baseProduct?.description || '',
+          publishedDescription: attributes?.publishedDescription || '',
           description:
             attributes?.supplierDescription ||
             attributes?.description ||
-            baseProduct?.description ||
             '',
           brand: displayBrand || baseProduct?.brand || '',
           category: attributes?.category || baseProduct?.category || '',

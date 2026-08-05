@@ -70,6 +70,58 @@ function pmAuthErrorResponse(res, error) {
   return null;
 }
 
+function resolveReconciliationFlag(rawFlag) {
+  return rawFlag === undefined || rawFlag === null || String(rawFlag).trim() === ''
+    ? null
+    : String(rawFlag).trim();
+}
+
+function rememberVaultAttributionFromRequest(req) {
+  const attributionHeader = String(req.headers['x-vault-attribution-keys'] || '').trim();
+  if (!attributionHeader) return;
+  try {
+    const keys = JSON.parse(attributionHeader);
+    if (Array.isArray(keys) && keys.length) {
+      rememberPmVaultPlatformAttribution({ extra: keys.filter(Boolean) });
+    }
+  } catch {
+    // ignore malformed header
+  }
+}
+
+/** Shared reconciliation statement payload for /transactions and /ledger-summary. */
+function buildReconciliationStatementResponse(ledger) {
+  return {
+    status: 'success',
+    title: 'Reconciliation statement',
+    subtitle: 'Transactions for your Customer profile',
+    transactions: ledger.transactions || [],
+    summary: ledger.summary,
+    pageInfo: ledger.pageInfo || { hasMore: false, nextCursor: null },
+    source: 'pm_vault_transactions',
+    upstream: ledger.upstream,
+    flag: ledger.flag
+  };
+}
+
+async function loadReconciliationLedger(req, query = {}) {
+  rememberVaultAttributionFromRequest(req);
+  const credentials = readPmCredentialsFromRequest(req);
+  const flag = resolveReconciliationFlag(req.query?.flag);
+  const hasExplicitLimit = query.limit != null && String(query.limit).trim() !== '';
+  const hasExplicitCursor = query.cursor != null && String(query.cursor).trim() !== '';
+
+  return getPmVaultTransactions(req.user, credentials, {
+    flag,
+    from: query.from,
+    to: query.to,
+    limit: query.limit,
+    cursor: query.cursor,
+    search: query.search,
+    fetchAll: !hasExplicitLimit && !hasExplicitCursor
+  });
+}
+
 walletRouter.get('/config', authenticateToken, requirePlatformVaultUser, (req, res) => {
   const platformVault = usesPlatformVault(req.user);
   const razorpay = getRazorpayPublicConfig();
@@ -167,47 +219,8 @@ walletRouter.get('/balance', authenticateToken, requirePlatformVaultUser, async 
 walletRouter.get('/transactions', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
     const query = parseWithSchema(walletTransactionsListSchema, req.query || {});
-    const credentials = readPmCredentialsFromRequest(req);
-    // Client may send payment ids from this browser's successful Tatva Direct top-ups
-    // so we can overlay platform even if confirm ran on another host.
-    const attributionHeader = String(req.headers['x-vault-attribution-keys'] || '').trim();
-    if (attributionHeader) {
-      try {
-        const keys = JSON.parse(attributionHeader);
-        if (Array.isArray(keys) && keys.length) {
-          rememberPmVaultPlatformAttribution({ extra: keys.filter(Boolean) });
-        }
-      } catch {
-        // ignore malformed header
-      }
-    }
-    // Only filter by flag when the client explicitly asks; default = all platforms.
-    const flag =
-      req.query?.flag === undefined || req.query?.flag === null || String(req.query.flag).trim() === ''
-        ? null
-        : String(req.query.flag).trim();
-    const ledger = await getPmVaultTransactions(req.user, credentials, {
-      flag,
-      from: query.from,
-      to: query.to,
-      limit: query.limit,
-      cursor: query.cursor,
-      search: query.search
-    });
-    return res.json({
-      status: 'success',
-      title: 'Reconciliation statement',
-      subtitle: 'Transactions for your Customer profile',
-      transactions: ledger.transactions || [],
-      summary: ledger.summary,
-      pageInfo: {
-        hasMore: false,
-        nextCursor: null
-      },
-      source: 'pm_vault_transactions',
-      upstream: ledger.upstream,
-      flag: ledger.flag
-    });
+    const ledger = await loadReconciliationLedger(req, query);
+    return res.json(buildReconciliationStatementResponse(ledger));
   } catch (e) {
     console.error('[Vault] transactions error:', e);
     if (String(e?.name || '') === 'ZodError') {
@@ -223,18 +236,17 @@ walletRouter.get('/transactions', authenticateToken, requirePlatformVaultUser, a
 /** Ledger totals — same full cross-platform source as /transactions. */
 walletRouter.get('/ledger-summary', authenticateToken, requirePlatformVaultUser, async (req, res) => {
   try {
-    const credentials = readPmCredentialsFromRequest(req);
-    const flag =
-      req.query?.flag === undefined || req.query?.flag === null || String(req.query.flag).trim() === ''
-        ? null
-        : String(req.query.flag).trim();
-    const ledger = await getPmVaultTransactions(req.user, credentials, { flag });
+    const ledger = await loadReconciliationLedger(req, {});
+    const statement = buildReconciliationStatementResponse(ledger);
     return res.json({
       status: 'success',
-      summary: ledger.summary,
-      source: 'pm_vault_transactions',
-      upstream: ledger.upstream,
-      flag: ledger.flag
+      summary: statement.summary,
+      transactionCount: statement.summary?.transactionCount ?? statement.transactions.length,
+      transactions: statement.transactions,
+      pageInfo: statement.pageInfo,
+      source: statement.source,
+      upstream: statement.upstream,
+      flag: statement.flag
     });
   } catch (e) {
     console.error('[Vault] ledger summary error:', e);
@@ -454,12 +466,25 @@ walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProviderOr
     if (e?.code === 'ORDER_ALREADY_PAID') {
       return res.status(400).json({ status: 'error', message: e.message });
     }
+    if (
+      e?.code === 'SUPPLIER_PM_CREDIT_DEFERRED' ||
+      e?.code === 'SUPPLIER_PAYOUT_RECOVERY_FAILED'
+    ) {
+      return res.status(409).json({
+        status: 'error',
+        code: e.code,
+        message: e.message || 'Supplier payout could not be completed for this paid order'
+      });
+    }
     if (e?.code === 'INSUFFICIENT_WALLET_BALANCE' || e?.code === 'INSUFFICIENT_VAULT_BALANCE') {
       return res.status(400).json({
         status: 'error',
         code: 'INSUFFICIENT_VAULT_BALANCE',
         message: e.message || 'Insufficient vault balance'
       });
+    }
+    if (e?.code === 'SUPPLIER_NOT_FOUND') {
+      return res.status(400).json({ status: 'error', code: e.code, message: e.message });
     }
     if (
       e?.code === 'PM_VAULT_PAY_NOT_CONFIGURED' ||

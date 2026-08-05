@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { toast } from 'sonner';
 import { Check, ChevronLeft, ChevronRight, ImageOff, MapPin, Package, Search, ShoppingCart, Star, Tag, Users } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -9,51 +8,16 @@ import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpEmptyState from '../components/sp/SpEmptyState';
+import DiscoveryAddToCartDialog from '../components/sp/DiscoveryAddToCartDialog';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardFooter } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from '@/components/ui/dialog';
-import { refreshServiceProviderCartCount } from '../utils/spCartBadge';
 import { formatRupeePerUnit } from '../utils/formatRupee';
-import { isCustomerFacingSpecKey } from '../utils/specifications';
-import {
-  getGeolocationErrorMessage,
-  resolveAddressFromCurrentLocation
-} from '../utils/currentLocationAddress';
-import {
-  formatShippingAddressLabel,
-  normalizeShippingAddressBookEntry
-} from '../utils/shippingAddressLabel';
-import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
+import { specificationEntriesForCustomerDisplay } from '../utils/specifications';
 import { openProductDetailInNewTab } from '../utils/discoveryNavigation';
 import { dedupeLabelsCaseInsensitive } from '../utils/categoryNormalize';
-import { cn } from '@/lib/utils';
 import './ProductDiscovery.css';
-
-const blankShippingAddress = {
-  label: '',
-  line1: '',
-  city: '',
-  state: '',
-  pincode: '',
-  country: ''
-};
-
-const emptyProjectFieldErrors = {
-  projectName: '',
-  expectedDispatchDate: ''
-};
-
-const todayDateMin = getTodayDateInputValue();
 
 function formatPrice(price, unit) {
   const num = Number(price);
@@ -87,23 +51,19 @@ function RatingStars({ rating, reviews }) {
 }
 
 function SpecBadges({ specifications }) {
-  if (!specifications || typeof specifications !== 'object') return null;
-  const entries = Object.entries(specifications).filter(
-    ([key, value]) =>
-      isCustomerFacingSpecKey(key) &&
-      value !== null &&
-      value !== undefined &&
-      String(value).trim()
-  );
+  const allEntries = specificationEntriesForCustomerDisplay(specifications);
+  const entries = allEntries.slice(0, 4);
   if (!entries.length) return null;
   return (
     <div className="pd-specs">
-      {entries.slice(0, 4).map(([key, val]) => (
-        <span key={key} className="pd-spec-badge">
-          <strong>{key}:</strong> {String(val)}
+      {entries.map((entry) => (
+        <span key={entry.key} className="pd-spec-badge">
+          <strong>{entry.label}:</strong> {entry.displayValue}
         </span>
       ))}
-      {entries.length > 4 && <span className="pd-spec-badge pd-spec-more">+{entries.length - 4} more</span>}
+      {allEntries.length > 4 && (
+        <span className="pd-spec-badge pd-spec-more">+{allEntries.length - 4} more</span>
+      )}
     </div>
   );
 }
@@ -133,20 +93,9 @@ const ProductDiscovery = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [recommendationMode, setRecommendationMode] = useState('');
-  const [cartBusyByProductId, setCartBusyByProductId] = useState({});
   const [cartAddedByProductId, setCartAddedByProductId] = useState({});
-  const [cartProjects, setCartProjects] = useState([]);
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [pendingProduct, setPendingProduct] = useState(null);
-  const [targetProjectId, setTargetProjectId] = useState('__new__');
-  const [newProjectName, setNewProjectName] = useState('');
-  const [expectedDeliveryDate, setExpectedDeliveryDate] = useState('');
-  const [projectFieldErrors, setProjectFieldErrors] = useState(emptyProjectFieldErrors);
-  const [dialogError, setDialogError] = useState('');
-  const [shippingAddressBook, setShippingAddressBook] = useState([]);
-  const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
-  const [newShippingAddress, setNewShippingAddress] = useState(blankShippingAddress);
-  const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
   const pageSize = 24;
 
   const page = useMemo(() => {
@@ -271,73 +220,7 @@ const ProductDiscovery = () => {
 
   const safePage = Math.min(Math.max(page, 1), pageCount);
 
-  const loadCartProjects = async () => {
-    const token = localStorage.getItem('token');
-    if (!token) {
-      return [];
-    }
-    try {
-      const response = await fetch(getApiUrl('/api/po/cart'), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await response.json();
-      if (!response.ok || data.status !== 'success') {
-        throw new Error(data.message || 'Failed to fetch cart');
-      }
-      const groups = Array.isArray(data?.cart?.draft?.boqGroups) ? data.cart.draft.boqGroups : [];
-      const normalizedGroups = groups
-        .filter((group) => String(group?.groupId || '').trim())
-        .map((group) => ({
-          groupId: String(group.groupId),
-          boqName: String(group?.boqName || '').trim() || 'Untitled project',
-          requiredDate: String(group?.boqProject?.requiredDate || '').trim().slice(0, 10),
-          shippingAddressId: String(group?.boqProject?.shippingAddressId || '').trim()
-        }));
-      setCartProjects(normalizedGroups);
-      return normalizedGroups;
-    } catch {
-      return [];
-    }
-  };
-
-  const loadProfileShippingAddresses = async () => {
-    const token = localStorage.getItem('token');
-    if (!token) return [];
-    try {
-      const response = await fetch(getApiUrl('/api/profile'), {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const data = await response.json();
-      if (!response.ok || !data?.profile) return [];
-      const entries = Array.isArray(data.profile.shippingAddresses)
-        ? data.profile.shippingAddresses
-            .map((entry) => normalizeShippingAddressBookEntry(entry))
-            .filter((entry) => entry.id)
-        : [];
-      setShippingAddressBook(entries);
-      return entries;
-    } catch {
-      return [];
-    }
-  };
-
-  const applyProjectShippingSelection = (projectId, groups, addresses) => {
-    const project = groups.find((group) => group.groupId === projectId);
-    const projectAddressId = String(project?.shippingAddressId || '').trim();
-    if (projectAddressId && addresses.some((entry) => entry.id === projectAddressId)) {
-      setSelectedShippingAddressId(projectAddressId);
-      setNewShippingAddress(blankShippingAddress);
-      return;
-    }
-    if (addresses.length > 0) {
-      setSelectedShippingAddressId(addresses[0].id);
-      setNewShippingAddress(blankShippingAddress);
-      return;
-    }
-    setSelectedShippingAddressId('__new__');
-  };
-
-  const openProjectPicker = async (product) => {
+  const openProjectPicker = (product) => {
     const pid = String(product?.id || '').trim();
     if (!pid) {
       setError('This product cannot be added because its id is missing.');
@@ -351,174 +234,18 @@ const ProductDiscovery = () => {
       setError('Product is out of stock');
       return;
     }
-    const [groups, addresses] = await Promise.all([loadCartProjects(), loadProfileShippingAddresses()]);
-    const initialProjectId = groups[0]?.groupId || '__new__';
     setPendingProduct(product);
-    setTargetProjectId(initialProjectId);
-    setNewProjectName(String(product?.name || '').trim());
-    setExpectedDeliveryDate('');
-    setProjectFieldErrors(emptyProjectFieldErrors);
-    setDialogError('');
-    applyProjectShippingSelection(initialProjectId, groups, addresses);
     setProjectPickerOpen(true);
   };
 
-  const fillShippingFromCurrentLocation = async () => {
-    setLocatingShippingAddress(true);
-    try {
-      const resolved = await resolveAddressFromCurrentLocation();
-      setNewShippingAddress((prev) => ({
-        ...prev,
-        line1: resolved.line1 || prev.line1,
-        city: resolved.city || prev.city,
-        state: resolved.state || prev.state,
-        pincode: resolved.pincode || prev.pincode,
-        country: resolved.country || prev.country || 'India',
-        label: prev.label || resolved.city || 'Current location'
-      }));
-      setSelectedShippingAddressId('__new__');
-    } catch (error) {
-      window.alert(getGeolocationErrorMessage(error));
-    } finally {
-      setLocatingShippingAddress(false);
-    }
-  };
-
-  const resolveShippingPayload = async (token) => {
-    if (!selectedShippingAddressId) {
-      return { shippingAddressId: null, shippingAddress: null };
-    }
-
-    if (selectedShippingAddressId === '__new__') {
-      const missing = ['line1', 'city', 'state', 'pincode', 'country'].find(
-        (field) => !String(newShippingAddress?.[field] || '').trim()
-      );
-      if (missing) {
-        throw new Error('Please complete all shipping address fields or choose a saved address.');
-      }
-      const saveRes = await fetch(getApiUrl('/api/profile/shipping-addresses'), {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          label: newShippingAddress.label?.trim() || newShippingAddress.city,
-          line1: newShippingAddress.line1.trim(),
-          city: newShippingAddress.city.trim(),
-          state: newShippingAddress.state.trim(),
-          pincode: newShippingAddress.pincode.trim(),
-          country: newShippingAddress.country.trim()
-        })
-      });
-      const saveData = await saveRes.json();
-      if (!saveRes.ok || saveData.status !== 'success') {
-        throw new Error(saveData.message || 'Failed to save shipping address to profile.');
-      }
-      const saved = saveData.shippingAddress || {};
-      const normalized = normalizeShippingAddressBookEntry(saved);
-      setShippingAddressBook((prev) => {
-        const exists = prev.some((entry) => entry.id === normalized.id);
-        return exists ? prev : [...prev, normalized];
-      });
-      setSelectedShippingAddressId(normalized.id);
-      return {
-        shippingAddressId: normalized.id,
-        shippingAddress: normalized.address
-      };
-    }
-
-    const selected = shippingAddressBook.find((entry) => entry.id === selectedShippingAddressId);
-    if (!selected) {
-      throw new Error('Selected shipping address was not found. Please choose again.');
-    }
-    return {
-      shippingAddressId: selected.id,
-      shippingAddress: selected.address
-    };
-  };
-
-  const confirmAddToCart = async () => {
-    setDialogError('');
-    const token = localStorage.getItem('token');
-    if (!token) {
-      setDialogError('Please log in again to add items to cart.');
-      return false;
-    }
-    const productId = pendingProduct?.id;
-    if (!productId) {
-      setDialogError('No product selected for adding to cart.');
-      return false;
-    }
-    const isNewProject = targetProjectId === '__new__';
-    if (isNewProject) {
-      const nextFieldErrors = { ...emptyProjectFieldErrors };
-      if (!newProjectName.trim()) {
-        nextFieldErrors.projectName = 'Please enter a project name.';
-      }
-      if (!expectedDeliveryDate) {
-        nextFieldErrors.expectedDispatchDate = 'Expected dispatch date is required.';
-      } else if (isDateBeforeToday(expectedDeliveryDate)) {
-        nextFieldErrors.expectedDispatchDate = 'Expected dispatch date cannot be in the past.';
-      }
-      setProjectFieldErrors(nextFieldErrors);
-      if (nextFieldErrors.projectName || nextFieldErrors.expectedDispatchDate) {
-        return false;
-      }
-    } else {
-      setProjectFieldErrors(emptyProjectFieldErrors);
-    }
-    setCartBusyByProductId((prev) => ({ ...prev, [String(productId)]: true }));
-    try {
-      const shippingPayload = await resolveShippingPayload(token);
-      const payload = {
-        productId: String(productId),
-        quantity: 1
-      };
-      if (isNewProject) {
-        payload.projectName = newProjectName.trim();
-        payload.expectedDeliveryDate = expectedDeliveryDate;
-      } else {
-        payload.groupId = targetProjectId;
-      }
-      if (shippingPayload.shippingAddressId) {
-        payload.shippingAddressId = shippingPayload.shippingAddressId;
-        payload.shippingAddress = shippingPayload.shippingAddress;
-      }
-      const saveRes = await fetch(getApiUrl('/api/po/cart/discovery-item'), {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(payload)
-      });
-      const saveData = await saveRes.json();
-      if (!saveRes.ok || saveData.status !== 'success') {
-        throw new Error(saveData.message || 'Failed to save cart');
-      }
-      setProjectPickerOpen(false);
-      setPendingProduct(null);
-      setCartAddedByProductId((prev) => ({ ...prev, [String(productId)]: true }));
-      await refreshServiceProviderCartCount({ immediate: true });
-      window.dispatchEvent(new Event('sp-workflow-updated'));
-      toast.success('Added to cart');
-      setTimeout(() => {
-        setCartAddedByProductId((prev) => {
-          const { [String(productId)]: _removed, ...rest } = prev;
-          return rest;
-        });
-      }, 1400);
-      return true;
-    } catch (e) {
-      setDialogError(e.message || 'Failed to add to cart');
-      return false;
-    } finally {
-      setCartBusyByProductId((prev) => {
+  const handleCartAdded = (productId) => {
+    setCartAddedByProductId((prev) => ({ ...prev, [String(productId)]: true }));
+    setTimeout(() => {
+      setCartAddedByProductId((prev) => {
         const { [String(productId)]: _removed, ...rest } = prev;
         return rest;
       });
-    }
+    }, 1400);
   };
 
   const imageArray = (product) => getProductImageList(product);
@@ -703,7 +430,7 @@ const ProductDiscovery = () => {
                       event.stopPropagation();
                       openProjectPicker(product);
                     }}
-                    disabled={Boolean(cartBusyByProductId[pid]) || !hasEligibleSupplier || !inStock}
+                    disabled={!hasEligibleSupplier || !inStock}
                     title={
                       !hasEligibleSupplier
                         ? 'No eligible supplier is currently listing this product'
@@ -728,253 +455,15 @@ const ProductDiscovery = () => {
           })}
         </div>
       )}
-      <Dialog open={projectPickerOpen} onOpenChange={setProjectPickerOpen}>
-        <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden p-0">
-          <div className="shrink-0 border-b px-6 py-4 pr-12">
-            <DialogHeader>
-              <DialogTitle>Select project for cart item</DialogTitle>
-              <DialogDescription>
-                Choose where to store this product in your cart. You can add multiple products under one project.
-              </DialogDescription>
-            </DialogHeader>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-4">
-          <div className="space-y-4">
-            <div className="space-y-1">
-              <label className="text-sm font-medium">Project</label>
-              <select
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={targetProjectId}
-                onChange={(event) => {
-                  const nextTarget = event.target.value;
-                  setTargetProjectId(nextTarget);
-                  setProjectFieldErrors(emptyProjectFieldErrors);
-                  setDialogError('');
-                  if (nextTarget !== '__new__') {
-                    setExpectedDeliveryDate('');
-                    applyProjectShippingSelection(nextTarget, cartProjects, shippingAddressBook);
-                  }
-                }}
-              >
-                {cartProjects.map((group) => (
-                  <option key={group.groupId} value={group.groupId}>
-                    {group.boqName}
-                  </option>
-                ))}
-                <option value="__new__">+ Create new project</option>
-              </select>
-            </div>
-            {targetProjectId === '__new__' ? (
-              <div className="space-y-4">
-                <div className="space-y-1">
-                  <label className="text-sm font-medium" htmlFor="pd-new-project-name">
-                    Project name
-                  </label>
-                  <Input
-                    id="pd-new-project-name"
-                    maxLength={120}
-                    placeholder="e.g. Site A plumbing"
-                    value={newProjectName}
-                    aria-invalid={Boolean(projectFieldErrors.projectName)}
-                    className={cn(projectFieldErrors.projectName && 'border-destructive')}
-                    onChange={(event) => {
-                      setNewProjectName(event.target.value);
-                      if (projectFieldErrors.projectName) {
-                        setProjectFieldErrors((prev) => ({ ...prev, projectName: '' }));
-                      }
-                    }}
-                  />
-                  {projectFieldErrors.projectName ? (
-                    <p className="text-xs text-destructive" role="alert">
-                      {projectFieldErrors.projectName}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="space-y-1">
-                  <label className="text-sm font-medium" htmlFor="pd-expected-dispatch-date">
-                    Expected dispatch date
-                  </label>
-                  <Input
-                    id="pd-expected-dispatch-date"
-                    type="date"
-                    min={todayDateMin}
-                    value={expectedDeliveryDate}
-                    aria-invalid={Boolean(projectFieldErrors.expectedDispatchDate)}
-                    aria-describedby={
-                      projectFieldErrors.expectedDispatchDate
-                        ? 'pd-expected-dispatch-date-error'
-                        : undefined
-                    }
-                    className={cn(projectFieldErrors.expectedDispatchDate && 'border-destructive')}
-                    onChange={(event) => {
-                      const next = event.target.value;
-                      setExpectedDeliveryDate(next);
-                      if (next && isDateBeforeToday(next)) {
-                        setProjectFieldErrors((prev) => ({
-                          ...prev,
-                          expectedDispatchDate: 'Expected dispatch date cannot be in the past.'
-                        }));
-                        return;
-                      }
-                      if (projectFieldErrors.expectedDispatchDate) {
-                        setProjectFieldErrors((prev) => ({ ...prev, expectedDispatchDate: '' }));
-                      }
-                    }}
-                  />
-                  {projectFieldErrors.expectedDispatchDate ? (
-                    <p
-                      id="pd-expected-dispatch-date-error"
-                      className="text-xs text-destructive"
-                      role="alert"
-                    >
-                      {projectFieldErrors.expectedDispatchDate}
-                    </p>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-            {targetProjectId !== '__new__' ? (
-              <p className="text-xs text-muted-foreground">
-                Expected dispatch date for this project:{' '}
-                {(() => {
-                  const requiredDate = cartProjects.find((group) => group.groupId === targetProjectId)?.requiredDate;
-                  return requiredDate ? formatDateIST(requiredDate, '—') : 'Not set';
-                })()}
-              </p>
-            ) : null}
-
-            <div className="pd-modal-divider" />
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-sm font-medium">Shipping address</label>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Optional. Saved to your profile when you add a new address.
-                </p>
-              </div>
-              <select
-                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={selectedShippingAddressId}
-                onChange={(event) => {
-                  const next = event.target.value;
-                  setSelectedShippingAddressId(next);
-                  if (next !== '__new__') {
-                    setNewShippingAddress(blankShippingAddress);
-                  }
-                }}
-              >
-                <option value="">No shipping address</option>
-                {shippingAddressBook.map((entry, index) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.displayName || formatShippingAddressLabel(entry, index)}
-                  </option>
-                ))}
-                <option value="__new__">+ Add new address</option>
-              </select>
-
-              {selectedShippingAddressId === '__new__' ? (
-                <div className="pd-modal-address-form space-y-3">
-                  <div className="checkout-address-location-row">
-                    <button
-                      type="button"
-                      className="checkout-location-btn"
-                      onClick={fillShippingFromCurrentLocation}
-                      disabled={locatingShippingAddress}
-                    >
-                      <MapPin size={15} aria-hidden />
-                      {locatingShippingAddress ? 'Detecting location…' : 'Use my current location'}
-                    </button>
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium">Address label</label>
-                    <Input
-                      maxLength={120}
-                      placeholder="e.g. Site A, Warehouse"
-                      value={newShippingAddress.label}
-                      onChange={(event) =>
-                        setNewShippingAddress((prev) => ({ ...prev, label: event.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-1">
-                    <label className="text-sm font-medium">Street address</label>
-                    <Input
-                      placeholder="Building / street / area"
-                      value={newShippingAddress.line1}
-                      onChange={(event) =>
-                        setNewShippingAddress((prev) => ({ ...prev, line1: event.target.value }))
-                      }
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-sm font-medium">City</label>
-                      <Input
-                        placeholder="e.g. Pune"
-                        value={newShippingAddress.city}
-                        onChange={(event) =>
-                          setNewShippingAddress((prev) => ({ ...prev, city: event.target.value }))
-                        }
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-sm font-medium">State</label>
-                      <Input
-                        placeholder="e.g. Maharashtra"
-                        value={newShippingAddress.state}
-                        onChange={(event) =>
-                          setNewShippingAddress((prev) => ({ ...prev, state: event.target.value }))
-                        }
-                      />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-sm font-medium">PIN code</label>
-                      <Input
-                        placeholder="e.g. 411026"
-                        value={newShippingAddress.pincode}
-                        onChange={(event) =>
-                          setNewShippingAddress((prev) => ({ ...prev, pincode: event.target.value }))
-                        }
-                      />
-                    </div>
-                    <div className="space-y-1">
-                      <label className="text-sm font-medium">Country</label>
-                      <Input
-                        placeholder="e.g. India"
-                        value={newShippingAddress.country}
-                        onChange={(event) =>
-                          setNewShippingAddress((prev) => ({ ...prev, country: event.target.value }))
-                        }
-                      />
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-          {dialogError ? (
-            <div
-              className="mt-4 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-              role="alert"
-            >
-              {dialogError}
-            </div>
-          ) : null}
-          </div>
-          <div className="shrink-0 border-t bg-background px-6 py-4">
-            <DialogFooter className="gap-2 sm:gap-0">
-              <Button variant="outline" onClick={() => setProjectPickerOpen(false)}>
-                Cancel
-              </Button>
-              <Button onClick={confirmAddToCart}>
-                Add to cart
-              </Button>
-            </DialogFooter>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <DiscoveryAddToCartDialog
+        open={projectPickerOpen}
+        onOpenChange={(open) => {
+          setProjectPickerOpen(open);
+          if (!open) setPendingProduct(null);
+        }}
+        product={pendingProduct}
+        onAdded={handleCartAdded}
+      />
     </SpPageLayout>
   );
 };

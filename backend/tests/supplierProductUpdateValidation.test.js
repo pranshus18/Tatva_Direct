@@ -118,12 +118,26 @@ test('getMissingSupplierSpecificationTemplateFields requires every admin templat
   assert.match(result.message, /Size/i);
 });
 
-test('areSupplierOfferSpecificationValuesLocked detects saved offer values', () => {
+test('areSupplierOfferSpecificationValuesLocked detects completed post-approval fill', () => {
   assert.equal(
-    areSupplierOfferSpecificationValuesLocked({
-      attributes: { specifications: { finish: 'Matt' } }
-    }),
+    areSupplierOfferSpecificationValuesLocked(
+      {
+        status: 'approved',
+        attributes: { specifications: { finish: 'Matt', volume: '20L' } }
+      },
+      ['finish', 'volume']
+    ),
     true
+  );
+  assert.equal(
+    areSupplierOfferSpecificationValuesLocked(
+      {
+        status: 'approved',
+        attributes: { specifications: { finish: 'Matt', volume: '' } }
+      },
+      ['finish', 'volume']
+    ),
+    false
   );
   assert.equal(
     areSupplierOfferSpecificationValuesLocked({

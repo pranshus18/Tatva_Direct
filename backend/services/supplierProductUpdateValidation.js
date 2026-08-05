@@ -3,6 +3,7 @@ import { validateProductUnitCompatibility } from '../utils/productUnitCompatibil
 import {
   countMeaningfulSpecValues,
   isMeaningfullyFilledSpecValue,
+  normalizeSpecKeyForDedup,
   parseSpecificationsObject,
   specificationTemplateKeysOnly
 } from './supplierCatalogHelpersService.js';
@@ -12,6 +13,7 @@ const INVENTORY_FIELD_KEYS = [
   'price',
   'location',
   'min_order_quantity',
+  'lsa',
   'igst_rate',
   'igstRate',
   'cgst_rate',
@@ -197,12 +199,38 @@ export function getMissingSupplierSpecificationTemplateFields(templateKeys = [],
   };
 }
 
-/** True when the supplier offer already saved specification values (one-time fill complete). */
-export function areSupplierOfferSpecificationValuesLocked(supplierProduct = {}) {
+/** True when the supplier completed the one-time post-approval specification fill. */
+export function areSupplierOfferSpecificationValuesLocked(
+  supplierProduct = {},
+  catalogSpecificationKeys = []
+) {
   const offerSpecs =
     parseSpecificationsObject(supplierProduct?.attributes?.specifications) ||
     parseSpecificationsObject(supplierProduct?.specifications) ||
     {};
+  const status = String(supplierProduct?.status || 'pending').trim().toLowerCase();
+  const isApproved = status === 'approved' || status === 'active';
+  const templateKeys = Array.isArray(catalogSpecificationKeys)
+    ? catalogSpecificationKeys.filter(Boolean)
+    : [];
+
+  if (isApproved && templateKeys.length > 0) {
+    return templateKeys.every((key) => {
+      if (isMeaningfullyFilledSpecValue(offerSpecs[key])) return true;
+      const targetNorm = normalizeSpecKeyForDedup(key);
+      if (!targetNorm) return false;
+      return Object.entries(offerSpecs).some(
+        ([offerKey, value]) =>
+          normalizeSpecKeyForDedup(offerKey) === targetNorm &&
+          isMeaningfullyFilledSpecValue(value)
+      );
+    });
+  }
+
+  if (!isApproved) {
+    return false;
+  }
+
   return countMeaningfulSpecValues(offerSpecs) > 0;
 }
 
