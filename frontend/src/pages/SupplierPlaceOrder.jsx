@@ -10,6 +10,7 @@ import {
 } from '../utils/specifications';
 import { formatRupee } from '../utils/formatRupee';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
+import { restorePmVaultSession } from '../services/pmAuthService';
 import { isVaultPaymentMethod, VAULT_PAYMENT_METHOD } from '../utils/vaultPaymentMethod';
 import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import { formatShippingAddressLabel, formatShippingAddressPreview } from '../utils/shippingAddressLabel';
@@ -1017,7 +1018,7 @@ const SupplierPlaceOrder = () => {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`
           },
-          body: JSON.stringify({ orderIds, perOrderTransport })
+          body: JSON.stringify({ orderIds, perOrderTransport, persistOnly: true })
         });
         const confirmData = await confirmRes.json().catch(() => ({}));
         if (!confirmRes.ok || confirmData?.status !== 'success') {
@@ -1030,37 +1031,51 @@ const SupplierPlaceOrder = () => {
 
       // Vault checkout: debit immediately at placement (includes saved transport when selected).
       if (isVaultPaymentMethod(paymentMethod)) {
-        for (const order of createdOrders) {
-          if (!order?.id) continue;
-          try {
-            const payData = await payOrderFromVault(order.id, {
-              idempotencyKey: `supplier-place-vault-${order.id}`
-            });
-            if (payData?.status && payData.status !== 'success') {
-              throw new Error(
-                payData.message ||
-                  `Vault payment failed for ${order.orderNumber || order.id}.`
-              );
-            }
-          } catch (payErr) {
-            const alreadyPaid =
-              payErr?.code === 'ORDER_ALREADY_PAID' ||
-              /already paid/i.test(String(payErr?.message || ''));
-            if (!alreadyPaid) {
-              alert(
-                payErr?.message ||
+        await restorePmVaultSession();
+        const payOutcomes = await Promise.all(
+          createdOrders.map(async (order) => {
+            if (!order?.id) return { ok: true, order };
+            try {
+              const payData = await payOrderFromVault(order.id, {
+                idempotencyKey: `supplier-place-vault-${order.id}`,
+                skipSessionRestore: true
+              });
+              if (payData?.status && payData.status !== 'success') {
+                return {
+                  ok: false,
+                  order,
+                  message:
+                    payData.message ||
+                    `Vault payment failed for ${order.orderNumber || order.id}.`
+                };
+              }
+              return { ok: true, order };
+            } catch (payErr) {
+              const alreadyPaid =
+                payErr?.code === 'ORDER_ALREADY_PAID' ||
+                /already paid/i.test(String(payErr?.message || ''));
+              if (alreadyPaid) return { ok: true, order };
+              return {
+                ok: false,
+                order,
+                message:
+                  payErr?.message ||
                   `Order(s) created, but vault payment failed for ${order.orderNumber || order.id}. Open Upstream Orders and pay from vault once your balance is sufficient.`
-              );
-              localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-              navigate('/supplier-orders?direction=upstream');
-              return;
+              };
             }
-          }
+          })
+        );
+        const failedPay = payOutcomes.find((outcome) => !outcome.ok);
+        if (failedPay) {
+          alert(failedPay.message || 'Vault payment failed.');
+          localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+          navigate('/supplier-orders?direction=upstream');
+          return;
         }
       }
 
       // After vault payment succeeds, book carrier / persist tracking.
-      if (perOrderTransport?.length) {
+      if (perOrderTransport?.length && isVaultPaymentMethod(paymentMethod)) {
         const bookRes = await fetch(getApiUrl('/api/po/transport/confirm'), {
           method: 'POST',
           headers: {

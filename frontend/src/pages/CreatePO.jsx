@@ -6,6 +6,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { API_BASE_URL, getApiUrl, resolveApiPath, buildAuthHeaders } from '../config/api';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
+import { restorePmVaultSession } from '../services/pmAuthService';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
@@ -964,7 +965,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     return data;
   };
 
-  const finalizeTransportDetails = async (ordersToConfirm = createdTransportOrders) => {
+  const finalizeTransportDetails = async (
+    ordersToConfirm = createdTransportOrders,
+    { persistOnly = false } = {}
+  ) => {
     const orderList = Array.isArray(ordersToConfirm) ? ordersToConfirm : [];
     const orderIds = orderList.map((order) => order?.id).filter(Boolean);
     if (orderIds.length === 0) {
@@ -1097,6 +1101,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       }
     }
 
+    if (persistOnly) {
+      confirmBody.persistOnly = true;
+    }
+
     const res = await fetch(getApiUrl('/api/po/transport/confirm'), {
       method: 'POST',
       headers: buildAuthHeaders({
@@ -1138,40 +1146,57 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       }
 
       // 1) Save carrier selection + transport amount (no logistics book / tracking yet).
-      await finalizeTransportDetails(activeOrders);
+      await finalizeTransportDetails(activeOrders, { persistOnly: true });
 
       // 2) Vault debit must succeed before carrier book reveals AWB / tracking.
       if (isVaultPaymentMethod(poPaymentMethod)) {
-        const unpaid = activeOrders.filter((order) => order?.id);
-        for (const order of unpaid) {
-          try {
-            const payData = await payOrderFromVault(order.id, {
-              idempotencyKey: `create-po-vault-${order.id}`
-            });
-            if (payData?.status && payData.status !== 'success') {
-              throw new Error(
-                payData.message ||
-                  `Failed to debit vault for order ${order.orderNumber || order.id}. Products + transport were not fully paid.`
-              );
-            }
-          } catch (payErr) {
-            const alreadyPaid =
-              payErr?.code === 'ORDER_ALREADY_PAID' ||
-              /already paid/i.test(String(payErr?.message || ''));
-            if (!alreadyPaid) {
-              alert(
-                payErr?.message ||
-                  `Order(s) created, but vault payment failed. Open Your Orders and pay from vault once your balance is sufficient.`
-              );
-              navigate('/your-orders');
-              return;
-            }
-          }
+        await restorePmVaultSession();
+        const payOutcomes = await Promise.all(
+          activeOrders
+            .filter((order) => order?.id)
+            .map(async (order) => {
+              try {
+                const payData = await payOrderFromVault(order.id, {
+                  idempotencyKey: `create-po-vault-${order.id}`,
+                  skipSessionRestore: true
+                });
+                if (payData?.status && payData.status !== 'success') {
+                  return {
+                    ok: false,
+                    order,
+                    message:
+                      payData.message ||
+                      `Failed to debit vault for order ${order.orderNumber || order.id}. Products + transport were not fully paid.`
+                  };
+                }
+                return { ok: true, order };
+              } catch (payErr) {
+                const alreadyPaid =
+                  payErr?.code === 'ORDER_ALREADY_PAID' ||
+                  /already paid/i.test(String(payErr?.message || ''));
+                if (alreadyPaid) return { ok: true, order };
+                return {
+                  ok: false,
+                  order,
+                  message:
+                    payErr?.message ||
+                    `Order(s) created, but vault payment failed. Open Your Orders and pay from vault once your balance is sufficient.`
+                };
+              }
+            })
+        );
+        const failedPay = payOutcomes.find((outcome) => !outcome.ok);
+        if (failedPay) {
+          alert(failedPay.message || 'Vault payment failed.');
+          navigate('/your-orders');
+          return;
         }
       }
 
-      // 3) After payment: book courier/trucking and persist tracking.
-      const transportResult = await finalizeTransportDetails(activeOrders);
+      // 3) After vault payment: book courier/trucking and persist tracking.
+      const transportResult = isVaultPaymentMethod(poPaymentMethod)
+        ? await finalizeTransportDetails(activeOrders)
+        : null;
 
       await clearCartTransportSelection();
       setSelectedTransport(null);

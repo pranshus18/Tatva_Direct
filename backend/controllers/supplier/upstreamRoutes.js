@@ -32,7 +32,6 @@ import {
   formatUpstreamRoleLabel,
   formatUpstreamRoleLabels,
   pickMatchingUpstreamRoleForSeller,
-  pickAnyUpstreamSellerRoleOnChain,
   pickUpstreamSellerRoleForBrand,
   getImmediateUpstreamRoleForBrand,
   rankUpstreamOffersForProduct,
@@ -43,7 +42,6 @@ import {
   resolveGeoFromOutletAddress,
   buildAllowedUpstreamRolesSet,
   resolveRequiredUpstreamRoleFromAdminChain,
-  sellerHasAnyUpstreamRoleForBrand,
   sellerMatchesUpstreamForBrand,
   supplierUpstreamCartSaveSchema,
   supplierUpstreamCheckoutReleaseSchema,
@@ -1016,21 +1014,11 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
           const sup = upstreamUserMap[offer.supplier_id];
           if (!sup?.profile) return false;
           if (registeredPartnerIds.has(offer.supplier_id)) return true;
-          if (
-            sellerMatchesUpstreamForBrand(
-              sup.profile,
-              allowedRolesSet,
-              brandTokenForMatch,
-              chainRouting
-            )
-          ) {
-            return true;
-          }
-          return sellerHasAnyUpstreamRoleForBrand(
+          return sellerMatchesUpstreamForBrand(
             sup.profile,
-            buyerRole,
+            allowedRolesSet,
             brandTokenForMatch,
-            chainRow
+            chainRouting
           );
         })
         .map((u) => {
@@ -1066,7 +1054,6 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
                 brandTokenForMatch,
                 chainRouting
               ) ||
-              pickAnyUpstreamSellerRoleOnChain(sup.profile, buyerRole, brandTokenForMatch, chainRow) ||
               (registeredPartnerIds.has(u.supplier_id)
                 ? getImmediateUpstreamRoleForBrand({
                     profile: req.user.profile || {},
@@ -1465,7 +1452,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     // Preload supplier profile for defaults + GSTIN detection.
     const { data: supplierProfileRow, error: supplierProfileErr } = await supabase
       .from('users')
-      .select('address, profile, user_type')
+      .select('name, company, address, profile, user_type')
       .eq('id', req.userId)
       .single();
     if (supplierProfileErr || !supplierProfileRow) {
@@ -1572,11 +1559,22 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     if (upstreamErr) throw upstreamErr;
 
     const upstreamOfferById = {};
+    const upstreamOffersNeedingSync = [];
+    for (const row of upstreamOffers || []) {
+      const state = resolveEffectiveSupplierOfferState(row, row.product);
+      if (state.needsCatalogSync && row?.id) upstreamOffersNeedingSync.push(row.id);
+    }
+    if (upstreamOffersNeedingSync.length > 0) {
+      await supabase
+        .from('supplier_products')
+        .update({ status: 'approved', is_active: true })
+        .in('id', upstreamOffersNeedingSync);
+    }
     for (const row of upstreamOffers || []) {
       let effectiveRow = row;
-      const { needsCatalogSync } = resolveEffectiveSupplierOfferState(row, row.product);
-      if (needsCatalogSync) {
-        effectiveRow = await syncSupplierOfferApprovalFromCatalog(supabase, row);
+      const state = resolveEffectiveSupplierOfferState(row, row.product);
+      if (state.needsCatalogSync) {
+        effectiveRow = { ...row, status: 'approved', is_active: true };
       }
       if (isSupplierOfferAvailableForUpstream(effectiveRow, effectiveRow.product)) {
         upstreamOfferById[effectiveRow.id] = effectiveRow;
@@ -1607,12 +1605,14 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     const upstreamSupplierIds = [...new Set((upstreamOffers || []).map((r) => r.supplier_id).filter(Boolean))];
     const { data: upstreamUsers } = await supabase
       .from('users')
-      .select('id, profile')
+      .select('id, name, company, profile')
       .in('id', upstreamSupplierIds);
 
     const upstreamProfileById = {};
+    const upstreamUserById = {};
     (upstreamUsers || []).forEach((u) => {
       upstreamProfileById[u.id] = u.profile;
+      upstreamUserById[u.id] = u;
     });
 
     const sameVariantMatch = (mineOffer, upstreamOffer) =>
@@ -1708,13 +1708,16 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
 
       const cartBrandToken =
         resolveUpstreamBrandLabel(myOffer?.attributes, myOffer?.product?.brand) || brandKey;
-      const supplierAllowed =
-        sellerMatchesUpstreamForBrand(upProfile, allowedRolesSet, cartBrandToken, chainRouting) ||
-        sellerHasAnyUpstreamRoleForBrand(upProfile, buyerRole, cartBrandToken, chainRow);
+      const supplierAllowed = sellerMatchesUpstreamForBrand(
+        upProfile,
+        allowedRolesSet,
+        cartBrandToken,
+        chainRouting
+      );
       if (!supplierAllowed) {
         return res.status(403).json({
           status: 'error',
-          message: `Selected upstream supplier is not registered for brand "${cartBrandToken}" at any allowed supply-chain tier above you (per admin chain for that brand).`
+          message: `Selected upstream supplier is not registered for brand "${cartBrandToken}" at the supply-chain layer directly above you (per admin chain for that brand).`
         });
       }
 
@@ -1771,13 +1774,8 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       }
     }
 
-    const buyer = await supabase
-      .from('users')
-      .select('name, company')
-      .eq('id', req.userId)
-      .single();
-
-    const buyerName = buyer?.data?.name || buyer?.data?.company || 'Supplier';
+    const buyerName =
+      String(supplierProfileRow?.name || supplierProfileRow?.company || '').trim() || 'Supplier';
 
     const createdOrders = [];
 
@@ -1925,7 +1923,8 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
           buyerUserId: req.userId,
           checkoutSessionId,
           lines: groupLines,
-          orderItemBySupplierProductId
+          orderItemBySupplierProductId,
+          skipExpireStale: true
         });
       } catch (invErr) {
         console.error('[Upstream Orders] reservation consume error:', invErr);
@@ -1936,12 +1935,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
 
       // Notify upstream supplier
       try {
-        const { data: supplierUser } = await supabase
-          .from('users')
-          .select('name, company')
-          .eq('id', supplierId)
-          .single();
-
+        const supplierUser = upstreamUserById[supplierId];
         const supplierName = supplierUser?.name || supplierUser?.company || 'Supplier';
 
         await insertNotification({

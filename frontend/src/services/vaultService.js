@@ -185,8 +185,10 @@ export async function addVaultOfflineMoney({
 }
 
 /** Tatva backend — order checkout escrow. */
-export async function payOrderFromVault(orderId, { idempotencyKey } = {}) {
-  await restorePmVaultSession();
+export async function payOrderFromVault(orderId, { idempotencyKey, skipSessionRestore = false } = {}) {
+  if (!skipSessionRestore) {
+    await restorePmVaultSession();
+  }
   const response = await fetch(getApiUrl(`/api/vault/orders/${orderId}/pay`), {
     method: 'POST',
     headers: buildAuthHeaders({

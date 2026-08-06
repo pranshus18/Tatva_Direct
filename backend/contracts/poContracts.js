@@ -165,7 +165,9 @@ export const poTransportConfirmSchema = z
     etd: z.string().max(120).optional().nullable(),
     perOrderTransport: z.array(perOrderTransportRowSchema).optional(),
     /** When not using perOrderTransport and exactly one order — same as per-row quoted amount. */
-    quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable()
+    quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable(),
+    /** Save quoted transport on orders without calling external logistics APIs. */
+    persistOnly: z.boolean().optional()
   })
   .superRefine((data, ctx) => {
     const rows = data.perOrderTransport || [];

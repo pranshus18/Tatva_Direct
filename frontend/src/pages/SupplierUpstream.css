@@ -1726,6 +1726,51 @@
   color: #64748b;
 }
 
+.us-pd-card__qty-control {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.us-pd-card__qty-btn {
+  min-width: 2rem;
+  height: 2rem;
+  border: none;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 1.1rem;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  transition: background 0.15s ease;
+}
+
+.us-pd-card__qty-btn:hover:not(:disabled) {
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.us-pd-card__qty-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.us-pd-card__qty-value {
+  min-width: 2.25rem;
+  text-align: center;
+  font-weight: 600;
+  color: #0f172a;
+  font-size: 0.875rem;
+  padding: 0 0.25rem;
+}
+
 .us-pd-card__qty-input {
   width: 5.5rem;
   padding: 0.35rem 0.5rem;

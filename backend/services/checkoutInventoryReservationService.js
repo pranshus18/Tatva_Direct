@@ -342,9 +342,12 @@ export async function consumeCheckoutReservationsForOrder({
   source,
   checkoutSessionId,
   lines = [],
-  orderItemBySupplierProductId = {}
+  orderItemBySupplierProductId = {},
+  skipExpireStale = false
 }) {
-  await expireStaleReservations({ buyerUserId });
+  if (!skipExpireStale) {
+    await expireStaleReservations({ buyerUserId });
+  }
   const normalizedLines = dedupeCheckoutLinesByProduct(lines);
   if (!normalizedLines.length) {
     throw new Error('No valid checkout lines for inventory consume');

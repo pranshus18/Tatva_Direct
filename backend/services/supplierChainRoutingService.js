@@ -94,17 +94,44 @@ export function findUpstreamRoleWalkback(buyerRole, rolesInAdminChain) {
   return null;
 }
 
-export async function loadAdminBrandChainsByName({ supabase, brandNames }) {
-  const names = [...new Set((brandNames || []).map((b) => String(b || '').trim()).filter(Boolean))];
-  const wantedKeys = [...new Set(names.map((n) => normalizeBrandKey(n)).filter(Boolean))];
-  if (wantedKeys.length === 0) return new Map();
+function buildBrandChainLookupOrFilter(names = [], wantedKeys = []) {
+  const parts = new Set();
+  for (const name of names) {
+    const escaped = String(name || '').replace(/[%_,]/g, '').trim();
+    if (escaped.length >= 2) parts.add(`category_name.ilike.%${escaped}%`);
+  }
+  for (const key of wantedKeys) {
+    const escaped = String(key || '').replace(/[%_,]/g, '').trim();
+    if (escaped.length >= 2) parts.add(`category_name.ilike.%${escaped}%`);
+  }
+  return [...parts];
+}
+
+async function fetchAdminBrandChainRows({ supabase, names, wantedKeys }) {
+  const orFilter = buildBrandChainLookupOrFilter(names, wantedKeys);
+  if (orFilter.length > 0) {
+    let query = supabase.from('category_supply_chains').select('id, category_name, stages, updated_at');
+    if (typeof query.or === 'function') {
+      query = query.or(orFilter.slice(0, 24).join(','));
+      const { data, error } = await query;
+      if (error) throw error;
+      if (Array.isArray(data) && data.length > 0) return data;
+    }
+  }
 
   const { data, error } = await supabase
     .from('category_supply_chains')
     .select('id, category_name, stages, updated_at');
   if (error) throw error;
+  return data || [];
+}
 
-  const rows = data || [];
+export async function loadAdminBrandChainsByName({ supabase, brandNames }) {
+  const names = [...new Set((brandNames || []).map((b) => String(b || '').trim()).filter(Boolean))];
+  const wantedKeys = [...new Set(names.map((n) => normalizeBrandKey(n)).filter(Boolean))];
+  if (wantedKeys.length === 0) return new Map();
+
+  const rows = await fetchAdminBrandChainRows({ supabase, names, wantedKeys });
   const map = new Map();
   for (const wantedKey of wantedKeys) {
     let matched = null;

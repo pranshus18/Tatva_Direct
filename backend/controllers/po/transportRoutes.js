@@ -48,7 +48,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       deliveryLat: rootDeliveryLat = null,
       deliveryLng: rootDeliveryLng = null,
       carrier: rootCarrier = null,
-      matter: rootMatter = null
+      matter: rootMatter = null,
+      persistOnly = false
     } = payload;
 
     const transportByOrderId = new Map(
@@ -298,6 +299,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
     // Book courier or trucking in parallel (multi-vendor PO confirm).
     // Upstream logistics book runs only after vault debit (payment_status=paid).
     const bookingWarnings = [];
+    if (!persistOnly) {
     await Promise.all(
       rowContexts.map(async (ctx) => {
         const {
@@ -511,6 +513,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         }
       })
     );
+    }
 
     const updatedOrders = await Promise.all(
       rowContexts.map(async (ctx) => {

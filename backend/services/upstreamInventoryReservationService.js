@@ -65,13 +65,15 @@ export async function consumeCheckoutReservationsForOrder({
   buyerUserId,
   checkoutSessionId,
   lines = [],
-  orderItemBySupplierProductId = {}
+  orderItemBySupplierProductId = {},
+  skipExpireStale = false
 }) {
   return consumeSharedCheckoutReservationsForOrder({
     buyerUserId,
     source: CHECKOUT_SOURCES.UPSTREAM,
     checkoutSessionId,
     lines,
-    orderItemBySupplierProductId
+    orderItemBySupplierProductId,
+    skipExpireStale
   });
 }

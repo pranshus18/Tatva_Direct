@@ -1246,23 +1246,39 @@ const SupplierUpstream = ({ user }) => {
                       onClick={(event) => event.stopPropagation()}
                       onKeyDown={(event) => event.stopPropagation()}
                     >
-                      <label className="us-pd-card__qty-label" htmlFor={`qty-${mineId}`}>Quantity</label>
-                      <input
-                        id={`qty-${mineId}`}
-                        type="number"
-                        min={minQty}
-                        step={1}
-                        inputMode="numeric"
-                        value={selectedMine[mineId] ?? minQty}
-                        onChange={(e) => {
-                          const v = parseSupplierStockQuantity(e.target.value);
-                          setSelectedMine((prev) => ({
-                            ...prev,
-                            [mineId]: v != null && v > 0 ? Math.max(minQty, v) : minQty
-                          }));
-                        }}
-                        className="us-pd-card__qty-input"
-                      />
+                      <label className="us-pd-card__qty-label">Quantity</label>
+                      <div className="us-pd-card__qty-control">
+                        <button
+                          type="button"
+                          className="us-pd-card__qty-btn"
+                          onClick={() => {
+                            const current = parseSupplierStockQuantity(selectedMine[mineId]) ?? minQty;
+                            setSelectedMine((prev) => ({
+                              ...prev,
+                              [mineId]: Math.max(minQty, current - 1)
+                            }));
+                          }}
+                          disabled={(parseSupplierStockQuantity(selectedMine[mineId]) ?? minQty) <= minQty}
+                          aria-label="Decrease quantity"
+                        >
+                          −
+                        </button>
+                        <span className="us-pd-card__qty-value">{selectedMine[mineId] ?? minQty}</span>
+                        <button
+                          type="button"
+                          className="us-pd-card__qty-btn"
+                          onClick={() => {
+                            const current = parseSupplierStockQuantity(selectedMine[mineId]) ?? minQty;
+                            setSelectedMine((prev) => ({
+                              ...prev,
+                              [mineId]: Math.max(minQty, current + 1)
+                            }));
+                          }}
+                          aria-label="Increase quantity"
+                        >
+                          +
+                        </button>
+                      </div>
                     </div>
                   ) : null}
                 </div>
