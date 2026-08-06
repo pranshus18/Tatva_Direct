@@ -55,7 +55,7 @@ export async function fetchVaultHeaderBalance() {
   try {
     return await vaultFetch('/api/vault/header-balance');
   } catch (error) {
-    if (error.code === 'PM_AUTH_REQUIRED') {
+    if (error.code === 'PM_AUTH_REQUIRED' || error.code === 'INVALID_TOKEN' || error.status === 401) {
       return {
         status: 'success',
         visible: true,
@@ -63,7 +63,7 @@ export async function fetchVaultHeaderBalance() {
         source: 'pm_vault',
         balance: null,
         vaultPath: '/vault',
-        message: error.message
+        message: error.message || 'PM session expired. Sign in again with phone OTP.'
       };
     }
     throw error;

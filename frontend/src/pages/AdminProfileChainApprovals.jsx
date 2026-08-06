@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getApiUrl } from '../config/api';
 import { CheckCircle, Clock, ExternalLink, FileText, RefreshCw, User, XCircle } from 'lucide-react';
 import { certificateLabelFromUrl } from '../utils/authorizationCertificateUrls';
@@ -54,12 +54,7 @@ const AdminProfileChainApprovals = () => {
   const [brandItems, setBrandItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('pending');
-
-  const filteredItems = useMemo(() => {
-    if (statusFilter === 'all') return brandItems;
-    return brandItems.filter((item) => String(item?.status || '') === statusFilter);
-  }, [brandItems, statusFilter]);
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const fetchRequests = async () => {
     setLoading(true);
@@ -177,23 +172,27 @@ const AdminProfileChainApprovals = () => {
             className="admin-chain-filter-select"
             disabled={actionLoading}
           >
+            <option value="all">All profiles</option>
             <option value="pending">Pending</option>
             <option value="approved">Approved</option>
             <option value="rejected">Rejected</option>
-            <option value="all">All</option>
           </select>
         </div>
       </div>
 
       <div className="admin-content">
-        {filteredItems.length === 0 ? (
+        {brandItems.length === 0 ? (
           <div className="empty-state">
             <User size={48} color="#94a3b8" />
-            <p>No brand requests</p>
+            <p>No profile assignments found</p>
             <p className="empty-state-subtitle">
               {statusFilter === 'pending'
                 ? 'No brands are waiting for supply-chain role approval.'
-                : 'Try another filter or refresh.'}
+                : statusFilter === 'approved'
+                  ? 'No approved supplier profile assignments yet.'
+                  : statusFilter === 'rejected'
+                    ? 'No rejected profile assignments.'
+                    : 'Try another filter or refresh.'}
             </p>
           </div>
         ) : (
@@ -208,7 +207,7 @@ const AdminProfileChainApprovals = () => {
             </div>
 
             <div className="admin-chain-card-list">
-              {filteredItems.map((item) => {
+              {brandItems.map((item) => {
                 const u = item.user;
                 const isPending = item.status === 'pending' && item.canAct;
                 return (

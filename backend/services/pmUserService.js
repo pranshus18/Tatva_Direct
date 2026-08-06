@@ -138,7 +138,7 @@ function resolveLocalCustomerFields(user, localCustomerFields = null) {
   };
 }
 
-export async function fetchPmCurrentUser(accessToken) {
+export async function fetchPmCurrentUser(accessToken, options = {}) {
   const token = String(accessToken || '').trim();
   if (!token) return null;
 
@@ -157,6 +157,11 @@ export async function fetchPmCurrentUser(accessToken) {
   }
 
   if (!response.ok || payload.success === false) {
+    if (options.throwOnUnauthorized && response.status === 401) {
+      const error = new Error('PM session expired. Sign in again with phone OTP.');
+      error.code = 'PM_AUTH_REQUIRED';
+      throw error;
+    }
     return null;
   }
 

@@ -5,6 +5,7 @@ import {
   detectSupplyChainRoleChanges,
   chainRequiresAdminApproval,
   mergeApprovedBrandsIntoChainEntries,
+  mergeSupplierEditableEntrySave,
   normalizeCompanyInfoEntries,
   syncLegacyMinimumOrderValue
 } from '../services/supplierChainProfileService.js';
@@ -195,4 +196,29 @@ test('syncLegacyMinimumOrderValue copies saved entry MOV to legacy profile field
     { saveSupplyChainEntryId: 'e1' }
   );
   assert.equal(profileUpdate.minimumOrderValue, 3200);
+});
+
+test('mergeSupplierEditableEntrySave updates MOV on one entry without changing top-level role metadata', () => {
+  const baseline = {
+    supplierRole: 'dealer',
+    brands: 'Milton',
+    companyInfoEntries: [
+      { id: 'e1', role: 'dealer', brands: 'Milton', minimumOrderValue: 2500 },
+      { id: 'e2', role: 'dealer', brands: 'HP', minimumOrderValue: 1000 }
+    ]
+  };
+  const incoming = {
+    supplierRole: 'dealer',
+    brands: 'HP',
+    companyInfoEntries: [
+      { id: 'e1', role: 'dealer', brands: 'Milton', minimumOrderValue: 5000 },
+      { id: 'e2', role: 'dealer', brands: 'HP', minimumOrderValue: 1000 }
+    ]
+  };
+
+  const merged = mergeSupplierEditableEntrySave(baseline, incoming, 'e1');
+  assert.equal(merged.supplierRole, 'dealer');
+  assert.equal(merged.brands, 'Milton');
+  assert.equal(merged.companyInfoEntries[0].minimumOrderValue, 5000);
+  assert.equal(merged.companyInfoEntries[1].minimumOrderValue, 1000);
 });

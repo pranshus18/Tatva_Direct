@@ -316,27 +316,40 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
   // ==========================
   router.get('/supplier-chain-requests', authenticateToken, isAdmin, async (req, res) => {
     try {
-      const status = String(req.query?.status || 'pending').trim().toLowerCase();
+      const status = String(req.query?.status || 'all').trim().toLowerCase();
       let query = supabase
         .from('supplier_chain_profile_requests')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(200);
+        .limit(1000);
 
-      if (status && status !== 'all') {
+      if (status === 'pending' || status === 'rejected') {
         query = query.eq('status', status);
       }
 
       const { data: rows, error } = await query;
       if (error) throw error;
 
-      const userIds = [...new Set((rows || []).map((r) => r.user_id).filter(Boolean))];
       const userMap = {};
-      if (userIds.length > 0) {
-        const { data: users } = await supabase
+      if (status === 'approved' || status === 'all') {
+        const { data: suppliers, error: suppliersError } = await supabase
           .from('users')
           .select('id, name, email, company, user_type, profile')
-          .in('id', userIds);
+          .eq('user_type', 'supplier');
+        if (suppliersError) throw suppliersError;
+        (suppliers || []).forEach((u) => {
+          userMap[u.id] = u;
+        });
+      }
+
+      const userIdsFromRows = [...new Set((rows || []).map((r) => r.user_id).filter(Boolean))];
+      const missingUserIds = userIdsFromRows.filter((id) => !userMap[id]);
+      if (missingUserIds.length > 0) {
+        const { data: users, error: usersError } = await supabase
+          .from('users')
+          .select('id, name, email, company, user_type, profile')
+          .in('id', missingUserIds);
+        if (usersError) throw usersError;
         (users || []).forEach((u) => {
           userMap[u.id] = u;
         });
@@ -347,9 +360,11 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         user: userMap[r.user_id] || null
       }));
 
-      await syncPendingRequestPayloads(requests, userMap);
+      if (status === 'pending' || status === 'all') {
+        await syncPendingRequestPayloads(requests, userMap);
+      }
 
-      const brandItems = buildBrandReviewItems(requests, userMap);
+      const brandItems = buildBrandReviewItems(requests, userMap, { statusFilter: status });
 
       res.json({ status: 'success', requests, brandItems });
     } catch (error) {

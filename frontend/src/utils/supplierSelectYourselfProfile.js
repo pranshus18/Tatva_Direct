@@ -1266,12 +1266,21 @@ export function buildSupplierChainSavePayload(profile, entries = null, options =
   const savedEntry =
     (saveEntryId && nextEntries.find((entry) => String(entry?.id || '').trim() === saveEntryId)) ||
     first;
+  const preserveTopLevelFields = Boolean(saveEntryId);
   const chainFields = {
     companyInfoEntries: nextEntries,
-    supplierRole: savedEntry.role || profile?.supplierRole || '',
-    brands: savedEntry.brands || profile?.brands || '',
-    gstin: savedEntry.gstin || profile?.gstin || '',
-    companyName: savedEntry.companyName || profile?.companyName || '',
+    supplierRole: preserveTopLevelFields
+      ? profile?.supplierRole || savedEntry.role || ''
+      : savedEntry.role || profile?.supplierRole || '',
+    brands: preserveTopLevelFields
+      ? profile?.brands || savedEntry.brands || ''
+      : savedEntry.brands || profile?.brands || '',
+    gstin: preserveTopLevelFields
+      ? profile?.gstin || savedEntry.gstin || ''
+      : savedEntry.gstin || profile?.gstin || '',
+    companyName: preserveTopLevelFields
+      ? profile?.companyName || savedEntry.companyName || ''
+      : savedEntry.companyName || profile?.companyName || '',
     minimumOrderValue: savedEntry.minimumOrderValue ?? profile?.minimumOrderValue ?? ''
   };
 
@@ -1279,11 +1288,11 @@ export function buildSupplierChainSavePayload(profile, entries = null, options =
     const payload = {
       userType: profile?.userType || 'supplier',
       companyInfoEntries: nextEntries,
-      supplierRole: savedEntry.role || profile?.supplierRole || '',
-      brands: savedEntry.brands || profile?.brands || ''
+      supplierRole: chainFields.supplierRole,
+      brands: chainFields.brands
     };
-    const gstin = String(savedEntry.gstin || '').trim();
-    const companyName = String(savedEntry.companyName || '').trim();
+    const gstin = String(chainFields.gstin || '').trim();
+    const companyName = String(chainFields.companyName || '').trim();
     const mov = savedEntry.minimumOrderValue;
     if (gstin) payload.gstin = gstin;
     if (companyName) payload.companyName = companyName;

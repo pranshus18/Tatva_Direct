@@ -127,10 +127,22 @@ function pmRequestFailed(response, payload, fallbackMessage) {
   const error = new Error(message);
   error.status = response.status;
   const pmCode = payload?.code || payload?.error || null;
-  error.code =
+  let code =
     pmCode === 'VALIDATION_ERROR' || /validation failed/i.test(String(topMessage || ''))
       ? 'PM_VAULT_VALIDATION_FAILED'
       : pmCode || 'PM_VAULT_REQUEST_FAILED';
+
+  if (
+    response.status === 401 ||
+    code === 'INVALID_TOKEN' ||
+    code === 'TOKEN_EXPIRED' ||
+    /invalid or expired token/i.test(String(topMessage || ''))
+  ) {
+    code = 'PM_AUTH_REQUIRED';
+    error.message = 'PM session expired. Sign in again with phone OTP.';
+  }
+
+  error.code = code;
   error.payload = payload;
   error.fieldErrors = fieldErrors;
   return error;
@@ -252,7 +264,7 @@ export async function ensurePmVaultAuth(user, credentials = {}) {
     throw error;
   }
 
-  const pmUserFromToken = await fetchPmCurrentUser(accessToken);
+  const pmUserFromToken = await fetchPmCurrentUser(accessToken, { throwOnUnauthorized: true });
   const phone = normalizeIndianMobile(user?.phone || pmUserFromToken?.phoneNumber);
   const pmUserFromPhone =
     !pmUserFromToken && phone ? await fetchPmUserByPhone(phone) : null;

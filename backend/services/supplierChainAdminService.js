@@ -97,17 +97,34 @@ export async function syncPendingRequestPayloads(requestRows = [], userMap = {})
       storedKeys.size === prunedKeys.size && [...storedKeys].every((key) => prunedKeys.has(key));
     if (keysMatch) continue;
 
+    const nowIso = new Date().toISOString();
+    const updatePayload =
+      prunedEntries.length === 0
+        ? {
+            payload: pruned,
+            status: 'approved',
+            reviewed_at: nowIso,
+            updated_at: nowIso,
+            rejection_reason: null
+          }
+        : {
+            payload: pruned,
+            updated_at: nowIso
+          };
+
     const { error } = await supabase
       .from('supplier_chain_profile_requests')
-      .update({
-        payload: pruned,
-        updated_at: new Date().toISOString()
-      })
+      .update(updatePayload)
       .eq('id', row.id)
       .eq('status', 'pending');
 
     if (!error) {
       row.payload = pruned;
+      if (prunedEntries.length === 0) {
+        row.status = 'approved';
+        row.reviewed_at = nowIso;
+        row.rejection_reason = null;
+      }
       updates.push(row.id);
     }
   }
@@ -190,57 +207,121 @@ function mergeEntryIntoProfile(profile, approvedEntry) {
   };
 }
 
-export function buildBrandReviewItems(requestRows = [], userMap = {}) {
+function buildReviewItem({ row = null, entry, user, roleChange = null }) {
+  const brand = String(entry?.brands || '').trim();
+  const role = String(entry?.role || '').trim();
+  const entryId = String(entry?.id || '').trim();
+  const rowStatus = String(row?.status || 'approved');
+  const userId = row?.user_id || user?.id || null;
+
+  return {
+    id: `${row?.id || userId}:${entryId || brand}:${role}`,
+    requestId: row?.id || null,
+    entryId,
+    userId,
+    brand,
+    role,
+    roleLabel: formatRoleLabel(role),
+    roleChange: roleChange
+      ? {
+          fromRole: roleChange.fromRole,
+          toRole: roleChange.toRole,
+          fromRoleLabel: formatRoleLabel(roleChange.fromRole),
+          toRoleLabel: formatRoleLabel(roleChange.toRole)
+        }
+      : null,
+    documents: documentsFromChainEntry(entry),
+    status: rowStatus,
+    submittedAt: row?.created_at || null,
+    rejectionReason: row?.rejection_reason || '',
+    user: user
+      ? {
+          id: user.id,
+          name: user.name || '',
+          email: user.email || '',
+          company: user.company || ''
+        }
+      : null,
+    canAct: rowStatus === 'pending'
+  };
+}
+
+function reviewItemDedupeKey(item) {
+  return `${item.userId}:${catalogBrandDedupKey(item.brand)}:${item.role}`;
+}
+
+/** Saved supplier profile entries — source of truth for approved assignments. */
+export function buildApprovedProfileItems(userMap = {}) {
   const items = [];
 
-  for (const row of requestRows) {
-    const user = userMap[row.user_id] || null;
-    const reviewPayload = resolveReviewPayloadForRequest(user?.profile || {}, row?.payload || {});
+  for (const user of Object.values(userMap)) {
+    if (String(user?.user_type || '') !== 'supplier') continue;
     const baseline = baselineChainFromProfile(user?.profile || {});
-    const roleChanges = detectSupplyChainRoleChanges(baseline, reviewPayload);
-    const entries = reviewableEntries(reviewPayload);
+    for (const entry of reviewableEntries({ companyInfoEntries: baseline.companyInfoEntries || [] })) {
+      items.push(
+        buildReviewItem({
+          row: { status: 'approved', user_id: user.id },
+          entry,
+          user
+        })
+      );
+    }
+  }
 
-    for (const entry of entries) {
-      const baselineEntry = matchBaselineChainEntry(baseline.companyInfoEntries || [], entry);
-      if (!entryNeedsAdminReview(baselineEntry, entry)) continue;
+  return items;
+}
 
-      const brand = String(entry?.brands || '').trim();
-      const role = String(entry?.role || '').trim();
-      const entryId = String(entry?.id || '').trim();
-      const roleChange =
-        roleChanges.find((change) => catalogBrandDedupKey(change.brand) === catalogBrandDedupKey(brand)) ||
-        null;
+export function buildBrandReviewItems(requestRows = [], userMap = {}, options = {}) {
+  const statusFilter = String(options.statusFilter || 'pending').trim().toLowerCase();
+  const items = [];
+  const seen = new Set();
 
-      items.push({
-        id: `${row.id}:${entryId || brand}`,
-        requestId: row.id,
-        entryId,
-        userId: row.user_id,
-        brand,
-        role,
-        roleLabel: formatRoleLabel(role),
-        roleChange: roleChange
-          ? {
-              fromRole: roleChange.fromRole,
-              toRole: roleChange.toRole,
-              fromRoleLabel: formatRoleLabel(roleChange.fromRole),
-              toRoleLabel: formatRoleLabel(roleChange.toRole)
-            }
-          : null,
-        documents: documentsFromChainEntry(entry),
-        status: String(row?.status || 'pending'),
-        submittedAt: row?.created_at || null,
-        rejectionReason: row?.rejection_reason || '',
-        user: user
-          ? {
-              id: user.id,
-              name: user.name || '',
-              email: user.email || '',
-              company: user.company || ''
-            }
-          : null,
-        canAct: String(row?.status || '') === 'pending'
-      });
+  const pushItem = (item) => {
+    const key = reviewItemDedupeKey(item);
+    if (seen.has(key)) return;
+    seen.add(key);
+    items.push(item);
+  };
+
+  if (statusFilter === 'approved') {
+    for (const item of buildApprovedProfileItems(userMap)) {
+      pushItem(item);
+    }
+    return items;
+  }
+
+  for (const row of requestRows) {
+    const rowStatus = String(row?.status || 'pending');
+    const user = userMap[row.user_id] || null;
+    const baseline = baselineChainFromProfile(user?.profile || {});
+
+    if (rowStatus === 'pending' && (statusFilter === 'pending' || statusFilter === 'all')) {
+      const reviewPayload = resolveReviewPayloadForRequest(user?.profile || {}, row?.payload || {});
+      const roleChanges = detectSupplyChainRoleChanges(baseline, reviewPayload);
+
+      for (const entry of reviewableEntries(reviewPayload)) {
+        const baselineEntry = matchBaselineChainEntry(baseline.companyInfoEntries || [], entry);
+        if (!entryNeedsAdminReview(baselineEntry, entry)) continue;
+
+        const brand = String(entry?.brands || '').trim();
+        const roleChange =
+          roleChanges.find((change) => catalogBrandDedupKey(change.brand) === catalogBrandDedupKey(brand)) ||
+          null;
+
+        pushItem(buildReviewItem({ row, entry, user, roleChange }));
+      }
+    }
+
+    if (rowStatus === 'rejected' && (statusFilter === 'rejected' || statusFilter === 'all')) {
+      for (const entry of reviewableEntries(row?.payload || {})) {
+        pushItem(buildReviewItem({ row, entry, user }));
+      }
+    }
+  }
+
+  if (statusFilter === 'all') {
+    for (const item of buildApprovedProfileItems(userMap)) {
+      pushItem(item);
     }
   }
 

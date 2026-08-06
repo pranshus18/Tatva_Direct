@@ -8,6 +8,7 @@ import {
   clearPendingChainRequest,
   detectSupplyChainRoleChanges,
   hasAnySupplyChainRole,
+  mergeSupplierEditableEntrySave,
   replacePendingChainRequest,
   syncLegacyMinimumOrderValue
 } from '../../../services/supplierChainProfileService.js';
@@ -671,12 +672,19 @@ export function registerProfileUpdateRoutes(router) {
               ? reviewPayload.companyInfoEntries.length
               : 0;
             if (reviewEntryCount === 0) {
-              return res.status(400).json({
-                status: 'error',
-                code: 'no_chain_changes_to_review',
-                message: 'No supply-chain changes were detected for admin review.'
-              });
-            }
+              const chainToSave = saveSupplyChainEntryId
+                ? mergeSupplierEditableEntrySave(baselineChain, incomingChain, saveSupplyChainEntryId)
+                : incomingChain;
+              try {
+                await clearPendingChainRequest(req.userId);
+              } catch (e) {
+                console.warn('[Profile] clearPendingChainRequest (supplier-editable save):', e?.message || e);
+              }
+              profileUpdate.supplierRole = chainToSave.supplierRole || baselineChain.supplierRole;
+              profileUpdate.brands = chainToSave.brands || baselineChain.brands;
+              profileUpdate.companyInfoEntries = chainToSave.companyInfoEntries;
+              syncLegacyMinimumOrderValue(profileUpdate, chainToSave, { saveSupplyChainEntryId });
+            } else {
             try {
               await replacePendingChainRequest(req.userId, reviewPayload);
             } catch (e) {
@@ -731,6 +739,7 @@ export function registerProfileUpdateRoutes(router) {
                 console.error('[Profile] Failed to notify admins (chain pending):', notifErr);
               }
             })();
+            }
           } else {
             try {
               await clearPendingChainRequest(req.userId);

@@ -558,6 +558,42 @@ export function chainRequiresAdminApproval(baseline, incoming) {
   return detectSupplyChainRoleChanges(baseline, incoming).length > 0;
 }
 
+/** Apply supplier-editable per-entry fields (MOV) without disturbing approved chain metadata. */
+export function mergeSupplierEditableEntrySave(baseline, incoming, saveSupplyChainEntryId) {
+  const saveEntryId = String(saveSupplyChainEntryId || '').trim();
+  if (!saveEntryId) {
+    return incoming;
+  }
+
+  const incomingEntries = normalizeCompanyInfoEntries(incoming?.companyInfoEntries || []);
+  const incomingEntry = incomingEntries.find((entry) => String(entry?.id || '').trim() === saveEntryId);
+  if (!incomingEntry) {
+    return baseline;
+  }
+
+  const mergedEntries = normalizeCompanyInfoEntries(baseline?.companyInfoEntries || []).map((entry) => {
+    if (String(entry?.id || '').trim() !== saveEntryId) {
+      return entry;
+    }
+    const next = { ...entry };
+    if (
+      incomingEntry.minimumOrderValue !== undefined &&
+      incomingEntry.minimumOrderValue !== null &&
+      incomingEntry.minimumOrderValue !== ''
+    ) {
+      next.minimumOrderValue = incomingEntry.minimumOrderValue;
+    } else {
+      delete next.minimumOrderValue;
+    }
+    return next;
+  });
+
+  return {
+    ...baseline,
+    companyInfoEntries: mergedEntries
+  };
+}
+
 export function syncLegacyMinimumOrderValue(profileUpdate, incomingChain, options = {}) {
   const entries = Array.isArray(incomingChain?.companyInfoEntries)
     ? incomingChain.companyInfoEntries

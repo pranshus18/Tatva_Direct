@@ -5,6 +5,7 @@ import {
   buildBrandApprovalDetailsSignature,
   buildSelectYourselfChainFormSignature,
   buildSelectYourselfChainEntryRowsSignature,
+  buildSupplierChainSavePayload,
   classifyPathBBrandSaveRows,
   deduplicateCompanyInfoEntriesByBrand,
   findSupplierBrandRequest,
@@ -903,5 +904,36 @@ describe('mergeCompanyInfoEntriesById', () => {
       [{ id: 'a', brands: 'X', role: 'retailer' }]
     );
     expect(merged[0].role).toBe('retailer');
+  });
+});
+
+describe('buildSupplierChainSavePayload', () => {
+  it('preserves profile top-level role/brands when saving a single entry', () => {
+    const profile = {
+      supplierRole: 'dealer',
+      brands: 'Milton',
+      gstin: 'GST-1',
+      companyName: 'Acme',
+      companyInfoEntries: [
+        { id: 'e1', role: 'dealer', brands: 'Milton', minimumOrderValue: 2500 },
+        { id: 'e2', role: 'retailer', brands: 'HP', minimumOrderValue: 1000 }
+      ]
+    };
+    const entries = [
+      { id: 'e1', role: 'dealer', brands: 'Milton', minimumOrderValue: 2500 },
+      { id: 'e2', role: 'retailer', brands: 'HP', minimumOrderValue: 4500 }
+    ];
+
+    const payload = buildSupplierChainSavePayload(profile, entries, {
+      forApi: true,
+      saveSupplyChainEntryId: 'e2'
+    });
+
+    expect(payload.supplierRole).toBe('dealer');
+    expect(payload.brands).toBe('Milton');
+    expect(payload.gstin).toBe('GST-1');
+    expect(payload.companyName).toBe('Acme');
+    expect(payload.minimumOrderValue).toBe(4500);
+    expect(payload.companyInfoEntries.find((entry) => entry.id === 'e2')?.minimumOrderValue).toBe(4500);
   });
 });

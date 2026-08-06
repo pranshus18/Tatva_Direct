@@ -63,9 +63,23 @@ function normalizeLimit(raw) {
   return Math.max(1, Math.min(parsed, 200));
 }
 
+function isPmAuthError(error) {
+  const code = String(error?.code || '').trim();
+  return (
+    code === 'PM_AUTH_REQUIRED' ||
+    code === 'INVALID_TOKEN' ||
+    code === 'TOKEN_EXPIRED' ||
+    error?.status === 401
+  );
+}
+
 function pmAuthErrorResponse(res, error) {
-  if (error?.code === 'PM_AUTH_REQUIRED') {
-    return res.status(401).json({ status: 'error', code: error.code, message: error.message });
+  if (isPmAuthError(error)) {
+    return res.status(401).json({
+      status: 'error',
+      code: 'PM_AUTH_REQUIRED',
+      message: error.message || 'PM session expired. Sign in again with phone OTP.'
+    });
   }
   return null;
 }
@@ -162,7 +176,7 @@ walletRouter.get('/header-balance', authenticateToken, async (req, res) => {
           vaultPath: vaultPagePath(userType)
         });
       } catch (e) {
-        if (e?.code === 'PM_AUTH_REQUIRED') {
+        if (isPmAuthError(e)) {
           return res.json({
             status: 'success',
             visible: true,
@@ -170,7 +184,7 @@ walletRouter.get('/header-balance', authenticateToken, async (req, res) => {
             linked: false,
             balance: null,
             vaultPath: vaultPagePath(userType),
-            message: e.message
+            message: e.message || 'PM session expired. Sign in again with phone OTP.'
           });
         }
         throw e;
