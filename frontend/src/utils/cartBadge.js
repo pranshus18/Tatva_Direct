@@ -36,21 +36,45 @@ export function countServiceProviderCartDraft(draft) {
   }, 0);
 }
 
+export function hasUpstreamProjectCartLines(project) {
+  if (!project || typeof project !== 'object') return false;
+
+  const selectedMine =
+    project.selectedMine && typeof project.selectedMine === 'object' ? project.selectedMine : {};
+  if (Object.values(selectedMine).some((qty) => Number(qty) > 0)) return true;
+
+  const items = Array.isArray(project.items) ? project.items : [];
+  return items.some((item) => {
+    const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+    const qty = Number(item?.quantity);
+    return mineId && Number.isFinite(qty) && qty > 0;
+  });
+}
+
+export function countSupplierUpstreamCartLines(project) {
+  if (!hasUpstreamProjectCartLines(project)) return 0;
+
+  const items = Array.isArray(project?.items) ? project.items : [];
+  if (items.length > 0) {
+    return items.filter((item) => {
+      const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+      const qty = Number(item?.quantity);
+      return mineId && Number.isFinite(qty) && qty > 0;
+    }).length;
+  }
+
+  const selectedMine =
+    project?.selectedMine && typeof project.selectedMine === 'object' ? project.selectedMine : {};
+  return Object.values(selectedMine).filter((qty) => Number(qty) > 0).length;
+}
+
 export function countSupplierUpstreamCartDraft(draft) {
   if (!draft || typeof draft !== 'object') return 0;
 
-  const countSelectedMine = (selectedMine) => {
-    const map = selectedMine && typeof selectedMine === 'object' ? selectedMine : {};
-    return Object.values(map).filter((qty) => Number(qty) > 0).length;
-  };
-
   const projects = Array.isArray(draft.projects) ? draft.projects : [];
   if (projects.length > 0) {
-    return projects.reduce(
-      (sum, project) => sum + countSelectedMine(project?.selectedMine),
-      0
-    );
+    return projects.reduce((sum, project) => sum + countSupplierUpstreamCartLines(project), 0);
   }
 
-  return countSelectedMine(draft.selectedMine);
+  return countSupplierUpstreamCartLines({ selectedMine: draft.selectedMine, items: draft.items });
 }

@@ -691,11 +691,16 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
       updateData.stock = parseInt(updateData.stock) || 0;
     }
     
-    // Remove fields that shouldn't be updated directly
+    // Remove fields that shouldn't be updated directly on products
     delete updateData.id;
     delete updateData._id;
     delete updateData.supplier_id;
     delete updateData.supplier;
+    delete updateData.supplier_product_id;
+    delete updateData.supplierProductId;
+    delete updateData.catalogProductId;
+    delete updateData.supplierDescription;
+    delete updateData.publishedDescription;
     delete updateData.created_at;
     delete updateData.status; // Status can only be changed via approve/reject endpoints
     delete updateData.approved_by;

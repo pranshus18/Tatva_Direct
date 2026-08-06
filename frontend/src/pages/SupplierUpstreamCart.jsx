@@ -18,6 +18,7 @@ import {
   normalizeSupplierProductsFromApi,
   normalizeSupplierProductKey
 } from '../utils/supplierProductRow';
+import { hasUpstreamProjectCartLines } from '../utils/cartBadge';
 import {
   formatShippingAddressLabel,
   formatShippingAddressPreview,
@@ -167,11 +168,22 @@ const SupplierUpstreamCart = () => {
               lineMeta: null
             }));
         const rows = lineSources
-          .map(({ mineId, qty, lineMeta }) => {
+          .map(({ mineId, quantity: lineQuantity, lineMeta }) => {
             const key = normalizeSupplierProductKey(mineId);
-            const product = productBySupplierProductId[key];
-            const parsed = parseSupplierStockQuantity(qty);
+            const parsed = parseSupplierStockQuantity(lineQuantity);
             if (!key || parsed == null || parsed <= 0) return null;
+            const product =
+              productBySupplierProductId[key] ||
+              (lineMeta
+                ? {
+                    supplier_product_id: key,
+                    name: String(lineMeta.name || lineMeta.variantLabel || 'Product').trim(),
+                    variantKey: lineMeta.variantKey,
+                    variantAsin: lineMeta.variantAsin,
+                    min_order_quantity: 1
+                  }
+                : null);
+            if (!product) return null;
             const minQty = Math.max(1, product?.min_order_quantity ?? 1);
             const quantity = Math.max(minQty, parsed);
             const variantLabel = String(
@@ -189,7 +201,7 @@ const SupplierUpstreamCart = () => {
               variantLabel
             };
           })
-          .filter((row) => row && row.product);
+          .filter(Boolean);
         return { project, rows };
       })
         .filter(({ rows }) => rows.length > 0),
@@ -220,11 +232,7 @@ const SupplierUpstreamCart = () => {
       }
       const draft = cartData?.cart?.draft && typeof cartData.cart.draft === 'object' ? cartData.cart.draft : {};
       setProjects(
-        (Array.isArray(draft.projects) ? draft.projects : []).filter((project) => {
-          const selectedMine =
-            project?.selectedMine && typeof project.selectedMine === 'object' ? project.selectedMine : {};
-          return Object.values(selectedMine).some((qty) => Number(qty) > 0);
-        })
+        (Array.isArray(draft.projects) ? draft.projects : []).filter(hasUpstreamProjectCartLines)
       );
       setProducts(
         normalizeSupplierProductsFromApi(

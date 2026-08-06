@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {
   countServiceProviderCartDraft,
   countSupplierUpstreamCartDraft,
-  getServiceProviderCartGroups
+  getServiceProviderCartGroups,
+  hasUpstreamProjectCartLines
 } from '../utils/cartBadge.js';
 
 test('countServiceProviderCartDraft counts cart lines not total quantity', () => {
@@ -55,5 +56,32 @@ test('countSupplierUpstreamCartDraft returns 0 when nothing is selected', () => 
       projects: [{ selectedMine: { a: 0, b: 0 } }]
     }),
     0
+  );
+});
+
+test('countSupplierUpstreamCartDraft counts structured cart items', () => {
+  assert.equal(
+    countSupplierUpstreamCartDraft({
+      projects: [
+        {
+          selectedMine: {},
+          items: [
+            { mineSupplierProductId: 'mine-a', quantity: 2 },
+            { mineSupplierProductId: 'mine-b', quantity: 0 }
+          ]
+        }
+      ]
+    }),
+    1
+  );
+});
+
+test('hasUpstreamProjectCartLines accepts items without selectedMine', () => {
+  assert.equal(
+    hasUpstreamProjectCartLines({
+      selectedMine: {},
+      items: [{ mineSupplierProductId: 'mine-a', quantity: 1 }]
+    }),
+    true
   );
 });
