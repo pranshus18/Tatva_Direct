@@ -25,9 +25,13 @@ export { insertNotification } from '../../repositories/notificationsRepository.j
 export {
   assertGstStateInputs,
   assertSupplierProductTaxRates,
+  buildOrderGstSummary,
   computeLineGst,
   extractUserState,
+  formatGstTaxTypeLabel,
   isSameIndianState,
+  lineGstFromOrderItemSnapshot,
+  resolveGstPlaceOfSupplyState,
   sumGstLines
 } from '../../services/gstService.js';
 export {

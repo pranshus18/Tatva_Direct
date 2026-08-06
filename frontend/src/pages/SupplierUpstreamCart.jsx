@@ -154,18 +154,39 @@ const SupplierUpstreamCart = () => {
         const selectedMine = project?.selectedMine && typeof project.selectedMine === 'object'
           ? project.selectedMine
           : {};
-        const rows = Object.entries(selectedMine)
-          .map(([mineId, qty]) => {
+        const structuredItems = Array.isArray(project?.items) ? project.items : [];
+        const lineSources = structuredItems.length
+          ? structuredItems.map((item) => ({
+              mineId: normalizeSupplierProductKey(item?.mineSupplierProductId || item?.mineId),
+              quantity: item?.quantity,
+              lineMeta: item
+            }))
+          : Object.entries(selectedMine).map(([mineId, qty]) => ({
+              mineId: normalizeSupplierProductKey(mineId),
+              quantity: qty,
+              lineMeta: null
+            }));
+        const rows = lineSources
+          .map(({ mineId, qty, lineMeta }) => {
             const key = normalizeSupplierProductKey(mineId);
             const product = productBySupplierProductId[key];
             const parsed = parseSupplierStockQuantity(qty);
-            if (parsed == null || parsed <= 0) return null;
+            if (!key || parsed == null || parsed <= 0) return null;
             const minQty = Math.max(1, product?.min_order_quantity ?? 1);
             const quantity = Math.max(minQty, parsed);
+            const variantLabel = String(
+              lineMeta?.variantLabel ||
+                lineMeta?.variantAsin ||
+                product?.variantAsin ||
+                lineMeta?.variantKey ||
+                product?.variantKey ||
+                ''
+            ).trim();
             return {
               mineId: key,
               quantity,
-              product
+              product,
+              variantLabel
             };
           })
           .filter((row) => row && row.product);
@@ -289,7 +310,14 @@ const SupplierUpstreamCart = () => {
       selectedMine: {
         ...(project.selectedMine || {}),
         [key]: quantity
-      }
+      },
+      items: Array.isArray(project.items)
+        ? project.items.map((item) =>
+            normalizeSupplierProductKey(item?.mineSupplierProductId || item?.mineId) === key
+              ? { ...item, quantity }
+              : item
+          )
+        : project.items
     };
     const ok = await persistProject(nextProject, { silent: true });
     if (ok) {
@@ -308,7 +336,14 @@ const SupplierUpstreamCart = () => {
     const nextProject = {
       ...project,
       selectedMine: nextSelectedMine,
-      selectedUpstreamOffer: nextSelectedUpstreamOffer
+      selectedUpstreamOffer: nextSelectedUpstreamOffer,
+      items: Array.isArray(project.items)
+        ? project.items.filter(
+            (item) =>
+              normalizeSupplierProductKey(item?.mineSupplierProductId || item?.mineId) !==
+              normalizeSupplierProductKey(mineId)
+          )
+        : project.items
     };
     const ok = await persistProject(nextProject, { silent: true });
     if (!ok) return;
@@ -976,6 +1011,11 @@ const SupplierUpstreamCart = () => {
                               <tr key={`${projectId}-${mineId}`}>
                                 <td className="supplier-cart-product-cell">
                                   <div className="supplier-cart-product-name">{p?.name || 'Product'}</div>
+                                  {row.variantLabel ? (
+                                    <div className="supplier-cart-variant-label">
+                                      Variant: {row.variantLabel}
+                                    </div>
+                                  ) : null}
                                   <UpstreamProductDisplay
                                     product={p}
                                     compact

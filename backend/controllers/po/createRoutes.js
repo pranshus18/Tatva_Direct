@@ -24,7 +24,9 @@ import {
   recordInventoryMovement,
   resolveB2bPaymentFromBody,
   resolveCheckoutShippingAddress,
-  sumGstLines,
+  buildOrderGstSummary,
+  resolveCheckoutBillingAddress,
+  resolveGstPlaceOfSupplyState,
   supplierMatchesBrandTerminalRole,
   toLifecycleStateFromStatus
 } from './poImports.js';
@@ -44,6 +46,9 @@ import {
   consumeCheckoutReservationsForOrder,
   validateCheckoutReservationsForLines
 } from '../../services/checkoutInventoryReservationService.js';
+import {
+  sumPoGroupsProductsInclGst
+} from '../../utils/orderChargeBreakdown.js';
 
 export function registerPoCreateRoutes(ctx) {
   const {
@@ -169,9 +174,21 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
       }) ||
       groupShippingFallback ||
       profileAddress;
-    const billingAddress = shippingAddress;
-    const deliveryDestination = 'shipping';
-    const selectedDeliveryAddress = shippingAddress;
+    const deliveryDestination = payload.deliveryDestination === 'billing' ? 'billing' : 'shipping';
+    const billingAddress = resolveCheckoutBillingAddress({
+      serviceProvider,
+      requestedBillingAddress: payload.billingAddress,
+      shippingAddress,
+      hasGstin
+    });
+    const placeOfSupplyState = resolveGstPlaceOfSupplyState({
+      hasGstin,
+      deliveryDestination,
+      billingAddress,
+      shippingAddress
+    });
+    const selectedDeliveryAddress =
+      deliveryDestination === 'billing' && hasGstin ? billingAddress : shippingAddress;
 
     if (!isAddressComplete(shippingAddress)) {
       return res.status(400).json({
@@ -209,9 +226,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
     let walletRemainingBalance = null;
     if (isVaultCheckout) {
-      const productsTotal = toMoney(
-        (Array.isArray(poGroups) ? poGroups : []).reduce((sum, group) => sum + (Number(group?.total) || 0), 0)
-      );
+      const productsTotal = toMoney(sumPoGroupsProductsInclGst(poGroups));
       const quotedTransportTotal = toMoney(payload?.quotedTransportTotal || 0);
       const groupedTotal = toMoney(productsTotal + quotedTransportTotal);
 
@@ -251,11 +266,12 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
               'en-IN'
             )}, required ₹${groupedTotal.toLocaleString(
               'en-IN'
-            )} (products + transport). Please credit vault before placing this order.`,
+            )} (products incl. GST + transport). Please credit vault before placing this order.`,
             vault: {
               balance: available,
               required: groupedTotal,
               productsTotal,
+              gstIncluded: true,
               transportTotal: quotedTransportTotal,
               shortage
             }
@@ -350,7 +366,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
       // Map items to order items format — line work runs in parallel per item for faster PO create.
       const supplierState = extractUserState(supplier);
-      const billingState = billingAddress?.state || shippingAddress?.state || '';
+      const billingState = placeOfSupplyState || billingAddress?.state || shippingAddress?.state || '';
       assertGstStateInputs({
         supplierState,
         billingState,
@@ -462,10 +478,14 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
               gst: {
                 supplierState,
                 billingState,
+                placeOfSupplyState: billingState,
                 intraStateTax,
                 taxType: lineGst.taxType,
                 taxableAmount: lineGst.taxableAmount,
                 taxAmount: lineGst.taxAmount,
+                igstAmount: lineGst.igstAmount,
+                cgstAmount: lineGst.cgstAmount,
+                sgstAmount: lineGst.sgstAmount,
                 totalAmount: lineGst.totalAmount,
                 igstRate: lineGst.igstRate,
                 cgstRate: lineGst.cgstRate,
@@ -480,7 +500,13 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
       const orderItems = lineBuilt.map((b) => b.orderItemRow);
       const lineTaxBreakdown = lineBuilt.map((b) => b.lineGst);
-      const gstSummary = sumGstLines(lineTaxBreakdown);
+      const gstSummary = buildOrderGstSummary({
+        lineTaxBreakdown,
+        supplierState,
+        billingState: billingAddress?.state || billingState,
+        placeOfSupplyState: billingState,
+        intraStateTax
+      });
       const totalAmount = gstSummary.totalAmount;
       const roundedOrderAmount = toMoney(totalAmount);
 
@@ -605,9 +631,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
               gstin: hasGstin ? profileGstin : null,
               gstTaxApplicableOnBillingAddressOnly: hasGstin,
               gstSummary: {
-                taxType: intraStateTax ? 'CGST_SGST' : 'IGST',
-                supplierState,
-                billingState,
+                taxType: gstSummary.taxType,
+                supplierState: gstSummary.supplierState,
+                billingState: gstSummary.billingState,
+                placeOfSupplyState: gstSummary.placeOfSupplyState,
+                intraStateTax: gstSummary.intraStateTax,
                 subtotalAmount: gstSummary.subtotalAmount,
                 taxAmount: gstSummary.taxAmount,
                 igstAmount: gstSummary.igstAmount,

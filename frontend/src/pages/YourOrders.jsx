@@ -37,6 +37,8 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import OrderDialogSection from '../components/sp/OrderDialogSection';
+import OrderChargeSummary from '../components/sp/OrderChargeSummary';
+import { resolveOrderChargeBreakdown } from '../utils/orderChargeBreakdown';
 import {
   Dialog,
   DialogContent,
@@ -270,7 +272,8 @@ const YourOrders = () => {
 
   const handlePayFromVault = async () => {
     if (!orderDetails?.id || processingPayment) return;
-    const orderAmount = Number(orderDetails?.totalAmount || 0);
+    const chargeBreakdown = resolveOrderChargeBreakdown(orderDetails);
+    const orderAmount = Number(chargeBreakdown.combinedTotal || 0);
     if (orderAmount > Number(vaultBalance || 0)) {
       const shortage = Math.max(0, orderAmount - Number(vaultBalance || 0));
       setPaymentNotice(
@@ -612,7 +615,8 @@ const YourOrders = () => {
   const payLaterDueAt = payLaterMeta?.settlementDueAt || null;
   const showVaultPayForOrder = orderPaymentPending;
   const nonVaultPending = orderPaymentPending && orderPm && !isVaultPaymentMethod(orderPm);
-  const orderAmount = Number(orderDetails?.totalAmount || 0);
+  const chargeBreakdown = resolveOrderChargeBreakdown(orderDetails || {});
+  const orderAmount = Number(chargeBreakdown.combinedTotal || 0);
   const vaultShortage = Math.max(0, orderAmount - Number(vaultBalance || 0));
   const hasEnoughVaultBalance = vaultShortage <= 0;
 
@@ -891,9 +895,9 @@ const YourOrders = () => {
                   <span className={spPaymentBadgeClass(orderDetails.paymentStatus)}>
                     {formatPaymentStatusLabel(orderDetails.paymentStatus)}
                   </span>
-                  {orderDetails.totalAmount != null ? (
+                  {orderDetails ? (
                     <span className="ml-auto text-lg font-bold text-[#0f172a]">
-                      ₹{Number(orderDetails.totalAmount).toLocaleString('en-IN')}
+                      ₹{Number(resolveOrderChargeBreakdown(orderDetails).combinedTotal).toLocaleString('en-IN')}
                     </span>
                   ) : null}
                 </div>
@@ -968,10 +972,8 @@ const YourOrders = () => {
                     )}
                     <div className="mb-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
                       <div className="font-medium text-slate-800">Vault payment</div>
-                      <div className="mt-1 text-slate-700">
-                        Order amount: <strong>₹{orderAmount.toLocaleString('en-IN')}</strong>
-                      </div>
-                      <div className="text-slate-700">
+                      <OrderChargeSummary order={orderDetails} compact />
+                      <div className="mt-2 text-slate-700">
                         Vault balance:{' '}
                         <strong>
                           {loadingVaultBalance
@@ -1351,20 +1353,25 @@ const YourOrders = () => {
                   ) : (
                     <p className="text-sm text-muted-foreground">No return requests yet.</p>
                   )}
-                  {canRequestReturnForOrder(orderDetails) ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <button type="button" className="btn-secondary" onClick={handleCreateReturnRequest}>
-                        Request return
-                      </button>
-                      <Button variant="outline" size="sm" onClick={() => navigate('/returns')}>
-                        View all returns
-                      </Button>
-                    </div>
-                  ) : (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!canRequestReturnForOrder(orderDetails)}
+                      title={getReturnRequestBlockReason(orderDetails) || undefined}
+                      onClick={handleCreateReturnRequest}
+                    >
+                      Request return
+                    </button>
+                    <Button variant="outline" size="sm" onClick={() => navigate('/returns')}>
+                      View all returns
+                    </Button>
+                  </div>
+                  {!canRequestReturnForOrder(orderDetails) && getReturnRequestBlockReason(orderDetails) ? (
                     <p className="mt-2 text-sm text-muted-foreground">
                       {getReturnRequestBlockReason(orderDetails)}
                     </p>
-                  )}
+                  ) : null}
                 </OrderDialogSection>
 
                 {canRateOrder ? (

@@ -4,6 +4,8 @@ import {
   appendDiscoveryItemAsNewProject,
   consolidateDuplicateProductLines,
   mergeOrAppendCartGroupItem,
+  mergeOrAppendUpstreamCartItem,
+  mergeUpstreamSelectedMineMaps,
   mergeUpstreamSelectedMineQuantity,
   normalizePoCartDraft,
   poCartDraftNeedsPersistAfterPrune,
@@ -67,17 +69,45 @@ test('prunePoCartGroups removes zero-qty lines and empty projects', () => {
   assert.equal(groups[0].items[0].quantity, 2);
 });
 
-test('mergeOrAppendCartGroupItem increases quantity when the same product is re-added to the same project', () => {
-  const existingItems = [{ id: 'a', productId: 'p1', name: 'Mac Air M1', quantity: 1 }];
+test('mergeOrAppendCartGroupItem increases quantity when the same product and variant is re-added to the same project', () => {
+  const existingItems = [{ id: 'a', productId: 'p1', variantKey: 'vk-red', name: 'Mac Air M1', quantity: 1 }];
   const nextItems = mergeOrAppendCartGroupItem(existingItems, {
     id: 'pd-item-new',
     productId: 'p1',
+    variantKey: 'vk-red',
     name: 'Mac Air M1',
     quantity: 1
   });
-  assert.equal(nextItems.length, 1, 'must not create a duplicate row for the same product');
+  assert.equal(nextItems.length, 1, 'must not create a duplicate row for the same product+variant');
   assert.equal(nextItems[0].id, 'a', 'the original line id is kept, only quantity changes');
   assert.equal(nextItems[0].quantity, 2);
+});
+
+test('mergeOrAppendCartGroupItem appends a separate row when the same product has a different variant', () => {
+  const existingItems = [{ id: 'a', productId: 'p1', variantKey: 'vk-red', name: 'Mac Air M1', quantity: 1 }];
+  const nextItems = mergeOrAppendCartGroupItem(existingItems, {
+    id: 'pd-item-new',
+    productId: 'p1',
+    variantKey: 'vk-blue',
+    name: 'Mac Air M1',
+    quantity: 1
+  });
+  assert.equal(nextItems.length, 2, 'different variants must stay as separate cart lines');
+  assert.equal(nextItems[0].quantity, 1);
+  assert.equal(nextItems[1].variantKey, 'vk-blue');
+  assert.equal(nextItems[1].quantity, 1);
+});
+
+test('mergeOrAppendCartGroupItem treats missing variantKey as the default variant bucket', () => {
+  const existingItems = [{ id: 'a', productId: 'p1', name: 'Cement', quantity: 2 }];
+  const nextItems = mergeOrAppendCartGroupItem(existingItems, {
+    id: 'pd-item-new',
+    productId: 'p1',
+    name: 'Cement',
+    quantity: 3
+  });
+  assert.equal(nextItems.length, 1);
+  assert.equal(nextItems[0].quantity, 5);
 });
 
 test('mergeOrAppendCartGroupItem appends a new row for a different product in the same project', () => {
@@ -100,6 +130,57 @@ test('mergeUpstreamSelectedMineQuantity increases quantity for the same supplier
 test('mergeUpstreamSelectedMineQuantity starts fresh for a key not yet in the project', () => {
   const merged = mergeUpstreamSelectedMineQuantity({ 'sp-1': 2 }, 'sp-2', 3);
   assert.equal(merged, 3);
+});
+
+test('mergeOrAppendUpstreamCartItem keeps separate lines for the same product with different variants', () => {
+  const existingItems = [
+    {
+      id: 'line-red',
+      mineSupplierProductId: 'mine-red',
+      productId: 'p1',
+      variantKey: 'vk-red',
+      quantity: 1
+    }
+  ];
+  const nextItems = mergeOrAppendUpstreamCartItem(existingItems, {
+    id: 'line-blue',
+    mineSupplierProductId: 'mine-blue',
+    productId: 'p1',
+    variantKey: 'vk-blue',
+    quantity: 2
+  });
+  assert.equal(nextItems.length, 2);
+  assert.equal(nextItems[0].quantity, 1);
+  assert.equal(nextItems[1].quantity, 2);
+});
+
+test('mergeOrAppendUpstreamCartItem increases quantity for the same product and variant', () => {
+  const existingItems = [
+    {
+      id: 'line-red',
+      mineSupplierProductId: 'mine-red',
+      productId: 'p1',
+      variantKey: 'vk-red',
+      quantity: 1
+    }
+  ];
+  const nextItems = mergeOrAppendUpstreamCartItem(existingItems, {
+    id: 'line-red-again',
+    mineSupplierProductId: 'mine-red',
+    productId: 'p1',
+    variantKey: 'vk-red',
+    quantity: 3
+  });
+  assert.equal(nextItems.length, 1);
+  assert.equal(nextItems[0].quantity, 4);
+});
+
+test('mergeUpstreamSelectedMineMaps adds new variant lines without removing existing ones', () => {
+  const merged = mergeUpstreamSelectedMineMaps(
+    { 'mine-red': 2 },
+    { 'mine-blue': 3 }
+  );
+  assert.deepEqual(merged, { 'mine-red': 2, 'mine-blue': 3 });
 });
 
 test('normalizePoCartDraft keeps separate lines for the same productId', () => {

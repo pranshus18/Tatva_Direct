@@ -234,6 +234,14 @@ const ProductDiscovery = () => {
       setError('Product is out of stock');
       return;
     }
+    const hasVariants = Boolean(product?.hasVariants) || Number(product?.variantCount || 0) > 1;
+    if (hasVariants) {
+      const returnPath = `${window.location.pathname}${window.location.search}`;
+      navigate(
+        `/product-discovery/${encodeURIComponent(pid)}?return=${encodeURIComponent(returnPath)}`
+      );
+      return;
+    }
     setPendingProduct(product);
     setProjectPickerOpen(true);
   };
@@ -436,7 +444,9 @@ const ProductDiscovery = () => {
                         ? 'No eligible supplier is currently listing this product'
                         : !inStock
                           ? 'Product is out of stock'
-                          : undefined
+                          : hasVariants
+                            ? 'Select a variant on the product page before adding to cart'
+                            : undefined
                     }
                   >
                     {cartAddedByProductId[pid] ? (
@@ -445,6 +455,8 @@ const ProductDiscovery = () => {
                       <>No suppliers</>
                     ) : !inStock ? (
                       <>Out of stock</>
+                    ) : hasVariants ? (
+                      <>Select variant</>
                     ) : (
                       <><ShoppingCart size={16} /> Add to Cart</>
                     )}

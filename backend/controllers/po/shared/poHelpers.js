@@ -6,6 +6,7 @@ import {
   isVaultPaymentMethod,
   toDbVaultPaymentMethod
 } from '../../../utils/vaultPaymentMethod.js';
+import { deriveGstTaxTypeFromTotals } from '../../../services/gstService.js';
 
 export const LEGACY_PO_CART_GROUP_PREFIX = 'legacy';
 export const ORDER_INSERT_MAX_RETRIES = 3;
@@ -183,6 +184,31 @@ export function resolveCheckoutShippingAddress({
   return null;
 }
 
+/** Billing / GST-registered address used to decide IGST vs CGST+SGST. */
+export function resolveCheckoutBillingAddress({
+  serviceProvider = null,
+  requestedBillingAddress = null,
+  shippingAddress = null,
+  hasGstin = false
+} = {}) {
+  const requested = normalizeAddress(requestedBillingAddress || {});
+  if (isAddressComplete(requested)) return requested;
+
+  const registered = normalizeAddress(serviceProvider?.address || {});
+  if (hasGstin && isAddressComplete(registered)) return registered;
+
+  const legacyList = serviceProvider?.profile?.billingAddresses;
+  if (hasGstin && Array.isArray(legacyList) && legacyList.length > 0) {
+    const fromLegacy = normalizeAddress(legacyList[0] || {});
+    if (isAddressComplete(fromLegacy)) return fromLegacy;
+  }
+
+  const shipping = normalizeAddress(shippingAddress || {});
+  if (isAddressComplete(shipping)) return shipping;
+
+  return registered;
+}
+
 export async function loadServiceProviderPoCartDraft(supabase, userId) {
   const { data: cart } = await supabase
     .from('po_carts')
@@ -213,6 +239,49 @@ export function consolidatePoTransportGroups(groups) {
     const existing = merged.get(mergeKey);
     existing.items.push(...(group.items || []));
     existing.total = Math.round((Number(existing.total || 0) + Number(group.total || 0)) * 100) / 100;
+    existing.subtotal = Math.round(
+      ((Number(existing.subtotal ?? existing.total) || 0) +
+        (Number(group.subtotal ?? group.total) || 0)) *
+        100
+    ) / 100;
+    existing.gstAmount = Math.round(
+      (Number(existing.gstAmount || 0) + Number(group.gstAmount || 0)) * 100
+    ) / 100;
+    existing.totalInclGst = Math.round(
+      (Number(existing.totalInclGst || 0) + Number(group.totalInclGst || 0)) * 100
+    ) / 100;
+    if (group.gstSummary || existing.gstSummary) {
+      const left = existing.gstSummary || {};
+      const right = group.gstSummary || {};
+      existing.gstSummary = {
+        taxType: deriveGstTaxTypeFromTotals({
+          igstAmount:
+            (Number(left.igstAmount) || 0) + (Number(right.igstAmount) || 0),
+          cgstAmount:
+            (Number(left.cgstAmount) || 0) + (Number(right.cgstAmount) || 0),
+          sgstAmount:
+            (Number(left.sgstAmount) || 0) + (Number(right.sgstAmount) || 0)
+        }),
+        supplierState: left.supplierState || right.supplierState || '',
+        billingState: left.billingState || right.billingState || '',
+        placeOfSupplyState: left.placeOfSupplyState || right.placeOfSupplyState || '',
+        intraStateTax:
+          left.intraStateTax != null ? left.intraStateTax : right.intraStateTax,
+        subtotalAmount:
+          Math.round(((Number(left.subtotalAmount) || 0) + (Number(right.subtotalAmount) || 0)) * 100) /
+          100,
+        taxAmount:
+          Math.round(((Number(left.taxAmount) || 0) + (Number(right.taxAmount) || 0)) * 100) / 100,
+        igstAmount:
+          Math.round(((Number(left.igstAmount) || 0) + (Number(right.igstAmount) || 0)) * 100) / 100,
+        cgstAmount:
+          Math.round(((Number(left.cgstAmount) || 0) + (Number(right.cgstAmount) || 0)) * 100) / 100,
+        sgstAmount:
+          Math.round(((Number(left.sgstAmount) || 0) + (Number(right.sgstAmount) || 0)) * 100) / 100,
+        totalAmount:
+          Math.round(((Number(left.totalAmount) || 0) + (Number(right.totalAmount) || 0)) * 100) / 100
+      };
+    }
     if (!existing.shippingAddress && shippingAddress) {
       existing.shippingAddress = shippingAddress;
       existing.shippingAddressLabel =
@@ -305,19 +374,32 @@ export function consolidateDuplicateProductLines(boqGroups) {
   return out.filter((g) => (g.items || []).length > 0);
 }
 
+export function normalizeCartVariantKey(item) {
+  return String(item?.variantKey || item?.variant_key || '').trim();
+}
+
+function cartLineMatchesProductVariant(existingItem, productId, variantKey) {
+  if (String(existingItem?.productId || '').trim() !== productId) return false;
+  return normalizeCartVariantKey(existingItem) === variantKey;
+}
+
 /**
- * Add an item to a cart project's line list: if a line for the SAME product already exists in
- * this project, increase its quantity instead of appending a duplicate row. A different project
+ * Add an item to a cart project's line list: if a line for the SAME product and SAME variant
+ * already exists in this project, increase its quantity instead of appending a duplicate row.
+ * Same product with a different variant is always a separate line. A different project
  * (a different `items` array entirely) always keeps its own separate line — this only dedupes
  * within one project's item list.
  */
 export function mergeOrAppendCartGroupItem(existingItems, newItem) {
   const items = Array.isArray(existingItems) ? existingItems : [];
   const productId = String(newItem?.productId || '').trim();
+  const variantKey = normalizeCartVariantKey(newItem);
   const addQty = Math.max(0, Math.floor(Number(newItem?.quantity) || 0));
   if (!productId) return [...items, newItem];
 
-  const existingIndex = items.findIndex((it) => String(it?.productId || '').trim() === productId);
+  const existingIndex = items.findIndex((it) =>
+    cartLineMatchesProductVariant(it, productId, variantKey)
+  );
   if (existingIndex < 0) return [...items, newItem];
 
   return items.map((it, idx) => {
@@ -338,6 +420,108 @@ export function mergeUpstreamSelectedMineQuantity(existingSelectedMine, key, add
   const existingQuantity = Number(existingSelectedMine?.[key]) || 0;
   const delta = Math.max(0, Math.floor(Number(addQty) || 0));
   return Math.min(MAX_CART_ITEM_QUANTITY, existingQuantity + delta);
+}
+
+export function upstreamCartLineIdentity(item = {}) {
+  return {
+    mineSupplierProductId: String(
+      item?.mineSupplierProductId || item?.mineId || item?.id || ''
+    ).trim(),
+    productId: String(item?.productId || '').trim(),
+    variantKey: normalizeCartVariantKey(item)
+  };
+}
+
+function upstreamCartLinesMatch(existingItem, newItem) {
+  const left = upstreamCartLineIdentity(existingItem);
+  const right = upstreamCartLineIdentity(newItem);
+  if (left.mineSupplierProductId && right.mineSupplierProductId) {
+    return left.mineSupplierProductId === right.mineSupplierProductId;
+  }
+  if (left.productId && right.productId) {
+    return left.productId === right.productId && left.variantKey === right.variantKey;
+  }
+  return false;
+}
+
+/** Build `{ [mineSupplierProductId]: quantity }` from structured upstream cart lines. */
+export function buildUpstreamSelectedMineFromItems(items) {
+  const selectedMine = {};
+  for (const item of Array.isArray(items) ? items : []) {
+    const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+    const qty = Math.max(0, Math.floor(Number(item?.quantity) || 0));
+    if (!mineId || qty <= 0) continue;
+    selectedMine[mineId] = Math.min(
+      MAX_CART_ITEM_QUANTITY,
+      (Number(selectedMine[mineId]) || 0) + qty
+    );
+  }
+  return selectedMine;
+}
+
+/**
+ * Upstream cart lines: merge quantity only for the same offer id or same product+variant.
+ * Same catalog product with a different variant always stays a separate line.
+ */
+export function mergeOrAppendUpstreamCartItem(existingItems, newItem) {
+  const items = Array.isArray(existingItems) ? [...existingItems] : [];
+  const mineId = String(newItem?.mineSupplierProductId || newItem?.mineId || '').trim();
+  const addQty = Math.max(0, Math.floor(Number(newItem?.quantity) || 0));
+  if (!mineId && !String(newItem?.productId || '').trim()) {
+    return [...items, newItem];
+  }
+
+  const existingIndex = items.findIndex((it) => upstreamCartLinesMatch(it, newItem));
+  if (existingIndex < 0) return [...items, newItem];
+
+  return items.map((it, idx) => {
+    if (idx !== existingIndex) return it;
+    return {
+      ...it,
+      ...newItem,
+      mineSupplierProductId:
+        String(it?.mineSupplierProductId || it?.mineId || mineId || '').trim() || mineId,
+      quantity: Math.min(
+        MAX_CART_ITEM_QUANTITY,
+        (Number(it.quantity) || 0) + addQty
+      )
+    };
+  });
+}
+
+/** Legacy drafts only stored selectedMine — synthesize structured lines for variant-aware merges. */
+export function buildUpstreamItemsFromSelectedMine(selectedMine = {}, metaByMineId = {}) {
+  const out = [];
+  for (const [mineId, qtyRaw] of Object.entries(selectedMine || {})) {
+    const mineSupplierProductId = String(mineId || '').trim();
+    const quantity = Math.max(0, Math.floor(Number(qtyRaw) || 0));
+    if (!mineSupplierProductId || quantity <= 0) continue;
+    const meta =
+      metaByMineId && typeof metaByMineId === 'object' ? metaByMineId[mineSupplierProductId] : null;
+    out.push({
+      id: `us-item-${mineSupplierProductId}`,
+      mineSupplierProductId,
+      productId: String(meta?.productId || '').trim() || undefined,
+      variantKey: normalizeCartVariantKey(meta || {}),
+      variantAsin: String(meta?.variantAsin || meta?.variant_asin || '').trim() || undefined,
+      variantLabel: String(meta?.variantLabel || meta?.name || '').trim() || undefined,
+      name: String(meta?.name || '').trim() || undefined,
+      quantity
+    });
+  }
+  return out;
+}
+
+export function mergeUpstreamSelectedMineMaps(existingSelectedMine = {}, incomingSelectedMine = {}) {
+  const merged = { ...(existingSelectedMine || {}) };
+  for (const [mineId, qtyRaw] of Object.entries(incomingSelectedMine || {})) {
+    const key = String(mineId || '').trim();
+    if (!key) continue;
+    const qty = Math.max(0, Math.floor(Number(qtyRaw) || 0));
+    if (qty <= 0) continue;
+    merged[key] = mergeUpstreamSelectedMineQuantity(merged, key, qty);
+  }
+  return merged;
 }
 
 export function isDiscoveryBoqGroup(group) {

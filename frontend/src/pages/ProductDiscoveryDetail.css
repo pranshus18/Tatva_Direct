@@ -134,6 +134,11 @@
   color: #334155;
 }
 
+.pdd-option-group__selected {
+  font-weight: 600;
+  color: #312e81;
+}
+
 .pdd-thumbs {
   display: flex;
   flex-wrap: wrap;

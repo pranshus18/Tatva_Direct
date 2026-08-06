@@ -28,6 +28,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
+import SupplierTsinLine from '../components/SupplierTsinLine';
 import { cn } from '@/lib/utils';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import {
@@ -1298,13 +1299,28 @@ const Cart = ({ onLoadCart }) => {
                         const name = String(
                           item?.normalizedName || item?.rawName || item?.name || 'Item'
                         );
+                        const variantLabel = String(item?.variantLabel || '').trim();
+                        const variantAsin = String(item?.variantAsin || '').trim();
+                        const variantKey = String(item?.variantKey || item?.variant_key || '').trim();
+                        const variantHint =
+                          variantLabel ||
+                          variantAsin ||
+                          (variantKey ? `Variant ${variantKey.slice(0, 8)}…` : '');
                         return (
                           <li
-                            key={itemId || `${groupIndex}-${name}`}
+                            key={itemId || `${groupIndex}-${name}-${variantKey || 'default'}`}
                             className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between"
                           >
                             <div className="min-w-0 flex-1">
                               <p className="font-medium text-foreground">{name}</p>
+                              {variantHint ? (
+                                <p className="mt-0.5 text-sm text-muted-foreground">
+                                  Variant: {variantHint}
+                                </p>
+                              ) : null}
+                              {variantAsin ? (
+                                <SupplierTsinLine variantAsin={variantAsin} />
+                              ) : null}
                               <p className="mt-0.5 text-sm text-muted-foreground">
                                 Unit: {String(item?.unit || 'nos')}
                               </p>

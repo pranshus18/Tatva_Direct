@@ -28,6 +28,7 @@ import {
 } from '../utils/specifications';
 import {
   buildOptionSelectionsForVariant,
+  pickPrimaryVariantOption,
   resolveActiveDiscoveryVariant,
   resolveDiscoveryVariantLabel,
   resolveVariantDisplaySpecifications,
@@ -302,7 +303,11 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     [detail?.variants]
   );
 
-  const variantOptions = Array.isArray(detail?.variantOptions) ? detail.variantOptions : [];
+  const allVariantOptions = Array.isArray(detail?.variantOptions) ? detail.variantOptions : [];
+  const selectorOptions = useMemo(
+    () => pickPrimaryVariantOption(allVariantOptions),
+    [allVariantOptions]
+  );
 
   const selectedVariant = useMemo(
     () =>
@@ -317,7 +322,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
 
   // Hydrate option chips from URL / default / explicit variant so first paint matches the active listing.
   useEffect(() => {
-    if (!variants.length || !variantOptions.length) return;
+    if (!variants.length || !selectorOptions.length) return;
     if (Object.keys(optionSelections || {}).length > 0) return;
     const source =
       selectedVariant ||
@@ -328,7 +333,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         urlVariantToken: searchParams.get('variant')
       });
     if (!source) return;
-    const next = buildOptionSelectionsForVariant(source, variantOptions);
+    const next = buildOptionSelectionsForVariant(source, selectorOptions);
     if (Object.keys(next).length === 0) return;
     setOptionSelections(next);
     if (!selectedVariantKey) {
@@ -336,7 +341,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     }
   }, [
     variants,
-    variantOptions,
+    selectorOptions,
     optionSelections,
     selectedVariant,
     selectedVariantKey,
@@ -452,8 +457,8 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
 
   const handleVariantChipSelect = (variant) => {
     setSelectedVariantKey(variantSelectionKey(variant));
-    if (variantOptions.length > 0) {
-      setOptionSelections(buildOptionSelectionsForVariant(variant, variantOptions));
+    if (selectorOptions.length > 0) {
+      setOptionSelections(buildOptionSelectionsForVariant(variant, selectorOptions));
     } else {
       setOptionSelections({});
     }
@@ -668,12 +673,12 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                           type="button"
                           className={`pdd-thumb ${active ? 'pdd-thumb--active' : ''}`}
                           onClick={() => handleVariantChipSelect(variant)}
-                          title={resolveDiscoveryVariantLabel(variant, variantOptions)}
+                          title={resolveDiscoveryVariantLabel(variant, allVariantOptions)}
                         >
                           {thumb ? (
-                            <img src={thumb} alt={resolveDiscoveryVariantLabel(variant, variantOptions)} />
+                            <img src={thumb} alt={resolveDiscoveryVariantLabel(variant, allVariantOptions)} />
                           ) : (
-                            <span className="pdd-thumb__placeholder">{resolveDiscoveryVariantLabel(variant, variantOptions).slice(0, 2)}</span>
+                            <span className="pdd-thumb__placeholder">{resolveDiscoveryVariantLabel(variant, allVariantOptions).slice(0, 2)}</span>
                           )}
                         </button>
                       );
@@ -700,32 +705,43 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
               <RatingStars rating={activeListing?.average_rating} reviews={activeListing?.total_reviews} />
               <SupplierTsinLine asin={activeListing?.asin} variantAsin={activeListing?.variantAsin} />
 
-              {variantOptions.length > 0 ? (
+              {selectorOptions.length > 0 ? (
                 <div className="pdd-options">
-                  {variantOptions.map((option) => (
-                    <div key={option.key} className="pdd-option-group">
-                      <span className="pdd-option-group__label">{option.label}</span>
-                      <div className="pdd-option-group__values">
-                        {option.values.map((value) => {
-                          const active = optionSelections[option.key] === value;
-                          return (
-                            <button
-                              key={`${option.key}-${value}`}
-                              type="button"
-                              className={`pdd-option-chip ${active ? 'pdd-option-chip--active' : ''}`}
-                              onClick={() => handleOptionSelect(option.key, value)}
-                            >
-                              {value}
-                            </button>
-                          );
-                        })}
+                  {selectorOptions.map((option) => {
+                    const selectedValue = optionSelections[option.key];
+                    return (
+                      <div key={option.key} className="pdd-option-group">
+                        <span className="pdd-option-group__label">
+                          {option.label}
+                          {selectedValue ? (
+                            <>
+                              {': '}
+                              <strong className="pdd-option-group__selected">{selectedValue}</strong>
+                            </>
+                          ) : null}
+                        </span>
+                        <div className="pdd-option-group__values">
+                          {option.values.map((value) => {
+                            const active = selectedValue === value;
+                            return (
+                              <button
+                                key={`${option.key}-${value}`}
+                                type="button"
+                                className={`pdd-option-chip ${active ? 'pdd-option-chip--active' : ''}`}
+                                onClick={() => handleOptionSelect(option.key, value)}
+                              >
+                                {value}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               ) : null}
 
-              {detail.hasVariants && variantOptions.length === 0 ? (
+              {detail.hasVariants && allVariantOptions.length === 0 ? (
                 <div className="pdd-options">
                   <span className="pdd-option-group__label">Select variant</span>
                   <div className="pdd-option-group__values">
@@ -738,7 +754,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                           className={`pdd-option-chip ${active ? 'pdd-option-chip--active' : ''}`}
                           onClick={() => handleVariantChipSelect(variant)}
                         >
-                          {resolveDiscoveryVariantLabel(variant, variantOptions)}
+                          {resolveDiscoveryVariantLabel(variant, allVariantOptions)}
                         </button>
                       );
                     })}
@@ -825,7 +841,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                                     className="pdd-variant-table__link"
                                     onClick={() => handleVariantChipSelect(variant)}
                                   >
-                                    {resolveDiscoveryVariantLabel(variant, variantOptions)}
+                                    {resolveDiscoveryVariantLabel(variant, allVariantOptions)}
                                   </button>
                                 </td>
                                 <td>{rowPrice || 'On request'}</td>
@@ -860,7 +876,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                   id: activeListing.productId,
                   productId: activeListing.productId,
                   name: displayProductName,
-                  variantKey: activeListing.variantKey || undefined
+                  stock: activeListing.stock,
+                  variantKey: activeListing.variantKey || undefined,
+                  variantAsin: activeListing.variantAsin || undefined,
+                  variantLabel: resolveDiscoveryVariantLabel(activeListing, allVariantOptions)
                 }
               : null
           }

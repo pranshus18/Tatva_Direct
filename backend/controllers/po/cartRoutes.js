@@ -302,6 +302,9 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
       });
     }
 
+    const variantAsin = String(req.body?.variantAsin || '').trim();
+    const variantLabel = String(req.body?.variantLabel || '').trim();
+
     const discoveryItem = {
       id: `pd-item-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       normalizedName: product.name || 'Unnamed Product',
@@ -315,6 +318,12 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
     };
     if (variantKey) {
       discoveryItem.variantKey = variantKey;
+    }
+    if (variantAsin) {
+      discoveryItem.variantAsin = variantAsin;
+    }
+    if (variantLabel) {
+      discoveryItem.variantLabel = variantLabel;
     }
 
     let nextGroups = Array.isArray(currentDraft.boqGroups) ? [...currentDraft.boqGroups] : [];
@@ -335,9 +344,10 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
           if (enrichedShipping.location) nextProject.location = enrichedShipping.location;
           if (enrichedShipping.siteGeo) nextProject.siteGeo = enrichedShipping.siteGeo;
         }
-        // Same product added again to the SAME project: increase the existing line's quantity
-        // instead of appending a second row for it. A different project always gets its own line
-        // (handled below in the "new project" branch), so this only dedupes within one project.
+        // Same product+variant added again to the SAME project: increase the existing line's quantity
+        // instead of appending a second row for it. A different variant of the same product stays a
+        // separate line. A different project always gets its own line (handled below in the "new
+        // project" branch), so this only dedupes within one project.
         return {
           ...group,
           boqProject: nextProject,

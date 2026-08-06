@@ -1,6 +1,38 @@
+const normalizeReturnStatus = (status) => String(status || '').trim().toLowerCase();
+
+export function getRemainingReturnableQuantity(orderedQty, existingReturns = []) {
+  const ordered = Number(orderedQty) || 0;
+  const reserved = (existingReturns || [])
+    .filter((row) => normalizeReturnStatus(row?.status) !== 'rejected')
+    .reduce((sum, row) => sum + (Number(row?.quantity) || 0), 0);
+  return Math.max(0, ordered - reserved);
+}
+
+function getReturnsForItem(returns, itemId) {
+  return (returns || []).filter((row) => {
+    const rowItemId = row?.order_item_id ?? row?.orderItemId;
+    return rowItemId === itemId;
+  });
+}
+
+export function getTotalRemainingReturnableQuantity(order) {
+  const items = Array.isArray(order?.items) ? order.items : [];
+  const returns = Array.isArray(order?.returns) ? order.returns : [];
+  return items.reduce((sum, item) => {
+    const itemId = item?.id ?? item?.order_item_id ?? item?.orderItemId;
+    if (!itemId) return sum;
+    const itemReturns = getReturnsForItem(returns, itemId);
+    return sum + getRemainingReturnableQuantity(item.quantity, itemReturns);
+  }, 0);
+}
+
 export function canRequestReturnForOrder(order) {
   const status = String(order?.status || '').toLowerCase();
-  return status === 'delivered';
+  if (status !== 'delivered') return false;
+  if (Array.isArray(order?.items) && order.items.length > 0) {
+    return getTotalRemainingReturnableQuantity(order) > 0;
+  }
+  return true;
 }
 
 export function getReturnRequestBlockReason(order) {
@@ -10,6 +42,22 @@ export function getReturnRequestBlockReason(order) {
   }
   if (status !== 'delivered') {
     return 'Returns can only be requested after delivery.';
+  }
+  if (Array.isArray(order?.items) && order.items.length > 0) {
+    const remaining = getTotalRemainingReturnableQuantity(order);
+    if (remaining <= 0) {
+      const returns = Array.isArray(order?.returns) ? order.returns : [];
+      const activeReturns = returns.filter(
+        (row) => normalizeReturnStatus(row?.status) !== 'rejected'
+      );
+      const allClosed =
+        activeReturns.length > 0 &&
+        activeReturns.every((row) => normalizeReturnStatus(row?.status) === 'closed');
+      if (allClosed) {
+        return 'All return requests for this order have been closed. No further returns can be requested.';
+      }
+      return 'All units for this order have already been requested for return.';
+    }
   }
   return '';
 }

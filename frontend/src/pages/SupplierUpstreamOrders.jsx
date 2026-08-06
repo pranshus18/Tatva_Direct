@@ -18,11 +18,13 @@ import {
   X,
   QrCode,
   Plus,
-  Package
+  Package,
+  Save
 } from 'lucide-react';
 import { buildOrderUpiPayUri, qrServerImageUrl } from '../utils/upiPaymentQr';
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 import {
+  SUPPLIER_RETURN_ACTIONS,
   canRequestReturnForOrder,
   getReturnRequestBlockReason,
   labelReturnStatus
@@ -31,7 +33,15 @@ import ProductImageCarousel from '../components/ProductImageCarousel';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpStatCard from '../components/sp/SpStatCard';
+import OrderChargeSummary from '../components/sp/OrderChargeSummary';
+import SupplierOrderScopeNav from '../components/supplier/SupplierOrderScopeNav';
 import { Button } from '@/components/ui/button';
+
+const BUYER_SCOPE_FILTERS = [
+  { id: 'all', label: 'All buyers' },
+  { id: 'retail', label: 'Customers (retail)' },
+  { id: 'chain', label: 'Chain partners' }
+];
 
 const sortStatusHistory = (raw) =>
   [...(raw || [])].sort((a, b) => {
@@ -77,6 +87,8 @@ function StatusBadge({ status }) {
 export default function SupplierUpstreamOrders() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const direction = searchParams.get('direction') === 'upstream' ? 'upstream' : 'downstream';
+  const isDownstream = direction === 'downstream';
 
   const [loading, setLoading] = useState(true);
   const [orders, setOrders] = useState([]);
@@ -84,6 +96,7 @@ export default function SupplierUpstreamOrders() {
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [paymentFilter, setPaymentFilter] = useState('all');
+  const [buyerScopeFilter, setBuyerScopeFilter] = useState('all');
 
   const [orderModalId, setOrderModalId] = useState(null);
   const [orderDetails, setOrderDetails] = useState(null);
@@ -92,8 +105,24 @@ export default function SupplierUpstreamOrders() {
   const [cancellingOrder, setCancellingOrder] = useState(false);
   const [vaultBalance, setVaultBalance] = useState(0);
   const [loadingVaultBalance, setLoadingVaultBalance] = useState(false);
+  const [updatingStatus, setUpdatingStatus] = useState(false);
+  const [newStatus, setNewStatus] = useState('');
+  const [shipCarrier, setShipCarrier] = useState('');
+  const [shipTrackingNumber, setShipTrackingNumber] = useState('');
+  const [shipTrackingUrl, setShipTrackingUrl] = useState('');
 
   const fetchOrders = useCallback(async () => {
+    if (isDownstream) {
+      const scopeQuery = buyerScopeFilter === 'all' ? '' : `?scope=${buyerScopeFilter}`;
+      const res = await authFetch(`/api/supplier/orders${scopeQuery}`, { cache: 'no-cache' });
+      const data = await res.json();
+      if (data.status === 'success') {
+        setOrders(Array.isArray(data.orders) ? data.orders : []);
+      } else {
+        throw new Error(data.message || 'Failed to load orders');
+      }
+      return;
+    }
     const res = await authFetch('/api/supplier/upstream/orders?all=true', { cache: 'no-cache' });
     const data = await res.json();
     if (data.status === 'success') {
@@ -101,7 +130,7 @@ export default function SupplierUpstreamOrders() {
     } else {
       throw new Error(data.message || 'Failed to load orders');
     }
-  }, []);
+  }, [isDownstream, buyerScopeFilter]);
 
   const refreshOrders = async () => {
     setRefreshing(true);
@@ -116,11 +145,14 @@ export default function SupplierUpstreamOrders() {
   };
 
   useEffect(() => {
+    setOrderModalId(null);
+    setOrderDetails(null);
+    setLoading(true);
     (async () => {
       try {
         await fetchOrders();
       } catch (e) {
-        console.error('Failed to load upstream orders:', e);
+        console.error('Failed to load orders:', e);
         alert(e?.message || 'Failed to load orders');
       } finally {
         setLoading(false);
@@ -133,8 +165,22 @@ export default function SupplierUpstreamOrders() {
     setLoadingOrderDetails(true);
     setOrderDetails(null);
     try {
-      const token = localStorage.getItem('token');
       const encoded = encodeURIComponent(orderNumberOrId);
+      if (isDownstream) {
+        const res = await authFetch(`/api/supplier/orders/${encoded}`, { cache: 'no-cache' });
+        const data = await res.json();
+        if (data.status === 'success' && data.order) {
+          setOrderDetails(data.order);
+          setNewStatus(data.order.status || 'pending');
+          setShipCarrier(data.order.shippingProvider || '');
+          setShipTrackingNumber(data.order.trackingNumber || '');
+          setShipTrackingUrl(data.order.trackingUrl || '');
+        } else {
+          alert(data.message || 'Failed to load order details.');
+        }
+        return;
+      }
+      const token = localStorage.getItem('token');
       const res = await fetch(getApiUrl(`/api/dashboard/service-provider/orders/${encoded}`), {
         headers: { Authorization: `Bearer ${token}` },
         cache: 'no-cache'
@@ -151,23 +197,31 @@ export default function SupplierUpstreamOrders() {
     } finally {
       setLoadingOrderDetails(false);
     }
-  }, []);
+  }, [isDownstream]);
 
   const openOrder = useCallback(
     (orderNumber) => {
       if (!orderNumber) return;
       setOrderModalId(orderNumber);
-      setSearchParams({ order: orderNumber }, { replace: true });
+      const next = new URLSearchParams(searchParams);
+      next.set('order', orderNumber);
+      setSearchParams(next, { replace: true });
       fetchOrderDetails(orderNumber);
     },
-    [fetchOrderDetails, setSearchParams]
+    [fetchOrderDetails, searchParams, setSearchParams]
   );
 
   const closeOrderModal = () => {
     setOrderModalId(null);
     setOrderDetails(null);
+    setNewStatus('');
+    setShipCarrier('');
+    setShipTrackingNumber('');
+    setShipTrackingUrl('');
     if (searchParams.get('order')) {
-      setSearchParams({}, { replace: true });
+      const next = new URLSearchParams(searchParams);
+      next.delete('order');
+      setSearchParams(next, { replace: true });
     }
   };
 
@@ -186,11 +240,12 @@ export default function SupplierUpstreamOrders() {
       if (statusFilter !== 'all' && status !== statusFilter) return false;
       if (paymentFilter !== 'all' && payment !== paymentFilter) return false;
       if (!q) return true;
-      return [order.orderNumber, order.supplierName, order.status, order.paymentStatus, order.paymentMethod]
-        .map((v) => String(v || '').toLowerCase())
-        .some((v) => v.includes(q));
+      const searchFields = isDownstream
+        ? [order.orderNumber, order.customer, order.company, order.status, order.paymentStatus]
+        : [order.orderNumber, order.supplierName, order.status, order.paymentStatus, order.paymentMethod];
+      return searchFields.map((v) => String(v || '').toLowerCase()).some((v) => v.includes(q));
     });
-  }, [orders, query, statusFilter, paymentFilter]);
+  }, [orders, query, statusFilter, paymentFilter, isDownstream]);
 
   const stats = useMemo(() => {
     const active = orders.filter((o) => !['delivered', 'cancelled'].includes(String(o.status || '').toLowerCase()));
@@ -200,12 +255,19 @@ export default function SupplierUpstreamOrders() {
     const pendingPayment = orders.filter(
       (o) => String(o.paymentStatus || '').toLowerCase() !== 'paid'
     );
-    const totalValue = orders.reduce((sum, o) => sum + Number(o.totalAmount || 0), 0);
+    const chain = orders.filter((o) => o.chainUpstreamOrder);
+    const retail = orders.filter((o) => !o.chainUpstreamOrder);
+    const totalValue = orders.reduce(
+      (sum, o) => sum + Number(o.totalAmount || o.amount || 0),
+      0
+    );
     return {
       total: orders.length,
       active: active.length,
       inTransit: inTransit.length,
       pendingPayment: pendingPayment.length,
+      chain: chain.length,
+      retail: retail.length,
       totalValue
     };
   }, [orders]);
@@ -213,8 +275,80 @@ export default function SupplierUpstreamOrders() {
   const orderPaymentMethod = String(orderDetails?.paymentMethod || orderDetails?.payment_method || '').toLowerCase();
   const orderIsPayLater = orderPaymentMethod === 'credit';
   const orderVaultPaymentPending =
-    orderDetails && String(orderDetails.paymentStatus || '').toLowerCase() !== 'paid';
+    !isDownstream &&
+    orderDetails &&
+    String(orderDetails.paymentStatus || '').toLowerCase() !== 'paid';
   const canPayFromVaultNow = orderVaultPaymentPending;
+
+  const handleUpdateDownstreamStatus = async () => {
+    if (!orderModalId || !newStatus) {
+      alert('Please select a status to update');
+      return;
+    }
+    setUpdatingStatus(true);
+    try {
+      const token = localStorage.getItem('token');
+      const encodedOrderId = encodeURIComponent(orderModalId);
+      const body = {
+        status: newStatus,
+        notes: `Status updated to ${newStatus} by supplier`
+      };
+      if (newStatus === 'shipped') {
+        if (shipCarrier.trim()) body.shippingProvider = shipCarrier.trim();
+        if (shipTrackingNumber.trim()) body.trackingNumber = shipTrackingNumber.trim();
+        if (shipTrackingUrl.trim()) body.trackingUrl = shipTrackingUrl.trim();
+      }
+      const response = await fetch(getApiUrl(`/api/supplier/orders/${encodedOrderId}/status`), {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify(body)
+      });
+      const data = await response.json();
+      if (data.status === 'success') {
+        alert('Order status updated successfully');
+        await fetchOrderDetails(orderModalId);
+        await fetchOrders();
+      } else {
+        alert(data.message || 'Failed to update order status.');
+      }
+    } catch (error) {
+      console.error('Failed to update order status:', error);
+      alert('Failed to update order status. Please try again.');
+    } finally {
+      setUpdatingStatus(false);
+    }
+  };
+
+  const handleUpdateReturnStatus = async (returnId, nextStatus) => {
+    const supplierNotes = window.prompt(`Optional notes for status "${nextStatus}":`, '');
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch(getApiUrl(`/api/supplier/returns/${returnId}/status`), {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          status: nextStatus,
+          ...(supplierNotes ? { supplierNotes } : {})
+        })
+      });
+      const data = await response.json();
+      if (data.status !== 'success') {
+        alert(data.message || 'Failed to update return status.');
+        return;
+      }
+      alert('Return status updated.');
+      await fetchOrderDetails(orderModalId);
+    } catch (error) {
+      console.error('Failed to update return status:', error);
+      alert('Failed to update return status.');
+    }
+  };
 
   const handleMarkAsPaid = async () => {
     if (!orderModalId) return;
@@ -245,7 +379,9 @@ export default function SupplierUpstreamOrders() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!orderDetails || String(orderDetails.paymentStatus || '').toLowerCase() === 'paid') return undefined;
+    if (isDownstream || !orderDetails || String(orderDetails.paymentStatus || '').toLowerCase() === 'paid') {
+      return undefined;
+    }
     const loadVaultBalance = async () => {
       setLoadingVaultBalance(true);
       try {
@@ -263,7 +399,7 @@ export default function SupplierUpstreamOrders() {
     return () => {
       cancelled = true;
     };
-  }, [orderDetails?.id, orderDetails?.paymentStatus]);
+  }, [isDownstream, orderDetails?.id, orderDetails?.paymentStatus]);
 
   const canCancelUpstreamOrder = (order) => {
     const status = String(order?.status || '').toLowerCase();
@@ -406,7 +542,7 @@ export default function SupplierUpstreamOrders() {
     return (
       <div className="dashboard-loading">
         <div className="spinner" />
-        <p>Loading your upstream orders…</p>
+        <p>Loading orders…</p>
       </div>
     );
   }
@@ -415,8 +551,12 @@ export default function SupplierUpstreamOrders() {
     <SpPageLayout showStepper={false}>
       <div className="supplier-upstream-orders-page">
         <SpPageHeader
-          title="My Upstream Orders"
-          description="Track purchase orders placed with tier-above partners. Status, payment, shipment, and invoices update here as your supplier progresses the order."
+          title="Orders"
+          description={
+            isDownstream
+              ? 'Orders where you are the seller — from service providers and supply-chain partners.'
+              : 'Purchase orders placed with tier-above partners — track status, payment, and shipment.'
+          }
           icon={ClipboardList}
           actions={
             <>
@@ -424,18 +564,27 @@ export default function SupplierUpstreamOrders() {
                 <RefreshCw size={16} className={refreshing ? 'upstream-spin' : ''} />
                 Refresh
               </Button>
-              <Button onClick={() => navigate('/supplier-upstream')}>
-                <Plus size={16} />
-                Place new order
-              </Button>
+              {!isDownstream ? (
+                <Button onClick={() => navigate('/supplier-upstream')}>
+                  <Plus size={16} />
+                  Place new order
+                </Button>
+              ) : null}
             </>
           }
         />
 
+        <SupplierOrderScopeNav />
+
         <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <SpStatCard label="Total orders" value={stats.total} icon={ClipboardList} accent="indigo" />
           <SpStatCard label="Active" value={stats.active} icon={Package} accent="amber" />
-          <SpStatCard label="In transit" value={stats.inTransit} icon={Package} accent="sky" />
+          <SpStatCard
+            label={isDownstream ? 'Retail buyers' : 'In transit'}
+            value={isDownstream ? stats.retail : stats.inTransit}
+            icon={Package}
+            accent="sky"
+          />
           <SpStatCard
             label="Order value"
             value={`₹${stats.totalValue.toLocaleString('en-IN')}`}
@@ -450,11 +599,27 @@ export default function SupplierUpstreamOrders() {
               <Search size={16} />
               <input
                 type="text"
-                placeholder="Search order #, supplier, status…"
+                placeholder={
+                  isDownstream ? 'Search order #, buyer, status…' : 'Search order #, supplier, status…'
+                }
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
             </div>
+            {isDownstream ? (
+              <select
+                className="supplier-upstream-orders-select"
+                value={buyerScopeFilter}
+                onChange={(e) => setBuyerScopeFilter(e.target.value)}
+                aria-label="Filter by buyer type"
+              >
+                {BUYER_SCOPE_FILTERS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <select
               className="supplier-upstream-orders-select"
               value={statusFilter}
@@ -485,8 +650,14 @@ export default function SupplierUpstreamOrders() {
             <div className="supplier-upstream-orders-empty">
               <ClipboardList size={48} strokeWidth={1.25} />
               <h3>No orders match your filters</h3>
-              <p>Place a stock order from upstream sourcing to see it tracked here.</p>
-              <Button onClick={() => navigate('/supplier-upstream')}>Go to upstream sourcing</Button>
+              <p>
+                {isDownstream
+                  ? 'When buyers place orders with you, they will appear here.'
+                  : 'Place a stock order from upstream sourcing to see it tracked here.'}
+              </p>
+              {!isDownstream ? (
+                <Button onClick={() => navigate('/supplier-upstream')}>Go to upstream sourcing</Button>
+              ) : null}
             </div>
           ) : (
             <div className="supplier-upstream-orders-table-wrap">
@@ -494,25 +665,28 @@ export default function SupplierUpstreamOrders() {
                 <thead>
                   <tr>
                     <th>Order</th>
-                    <th>Supplier</th>
+                    <th>{isDownstream ? 'Buyer' : 'Supplier'}</th>
                     <th>Items</th>
                     <th>Amount</th>
                     <th>Status</th>
                     <th>Payment</th>
                     <th>Expected dispatch date</th>
                     <th>Updated</th>
-                    <th aria-label="Actions" />
+                    {!isDownstream ? <th aria-label="Actions" /> : null}
                   </tr>
                 </thead>
                 <tbody>
                   {filteredOrders.map((o) => (
                     <tr
-                      key={o.id}
+                      key={o.id || o.orderNumber}
                       className="supplier-upstream-orders-row"
                       onClick={() => openOrder(o.orderNumber)}
                     >
                       <td>
                         <strong>{o.orderNumber}</strong>
+                        {isDownstream && o.chainUpstreamOrder ? (
+                          <div className="supplier-upstream-orders-tracking">Chain partner</div>
+                        ) : null}
                         {o.trackingNumber ? (
                           <div className="supplier-upstream-orders-tracking">
                             {o.trackingNumber}
@@ -520,9 +694,20 @@ export default function SupplierUpstreamOrders() {
                           </div>
                         ) : null}
                       </td>
-                      <td>{o.supplierName || 'Supplier'}</td>
+                      <td>
+                        {isDownstream ? (
+                          <>
+                            {o.customer || 'Buyer'}
+                            {o.company ? (
+                              <div className="supplier-upstream-orders-tracking">{o.company}</div>
+                            ) : null}
+                          </>
+                        ) : (
+                          o.supplierName || 'Supplier'
+                        )}
+                      </td>
                       <td>{o.itemCount ?? '—'}</td>
-                      <td>₹{Number(o.totalAmount || 0).toLocaleString('en-IN')}</td>
+                      <td>₹{Number(o.totalAmount || o.amount || 0).toLocaleString('en-IN')}</td>
                       <td>
                         <StatusBadge status={o.status} />
                       </td>
@@ -530,26 +715,28 @@ export default function SupplierUpstreamOrders() {
                         <span className="supplier-upstream-orders-payment">
                           {String(o.paymentStatus || 'pending')}
                         </span>
-                        <span className="supplier-upstream-orders-payment-method">
-                          {paymentMethodLabel(o.paymentMethod)}
-                        </span>
+                        {!isDownstream ? (
+                          <span className="supplier-upstream-orders-payment-method">
+                            {paymentMethodLabel(o.paymentMethod)}
+                          </span>
+                        ) : null}
                       </td>
                       <td>
-                        {o.expectedDeliveryDate
-                          ? formatDateIST(o.expectedDeliveryDate, '—')
-                          : '—'}
+                        {o.expectedDeliveryDate ? formatDateIST(o.expectedDeliveryDate, '—') : '—'}
                       </td>
                       <td>{o.updatedAt ? formatDateTimeIST(o.updatedAt, '—') : '—'}</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="btn-icon upstream-delete-btn"
-                          title="Delete order"
-                          onClick={(e) => handleDeleteOrder(o.orderNumber, e)}
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                      </td>
+                      {!isDownstream ? (
+                        <td>
+                          <button
+                            type="button"
+                            className="btn-icon upstream-delete-btn"
+                            title="Delete order"
+                            onClick={(e) => handleDeleteOrder(o.orderNumber, e)}
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        </td>
+                      ) : null}
                     </tr>
                   ))}
                 </tbody>
@@ -587,6 +774,157 @@ export default function SupplierUpstreamOrders() {
               </div>
             ) : orderDetails ? (
               <div className="modal-body">
+                {isDownstream ? (
+                  <>
+                    <div className="order-info-section">
+                      <h3>Buyer</h3>
+                      <p><strong>Name:</strong> {orderDetails.serviceProvider?.name || 'N/A'}</p>
+                      <p><strong>Company:</strong> {orderDetails.serviceProvider?.company || 'N/A'}</p>
+                      {orderDetails.channel === 'b2b_po' &&
+                      orderDetails.serviceProvider?.user_type === 'supplier' ? (
+                        <p className="upstream-muted-meta">Supply-chain partner (B2B upstream purchase)</p>
+                      ) : null}
+                    </div>
+
+                    <div className="order-info-section">
+                      <h3>Order items</h3>
+                      {Array.isArray(orderDetails.items) && orderDetails.items.length > 0 ? (
+                        <>
+                          <table className="order-items-table">
+                            <thead>
+                              <tr>
+                                <th>Product</th>
+                                <th>Qty</th>
+                                <th>Unit</th>
+                                <th>Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {orderDetails.items.map((item, idx) => (
+                                <tr key={idx}>
+                                  <td>{item.product?.name || item.name || 'Product'}</td>
+                                  <td>{item.quantity}</td>
+                                  <td>₹{Number(item.unitPrice || 0).toLocaleString('en-IN')}</td>
+                                  <td>₹{Number(item.totalPrice || 0).toLocaleString('en-IN')}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <OrderChargeSummary order={orderDetails} />
+                        </>
+                      ) : (
+                        <p className="upstream-muted-meta">No items found.</p>
+                      )}
+                    </div>
+
+                    <div className="order-info-section">
+                      <h3>Order status</h3>
+                      <label>
+                        <strong>Status:</strong>
+                        <select
+                          value={newStatus}
+                          onChange={(e) => setNewStatus(e.target.value)}
+                          disabled={updatingStatus}
+                        >
+                          <option value="pending">Pending</option>
+                          <option value="confirmed">Confirmed</option>
+                          <option value="processing">Processing</option>
+                          <option value="shipped">Shipped</option>
+                          <option value="delivered">Delivered</option>
+                          <option value="cancelled">Cancelled</option>
+                        </select>
+                      </label>
+                      {newStatus === 'shipped' ? (
+                        <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.5rem' }}>
+                          <input
+                            type="text"
+                            value={shipCarrier}
+                            onChange={(e) => setShipCarrier(e.target.value)}
+                            placeholder="Carrier (optional)"
+                            disabled={updatingStatus}
+                          />
+                          <input
+                            type="text"
+                            value={shipTrackingNumber}
+                            onChange={(e) => setShipTrackingNumber(e.target.value)}
+                            placeholder="Tracking number (optional)"
+                            disabled={updatingStatus}
+                          />
+                          <input
+                            type="url"
+                            value={shipTrackingUrl}
+                            onChange={(e) => setShipTrackingUrl(e.target.value)}
+                            placeholder="Tracking URL (optional)"
+                            disabled={updatingStatus}
+                          />
+                        </div>
+                      ) : null}
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          onClick={handleUpdateDownstreamStatus}
+                          disabled={updatingStatus || newStatus === orderDetails.status}
+                        >
+                          {updatingStatus ? 'Updating…' : <><Save size={16} /> Update status</>}
+                        </button>
+                      </div>
+                      <p style={{ marginTop: '0.75rem' }}>
+                        <strong>Payment:</strong> {orderDetails.paymentStatus || 'pending'}
+                      </p>
+                      {orderDetails.invoicePdfUrl ? (
+                        <a
+                          href={orderDetails.invoicePdfUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="btn-primary"
+                          style={{ display: 'inline-block', marginTop: '0.5rem' }}
+                        >
+                          Download invoice
+                        </a>
+                      ) : null}
+                    </div>
+
+                    <div className="order-info-section">
+                      <h3>Return requests</h3>
+                      {Array.isArray(orderDetails.returns) && orderDetails.returns.length > 0 ? (
+                        <div className="upstream-returns-list">
+                          {orderDetails.returns.map((ret) => (
+                            <div key={ret.id} className="upstream-return-card">
+                              <div><strong>Status:</strong> {labelReturnStatus(ret.status)}</div>
+                              <div><strong>Qty:</strong> {ret.quantity}</div>
+                              <div><strong>Reason:</strong> {ret.reason}</div>
+                              {ret.tracking_id ? <div><strong>Tracking:</strong> {ret.tracking_id}</div> : null}
+                              <div className="upstream-return-actions">
+                                {(SUPPLIER_RETURN_ACTIONS[ret.status] || []).map((nextStatus) => (
+                                  <button
+                                    key={nextStatus}
+                                    type="button"
+                                    className="btn-secondary"
+                                    onClick={() => handleUpdateReturnStatus(ret.id, nextStatus)}
+                                  >
+                                    Mark {labelReturnStatus(nextStatus)}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="upstream-muted-meta">No return requests for this order.</p>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ marginTop: '0.75rem' }}
+                        onClick={() => navigate('/supplier-returns?tab=incoming')}
+                      >
+                        View all downstream returns
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
                 <div className="order-info-section">
                   <h3>Supplier</h3>
                   <p>
@@ -825,22 +1163,27 @@ export default function SupplierUpstreamOrders() {
                   ) : (
                     <p className="upstream-muted-meta">No return requests yet.</p>
                   )}
-                  {canRequestReturnForOrder(orderDetails) ? (
-                    <div className="upstream-return-actions">
-                      <button type="button" className="btn-secondary" onClick={handleCreateReturnRequest}>
-                        Request return
-                      </button>
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={() => navigate('/supplier-returns?tab=outgoing')}
-                      >
-                        View all upstream returns
-                      </button>
-                    </div>
-                  ) : (
+                  <div className="upstream-return-actions">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      disabled={!canRequestReturnForOrder(orderDetails)}
+                      title={getReturnRequestBlockReason(orderDetails) || undefined}
+                      onClick={handleCreateReturnRequest}
+                    >
+                      Request return
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => navigate('/supplier-returns?tab=outgoing')}
+                    >
+                      View all upstream returns
+                    </button>
+                  </div>
+                  {!canRequestReturnForOrder(orderDetails) && getReturnRequestBlockReason(orderDetails) ? (
                     <p className="upstream-muted-meta">{getReturnRequestBlockReason(orderDetails)}</p>
-                  )}
+                  ) : null}
                 </div>
 
                 {canCancelUpstreamOrder(orderDetails) ? (
@@ -890,6 +1233,8 @@ export default function SupplierUpstreamOrders() {
                     </div>
                   </div>
                 ) : null}
+                  </>
+                )}
               </div>
             ) : (
               <div className="modal-body upstream-modal-loading">

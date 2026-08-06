@@ -14,6 +14,25 @@ test('canRequestReturnForOrder allows only delivered orders', () => {
   assert.equal(canRequestReturnForOrder({ status: 'cancelled' }), false);
 });
 
+test('canRequestReturnForOrder blocks when all units are already returned', () => {
+  const order = {
+    status: 'delivered',
+    items: [{ id: 'item-1', quantity: 3 }],
+    returns: [{ order_item_id: 'item-1', quantity: 3, status: 'closed' }]
+  };
+  assert.equal(canRequestReturnForOrder(order), false);
+  assert.match(getReturnRequestBlockReason(order), /closed/i);
+});
+
+test('canRequestReturnForOrder allows partial remaining quantity', () => {
+  const order = {
+    status: 'delivered',
+    items: [{ id: 'item-1', quantity: 5 }],
+    returns: [{ order_item_id: 'item-1', quantity: 3, status: 'closed' }]
+  };
+  assert.equal(canRequestReturnForOrder(order), true);
+});
+
 test('getReturnRequestBlockReason explains ineligible orders', () => {
   assert.equal(getReturnRequestBlockReason({ status: 'delivered' }), '');
   assert.match(getReturnRequestBlockReason({ status: 'shipped' }), /delivered/i);

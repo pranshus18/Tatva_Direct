@@ -19,12 +19,12 @@ export function clearSupplierSelectScopeSession() {
 }
 
 /**
- * One supplier-select row per product — avoids duplicate Mac Air M2 blocks from repeated voice adds.
+ * One supplier-select row per product+variant — avoids collapsing different variants of the same product.
  */
 export function dedupeSupplierSelectItems(items) {
   if (!Array.isArray(items) || items.length === 0) return [];
   const byLineId = new Set();
-  const byProductId = new Map();
+  const byProductVariant = new Map();
   const out = [];
 
   for (const it of items) {
@@ -33,14 +33,16 @@ export function dedupeSupplierSelectItems(items) {
     if (lineId) byLineId.add(lineId);
 
     const pid = String(it?.productId ?? '').trim();
+    const variantKey = String(it?.variantKey ?? it?.variant_key ?? '').trim();
     if (pid) {
-      if (byProductId.has(pid)) {
-        const prev = byProductId.get(pid);
+      const scopeKey = `${pid}::${variantKey}`;
+      if (byProductVariant.has(scopeKey)) {
+        const prev = byProductVariant.get(scopeKey);
         prev.quantity = (Number(prev.quantity) || 0) + (Number(it.quantity) || 0);
         continue;
       }
       const row = { ...it };
-      byProductId.set(pid, row);
+      byProductVariant.set(scopeKey, row);
       out.push(row);
       continue;
     }

@@ -707,13 +707,22 @@ const SupplierUpstream = ({ user }) => {
       alert('Select at least one item before saving cart.');
       return;
     }
+    const activeProject = cartProjects.find(
+      (project) => String(project?.projectId || '') === String(activeProjectId || '')
+    );
     const ok = await persistUpstreamCartDraft({
       selectedMine,
       selectedUpstreamOffer,
       suggestions: Array.isArray(suggestions) ? suggestions : [],
       searchQuery,
       selectedCategory,
-      cartName
+      cartName: cartName || activeProject?.cartName || '',
+      ...(activeProjectId
+        ? {
+            projectId: activeProjectId,
+            requiredDate: activeProject?.requiredDate || ''
+          }
+        : {})
     });
     if (ok) {
       setSelectedMine({});
@@ -962,6 +971,13 @@ const SupplierUpstream = ({ user }) => {
         body: JSON.stringify({
           mineSupplierProductId: mineId,
           quantity: nextQty,
+          ...(product?.variantKey || product?.variant_key
+            ? { variantKey: String(product.variantKey || product.variant_key) }
+            : {}),
+          ...(product?.variantAsin || product?.variant_asin
+            ? { variantAsin: String(product.variantAsin || product.variant_asin) }
+            : {}),
+          ...(product?.name ? { variantLabel: String(product.name) } : {}),
           ...(isNewProject
             ? { cartName: newCartProjectName.trim(), requiredDate: newCartRequiredDate }
             : { projectId: targetCartProjectId }),
@@ -1068,7 +1084,7 @@ const SupplierUpstream = ({ user }) => {
         icon={Network}
         actions={
           <>
-            <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-upstream-orders')}>
+            <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-orders?direction=upstream')}>
               My orders
             </Button>
             <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-cart')}>
@@ -1603,6 +1619,26 @@ const SupplierUpstream = ({ user }) => {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-4">
           <div className="space-y-4">
+            {pendingCartProduct ? (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm">
+                <div className="font-medium">{pendingCartProduct.name || 'Product'}</div>
+                {String(
+                  pendingCartProduct.variantAsin ||
+                    pendingCartProduct.variantKey ||
+                    pendingCartProduct.variant_key ||
+                    ''
+                ).trim() ? (
+                  <div className="mt-1 text-muted-foreground">
+                    Variant:{' '}
+                    {String(
+                      pendingCartProduct.variantAsin ||
+                        pendingCartProduct.variantKey ||
+                        pendingCartProduct.variant_key
+                    ).trim()}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             <div className="space-y-1">
               <label className="text-sm font-medium">Project</label>
               <select

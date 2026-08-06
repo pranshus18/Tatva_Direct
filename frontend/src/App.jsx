@@ -73,7 +73,7 @@ const SupplierUpstreamCart = safeLazy(
 );
 const SupplierUpstreamOrders = safeLazy(
   () => import('./pages/SupplierUpstreamOrders'),
-  'Supplier Upstream Orders page'
+  'Supplier Orders page'
 );
 const SupplierSelectYourself = safeLazy(
   () => import('./pages/SupplierSelectYourself'),
@@ -422,8 +422,8 @@ function App() {
 
     if (userType === 'supplier') {
       return idlePrefetch([
-        () => import('./pages/SupplierUpstream'),
         () => import('./pages/SupplierUpstreamOrders'),
+        () => import('./pages/SupplierUpstream'),
         () => import('./pages/SupplierWallet'),
         () => import('./pages/SupplierPOS')
       ]);
@@ -501,7 +501,12 @@ function App() {
           path="/supplier-upstream/product/:productId"
           element={supplierPortal(<ProductDiscoveryDetail portal="supplier" />)}
         />
-        <Route path="/supplier-upstream-orders" element={supplierPortal(<SupplierUpstreamOrders />)} />
+        <Route path="/supplier-orders" element={supplierPortal(<SupplierUpstreamOrders />)} />
+        <Route path="/supplier-downstream-orders" element={<Navigate to="/supplier-orders" replace />} />
+        <Route
+          path="/supplier-upstream-orders"
+          element={<Navigate to="/supplier-orders?direction=upstream" replace />}
+        />
         <Route
           path="/supplier-upstream-returns"
           element={<Navigate to="/supplier-returns?tab=outgoing" replace />}

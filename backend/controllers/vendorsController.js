@@ -52,14 +52,15 @@ import {
 } from '../services/vendorRankingLoggingService.js';
 import { vendorRankSchema } from '../contracts/vendorContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
+import { extractExplicitVariantKey } from '../services/productIdentityService.js';
 
 const router = express.Router();
 const shouldIncludeAllVariantsForItem = ({ item = {}, itemName = '', referenceProduct = null }) => {
-  void item;
+  // Cart lines with an explicit variant should only rank suppliers for that variant.
+  if (extractExplicitVariantKey(item)) return false;
   void itemName;
   void referenceProduct;
-  // Service-provider selection must be variant-wise so buyers can compare
-  // each supplier offer variant explicitly, even when BOQ name has model tokens.
+  // BOQ / unnamed lines without variant scope: show all supplier offers so buyers can compare.
   return true;
 };
 
@@ -134,6 +135,7 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         normalizedName: item.normalizedName,
         rawName: item.rawName,
         productId: item.productId,
+        variantKey: item.variantKey,
         availableSuppliers: item.availableSuppliers
       }))
     );

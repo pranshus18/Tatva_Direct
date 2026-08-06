@@ -68,7 +68,12 @@ import {
   buildShippingAddressKey,
   consolidatePoTransportGroups,
   formatShippingAddressLabel,
-  mergeUpstreamSelectedMineQuantity
+  mergeUpstreamSelectedMineQuantity,
+  mergeOrAppendUpstreamCartItem,
+  buildUpstreamSelectedMineFromItems,
+  buildUpstreamItemsFromSelectedMine,
+  mergeUpstreamSelectedMineMaps,
+  normalizeCartVariantKey
 } from '../po/shared/poHelpers.js';
 import {
   normalizeRequiredDateForUpstream,
@@ -120,8 +125,59 @@ export function registerSupplierUpstreamRoutes(ctx) {
     return out;
   };
 
-  const hasUpstreamProjectLines = (project = {}) =>
-    Object.keys(normalizeSelectedMineQuantities(project?.selectedMine || {})).length > 0;
+  const hasUpstreamProjectLines = (project = {}) => {
+    if (Array.isArray(project?.items) && project.items.length > 0) return true;
+    return Object.keys(normalizeSelectedMineQuantities(project?.selectedMine || {})).length > 0;
+  };
+
+  const loadUpstreamMineMetaByIds = async (userId, mineIds = []) => {
+    const ids = [...new Set((Array.isArray(mineIds) ? mineIds : []).map((id) => String(id || '').trim()).filter(Boolean))];
+    if (!ids.length) return {};
+    const { data: rows, error } = await supabase
+      .from('supplier_products')
+      .select('id, product_id, variant_key, variant_asin, attributes, product:products(name)')
+      .in('id', ids)
+      .eq('supplier_id', userId);
+    if (error) throw error;
+    const metaByMineId = {};
+    for (const row of rows || []) {
+      const mineId = String(row?.id || '').trim();
+      if (!mineId) continue;
+      const attrs = row?.attributes && typeof row.attributes === 'object' ? row.attributes : {};
+      metaByMineId[mineId] = {
+        productId: row?.product_id || null,
+        variantKey: String(row?.variant_key || '').trim() || null,
+        variantAsin: String(row?.variant_asin || '').trim() || null,
+        variantLabel: String(attrs?.variantName || row?.product?.name || '').trim() || null,
+        name: String(row?.product?.name || '').trim() || null
+      };
+    }
+    return metaByMineId;
+  };
+
+  const finalizeUpstreamProjectLines = (project, metaByMineId = {}) => {
+    const base = project && typeof project === 'object' ? { ...project } : {};
+    const existingItems = Array.isArray(base.items) ? base.items : [];
+    const fallbackItems = buildUpstreamItemsFromSelectedMine(base.selectedMine || {}, metaByMineId);
+    const items = (existingItems.length ? existingItems : fallbackItems).map((item) => {
+      const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+      const meta = mineId ? metaByMineId[mineId] : null;
+      if (!meta) return item;
+      return {
+        ...item,
+        productId: item?.productId || meta.productId || undefined,
+        variantKey: normalizeCartVariantKey(item) || normalizeCartVariantKey(meta) || undefined,
+        variantAsin: item?.variantAsin || meta.variantAsin || undefined,
+        variantLabel: item?.variantLabel || meta.variantLabel || undefined,
+        name: item?.name || meta.name || undefined
+      };
+    });
+    return {
+      ...base,
+      items,
+      selectedMine: buildUpstreamSelectedMineFromItems(items)
+    };
+  };
 
   const upstreamCartDraftNeedsPersistAfterPrune = (rawDraft = {}, normalizedDraft = {}) => {
     const rawProjects = Array.isArray(rawDraft?.projects) ? rawDraft.projects : [];
@@ -391,13 +447,20 @@ export function registerSupplierUpstreamRoutes(ctx) {
     const cartNameRaw = String(payload.cartName || '').trim();
     const rawRequiredDate = String(payload.requiredDate || '').trim();
     const requiredDate = /^\d{4}-\d{2}-\d{2}$/.test(rawRequiredDate) ? rawRequiredDate : '';
+    const items = Array.isArray(payload.items)
+      ? payload.items
+      : buildUpstreamItemsFromSelectedMine(
+          payload.selectedMine && typeof payload.selectedMine === 'object' ? payload.selectedMine : {},
+          payload.selectedMineMeta && typeof payload.selectedMineMeta === 'object'
+            ? payload.selectedMineMeta
+            : {}
+        );
     const project = {
       projectId,
       cartName: cartNameRaw || `Project ${formatPlatformDate(new Date())}`,
       requiredDate,
-      selectedMine: normalizeSelectedMineQuantities(
-        payload.selectedMine && typeof payload.selectedMine === 'object' ? payload.selectedMine : {}
-      ),
+      items,
+      selectedMine: buildUpstreamSelectedMineFromItems(items),
       selectedUpstreamOffer:
         payload.selectedUpstreamOffer && typeof payload.selectedUpstreamOffer === 'object'
           ? payload.selectedUpstreamOffer
@@ -1988,7 +2051,9 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
 
     const { data: mineRow, error: mineError } = await supabase
       .from('supplier_products')
-      .select('id, supplier_id, min_order_quantity, attributes, status, is_active, product:products(brand, status)')
+      .select(
+        'id, supplier_id, product_id, variant_key, variant_asin, min_order_quantity, attributes, status, is_active, product:products(brand, status, name)'
+      )
       .eq('id', mineSupplierProductId)
       .eq('supplier_id', req.userId)
       .maybeSingle();
@@ -2016,6 +2081,25 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
     );
     const quantity = Math.max(minQty, requestedQuantity);
     const quantityAdjusted = quantity !== requestedQuantity;
+    const variantKey = String(req.body?.variantKey || mineRow?.variant_key || '').trim();
+    const variantAsin = String(req.body?.variantAsin || mineRow?.variant_asin || '').trim();
+    const variantLabel = String(
+      req.body?.variantLabel ||
+        mineRow?.attributes?.variantName ||
+        mineRow?.product?.name ||
+        ''
+    ).trim();
+    const productName = String(mineRow?.product?.name || '').trim() || 'Product';
+    const newCartItem = {
+      id: `us-item-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      mineSupplierProductId,
+      productId: mineRow?.product_id || undefined,
+      variantKey: variantKey || undefined,
+      variantAsin: variantAsin || undefined,
+      variantLabel: variantLabel || undefined,
+      name: productName,
+      quantity
+    };
 
     const { data: cartRow, error: cartError } = await supabase
       .from('po_carts')
@@ -2038,22 +2122,26 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         return res.status(404).json({ status: 'error', message: 'Selected project not found' });
       }
       const existing = buildUpstreamProject(currentProjects[idx]);
-      // Same product added again to the SAME project: increase the existing quantity instead of
-      // overwriting it. A different project always gets its own entry (the `else` branch below
-      // creates a brand-new project), so this only merges quantities within one project.
-      const mergedQuantity = mergeUpstreamSelectedMineQuantity(
-        existing.selectedMine,
-        mineSupplierProductId,
-        quantity
-      );
+      const existingItems = Array.isArray(existing.items)
+        ? existing.items
+        : buildUpstreamItemsFromSelectedMine(existing.selectedMine || {});
+      const nextItems = mergeOrAppendUpstreamCartItem(existingItems, newCartItem);
       updatedProject = applyShippingToUpstreamProject(
-        {
-          ...existing,
-          selectedMine: {
-            ...(existing.selectedMine || {}),
-            [mineSupplierProductId]: mergedQuantity
+        finalizeUpstreamProjectLines(
+          {
+            ...existing,
+            items: nextItems
+          },
+          {
+            [mineSupplierProductId]: {
+              productId: mineRow?.product_id || null,
+              variantKey,
+              variantAsin,
+              variantLabel,
+              name: productName
+            }
           }
-        },
+        ),
         enrichedShipping
       );
       nextProjects[idx] = updatedProject;
@@ -2065,15 +2153,26 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         });
       }
       updatedProject = applyShippingToUpstreamProject(
-        buildUpstreamProject({
-          cartName: requestedCartName || `Quick Add - ${mineSupplierProductId.slice(0, 8)}`,
-          requiredDate,
-          selectedMine: { [mineSupplierProductId]: quantity },
-          selectedUpstreamOffer: {},
-          suggestions: [],
-          brandFilter: '',
-          searchTerm: ''
-        }),
+        finalizeUpstreamProjectLines(
+          buildUpstreamProject({
+            cartName: requestedCartName || `Quick Add - ${mineSupplierProductId.slice(0, 8)}`,
+            requiredDate,
+            items: [newCartItem],
+            selectedUpstreamOffer: {},
+            suggestions: [],
+            brandFilter: '',
+            searchTerm: ''
+          }),
+          {
+            [mineSupplierProductId]: {
+              productId: mineRow?.product_id || null,
+              variantKey,
+              variantAsin,
+              variantLabel,
+              name: productName
+            }
+          }
+        ),
         enrichedShipping
       );
       // New add must appear first in cart.
@@ -2361,13 +2460,21 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
     const existingProject = payloadInput.projectId
       ? nextProjects.find((p) => String(p?.projectId || '') === String(payloadInput.projectId))
       : null;
+    const incomingSelectedMine = normalizeSelectedMineQuantities(payloadInput.selectedMine || {});
+    const mergedSelectedMine = existingProject
+      ? mergeUpstreamSelectedMineMaps(existingProject?.selectedMine || {}, incomingSelectedMine)
+      : incomingSelectedMine;
+    const mineIds = Object.keys(mergedSelectedMine);
+    const metaByMineId = await loadUpstreamMineMetaByIds(req.userId, mineIds);
     let nextProject = buildUpstreamProject({
       ...(existingProject || {}),
       projectId: payloadInput.projectId || null,
       cartName: String(payloadInput.cartName || '').trim() || existingProject?.cartName,
       requiredDate: String(payloadInput.requiredDate || '').trim() || existingProject?.requiredDate,
-      selectedMine: payloadInput.selectedMine || existingProject?.selectedMine || {},
-      selectedUpstreamOffer: payloadInput.selectedUpstreamOffer || existingProject?.selectedUpstreamOffer || {},
+      selectedMine: mergedSelectedMine,
+      selectedMineMeta: metaByMineId,
+      selectedUpstreamOffer:
+        payloadInput.selectedUpstreamOffer || existingProject?.selectedUpstreamOffer || {},
       suggestions: Array.isArray(payloadInput.suggestions)
         ? payloadInput.suggestions
         : existingProject?.suggestions || [],
@@ -2375,6 +2482,7 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       searchTerm: String(payloadInput.searchTerm || '').trim() || existingProject?.searchTerm || '',
       createdAt: existingProject?.createdAt
     });
+    nextProject = finalizeUpstreamProjectLines(nextProject, metaByMineId);
     if (enrichedShipping) {
       nextProject = applyShippingToUpstreamProject(nextProject, enrichedShipping);
     }

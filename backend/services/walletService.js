@@ -5,6 +5,7 @@ import { createReceiptAndDeliver } from './paymentReceiptService.js';
 import { ensurePaymentTransactionForPaidOrder } from './paymentTransactionService.js';
 import { writeAuditLog } from './auditService.js';
 import { calculateOrderPlatformFee } from './platformFeeService.js';
+import { resolveOrderChargeBreakdown } from '../utils/orderChargeBreakdown.js';
 
 const PLATFORM_ESCROW_WALLET = 'platform_escrow';
 const PLATFORM_REVENUE_WALLET = 'platform_revenue';
@@ -1082,7 +1083,21 @@ export async function payOrderFromWallet({
     orderItems,
     supplierId: order.supplier_id
   });
-  const grossAmount = roundMoney(order.total_amount);
+  const chargeBreakdown = resolveOrderChargeBreakdown(order);
+  const grossAmount = roundMoney(chargeBreakdown.combinedTotal);
+  if (Math.abs(roundMoney(order.total_amount) - grossAmount) > 0.01) {
+    const { data: syncedOrder, error: syncError } = await supabase
+      .from('orders')
+      .update({ total_amount: grossAmount })
+      .eq('id', order.id)
+      .select('*')
+      .single();
+    if (!syncError && syncedOrder) {
+      order = syncedOrder;
+    } else {
+      order.total_amount = grossAmount;
+    }
+  }
   const platformFeeAmount = Math.min(grossAmount, roundMoney(feeResult.feeAmount));
   const supplierPayoutAmount = roundMoney(grossAmount - platformFeeAmount);
 

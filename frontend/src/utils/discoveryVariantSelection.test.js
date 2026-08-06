@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  pickPrimaryVariantOption,
   resolveActiveDiscoveryVariant,
   resolveDiscoveryVariantLabel,
   variantMatchesSelections,
@@ -66,6 +67,36 @@ describe('discoveryVariantSelection', () => {
     expect(
       variantMatchesSelections(variants[1], { 'Leak Proof': 'yes', Height: '8 inch' })
     ).toBe(true);
+  });
+});
+
+describe('pickPrimaryVariantOption', () => {
+  it('prefers color over capacity, height, and material', () => {
+    const primary = pickPrimaryVariantOption([
+      { key: 'height', label: 'Height', values: ['27 cm', '600ml'] },
+      { key: 'capacity', label: 'Capacity', values: ['1 L', '500ML'] },
+      { key: 'color', label: 'Color', values: ['black', 'blue', 'Silver'] },
+      { key: 'material', label: 'Material', values: ['Stainless Steel', 'Steel 304'] }
+    ]);
+    expect(primary).toHaveLength(1);
+    expect(primary[0].key).toBe('color');
+  });
+
+  it('returns the only option when just one selector exists', () => {
+    const primary = pickPrimaryVariantOption([
+      { key: 'capacity', label: 'Capacity', values: ['1 L', '500ML'] }
+    ]);
+    expect(primary).toEqual([
+      { key: 'capacity', label: 'Capacity', values: ['1 L', '500ML'] }
+    ]);
+  });
+
+  it('falls back to the option with the most values when no priority key matches', () => {
+    const primary = pickPrimaryVariantOption([
+      { key: 'finish', label: 'Finish', values: ['Matte'] },
+      { key: 'edition', label: 'Edition', values: ['Standard', 'Pro', 'Max'] }
+    ]);
+    expect(primary[0].key).toBe('edition');
   });
 });
 

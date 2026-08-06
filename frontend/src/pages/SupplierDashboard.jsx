@@ -37,6 +37,8 @@ import SupplierTsinLine from '../components/SupplierTsinLine';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpStatCard from '../components/sp/SpStatCard';
+import OrderChargeSummary from '../components/sp/OrderChargeSummary';
+import SupplierOrderScopeNav from '../components/supplier/SupplierOrderScopeNav';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import './Dashboard.css';
@@ -542,11 +544,6 @@ const SupplierDashboard = ({ user }) => {
       .filter(Boolean)
       .join(', ');
 
-  const readGstSummary = (order) =>
-    order?.invoice?.metadata?.gstSummary ||
-    order?.deliveryAddress?.gstSummary ||
-    null;
-
 
   if (loading) {
     return (
@@ -578,11 +575,13 @@ const SupplierDashboard = ({ user }) => {
               <Button variant="outline" onClick={() => navigate('/supplier-returns')}>
                 Returns
               </Button>
+              <Button variant="outline" onClick={() => navigate('/supplier-orders')}>
+                Orders
+              </Button>
               <Button variant="outline" onClick={() => navigate('/product-management')}>
                 Manage Products
               </Button>
-              <Button variant="outline" onClick={() => navigate('/supplier-upstream')}>Upstream sourcing</Button>
-              <Button onClick={() => navigate('/supplier-upstream-orders')}>My upstream orders</Button>
+              <Button onClick={() => navigate('/supplier-upstream')}>Upstream sourcing</Button>
             </>
           }
         />
@@ -891,8 +890,12 @@ const SupplierDashboard = ({ user }) => {
         <div className="dashboard-section">
           <div className="section-header">
             <h2>Live Orders</h2>
-            <button className="btn-secondary">View All</button>
+            <button className="btn-secondary" onClick={() => navigate('/supplier-orders')}>
+              View all orders
+            </button>
           </div>
+
+          <SupplierOrderScopeNav showReturnsLink={false} className="supplier-dashboard-order-scope" />
 
           <div className="live-orders-search supplier-dashboard-live-search">
             <Search size={18} className="supplier-dashboard-live-search-icon" aria-hidden />
@@ -1035,6 +1038,7 @@ const SupplierDashboard = ({ user }) => {
                 <div className="order-info-section">
                   <h3>Order Items</h3>
                   {orderDetails.items && orderDetails.items.length > 0 ? (
+                    <>
                     <table className="order-items-table">
                       <thead>
                         <tr>
@@ -1103,37 +1107,11 @@ const SupplierDashboard = ({ user }) => {
                           </tr>
                         ))}
                       </tbody>
-                      <tfoot>
-                        <tr>
-                          <td colSpan="3"><strong>Total Amount</strong></td>
-                          <td><strong>₹{orderDetails.totalAmount?.toLocaleString()}</strong></td>
-                        </tr>
-                      </tfoot>
                     </table>
+                    <OrderChargeSummary order={orderDetails} />
+                    </>
                   ) : (
                     <p className="supplier-dashboard-muted-text">No items found in this order.</p>
-                  )}
-                  {readGstSummary(orderDetails) && (
-                    <div className="supplier-dashboard-gst-summary">
-                      <p className="supplier-dashboard-gst-row supplier-dashboard-gst-row-first">
-                        <strong>Taxable subtotal:</strong> ₹{Number(readGstSummary(orderDetails)?.subtotalAmount || 0).toLocaleString('en-IN')}
-                      </p>
-                      <p className="supplier-dashboard-gst-row">
-                        <strong>GST type:</strong> {readGstSummary(orderDetails)?.taxType === 'IGST' ? 'IGST' : 'CGST + SGST'}
-                      </p>
-                      {readGstSummary(orderDetails)?.taxType === 'IGST' ? (
-                        <p className="supplier-dashboard-gst-row">
-                          <strong>IGST:</strong> ₹{Number(readGstSummary(orderDetails)?.igstAmount || 0).toLocaleString('en-IN')}
-                        </p>
-                      ) : (
-                        <p className="supplier-dashboard-gst-row">
-                          <strong>CGST:</strong> ₹{Number(readGstSummary(orderDetails)?.cgstAmount || 0).toLocaleString('en-IN')} | <strong>SGST:</strong> ₹{Number(readGstSummary(orderDetails)?.sgstAmount || 0).toLocaleString('en-IN')}
-                        </p>
-                      )}
-                      <p className="supplier-dashboard-gst-row">
-                        <strong>Total GST:</strong> ₹{Number(readGstSummary(orderDetails)?.taxAmount || 0).toLocaleString('en-IN')}
-                      </p>
-                    </div>
                   )}
                 </div>
 

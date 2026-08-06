@@ -166,7 +166,13 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         prevAddr.transportBill && typeof prevAddr.transportBill === 'object' ? prevAddr.transportBill : null;
       const existingTransport = Math.round((Number(existingBill?.amount || 0) || 0) * 100) / 100;
       const currentTotal = Math.round((parseFloat(row.total_amount || 0) || 0) * 100) / 100;
-      const productsOnly = Math.max(0, Math.round((currentTotal - existingTransport) * 100) / 100);
+      const productsInclGstFromSummary = Math.round(
+        (Number(prevAddr?.gstSummary?.totalAmount || 0) || 0) * 100
+      ) / 100;
+      const productsOnly =
+        productsInclGstFromSummary > 0
+          ? productsInclGstFromSummary
+          : Math.max(0, Math.round((currentTotal - existingTransport) * 100) / 100);
 
       const isSingleRoot =
         !hasPerOrderRows && orderIds.length === 1 && row.id === orderIds[0];

@@ -8,6 +8,44 @@ function normalizeOptionKey(key) {
   return normalizeSpecificationKeyForMatch(key);
 }
 
+/** Amazon-style: one shopper-facing selector; everything else lives in specifications. */
+const PRIMARY_VARIANT_OPTION_KEYS = [
+  'color',
+  'colour',
+  'size',
+  'capacity',
+  'pack_size',
+  'packsize',
+  'style',
+  'pattern',
+  'material',
+  'height',
+  'length',
+  'width',
+  'weight',
+  'volume'
+];
+
+export function pickPrimaryVariantOption(variantOptions = []) {
+  if (!Array.isArray(variantOptions) || variantOptions.length === 0) return [];
+  if (variantOptions.length === 1) return variantOptions;
+
+  const withKeys = variantOptions.map((option) => ({
+    ...option,
+    normalizedKey: normalizeOptionKey(option.key)
+  }));
+
+  for (const priorityKey of PRIMARY_VARIANT_OPTION_KEYS) {
+    const match = withKeys.find((option) => option.normalizedKey === priorityKey);
+    if (match) return [match];
+  }
+
+  const [best] = [...withKeys].sort(
+    (left, right) => (right.values?.length || 0) - (left.values?.length || 0)
+  );
+  return best ? [best] : [];
+}
+
 function normalizeOptionValue(value) {
   return String(value || '').trim().toLowerCase();
 }

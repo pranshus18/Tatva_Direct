@@ -53,6 +53,12 @@ import {
   VAULT_PAGE_PATH,
   VAULT_PAYMENT_METHOD
 } from '../utils/vaultPaymentMethod';
+import {
+  sumPoGroupsGstAmount,
+  sumPoGroupsProductSubtotal,
+  sumPoGroupsProductsInclGst
+} from '../utils/orderChargeBreakdown';
+import { formatGstBasisLabel, formatGstTaxTypeLabel } from '../utils/gstDisplay';
 import './CreatePO.css';
 
 const todayDateMin = getTodayDateInputValue();
@@ -241,6 +247,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   const [platformQrDataUrl, setPlatformQrDataUrl] = useState('');
   const [serviceProviderGstin, setServiceProviderGstin] = useState('');
   const [shippingAddress, setShippingAddress] = useState(blankAddress);
+  const [billingAddress, setBillingAddress] = useState(blankAddress);
   const [checkoutShippingProjectName, setCheckoutShippingProjectName] = useState('');
   const [createdTransportOrders, setCreatedTransportOrders] = useState([]);
   const [selectedTransport, setSelectedTransport] = useState(null);
@@ -389,8 +396,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     setReservationSecondsLeft(0);
   };
 
+  const productsSubtotalAllPos = useMemo(
+    () => sumPoGroupsProductSubtotal(poGroups),
+    [poGroups]
+  );
+  const gstTotalAllPos = useMemo(() => sumPoGroupsGstAmount(poGroups), [poGroups]);
   const grandTotalAllPos = useMemo(
-    () => poGroups.reduce((sum, g) => sum + (Number(g.total) || 0), 0),
+    () => sumPoGroupsProductsInclGst(poGroups),
     [poGroups]
   );
   const transportTotalAllPos = useMemo(() => {
@@ -614,6 +626,18 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           if (profileData?.profile) {
             const gstin = String(profileData.profile.gstin || profileData.profile.mainGstin || '').trim();
             setServiceProviderGstin(gstin);
+          }
+          const registeredBilling = normalizeAddress(profileData?.address || {});
+          const legacyBilling = Array.isArray(profileData?.profile?.billingAddresses)
+            ? normalizeAddress(profileData.profile.billingAddresses[0] || {})
+            : blankAddress;
+          const resolvedBilling = isUsableShippingAddress(registeredBilling)
+            ? registeredBilling
+            : isUsableShippingAddress(legacyBilling)
+              ? legacyBilling
+              : blankAddress;
+          if (isUsableShippingAddress(resolvedBilling)) {
+            setBillingAddress(resolvedBilling);
           }
         }
 
@@ -905,7 +929,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         paymentDetails: Object.keys(paymentDetails).length > 0 ? paymentDetails : undefined,
         deliveryDestination: 'shipping',
         shippingAddress,
-        billingAddress: shippingAddress,
+        billingAddress: isUsableShippingAddress(billingAddress) ? billingAddress : shippingAddress,
         gstin: serviceProviderGstin || null,
         quotedTransportTotal: transportTotalAllPos
       })
@@ -1279,7 +1303,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           body: JSON.stringify({
             poGroups: scopedGroups,
             shippingAddress,
-            billingAddress: shippingAddress,
+            billingAddress: isUsableShippingAddress(billingAddress) ? billingAddress : shippingAddress,
             deliveryDestination: 'shipping',
             hasGstin: false
           })
@@ -1318,7 +1342,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         hasGstin: false,
         deliveryDestination: 'shipping',
         shippingAddress,
-        billingAddress: shippingAddress,
+        billingAddress: isUsableShippingAddress(billingAddress) ? billingAddress : shippingAddress,
         createdOrders: createdTransportOrders
       }
     });
@@ -1545,7 +1569,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             </button>
             <span style={{ fontSize: '0.76rem', color: '#64748b' }}>
               {isVaultPaymentMethod(poPaymentMethod)
-                ? 'Tip: Keep enough vault balance for products + transport before confirming.'
+                ? 'Tip: Keep enough vault balance for products (incl. GST) + transport before confirming.'
                 : 'Tip: Configure credit limit with supplier to use pay later without failures.'}
             </span>
           </div>
@@ -1565,13 +1589,20 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                 Vault balance check
               </p>
               <p style={{ margin: 0, fontSize: '0.8rem', color: '#475569' }}>
-                Products: <strong>₹{Number(grandTotalAllPos || 0).toLocaleString('en-IN')}</strong>
+                Product total: <strong>₹{Number(productsSubtotalAllPos || 0).toLocaleString('en-IN')}</strong>
+              </p>
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
+                GST: <strong>₹{Number(gstTotalAllPos || 0).toLocaleString('en-IN')}</strong>
+              </p>
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
+                Products incl. GST:{' '}
+                <strong>₹{Number(grandTotalAllPos || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
                 Transport: <strong>₹{Number(transportTotalAllPos || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
-                Amount to debit:{' '}
+                Combined total to debit:{' '}
                 <strong>₹{Number(checkoutTotalDue || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
@@ -1790,8 +1821,18 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                         Delivery: {group.shippingAddressLabel}
                       </p>
                     ) : null}
+                    {group.gstSummary ? (
+                      <p style={{ margin: '0.2rem 0 0', fontSize: '0.78rem', color: '#475569' }}>
+                        GST: {formatGstTaxTypeLabel(group.gstSummary.taxType)}
+                        {formatGstBasisLabel(group.gstSummary)
+                          ? ` · ${formatGstBasisLabel(group.gstSummary)}`
+                          : ''}
+                      </p>
+                    ) : null}
                   </div>
-                  <div className="po-total">₹{group.total?.toLocaleString() || '0'}</div>
+                  <div className="po-total">
+                    ₹{(group.totalInclGst ?? group.total)?.toLocaleString() || '0'}
+                  </div>
                 </div>
                 <table className="po-table">
                   <thead>

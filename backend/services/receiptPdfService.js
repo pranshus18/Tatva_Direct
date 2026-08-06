@@ -4,9 +4,12 @@ import { ORDER_ATTACHMENTS_BUCKET, uploadFile } from './storage.js';
 import {
   assertGstStateInputs,
   assertSupplierProductTaxRates,
+  buildOrderGstSummary,
   computeLineGst,
   extractUserState,
+  formatGstTaxTypeLabel,
   isSameIndianState,
+  lineGstFromOrderItemSnapshot,
   sumGstLines
 } from './gstService.js';
 import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
@@ -86,6 +89,8 @@ export async function loadReceiptItemsAndGst({ order, supplier, serviceProvider 
     .eq('order_id', order.id);
 
   const items = rows || [];
+  const orderLevelGst = order?.delivery_address?.gstSummary || null;
+
   const supplierProductIds = [...new Set(items.map((it) => it?.supplier_product_id).filter(Boolean))];
   let supplierProductsById = new Map();
   if (supplierProductIds.length > 0) {
@@ -97,11 +102,14 @@ export async function loadReceiptItemsAndGst({ order, supplier, serviceProvider 
   }
 
   const billingState =
+    orderLevelGst?.placeOfSupplyState ||
+    orderLevelGst?.billingState ||
     order?.delivery_address?.billingAddress?.state ||
     order?.delivery_address?.state ||
     extractUserState(serviceProvider || {}) ||
     '';
-  const supplierState = extractUserState(supplier || {});
+  const supplierState =
+    orderLevelGst?.supplierState || extractUserState(supplier || {}) || '';
   assertGstStateInputs({
     supplierState,
     billingState,
@@ -113,6 +121,14 @@ export async function loadReceiptItemsAndGst({ order, supplier, serviceProvider 
     const qty = Number(item?.quantity || 0);
     const unitPrice = Number(item?.unit_price || 0);
     const taxableAmount = Number(item?.total_price || qty * unitPrice);
+    const snapshotLineGst = lineGstFromOrderItemSnapshot(item, taxableAmount);
+    if (snapshotLineGst) {
+      return {
+        ...item,
+        lineGst: snapshotLineGst
+      };
+    }
+
     const spTax = supplierProductsById.get(item?.supplier_product_id) || {};
     assertSupplierProductTaxRates({
       supplierProduct: spTax,
@@ -132,7 +148,21 @@ export async function loadReceiptItemsAndGst({ order, supplier, serviceProvider 
     };
   });
 
-  const gstSummary = sumGstLines(enrichedItems.map((it) => it.lineGst));
+  const gstSummary =
+    orderLevelGst && typeof orderLevelGst === 'object' && orderLevelGst.totalAmount
+      ? {
+          ...orderLevelGst,
+          taxType:
+            orderLevelGst.taxType ||
+            sumGstLines(enrichedItems.map((it) => it.lineGst)).taxType
+        }
+      : buildOrderGstSummary({
+          lineTaxBreakdown: enrichedItems.map((it) => it.lineGst),
+          supplierState,
+          billingState,
+          placeOfSupplyState: billingState,
+          intraStateTax: intraState
+        });
   return { items: enrichedItems, gstSummary };
 }
 
@@ -198,6 +228,32 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       doc.x = pageLeft;
 
       const transportBillRow = getTransportBill(order);
+      const orderGstSummary =
+        gstSummary && typeof gstSummary === 'object'
+          ? gstSummary
+          : sumGstLines(items.map((it) => it?.lineGst || {}));
+
+      section('GST basis');
+      doc.fontSize(10.3).font('Helvetica');
+      if (orderGstSummary?.supplierState || supplier?.address) {
+        doc.text(
+          `Supplier state: ${safeString(orderGstSummary?.supplierState || extractUserState(supplier || {}))}`
+        );
+      }
+      doc.text(
+        `Place of supply (customer): ${safeString(
+          orderGstSummary?.placeOfSupplyState ||
+            orderGstSummary?.billingState ||
+            order?.delivery_address?.billingAddress?.state ||
+            '-'
+        )}`
+      );
+      doc.text(`GST type for this order: ${formatGstTaxTypeLabel(orderGstSummary?.taxType)}`);
+      if (orderGstSummary?.intraStateTax != null) {
+        doc.text(
+          `Supply: ${orderGstSummary.intraStateTax ? 'Intra-state (CGST + SGST)' : 'Inter-state (IGST)'}`
+        );
+      }
 
       if (!items.length && !transportBillRow) {
         doc.fontSize(10).font('Helvetica').text('No line items found.');
@@ -211,12 +267,14 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
           const lineUnit = item?.product?.unit || 'units';
           const lineTaxLabel =
             lineGst?.taxType === 'IGST'
-              ? `IGST ${Number(lineGst?.igstRate || 0)}%`
-              : `CGST ${Number(lineGst?.cgstRate || 0)}% + SGST ${Number(lineGst?.sgstRate || 0)}%`;
+              ? `IGST ${Number(lineGst?.igstRate || 0)}% = ${formatINR(lineGst?.igstAmount || lineGst?.taxAmount || 0)}`
+              : `CGST ${Number(lineGst?.cgstRate || 0)}% + SGST ${Number(lineGst?.sgstRate || 0)}% = ${formatINR(
+                  lineGst?.taxAmount || 0
+                )}`;
 
           const rowTop = doc.y;
           doc.fontSize(9.2).font('Helvetica').text(
-            `${lineName}\n${lineTaxLabel} = ${formatINR(lineGst?.taxAmount || 0)}\nLine total (incl GST): ${formatINR(
+            `${lineName}\n${lineTaxLabel}\nLine total (incl GST): ${formatINR(
               lineGst?.totalAmount || taxableAmount
             )}`,
             tableStartX + 6,
@@ -287,13 +345,17 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       doc.fontSize(10.3).font('Helvetica');
       doc.text(`Taxable subtotal (products): ${formatINR(subtotalAmount)}`);
       if (igstAmount > 0) {
-        doc.text(`GST type: IGST`);
-        doc.text(`IGST: ${formatINR(igstAmount || taxAmount)}`);
-      } else {
-        doc.text(`GST type: CGST + SGST`);
+        doc.text(`IGST: ${formatINR(igstAmount)}`);
+      }
+      if (cgstAmount > 0 || sgstAmount > 0) {
         doc.text(`CGST: ${formatINR(cgstAmount)} | SGST: ${formatINR(sgstAmount)}`);
       }
-      doc.text(`Total GST (products): ${formatINR(taxAmount)}`);
+      if (igstAmount <= 0 && cgstAmount <= 0 && sgstAmount <= 0 && taxAmount > 0) {
+        doc.text(`GST type: ${formatGstTaxTypeLabel(strictSummary?.taxType)}`);
+        doc.text(`Total GST: ${formatINR(taxAmount)}`);
+      } else {
+        doc.text(`Total GST (products): ${formatINR(taxAmount)}`);
+      }
       doc.text(`Products total (incl. GST): ${formatINR(productsInclGst)}`);
       if (transportBillRow) {
         doc.moveDown(0.15);

@@ -133,6 +133,102 @@ export function assertSupplierProductTaxRates({ supplierProduct, context = 'GST 
   throw error;
 }
 
+export function deriveGstTaxTypeFromTotals({ igstAmount = 0, cgstAmount = 0, sgstAmount = 0 } = {}) {
+  const igst = asNumber(igstAmount);
+  const cgst = asNumber(cgstAmount);
+  const sgst = asNumber(sgstAmount);
+  if (igst > 0 && cgst <= 0 && sgst <= 0) return 'IGST';
+  if ((cgst > 0 || sgst > 0) && igst <= 0) return 'CGST_SGST';
+  if (igst > 0 && (cgst > 0 || sgst > 0)) return 'MIXED';
+  return 'NONE';
+}
+
+/** Place of supply state drives IGST vs CGST+SGST (billing when GSTIN registered). */
+export function resolveGstPlaceOfSupplyState({
+  hasGstin = false,
+  deliveryDestination = 'shipping',
+  billingAddress = {},
+  shippingAddress = {}
+} = {}) {
+  const billingState = billingAddress?.state || billingAddress?.region || '';
+  const shippingState = shippingAddress?.state || shippingAddress?.region || '';
+  if (hasGstin) {
+    if (deliveryDestination === 'billing' && billingState) return billingState;
+    if (billingState) return billingState;
+  }
+  return shippingState || billingState || '';
+}
+
+export function buildOrderGstSummary({
+  lineTaxBreakdown = [],
+  supplierState = '',
+  billingState = '',
+  placeOfSupplyState = '',
+  intraStateTax = false
+} = {}) {
+  const totals = sumGstLines(lineTaxBreakdown);
+  const posState = placeOfSupplyState || billingState || '';
+  return {
+    ...totals,
+    taxType: deriveGstTaxTypeFromTotals(totals),
+    supplierState: normalizeStateName(supplierState) || String(supplierState || '').trim(),
+    billingState: normalizeStateName(billingState) || String(billingState || '').trim(),
+    placeOfSupplyState: normalizeStateName(posState) || String(posState || '').trim(),
+    intraStateTax: Boolean(intraStateTax)
+  };
+}
+
+export function parseOrderItemSpecifications(specifications) {
+  if (!specifications) return {};
+  if (typeof specifications === 'object' && !Array.isArray(specifications)) return specifications;
+  if (typeof specifications === 'string') {
+    try {
+      const parsed = JSON.parse(specifications);
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/** Immutable GST snapshot captured on each order line at placement. */
+export function lineGstFromOrderItemSnapshot(item, fallbackTaxableAmount = 0) {
+  const specs = parseOrderItemSpecifications(item?.specifications);
+  const gst = specs?.gst;
+  if (!gst || typeof gst !== 'object' || !gst.taxType) return null;
+
+  const taxableAmount = asNumber(gst.taxableAmount ?? fallbackTaxableAmount);
+  const taxAmount = asNumber(gst.taxAmount);
+  const igstAmount = asNumber(gst.igstAmount);
+  const cgstAmount = asNumber(gst.cgstAmount);
+  const sgstAmount = asNumber(gst.sgstAmount);
+
+  return {
+    taxableAmount,
+    taxType: gst.taxType,
+    igstRate: asNumber(gst.igstRate),
+    cgstRate: asNumber(gst.cgstRate),
+    sgstRate: asNumber(gst.sgstRate),
+    igstAmount: igstAmount || (gst.taxType === 'IGST' ? taxAmount : 0),
+    cgstAmount: cgstAmount || (gst.taxType === 'CGST_SGST' ? taxAmount / 2 : 0),
+    sgstAmount: sgstAmount || (gst.taxType === 'CGST_SGST' ? taxAmount / 2 : 0),
+    taxAmount: taxAmount || igstAmount + cgstAmount + sgstAmount,
+    totalAmount: asNumber(gst.totalAmount ?? taxableAmount + taxAmount),
+    supplierState: gst.supplierState || '',
+    billingState: gst.billingState || gst.placeOfSupplyState || '',
+    placeOfSupplyState: gst.placeOfSupplyState || gst.billingState || '',
+    intraStateTax: Boolean(gst.intraStateTax)
+  };
+}
+
+export function formatGstTaxTypeLabel(taxType) {
+  if (taxType === 'IGST') return 'IGST (inter-state)';
+  if (taxType === 'CGST_SGST') return 'CGST + SGST (same state)';
+  if (taxType === 'MIXED') return 'IGST + CGST/SGST (mixed lines)';
+  return 'No GST';
+}
+
 export function computeLineGst({
   taxableAmount = 0,
   igstRate = 0,
@@ -179,7 +275,7 @@ export function computeLineGst({
 }
 
 export function sumGstLines(lines = []) {
-  return (lines || []).reduce(
+  const totals = (lines || []).reduce(
     (acc, line) => {
       acc.subtotalAmount += asNumber(line?.taxableAmount);
       acc.taxAmount += asNumber(line?.taxAmount);
@@ -198,4 +294,8 @@ export function sumGstLines(lines = []) {
       totalAmount: 0
     }
   );
+  return {
+    ...totals,
+    taxType: deriveGstTaxTypeFromTotals(totals)
+  };
 }

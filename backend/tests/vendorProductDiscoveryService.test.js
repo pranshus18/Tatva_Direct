@@ -127,3 +127,72 @@ test('reconcileWithSupplierOffers never fills a blank offer location from the sh
     'a blank offer location must stay blank, never inherit the shared catalog product location'
   );
 });
+
+test('reconcileWithSupplierOffers keeps only offers matching the cart line variantKey', async () => {
+  const catalogProduct = {
+    id: 'product-1',
+    name: 'Mac Air M2',
+    description: 'A laptop',
+    category: 'laptop',
+    unit: 'nos',
+    asin: 'TS22',
+    images: [],
+    average_rating: 0,
+    status: 'approved',
+    location: 'Bengaluru',
+    specifications: {}
+  };
+
+  const offerRows = [
+    {
+      id: 'offer-red',
+      product_id: 'product-1',
+      price: 85,
+      stock: 50,
+      min_order_quantity: 1,
+      location: 'Pune',
+      outlet_id: null,
+      variant_key: 'vk-red',
+      variant_asin: 'TS22R',
+      attributes: {},
+      status: 'approved',
+      is_active: true,
+      supplier: { id: 'supplier-a', name: 'Supplier A', company: 'A', address: {}, profile: {} }
+    },
+    {
+      id: 'offer-blue',
+      product_id: 'product-1',
+      price: 90,
+      stock: 40,
+      min_order_quantity: 1,
+      location: 'Mumbai',
+      outlet_id: null,
+      variant_key: 'vk-blue',
+      variant_asin: 'TS22B',
+      attributes: {},
+      status: 'approved',
+      is_active: true,
+      supplier: { id: 'supplier-b', name: 'Supplier B', company: 'B', address: {}, profile: {} }
+    }
+  ];
+
+  const supabase = makeFakeSupabase({ offerRows, catalogProducts: [catalogProduct] });
+
+  const result = await reconcileWithSupplierOffers({
+    supabase,
+    products: [catalogProduct],
+    item: { productId: 'product-1', variantKey: 'vk-red' },
+    itemId: 'item-1',
+    itemName: 'Mac Air M2',
+    referenceProduct: catalogProduct,
+    includeAllVariants: false,
+    targetBrand: null,
+    detectProductBrandKey: () => null,
+    fuzzyNameCompatible: () => true,
+    hasModelTokenConflict: () => false
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].variant_key, 'vk-red');
+  assert.equal(result[0].supplierProductId, 'offer-red');
+});

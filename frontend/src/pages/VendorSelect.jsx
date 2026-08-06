@@ -1202,6 +1202,14 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
           return (
           <div key={item.id} className="vendor-section">
             <h3 className="item-title">{item.normalizedName || item.rawName}</h3>
+            {String(item?.variantLabel || item?.variantAsin || item?.variantKey || '').trim() ? (
+              <div style={{ marginTop: '-0.4rem', marginBottom: '0.75rem', fontSize: '0.82rem', color: '#64748b' }}>
+                Variant:{' '}
+                <strong>
+                  {String(item?.variantLabel || item?.variantAsin || item?.variantKey || '').trim()}
+                </strong>
+              </div>
+            ) : null}
             <div style={{ marginTop: '-0.4rem', marginBottom: '0.75rem', fontSize: '0.82rem', color: '#334155' }}>
               Requested quantity: <strong>{getItemRequestedQty(item)}</strong>
               {item.unit ? ` ${item.unit}` : ''}

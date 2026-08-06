@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { resolveApiPath } from '../config/api';
+import SupplierOrderScopeNav from '../components/supplier/SupplierOrderScopeNav';
 import './SupplierReturns.css';
 import {
   SUPPLIER_RETURN_ACTIONS as statusActions,
@@ -10,8 +11,8 @@ import {
 import { formatDateIST, formatDateTimeIST } from '../utils/dateTime';
 
 const MAIN_TABS = [
-  { id: 'incoming', label: 'Process returns' },
-  { id: 'outgoing', label: 'My upstream returns' }
+  { id: 'incoming', label: 'Downstream returns' },
+  { id: 'outgoing', label: 'Upstream returns' }
 ];
 
 const INCOMING_SOURCES = [
@@ -225,7 +226,8 @@ const SupplierReturns = () => {
         <div>
           <h1>Returns</h1>
           <p>
-            Process returns sent to you, or track returns you raised on upstream purchase orders.
+            Downstream returns are requests from buyers to you. Upstream returns are requests you raised on
+            purchase orders with your suppliers.
           </p>
         </div>
         <button className="btn-secondary" onClick={() => navigate('/supplier-dashboard')}>
@@ -233,7 +235,9 @@ const SupplierReturns = () => {
         </button>
       </div>
 
-      <div className="sr-main-tabs" role="tablist" aria-label="Return views">
+      <SupplierOrderScopeNav />
+
+      <div className="sr-main-tabs" role="tablist" aria-label="Return direction">
         {MAIN_TABS.map((tab) => (
           <button
             key={tab.id}
@@ -258,7 +262,7 @@ const SupplierReturns = () => {
           <div className="sr-toolbar">
             <div className="sr-toolbar__left">
               <div className="sr-toolbar__title">
-                {mainTab === 'outgoing' ? 'Your upstream return requests' : 'Incoming return requests'}
+                {mainTab === 'outgoing' ? 'Upstream return requests you filed' : 'Downstream returns to process'}
               </div>
               <div className="sr-toolbar__subtitle">{filteredReturns.length} shown</div>
             </div>
@@ -307,11 +311,19 @@ const SupplierReturns = () => {
                 <button
                   type="button"
                   className="btn-secondary sr-empty__action"
-                  onClick={() => navigate('/supplier-upstream-orders')}
+                  onClick={() => navigate('/supplier-orders?direction=upstream')}
                 >
                   Go to upstream orders
                 </button>
-              ) : null}
+              ) : (
+                <button
+                  type="button"
+                  className="btn-secondary sr-empty__action"
+                  onClick={() => navigate('/supplier-orders')}
+                >
+                  Go to downstream orders
+                </button>
+              )}
             </div>
           ) : (
             <div className="sr-grid">
@@ -348,7 +360,19 @@ const SupplierReturns = () => {
                       {r.order_number ? (
                         <div className="sr-field">
                           <div className="sr-field__label">Order</div>
-                          <div className="sr-field__value sr-mono">{r.order_number}</div>
+                          <button
+                            type="button"
+                            className="sr-field__value sr-mono sr-order-link"
+                            onClick={() =>
+                              navigate(
+                                mainTab === 'outgoing'
+                                  ? `/supplier-orders?direction=upstream&order=${encodeURIComponent(r.order_number)}`
+                                  : `/supplier-orders?order=${encodeURIComponent(r.order_number)}`
+                              )
+                            }
+                          >
+                            {r.order_number}
+                          </button>
                         </div>
                       ) : null}
                       {r.buyer_name && mainTab === 'incoming' ? (

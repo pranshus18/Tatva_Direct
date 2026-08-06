@@ -259,6 +259,12 @@ export default function DiscoveryAddToCartDialog({
       if (product?.variantKey) {
         payload.variantKey = String(product.variantKey);
       }
+      if (product?.variantAsin) {
+        payload.variantAsin = String(product.variantAsin);
+      }
+      if (product?.variantLabel) {
+        payload.variantLabel = String(product.variantLabel);
+      }
       if (isNewProject) {
         payload.projectName = newProjectName.trim();
         payload.expectedDeliveryDate = expectedDeliveryDate;

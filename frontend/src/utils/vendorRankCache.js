@@ -3,14 +3,15 @@
 const CACHE = new Map();
 const TTL_MS = 5 * 60 * 1000;
 /** Bump when vendor rank payload shape / spec merge logic changes (invalidates stale cached cards). */
-const VENDOR_RANK_CACHE_VERSION = 'spec-per-offer-v5';
+const VENDOR_RANK_CACHE_VERSION = 'variant-scoped-v6';
 
 export function buildVendorRankCacheKey(items, boqId, project = null) {
   const lines = (Array.isArray(items) ? items : [])
     .map((it) => {
       const id = String(it?.id ?? it?.productId ?? '').trim();
+      const variantKey = String(it?.variantKey ?? it?.variant_key ?? '').trim();
       const qty = Math.floor(Number(it?.quantity)) || 1;
-      return `${id}:${qty}`;
+      return `${id}:${variantKey || '-'}:${qty}`;
     })
     .filter((line) => line && !line.startsWith(':'))
     .sort();

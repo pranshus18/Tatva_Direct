@@ -31,13 +31,16 @@ export function registerSupplierOrderRoutes(ctx) {
 
 router.get('/orders', authenticateToken, async (req, res) => {
   try {
+    const scopeRaw = String(req.query.scope || 'all').trim().toLowerCase();
+    const scope = ['retail', 'chain', 'all'].includes(scopeRaw) ? scopeRaw : 'all';
+
     // Use retry logic for transient SSL/network errors
     const result = await retrySupabaseQuery(async () => {
       return await supabase
         .from('orders')
         .select(`
           *,
-          service_provider:users!orders_service_provider_id_fkey (id, name, company, email, phone),
+          service_provider:users!orders_service_provider_id_fkey (id, name, company, email, phone, user_type),
           order_items (
             *,
             product:products (id, name, category, unit, price)
@@ -61,6 +64,7 @@ router.get('/orders', authenticateToken, async (req, res) => {
         return res.json({ 
           status: 'success',
           orders: [],
+          scope,
           warning: 'Unable to fetch orders due to network issues. Please try again in a moment.'
         });
       }
@@ -68,7 +72,17 @@ router.get('/orders', authenticateToken, async (req, res) => {
     }
 
     const rawOrders = result.data || [];
-    const orderIds = rawOrders.map((o) => o.id).filter(Boolean);
+    const scopedOrders = rawOrders.filter((order) => {
+      const buyer = order.service_provider;
+      const chainUpstreamOrder =
+        String(order.channel || '').toLowerCase() === 'b2b_po' &&
+        String(buyer?.user_type || '').toLowerCase() === 'supplier';
+      if (scope === 'chain') return chainUpstreamOrder;
+      if (scope === 'retail') return !chainUpstreamOrder;
+      return true;
+    });
+
+    const orderIds = scopedOrders.map((o) => o.id).filter(Boolean);
     let invoiceByOrderId = new Map();
     if (orderIds.length > 0) {
       const { data: invoiceRows } = await supabase
@@ -77,17 +91,39 @@ router.get('/orders', authenticateToken, async (req, res) => {
         .in('order_id', orderIds);
       invoiceByOrderId = new Map((invoiceRows || []).map((inv) => [inv.order_id, inv]));
     }
-    const ordersWithInvoices = rawOrders.map((o) => {
+    const ordersWithInvoices = scopedOrders.map((o) => {
       const inv = invoiceByOrderId.get(o.id);
+      const buyer = o.service_provider;
+      const chainUpstreamOrder =
+        String(o.channel || '').toLowerCase() === 'b2b_po' &&
+        String(buyer?.user_type || '').toLowerCase() === 'supplier';
       return {
-        ...o,
+        id: o.id,
+        orderNumber: o.order_number || o.id,
+        customer: buyer?.name || buyer?.company || 'Service Provider',
+        company: buyer?.company || '',
+        amount: parseFloat(o.total_amount || 0),
+        totalAmount: parseFloat(o.total_amount || 0),
+        status: o.status,
+        paymentStatus: o.payment_status || 'pending',
+        paymentMethod: o.payment_method || null,
+        createdAt: o.created_at,
+        updatedAt: o.updated_at || o.created_at,
+        itemCount: o.order_items?.length || 0,
+        channel: o.channel || null,
+        chainUpstreamOrder,
+        buyerIsSupplier: String(buyer?.user_type || '').toLowerCase() === 'supplier',
         invoiceNumber: inv?.invoice_number || null,
-        invoicePdfUrl: inv?.metadata?.pdfUrl || null
+        invoicePdfUrl: inv?.metadata?.pdfUrl || null,
+        trackingNumber: o.tracking_number || null,
+        shippingProvider: o.shipping_provider || null,
+        expectedDeliveryDate: o.expected_delivery_date || null
       };
     });
 
     res.json({
       status: 'success',
+      scope,
       orders: ordersWithInvoices
     });
   } catch (error) {

@@ -39,6 +39,8 @@ import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import BoqDetailDialog from '../components/sp/BoqDetailDialog';
+import OrderChargeSummary from '../components/sp/OrderChargeSummary';
+import { resolveOrderChargeBreakdown } from '../utils/orderChargeBreakdown';
 import './Dashboard.css';
 
 const DASHBOARD_CACHE_KEY = 'sp_dashboard_cache_v1';
@@ -630,10 +632,6 @@ const ServiceProviderDashboard = ({ user }) => {
       .filter(Boolean)
       .join(', ');
 
-  const readGstSummary = (order) =>
-    order?.invoice?.metadata?.gstSummary ||
-    order?.deliveryAddress?.gstSummary ||
-    null;
 
   const orderPaymentMethod = String(
     orderDetails?.paymentMethod || orderDetails?.payment_method || ''
@@ -660,7 +658,8 @@ const ServiceProviderDashboard = ({ user }) => {
 
   const handleMarkAsPaid = async () => {
     if (!orderDetails?.id) return;
-    const orderAmount = Number(orderDetails?.totalAmount || 0);
+    const chargeBreakdown = resolveOrderChargeBreakdown(orderDetails);
+    const orderAmount = Number(chargeBreakdown.combinedTotal || 0);
     if (orderAmount > Number(vaultBalance || 0)) {
       const shortage = Math.max(0, orderAmount - Number(vaultBalance || 0));
       alert(
@@ -673,7 +672,7 @@ const ServiceProviderDashboard = ({ user }) => {
     }
 
     const confirmed = window.confirm(
-      `Pay for Order ${orderDetails?.orderNumber} from your vault?\nAmount: ₹${orderDetails?.totalAmount?.toLocaleString()}`
+      `Pay for Order ${orderDetails?.orderNumber} from your vault?\nCombined total: ₹${orderAmount.toLocaleString('en-IN')}`
     );
     if (!confirmed) return;
 
@@ -1095,6 +1094,7 @@ const ServiceProviderDashboard = ({ user }) => {
                 <div className="order-info-section">
                   <h3>Order Items</h3>
                   {orderDetails.items && orderDetails.items.length > 0 ? (
+                    <>
                     <table className="order-items-table">
                       <thead>
                         <tr>
@@ -1178,37 +1178,11 @@ const ServiceProviderDashboard = ({ user }) => {
                           </tr>
                         ))}
                       </tbody>
-                      <tfoot>
-                        <tr>
-                          <td colSpan="3"><strong>Total Amount</strong></td>
-                          <td><strong>₹{orderDetails.totalAmount?.toLocaleString()}</strong></td>
-                        </tr>
-                      </tfoot>
                     </table>
+                    <OrderChargeSummary order={orderDetails} />
+                    </>
                   ) : (
                     <p style={{ color: '#64748b' }}>No items found in this order.</p>
-                  )}
-                  {readGstSummary(orderDetails) && (
-                    <div style={{ marginTop: '0.75rem', fontSize: '0.9rem', color: '#334155' }}>
-                      <p style={{ margin: 0 }}>
-                        <strong>Taxable subtotal:</strong> ₹{Number(readGstSummary(orderDetails)?.subtotalAmount || 0).toLocaleString('en-IN')}
-                      </p>
-                      <p style={{ margin: '0.2rem 0 0' }}>
-                        <strong>GST type:</strong> {readGstSummary(orderDetails)?.taxType === 'IGST' ? 'IGST' : 'CGST + SGST'}
-                      </p>
-                      {readGstSummary(orderDetails)?.taxType === 'IGST' ? (
-                        <p style={{ margin: '0.2rem 0 0' }}>
-                          <strong>IGST:</strong> ₹{Number(readGstSummary(orderDetails)?.igstAmount || 0).toLocaleString('en-IN')}
-                        </p>
-                      ) : (
-                        <p style={{ margin: '0.2rem 0 0' }}>
-                          <strong>CGST:</strong> ₹{Number(readGstSummary(orderDetails)?.cgstAmount || 0).toLocaleString('en-IN')} | <strong>SGST:</strong> ₹{Number(readGstSummary(orderDetails)?.sgstAmount || 0).toLocaleString('en-IN')}
-                        </p>
-                      )}
-                      <p style={{ margin: '0.2rem 0 0' }}>
-                        <strong>Total GST:</strong> ₹{Number(readGstSummary(orderDetails)?.taxAmount || 0).toLocaleString('en-IN')}
-                      </p>
-                    </div>
                   )}
                 </div>
 
@@ -1419,20 +1393,22 @@ const ServiceProviderDashboard = ({ user }) => {
                   ) : (
                     <p style={{ color: '#64748b' }}>No return requests yet.</p>
                   )}
-                  {canRequestReturnForOrder(orderDetails) ? (
+                  <div style={{ marginTop: '0.75rem' }}>
                     <button
                       className="btn-secondary"
                       type="button"
+                      disabled={!canRequestReturnForOrder(orderDetails)}
+                      title={getReturnRequestBlockReason(orderDetails) || undefined}
                       onClick={handleCreateReturnRequest}
-                      style={{ marginTop: '0.75rem' }}
                     >
                       Request Return
                     </button>
-                  ) : (
+                  </div>
+                  {!canRequestReturnForOrder(orderDetails) && getReturnRequestBlockReason(orderDetails) ? (
                     <p style={{ color: '#64748b', marginTop: '0.75rem' }}>
                       {getReturnRequestBlockReason(orderDetails)}
                     </p>
-                  )}
+                  ) : null}
                 </div>
 
                 {/* Supplier Rating & Feedback - only after delivery + payment */}

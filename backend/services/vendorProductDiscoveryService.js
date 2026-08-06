@@ -5,6 +5,7 @@ import {
   parseSupplierOfferAttributes,
   resolveOfferCatalogProductId
 } from './supplierCatalogHelpersService.js';
+import { extractExplicitVariantKey } from './productIdentityService.js';
 
 function buildCatalogProductMeta(product = {}) {
   return {
@@ -279,11 +280,25 @@ export async function reconcileWithSupplierOffers({
       });
 
       if (!offerRowsError && Array.isArray(offerRows) && offerRows.length > 0) {
+        const requestedVariantKey = extractExplicitVariantKey(item);
+        const scopedOfferRows = requestedVariantKey
+          ? offerRows.filter(
+              (row) => String(row?.variant_key || '').trim() === requestedVariantKey
+            )
+          : offerRows;
+
+        if (requestedVariantKey && scopedOfferRows.length === 0) {
+          console.log(
+            `[Vendor Ranking] No supplier_products offers matched variant ${requestedVariantKey} for item ${itemId}`
+          );
+        }
+
         console.log(
           `[Vendor Ranking] supplier_products offers sample for item ${itemId}:`,
-          offerRows.slice(0, 5).map((r) => ({
+          scopedOfferRows.slice(0, 5).map((r) => ({
             product_id: r.product_id,
             supplier_id: r.supplier_id,
+            variant_key: r.variant_key,
             price: r.price,
             stock: r.stock,
             status: r.status,
@@ -291,7 +306,7 @@ export async function reconcileWithSupplierOffers({
           }))
         );
 
-        updatedProducts = offerRows
+        updatedProducts = scopedOfferRows
           .map((row) => {
             const supplier = row?.supplier;
             if (!supplier?.id) return null;

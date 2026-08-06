@@ -1023,7 +1023,7 @@ const SupplierPlaceOrder = () => {
         if (!confirmRes.ok || confirmData?.status !== 'success') {
           alert(confirmData?.message || 'Upstream order(s) created, but transport selection failed.');
           localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-          navigate('/supplier-upstream-orders');
+          navigate('/supplier-orders?direction=upstream');
           return;
         }
       }
@@ -1052,7 +1052,7 @@ const SupplierPlaceOrder = () => {
                   `Order(s) created, but vault payment failed for ${order.orderNumber || order.id}. Open Upstream Orders and pay from vault once your balance is sufficient.`
               );
               localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-              navigate('/supplier-upstream-orders');
+              navigate('/supplier-orders?direction=upstream');
               return;
             }
           }
@@ -1073,7 +1073,7 @@ const SupplierPlaceOrder = () => {
         if (!bookRes.ok || bookData?.status !== 'success') {
           alert(bookData?.message || 'Paid, but carrier booking failed. Tracking can be retried later.');
           localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-          navigate('/supplier-upstream-orders');
+          navigate('/supplier-orders?direction=upstream');
           return;
         }
       }
@@ -1087,7 +1087,7 @@ const SupplierPlaceOrder = () => {
             : data.message || 'Upstream order(s) placed successfully.'
       );
       localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-      navigate('/supplier-upstream-orders');
+      navigate('/supplier-orders?direction=upstream');
     } catch (e) {
       console.error('Place upstream orders error:', e);
       alert(e?.message || 'Failed to place upstream orders. Please try again.');

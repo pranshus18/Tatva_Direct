@@ -27,7 +27,16 @@ import {
   loadServiceProviderPoCartDraft,
   resolveB2bPaymentFromBody,
   resolveCheckoutShippingAddress,
-  supplierMatchesBrandTerminalRole
+  supplierMatchesBrandTerminalRole,
+  assertGstStateInputs,
+  assertSupplierProductTaxRates,
+  buildOrderGstSummary,
+  computeLineGst,
+  extractUserState,
+  isSameIndianState,
+  resolveCheckoutBillingAddress,
+  resolveGstPlaceOfSupplyState,
+  sumGstLines
 } from './poImports.js';
 
 export function registerPoGroupRoutes(ctx) {
@@ -59,6 +68,44 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       ])
       .filter(Boolean);
     const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, itemBrandCandidates);
+
+    const { data: serviceProvider } = await supabase
+      .from('users')
+      .select('id, address, profile')
+      .eq('id', req.userId)
+      .eq('user_type', 'service_provider')
+      .maybeSingle();
+    const profileAddress = normalizeAddress(serviceProvider?.address || {});
+    const profileGstin = String(
+      serviceProvider?.profile?.gstin || serviceProvider?.profile?.mainGstin || ''
+    ).trim();
+    const hasGstin = Boolean(profileGstin);
+    const billingAddress = resolveCheckoutBillingAddress({
+      serviceProvider,
+      requestedBillingAddress: defaultShippingAddress,
+      shippingAddress: fallbackShipping,
+      hasGstin
+    });
+    const placeOfSupplyState = resolveGstPlaceOfSupplyState({
+      hasGstin,
+      deliveryDestination: 'shipping',
+      billingAddress,
+      shippingAddress: fallbackShipping || profileAddress
+    });
+    const supplierStateCache = new Map();
+    const loadSupplierState = async (supplierId) => {
+      const key = String(supplierId || '').trim();
+      if (!key) return '';
+      if (supplierStateCache.has(key)) return supplierStateCache.get(key);
+      const { data: supplierRow } = await supabase
+        .from('users')
+        .select('address, profile')
+        .eq('id', key)
+        .maybeSingle();
+      const state = extractUserState(supplierRow || {});
+      supplierStateCache.set(key, state);
+      return state;
+    };
     
     if (!selectedVendors || typeof selectedVendors !== 'object') {
       return res.status(400).json({
@@ -298,6 +345,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
           vendorName: supplierName,
           items: [],
           total: 0,
+          lineTaxBreakdown: [],
           outletIds: new Set()
         };
       }
@@ -362,6 +410,37 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       });
 
       vendorGroups[transportGroupId].total += itemTotal;
+
+      if (placeOfSupplyState) {
+        try {
+          const supplierState = await loadSupplierState(vendorId);
+          assertGstStateInputs({
+            supplierState,
+            billingState: placeOfSupplyState,
+            context: 'PO group GST preview'
+          });
+          assertSupplierProductTaxRates({
+            supplierProduct,
+            context: 'PO group GST preview',
+            productRef: supplierProduct?.product?.name || itemName
+          });
+          const intraStateTax = isSameIndianState(supplierState, placeOfSupplyState);
+          const lineGst = computeLineGst({
+            taxableAmount: itemTotal,
+            igstRate: supplierProduct.igst_rate,
+            cgstRate: supplierProduct.cgst_rate,
+            sgstRate: supplierProduct.sgst_rate,
+            intraState: intraStateTax
+          });
+          vendorGroups[transportGroupId].lineTaxBreakdown.push(lineGst);
+          if (!vendorGroups[transportGroupId].supplierState) {
+            vendorGroups[transportGroupId].supplierState = supplierState;
+          }
+        } catch (gstPreviewError) {
+          // Grouping still succeeds; create route will enforce tax before order insert.
+          console.warn('[PO group] GST preview skipped for line:', gstPreviewError?.message || gstPreviewError);
+        }
+      }
     }
 
     const supplierIdsForPins = [
@@ -415,6 +494,19 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         outletId: null,
         outletName: null
       };
+      const subtotal = Math.round(group.total * 100) / 100;
+      const gstSummary = buildOrderGstSummary({
+        lineTaxBreakdown: group.lineTaxBreakdown || [],
+        supplierState: group.supplierState || '',
+        billingState: billingAddress?.state || placeOfSupplyState,
+        placeOfSupplyState,
+        intraStateTax: isSameIndianState(group.supplierState, placeOfSupplyState)
+      });
+      const gstAmount = Math.round((gstSummary.taxAmount || 0) * 100) / 100;
+      const totalInclGst =
+        gstSummary.totalAmount > 0
+          ? Math.round(gstSummary.totalAmount * 100) / 100
+          : subtotal;
       return {
         vendorId: group.vendorId,
         transportGroupId: group.transportGroupId,
@@ -422,7 +514,11 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         shippingAddress: group.shippingAddress || null,
         shippingAddressLabel: group.shippingAddressLabel || '',
         vendorName: group.vendorName,
-        total: Math.round(group.total * 100) / 100,
+        subtotal,
+        gstAmount,
+        totalInclGst,
+        total: subtotal,
+        gstSummary: gstSummary.totalAmount > 0 ? gstSummary : null,
         pickupPincode: pickup.pincode || '',
         pickupAddressSummary: pickup.summary || '',
         pickupAddress: pickup.pickupAddress || null,

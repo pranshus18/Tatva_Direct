@@ -3,6 +3,7 @@ import {
   generateAndAttachReceiptPdf,
   normalizeUserAddress
 } from './dashboardImports.js';
+import { resolveOrderChargeBreakdown } from '../../utils/orderChargeBreakdown.js';
 export * from './shared/dashboardHelpers.js';
 
 export function registerDashboardOrderDetailRoutes(ctx) {
@@ -212,10 +213,12 @@ router.get('/service-provider/orders/:id', authenticateToken, async (req, res) =
     }
 
     // Format order for frontend
+    const chargeBreakdown = resolveOrderChargeBreakdown(order);
     const formattedOrder = {
       ...order,
       orderNumber: order.order_number || order.id,
-      totalAmount: parseFloat(order.total_amount || 0),
+      totalAmount: chargeBreakdown.combinedTotal,
+      chargeBreakdown,
       paymentStatus: order.payment_status || 'pending',
       paymentMethod: order.payment_method,
       status: order.status || 'pending',
