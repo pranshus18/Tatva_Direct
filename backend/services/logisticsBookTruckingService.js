@@ -88,10 +88,14 @@ export function extractTruckingBookingTracking(json) {
   };
 }
 
-async function postJson(url, body) {
+async function postJson(url, body, { accessToken = null } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = String(accessToken || '').trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   const opts = {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body)
   };
   if (BOOK_TIMEOUT_MS > 0) {
@@ -150,7 +154,10 @@ export async function bookTrucking({
   contactPhone,
   weightKg,
   matter = null,
-  displayName = null
+  displayName = null,
+  orderId = null,
+  transportAmount = null,
+  pmAccessToken = null
 }) {
   const body = buildTruckingBookPayload({
     vehicleTypeId,
@@ -161,13 +168,16 @@ export async function bookTrucking({
     deliveryLng,
     contactPhone,
     weightKg,
-    matter
+    matter,
+    orderId,
+    transportAmount
   });
 
-  let res = await postJson(truckingBookUrl(), body);
+  const authOpts = { accessToken: pmAccessToken };
+  let res = await postJson(truckingBookUrl(), body, authOpts);
   if (!res.ok && RETRYABLE.has(res.status)) {
     await delay(500);
-    res = await postJson(truckingBookUrl(), body);
+    res = await postJson(truckingBookUrl(), body, authOpts);
   }
 
   if (!res.ok) {

@@ -30,33 +30,23 @@ export function resolveBuyerFacingProductDescription({ product = {}, offerAttrib
   return getSupplierSubmittedDescription(offerAttributes);
 }
 
-function isDistinctFromSupplierDraft(text, supplierDraft = '') {
-  const trimmed = String(text || '').trim();
-  if (!trimmed) return false;
-  const supplier = String(supplierDraft || '').trim();
-  return !(supplier && trimmed === supplier);
-}
-
-/** Mirrors admin UI: require saved buyer-facing copy before approval (not stale catalog alone). */
+/** Mirrors admin UI: saved buyer-facing copy before approval (AI polish optional). */
 export function getAdminBuyerFacingDescriptionForApproval(product = {}) {
   const status = String(product?.status || 'pending').trim().toLowerCase();
   const publishedFromOffer = String(product?.publishedDescription || '').trim();
   const catalog = String(product?.description || '').trim();
-  const supplier = String(product?.supplierDescription || '').trim();
 
   if (status === 'approved') {
     return catalog;
   }
 
-  if (isDistinctFromSupplierDraft(publishedFromOffer, supplier)) {
+  // Admin explicitly saved copy on the offer — may match supplier draft if admin approved as-is.
+  if (publishedFromOffer) {
     return publishedFromOffer;
   }
 
-  if (
-    isDistinctFromSupplierDraft(catalog, supplier) &&
-    publishedFromOffer &&
-    catalog === publishedFromOffer
-  ) {
+  // Catalog + offer publish synced after save (legacy responses).
+  if (catalog && publishedFromOffer && catalog === publishedFromOffer) {
     return catalog;
   }
 

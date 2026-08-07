@@ -265,7 +265,8 @@ export function buildBookCourierCheckoutPayload({
   orderId,
   orderNumber,
   vendorId = null,
-  clientReference = null
+  clientReference = null,
+  transportAmount = null
 }) {
   const id = Number(courierCompanyId);
   if (!Number.isFinite(id) || id <= 0) {
@@ -306,6 +307,13 @@ export function buildBookCourierCheckoutPayload({
   const cn = pickStr(courierDisplayName);
   if (cn) body.courier_name = cn.slice(0, 200);
   if (vendorId) body.vendor_id = String(vendorId);
+  if (orderId) body.ecommerce_order_id = String(orderId);
+
+  const freight = Number(transportAmount);
+  if (Number.isFinite(freight) && freight > 0) {
+    body.transport_amount = Math.round(freight * 100) / 100;
+    body.charge_logistics_vault = true;
+  }
 
   return body;
 }
@@ -322,7 +330,9 @@ export function buildTruckingBookPayload({
   deliveryLng,
   contactPhone,
   weightKg,
-  matter = null
+  matter = null,
+  orderId = null,
+  transportAmount = null
 }) {
   const coords = [pickupLat, pickupLng, deliveryLat, deliveryLng];
   if (coords.some((v) => v === null || v === undefined || v === '')) {
@@ -362,6 +372,13 @@ export function buildTruckingBookPayload({
 
   const m = pickStr(matter);
   if (m) body.matter = m.slice(0, 500);
+
+  if (orderId) body.ecommerce_order_id = String(orderId);
+  const freight = Number(transportAmount);
+  if (Number.isFinite(freight) && freight > 0) {
+    body.transport_amount = Math.round(freight * 100) / 100;
+    body.charge_logistics_vault = true;
+  }
 
   return body;
 }

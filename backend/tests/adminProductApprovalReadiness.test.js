@@ -22,6 +22,19 @@ test('isAdminProductReadyForApproval passes when saved buyer-facing description 
   assert.equal(isAdminProductReadyForApproval(readyPendingProduct), true);
 });
 
+test('validateAdminProductApprovalReadiness passes when admin saves supplier text as-is', () => {
+  const supplierText = 'Durable steel bottle suitable for daily hydration.';
+  assert.equal(
+    isAdminProductReadyForApproval({
+      ...readyPendingProduct,
+      supplierDescription: supplierText,
+      publishedDescription: supplierText,
+      description: supplierText
+    }),
+    true
+  );
+});
+
 test('validateAdminProductApprovalReadiness fails without saved buyer-facing description', () => {
   const result = validateAdminProductApprovalReadiness({
     ...readyPendingProduct,

@@ -1,14 +1,28 @@
 const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
 
+/** MRP line total for a PO group (GST already included in unit prices). */
+export function resolvePoGroupMrpTotal(group = {}) {
+  const mrp = Number(
+    group?.totalInclGst ?? group?.gstSummary?.totalAmount ?? group?.subtotal ?? group?.total
+  );
+  return Number.isFinite(mrp) ? roundMoney(mrp) : 0;
+}
+
+/** Taxable value (excl. GST) extracted from MRP for invoice breakdown. */
+export function resolvePoGroupTaxableSubtotal(group = {}) {
+  const taxable = Number(group?.gstSummary?.subtotalAmount);
+  if (Number.isFinite(taxable) && taxable >= 0) return roundMoney(taxable);
+  const mrp = resolvePoGroupMrpTotal(group);
+  const gst = Number(group?.gstAmount ?? group?.gstSummary?.taxAmount) || 0;
+  return roundMoney(Math.max(0, mrp - gst));
+}
+
 export function sumPoGroupsProductsInclGst(poGroups = []) {
   return roundMoney(
-    (Array.isArray(poGroups) ? poGroups : []).reduce((sum, group) => {
-      const incl = Number(group?.totalInclGst ?? group?.gstSummary?.totalAmount);
-      if (Number.isFinite(incl) && incl > 0) return sum + incl;
-      const sub = Number(group?.subtotal ?? group?.total) || 0;
-      const gst = Number(group?.gstAmount) || 0;
-      return sum + sub + gst;
-    }, 0)
+    (Array.isArray(poGroups) ? poGroups : []).reduce(
+      (sum, group) => sum + resolvePoGroupMrpTotal(group),
+      0
+    )
   );
 }
 
@@ -24,14 +38,18 @@ export function sumPoGroupsGstAmount(poGroups = []) {
 export function sumPoGroupsProductSubtotal(poGroups = []) {
   return roundMoney(
     (Array.isArray(poGroups) ? poGroups : []).reduce(
-      (sum, group) =>
-        sum + (Number(group?.subtotal ?? group?.gstSummary?.subtotalAmount ?? group?.total) || 0),
+      (sum, group) => sum + resolvePoGroupTaxableSubtotal(group),
       0
     )
   );
 }
 
-/** Products (incl. GST) + transport — amount that should be debited from vault. */
+/**
+ * Order charge split:
+ * - buyerVaultDebit: products (MRP incl. GST) — debited from the SP PM vault
+ * - logisticsVaultDebit: transport — debited from the logistics vault at carrier booking
+ * - combinedTotal: full order total (products + transport) for invoices and display
+ */
 export function resolveOrderChargeBreakdown(order = {}) {
   const delivery = order?.delivery_address || order?.deliveryAddress || {};
   const gst =
@@ -39,13 +57,26 @@ export function resolveOrderChargeBreakdown(order = {}) {
     order?.invoice?.metadata?.gstSummary ||
     order?.gstSummary ||
     null;
-  const transportAmount = roundMoney(delivery?.transportBill?.amount || 0);
+  let transportAmount = roundMoney(delivery?.transportBill?.amount || 0);
+  const transportBill = delivery?.transportBill;
+  if (
+    transportBill &&
+    (transportBill.source === 'self_ship' ||
+      transportBill.paymentVault === 'none' ||
+      transportBill.paymentStatus === 'not_applicable')
+  ) {
+    transportAmount = 0;
+  }
+  const storedTotal = roundMoney(order?.total_amount ?? order?.totalAmount ?? 0);
 
   const productSubtotal = roundMoney(gst?.subtotalAmount ?? 0);
   const gstAmount = roundMoney(gst?.taxAmount ?? 0);
   let productsInclGst = roundMoney(gst?.totalAmount ?? 0);
 
-  if (!productsInclGst && (productSubtotal || gstAmount)) {
+  if (!productsInclGst && storedTotal > 0) {
+    productsInclGst = roundMoney(Math.max(0, storedTotal - transportAmount));
+  }
+  if (!productsInclGst && gst?.priceIncludesGst !== false && (productSubtotal || gstAmount)) {
     productsInclGst = roundMoney(productSubtotal + gstAmount);
   }
 
@@ -63,27 +94,34 @@ export function resolveOrderChargeBreakdown(order = {}) {
     );
   }
 
-  const storedTotal = roundMoney(order?.total_amount ?? order?.totalAmount ?? 0);
-  let combinedTotal = roundMoney(productsInclGst + transportAmount);
+  const derivedTotal = roundMoney(productsInclGst + transportAmount);
+  let combinedTotal = storedTotal > 0 ? storedTotal : derivedTotal;
 
-  // Legacy rows: total_amount stored as taxable subtotal while gstSummary has tax.
+  // Legacy ex-GST orders: total_amount was taxable only; add GST from summary.
   if (
+    gst?.priceIncludesGst === false &&
     gstAmount > 0 &&
     productSubtotal > 0 &&
     Math.abs(storedTotal - productSubtotal) < 0.01
   ) {
-    combinedTotal = roundMoney(productsInclGst + transportAmount);
-  } else if (storedTotal > combinedTotal + 0.01) {
-    combinedTotal = storedTotal;
-  } else if (!gst && storedTotal > 0) {
-    combinedTotal = storedTotal;
+    combinedTotal = derivedTotal;
+  } else if (storedTotal <= 0 && derivedTotal > 0) {
+    combinedTotal = derivedTotal;
+  } else if (derivedTotal > storedTotal + 0.01) {
+    // Stored total missing freight (common before transport confirm) or stale — use full charge.
+    combinedTotal = derivedTotal;
   }
+
+  const buyerVaultDebit = productsInclGst;
+  const logisticsVaultDebit = transportAmount;
 
   return {
     productSubtotal: productSubtotal || roundMoney(Math.max(0, productsInclGst - gstAmount)),
     gstAmount,
     productsInclGst,
     transportAmount,
+    buyerVaultDebit,
+    logisticsVaultDebit,
     combinedTotal,
     gstSummary: gst
   };

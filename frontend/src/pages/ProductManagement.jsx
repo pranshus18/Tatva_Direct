@@ -58,8 +58,10 @@ import {
   SUPPLIER_CURRENT_STOCK_LABEL,
   SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
   SUPPLIER_MRP_FIELD_LABEL,
+  SUPPLIER_MRP_INCLUSIVE_HINT,
   SUPPLIER_MRP_LABEL,
   SUPPLIER_MRP_LOCKED_MESSAGE,
+  SUPPLIER_MRP_SHORT_NOTE,
   formatSupplierStockAvailability,
   getSupplierStockHealth,
   isSupplierInventoryConfigured,
@@ -1104,9 +1106,14 @@ const ProductManagement = ({ user }) => {
                       ) : (
                         <div className="pd-card__details">
                           {inventoryConfigured && Number(product.price) > 0 ? (
-                            <span className="pd-card__price">
-                              {formatRupeePerUnit(product.price, product.unit)}
-                            </span>
+                            <>
+                              <span className="pd-card__price">
+                                {formatRupeePerUnit(product.price, product.unit)}
+                              </span>
+                              <span className="pd-card__price-note" style={{ display: 'block', fontSize: '0.72rem', color: '#64748b' }}>
+                                {SUPPLIER_MRP_SHORT_NOTE}
+                              </span>
+                            </>
                           ) : !inventoryConfigured ? (
                             <span className="pd-card__price pd-card__price--pending">
                               {SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
@@ -1812,6 +1819,9 @@ const ProductDetailsModal = ({
                   ? formatRupeePerUnit(product.price, product.unit)
                   : SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
               </span>
+              {isSupplierInventoryConfigured(product) && Number(product.price) > 0 ? (
+                <span style={{ fontSize: '0.78rem', color: '#64748b' }}>{SUPPLIER_MRP_SHORT_NOTE}</span>
+              ) : null}
             </div>
             <div className="pm-details-field">
               <span className="pm-details-field__label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>
@@ -5015,7 +5025,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
                       {SUPPLIER_MRP_LOCKED_MESSAGE}
                     </p>
-                  ) : null}
+                  ) : (
+                    <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
+                      {SUPPLIER_MRP_INCLUSIVE_HINT}
+                    </p>
+                  )}
                   {!mrpLocked && typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
                     <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#0369a1' }}>
                       Recommended avg {SUPPLIER_MRP_LABEL}: <strong>{formatRupee(recommendedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>

@@ -56,7 +56,7 @@ export function getAdminProductApprovalReadiness(product = {}) {
     missingRequirements.push({
       id: 'description',
       label: 'Product description',
-      message: 'Add and save a buyer-facing product description (use Polish with AI or write manually).'
+      message: 'Add and save a product description for buyers (edit manually or use Polish with AI if you want).'
     });
   }
 

@@ -266,10 +266,14 @@ function safeJsonPreview(obj, max = 1500) {
   }
 }
 
-async function postJson(url, body) {
+async function postJson(url, body, { accessToken = null } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = String(accessToken || '').trim();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   const opts = {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body)
   };
   if (BOOK_TIMEOUT_MS > 0) {
@@ -365,7 +369,9 @@ export async function bookCourierCheckout({
   orderId,
   orderNumber,
   vendorId = null,
-  clientReference = null
+  clientReference = null,
+  transportAmount = null,
+  pmAccessToken = null
 }) {
   const id = Number(courierCompanyId);
   if (!Number.isFinite(id) || id <= 0) {
@@ -382,14 +388,16 @@ export async function bookCourierCheckout({
     orderId,
     orderNumber,
     vendorId,
-    clientReference
+    clientReference,
+    transportAmount
   });
 
-  let res = await postJson(bookCourierCheckoutUrl(), checkoutBody);
+  const authOpts = { accessToken: pmAccessToken };
+  let res = await postJson(bookCourierCheckoutUrl(), checkoutBody, authOpts);
 
   if (!res.ok && RETRYABLE.has(res.status)) {
     await delay(500);
-    res = await postJson(bookCourierCheckoutUrl(), checkoutBody);
+    res = await postJson(bookCourierCheckoutUrl(), checkoutBody, authOpts);
   }
 
   let usedLegacyCarrierBook = false;
@@ -397,7 +405,7 @@ export async function bookCourierCheckout({
     res = await postJson(BOOK_CARRIER_URL(), {
       carrier_id: id,
       order_details: checkoutBody
-    });
+    }, authOpts);
     usedLegacyCarrierBook = true;
   }
 
@@ -498,7 +506,9 @@ export async function scheduleCourier({
   orderId = null,
   orderNumber = null,
   clientReference = null,
-  etdRaw = null
+  etdRaw = null,
+  transportAmount = null,
+  pmAccessToken = null
 }) {
   const id = Number(courierCompanyId);
   if (!Number.isFinite(id) || id <= 0) {
@@ -521,11 +531,18 @@ export async function scheduleCourier({
     etdRaw
   });
 
-  let res = await postJson(scheduleCourierUrl(), scheduleBody);
+  const freight = Number(transportAmount);
+  if (Number.isFinite(freight) && freight > 0) {
+    scheduleBody.transport_amount = Math.round(freight * 100) / 100;
+    scheduleBody.charge_logistics_vault = true;
+  }
+
+  const authOpts = { accessToken: pmAccessToken };
+  let res = await postJson(scheduleCourierUrl(), scheduleBody, authOpts);
 
   if (!res.ok && RETRYABLE.has(res.status)) {
     await delay(500);
-    res = await postJson(scheduleCourierUrl(), scheduleBody);
+    res = await postJson(scheduleCourierUrl(), scheduleBody, authOpts);
   }
 
   if (!res.ok) {

@@ -102,6 +102,11 @@ export function dedupeCheckoutLinesByProductForTest(lines = []) {
   return dedupeCheckoutLinesByProduct(lines);
 }
 
+/** @internal test export */
+export function reservationsMatchLinesForTest(rows = [], lines = []) {
+  return reservationsMatchLines(rows, lines);
+}
+
 export async function getActiveReservedQuantitiesByProductIds(supplierProductIds = []) {
   const ids = [...new Set((supplierProductIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
   if (!ids.length) return new Map();
@@ -343,8 +348,9 @@ export async function consumeCheckoutReservationsForOrder({
   checkoutSessionId,
   lines = [],
   orderItemBySupplierProductId = {},
-  skipExpireStale = false
-}) {
+  skipExpireStale = false,
+  requireEmptySession = false
+} = {}) {
   if (!skipExpireStale) {
     await expireStaleReservations({ buyerUserId });
   }
@@ -367,7 +373,7 @@ export async function consumeCheckoutReservationsForOrder({
     }
     if (safeNumber(reservation.reserved_quantity) !== quantity) {
       throw new Error(
-        'Reserved quantity does not match the order quantity for one or more upstream items.'
+        'Reserved quantity does not match the order quantity for one or more items.'
       );
     }
 
@@ -392,7 +398,7 @@ export async function consumeCheckoutReservationsForOrder({
     byProductId.delete(supplierProductId);
   }
 
-  if (byProductId.size > 0) {
+  if (requireEmptySession && byProductId.size > 0) {
     throw new Error('Checkout inventory holds could not be matched to all order lines');
   }
 

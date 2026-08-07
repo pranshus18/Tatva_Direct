@@ -806,7 +806,7 @@ export async function releaseSupplierVaultPayoutForOrder({
   }
 
   const supplierUser = await loadSupplierUserForPayout(order.supplier_id);
-  if (!supplierUser) {
+  if (!supplierUser && !usesPmVault) {
     const err = new Error('Supplier account not found for payout release');
     err.code = 'SUPPLIER_NOT_FOUND';
     throw err;
@@ -1000,13 +1000,33 @@ export async function payOrderFromWallet({
   idempotencyKey = null,
   pmCredentials = null
 }) {
-  const order = await loadOrderForWalletPay(orderId);
+  let order = await loadOrderForWalletPay(orderId);
   if (actorRole !== 'admin' && order.service_provider_id !== actorUserId) {
     const err = new Error('Not authorized for this order');
     err.code = 'ORDER_FORBIDDEN';
     throw err;
   }
   if (String(order.payment_status || '').toLowerCase() === 'paid') {
+    const pmVaultMod = await import('./pmVaultService.js');
+    const { data: actorUser } = await supabase
+      .from('users')
+      .select('*')
+      .eq('id', actorUserId)
+      .maybeSingle();
+    const usesPmVault = Boolean(actorUser && pmVaultMod.usesPlatformVault(actorUser));
+
+    if (usesPmVault) {
+      return {
+        order,
+        alreadyPaid: true,
+        platformFeeAmount: roundMoney(order.platform_fee_amount ?? 0),
+        supplierPayoutAmount: roundMoney(order.supplier_payout_amount ?? 0),
+        feeBreakdown: [],
+        receiptDelivery: null,
+        invoiceSummary: null
+      };
+    }
+
     if (String(order.wallet_payment_status || '').toLowerCase() !== 'released') {
       const orderItems = await loadOrderItemsForFee(order.id);
       const feeResult = await calculateOrderPlatformFee({
@@ -1077,6 +1097,8 @@ export async function payOrderFromWallet({
     throw err;
   }
 
+  order = await loadOrderForWalletPay(orderId);
+
   const orderItems = await loadOrderItemsForFee(order.id);
   const feeResult = await calculateOrderPlatformFee({
     order,
@@ -1084,22 +1106,33 @@ export async function payOrderFromWallet({
     supplierId: order.supplier_id
   });
   const chargeBreakdown = resolveOrderChargeBreakdown(order);
-  const grossAmount = roundMoney(chargeBreakdown.combinedTotal);
-  if (Math.abs(roundMoney(order.total_amount) - grossAmount) > 0.01) {
+  const orderTotalAmount = roundMoney(chargeBreakdown.combinedTotal);
+  const buyerVaultDebit = roundMoney(chargeBreakdown.buyerVaultDebit ?? chargeBreakdown.productsInclGst);
+  if (!Number.isFinite(buyerVaultDebit) || buyerVaultDebit <= 0) {
+    const err = new Error(
+      `Product charge total is invalid (₹${buyerVaultDebit}). Retry vault payment.`
+    );
+    err.code = 'ORDER_CHARGE_INVALID';
+    throw err;
+  }
+  if (
+    orderTotalAmount > 0 &&
+    Math.abs(roundMoney(order.total_amount) - orderTotalAmount) > 0.01
+  ) {
     const { data: syncedOrder, error: syncError } = await supabase
       .from('orders')
-      .update({ total_amount: grossAmount })
+      .update({ total_amount: orderTotalAmount })
       .eq('id', order.id)
       .select('*')
       .single();
     if (!syncError && syncedOrder) {
       order = syncedOrder;
     } else {
-      order.total_amount = grossAmount;
+      order.total_amount = orderTotalAmount;
     }
   }
-  const platformFeeAmount = Math.min(grossAmount, roundMoney(feeResult.feeAmount));
-  const supplierPayoutAmount = roundMoney(grossAmount - platformFeeAmount);
+  const platformFeeAmount = Math.min(buyerVaultDebit, roundMoney(feeResult.feeAmount));
+  const supplierPayoutAmount = roundMoney(buyerVaultDebit - platformFeeAmount);
 
   const { data: actorUser, error: actorUserError } = await supabase
     .from('users')
@@ -1110,19 +1143,14 @@ export async function payOrderFromWallet({
 
   const pmVault = await import('./pmVaultService.js');
   const usesPmVault = Boolean(actorUser && pmVault.usesPlatformVault(actorUser));
-  const supplierUser = await loadSupplierUserForPayout(order.supplier_id);
-  const supplierPmUserId = supplierUser ? await pmVault.resolvePmUserIdForTatvaUser(supplierUser) : null;
 
-  // SP / supplier vault lives on PM only — never read/write Tatva wallets tables.
+  // Customer PM vault debit only — supplier vault credit API is not wired yet.
   if (usesPmVault) {
     const pmPayment = await pmVault.payOrderFromPmVault({
       user: actorUser,
       orderId: order.id,
       orderNumber: order.order_number || null,
-      amountInRupees: grossAmount,
-      supplierPmUserId,
-      supplierPayoutAmountInRupees: supplierPayoutAmount,
-      platformFeeAmountInRupees: platformFeeAmount,
+      amountInRupees: buyerVaultDebit,
       description: `Order payment for ${order.order_number || order.id}`,
       credentials: pmCredentials || {}
     });
@@ -1170,15 +1198,21 @@ export async function payOrderFromWallet({
       paymentReference: pmPaymentRef,
       provider: 'pm_vault',
       status: 'captured',
-      actorUserId
+      actorUserId,
+      amount: buyerVaultDebit
     });
 
-    const receiptDelivery = await createReceiptAndDeliver({
-      order: orderAfterRelease,
-      paymentMethod: 'vault',
-      paymentReference: pmPaymentRef,
-      actorUserId
-    });
+    let receiptDelivery = null;
+    try {
+      receiptDelivery = await createReceiptAndDeliver({
+        order: orderAfterRelease,
+        paymentMethod: 'vault',
+        paymentReference: pmPaymentRef,
+        actorUserId
+      });
+    } catch (receiptErr) {
+      console.error('[Vault] Receipt delivery failed after PM vault pay:', receiptErr);
+    }
 
     let invoiceSummary = null;
     try {
@@ -1198,7 +1232,9 @@ export async function payOrderFromWallet({
       requestId,
       metadata: {
         orderId: order.id,
-        grossAmount,
+        buyerVaultDebit,
+        orderTotalAmount,
+        logisticsVaultDebit: roundMoney(chargeBreakdown.logisticsVaultDebit ?? 0),
         platformFeeAmount,
         supplierPayoutAmount,
         supplierCreditRef: payoutRelease.supplierCreditRef || null,
@@ -1211,6 +1247,9 @@ export async function payOrderFromWallet({
       feeBreakdown: feeResult.breakdown,
       platformFeeAmount,
       supplierPayoutAmount,
+      buyerVaultDebit,
+      orderTotalAmount,
+      logisticsVaultDebit: roundMoney(chargeBreakdown.logisticsVaultDebit ?? 0),
       supplierPayoutRelease: payoutRelease,
       receiptDelivery,
       invoiceSummary
@@ -1228,7 +1267,7 @@ export async function payOrderFromWallet({
   await transferBetweenWallets({
     fromWalletId: customerWallet.id,
     toWalletId: escrowWallet.id,
-    amount: grossAmount,
+    amount: buyerVaultDebit,
     transactionTypeDebit: 'order_payment',
     transactionTypeCredit: 'order_hold',
     referenceType: 'order',
@@ -1281,7 +1320,8 @@ export async function payOrderFromWallet({
     paymentReference: `vault-${order.id}`,
     provider: 'vault',
     status: 'captured',
-    actorUserId
+    actorUserId,
+    amount: buyerVaultDebit
   });
 
   const receiptDelivery = await createReceiptAndDeliver({
@@ -1311,7 +1351,9 @@ export async function payOrderFromWallet({
     requestId,
     metadata: {
       orderId: order.id,
-      grossAmount,
+      buyerVaultDebit,
+      orderTotalAmount,
+      logisticsVaultDebit: roundMoney(chargeBreakdown.logisticsVaultDebit ?? 0),
       platformFeeAmount,
       supplierPayoutAmount,
       supplierCreditRef: payoutRelease.supplierCreditRef || null,
@@ -1324,6 +1366,9 @@ export async function payOrderFromWallet({
     feeBreakdown: feeResult.breakdown,
     platformFeeAmount,
     supplierPayoutAmount,
+    buyerVaultDebit,
+    orderTotalAmount,
+    logisticsVaultDebit: roundMoney(chargeBreakdown.logisticsVaultDebit ?? 0),
     supplierPayoutRelease: payoutRelease,
     receiptDelivery,
     invoiceSummary

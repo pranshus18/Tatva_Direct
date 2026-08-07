@@ -11,8 +11,10 @@ import {
   buildTransportQuoteCacheKey,
   fetchTransportQuotes
 } from '../utils/logisticsQuoteApi';
-
-const SELF_SHIP_PROVIDER_NAME = 'Self ship';
+import {
+  isSelfShipProviderName,
+  SELF_SHIP_PROVIDER_NAME
+} from '../utils/transportLabels';
 
 const formatCurrency = (value) =>
   `₹${(Number(value) || 0).toLocaleString('en-IN', {
@@ -77,7 +79,7 @@ function TransportPickCard({ provider, selected, onPick, disabled = false, disab
     (provider.transportKind === 'trucking' ||
     String(provider.source || '').toLowerCase() === 'borzo' ||
     provider.vehicle_type_id != null);
-  const badge = isSelfShip ? 'Self ship' : isTrucking ? 'Trucking' : 'Courier';
+  const badge = isSelfShip ? SELF_SHIP_PROVIDER_NAME : isTrucking ? 'Trucking' : 'Courier';
   const fare = providerFareInr(provider);
   const overCapacity = Boolean(provider.capacity_exceeded);
 
@@ -197,7 +199,10 @@ const TransportSuggestion = () => {
   const grandTotalAllPos =
     Number(location.state?.grandTotalAllPos) ||
     Number(location.state?.voiceCart?.grandTotalAllPos) ||
-    poGroups.reduce((s, g) => s + (Number(g.total) || 0), 0);
+    poGroups.reduce(
+      (s, g) => s + (Number(g.totalInclGst ?? g.total) || 0),
+      0
+    );
   const requiredDate =
     location.state?.requiredDate || location.state?.voiceCart?.requiredDate || '';
   const hasGstin =
@@ -240,10 +245,10 @@ const TransportSuggestion = () => {
     const expectedIds = poGroups.map((g) => getTransportGroupKey(g)).filter(Boolean);
     const values = Object.values(by).map((v) => String(v || '').trim().toLowerCase());
     if (expectedIds.length > 0 && expectedIds.every((id) => String(by[id] || '').trim())) {
-      return values.every((v) => v === 'self ship' || v === 'self-ship');
+      return values.every((v) => isSelfShipProviderName(v));
     }
     const root = String(st.shippingProvider || '').trim().toLowerCase();
-    return root === 'self ship' || root === 'self-ship';
+    return isSelfShipProviderName(root);
   }, [incomingTransportSelection, poGroups]);
 
   const [selectedByVendorId, setSelectedByVendorId] = React.useState({});
@@ -438,7 +443,10 @@ const TransportSuggestion = () => {
         poGroups: allPoGroups,
         grandTotalAllPos:
           Number(location.state?.grandTotalAllPos) ||
-          allPoGroups.reduce((s, g) => s + (Number(g.total) || 0), 0),
+          allPoGroups.reduce(
+            (s, g) => s + (Number(g.totalInclGst ?? g.total) || 0),
+            0
+          ),
         requiredDate,
         hasGstin,
         deliveryDestination,
@@ -476,7 +484,7 @@ const TransportSuggestion = () => {
         shippingProvider: '',
         trackingNumber: '',
         trackingUrl: '',
-        transportNotes: 'Self ship by supplier'
+        transportNotes: 'Shipment by supplier'
       };
       finishTransportNavigation(transportSelection);
       return;
@@ -561,7 +569,7 @@ const TransportSuggestion = () => {
       title={focusGroup ? `Transport — ${focusGroup.vendorName}` : 'Transport suggestion'}
       description={
         focusGroup
-          ? `Choose courier, trucking, or self ship for ${focusGroup.vendorName}. Items from the same supplier are shipped together.`
+          ? `Choose courier, trucking, or shipment by supplier for ${focusGroup.vendorName}. Items from the same supplier are shipped together.`
           : undefined
       }
       icon={Truck}
@@ -680,7 +688,7 @@ const TransportSuggestion = () => {
                     checked={transportModeChoice === 'self_ship'}
                     onChange={() => setTransportModeChoice('self_ship')}
                   />{' '}
-                  Self ship (supplier delivers directly)
+                  Shipment by supplier (supplier delivers directly)
                 </label>
               </div>
             </div>
@@ -696,7 +704,7 @@ const TransportSuggestion = () => {
                   color: '#166534'
                 }}
               >
-                Self ship selected. No external transport quote or booking will be requested from logistics module.
+                Shipment by supplier selected. No external transport quote or booking will be requested from logistics module.
               </div>
             ) : null}
             {!logisticsLoading && !logisticsError && formatAddressLines(deliveryAddressUsed).length > 0 ? (

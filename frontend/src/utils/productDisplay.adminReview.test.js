@@ -39,6 +39,17 @@ describe('admin product descriptions', () => {
     );
   });
 
+  it('accepts admin-saved supplier text without AI polish when publishedDescription is set', () => {
+    const supplierText = 'This steel bottle keeps drinks hot and cold for hours.';
+    const product = {
+      status: 'pending',
+      description: supplierText,
+      publishedDescription: supplierText,
+      supplierDescription: supplierText
+    };
+    expect(getAdminBuyerFacingCatalogDescription(product)).toBe(supplierText);
+  });
+
   it('shows polished catalog copy after admin save even if only description field is present on response', () => {
     const product = {
       status: 'pending',

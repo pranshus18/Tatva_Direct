@@ -13,6 +13,7 @@ import SupplierProductAdditionSteps from '../components/SupplierProductAdditionS
 import {
   SUPPLIER_CURRENT_STOCK_LABEL,
   SUPPLIER_MRP_FIELD_LABEL,
+  SUPPLIER_MRP_INCLUSIVE_HINT,
   SUPPLIER_MRP_LABEL
 } from '../utils/supplierStockLabel';
 import { formatRupee } from '../utils/formatRupee';
@@ -634,6 +635,9 @@ const SupplierProductSetup = ({ user }) => {
                 step="0.01"
                 required
               />
+              <p className="form-hint" style={{ marginTop: '0.35rem', fontSize: '0.82rem', color: '#64748b' }}>
+                {SUPPLIER_MRP_INCLUSIVE_HINT}
+              </p>
                 {typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
                   <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#0369a1' }}>
                     Recommended avg {SUPPLIER_MRP_LABEL}: <strong>{formatRupee(recommendedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>

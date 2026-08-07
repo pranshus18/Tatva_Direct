@@ -6,6 +6,7 @@ import {
   computeLineGst,
   extractUserState,
   isSameIndianState,
+  resolvePriceIncludesGstFromItem,
   sumGstLines
 } from './gstService.js';
 
@@ -62,7 +63,6 @@ async function buildOrderTaxSummary(order) {
   const lineTaxBreakdown = (orderItems || []).map((line) => {
     const quantity = Number(line?.quantity) || 0;
     const unitPrice = Number(line?.unit_price) || 0;
-    const taxableAmount = quantity * unitPrice;
     const supplierProduct = supplierProductsById.get(line?.supplier_product_id) || {};
     assertSupplierProductTaxRates({
       supplierProduct,
@@ -70,11 +70,12 @@ async function buildOrderTaxSummary(order) {
       productRef: `supplier_product_id ${line?.supplier_product_id || 'unknown'}`
     });
     return computeLineGst({
-      taxableAmount,
+      taxableAmount: quantity * unitPrice,
       igstRate: supplierProduct?.igst_rate,
       cgstRate: supplierProduct?.cgst_rate,
       sgstRate: supplierProduct?.sgst_rate,
-      intraState: intraStateTax
+      intraState: intraStateTax,
+      priceIncludesGst: resolvePriceIncludesGstFromItem(line)
     });
   });
 

@@ -7,14 +7,21 @@ export const SUPPLIER_CURRENT_STOCK_LABEL = 'Current stock with you';
 /** Shown until MRP / location inventory details are completed (step 2) */
 export const SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL = 'Inventory Setup Pending';
 
-/** Supplier portal label for catalog / inventory unit amount (API field remains `price`) */
-export const SUPPLIER_MRP_LABEL = 'MRP';
+/** Supplier portal label for catalog / inventory unit amount (API field remains `price`; GST-inclusive MRP) */
+export const SUPPLIER_MRP_LABEL = 'MRP (incl. GST)';
 
 /** Form column: MRP with rupee symbol */
 export const SUPPLIER_MRP_FIELD_LABEL = `${SUPPLIER_MRP_LABEL} (${RUPEE_SYMBOL})`;
 
-/** Product_COV tier unit price (must not exceed catalog MRP) */
-export const SUPPLIER_COV_PRICE_LABEL = 'COV price';
+/** Product_COV tier unit price (must not exceed catalog MRP; also GST-inclusive) */
+export const SUPPLIER_COV_PRICE_LABEL = 'COV price (incl. GST)';
+
+/** Shown under MRP / price fields in supplier inventory forms */
+export const SUPPLIER_MRP_INCLUSIVE_HINT =
+  'This is the final price buyers pay. It already includes the base price and GST — do not add GST separately.';
+
+/** Short note next to catalog price display */
+export const SUPPLIER_MRP_SHORT_NOTE = 'Incl. base price + GST';
 
 /** Form column: COV price with rupee symbol */
 export const SUPPLIER_COV_PRICE_FIELD_LABEL = `${SUPPLIER_COV_PRICE_LABEL} (${RUPEE_SYMBOL})`;

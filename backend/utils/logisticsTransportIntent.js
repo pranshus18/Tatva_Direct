@@ -10,6 +10,23 @@ export const TRANSPORT_KIND = Object.freeze({
   SELF_SHIP: 'self_ship'
 });
 
+const SELF_SHIP_PROVIDER_NAMES = new Set([
+  'self ship',
+  'self-ship',
+  'shipment by supplier'
+]);
+
+export function isSelfShipProviderName(name) {
+  return SELF_SHIP_PROVIDER_NAMES.has(String(name || '').trim().toLowerCase());
+}
+
+export function isSelfShipTransportSelection({ transportMode = null, shippingProvider = null, source = null } = {}) {
+  const mode = String(transportMode || '').trim().toLowerCase();
+  if (mode === TRANSPORT_KIND.SELF_SHIP) return true;
+  if (String(source || '').trim().toLowerCase() === TRANSPORT_KIND.SELF_SHIP) return true;
+  return isSelfShipProviderName(shippingProvider);
+}
+
 function positiveInt(value) {
   const n = Number(value);
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;

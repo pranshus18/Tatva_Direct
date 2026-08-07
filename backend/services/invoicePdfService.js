@@ -337,16 +337,18 @@ function createInvoicePdfBuffer({ order, invoice, items, receiptNumber = null })
       section('Total Amount');
       if (gstSummary) {
         doc.fontSize(10.3).font('Helvetica');
-        doc.text(`Taxable subtotal (products): ${formatINR(gstSummary.subtotalAmount)}`);
+        doc.text(`Taxable value (excl. GST): ${formatINR(gstSummary.subtotalAmount)}`);
         if (gstSummary.taxType === 'IGST') {
           doc.text(`GST type: IGST`);
-          doc.text(`IGST: ${formatINR(gstSummary.igstAmount || gstSummary.taxAmount)}`);
+          doc.text(`IGST (included in MRP): ${formatINR(gstSummary.igstAmount || gstSummary.taxAmount)}`);
         } else {
           doc.text(`GST type: CGST + SGST`);
-          doc.text(`CGST: ${formatINR(gstSummary.cgstAmount)} | SGST: ${formatINR(gstSummary.sgstAmount)}`);
+          doc.text(
+            `CGST (in MRP): ${formatINR(gstSummary.cgstAmount)} | SGST (in MRP): ${formatINR(gstSummary.sgstAmount)}`
+          );
         }
-        doc.text(`Total GST (products): ${formatINR(gstSummary.taxAmount)}`);
-        doc.text(`Products total (incl. GST): ${formatINR(gstSummary.totalAmount)}`);
+        doc.text(`Total GST (included in MRP): ${formatINR(gstSummary.taxAmount)}`);
+        doc.text(`Products total (MRP): ${formatINR(gstSummary.totalAmount)}`);
       }
       if (transportBillRow) {
         doc.moveDown(0.12);

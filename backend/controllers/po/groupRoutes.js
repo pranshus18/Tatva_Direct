@@ -13,6 +13,7 @@ import {
   getAllowedSellerRoleForBrand,
   getContractErrorMessage,
   getOutletPickupMeta,
+  isPoVendorSupplierUser,
   getSupplierPickupMeta,
   isAddressComplete,
   loadAdminBrandTerminalRoleMap,
@@ -190,11 +191,13 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
             supplier:users!supplier_products_supplier_id_fkey (id, name, company, profile)
           `)
           .eq('id', selectedToken)
-          .in('status', ['approved', 'pending'])
           .maybeSingle();
         if (spBySelectionId?.supplier_id) {
-          supplierProduct = spBySelectionId;
           vendorId = spBySelectionId.supplier_id;
+          const offerStatus = String(spBySelectionId.status || '').toLowerCase();
+          if (offerStatus === 'approved' || offerStatus === 'pending') {
+            supplierProduct = spBySelectionId;
+          }
         }
       }
       const itemSpecs = item.specifications || {};
@@ -328,11 +331,10 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       if ((sellerProfile === undefined || sellerProfile === null) && vendorId) {
         const { data: sellerRow } = await supabase
           .from('users')
-          .select('profile')
+          .select('profile, user_type')
           .eq('id', vendorId)
-          .eq('user_type', 'supplier')
           .maybeSingle();
-        sellerProfile = sellerRow?.profile ?? null;
+        sellerProfile = isPoVendorSupplierUser(sellerRow) ? sellerRow?.profile ?? null : null;
       }
       const selectedBrandName =
         supplierProduct?.attributes?.brand ||
@@ -522,7 +524,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         outletId: null,
         outletName: null
       };
-      const subtotal = roundMoney(group.total);
+      const mrpTotal = roundMoney(group.total);
       const gstSummary = buildOrderGstSummary({
         lineTaxBreakdown: group.lineTaxBreakdown || [],
         supplierState: group.supplierState || '',
@@ -532,7 +534,9 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       });
       const gstAmount = roundMoney(gstSummary.taxAmount || 0);
       const totalInclGst =
-        gstSummary.totalAmount > 0 ? roundMoney(gstSummary.totalAmount) : subtotal;
+        gstSummary.totalAmount > 0 ? roundMoney(gstSummary.totalAmount) : mrpTotal;
+      const taxableSubtotal =
+        gstSummary.subtotalAmount > 0 ? roundMoney(gstSummary.subtotalAmount) : mrpTotal;
       return {
         vendorId: group.vendorId,
         transportGroupId: group.transportGroupId,
@@ -540,11 +544,15 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         shippingAddress: group.shippingAddress || null,
         shippingAddressLabel: group.shippingAddressLabel || '',
         vendorName: group.vendorName,
-        subtotal,
+        subtotal: mrpTotal,
+        taxableSubtotal,
         gstAmount,
         totalInclGst,
-        total: subtotal,
-        gstSummary: gstSummary.totalAmount > 0 ? gstSummary : null,
+        total: mrpTotal,
+        gstSummary:
+          gstSummary.totalAmount > 0
+            ? { ...gstSummary, priceIncludesGst: true }
+            : null,
         pickupPincode: pickup.pincode || '',
         pickupAddressSummary: pickup.summary || '',
         pickupAddress: pickup.pickupAddress || null,

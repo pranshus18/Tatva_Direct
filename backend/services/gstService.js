@@ -291,20 +291,91 @@ export function formatGstTaxTypeLabel(taxType) {
   return 'No GST';
 }
 
+/** Whether line unit prices include GST. Catalog MRP is always GST-inclusive. */
+export function resolvePriceIncludesGstFromItem(item) {
+  const specs = parseOrderItemSpecifications(item?.specifications);
+  const gst = specs?.gst;
+  if (gst && typeof gst.priceIncludesGst === 'boolean') {
+    return gst.priceIncludesGst;
+  }
+  return true;
+}
+
+/**
+ * Compute GST for a line. By default `lineAmount` (taxableAmount param) is MRP × qty — GST-inclusive.
+ * Taxable value and tax components are extracted for invoice breakdown; totalAmount equals lineAmount.
+ */
 export function computeLineGst({
   taxableAmount = 0,
+  lineAmount = null,
   igstRate = 0,
   cgstRate = 0,
   sgstRate = 0,
   intraState = false,
-  supplierProduct = null
+  supplierProduct = null,
+  priceIncludesGst = true
 } = {}) {
   const resolvedRates = supplierProduct ? resolveSupplierProductTaxRates(supplierProduct) : null;
-  const taxable = roundMoney(taxableAmount);
   const safeIgst = asNumber(resolvedRates?.igstRate ?? igstRate);
   const safeCgst = asNumber(resolvedRates?.cgstRate ?? cgstRate);
   const safeSgst = asNumber(resolvedRates?.sgstRate ?? sgstRate);
+  const inclusiveLineAmount = roundMoney(lineAmount ?? taxableAmount);
 
+  if (priceIncludesGst) {
+    const effectiveRate = intraState ? safeCgst + safeSgst : safeIgst;
+    if (effectiveRate <= 0) {
+      return {
+        taxableAmount: inclusiveLineAmount,
+        taxType: intraState ? 'CGST_SGST' : 'IGST',
+        igstRate: safeIgst,
+        cgstRate: safeCgst,
+        sgstRate: safeSgst,
+        igstAmount: 0,
+        cgstAmount: 0,
+        sgstAmount: 0,
+        taxAmount: 0,
+        totalAmount: inclusiveLineAmount,
+        priceIncludesGst: true
+      };
+    }
+
+    const taxable = roundMoney((inclusiveLineAmount * 100) / (100 + effectiveRate));
+    const taxAmount = roundMoney(inclusiveLineAmount - taxable);
+
+    if (intraState) {
+      const cgstAmount = roundMoney((taxable * safeCgst) / 100);
+      const sgstAmount = roundMoney(taxAmount - cgstAmount);
+      return {
+        taxableAmount: taxable,
+        taxType: 'CGST_SGST',
+        igstRate: 0,
+        cgstRate: safeCgst,
+        sgstRate: safeSgst,
+        igstAmount: 0,
+        cgstAmount,
+        sgstAmount,
+        taxAmount,
+        totalAmount: inclusiveLineAmount,
+        priceIncludesGst: true
+      };
+    }
+
+    return {
+      taxableAmount: taxable,
+      taxType: 'IGST',
+      igstRate: safeIgst,
+      cgstRate: 0,
+      sgstRate: 0,
+      igstAmount: taxAmount,
+      cgstAmount: 0,
+      sgstAmount: 0,
+      taxAmount,
+      totalAmount: inclusiveLineAmount,
+      priceIncludesGst: true
+    };
+  }
+
+  const taxable = roundMoney(inclusiveLineAmount);
   if (intraState) {
     const cgstAmount = roundMoney((taxable * safeCgst) / 100);
     const sgstAmount = roundMoney((taxable * safeSgst) / 100);
@@ -319,7 +390,8 @@ export function computeLineGst({
       cgstAmount,
       sgstAmount,
       taxAmount,
-      totalAmount: roundMoney(taxable + taxAmount)
+      totalAmount: roundMoney(taxable + taxAmount),
+      priceIncludesGst: false
     };
   }
 
@@ -334,7 +406,8 @@ export function computeLineGst({
     cgstAmount: 0,
     sgstAmount: 0,
     taxAmount: igstAmount,
-    totalAmount: roundMoney(taxable + igstAmount)
+    totalAmount: roundMoney(taxable + igstAmount),
+    priceIncludesGst: false
   };
 }
 
@@ -372,21 +445,22 @@ export function sumGstLines(lines = []) {
 export function buildPoGroupsCheckoutSummary(poGroups = []) {
   const groups = Array.isArray(poGroups) ? poGroups : [];
   const productSubtotal = roundMoney(
-    groups.reduce((sum, group) => sum + asNumber(group?.subtotal ?? group?.total ?? group?.gstSummary?.subtotalAmount), 0)
+    groups.reduce((sum, group) => sum + asNumber(group?.gstSummary?.subtotalAmount), 0)
   );
   const gstAmount = roundMoney(
     groups.reduce((sum, group) => sum + asNumber(group?.gstAmount ?? group?.gstSummary?.taxAmount), 0)
   );
   const productsInclGst = roundMoney(
     groups.reduce((sum, group) => {
-      const incl = asNumber(group?.totalInclGst ?? group?.gstSummary?.totalAmount);
-      if (incl > 0) return sum + incl;
-      return sum + asNumber(group?.subtotal ?? group?.total) + asNumber(group?.gstAmount);
+      const incl = asNumber(
+        group?.totalInclGst ?? group?.gstSummary?.totalAmount ?? group?.subtotal ?? group?.total
+      );
+      return sum + incl;
     }, 0)
   );
   return {
-    productSubtotal,
+    productSubtotal: productSubtotal || roundMoney(Math.max(0, productsInclGst - gstAmount)),
     gstAmount,
-    productsInclGst: productsInclGst || roundMoney(productSubtotal + gstAmount)
+    productsInclGst
   };
 }

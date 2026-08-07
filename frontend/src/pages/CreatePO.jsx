@@ -55,11 +55,9 @@ import {
   VAULT_PAYMENT_METHOD
 } from '../utils/vaultPaymentMethod';
 import {
-  sumPoGroupsGstAmount,
-  sumPoGroupsProductSubtotal,
   sumPoGroupsProductsInclGst
 } from '../utils/orderChargeBreakdown';
-import { formatGstBasisLabel } from '../utils/gstDisplay';
+import { isSelfShipTransport, SELF_SHIP_PROVIDER_NAME } from '../utils/transportLabels';
 import './CreatePO.css';
 
 const todayDateMin = getTodayDateInputValue();
@@ -240,7 +238,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   }, [boqProject?.requiredDate, navVoiceCart?.requiredDate]);
   const [requiredDate, setRequiredDate] = useState(initialRequiredDateFromContext);
   const [creatingOrders, setCreatingOrders] = useState(false);
-  /** Vault-only checkout: orders are paid from PM vault (products + transport). */
+  /** Vault checkout: SP vault debits products only; transport uses logistics vault at booking. */
   const [poPaymentMethod, setPoPaymentMethod] = useState(VAULT_PAYMENT_METHOD);
   /** Payment details collected based on selected method (card number, UTR, etc.) */
   const [paymentDetails, setPaymentDetails] = useState({});
@@ -398,20 +396,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     setReservationSecondsLeft(0);
   };
 
-  const productsSubtotalAllPos = useMemo(
-    () =>
-      Number.isFinite(Number(checkoutSummary?.productSubtotal))
-        ? Number(checkoutSummary.productSubtotal)
-        : sumPoGroupsProductSubtotal(poGroups),
-    [checkoutSummary, poGroups]
-  );
-  const gstTotalAllPos = useMemo(
-    () =>
-      Number.isFinite(Number(checkoutSummary?.gstAmount))
-        ? Number(checkoutSummary.gstAmount)
-        : sumPoGroupsGstAmount(poGroups),
-    [checkoutSummary, poGroups]
-  );
   const grandTotalAllPos = useMemo(
     () =>
       Number.isFinite(Number(checkoutSummary?.productsInclGst))
@@ -437,6 +421,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       for (const key of Object.keys(byVendor)) {
         if (!String(byVendor[key] || '').trim()) continue;
         const det = details[key];
+        const providerName = byVendor[key];
+        if (isSelfShipTransport(det, providerName)) continue;
         const quoted = parseQuote(det?.fareValue) ?? parseQuote(det?.rate);
         if (quoted != null) sum += quoted;
       }
@@ -448,9 +434,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     () => Math.round((Number(grandTotalAllPos || 0) + Number(transportTotalAllPos || 0)) * 100) / 100,
     [grandTotalAllPos, transportTotalAllPos]
   );
+  const vaultProductDebit = useMemo(
+    () => Math.round(Number(grandTotalAllPos || 0) * 100) / 100,
+    [grandTotalAllPos]
+  );
   const vaultShortage = useMemo(
-    () => Math.max(0, Number(checkoutTotalDue || 0) - Number(vaultBalance || 0)),
-    [checkoutTotalDue, vaultBalance]
+    () => Math.max(0, Number(vaultProductDebit || 0) - Number(vaultBalance || 0)),
+    [vaultProductDebit, vaultBalance]
   );
   const hasSufficientVaultBalance = vaultShortage <= 0;
 
@@ -1012,11 +1002,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       const vt = det.vehicle_type_id ?? det.vehicleTypeId;
       return vt != null && vt !== '' && Number(vt) > 0;
     };
-    const isSelfShipDetail = (det, shippingProvider = '') => {
-      const mode = String(det?.transportMode || det?.transport_mode || '').toLowerCase();
-      const providerName = String(shippingProvider || '').trim().toLowerCase();
-      return mode === 'self_ship' || providerName === 'self ship' || providerName === 'self-ship';
-    };
+    const isSelfShipDetail = (det, shippingProvider = '') => isSelfShipTransport(det, shippingProvider);
 
     const applyTruckingFields = (target, det) => {
       const vtRaw = det?.vehicle_type_id ?? det?.vehicleTypeId;
@@ -1047,8 +1033,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object'
             ? st.byVendorCourierDetail[transportKey] || st.byVendorCourierDetail[String(o.supplierId || '')]
             : null;
-        const quotedTransportAmount =
-          parseQuoteInr(det?.fareValue) ?? parseQuoteInr(det?.rate);
+        const quotedTransportAmount = isSelfShipDetail(det, sp)
+          ? null
+          : parseQuoteInr(det?.fareValue) ?? parseQuoteInr(det?.rate);
         const courierCompanyId =
           det?.courier_company_id != null && det?.courier_company_id !== ''
             ? Number(det.courier_company_id)
@@ -1094,35 +1081,40 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       if (orderList.length === 1 && st.byVendorCourierDetail && typeof st.byVendorCourierDetail === 'object') {
         const sid = String(orderList[0].supplierId || '');
         const det = st.byVendorCourierDetail[sid];
-        const q = parseQuoteInr(det?.fareValue) ?? parseQuoteInr(det?.rate);
-        if (q != null) {
-          confirmBody.quotedTransportAmount = q;
-        }
         const cc = det?.courier_company_id;
         const n = cc != null && cc !== '' ? Number(cc) : NaN;
         if (isSelfShipDetail(det, st.shippingProvider)) {
           confirmBody.transportMode = 'self_ship';
           confirmBody.source = 'self_ship';
-        } else if (isTruckingDetail(det)) {
-          applyTruckingFields(confirmBody, det);
         } else {
-          confirmBody.transportMode = 'courier';
-          if (Number.isFinite(n) && n > 0) {
-            confirmBody.courierCompanyId = n;
+          const q = parseQuoteInr(det?.fareValue) ?? parseQuoteInr(det?.rate);
+          if (q != null) {
+            confirmBody.quotedTransportAmount = q;
           }
-          const td = det?.transit_days ?? det?.transitDays;
-          if (td != null && td !== '') confirmBody.transitDays = Number(td);
-          if (det?.transportGroupId) confirmBody.transportGroupId = String(det.transportGroupId);
-          if (det?.pickupPincode) {
-            confirmBody.pickupPincode = String(det.pickupPincode).replace(/\D/g, '').slice(0, 6);
+          if (isTruckingDetail(det)) {
+            applyTruckingFields(confirmBody, det);
+          } else {
+            confirmBody.transportMode = 'courier';
+            if (Number.isFinite(n) && n > 0) {
+              confirmBody.courierCompanyId = n;
+            }
+            const td = det?.transit_days ?? det?.transitDays;
+            if (td != null && td !== '') confirmBody.transitDays = Number(td);
+            if (det?.transportGroupId) confirmBody.transportGroupId = String(det.transportGroupId);
+            if (det?.pickupPincode) {
+              confirmBody.pickupPincode = String(det.pickupPincode).replace(/\D/g, '').slice(0, 6);
+            }
+            if (det?.etd) confirmBody.etd = String(det.etd);
           }
-          if (det?.etd) confirmBody.etd = String(det.etd);
         }
       }
     }
 
     if (persistOnly) {
       confirmBody.persistOnly = true;
+      if (isVaultPaymentMethod(poPaymentMethod)) {
+        confirmBody.settleVault = true;
+      }
     }
 
     const res = await fetch(getApiUrl('/api/po/transport/confirm'), {
@@ -1155,6 +1147,19 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     return res.json();
   };
 
+  const hasTransportConfigured = useMemo(() => {
+    const st = selectedTransport;
+    if (!st || typeof st !== 'object') return false;
+    const byVendor = st.byVendorId && typeof st.byVendorId === 'object' ? st.byVendorId : null;
+    if (byVendor && poGroups.length > 0) {
+      return poGroups.every((group) => {
+        const key = getTransportGroupKey(group);
+        return Boolean(String(byVendor[key] || byVendor[String(group.vendorId || '')] || '').trim());
+      });
+    }
+    return Boolean(String(st.shippingProvider || '').trim());
+  }, [selectedTransport, poGroups]);
+
   const completeOrderFlow = async () => {
     try {
       setCreatingOrders(true);
@@ -1165,55 +1170,46 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
         setCreatedTransportOrders(activeOrders);
       }
 
-      // 1) Save carrier selection + transport amount (no logistics book / tracking yet).
-      await finalizeTransportDetails(activeOrders, { persistOnly: true });
+      // 1) Save carrier selection + transport amount, then debit vault on the server (sequential, reliable).
+      const transportPersistResult = await finalizeTransportDetails(activeOrders, { persistOnly: true });
 
-      // 2) Vault debit must succeed before carrier book reveals AWB / tracking.
       if (isVaultPaymentMethod(poPaymentMethod)) {
-        await restorePmVaultSession();
-        const payOutcomes = await Promise.all(
-          activeOrders
-            .filter((order) => order?.id)
-            .map(async (order) => {
-              try {
-                const payData = await payOrderFromVault(order.id, {
-                  idempotencyKey: `create-po-vault-${order.id}`,
-                  skipSessionRestore: true
-                });
-                if (payData?.status && payData.status !== 'success') {
-                  return {
-                    ok: false,
-                    order,
-                    message:
-                      payData.message ||
-                      `Failed to debit vault for order ${order.orderNumber || order.id}. Products + transport were not fully paid.`
-                  };
-                }
-                return { ok: true, order };
-              } catch (payErr) {
-                const alreadyPaid =
-                  payErr?.code === 'ORDER_ALREADY_PAID' ||
-                  /already paid/i.test(String(payErr?.message || ''));
-                if (alreadyPaid) return { ok: true, order };
-                return {
-                  ok: false,
-                  order,
-                  message:
-                    payErr?.message ||
-                    `Order(s) created, but vault payment failed. Open Your Orders and pay from vault once your balance is sufficient.`
-                };
+        const vaultSettlement = transportPersistResult?.vaultSettlement;
+        const allPaidServerSide =
+          vaultSettlement?.allPaid &&
+          Array.isArray(vaultSettlement?.paidOrders) &&
+          vaultSettlement.paidOrders.length > 0;
+
+        if (!allPaidServerSide) {
+          await restorePmVaultSession();
+          for (const order of activeOrders.filter((row) => row?.id)) {
+            try {
+              const payData = await payOrderFromVault(order.id, {
+                idempotencyKey: `create-po-vault-${order.id}`,
+                skipSessionRestore: true
+              });
+              if (payData?.status && payData.status !== 'success') {
+                throw new Error(
+                  payData.message ||
+                    `Failed to debit vault for order ${order.orderNumber || order.id}.`
+                );
               }
-            })
-        );
-        const failedPay = payOutcomes.find((outcome) => !outcome.ok);
-        if (failedPay) {
-          alert(failedPay.message || 'Vault payment failed.');
-          navigate('/your-orders');
-          return;
+            } catch (payErr) {
+              const alreadyPaid =
+                payErr?.code === 'ORDER_ALREADY_PAID' ||
+                /already paid/i.test(String(payErr?.message || ''));
+              if (!alreadyPaid) {
+                alert(
+                  payErr?.message ||
+                    'Order(s) created, but vault payment failed. Open Your Orders and pay from vault.'
+                );
+                navigate('/your-orders');
+                return;
+              }
+            }
+          }
         }
       }
-
-      // 3) After vault payment: book courier/trucking and persist tracking.
       const transportResult = isVaultPaymentMethod(poPaymentMethod)
         ? await finalizeTransportDetails(activeOrders)
         : null;
@@ -1287,6 +1283,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     if (isVaultPaymentMethod(poPaymentMethod)) {
       if (loadingVaultBalance) {
         alert('Checking vault balance. Please wait and try again.');
+        return;
+      }
+      if (!hasTransportConfigured) {
+        alert('Select transport for each supplier before confirming your order.');
         return;
       }
       if (!hasSufficientVaultBalance) {
@@ -1401,7 +1401,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           <h2>Purchase Orders Created!</h2>
           <p>
             {isVaultPaymentMethod(poPaymentMethod)
-              ? 'Your orders were placed and paid from vault. Product and transport charges were debited at checkout; supplier vaults are credited immediately (net of platform fee).'
+              ? 'Your orders were placed and paid from vault. Product charges were debited from your vault only. Supplier vault credit will be handled separately when that integration is available.'
               : 'Your orders were placed on pay later. Settle each order from your vault before the due date — top up your vault first if needed. All payments go through vault only.'}
           </p>
           <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap', justifyContent: 'center' }}>
@@ -1588,7 +1588,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           </select>
           {isVaultPaymentMethod(poPaymentMethod) ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
-              On confirm, vault is debited for product total plus selected transport charges. The supplier vault is credited immediately (net of platform fee).
+              On confirm, your vault is debited for the product total only (MRP incl. GST). Supplier vault credit is not automated yet — only your vault balance is reduced at checkout.
             </p>
           ) : poPaymentMethod === 'credit' ? (
             <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569', maxWidth: '640px' }}>
@@ -1614,7 +1614,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             </button>
             <span style={{ fontSize: '0.76rem', color: '#64748b' }}>
               {isVaultPaymentMethod(poPaymentMethod)
-                ? 'Tip: Keep enough vault balance for products (incl. GST) + transport before confirming.'
+                ? 'Tip: Keep enough vault balance for the product total before confirming. Transport is billed via logistics vault.'
                 : 'Tip: Configure credit limit with supplier to use pay later without failures.'}
             </span>
           </div>
@@ -1634,21 +1634,20 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                 Vault balance check
               </p>
               <p style={{ margin: 0, fontSize: '0.8rem', color: '#475569' }}>
-                Product total: <strong>₹{Number(productsSubtotalAllPos || 0).toLocaleString('en-IN')}</strong>
-              </p>
-              <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
-                GST: <strong>₹{Number(gstTotalAllPos || 0).toLocaleString('en-IN')}</strong>
-              </p>
-              <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
-                Products incl. GST:{' '}
+                Product total:{' '}
                 <strong>₹{Number(grandTotalAllPos || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
-                Transport: <strong>₹{Number(transportTotalAllPos || 0).toLocaleString('en-IN')}</strong>
+                Transport (logistics vault):{' '}
+                <strong>₹{Number(transportTotalAllPos || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
-                Combined total to debit:{' '}
+                Order total:{' '}
                 <strong>₹{Number(checkoutTotalDue || 0).toLocaleString('en-IN')}</strong>
+              </p>
+              <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
+                Your vault debit (products):{' '}
+                <strong>₹{Number(vaultProductDebit || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
                 Vault balance:{' '}
@@ -1866,17 +1865,6 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                         Delivery: {group.shippingAddressLabel}
                       </p>
                     ) : null}
-                    {group.gstSummary ? (
-                      <p style={{ margin: '0.2rem 0 0', fontSize: '0.78rem', color: '#475569' }}>
-                        GST:{' '}
-                        <strong>
-                          ₹{Number(group.gstAmount ?? group.gstSummary.taxAmount ?? 0).toLocaleString('en-IN')}
-                        </strong>
-                        {formatGstBasisLabel(group.gstSummary)
-                          ? ` · ${formatGstBasisLabel(group.gstSummary)}`
-                          : ''}
-                      </p>
-                    ) : null}
                   </div>
                   <div className="po-total">
                     ₹{(group.totalInclGst ?? group.total)?.toLocaleString() || '0'}
@@ -1887,8 +1875,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                     <tr>
                       <th>Item</th>
                       <th>Quantity</th>
-                      <th>Unit Price (excl. GST)</th>
-                      <th>Total (incl. GST)</th>
+                      <th>Unit Price (MRP)</th>
+                      <th>Line Total</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1966,9 +1954,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                         <td>
                           ₹
                           {Number(
-                            item.lineTotalInclGst ??
-                              ((item.quantity || 0) * (item.price || 0) +
-                                Number(item.lineGst?.taxAmount || 0))
+                            item.lineTotalInclGst ?? (item.quantity || 0) * (item.price || 0)
                           ).toLocaleString('en-IN')}
                         </td>
                       </tr>
@@ -1985,7 +1971,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                         const priceLabel = formatQuoteMoney(d?.rate);
                         const modeLabel =
                           d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
-                            ? 'Self ship'
+                            ? SELF_SHIP_PROVIDER_NAME
                             : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
                               ? 'Trucking'
                               : 'Courier';
@@ -2042,7 +2028,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                         const priceLabel = formatQuoteMoney(d?.rate);
                         const modeLabel =
                           d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
-                            ? 'Self ship'
+                            ? SELF_SHIP_PROVIDER_NAME
                             : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
                               ? 'Trucking'
                               : 'Courier';

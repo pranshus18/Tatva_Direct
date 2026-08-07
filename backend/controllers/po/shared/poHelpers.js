@@ -7,6 +7,7 @@ import {
   toDbVaultPaymentMethod
 } from '../../../utils/vaultPaymentMethod.js';
 import { deriveGstTaxTypeFromTotals } from '../../../services/gstService.js';
+import { hasEffectiveRegisteredRole } from '../../../utils/portalRoles.js';
 
 export const LEGACY_PO_CART_GROUP_PREFIX = 'legacy';
 export const ORDER_INSERT_MAX_RETRIES = 3;
@@ -216,6 +217,73 @@ export async function loadServiceProviderPoCartDraft(supabase, userId) {
     .eq('service_provider_id', userId)
     .maybeSingle();
   return normalizePoCartDraft(cart?.draft_payload || {});
+}
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+async function loadSupplierUserById(supabase, candidateId) {
+  const id = String(candidateId || '').trim();
+  if (!id || !UUID_RE.test(id)) return null;
+  const { data } = await supabase
+    .from('users')
+    .select('id, name, company, address, profile, user_type')
+    .eq('id', id)
+    .maybeSingle();
+  if (!data) return null;
+  if (!hasEffectiveRegisteredRole(data, 'supplier')) return null;
+  return data;
+}
+
+export function isPoVendorSupplierUser(user) {
+  return hasEffectiveRegisteredRole(user, 'supplier');
+}
+
+async function loadSupplierUserFromOfferId(supabase, offerId) {
+  const id = String(offerId || '').trim();
+  if (!id || !UUID_RE.test(id)) return null;
+  const { data } = await supabase
+    .from('supplier_products')
+    .select(
+      'id, supplier_id, supplier:users!supplier_products_supplier_id_fkey(id, name, company, address, profile, user_type)'
+    )
+    .eq('id', id)
+    .maybeSingle();
+  if (!data?.supplier_id) return null;
+  const supplier = await loadSupplierUserById(supabase, data.supplier_id);
+  if (supplier) return supplier;
+  const { data: userRow } = await supabase
+    .from('users')
+    .select('id, name, company, address, profile, user_type')
+    .eq('id', data.supplier_id)
+    .maybeSingle();
+  return hasEffectiveRegisteredRole(userRow, 'supplier') ? userRow : null;
+}
+
+/**
+ * PO checkout may store a supplier offer id (selectionId) as vendorId.
+ * Resolve to the supplier user row before order insert.
+ */
+export async function resolvePoGroupSupplierId(supabase, group = {}) {
+  const token = String(group?.vendorId || '').trim();
+  const itemOfferIds = (Array.isArray(group?.items) ? group.items : [])
+    .map((item) => String(item?.supplierProductId || '').trim())
+    .filter(Boolean);
+  const offerIds = [...new Set([...itemOfferIds, token].filter(Boolean))];
+
+  for (const offerId of offerIds) {
+    const supplier = await loadSupplierUserFromOfferId(supabase, offerId);
+    if (supplier) {
+      return { supplierId: supplier.id, supplier };
+    }
+  }
+
+  const supplier = await loadSupplierUserById(supabase, token);
+  if (supplier) {
+    return { supplierId: supplier.id, supplier };
+  }
+
+  return { supplierId: token || null, supplier: null };
 }
 
 /** Merge PO groups that share supplier + delivery address (safety net after per-item grouping). */

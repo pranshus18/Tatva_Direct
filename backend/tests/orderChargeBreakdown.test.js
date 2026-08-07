@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolveOrderChargeBreakdown,
+  sumPoGroupsProductSubtotal,
   sumPoGroupsProductsInclGst
 } from '../utils/orderChargeBreakdown.js';
 
@@ -10,6 +11,7 @@ test('resolveOrderChargeBreakdown adds GST when total_amount stored as subtotal 
     total_amount: 1125,
     delivery_address: {
       gstSummary: {
+        priceIncludesGst: false,
         taxType: 'IGST',
         subtotalAmount: 1125,
         taxAmount: 56.25,
@@ -25,7 +27,7 @@ test('resolveOrderChargeBreakdown adds GST when total_amount stored as subtotal 
   assert.equal(breakdown.combinedTotal, 1181.25);
 });
 
-test('resolveOrderChargeBreakdown includes transport in combined total', () => {
+test('resolveOrderChargeBreakdown includes transport in combined total but not buyer vault debit', () => {
   const breakdown = resolveOrderChargeBreakdown({
     total_amount: 1125,
     delivery_address: {
@@ -40,12 +42,26 @@ test('resolveOrderChargeBreakdown includes transport in combined total', () => {
 
   assert.equal(breakdown.transportAmount, 200);
   assert.equal(breakdown.combinedTotal, 1381.25);
+  assert.equal(breakdown.buyerVaultDebit, 1181.25);
+  assert.equal(breakdown.logisticsVaultDebit, 200);
 });
 
-test('sumPoGroupsProductsInclGst prefers totalInclGst from grouped PO preview', () => {
+test('sumPoGroupsProductsInclGst uses MRP total and does not add GST again', () => {
   const total = sumPoGroupsProductsInclGst([
-    { total: 1000, gstAmount: 180, totalInclGst: 1180 },
-    { subtotal: 500, gstAmount: 90, totalInclGst: 590 }
+    { total: 1180, gstAmount: 180, totalInclGst: 1180 },
+    { subtotal: 590, gstAmount: 90, totalInclGst: 590 }
   ]);
   assert.equal(total, 1770);
+});
+
+test('sumPoGroupsProductSubtotal returns taxable value extracted from MRP', () => {
+  const taxable = sumPoGroupsProductSubtotal([
+    {
+      total: 1180,
+      gstAmount: 180,
+      totalInclGst: 1180,
+      gstSummary: { subtotalAmount: 1000, taxAmount: 180, totalAmount: 1180 }
+    }
+  ]);
+  assert.equal(taxable, 1000);
 });

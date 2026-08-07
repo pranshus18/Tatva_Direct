@@ -32,6 +32,19 @@ test('getAdminBuyerFacingDescriptionForApproval accepts saved publish copy', () 
   );
 });
 
+test('getAdminBuyerFacingDescriptionForApproval accepts supplier text saved as-is by admin', () => {
+  const supplierText = 'Raw supplier submission.';
+  assert.equal(
+    getAdminBuyerFacingDescriptionForApproval({
+      status: 'pending',
+      description: supplierText,
+      supplierDescription: supplierText,
+      publishedDescription: supplierText
+    }),
+    supplierText
+  );
+});
+
 test('buildAdminPublishedDescriptionAttributes preserves supplier draft', () => {
   const existing = buildSupplierDescriptionAttributes(
     {},

@@ -1294,7 +1294,7 @@ const ServiceProviderDashboard = ({ user }) => {
                       </p>
                     ) : null}
                     <p style={{ color: '#64748b', marginBottom: '1.5rem', fontSize: '0.9rem', textAlign: 'left' }}>
-                      Your vault is debited at payment; the supplier vault is credited immediately (net of platform fee).
+                      Your vault is debited at payment. Supplier vault credit is recorded as pending until that API is available.
                     </p>
                     <div style={{ marginBottom: '0.75rem', fontSize: '0.85rem', color: '#334155' }}>
                       <p style={{ margin: '0.25rem 0' }}>

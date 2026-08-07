@@ -28,7 +28,8 @@ export async function ensurePaymentTransactionForPaidOrder({
   paidAt = null,
   actorUserId = null,
   provider = null,
-  status = 'captured'
+  status = 'captured',
+  amount = null
 }) {
   if (!order?.id) return null;
 
@@ -57,7 +58,7 @@ export async function ensurePaymentTransactionForPaidOrder({
     provider: txnProvider === 'razorpay' ? 'razorpay' : 'manual',
     method: txnMethod,
     transaction_type: 'payment',
-    amount: order.total_amount,
+    amount: amount != null ? amount : order.total_amount,
     provider_order_id: order.payment_provider_order_id || null,
     provider_payment_id: providerPaymentId,
     status,

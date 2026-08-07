@@ -18,6 +18,18 @@ describe('getAdminProductApprovalReadiness', () => {
     expect(getAdminProductApprovalReadiness(readyPendingProduct).ok).toBe(true);
   });
 
+  it('passes when admin saves supplier description as-is without AI polish', () => {
+    const supplierText = 'This steel bottle keeps drinks hot and cold for hours.';
+    expect(
+      getAdminProductApprovalReadiness({
+        ...readyPendingProduct,
+        supplierDescription: supplierText,
+        publishedDescription: supplierText,
+        description: supplierText
+      }).ok
+    ).toBe(true);
+  });
+
   it('parses string and snapshot-wrapped specifications like the backend', () => {
     expect(
       getAdminProductApprovalReadiness({

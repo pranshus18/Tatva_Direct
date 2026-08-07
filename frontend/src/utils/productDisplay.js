@@ -59,33 +59,25 @@ export function getAdminSupplierSubmittedDescription(product = {}) {
 
 /**
  * Buyer-facing description shown in the admin edit box.
- * Pending/rejected: only admin-saved published copy (offer.publishedDescription), not stale catalog text.
+ * Pending/rejected: admin-saved published copy (offer.publishedDescription).
  * Approved: catalog products.description.
+ * AI polish is optional — admin may save supplier text as-is after review.
  */
 export function getAdminBuyerFacingCatalogDescription(product = {}) {
   const status = String(product?.status || 'pending').trim().toLowerCase();
   const publishedFromOffer = String(product?.publishedDescription || '').trim();
   const catalog = String(product?.description || '').trim();
-  const supplier = getAdminSupplierSubmittedDescription(product);
-
-  const isDistinctBuyerFacing = (text) => {
-    const trimmed = String(text || '').trim();
-    if (!isMeaningfulProductDescription(trimmed, { allowInlineSpecs: true })) return false;
-    if (supplier && trimmed === supplier) return false;
-    return true;
-  };
 
   if (status === 'approved') {
-    return isDistinctBuyerFacing(catalog) ? catalog : '';
+    return isMeaningfulProductDescription(catalog, { allowInlineSpecs: true }) ? catalog : '';
   }
 
-  if (isDistinctBuyerFacing(publishedFromOffer)) {
+  if (isMeaningfulProductDescription(publishedFromOffer, { allowInlineSpecs: true })) {
     return publishedFromOffer;
   }
 
-  // After admin Save, catalog.description and offer.publishedDescription should match.
   if (
-    isDistinctBuyerFacing(catalog) &&
+    isMeaningfulProductDescription(catalog, { allowInlineSpecs: true }) &&
     publishedFromOffer &&
     catalog === publishedFromOffer
   ) {
@@ -93,6 +85,13 @@ export function getAdminBuyerFacingCatalogDescription(product = {}) {
   }
 
   return '';
+}
+
+/** Description seed when admin opens Edit — saved copy first, else supplier draft. */
+export function getAdminBuyerFacingEditSeed(product = {}) {
+  const saved = getAdminBuyerFacingCatalogDescription(product);
+  if (saved) return saved;
+  return getAdminSupplierSubmittedDescription(product);
 }
 
 /** Admin list cards: prefer saved buyer-facing copy; else supplier draft while pending. */

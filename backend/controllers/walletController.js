@@ -490,10 +490,14 @@ walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProviderOr
         message: e.message || 'Supplier payout could not be completed for this paid order'
       });
     }
-    if (e?.code === 'INSUFFICIENT_WALLET_BALANCE' || e?.code === 'INSUFFICIENT_VAULT_BALANCE') {
+    if (
+      e?.code === 'INSUFFICIENT_WALLET_BALANCE' ||
+      e?.code === 'INSUFFICIENT_VAULT_BALANCE' ||
+      e?.code === 'ORDER_CHARGE_INVALID'
+    ) {
       return res.status(400).json({
         status: 'error',
-        code: 'INSUFFICIENT_VAULT_BALANCE',
+        code: e.code === 'ORDER_CHARGE_INVALID' ? e.code : 'INSUFFICIENT_VAULT_BALANCE',
         message: e.message || 'Insufficient vault balance'
       });
     }

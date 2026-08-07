@@ -20,40 +20,58 @@ test('resolveGstPlaceOfSupplyState prefers billing address when GSTIN is registe
   assert.equal(state, 'Maharashtra');
 });
 
-test('computeLineGst uses IGST when supplier and customer are in different states', () => {
+test('computeLineGst extracts IGST from MRP when supplier and customer are in different states', () => {
   assert.equal(isSameIndianState('Maharashtra', 'Karnataka'), false);
   const line = computeLineGst({
-    taxableAmount: 1000,
+    taxableAmount: 1180,
     igstRate: 18,
     cgstRate: 9,
     sgstRate: 9,
     intraState: false
   });
   assert.equal(line.taxType, 'IGST');
+  assert.equal(line.taxableAmount, 1000);
   assert.equal(line.igstAmount, 180);
   assert.equal(line.totalAmount, 1180);
+  assert.equal(line.priceIncludesGst, true);
 });
 
-test('computeLineGst uses CGST+SGST when supplier and customer share the same state', () => {
+test('computeLineGst extracts CGST+SGST from MRP when supplier and customer share the same state', () => {
   assert.equal(isSameIndianState('MH', 'Maharashtra'), true);
   const line = computeLineGst({
-    taxableAmount: 1000,
+    taxableAmount: 1180,
     igstRate: 18,
     cgstRate: 9,
     sgstRate: 9,
     intraState: true
   });
   assert.equal(line.taxType, 'CGST_SGST');
+  assert.equal(line.taxableAmount, 1000);
   assert.equal(line.cgstAmount, 90);
   assert.equal(line.sgstAmount, 90);
   assert.equal(line.totalAmount, 1180);
+});
+
+test('computeLineGst adds GST on top when priceIncludesGst is false (legacy)', () => {
+  const line = computeLineGst({
+    taxableAmount: 1000,
+    igstRate: 18,
+    cgstRate: 9,
+    sgstRate: 9,
+    intraState: false,
+    priceIncludesGst: false
+  });
+  assert.equal(line.taxableAmount, 1000);
+  assert.equal(line.igstAmount, 180);
+  assert.equal(line.totalAmount, 1180);
+  assert.equal(line.priceIncludesGst, false);
 });
 
 test('buildOrderGstSummary stores supplier and place-of-supply states per order', () => {
   const summary = buildOrderGstSummary({
     lineTaxBreakdown: [
       computeLineGst({
-        taxableAmount: 500,
+        taxableAmount: 525,
         igstRate: 5,
         cgstRate: 2.5,
         sgstRate: 2.5,
@@ -81,25 +99,27 @@ test('resolveSupplierProductTaxRates reads tax rates from offer attributes when 
   assert.equal(rates.sgstRate, 9);
 });
 
-test('computeLineGst rounds per-line tax and keeps product total + GST = total incl GST', () => {
+test('computeLineGst rounds per-line tax and keeps MRP total = taxable + GST', () => {
   const mouse = computeLineGst({
-    taxableAmount: 1899,
+    taxableAmount: 2126.88,
     intraState: false,
     supplierProduct: { igst_rate: 12, cgst_rate: 6, sgst_rate: 6 }
   });
   const backpack = computeLineGst({
-    taxableAmount: 300,
+    taxableAmount: 354,
     intraState: false,
     supplierProduct: { igst_rate: 18, cgst_rate: 9, sgst_rate: 9 }
   });
+  assert.equal(mouse.taxableAmount, 1899);
   assert.equal(mouse.taxAmount, 227.88);
+  assert.equal(backpack.taxableAmount, 300);
   assert.equal(backpack.taxAmount, 54);
   assert.equal(mouse.totalAmount, 2126.88);
   assert.equal(backpack.totalAmount, 354);
 
   const summary = buildPoGroupsCheckoutSummary([
     {
-      subtotal: 2199,
+      subtotal: 2480.88,
       gstAmount: mouse.taxAmount + backpack.taxAmount,
       totalInclGst: mouse.totalAmount + backpack.totalAmount,
       gstSummary: buildOrderGstSummary({

@@ -14,6 +14,7 @@ import {
   SUPPLIER_CURRENT_STOCK_LABEL,
   SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL,
   SUPPLIER_MRP_LABEL,
+  SUPPLIER_MRP_SHORT_NOTE,
   isSupplierInventoryConfigured
 } from '../utils/supplierStockLabel';
 import { formatRupeePerUnit } from '../utils/formatRupee';
@@ -157,6 +158,11 @@ export default function SupplierProductDetailsModal({ product, onClose }) {
                   ? formatRupeePerUnit(product.price, product.unit)
                   : SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL}
               </span>
+              {isSupplierInventoryConfigured(product) && Number(product.price) > 0 ? (
+                <span className="us-details-field__hint" style={{ fontSize: '0.78rem', color: '#64748b' }}>
+                  {SUPPLIER_MRP_SHORT_NOTE}
+                </span>
+              ) : null}
             </div>
             <div className="us-details-field">
               <span className="us-details-field__label">{SUPPLIER_CURRENT_STOCK_LABEL}</span>

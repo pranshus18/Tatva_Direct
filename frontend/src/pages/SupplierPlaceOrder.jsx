@@ -32,6 +32,7 @@ import {
   normalizeShippingAddress,
   isCompleteShippingAddress
 } from '../utils/poTransportSelection';
+import { isSelfShipTransport, SELF_SHIP_PROVIDER_NAME } from '../utils/transportLabels';
 import './Dashboard.css';
 import './CreatePO.css';
 import './SupplierPlaceOrder.css';
@@ -979,10 +980,10 @@ const SupplierPlaceOrder = () => {
           const transportMode = det?.transport_mode ?? det?.transportMode ?? null;
           const source = det?.source ?? null;
           const shippingProviderName = String(shippingProvider || '').trim().toLowerCase();
-          const isSelfShip =
-            String(transportMode || '').toLowerCase() === 'self_ship' ||
-            shippingProviderName === 'self ship' ||
-            shippingProviderName === 'self-ship';
+          const isSelfShip = isSelfShipTransport(
+            { transportMode, transport_mode: transportMode, name: shippingProviderName },
+            shippingProviderName
+          );
           const isTrucking = String(transportMode || '').toLowerCase() === 'trucking';
 
           return {
@@ -1524,7 +1525,7 @@ const SupplierPlaceOrder = () => {
                               const priceLabel = formatQuoteMoney(d?.rate ?? d?.fareValue);
                               const modeLabel =
                                 d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
-                                  ? 'Self ship'
+                                  ? SELF_SHIP_PROVIDER_NAME
                                   : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
                                     ? 'Trucking'
                                     : 'Courier';
@@ -1582,7 +1583,7 @@ const SupplierPlaceOrder = () => {
                           const priceLabel = formatQuoteMoney(d?.rate ?? d?.fareValue);
                           const modeLabel =
                             d?.transport_mode === 'self_ship' || d?.transportMode === 'self_ship'
-                              ? 'Self ship'
+                              ? SELF_SHIP_PROVIDER_NAME
                               : d?.transport_mode === 'trucking' || d?.transportMode === 'trucking'
                                 ? 'Trucking'
                                 : 'Courier';

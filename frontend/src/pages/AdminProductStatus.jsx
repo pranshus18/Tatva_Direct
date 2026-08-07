@@ -27,6 +27,7 @@ import { polishSupplierListingWithAi } from '../utils/adminPolishListingApi';
 import { formatDateTimeIST } from '../utils/dateTime';
 import {
   getAdminBuyerFacingCatalogDescription,
+  getAdminBuyerFacingEditSeed,
   getAdminReviewProductDescription,
   getAdminSupplierSubmittedDescription,
   isMeaningfulProductDescription,
@@ -792,6 +793,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     }
     const rawDesc = getAdminBuyerFacingCatalogDescription(product);
     const instructionInDescription = looksLikeAiInstructions(rawDesc);
+    const editSeed = getAdminBuyerFacingEditSeed(product);
     if (isEditing && instructionInDescription) {
       setAiEnhancePrompt(rawDesc);
     }
@@ -807,7 +809,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
       sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
       location: product?.location || '',
-      description: isEditing && instructionInDescription ? '' : rawDesc,
+      description: isEditing && instructionInDescription ? '' : isEditing ? editSeed : rawDesc,
       minOrderQuantity: product?.minOrderQuantity || 1,
       specifications: resolveAdminDisplaySpecifications(product)
     });
@@ -1560,8 +1562,8 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 }}
                 title={
                   canPolish
-                    ? 'Polish the text in the description box (or supplier draft) for buyers'
-                    : 'Click Edit and enter a description first, then polish'
+                    ? 'Optional: polish the description with AI for buyers'
+                    : 'Click Edit and enter a description first to enable AI polish'
                 }
               >
                 <Sparkles size={16} />
@@ -1593,7 +1595,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 rows="5"
                 placeholder={
                   showSupplierSubmittedDescription
-                    ? 'Use Polish with AI to draft buyer-facing copy from the supplier text above.'
+                    ? 'Review the supplier text above — edit if needed, or save as-is. Polish with AI is optional.'
                     : 'Write or edit the buyer-facing description buyers will see after approval.'
                 }
                 style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%', fontFamily: 'inherit' }}
@@ -1602,7 +1604,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               <p style={{ margin: 0, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
                 {buyerFacingDescription ||
                   (showSupplierSubmittedDescription
-                    ? 'Click Edit, then Polish with AI to create the buyer-facing description.'
+                    ? 'Click Edit to review the supplier description. Save as-is or use Polish with AI if you want.'
                     : 'No description yet. Click Edit to add one.')}
               </p>
             )}

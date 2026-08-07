@@ -15,6 +15,7 @@ import {
   orderDeliveryJsonToLogisticsAddress
 } from '../../utils/logisticsTransportHelpers.js';
 import {
+  isSelfShipTransportSelection,
   resolveBookingIntent,
   TRANSPORT_KIND
 } from '../../utils/logisticsTransportIntent.js';
@@ -49,7 +50,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       deliveryLng: rootDeliveryLng = null,
       carrier: rootCarrier = null,
       matter: rootMatter = null,
-      persistOnly = false
+      persistOnly = false,
+      settleVault = false
     } = payload;
 
     const transportByOrderId = new Map(
@@ -77,6 +79,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       email: String(buyerRow?.email || '').trim(),
       phone: String(buyerRow?.phone || '').trim()
     };
+    const { readPmCredentialsFromRequest } = await import('../../services/pmVaultService.js');
+    const pmAccessToken = readPmCredentialsFromRequest(req).pmAccessToken || null;
 
     const { data: orders, error: ordersError } = await supabase
       .from('orders')
@@ -159,7 +163,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         !hasPerOrderRows && orderIds.length === 1 && row.id === orderIds[0]
           ? parseQuotedInr(rootQuotedTransportAmount)
           : null;
-      const transportAmt = fromRow ?? fromRoot ?? null;
+      let transportAmt = fromRow ?? fromRoot ?? null;
 
       const prevAddr =
         row.delivery_address && typeof row.delivery_address === 'object' ? { ...row.delivery_address } : {};
@@ -236,6 +240,18 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         });
       }
 
+      const isSelfShip = Boolean(
+        bookingIntent.kind === TRANSPORT_KIND.SELF_SHIP ||
+          isSelfShipTransportSelection({
+            transportMode,
+            shippingProvider: sp,
+            source: transportSource
+          })
+      );
+      if (isSelfShip) {
+        transportAmt = null;
+      }
+
       const willBookCourier = bookingIntent.kind === TRANSPORT_KIND.COURIER;
       const willBookTrucking = bookingIntent.kind === TRANSPORT_KIND.TRUCKING;
 
@@ -279,6 +295,7 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
         truckingMatter,
         willBookCourier,
         willBookTrucking,
+        isSelfShip,
         allowLogisticsBook,
         orderPaid,
         bookingIntent,
@@ -297,7 +314,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
     }
 
     // Book courier or trucking in parallel (multi-vendor PO confirm).
-    // Upstream logistics book runs only after vault debit (payment_status=paid).
+    // Upstream logistics book runs only after SP vault debit (payment_status=paid).
+    // Transport freight is charged from the logistics vault at booking time.
     const bookingWarnings = [];
     if (!persistOnly) {
     await Promise.all(
@@ -316,7 +334,8 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
           willBookCourier,
           willBookTrucking,
           allowLogisticsBook,
-          orderPaid
+          orderPaid,
+          transportAmt
         } = ctx;
         if (!willBookCourier && !willBookTrucking) return;
 
@@ -362,7 +381,9 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
                   orderId: row.id,
                   orderNumber: row.order_number || undefined,
                   clientReference,
-                  etdRaw: ctx.etdRaw
+                  etdRaw: ctx.etdRaw,
+                  transportAmount: transportAmt,
+                  pmAccessToken
                 })
               : await bookCourierCheckout({
                   courierCompanyId: bookingIntent.courierCompanyId,
@@ -374,7 +395,9 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
                   orderId: row.id,
                   orderNumber: row.order_number || undefined,
                   vendorId: row.supplier_id || null,
-                  clientReference
+                  clientReference,
+                  transportAmount: transportAmt,
+                  pmAccessToken
                 });
             if (booked.trackingNumber) ctx.tn = booked.trackingNumber;
             if (booked.trackingUrl) ctx.tu = booked.trackingUrl;
@@ -442,7 +465,10 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
             contactPhone: sessionBuyer.phone,
             weightKg: bookWeight,
             matter: truckingMatter || lines.map((l) => l.name).filter(Boolean).join(', '),
-            displayName: String(sp).trim()
+            displayName: String(sp).trim(),
+            orderId: row.id,
+            transportAmount: transportAmt,
+            pmAccessToken
           });
           if (booked.trackingNumber) ctx.tn = booked.trackingNumber;
           if (booked.trackingUrl) ctx.tu = booked.trackingUrl;
@@ -526,18 +552,39 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
           prevAddr,
           existingBill,
           productsOnly,
-          resolvedSp
+          resolvedSp,
+          isSelfShip
         } = ctx;
         let nextDeliveryAddress = prevAddr;
         let nextTotalAmount = ctx.currentTotal;
 
-        if (transportAmt !== null && transportAmt > 0) {
+        if (isSelfShip) {
+          nextDeliveryAddress = {
+            ...prevAddr,
+            transportBill: {
+              amount: 0,
+              currency: 'INR',
+              provider: resolvedSp,
+              confirmedAt: new Date().toISOString(),
+              source: 'self_ship',
+              paymentVault: 'none',
+              paymentStatus: 'not_applicable'
+            }
+          };
+          nextTotalAmount = productsOnly;
+        } else if (transportAmt !== null && transportAmt > 0) {
+          const logisticsBooked =
+            ctx.logisticsBookingMeta &&
+            !ctx.logisticsBookingMeta.bookingFailed &&
+            !ctx.logisticsBookingMeta.deferredUntilPayment;
           const transportBill = {
             amount: transportAmt,
             currency: 'INR',
             provider: resolvedSp,
             confirmedAt: new Date().toISOString(),
-            source: 'logistics_quote'
+            source: 'logistics_quote',
+            paymentVault: 'logistics_vault',
+            paymentStatus: logisticsBooked ? 'paid' : 'pending'
           };
           nextDeliveryAddress = { ...prevAddr, transportBill };
           nextTotalAmount = Math.round((productsOnly + transportAmt) * 100) / 100;
@@ -588,11 +635,56 @@ router.post('/transport/confirm', authenticateToken, isServiceProviderOrSupplier
       })
     );
 
+    let vaultSettlement = null;
+    if (persistOnly && settleVault) {
+      const { payOrderFromWallet } = await import('../../services/walletService.js');
+      const { readPmCredentialsFromRequest } = await import('../../services/pmVaultService.js');
+      const pmCredentials = readPmCredentialsFromRequest(req);
+      const paidOrders = [];
+      for (const updated of updatedOrders) {
+        const orderId = updated?.id;
+        if (!orderId) continue;
+        try {
+          const payResult = await payOrderFromWallet({
+            orderId,
+            actorUserId: req.userId,
+            actorRole: req.user?.user_type || null,
+            requestId: req.requestId || null,
+            ipAddress: req.ip || null,
+            idempotencyKey: `transport-vault-settle:${orderId}`,
+            pmCredentials
+          });
+          paidOrders.push({
+            orderId,
+            ok: true,
+            paymentStatus: payResult?.order?.payment_status || 'paid',
+            buyerVaultDebit: payResult?.buyerVaultDebit ?? null,
+            orderTotalAmount: payResult?.orderTotalAmount ?? payResult?.order?.total_amount ?? null
+          });
+        } catch (payErr) {
+          if (payErr?.code === 'ORDER_ALREADY_PAID') {
+            paidOrders.push({ orderId, ok: true, alreadyPaid: true });
+            continue;
+          }
+          return res.status(400).json({
+            status: 'error',
+            code: payErr?.code || 'VAULT_SETTLE_FAILED',
+            message:
+              payErr?.message ||
+              `Vault payment failed for order ${updated?.order_number || orderId}. Transport was saved; retry payment from Your Orders.`,
+            vaultSettlement: { paidOrders, failedOrderId: orderId }
+          });
+        }
+      }
+      vaultSettlement = { paidOrders, allPaid: paidOrders.length > 0 && paidOrders.every((r) => r.ok) };
+    }
+
     return res.json({
       status: 'success',
       message: `Transport details updated for ${updatedOrders.length} order(s)`,
       ...(transportBookDebug ? { transportDebugEnabled: true } : {}),
       orders: updatedOrders,
+      ...(vaultSettlement ? { vaultSettlement } : {}),
       ...(bookingWarnings.length > 0
         ? {
             warnings: bookingWarnings,

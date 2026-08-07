@@ -1979,6 +1979,15 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       });
     }
 
+    try {
+      await releaseUpstreamCheckoutReservations({
+        buyerUserId: req.userId,
+        checkoutSessionId
+      });
+    } catch (reservationCleanupError) {
+      console.warn('[Upstream Orders] checkout reservation cleanup after create:', reservationCleanupError?.message || reservationCleanupError);
+    }
+
     return res.json({
       status: 'success',
       orders: createdOrders,

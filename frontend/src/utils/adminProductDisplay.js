@@ -22,7 +22,7 @@ export function resolveAdminDisplaySpecifications(product = {}) {
   return parseSpecificationsObject(product?.specifications) || {};
 }
 
-/** Text sent to Polish with AI: current buyer-facing edit box, then supplier draft. */
+/** Text sent to Polish with AI: current edit box, then supplier draft, then saved copy. */
 export function getAdminPolishSourceText({ product, editedProduct, isEditing }) {
   const typed = isEditing ? String(editedProduct?.description || '').trim() : '';
   if (typed) return typed;

@@ -1238,21 +1238,16 @@ export async function resolvePmUserIdForTatvaUser(user) {
 }
 
 /**
- * Debit PM vault for a Tatva order (service provider or supplier buyer).
- * PM contract (official):
- *   POST {PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay
- *   { orderId, userId }
- * Retries with amount if PM validation requires it (same pattern as other payment APIs).
- * @returns {Promise<{ paymentId: string|null }>}
+ * Debit PM vault for a Tatva order (buyer / service provider only).
+ * Supplier vault credit is intentionally not sent — Tatva Direct records payout as pending
+ * until a supplier credit API exists on PM.
+ * @returns {Promise<{ paymentId: string|null, buyerPmUserId: string|null }>}
  */
 export async function payOrderFromPmVault({
   user,
   orderId,
   orderNumber = null,
   amountInRupees,
-  supplierPmUserId = null,
-  supplierPayoutAmountInRupees = null,
-  platformFeeAmountInRupees = null,
   description = 'Order payment from PM vault',
   credentials = {}
 }) {
@@ -1300,22 +1295,8 @@ export async function payOrderFromPmVault({
   const amountForPm = payAmountInPaise ? amountPaise : amountInr;
   const orderNo = String(orderNumber || '').trim() || null;
   const desc = String(description || 'Order payment from PM vault').trim();
-  const supplierUserId = String(supplierPmUserId || '').trim() || null;
-  const supplierPayoutForPm =
-    supplierPayoutAmountInRupees != null && Number(supplierPayoutAmountInRupees) > 0
-      ? payAmountInPaise
-        ? Math.round(Number(supplierPayoutAmountInRupees) * 100)
-        : Math.round(Number(supplierPayoutAmountInRupees) * 100) / 100
-      : null;
-  const platformFeeForPm =
-    platformFeeAmountInRupees != null && Number(platformFeeAmountInRupees) > 0
-      ? payAmountInPaise
-        ? Math.round(Number(platformFeeAmountInRupees) * 100)
-        : Math.round(Number(platformFeeAmountInRupees) * 100) / 100
-      : null;
 
-  // Official PM body first. Some payment validators also require amount — retry if needed.
-  // Always include platform flag so PM routes the debit to the Tatva Direct DB.
+  // Buyer debit only — do not pass supplierUserId / split payout fields until PM exposes supplier credit.
   const attemptBodies = [
     withPmPlatformFlagBody({ orderId: tatvaOrderId, userId: pmUserId }),
     withPmPlatformFlagBody({
@@ -1329,21 +1310,7 @@ export async function payOrderFromPmVault({
       amount: amountForPm,
       ...(orderNo ? { orderNumber: orderNo } : {}),
       description: desc
-    }),
-    ...(supplierUserId && supplierPayoutForPm != null
-      ? [
-          withPmPlatformFlagBody({
-            orderId: tatvaOrderId,
-            userId: pmUserId,
-            amount: amountForPm,
-            supplierUserId,
-            supplierPayoutAmount: supplierPayoutForPm,
-            ...(platformFeeForPm != null ? { platformFeeAmount: platformFeeForPm } : {}),
-            ...(orderNo ? { orderNumber: orderNo } : {}),
-            description: desc
-          })
-        ]
-      : [])
+    })
   ];
 
   async function postVaultPay(body) {

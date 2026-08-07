@@ -102,7 +102,7 @@ export const poCreateRequestSchema = z.object({
   shippingAddress: addressSchema.optional(),
   billingAddress: addressSchema.optional(),
   gstin: z.string().optional().nullable(),
-  /** Sum of selected logistics quotes (INR) — included in vault sufficiency check with product totals. */
+  /** Sum of selected logistics quotes (INR) — charged from logistics vault at carrier booking, not SP vault. */
   quotedTransportTotal: z.union([z.number(), z.string()]).optional().nullable()
 });
 
@@ -167,7 +167,9 @@ export const poTransportConfirmSchema = z
     /** When not using perOrderTransport and exactly one order — same as per-row quoted amount. */
     quotedTransportAmount: z.union([z.number(), z.string()]).optional().nullable(),
     /** Save quoted transport on orders without calling external logistics APIs. */
-    persistOnly: z.boolean().optional()
+    persistOnly: z.boolean().optional(),
+    /** Debit PM vault for each order after transport amounts are saved (requires persistOnly). */
+    settleVault: z.boolean().optional()
   })
   .superRefine((data, ctx) => {
     const rows = data.perOrderTransport || [];

@@ -27,6 +27,8 @@ import {
   buildOrderGstSummary,
   resolveCheckoutBillingAddress,
   resolveGstPlaceOfSupplyState,
+  resolvePoGroupSupplierId,
+  isPoVendorSupplierUser,
   resolveSupplierStateForGst,
   supplierMatchesBrandTerminalRole,
   toLifecycleStateFromStatus
@@ -45,6 +47,7 @@ import { loadSupplierProductForPoCreate } from './groupRoutes.js';
 import {
   CHECKOUT_SOURCES,
   consumeCheckoutReservationsForOrder,
+  releaseCheckoutReservations,
   validateCheckoutReservationsForLines
 } from '../../services/checkoutInventoryReservationService.js';
 import {
@@ -228,8 +231,6 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     let walletRemainingBalance = null;
     if (isVaultCheckout) {
       const productsTotal = toMoney(sumPoGroupsProductsInclGst(poGroups));
-      const quotedTransportTotal = toMoney(payload?.quotedTransportTotal || 0);
-      const groupedTotal = toMoney(productsTotal + quotedTransportTotal);
 
       let currentVaultBalance = 0;
       try {
@@ -244,7 +245,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         const pmCredentials = readPmCredentialsFromRequest(req);
         const pmWallet = await assertPmVaultBalanceSufficient(
           req.user,
-          groupedTotal,
+          productsTotal,
           pmCredentials
         );
         currentVaultBalance = toMoney(pmWallet?.balance || 0);
@@ -259,21 +260,21 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         if (vaultError?.code === 'INSUFFICIENT_WALLET_BALANCE' || vaultError?.code === 'INSUFFICIENT_VAULT_BALANCE') {
           const availableMatch = String(vaultError.message || '').match(/Available INR\s+([0-9.]+)/i);
           const available = toMoney(availableMatch?.[1] || 0);
-          const shortage = toMoney(Math.max(0, groupedTotal - available));
+          const shortage = toMoney(Math.max(0, productsTotal - available));
           return res.status(400).json({
             status: 'error',
             code: 'INSUFFICIENT_VAULT_BALANCE',
             message: `Insufficient vault balance. Available ₹${available.toLocaleString(
               'en-IN'
-            )}, required ₹${groupedTotal.toLocaleString(
+            )}, required ₹${productsTotal.toLocaleString(
               'en-IN'
-            )} (products incl. GST + transport). Please credit vault before placing this order.`,
+            )} (products incl. GST). Transport is charged separately from the logistics vault. Please credit vault before placing this order.`,
             vault: {
               balance: available,
-              required: groupedTotal,
+              required: productsTotal,
               productsTotal,
               gstIncluded: true,
-              transportTotal: quotedTransportTotal,
+              transportPaidVia: 'logistics_vault',
               shortage
             }
           });
@@ -281,11 +282,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         throw vaultError;
       }
 
-      // Track remaining PM vault headroom across sequential PO creates.
+      // Track remaining PM vault headroom across sequential PO creates (products only).
       walletRemainingBalance = currentVaultBalance;
     }
     const resolveBcov = buildBcovResolver(supabase);
-    const GROUP_CREATE_CONCURRENCY = isVaultCheckout ? 1 : 3;
+    const GROUP_CREATE_CONCURRENCY = isVaultCheckout || checkoutSessionId ? 1 : 3;
     const createHttpError = (statusCode, message) => {
       const err = new Error(message);
       err.statusCode = statusCode;
@@ -322,8 +323,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     }
 
     const processPoGroup = async (group) => {
-      // Find supplier by vendorId
-      if (!group.vendorId) {
+      if (!group.vendorId && !(Array.isArray(group.items) && group.items.some((item) => item?.supplierProductId))) {
         logger.warn('Missing vendorId in PO group:', group);
         throw createHttpError(
           400,
@@ -331,21 +331,22 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         );
       }
 
-      // Validate and find supplier by ID
-      const { data: supplier, error: supplierError } = await supabase
-        .from('users')
-        .select('*')
-        .eq('id', group.vendorId)
-        .eq('user_type', 'supplier')
-        .single();
-
-      if (supplierError || !supplier) {
-        logger.warn(`Supplier not found with ID: ${group.vendorId}`);
+      const { supplierId: resolvedVendorId, supplier } = await resolvePoGroupSupplierId(supabase, group);
+      if (!supplier) {
+        logger.warn(`Supplier not found for PO group vendorId=${group.vendorId}`);
         throw createHttpError(
           404,
           `Supplier not found for vendor "${group.vendorName}". Please ensure the supplier exists in the system.`
         );
       }
+      if (!isPoVendorSupplierUser(supplier)) {
+        throw createHttpError(
+          403,
+          `Vendor "${group.vendorName || supplier.name || supplier.company}" is not registered as a supplier account.`
+        );
+      }
+
+      const vendorId = resolvedVendorId;
 
       const firstGroupItem = Array.isArray(group.items) ? group.items[0] : null;
       const groupBrandName =
@@ -454,7 +455,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             scopeKeys: bcovScopeKeys
           });
           const unitPrice = bcovResolved?.price ?? baseUnitPrice;
-          const taxableAmount = unitPrice * quantity;
+          const lineAmount = unitPrice * quantity;
           const itemSpecifications =
             item?.specifications && typeof item.specifications === 'object' && !Array.isArray(item.specifications)
               ? item.specifications
@@ -465,7 +466,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             productRef: `supplier_product_id ${supplierProduct.id}`
           });
           const lineGst = computeLineGst({
-            taxableAmount,
+            taxableAmount: lineAmount,
             intraState: intraStateTax,
             supplierProduct
           });
@@ -475,7 +476,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             supplier_product_id: supplierProduct.id,
             quantity: quantity,
             unit_price: unitPrice,
-            total_price: taxableAmount,
+            total_price: lineAmount,
             specifications: JSON.stringify({
               ...itemSpecifications,
               productIdentification: item.productIdentification || null,
@@ -496,6 +497,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
                   }
                 : { applied: false },
               gst: {
+                priceIncludesGst: true,
                 supplierState,
                 billingState,
                 placeOfSupplyState: billingState,
@@ -651,6 +653,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
               gstin: hasGstin ? profileGstin : null,
               gstTaxApplicableOnBillingAddressOnly: hasGstin,
               gstSummary: {
+                priceIncludesGst: true,
                 taxType: gstSummary.taxType,
                 supplierState: gstSummary.supplierState,
                 billingState: gstSummary.billingState,
@@ -866,6 +869,16 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
 
     const groupOrders = await runWithConcurrency(poGroups, GROUP_CREATE_CONCURRENCY, processPoGroup);
     createdOrders.push(...groupOrders.filter(Boolean));
+
+    try {
+      await releaseCheckoutReservations({
+        buyerUserId: req.userId,
+        source: CHECKOUT_SOURCES.SP_PO,
+        checkoutSessionId
+      });
+    } catch (reservationCleanupError) {
+      logger.warn('[PO] checkout reservation cleanup after create:', reservationCleanupError?.message || reservationCleanupError);
+    }
 
     // Update BOQ status if it exists
     if (boq) {
