@@ -573,4 +573,47 @@ describe('Select yourself — role setup step', () => {
 
     expect(await screen.findByRole('button', { name: /Save entry|Saved/i })).toBeInTheDocument();
   });
+
+  it('locks the role picker after onboarding is complete and exposes Request Role Change', async () => {
+    const completeEntry = {
+      id: 'entry-approved',
+      brands: 'acc',
+      role: 'dealer',
+      authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf'],
+      minimumOrderValue: 25000,
+      supplyChainRegistrationStarted: true
+    };
+
+    function CompletedFormHarness() {
+      const [profile] = useState(() => makeProfile([completeEntry]));
+      return (
+        <SupplierSupplyChainEntriesEditor
+          profile={profile}
+          setProfile={vi.fn()}
+          editing
+          sectionView="form"
+          selectionMode="all"
+          allowEntryManagement={false}
+          showAddEntry={false}
+          catalogBrands={CATALOG}
+          catalogBrandsLoading={false}
+          catalogBrandsError=""
+          onReloadCatalogBrands={vi.fn()}
+          supplierApprovedBrands={['acc']}
+          supplierBrandRequests={[]}
+          savedBaselineEntries={[completeEntry]}
+          approvedBaselineEntries={[completeEntry]}
+          filterBrandName="acc"
+          chainProfileApprovalStatus="approved"
+        />
+      );
+    }
+
+    render(<CompletedFormHarness />);
+
+    expect(await screen.findByText(/Active approved role: Dealer/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Request Role Change/i })).toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /Select your position/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Assigned supply-chain role/i)).toHaveValue('Dealer');
+  });
 });

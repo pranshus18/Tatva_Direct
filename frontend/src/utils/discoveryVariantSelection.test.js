@@ -3,6 +3,7 @@ import {
   pickPrimaryVariantOption,
   resolveActiveDiscoveryVariant,
   resolveDiscoveryVariantLabel,
+  resolveViewerListingForVariant,
   variantMatchesSelections,
   variantSelectionKey
 } from './discoveryVariantSelection.js';
@@ -24,6 +25,30 @@ describe('discoveryVariantSelection', () => {
       specifications: { height: '8 inch', 'leak-proof': 'yes' }
     }
   ];
+
+  it('prefers the mine listing when opening upstream detail from sourcing', () => {
+    const active = resolveActiveDiscoveryVariant({
+      variants,
+      selectedVariantKey: '',
+      optionSelections: {},
+      urlVariantToken: '',
+      mineSupplierProductId: 'mine-2',
+      viewerListings: [
+        { id: 'mine-1', productId: 'prod-1', variantAsin: 'TS1B1H', price: 4500 },
+        { id: 'mine-2', productId: 'prod-1', variantAsin: 'TS1B2N', price: 5200 }
+      ]
+    });
+    expect(active?.variantAsin).toBe('TS1B2N');
+  });
+
+  it('resolves viewer listing by mine id or variant identity', () => {
+    const listings = [
+      { id: 'mine-1', productId: 'prod-1', variantAsin: 'TS1B1H', price: 4500 },
+      { id: 'mine-2', productId: 'prod-1', variantAsin: 'TS1B2N', price: 5200 }
+    ];
+    expect(resolveViewerListingForVariant(listings, variants[1], 'mine-2')?.price).toBe(5200);
+    expect(resolveViewerListingForVariant(listings, variants[0], '')?.price).toBe(4500);
+  });
 
   it('prefers option chip selections over a stale URL variant token', () => {
     const active = resolveActiveDiscoveryVariant({

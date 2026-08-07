@@ -17,6 +17,51 @@ export const SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE =
 export const SELECT_YOURSELF_MOV_REQUIRED_MESSAGE =
   'Enter a minimum order value (₹) for this role before saving.';
 
+export const REQUEST_ROLE_CHANGE_LABEL = 'Request Role Change';
+
+/** True when supply-chain onboarding for this entry is complete and the role should stay locked. */
+export function isEntrySupplyChainOnboardingComplete(
+  entry,
+  profile,
+  savedBaselineEntries = []
+) {
+  if (!entry) return false;
+  const status = String(profile?.chainProfileApprovalStatus || '').trim().toLowerCase();
+  if (status === 'pending' || status === 'draft') return false;
+  if (!entryMatchesSavedBaseline(entry, savedBaselineEntries)) return false;
+
+  const role = String(entry?.role || '').trim();
+  const roleDocs = resolveRoleVerificationDocumentUrls(entry);
+  if (!role || roleDocs.length === 0) return false;
+
+  return !!String(entry?.brands || '').trim();
+}
+
+/** Active admin-approved role for display / lock checks (pending profile changes use baseline). */
+export function getActiveApprovedRoleForEntry(
+  entry,
+  profile,
+  approvedBaselineEntries = [],
+  savedBaselineEntries = []
+) {
+  const status = String(profile?.chainProfileApprovalStatus || '').trim().toLowerCase();
+  if (status === 'pending') {
+    const approvedEntry = findSavedBaselineEntry(entry, approvedBaselineEntries);
+    return String(approvedEntry?.role || '').trim();
+  }
+  if (isEntrySupplyChainOnboardingComplete(entry, profile, savedBaselineEntries)) {
+    return String(entry?.role || '').trim();
+  }
+  const approvedEntry = findSavedBaselineEntry(entry, approvedBaselineEntries);
+  return String(approvedEntry?.role || '').trim();
+}
+
+export function entryMinimumOrderValueChanged(entry, savedBaselineEntries = []) {
+  const savedEntry = findSavedBaselineEntry(entry, savedBaselineEntries);
+  if (!savedEntry) return false;
+  return String(entry?.minimumOrderValue ?? '') !== String(savedEntry?.minimumOrderValue ?? '');
+}
+
 /** True when Step 2 supply-chain fields were started (Select yourself only). */
 function entryRequiresSupplyChainCompletion(entry = {}) {
   if (entry?.supplyChainRegistrationStarted === true) return true;
@@ -156,16 +201,21 @@ export function getSelectYourselfEntrySaveReadiness(entry = {}) {
 export function getSelectYourselfEntrySaveState(
   entry = {},
   savedBaselineEntries = [],
-  approvedBaselineEntries = []
+  approvedBaselineEntries = [],
+  activeApprovedRole = ''
 ) {
   const readiness = getSelectYourselfEntrySaveReadiness(entry);
   const hasChangesFromLastSave = !entryMatchesSavedBaseline(entry, savedBaselineEntries);
   const approvedEntry = findSavedBaselineEntry(entry, approvedBaselineEntries);
-  const approvedRole = String(approvedEntry?.role || '').trim();
+  const approvedRole =
+    String(activeApprovedRole || '').trim() || String(approvedEntry?.role || '').trim();
   const currentRole = String(entry?.role || '').trim();
   const pendingApprovedRoleChange =
     !!approvedRole && !!currentRole && approvedRole !== currentRole;
   const alreadySaved = !hasChangesFromLastSave;
+  const movOnlyChange =
+    !pendingApprovedRoleChange &&
+    entryMinimumOrderValueChanged(entry, savedBaselineEntries);
   // Enable Save whenever this entry differs from the last saved snapshot — including
   // approved-role changes that still need admin review. Field validation runs on click.
   const enabled = hasChangesFromLastSave;

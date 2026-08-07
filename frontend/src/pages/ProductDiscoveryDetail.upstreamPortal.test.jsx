@@ -22,6 +22,16 @@ const DETAIL_PAYLOAD = {
   hasVariants: false,
   variantCount: 1,
   variantOptions: [],
+  viewerListings: [
+    {
+      id: 'mine-9',
+      productId: 'prod-1',
+      variantAsin: null,
+      price: 120,
+      stock: 110,
+      unit: '600 ml'
+    }
+  ],
   variants: [
     {
       productId: 'prod-1',
@@ -83,6 +93,7 @@ describe('ProductDiscoveryDetail in the supplier upstream portal', () => {
     expect(requestedUrl).toContain('/api/supplier/upstream/products/prod-1/detail');
     expect(screen.getByText(/Brand:/)).toHaveTextContent('Milton');
     expect(screen.getByRole('button', { name: /Back to upstream sourcing/i })).toBeInTheDocument();
+    expect(screen.getAllByText('₹120.00 per 600 ml').length).toBeGreaterThan(0);
   });
 
   it('hands the listing back to the sourcing cart flow', async () => {

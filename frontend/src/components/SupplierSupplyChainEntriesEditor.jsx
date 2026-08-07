@@ -19,7 +19,13 @@ import {
 import {
   getSelectYourselfEntrySaveState,
   SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE,
-  SELECT_YOURSELF_MOV_REQUIRED_MESSAGE
+  SELECT_YOURSELF_MOV_REQUIRED_MESSAGE,
+  REQUEST_ROLE_CHANGE_LABEL,
+  isEntrySupplyChainOnboardingComplete,
+  getActiveApprovedRoleForEntry,
+  entryMinimumOrderValueChanged,
+  findSavedBaselineEntry,
+  entryMatchesSavedBaseline
 } from '../utils/supplierSelectYourselfValidation';
 import {
   resolveSupplierBrandSetupLayers,
@@ -250,10 +256,15 @@ const CompanyInfoEntryCard = ({
   onChangeBrand = null,
   onSelectApprovedCatalogBrand = null,
   approvedRole = '',
+  activeApprovedRole = '',
   supplierApprovedBrands = [],
   supplierBrandRequests = [],
   highlighted = false,
-  onRequestChainConfiguration = null
+  onRequestChainConfiguration = null,
+  chainProfileApprovalStatus = '',
+  roleChangeRequestActive = false,
+  onRequestRoleChange = null,
+  onCancelRoleChangeRequest = null
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const catalogBrandSelected =
@@ -463,9 +474,28 @@ const CompanyInfoEntryCard = ({
   // Layer 2 access + Layer 3 chain (or already-loaded roles) before role setup UI unlocks.
   const brandApprovalReadyForRole =
     hasBrandValue && brandApprovedForSupplyChain && (chainDefined || hasResolvedChainRoles || brandCanSelectRoles);
+  const approvedRoleLabel = (activeApprovedRole || approvedRole)
+    ? formatSupplyChainRoleLabel(activeApprovedRole || approvedRole)
+    : '';
+  const pendingRoleChange =
+    !!(activeApprovedRole || approvedRole) &&
+    !!entry.role &&
+    String(entry.role).trim() !== String(activeApprovedRole || approvedRole).trim();
+  const movChanged = entryMinimumOrderValueChanged(entry, savedBaselineEntries);
+  const roleLocked =
+    isSupplyChainOnlyStep &&
+    isEntrySupplyChainOnboardingComplete(entry, { chainProfileApprovalStatus }, savedBaselineEntries) &&
+    !!(activeApprovedRole || approvedRole) &&
+    !roleChangeRequestActive;
   const roleSelectionEnabled =
-    editing && brandApprovalReadyForRole && !roleOptionsLoading && hasResolvedChainRoles;
-  const roleDocumentsEnabled = editing && brandApprovalReadyForRole;
+    editing &&
+    brandApprovalReadyForRole &&
+    !roleOptionsLoading &&
+    hasResolvedChainRoles &&
+    (!roleLocked || roleChangeRequestActive);
+  const roleDocumentsEnabled =
+    editing && brandApprovalReadyForRole && (!roleLocked || roleChangeRequestActive);
+  const movOnlySavePending = roleLocked && !roleChangeRequestActive && movChanged;
   const showBrandNotApprovedStep2Message =
     isSupplyChainOnlyStep && hasBrandValue && !brandApprovedForSupplyChain;
   const showChainNotDefinedStep2Message =
@@ -475,9 +505,6 @@ const CompanyInfoEntryCard = ({
     !chainDefined &&
     !hasResolvedChainRoles &&
     !roleOptionsLoading;
-  const approvedRoleLabel = approvedRole ? formatSupplyChainRoleLabel(approvedRole) : '';
-  const pendingRoleChange =
-    !!approvedRole && !!entry.role && String(entry.role).trim() !== String(approvedRole).trim();
   const showCustomBrandNameField =
     useBrandNameTextInput &&
     editing &&
@@ -487,14 +514,28 @@ const CompanyInfoEntryCard = ({
     (!brandPickerAtTop || pathBTypingMode);
   const showBrandApprovalSection = sectionView !== 'form';
   const showFormDetailsSection = sectionView !== 'brand';
-  const showEntrySave = editing && showFormDetailsSection && !!onSaveEntry && allowEntrySave && brandApprovalReadyForRole;
+  const showEntrySave =
+    editing &&
+    showFormDetailsSection &&
+    !!onSaveEntry &&
+    allowEntrySave &&
+    brandApprovalReadyForRole &&
+    (!roleLocked || roleChangeRequestActive || movOnlySavePending);
   const entrySaveState = showEntrySave
-    ? getSelectYourselfEntrySaveState(entry, savedBaselineEntries, approvedBaselineEntries)
+    ? getSelectYourselfEntrySaveState(
+        entry,
+        savedBaselineEntries,
+        approvedBaselineEntries,
+        activeApprovedRole || approvedRole
+      )
     : { ok: true, message: '', field: '', missing: [], alreadySaved: false, enabled: true };
-  const entrySaveEnabled = entrySaveState.enabled && !savingThisEntry;
+  const entrySaveEnabled =
+    (entrySaveState.enabled || movOnlySavePending) && !savingThisEntry;
   const entrySaveTitle = savingThisEntry
     ? 'Saving this entry…'
-    : entrySaveState.alreadySaved
+    : movOnlySavePending
+      ? 'Save minimum order value'
+      : entrySaveState.alreadySaved
       ? 'This entry is already saved'
       : entrySaveState.enabled && !entrySaveState.ok
         ? entrySaveState.pendingApprovedRoleChange
@@ -502,7 +543,7 @@ const CompanyInfoEntryCard = ({
           : entrySaveState.message || 'Complete required fields, then save this entry'
         : entrySaveState.ok
           ? entrySaveState.pendingApprovedRoleChange
-            ? 'Save to submit this role change for admin approval'
+            ? 'Submit role change request for admin approval'
             : 'Save this entry'
           : entrySaveState.message;
   const showEntryRemove = canRemove && editing && allowEntryRemove && isBrandOnlyStep;
@@ -582,7 +623,15 @@ const CompanyInfoEntryCard = ({
               title={entrySaveTitle}
               aria-disabled={!entrySaveEnabled}
             >
-              {savingThisEntry ? 'Saving…' : entrySaveState.alreadySaved ? 'Saved' : 'Save entry'}
+              {savingThisEntry
+                ? 'Saving…'
+                : movOnlySavePending
+                  ? 'Save order rules'
+                  : entrySaveState.pendingApprovedRoleChange || roleChangeRequestActive
+                    ? 'Submit role change'
+                    : entrySaveState.alreadySaved
+                      ? 'Saved'
+                      : 'Save entry'}
             </button>
           ) : null}
           {!forceExpanded ? (
@@ -996,35 +1045,89 @@ const CompanyInfoEntryCard = ({
               {isSupplyChainOnlyStep ? 'Your position in supply chain' : 'Supply-chain role'}
             </h4>
             <div className="chain-section__panel">
+              {roleLocked ? (
+                <div className="chain-callout chain-callout--success" role="status">
+                  <strong>Active approved role: {approvedRoleLabel}</strong>
+                  <p>
+                    Your supply-chain onboarding is complete for this brand. Your assigned role stays active until
+                    admin approves any change.
+                  </p>
+                  <div className="chain-role-lock-actions">
+                    {typeof onRequestRoleChange === 'function' ? (
+                      <button
+                        type="button"
+                        className="chain-entry-selector__link"
+                        onClick={() => onRequestRoleChange(entry.id)}
+                      >
+                        {REQUEST_ROLE_CHANGE_LABEL}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+              {roleChangeRequestActive ? (
+                <div className="chain-callout chain-callout--warning" role="status">
+                  <strong>Role change request</strong>
+                  <p>
+                    Choose your new supply-chain role and upload verification documents, then submit for admin approval.
+                    Your current approved role ({approvedRoleLabel}) stays active until the change is approved.
+                  </p>
+                  {typeof onCancelRoleChangeRequest === 'function' ? (
+                    <button
+                      type="button"
+                      className="chain-entry-selector__link"
+                      onClick={() => onCancelRoleChangeRequest(entry.id)}
+                    >
+                      Cancel role change
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="chain-field chain-field--full">
                 <label className="chain-field__label" htmlFor={`role-${entry.id}`}>
-                  {isSupplyChainOnlyStep ? 'Select your position' : 'Supply-chain role'}
-                  {adminChainReady ? <RequiredMark /> : null}
+                  {roleLocked
+                    ? 'Assigned supply-chain role'
+                    : isSupplyChainOnlyStep
+                      ? 'Select your position'
+                      : 'Supply-chain role'}
+                  {adminChainReady && !roleLocked ? <RequiredMark /> : null}
                 </label>
-                <select
-                  id={`role-${entry.id}`}
-                  className="chain-field__control"
-                  value={currentRoleValue}
-                  onChange={(e) => onUpdate('role', e.target.value)}
-                  disabled={!roleSelectionEnabled}
-                  required={editing && brandApprovalReadyForRole}
-                  aria-required={editing && brandApprovalReadyForRole ? 'true' : 'false'}
-                >
-                  <option value="">
-                    {showChainNotDefinedStep2Message ||
-                    (!roleOptionsLoading &&
-                      !hasResolvedChainRoles &&
-                      roleOptionsMessage === SUPPLY_CHAIN_NOT_DEFINED_MESSAGE)
-                      ? 'No roles configured by admin'
-                      : 'Select your role'}
-                  </option>
-                  {roleSelectOptions.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
+                {roleLocked ? (
+                  <input
+                    id={`role-${entry.id}`}
+                    type="text"
+                    className="chain-field__control chain-field__control--readonly"
+                    value={approvedRoleLabel}
+                    readOnly
+                    disabled
+                    aria-readonly="true"
+                  />
+                ) : (
+                  <select
+                    id={`role-${entry.id}`}
+                    className="chain-field__control"
+                    value={currentRoleValue}
+                    onChange={(e) => onUpdate('role', e.target.value)}
+                    disabled={!roleSelectionEnabled}
+                    required={editing && brandApprovalReadyForRole}
+                    aria-required={editing && brandApprovalReadyForRole ? 'true' : 'false'}
+                  >
+                    <option value="">
+                      {showChainNotDefinedStep2Message ||
+                      (!roleOptionsLoading &&
+                        !hasResolvedChainRoles &&
+                        roleOptionsMessage === SUPPLY_CHAIN_NOT_DEFINED_MESSAGE)
+                        ? 'No roles configured by admin'
+                        : 'Select your role'}
                     </option>
-                  ))}
-                </select>
-                {approvedRoleLabel ? (
+                    {roleSelectOptions.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                {approvedRoleLabel && !roleLocked ? (
                   <p className="chain-field__sublabel">
                     Approved role: <strong>{approvedRoleLabel}</strong>
                     {pendingRoleChange
@@ -1032,7 +1135,7 @@ const CompanyInfoEntryCard = ({
                       : ''}
                   </p>
                 ) : null}
-                {pendingRoleChange ? (
+                {pendingRoleChange && !roleLocked ? (
                   <p className="chain-callout chain-callout--warning">
                     You selected {formatSupplyChainRoleLabel(entry.role)} instead of your approved role (
                     {approvedRoleLabel}). Save this entry to submit the change for admin approval. Your current approved
@@ -1044,12 +1147,14 @@ const CompanyInfoEntryCard = ({
           </section>
 
           <section className="chain-section">
-            <h4 className="chain-section__title">Supply-chain role documents</h4>
+            <h4 className="chain-section__title">
+              {roleLocked ? 'Approved role documents' : 'Supply-chain role documents'}
+            </h4>
             <div className="chain-section__panel">
               <div className="chain-field chain-field--full">
                 <label className="chain-field__label">
                   Role verification documents
-                  <RequiredMark />
+                  {!roleLocked ? <RequiredMark /> : null}
                 </label>
                 <BrandAuthorizationDocuments
                   entry={entry}
@@ -1148,7 +1253,8 @@ export default function SupplierSupplyChainEntriesEditor({
   /** True when parent profile differs from last saved baseline (Select yourself page). */
   hasUnsavedChanges = false,
   /** Block parent profile reloads while uploads / local drafts are in flight. */
-  onProtectLocalDraft = null
+  onProtectLocalDraft = null,
+  chainProfileApprovalStatus = ''
 }) {
   const [uploadingRoleDocsEntryId, setUploadingRoleDocsEntryId] = useState(null);
   const [uploadingBrandDocsEntryId, setUploadingBrandDocsEntryId] = useState(null);
@@ -1160,6 +1266,7 @@ export default function SupplierSupplyChainEntriesEditor({
   const [selectedEntryId, setSelectedEntryId] = useState('');
   const [brandStepOtherMode, setBrandStepOtherMode] = useState(false);
   const [brandStepOtherExplicit, setBrandStepOtherExplicit] = useState(false);
+  const [roleChangeRequestEntryId, setRoleChangeRequestEntryId] = useState('');
   const newBrandModeInitializedRef = useRef(false);
   const [highlightedEntryId, setHighlightedEntryId] = useState('');
   const profileRef = useRef(profile);
@@ -1171,6 +1278,65 @@ export default function SupplierSupplyChainEntriesEditor({
     },
     [onProtectLocalDraft]
   );
+
+  const handleRequestRoleChange = useCallback((entryId) => {
+    setRoleChangeRequestEntryId(String(entryId || '').trim());
+  }, []);
+
+  const handleCancelRoleChangeRequest = useCallback(
+    (entryId) => {
+      const targetId = String(entryId || '').trim();
+      if (!targetId || !profileRef.current) {
+        setRoleChangeRequestEntryId('');
+        return;
+      }
+      const entries = getDisplayEntriesForProfile(profileRef.current);
+      const entry = entries.find((row) => String(row?.id || '') === targetId);
+      const savedEntry = findSavedBaselineEntry(entry, savedBaselineEntries);
+      if (savedEntry) {
+        setProfile(
+          syncProfileFromEntries(
+            profileRef.current,
+            entries.map((row) =>
+              String(row?.id || '') === targetId ? { ...savedEntry, id: targetId } : row
+            )
+          )
+        );
+      }
+      setRoleChangeRequestEntryId('');
+    },
+    [savedBaselineEntries, setProfile]
+  );
+
+  useEffect(() => {
+    if (chainProfileApprovalStatus === 'pending') {
+      setRoleChangeRequestEntryId('');
+    }
+  }, [chainProfileApprovalStatus]);
+
+  useEffect(() => {
+    if (savingEntryId || !roleChangeRequestEntryId) return;
+    const entries = getDisplayEntriesForProfile(profile);
+    const entry = entries.find((row) => String(row?.id || '') === roleChangeRequestEntryId);
+    if (entry && entryMatchesSavedBaseline(entry, savedBaselineEntries)) {
+      const activeRole = getActiveApprovedRoleForEntry(
+        entry,
+        { chainProfileApprovalStatus },
+        approvedBaselineEntries,
+        savedBaselineEntries
+      );
+      if (!activeRole || String(entry.role || '').trim() === activeRole) {
+        setRoleChangeRequestEntryId('');
+      }
+    }
+  }, [
+    savingEntryId,
+    roleChangeRequestEntryId,
+    profile,
+    savedBaselineEntries,
+    approvedBaselineEntries,
+    chainProfileApprovalStatus
+  ]);
   const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
   const lockedBrandKey = brandKeyForDuplicateCheck(lockedBrandName);
   const brandSetupLocked = isBrandStepPicker && !!lockedBrandKey;
@@ -2355,10 +2521,20 @@ export default function SupplierSupplyChainEntriesEditor({
             onChangeBrand={isBrandStepPicker ? handleBrandStepChangeBrand : null}
             onSelectApprovedCatalogBrand={isBrandStepPicker ? handleBrandStepCatalogPick : null}
             approvedRole={getApprovedRoleForEntry(approvedBaselineEntries, entry)}
+            activeApprovedRole={getActiveApprovedRoleForEntry(
+              entry,
+              { chainProfileApprovalStatus },
+              approvedBaselineEntries,
+              savedBaselineEntries
+            )}
             supplierApprovedBrands={supplierApprovedBrands}
             supplierBrandRequests={supplierBrandRequests}
             highlighted={highlightedEntryId === entry.id}
             onRequestChainConfiguration={onRequestChainConfiguration}
+            chainProfileApprovalStatus={chainProfileApprovalStatus}
+            roleChangeRequestActive={roleChangeRequestEntryId === entry.id}
+            onRequestRoleChange={sectionView === 'form' ? handleRequestRoleChange : null}
+            onCancelRoleChangeRequest={sectionView === 'form' ? handleCancelRoleChangeRequest : null}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]

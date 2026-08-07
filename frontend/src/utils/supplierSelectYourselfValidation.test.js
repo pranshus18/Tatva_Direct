@@ -7,7 +7,9 @@ import {
   entryMatchesSavedBaseline,
   getSelectYourselfEntrySaveReadiness,
   getSelectYourselfEntrySaveState,
-  validateSelectYourselfChainEntries
+  validateSelectYourselfChainEntries,
+  isEntrySupplyChainOnboardingComplete,
+  getActiveApprovedRoleForEntry
 } from './supplierSelectYourselfValidation';
 
 describe('validateSelectYourselfChainEntries', () => {
@@ -176,11 +178,46 @@ describe('getSelectYourselfEntrySaveState', () => {
         authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf']
       },
       savedBaselineEntries,
-      savedBaselineEntries
+      savedBaselineEntries,
+      'retailer'
     );
 
     expect(state.ok).toBe(false);
     expect(state.pendingApprovedRoleChange).toBe(true);
     expect(state.enabled).toBe(true);
+  });
+});
+
+describe('completed onboarding role lock helpers', () => {
+  const completeEntry = {
+    id: 'e1',
+    brands: 'acc',
+    role: 'dealer',
+    authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf'],
+    minimumOrderValue: 25000
+  };
+  const profile = { chainProfileApprovalStatus: 'approved' };
+
+  it('detects a saved, approved supply-chain entry as onboarding complete', () => {
+    expect(isEntrySupplyChainOnboardingComplete(completeEntry, profile, [completeEntry])).toBe(true);
+  });
+
+  it('returns the active approved role for a completed entry', () => {
+    expect(
+      getActiveApprovedRoleForEntry(completeEntry, profile, [completeEntry], [completeEntry])
+    ).toBe('dealer');
+  });
+
+  it('uses baseline role while a profile change is pending approval', () => {
+    const pendingProfile = { chainProfileApprovalStatus: 'pending' };
+    const baseline = [{ ...completeEntry, role: 'retailer' }];
+    expect(
+      getActiveApprovedRoleForEntry(
+        { ...completeEntry, role: 'dealer' },
+        pendingProfile,
+        baseline,
+        baseline
+      )
+    ).toBe('retailer');
   });
 });

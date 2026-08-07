@@ -27,6 +27,7 @@ import {
   buildOrderGstSummary,
   resolveCheckoutBillingAddress,
   resolveGstPlaceOfSupplyState,
+  resolveSupplierStateForGst,
   supplierMatchesBrandTerminalRole,
   toLifecycleStateFromStatus
 } from './poImports.js';
@@ -364,8 +365,29 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         );
       }
 
-      // Map items to order items format — line work runs in parallel per item for faster PO create.
-      const supplierState = extractUserState(supplier);
+      let outletRow = null;
+      if (firstGroupItem?.supplierProductId) {
+        const { data: offerRow } = await supabase
+          .from('supplier_products')
+          .select('outlet_id')
+          .eq('id', firstGroupItem.supplierProductId)
+          .maybeSingle();
+        const outletId = String(offerRow?.outlet_id || '').trim();
+        if (outletId) {
+          const { data: outletData } = await supabase
+            .from('outlets')
+            .select('id, supplier_id, address')
+            .eq('id', outletId)
+            .eq('is_active', true)
+            .maybeSingle();
+          outletRow = outletData || null;
+        }
+      }
+      const supplierState = resolveSupplierStateForGst({
+        supplierUser: supplier,
+        supplierProduct: firstGroupItem,
+        outlet: outletRow
+      });
       const billingState = placeOfSupplyState || billingAddress?.state || shippingAddress?.state || '';
       assertGstStateInputs({
         supplierState,
@@ -444,10 +466,8 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           });
           const lineGst = computeLineGst({
             taxableAmount,
-            igstRate: supplierProduct.igst_rate,
-            cgstRate: supplierProduct.cgst_rate,
-            sgstRate: supplierProduct.sgst_rate,
-            intraState: intraStateTax
+            intraState: intraStateTax,
+            supplierProduct
           });
 
           const orderItemRow = {

@@ -2,9 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildOrderGstSummary,
+  buildPoGroupsCheckoutSummary,
   computeLineGst,
   isSameIndianState,
-  resolveGstPlaceOfSupplyState
+  resolveGstPlaceOfSupplyState,
+  resolveSupplierProductTaxRates,
+  resolveSupplierStateForGst
 } from '../services/gstService.js';
 
 test('resolveGstPlaceOfSupplyState prefers billing address when GSTIN is registered', () => {
@@ -67,4 +70,56 @@ test('buildOrderGstSummary stores supplier and place-of-supply states per order'
   assert.equal(summary.placeOfSupplyState, 'maharashtra');
   assert.equal(summary.intraStateTax, false);
   assert.equal(summary.igstAmount, 25);
+});
+
+test('resolveSupplierProductTaxRates reads tax rates from offer attributes when columns are empty', () => {
+  const rates = resolveSupplierProductTaxRates({
+    attributes: { igstRate: 18, cgstRate: 9, sgstRate: 9 }
+  });
+  assert.equal(rates.igstRate, 18);
+  assert.equal(rates.cgstRate, 9);
+  assert.equal(rates.sgstRate, 9);
+});
+
+test('computeLineGst rounds per-line tax and keeps product total + GST = total incl GST', () => {
+  const mouse = computeLineGst({
+    taxableAmount: 1899,
+    intraState: false,
+    supplierProduct: { igst_rate: 12, cgst_rate: 6, sgst_rate: 6 }
+  });
+  const backpack = computeLineGst({
+    taxableAmount: 300,
+    intraState: false,
+    supplierProduct: { igst_rate: 18, cgst_rate: 9, sgst_rate: 9 }
+  });
+  assert.equal(mouse.taxAmount, 227.88);
+  assert.equal(backpack.taxAmount, 54);
+  assert.equal(mouse.totalAmount, 2126.88);
+  assert.equal(backpack.totalAmount, 354);
+
+  const summary = buildPoGroupsCheckoutSummary([
+    {
+      subtotal: 2199,
+      gstAmount: mouse.taxAmount + backpack.taxAmount,
+      totalInclGst: mouse.totalAmount + backpack.totalAmount,
+      gstSummary: buildOrderGstSummary({
+        lineTaxBreakdown: [mouse, backpack],
+        supplierState: 'delhi',
+        billingState: 'karnataka',
+        placeOfSupplyState: 'karnataka',
+        intraStateTax: false
+      })
+    }
+  ]);
+  assert.equal(summary.productSubtotal, 2199);
+  assert.equal(summary.gstAmount, 281.88);
+  assert.equal(summary.productsInclGst, 2480.88);
+});
+
+test('resolveSupplierStateForGst falls back to offer location state', () => {
+  const state = resolveSupplierStateForGst({
+    supplierUser: { address: {} },
+    supplierProduct: { location: 'Bengaluru, Karnataka, 560102, India' }
+  });
+  assert.equal(state, 'karnataka');
 });

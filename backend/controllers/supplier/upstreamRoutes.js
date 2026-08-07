@@ -579,7 +579,8 @@ router.get('/upstream/products/:productId/detail', authenticateToken, async (req
       hasVariants: result.hasVariants,
       variantCount: result.variantCount,
       variantOptions: result.variantOptions,
-      variants: result.variants
+      variants: result.variants,
+      viewerListings: result.viewerListings || []
     });
   } catch (error) {
     console.error('Upstream product detail error:', error);

@@ -31,11 +31,14 @@ import {
   assertGstStateInputs,
   assertSupplierProductTaxRates,
   buildOrderGstSummary,
+  buildPoGroupsCheckoutSummary,
   computeLineGst,
   extractUserState,
   isSameIndianState,
   resolveCheckoutBillingAddress,
   resolveGstPlaceOfSupplyState,
+  resolveSupplierStateForGst,
+  roundMoney,
   sumGstLines
 } from './poImports.js';
 
@@ -93,16 +96,41 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       shippingAddress: fallbackShipping || profileAddress
     });
     const supplierStateCache = new Map();
-    const loadSupplierState = async (supplierId) => {
+    const outletCache = new Map();
+    const loadSupplierState = async (supplierId, supplierProduct = null) => {
       const key = String(supplierId || '').trim();
       if (!key) return '';
-      if (supplierStateCache.has(key)) return supplierStateCache.get(key);
+      if (supplierStateCache.has(key) && !supplierProduct?.outlet_id) {
+        return supplierStateCache.get(key);
+      }
       const { data: supplierRow } = await supabase
         .from('users')
         .select('address, profile')
         .eq('id', key)
         .maybeSingle();
-      const state = extractUserState(supplierRow || {});
+      let outletRow = null;
+      const outletId = String(supplierProduct?.outlet_id || '').trim();
+      if (outletId) {
+        if (outletCache.has(outletId)) {
+          outletRow = outletCache.get(outletId);
+        } else {
+          const { data: outletData } = await supabase
+            .from('outlets')
+            .select('id, supplier_id, address')
+            .eq('id', outletId)
+            .eq('is_active', true)
+            .maybeSingle();
+          outletRow = outletData || null;
+          outletCache.set(outletId, outletRow);
+        }
+      }
+      const pickup = getSupplierPickupMeta(supplierRow || {});
+      const state = resolveSupplierStateForGst({
+        supplierUser: supplierRow || {},
+        supplierProduct,
+        outlet: outletRow,
+        pickupAddress: pickup?.pickupAddress || null
+      });
       supplierStateCache.set(key, state);
       return state;
     };
@@ -387,33 +415,12 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         ...productSpecs
       };
 
-      vendorGroups[transportGroupId].items.push({
-        name: itemName,
-        quantity: quantity,
-        price: price,
-        unit: product.unit || 'nos',
-        productId: product.id,
-        // Used to show supplier-specific tracking info (brandModel)
-        // and to set order_items.supplier_product_id for later enrichment in dashboard.js.
-        supplierProductId: supplierProduct.id,
-        asin: product.asin || null,
-        variantKey: supplierProduct.variant_key || null,
-        variantAsin: supplierProduct.variant_asin || null,
-        bcovApplied: !!bcovResolved,
-        bcovLevelId: bcovResolved?.levelId || null,
-        basePrice,
-        productIdentification: productIdentification || null,
-        specifications: mergedSpecifications,
-        images: productImages,
-        productImage: productImages[0] || null,
-        originalItem: item.normalizedName || item.rawName
-      });
-
       vendorGroups[transportGroupId].total += itemTotal;
 
+      let lineGst = null;
       if (placeOfSupplyState) {
         try {
-          const supplierState = await loadSupplierState(vendorId);
+          const supplierState = await loadSupplierState(vendorId, supplierProduct);
           assertGstStateInputs({
             supplierState,
             billingState: placeOfSupplyState,
@@ -425,12 +432,10 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
             productRef: supplierProduct?.product?.name || itemName
           });
           const intraStateTax = isSameIndianState(supplierState, placeOfSupplyState);
-          const lineGst = computeLineGst({
+          lineGst = computeLineGst({
             taxableAmount: itemTotal,
-            igstRate: supplierProduct.igst_rate,
-            cgstRate: supplierProduct.cgst_rate,
-            sgstRate: supplierProduct.sgst_rate,
-            intraState: intraStateTax
+            intraState: intraStateTax,
+            supplierProduct
           });
           vendorGroups[transportGroupId].lineTaxBreakdown.push(lineGst);
           if (!vendorGroups[transportGroupId].supplierState) {
@@ -441,6 +446,29 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
           console.warn('[PO group] GST preview skipped for line:', gstPreviewError?.message || gstPreviewError);
         }
       }
+
+      vendorGroups[transportGroupId].items.push({
+        name: itemName,
+        quantity: quantity,
+        price: price,
+        unit: product.unit || 'nos',
+        productId: product.id,
+        supplierProductId: supplierProduct.id,
+        asin: product.asin || null,
+        variantKey: supplierProduct.variant_key || null,
+        variantAsin: supplierProduct.variant_asin || null,
+        bcovApplied: !!bcovResolved,
+        bcovLevelId: bcovResolved?.levelId || null,
+        basePrice,
+        productIdentification: productIdentification || null,
+        specifications: mergedSpecifications,
+        images: productImages,
+        productImage: productImages[0] || null,
+        originalItem: item.normalizedName || item.rawName,
+        lineSubtotal: roundMoney(itemTotal),
+        lineGst,
+        lineTotalInclGst: lineGst ? roundMoney(lineGst.totalAmount) : roundMoney(itemTotal)
+      });
     }
 
     const supplierIdsForPins = [
@@ -494,7 +522,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         outletId: null,
         outletName: null
       };
-      const subtotal = Math.round(group.total * 100) / 100;
+      const subtotal = roundMoney(group.total);
       const gstSummary = buildOrderGstSummary({
         lineTaxBreakdown: group.lineTaxBreakdown || [],
         supplierState: group.supplierState || '',
@@ -502,11 +530,9 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         placeOfSupplyState,
         intraStateTax: isSameIndianState(group.supplierState, placeOfSupplyState)
       });
-      const gstAmount = Math.round((gstSummary.taxAmount || 0) * 100) / 100;
+      const gstAmount = roundMoney(gstSummary.taxAmount || 0);
       const totalInclGst =
-        gstSummary.totalAmount > 0
-          ? Math.round(gstSummary.totalAmount * 100) / 100
-          : subtotal;
+        gstSummary.totalAmount > 0 ? roundMoney(gstSummary.totalAmount) : subtotal;
       return {
         vendorId: group.vendorId,
         transportGroupId: group.transportGroupId,
@@ -534,11 +560,15 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
     if (consolidatedGroups.length === 0) {
       return res.json({ 
         groups: [],
+        checkoutSummary: buildPoGroupsCheckoutSummary([]),
         message: 'No items with selected vendors found'
       });
     }
 
-    res.json({ groups: consolidatedGroups });
+    res.json({
+      groups: consolidatedGroups,
+      checkoutSummary: buildPoGroupsCheckoutSummary(consolidatedGroups)
+    });
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });

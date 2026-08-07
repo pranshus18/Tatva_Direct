@@ -200,9 +200,9 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         rankLog(`[Vendor Ranking] Target retailer brand for item ${itemId}: ${targetBrand}`);
       }
 
-      // Search products purely by name (and approximate category) to collect ALL supplier offers,
-      // regardless of the specific normalized product_id.
-      rankLog(`[Vendor Ranking] Searching products by name only: "${itemNameLower}" (category: ${itemCategory})`);
+      // When the cart/BOQ line has a productId, discovery is anchored to that catalog product
+      // (plus optional family variants). Otherwise fall back to name-based product search.
+      rankLog(`[Vendor Ranking] Searching suppliers for "${itemNameLower}" (category: ${itemCategory})`);
       let products = await searchRankableProductsForItem({
         supabase,
         item,
@@ -364,9 +364,27 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         });
       }
       
-      // CRITICAL: If we have a reference product with a supplier but no vendors were found,
-      // create a vendor entry from the reference product to ensure it's shown
+      // Only synthesize a vendor when the reference catalog row still has at least one
+      // approved, active supplier_products offer. Deleted/deactivated listings must not
+      // reappear here via stale catalog metadata.
       if (validVendors.length === 0 && referenceProduct && referenceProduct.supplier && referenceProduct.supplier.id) {
+        const { data: liveOfferRows, error: liveOfferError } = await supabase
+          .from('supplier_products')
+          .select('id')
+          .eq('product_id', referenceProduct.id)
+          .eq('status', 'approved')
+          .eq('is_active', true)
+          .limit(1);
+        if (liveOfferError) {
+          console.error(
+            `[Vendor Ranking] Live-offer lookup failed for reference product ${referenceProduct.id}:`,
+            liveOfferError
+          );
+        } else if (!Array.isArray(liveOfferRows) || liveOfferRows.length === 0) {
+          rankLog(
+            `[Vendor Ranking] Skipping reference-product fallback for item ${itemId}: no live supplier offers on catalog product ${referenceProduct.id}`
+          );
+        } else {
         const refSupplierProfile = referenceProduct.supplier.profile;
         const refBrandAllowed = supplierMatchesBrandTerminalRole(
           refSupplierProfile,
@@ -383,10 +401,14 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         rankLog(`[Vendor Ranking] No vendors found but reference product has supplier, creating vendor entry...`);
         const fallbackVendor = buildFallbackVendorFromReferenceProduct({ referenceProduct, itemCategory });
         if (fallbackVendor) {
-          validVendors = [fallbackVendor];
-          rankLog(`[Vendor Ranking] Created vendor entry from reference product: ${validVendors[0].name}`);
+          fallbackVendor.supplierProductId = liveOfferRows[0]?.id || null;
+          validVendors = fallbackVendor.supplierProductId ? [fallbackVendor] : [];
+          if (validVendors.length > 0) {
+            rankLog(`[Vendor Ranking] Created vendor entry from reference product: ${validVendors[0].name}`);
+          }
         } else {
           rankLog(`[Vendor Ranking] Reference product has invalid stock/price, cannot create vendor entry`);
+        }
         }
         }
       }

@@ -55,8 +55,12 @@ function makeFakeSupabase({ offerRows = [], catalogProducts = [], familyVariantR
             return {
               in() {
                 return {
-                  in() {
-                    return Promise.resolve({ data: offerRows, error: null });
+                  eq() {
+                    return {
+                      eq() {
+                        return Promise.resolve({ data: offerRows, error: null });
+                      }
+                    };
                   }
                 };
               }
@@ -69,7 +73,7 @@ function makeFakeSupabase({ offerRows = [], catalogProducts = [], familyVariantR
   };
 }
 
-test('reconcileWithSupplierOffers never fills a blank offer location from the shared catalog product location', async () => {
+test('reconcileWithSupplierOffers excludes pending or inactive supplier offers', async () => {
   const catalogProduct = {
     id: 'product-1',
     name: 'Mac Air M2',
@@ -80,8 +84,6 @@ test('reconcileWithSupplierOffers never fills a blank offer location from the sh
     images: [],
     average_rating: 0,
     status: 'approved',
-    // Registered by a DIFFERENT supplier than the offer below — this must never leak into
-    // another supplier's offer just because that offer left its own location blank.
     location: 'HSR Layout, Bengaluru, Karnataka, 560102, India',
     specifications: {}
   };
@@ -93,13 +95,65 @@ test('reconcileWithSupplierOffers never fills a blank offer location from the sh
       price: 85,
       stock: 50,
       min_order_quantity: 1,
-      location: '', // seller left this blank on their own listing
+      location: '',
       outlet_id: null,
       variant_key: null,
       variant_asin: null,
       attributes: {},
       status: 'pending',
       is_active: false,
+      supplier: { id: 'karthik-id', name: 'karthik', company: 'Tatva', address: {}, profile: {} }
+    }
+  ];
+
+  const supabase = makeFakeSupabase({ offerRows, catalogProducts: [catalogProduct] });
+
+  const result = await reconcileWithSupplierOffers({
+    supabase,
+    products: [catalogProduct],
+    item: { productId: 'product-1' },
+    itemId: 'item-1',
+    itemName: 'Mac Air M2',
+    referenceProduct: catalogProduct,
+    includeAllVariants: false,
+    targetBrand: null,
+    detectProductBrandKey: () => null,
+    fuzzyNameCompatible: () => true,
+    hasModelTokenConflict: () => false
+  });
+
+  assert.equal(result.length, 0);
+});
+
+test('reconcileWithSupplierOffers never fills a blank offer location from the shared catalog product location', async () => {
+  const catalogProduct = {
+    id: 'product-1',
+    name: 'Mac Air M2',
+    description: 'A laptop',
+    category: 'laptop',
+    unit: 'nos',
+    asin: 'TS22',
+    images: [],
+    average_rating: 0,
+    status: 'approved',
+    location: 'HSR Layout, Bengaluru, Karnataka, 560102, India',
+    specifications: {}
+  };
+
+  const offerRows = [
+    {
+      id: 'offer-pune',
+      product_id: 'product-1',
+      price: 85,
+      stock: 50,
+      min_order_quantity: 1,
+      location: '',
+      outlet_id: null,
+      variant_key: null,
+      variant_asin: null,
+      attributes: {},
+      status: 'approved',
+      is_active: true,
       supplier: { id: 'karthik-id', name: 'karthik', company: 'Tatva', address: {}, profile: {} }
     }
   ];
@@ -195,4 +249,173 @@ test('reconcileWithSupplierOffers keeps only offers matching the cart line varia
   assert.equal(result.length, 1);
   assert.equal(result[0].variant_key, 'vk-red');
   assert.equal(result[0].supplierProductId, 'offer-red');
+});
+
+test('reconcileWithSupplierOffers drops name-incompatible live offers such as laptop backpacks for a Dell laptop request', async () => {
+  const dellCatalog = {
+    id: 'product-dell',
+    name: 'Dell Latitude 5420 Laptop',
+    description: 'Business laptop',
+    category: 'laptop',
+    unit: 'nos',
+    asin: 'TS2N',
+    images: [],
+    average_rating: 0,
+    status: 'approved',
+    location: 'Bengaluru',
+    specifications: {}
+  };
+  const backpackCatalog = {
+    id: 'product-backpack',
+    name: 'Safari Omega 30L Laptop Backpack',
+    description: 'Backpack',
+    category: 'laptop',
+    unit: 'piece',
+    asin: 'TSSDT',
+    images: [],
+    average_rating: 0,
+    status: 'approved',
+    location: 'Delhi',
+    specifications: {}
+  };
+
+  const offerRows = [
+    {
+      id: 'offer-dell',
+      product_id: 'product-dell',
+      price: 88440,
+      stock: 95,
+      min_order_quantity: 1,
+      location: '560072, India',
+      outlet_id: null,
+      variant_key: null,
+      variant_asin: null,
+      attributes: { listingName: 'Dell Latitude 5420 Laptop' },
+      status: 'approved',
+      is_active: true,
+      supplier: { id: 'supplier-dell', name: 'Raghavi', company: 'Wipro', address: {}, profile: {} }
+    },
+    {
+      id: 'offer-backpack',
+      product_id: 'product-backpack',
+      price: 0,
+      stock: 367,
+      min_order_quantity: 1,
+      location: '000000, India',
+      outlet_id: null,
+      variant_key: null,
+      variant_asin: null,
+      attributes: { listingName: 'Safari Omega 30L Laptop Backpack' },
+      status: 'approved',
+      is_active: true,
+      supplier: { id: 'supplier-backpack', name: 'Sparsha', company: 'HP', address: {}, profile: {} }
+    }
+  ];
+
+  const {
+    fuzzyNameCompatible,
+    hasModelTokenConflict
+  } = await import('../services/vendorRankingHelpersService.js');
+
+  const supabase = makeFakeSupabase({
+    offerRows,
+    catalogProducts: [dellCatalog, backpackCatalog]
+  });
+
+  const result = await reconcileWithSupplierOffers({
+    supabase,
+    products: [dellCatalog, backpackCatalog],
+    item: {},
+    itemId: 'item-dell',
+    itemName: 'Dell Latitude 5420 Laptop',
+    referenceProduct: dellCatalog,
+    includeAllVariants: false,
+    targetBrand: null,
+    detectProductBrandKey: () => null,
+    fuzzyNameCompatible,
+    hasModelTokenConflict
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].supplierProductId, 'offer-dell');
+  assert.equal(result[0].name, 'Dell Latitude 5420 Laptop');
+});
+
+test('reconcileWithSupplierOffers returns all live suppliers for the anchored productId', async () => {
+  const dellCatalog = {
+    id: 'product-dell',
+    name: 'Dell Latitude 5420 Laptop',
+    description: 'Business laptop',
+    category: 'laptop',
+    unit: 'nos',
+    asin: 'TS2N',
+    images: [],
+    average_rating: 0,
+    status: 'approved',
+    location: 'Bengaluru',
+    specifications: {}
+  };
+
+  const offerRows = [
+    {
+      id: 'offer-a',
+      product_id: 'product-dell',
+      price: 88440,
+      stock: 95,
+      min_order_quantity: 1,
+      location: '560072, India',
+      outlet_id: null,
+      variant_key: null,
+      variant_asin: null,
+      attributes: { listingName: 'Dell Latitude 5420' },
+      status: 'approved',
+      is_active: true,
+      supplier: { id: 'supplier-a', name: 'Raghavi', company: 'Wipro', address: {}, profile: {} }
+    },
+    {
+      id: 'offer-b',
+      product_id: 'product-dell',
+      price: 89999,
+      stock: 12,
+      min_order_quantity: 1,
+      location: '560001, India',
+      outlet_id: null,
+      variant_key: null,
+      variant_asin: null,
+      attributes: { listingName: 'Latitude 5420 Dell Laptop' },
+      status: 'approved',
+      is_active: true,
+      supplier: { id: 'supplier-b', name: 'Asha', company: 'Infosys', address: {}, profile: {} }
+    }
+  ];
+
+  const {
+    fuzzyNameCompatible,
+    hasModelTokenConflict
+  } = await import('../services/vendorRankingHelpersService.js');
+
+  const supabase = makeFakeSupabase({
+    offerRows,
+    catalogProducts: [dellCatalog]
+  });
+
+  const result = await reconcileWithSupplierOffers({
+    supabase,
+    products: [dellCatalog],
+    item: { productId: 'product-dell' },
+    itemId: 'item-dell',
+    itemName: 'Dell Latitude 5420 Laptop',
+    referenceProduct: dellCatalog,
+    includeAllVariants: false,
+    targetBrand: null,
+    detectProductBrandKey: () => null,
+    fuzzyNameCompatible,
+    hasModelTokenConflict
+  });
+
+  assert.equal(result.length, 2);
+  assert.deepEqual(
+    new Set(result.map((row) => row.supplierProductId)),
+    new Set(['offer-a', 'offer-b'])
+  );
 });

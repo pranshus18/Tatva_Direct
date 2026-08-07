@@ -67,7 +67,8 @@ export function filterTopValidVendors(vendors, limit = 10, options = {}) {
       vendor &&
       vendor.id &&
       vendor.name &&
-      (vendor.status === 'approved' || vendor.status === 'pending')
+      vendor.supplierProductId &&
+      vendor.status === 'approved'
   );
 
   if (preserveGeoOrder) {

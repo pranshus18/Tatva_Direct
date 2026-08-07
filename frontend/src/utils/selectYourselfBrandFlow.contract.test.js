@@ -11,7 +11,7 @@ import {
   isBrandApprovalSaveBlockedForPendingRequests,
   resolveSelectYourselfBrandStepStatus
 } from './supplierSelectYourselfProfile';
-import { resolveActiveBrandPath } from './supplierSelectYourselfPaths';
+import { resolveActiveBrandPath, shouldShowApprovedBrandPathBAlert } from './supplierSelectYourselfPaths';
 
 /**
  * Contract tests for Select Yourself Path A / Path B — the five defects from this thread.
@@ -133,6 +133,42 @@ describe('Select Yourself brand flow contract', () => {
     expect(resolveActiveBrandPath({ selectedAssignmentId: '', brandPathMode: 'pathB' })).toBe('pathB');
     expect(resolveActiveBrandPath({ selectedAssignmentId: '', brandPathMode: 'pathA' })).toBe('pathA');
     expect(resolveActiveBrandPath({ selectedAssignmentId: '', brandPathMode: null })).toBeNull();
+  });
+
+  it('8) already-approved alert shows only on Path B with a configured brand', () => {
+    const approved = ['samsung'];
+    expect(
+      shouldShowApprovedBrandPathBAlert({
+        approvedBrandsBlockingSave: approved,
+        hasBrandsNeedingApprovalRequest: false,
+        activeBrandPath: null,
+        hasConfiguredBrand: true
+      })
+    ).toBe(false);
+    expect(
+      shouldShowApprovedBrandPathBAlert({
+        approvedBrandsBlockingSave: approved,
+        hasBrandsNeedingApprovalRequest: false,
+        activeBrandPath: 'pathA',
+        hasConfiguredBrand: true
+      })
+    ).toBe(false);
+    expect(
+      shouldShowApprovedBrandPathBAlert({
+        approvedBrandsBlockingSave: approved,
+        hasBrandsNeedingApprovalRequest: false,
+        activeBrandPath: 'pathB',
+        hasConfiguredBrand: false
+      })
+    ).toBe(false);
+    expect(
+      shouldShowApprovedBrandPathBAlert({
+        approvedBrandsBlockingSave: approved,
+        hasBrandsNeedingApprovalRequest: false,
+        activeBrandPath: 'pathB',
+        hasConfiguredBrand: true
+      })
+    ).toBe(true);
   });
 
   it('7) Brand status never shows Ready to submit after a pending or approved request', () => {

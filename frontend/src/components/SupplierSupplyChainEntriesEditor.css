@@ -591,6 +591,14 @@
   margin-top: 0.45rem;
 }
 
+.supplier-select-yourself-editor .chain-role-lock-actions {
+  margin-top: 0.65rem;
+}
+
+.supplier-select-yourself-editor .chain-role-lock-actions .chain-entry-selector__link {
+  font-weight: 600;
+}
+
 .supplier-select-yourself-editor .chain-add-entry {
   margin-top: 0.5rem;
   padding-top: 1.25rem;

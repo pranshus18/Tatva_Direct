@@ -10,7 +10,10 @@ import {
   validateUniqueBrandsAcrossEntries,
   areBrandNamesExactDuplicates
 } from '../utils/supplierChainEntryValidation';
-import { validateSelectYourselfChainEntries } from '../utils/supplierSelectYourselfValidation';
+import {
+  validateSelectYourselfChainEntries,
+  isEntrySupplyChainOnboardingComplete
+} from '../utils/supplierSelectYourselfValidation';
 import {
   buildSupplierChainSavePayload,
   buildSupplyChainFormProfile,
@@ -44,7 +47,7 @@ import {
   buildSelectYourselfChainEntryRowsSignature,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
-import { resolveActiveBrandPath } from '../utils/supplierSelectYourselfPaths';
+import { resolveActiveBrandPath, shouldShowApprovedBrandPathBAlert, shouldShowMixedApprovedBrandPathBAlert } from '../utils/supplierSelectYourselfPaths';
 import { formatDateTimeIST } from '../utils/dateTime';
 import { resolveRoleVerificationDocumentUrls } from '../utils/authorizationCertificateUrls';
 import './Profile.css';
@@ -292,6 +295,19 @@ export default function SupplierSelectYourself() {
     brandSubmissionNotice
   ]);
 
+  const showApprovedBrandPathBAlert = shouldShowApprovedBrandPathBAlert({
+    approvedBrandsBlockingSave,
+    hasBrandsNeedingApprovalRequest,
+    activeBrandPath,
+    hasConfiguredBrand: hasSavedBrandEntries
+  });
+  const showMixedApprovedBrandPathBAlert = shouldShowMixedApprovedBrandPathBAlert({
+    approvedBrandsBlockingSave,
+    hasBrandsNeedingApprovalRequest,
+    activeBrandPath,
+    hasConfiguredBrand: hasSavedBrandEntries
+  });
+
   const showBrandApprovalRequestButton =
     activeBrandPath !== 'pathA' && hasBrandsNeedingApprovalRequest;
 
@@ -390,6 +406,14 @@ export default function SupplierSelectYourself() {
         item?.hasAdminSupplyChain === true
     );
   }, [catalogBrands, selectedAssignment?.brand, selectedAssignment?.hasAdminSupplyChain, selectedAssignmentChainState]);
+
+  const selectedAssignmentHasCompleteRole = useMemo(() => {
+    if (!selectedAssignment?.brand) return false;
+    const entry = getCompanyInfoEntriesForSave(profile || {}).find(
+      (row) => brandKeyForDuplicateCheck(row?.brands) === brandKeyForDuplicateCheck(selectedAssignment.brand)
+    );
+    return isEntrySupplyChainOnboardingComplete(entry, profile, savedBaselineEntries);
+  }, [selectedAssignment?.brand, profile, savedBaselineEntries]);
 
   useEffect(() => {
     const brand = String(selectedAssignment?.brand || '').trim();
@@ -1814,9 +1838,7 @@ export default function SupplierSelectYourself() {
             </p>
           ) : null}
 
-          {brandSaveBlockedByApprovedBrand &&
-          !hasBrandsNeedingApprovalRequest &&
-          activeBrandPath !== 'pathB' ? (
+          {showApprovedBrandPathBAlert ? (
             <div className="supplier-select-alert supplier-select-alert--draft" role="status">
               <strong>
                 {approvedBrandsBlockingSave.length === 1
@@ -1827,7 +1849,7 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {brandSaveBlockedByApprovedBrand && hasBrandsNeedingApprovalRequest ? (
+          {showMixedApprovedBrandPathBAlert ? (
             <div className="supplier-select-alert supplier-select-alert--draft" role="status">
               <strong>Some brands are already approved</strong>
               <p>
@@ -1939,11 +1961,23 @@ export default function SupplierSelectYourself() {
         >
           <h2>
             <span className="supplier-select-section__label">Role setup</span>
-            Choose your supply-chain role
+            {selectedAssignmentHasCompleteRole
+              ? 'Your active supply-chain role'
+              : 'Choose your supply-chain role'}
           </h2>
           <p className="supplier-select-section__intro">
-            After you select an approved brand above, choose your role in that brand&apos;s admin-defined supply chain
-            and upload documents. The brand name is filled automatically.
+            {selectedAssignmentHasCompleteRole ? (
+              <>
+                Onboarding is complete for this brand. Your approved role is shown below. Use{' '}
+                <strong>Request Role Change</strong> if you need a different supply-chain position — changes require
+                admin approval while your current role stays active.
+              </>
+            ) : (
+              <>
+                After you select an approved brand above, choose your role in that brand&apos;s admin-defined supply
+                chain and upload documents. The brand name is filled automatically.
+              </>
+            )}
           </p>
 
           {chainConfigNotice ? (
@@ -2028,6 +2062,7 @@ export default function SupplierSelectYourself() {
               onReloadCatalogBrands={reloadCatalogBrands}
               onRequestChainConfiguration={requestChainConfigurationForBrand}
               onProtectLocalDraft={markLocalDraftEdit}
+              chainProfileApprovalStatus={profile?.chainProfileApprovalStatus || ''}
             />
           ) : null}
         </div>

@@ -3,7 +3,7 @@
 const CACHE = new Map();
 const TTL_MS = 5 * 60 * 1000;
 /** Bump when vendor rank payload shape / spec merge logic changes (invalidates stale cached cards). */
-const VENDOR_RANK_CACHE_VERSION = 'variant-scoped-v6';
+const VENDOR_RANK_CACHE_VERSION = 'product-anchored-v7';
 
 export function buildVendorRankCacheKey(items, boqId, project = null) {
   const lines = (Array.isArray(items) ? items : [])

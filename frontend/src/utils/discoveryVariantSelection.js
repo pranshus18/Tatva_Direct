@@ -70,6 +70,38 @@ export function variantMatchesUrlToken(variant, token) {
   );
 }
 
+export function variantMatchesMineListing(variant, mineSupplierProductId) {
+  const mineId = String(mineSupplierProductId || '').trim();
+  if (!mineId) return false;
+  return String(variant?.supplierProductId || '') === mineId;
+}
+
+export function resolveViewerListingForVariant(viewerListings = [], variant = null, mineSupplierProductId = '') {
+  const listings = Array.isArray(viewerListings) ? viewerListings : [];
+  const mineId = String(mineSupplierProductId || '').trim();
+  if (mineId) {
+    const byMine = listings.find((listing) => String(listing?.id || '') === mineId);
+    if (byMine) return byMine;
+  }
+  if (!variant) return null;
+
+  const variantAsin = String(variant?.variantAsin || '').trim();
+  const variantKey = String(variant?.variantKey || '').trim();
+  const productId = String(variant?.productId || '').trim();
+
+  return (
+    listings.find((listing) => {
+      const listingAsin = String(listing?.variantAsin || '').trim();
+      const listingKey = String(listing?.variantKey || '').trim();
+      const listingProductId = String(listing?.productId || '').trim();
+      if (variantAsin && listingAsin && listingAsin === variantAsin) return true;
+      if (variantKey && listingKey && listingKey === variantKey) return true;
+      if (productId && listingProductId === productId && !variantAsin && !variantKey) return true;
+      return false;
+    }) || null
+  );
+}
+
 export function resolveVariantDisplaySpecifications(variant) {
   if (!variant) return {};
   return parseSpecificationsObject(variant.specifications) || variant.specifications || {};
@@ -104,9 +136,36 @@ export function resolveActiveDiscoveryVariant({
   variants = [],
   selectedVariantKey = '',
   optionSelections = {},
-  urlVariantToken = ''
+  urlVariantToken = '',
+  mineSupplierProductId = '',
+  viewerListings = []
 } = {}) {
   if (!variants.length) return null;
+
+  const mineId = String(mineSupplierProductId || '').trim();
+  if (mineId) {
+    const byMineVariant = variants.find((variant) => variantMatchesMineListing(variant, mineId));
+    if (byMineVariant) return byMineVariant;
+
+    const mineListing = resolveViewerListingForVariant(viewerListings, null, mineId);
+    if (mineListing) {
+      const listingAsin = String(mineListing?.variantAsin || '').trim();
+      const listingKey = String(mineListing?.variantKey || '').trim();
+      const byListing = variants.find((variant) => {
+        const variantAsin = String(variant?.variantAsin || '').trim();
+        const variantKey = String(variant?.variantKey || '').trim();
+        const productId = String(variant?.productId || '').trim();
+        const listingProductId = String(mineListing?.productId || '').trim();
+        if (listingAsin && variantAsin && listingAsin === variantAsin) return true;
+        if (listingKey && variantKey && listingKey === variantKey) return true;
+        if (listingProductId && productId === listingProductId && !listingAsin && !listingKey) {
+          return true;
+        }
+        return false;
+      });
+      if (byListing) return byListing;
+    }
+  }
 
   const selectionEntries = Object.entries(optionSelections || {}).filter(([, value]) =>
     String(value || '').trim()

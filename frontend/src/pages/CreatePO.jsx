@@ -59,7 +59,7 @@ import {
   sumPoGroupsProductSubtotal,
   sumPoGroupsProductsInclGst
 } from '../utils/orderChargeBreakdown';
-import { formatGstBasisLabel, formatGstTaxTypeLabel } from '../utils/gstDisplay';
+import { formatGstBasisLabel } from '../utils/gstDisplay';
 import './CreatePO.css';
 
 const todayDateMin = getTodayDateInputValue();
@@ -227,6 +227,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     return hasPropItems || navHasItems;
   });
   const [poGroups, setPoGroups] = useState([]);
+  const [checkoutSummary, setCheckoutSummary] = useState(null);
   const [confirmed, setConfirmed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -398,13 +399,25 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
   };
 
   const productsSubtotalAllPos = useMemo(
-    () => sumPoGroupsProductSubtotal(poGroups),
-    [poGroups]
+    () =>
+      Number.isFinite(Number(checkoutSummary?.productSubtotal))
+        ? Number(checkoutSummary.productSubtotal)
+        : sumPoGroupsProductSubtotal(poGroups),
+    [checkoutSummary, poGroups]
   );
-  const gstTotalAllPos = useMemo(() => sumPoGroupsGstAmount(poGroups), [poGroups]);
+  const gstTotalAllPos = useMemo(
+    () =>
+      Number.isFinite(Number(checkoutSummary?.gstAmount))
+        ? Number(checkoutSummary.gstAmount)
+        : sumPoGroupsGstAmount(poGroups),
+    [checkoutSummary, poGroups]
+  );
   const grandTotalAllPos = useMemo(
-    () => sumPoGroupsProductsInclGst(poGroups),
-    [poGroups]
+    () =>
+      Number.isFinite(Number(checkoutSummary?.productsInclGst))
+        ? Number(checkoutSummary.productsInclGst)
+        : sumPoGroupsProductsInclGst(poGroups),
+    [checkoutSummary, poGroups]
   );
   const transportTotalAllPos = useMemo(() => {
     const st = selectedTransport;
@@ -762,17 +775,24 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
       
       if (data.groups && Array.isArray(data.groups) && data.groups.length > 0) {
         setPoGroups(data.groups);
+        setCheckoutSummary(
+          data.checkoutSummary && typeof data.checkoutSummary === 'object'
+            ? data.checkoutSummary
+            : null
+        );
         setError(null);
       } else {
         const errorMsg = data.message || 'No purchase order groups were created. Please ensure all items have selected suppliers and matching products.';
         console.error('No groups returned:', data);
         setError(errorMsg);
         setPoGroups([]);
+        setCheckoutSummary(null);
       }
     } catch (error) {
       console.error('Failed to group POs:', error);
       setError(error.message || 'Failed to group purchase orders. Please try again.');
       setPoGroups([]);
+      setCheckoutSummary(null);
     } finally {
       setLoading(false);
     }
@@ -1848,7 +1868,10 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                     ) : null}
                     {group.gstSummary ? (
                       <p style={{ margin: '0.2rem 0 0', fontSize: '0.78rem', color: '#475569' }}>
-                        GST: {formatGstTaxTypeLabel(group.gstSummary.taxType)}
+                        GST:{' '}
+                        <strong>
+                          ₹{Number(group.gstAmount ?? group.gstSummary.taxAmount ?? 0).toLocaleString('en-IN')}
+                        </strong>
                         {formatGstBasisLabel(group.gstSummary)
                           ? ` · ${formatGstBasisLabel(group.gstSummary)}`
                           : ''}
@@ -1864,8 +1887,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                     <tr>
                       <th>Item</th>
                       <th>Quantity</th>
-                      <th>Unit Price</th>
-                      <th>Total</th>
+                      <th>Unit Price (excl. GST)</th>
+                      <th>Total (incl. GST)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1940,7 +1963,14 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                         </td>
                         <td>{item.quantity} {item.unit || ''}</td>
                         <td>₹{item.price?.toLocaleString() || '0'}</td>
-                        <td>₹{((item.quantity || 0) * (item.price || 0)).toLocaleString()}</td>
+                        <td>
+                          ₹
+                          {Number(
+                            item.lineTotalInclGst ??
+                              ((item.quantity || 0) * (item.price || 0) +
+                                Number(item.lineGst?.taxAmount || 0))
+                          ).toLocaleString('en-IN')}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

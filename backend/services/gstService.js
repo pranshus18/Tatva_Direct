@@ -1,7 +1,11 @@
+import { parseSupplierOfferAttributes } from './supplierCatalogHelpersService.js';
+
 const asNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
 };
+
+export const roundMoney = (value) => Math.round(asNumber(value) * 100) / 100;
 
 const STATE_ALIAS_MAP = new Map([
   ['andhra pradesh', 'andhra pradesh'],
@@ -115,22 +119,80 @@ export function assertGstStateInputs({ supplierState, billingState, context = 'G
   throw error;
 }
 
-export function assertSupplierProductTaxRates({ supplierProduct, context = 'GST calculation', productRef = '' } = {}) {
+export function resolveSupplierProductTaxRates(supplierProduct = {}) {
   const row = supplierProduct && typeof supplierProduct === 'object' ? supplierProduct : {};
-  const hasIgst = row.igst_rate !== null && row.igst_rate !== undefined && row.igst_rate !== '';
-  const hasCgst = row.cgst_rate !== null && row.cgst_rate !== undefined && row.cgst_rate !== '';
-  const hasSgst = row.sgst_rate !== null && row.sgst_rate !== undefined && row.sgst_rate !== '';
-  if (hasIgst && hasCgst && hasSgst) return;
+  const attrs = parseSupplierOfferAttributes(row.attributes);
+  const pickRate = (...values) => {
+    for (const value of values) {
+      if (value !== null && value !== undefined && value !== '') {
+        return asNumber(value);
+      }
+    }
+    return null;
+  };
+  return {
+    igstRate: pickRate(row.igst_rate, attrs?.igstRate, attrs?.igst_rate),
+    cgstRate: pickRate(row.cgst_rate, attrs?.cgstRate, attrs?.cgst_rate),
+    sgstRate: pickRate(row.sgst_rate, attrs?.sgstRate, attrs?.sgst_rate)
+  };
+}
+
+export function assertSupplierProductTaxRates({ supplierProduct, context = 'GST calculation', productRef = '' } = {}) {
+  const rates = resolveSupplierProductTaxRates(supplierProduct);
+  if (rates.igstRate != null && rates.cgstRate != null && rates.sgstRate != null) return;
 
   const missing = [];
-  if (!hasIgst) missing.push('IGST rate');
-  if (!hasCgst) missing.push('CGST rate');
-  if (!hasSgst) missing.push('SGST rate');
+  if (rates.igstRate == null) missing.push('IGST rate');
+  if (rates.cgstRate == null) missing.push('CGST rate');
+  if (rates.sgstRate == null) missing.push('SGST rate');
   const suffix = productRef ? ` for ${productRef}` : '';
   const error = new Error(`${context} failed: missing ${missing.join(', ')}${suffix} in supplier product tax config.`);
   error.statusCode = 400;
   error.code = 'GST_TAX_RATES_MISSING';
   throw error;
+}
+
+export function extractStateFromIndianAddress(address = {}) {
+  const raw = address?.state || address?.region || '';
+  return normalizeStateName(raw) || String(raw || '').trim();
+}
+
+export function extractStateFromLocationText(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const parts = text.split(',').map((part) => part.trim()).filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i -= 1) {
+    const part = parts[i];
+    if (/^\d{6}$/.test(part)) continue;
+    if (part.toLowerCase() === 'india') continue;
+    const normalized = normalizeStateName(part);
+    if (normalized) return normalized;
+  }
+  return '';
+}
+
+/** Supplier registration / dispatch state used to decide IGST vs CGST+SGST. */
+export function resolveSupplierStateForGst({
+  supplierUser = null,
+  supplierProduct = null,
+  outlet = null,
+  pickupAddress = null
+} = {}) {
+  const fromUser = extractUserState(supplierUser);
+  if (fromUser) return normalizeStateName(fromUser) || String(fromUser).trim();
+
+  const outletAddress =
+    outlet?.address && typeof outlet.address === 'object' ? outlet.address : outlet || null;
+  const fromOutlet = extractStateFromIndianAddress(outletAddress || {});
+  if (fromOutlet) return fromOutlet;
+
+  const fromPickup = extractStateFromIndianAddress(pickupAddress || {});
+  if (fromPickup) return fromPickup;
+
+  const fromOfferLocation = extractStateFromLocationText(supplierProduct?.location || '');
+  if (fromOfferLocation) return fromOfferLocation;
+
+  return '';
 }
 
 export function deriveGstTaxTypeFromTotals({ igstAmount = 0, cgstAmount = 0, sgstAmount = 0 } = {}) {
@@ -234,17 +296,19 @@ export function computeLineGst({
   igstRate = 0,
   cgstRate = 0,
   sgstRate = 0,
-  intraState = false
+  intraState = false,
+  supplierProduct = null
 } = {}) {
-  const taxable = asNumber(taxableAmount);
-  const safeIgst = asNumber(igstRate);
-  const safeCgst = asNumber(cgstRate);
-  const safeSgst = asNumber(sgstRate);
+  const resolvedRates = supplierProduct ? resolveSupplierProductTaxRates(supplierProduct) : null;
+  const taxable = roundMoney(taxableAmount);
+  const safeIgst = asNumber(resolvedRates?.igstRate ?? igstRate);
+  const safeCgst = asNumber(resolvedRates?.cgstRate ?? cgstRate);
+  const safeSgst = asNumber(resolvedRates?.sgstRate ?? sgstRate);
 
   if (intraState) {
-    const cgstAmount = (taxable * safeCgst) / 100;
-    const sgstAmount = (taxable * safeSgst) / 100;
-    const taxAmount = cgstAmount + sgstAmount;
+    const cgstAmount = roundMoney((taxable * safeCgst) / 100);
+    const sgstAmount = roundMoney((taxable * safeSgst) / 100);
+    const taxAmount = roundMoney(cgstAmount + sgstAmount);
     return {
       taxableAmount: taxable,
       taxType: 'CGST_SGST',
@@ -255,11 +319,11 @@ export function computeLineGst({
       cgstAmount,
       sgstAmount,
       taxAmount,
-      totalAmount: taxable + taxAmount
+      totalAmount: roundMoney(taxable + taxAmount)
     };
   }
 
-  const igstAmount = (taxable * safeIgst) / 100;
+  const igstAmount = roundMoney((taxable * safeIgst) / 100);
   return {
     taxableAmount: taxable,
     taxType: 'IGST',
@@ -270,7 +334,7 @@ export function computeLineGst({
     cgstAmount: 0,
     sgstAmount: 0,
     taxAmount: igstAmount,
-    totalAmount: taxable + igstAmount
+    totalAmount: roundMoney(taxable + igstAmount)
   };
 }
 
@@ -295,7 +359,34 @@ export function sumGstLines(lines = []) {
     }
   );
   return {
-    ...totals,
+    subtotalAmount: roundMoney(totals.subtotalAmount),
+    taxAmount: roundMoney(totals.taxAmount),
+    igstAmount: roundMoney(totals.igstAmount),
+    cgstAmount: roundMoney(totals.cgstAmount),
+    sgstAmount: roundMoney(totals.sgstAmount),
+    totalAmount: roundMoney(totals.totalAmount),
     taxType: deriveGstTaxTypeFromTotals(totals)
+  };
+}
+
+export function buildPoGroupsCheckoutSummary(poGroups = []) {
+  const groups = Array.isArray(poGroups) ? poGroups : [];
+  const productSubtotal = roundMoney(
+    groups.reduce((sum, group) => sum + asNumber(group?.subtotal ?? group?.total ?? group?.gstSummary?.subtotalAmount), 0)
+  );
+  const gstAmount = roundMoney(
+    groups.reduce((sum, group) => sum + asNumber(group?.gstAmount ?? group?.gstSummary?.taxAmount), 0)
+  );
+  const productsInclGst = roundMoney(
+    groups.reduce((sum, group) => {
+      const incl = asNumber(group?.totalInclGst ?? group?.gstSummary?.totalAmount);
+      if (incl > 0) return sum + incl;
+      return sum + asNumber(group?.subtotal ?? group?.total) + asNumber(group?.gstAmount);
+    }, 0)
+  );
+  return {
+    productSubtotal,
+    gstAmount,
+    productsInclGst: productsInclGst || roundMoney(productSubtotal + gstAmount)
   };
 }

@@ -103,7 +103,12 @@ function sanitizeVendorOffers(itemVendors, itemsList = []) {
     const item = itemsById.get(String(itemId)) || null;
     const vendors = Array.isArray(itemVendors[itemId]) ? itemVendors[itemId] : [];
     cleaned[itemId] = vendors
-      .filter((v) => v && v.id && v.name)
+      .filter((v) => {
+        if (!v || !v.id || !v.name) return false;
+        if (!v.supplierProductId) return false;
+        if (String(v.status || '').toLowerCase() !== 'approved') return false;
+        return true;
+      })
       .map((v) => {
         const availableStock = getVendorAvailableStock(v);
         const isAvailable = !(

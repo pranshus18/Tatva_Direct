@@ -31,6 +31,7 @@ import {
   pickPrimaryVariantOption,
   resolveActiveDiscoveryVariant,
   resolveDiscoveryVariantLabel,
+  resolveViewerListingForVariant,
   resolveVariantDisplaySpecifications,
   variantMatchesSelections,
   variantSelectionKey
@@ -302,6 +303,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     () => (Array.isArray(detail?.variants) ? detail.variants : []),
     [detail?.variants]
   );
+  const viewerListings = useMemo(
+    () => (Array.isArray(detail?.viewerListings) ? detail.viewerListings : []),
+    [detail?.viewerListings]
+  );
 
   const allVariantOptions = Array.isArray(detail?.variantOptions) ? detail.variantOptions : [];
   const selectorOptions = useMemo(
@@ -315,9 +320,19 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         variants,
         selectedVariantKey,
         optionSelections,
-        urlVariantToken: searchParams.get('variant')
+        urlVariantToken: searchParams.get('variant'),
+        mineSupplierProductId,
+        viewerListings: isUpstreamPortal ? viewerListings : []
       }),
-    [variants, searchParams, selectedVariantKey, optionSelections]
+    [
+      variants,
+      searchParams,
+      selectedVariantKey,
+      optionSelections,
+      mineSupplierProductId,
+      viewerListings,
+      isUpstreamPortal
+    ]
   );
 
   // Hydrate option chips from URL / default / explicit variant so first paint matches the active listing.
@@ -330,7 +345,9 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         variants,
         selectedVariantKey,
         optionSelections: {},
-        urlVariantToken: searchParams.get('variant')
+        urlVariantToken: searchParams.get('variant'),
+        mineSupplierProductId,
+        viewerListings: isUpstreamPortal ? viewerListings : []
       });
     if (!source) return;
     const next = buildOptionSelectionsForVariant(source, selectorOptions);
@@ -345,7 +362,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     optionSelections,
     selectedVariant,
     selectedVariantKey,
-    searchParams
+    searchParams,
+    mineSupplierProductId,
+    viewerListings,
+    isUpstreamPortal
   ]);
 
   useEffect(() => {
@@ -374,6 +394,21 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const productSummary = detail?.product || {};
   // Do not fall back to variants[0] when option chips form an incompatible combo.
   const activeListing = selectedVariant;
+  const viewerListing = useMemo(
+    () =>
+      isUpstreamPortal
+        ? resolveViewerListingForVariant(viewerListings, activeListing, mineSupplierProductId)
+        : null,
+    [isUpstreamPortal, viewerListings, activeListing, mineSupplierProductId, selectedVariantKey]
+  );
+  const displayUnit =
+    viewerListing?.unit || activeListing?.unit || productSummary.unit;
+  const displayPrice = isUpstreamPortal
+    ? viewerListing?.price ?? activeListing?.price
+    : activeListing?.price;
+  const displayStock = isUpstreamPortal
+    ? viewerListing?.stock ?? activeListing?.stock
+    : activeListing?.stock;
   const displaySpecifications = useMemo(
     () => resolveVariantDisplaySpecifications(activeListing),
     [activeListing, selectedVariantKey]
@@ -402,11 +437,13 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     ]
   );
   const priceLabel = useMemo(
-    () => formatPrice(activeListing?.price, activeListing?.unit || productSummary.unit),
-    [activeListing?.price, activeListing?.unit, productSummary.unit, selectedVariantKey]
+    () => formatPrice(displayPrice, displayUnit),
+    [displayPrice, displayUnit, selectedVariantKey]
   );
-  const rangeLabel = formatPriceRange(productSummary.priceRange, productSummary.unit);
-  const inStock = Number(activeListing?.stock) > 0;
+  const rangeLabel = isUpstreamPortal
+    ? null
+    : formatPriceRange(productSummary.priceRange, productSummary.unit);
+  const inStock = Number(displayStock) > 0;
 
   const backLabel = isUpstreamPortal ? 'Back to upstream sourcing' : 'Back to discovery';
 
@@ -423,7 +460,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     // page, so the detail page hands the supplier back to that flow for this listing.
     if (isUpstreamPortal) {
       const offerId =
-        activeListing?.supplierProductId || mineSupplierProductId || '';
+        viewerListing?.id ||
+        activeListing?.supplierProductId ||
+        mineSupplierProductId ||
+        '';
       navigate(buildUpstreamSourcingUrl({ addSupplierProductId: offerId }));
       return;
     }
@@ -471,7 +511,9 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         {priceLabel ? <div className="pdd-buybox__price">{priceLabel}</div> : null}
         {!priceLabel && rangeLabel ? <div className="pdd-buybox__price">{rangeLabel}</div> : null}
         {!priceLabel && !rangeLabel ? (
-          <div className="pdd-buybox__price pdd-buybox__price--na">Price on request</div>
+          <div className="pdd-buybox__price pdd-buybox__price--na">
+            {isUpstreamPortal ? 'Your listing price n/a' : 'Price on request'}
+          </div>
         ) : null}
         {priceLabel && rangeLabel && rangeLabel !== priceLabel ? (
           <p className="pdd-buybox__range-note">All variants: {rangeLabel}</p>
@@ -479,26 +521,26 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
       </div>
 
       <div className={`pdd-buybox__stock ${inStock ? 'pdd-buybox__stock--in' : 'pdd-buybox__stock--out'}`}>
-        {inStock ? `${activeListing.stock} in stock` : 'Product is out of stock'}
+        {inStock ? `${displayStock} in stock` : 'Product is out of stock'}
       </div>
 
       <dl className="pdd-buybox__facts">
-        {activeListing.unit ? (
+        {displayUnit ? (
           <div className="pdd-buybox__fact">
             <dt>Unit</dt>
-            <dd>{activeListing.unit}</dd>
+            <dd>{displayUnit}</dd>
           </div>
         ) : null}
-        {Number(activeListing.min_order_quantity) > 1 ? (
+        {Number(activeListing?.min_order_quantity ?? viewerListing?.min_order_quantity) > 1 ? (
           <div className="pdd-buybox__fact">
             <dt>MOQ</dt>
-            <dd>{activeListing.min_order_quantity}</dd>
+            <dd>{activeListing?.min_order_quantity ?? viewerListing?.min_order_quantity}</dd>
           </div>
         ) : null}
-        {activeListing.location ? (
+        {(activeListing?.location || viewerListing?.location) ? (
           <div className="pdd-buybox__fact">
             <dt>Ships from</dt>
-            <dd>{activeListing.location}</dd>
+            <dd>{activeListing?.location || viewerListing?.location}</dd>
           </div>
         ) : null}
         {Number(activeListing.supplierCount) > 0 ? (

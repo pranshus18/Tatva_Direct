@@ -6,6 +6,101 @@ import {
   resolveOfferCatalogProductId
 } from './supplierCatalogHelpersService.js';
 import { extractExplicitVariantKey } from './productIdentityService.js';
+import { isListedSupplierOffer } from './catalogOfferSnapshotService.js';
+import { resolveSupplierOfferDisplayName } from './supplierProductWriteService.js';
+
+function isOfferCompatibleWithRequestedItem({
+  item,
+  itemName,
+  catalogName = '',
+  attributes = {},
+  row = null,
+  catalogProductId = null,
+  anchoredProductIds = null,
+  fuzzyNameCompatible,
+  hasModelTokenConflict
+}) {
+  const requestedProductId = String(item?.productId || '').trim();
+  const offerProductId = String(row?.product_id || '').trim();
+  const resolvedCatalogId = String(catalogProductId || '').trim();
+  const anchoredIds = anchoredProductIds instanceof Set ? anchoredProductIds : new Set();
+
+  if (
+    requestedProductId &&
+    (offerProductId === requestedProductId ||
+      resolvedCatalogId === requestedProductId ||
+      anchoredIds.has(offerProductId) ||
+      anchoredIds.has(resolvedCatalogId))
+  ) {
+    return true;
+  }
+
+  const catalog = String(catalogName || '').trim();
+  if (!catalog || !fuzzyNameCompatible(itemName, catalog) || hasModelTokenConflict(itemName, catalog)) {
+    return false;
+  }
+
+  const listingName = resolveSupplierOfferDisplayName({ attributes, catalogName: catalog });
+  if (!listingName || listingName === catalog) return true;
+
+  return fuzzyNameCompatible(itemName, listingName) && !hasModelTokenConflict(itemName, listingName);
+}
+
+async function buildCandidateProductIdsForItem({
+  supabase,
+  item,
+  itemId,
+  itemName,
+  products = [],
+  referenceProduct = null,
+  includeAllVariants = false,
+  targetBrand,
+  detectProductBrandKey,
+  fuzzyNameCompatible,
+  hasModelTokenConflict
+}) {
+  const requestedProductId = String(item?.productId || '').trim();
+  const candidateIds = new Set();
+  const anchoredIds = new Set();
+
+  if (requestedProductId) {
+    candidateIds.add(requestedProductId);
+    anchoredIds.add(requestedProductId);
+
+    if (includeAllVariants && referenceProduct?.family_id) {
+      const { data: familyProducts, error: familyProductsError } = await supabase
+        .from('products')
+        .select('id')
+        .eq('family_id', referenceProduct.family_id)
+        .in('status', ['approved', 'pending']);
+      if (familyProductsError) {
+        console.error(`[Vendor Ranking] Family variant lookup failed for item ${itemId}:`, familyProductsError);
+      } else {
+        for (const row of familyProducts || []) {
+          if (row?.id) {
+            candidateIds.add(row.id);
+            anchoredIds.add(row.id);
+          }
+        }
+      }
+    }
+
+    return { candidateProductIds: [...candidateIds], anchoredProductIds: anchoredIds };
+  }
+
+  for (const product of products || []) {
+    if (!product?.id) continue;
+    if (targetBrand) {
+      const productBrand = detectProductBrandKey(product);
+      if (productBrand && productBrand !== targetBrand) continue;
+    }
+    if (!fuzzyNameCompatible(itemName, product.name)) continue;
+    if (hasModelTokenConflict(itemName, product.name)) continue;
+    candidateIds.add(product.id);
+  }
+
+  return { candidateProductIds: [...candidateIds], anchoredProductIds: anchoredIds };
+}
 
 function buildCatalogProductMeta(product = {}) {
   return {
@@ -99,6 +194,14 @@ export async function searchRankableProductsForItem({
   buildNameSearchPatterns,
   fuzzyNameCompatible
 }) {
+  const requestedProductId = String(item?.productId || '').trim();
+  if (requestedProductId && referenceProduct?.id === requestedProductId) {
+    console.log(
+      `[Vendor Ranking] Using anchored reference product for item ${itemId}: ${referenceProduct.name}`
+    );
+    return [referenceProduct];
+  }
+
   let products = [];
 
   const searchPatterns = buildNameSearchPatterns(itemNameLower);
@@ -193,40 +296,19 @@ export async function reconcileWithSupplierOffers({
 }) {
   let updatedProducts = products;
   try {
-    const baseCandidateProductIds = item.productId
-      ? [
-          ...new Set(
-            (updatedProducts || [])
-              .filter((p) => {
-                if (!p?.id) return false;
-                if (p.id === item.productId) return true;
-                const productBrand = detectProductBrandKey(p);
-                if (targetBrand && productBrand && productBrand !== targetBrand) return false;
-                if (!fuzzyNameCompatible(itemName, p.name)) return false;
-                if (hasModelTokenConflict(itemName, p.name)) return false;
-                return true;
-              })
-              .map((p) => p.id)
-          )
-        ]
-      : [...new Set((updatedProducts || []).map((p) => p?.id).filter(Boolean))];
-    const candidateProductIds = [...baseCandidateProductIds];
-    if (includeAllVariants && referenceProduct?.family_id) {
-      const { data: familyProducts, error: familyProductsError } = await supabase
-        .from('products')
-        .select('id')
-        .eq('family_id', referenceProduct.family_id)
-        .in('status', ['approved', 'pending']);
-      if (familyProductsError) {
-        console.error(`[Vendor Ranking] Family variant lookup failed for item ${itemId}:`, familyProductsError);
-      } else {
-        for (const row of familyProducts || []) {
-          if (row?.id && !candidateProductIds.includes(row.id)) {
-            candidateProductIds.push(row.id);
-          }
-        }
-      }
-    }
+    const { candidateProductIds, anchoredProductIds } = await buildCandidateProductIdsForItem({
+      supabase,
+      item,
+      itemId,
+      itemName,
+      products: updatedProducts,
+      referenceProduct,
+      includeAllVariants,
+      targetBrand,
+      detectProductBrandKey,
+      fuzzyNameCompatible,
+      hasModelTokenConflict
+    });
 
     if (candidateProductIds.length > 0) {
       const productMetaById = {};
@@ -272,7 +354,8 @@ export async function reconcileWithSupplierOffers({
             (id, name, company, email, phone, address, profile)
         `)
         .in('product_id', candidateProductIds)
-        .in('status', ['approved', 'pending']);
+        .eq('status', 'approved')
+        .eq('is_active', true);
 
       const variantMetaByKey = await loadVariantMetaByKeyForOffers(supabase, {
         familyId: referenceProduct?.family_id || null,
@@ -307,6 +390,7 @@ export async function reconcileWithSupplierOffers({
         );
 
         updatedProducts = scopedOfferRows
+          .filter((row) => isListedSupplierOffer(row))
           .map((row) => {
             const supplier = row?.supplier;
             if (!supplier?.id) return null;
@@ -314,18 +398,37 @@ export async function reconcileWithSupplierOffers({
             const variantMeta = resolveVariantMetaForOffer(row, variantMetaByKey);
             const catalogProductId = resolveOfferCatalogProductId(row, variantMetaByKey);
             const meta = productMetaById[catalogProductId] || productMetaById[row.product_id] || {};
+            if (
+              !isOfferCompatibleWithRequestedItem({
+                item,
+                itemName,
+                catalogName: meta.name,
+                attributes: parsedAttributes,
+                row,
+                catalogProductId,
+                anchoredProductIds,
+                fuzzyNameCompatible,
+                hasModelTokenConflict
+              })
+            ) {
+              return null;
+            }
             const catalogSpecifications = meta.specifications || {};
             const displaySpecifications = mergeOfferSpecifications(
               catalogSpecifications,
               { attributes: parsedAttributes },
               variantMeta
             );
+            const supplierListingName = resolveSupplierOfferDisplayName({
+              attributes: parsedAttributes,
+              catalogName: meta.name
+            });
             return {
               ...meta,
               // Prefer product_variants-linked catalog id so ranking scores the resolved sibling.
               id: catalogProductId || row.product_id,
               offerProductId: row.product_id,
-              name: meta.name,
+              name: supplierListingName || meta.name,
               description: meta.description,
               category: meta.category,
               unit: meta.unit || 'nos',
@@ -372,8 +475,9 @@ export async function reconcileWithSupplierOffers({
           `[Vendor Ranking] Reconciled products using supplier_products for item ${itemId}: ${updatedProducts.length} offers`
         );
       } else {
+        updatedProducts = [];
         console.log(
-          `[Vendor Ranking] No supplier_products offers found for candidate product ids; keeping legacy products. item ${itemId}`
+          `[Vendor Ranking] No live supplier_products offers for candidate product ids; cleared stale catalog-only matches for item ${itemId}`
         );
       }
     }

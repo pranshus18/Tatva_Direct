@@ -9,6 +9,7 @@ import {
   resolveDiscoveryAudienceRules,
   resolveVariantCatalogProduct,
   resolveVariantDisplayImages,
+  resolveViewerListingForVariant,
   indexListedOffersByCatalogProduct
 } from '../services/productDiscoveryDetailService.js';
 
@@ -156,6 +157,49 @@ test('aggregateOffersByVariantIdentity keeps distinct variant_key rows separate'
   assert.equal(grouped.size, 2);
   assert.equal(grouped.get('vk:silver-600')?.price, 100);
   assert.equal(grouped.get('vk:silver-1000')?.price, 150);
+});
+
+test('aggregateOffersByVariantIdentity prefers the viewer supplier when configured', () => {
+  const grouped = aggregateOffersByVariantIdentity(
+    [
+      {
+        id: 'offer-a',
+        supplier_id: 'supplier-a',
+        variant_asin: 'TS1B2N',
+        price: 300,
+        stock: 120,
+        status: 'approved',
+        is_active: true
+      },
+      {
+        id: 'offer-b',
+        supplier_id: 'supplier-b',
+        variant_asin: 'TS1B2N',
+        price: 69499,
+        stock: 200,
+        status: 'approved',
+        is_active: true
+      }
+    ],
+    { preferSupplierId: 'supplier-a' }
+  );
+
+  assert.equal(grouped.size, 1);
+  assert.equal(grouped.get('va:TS1B2N')?.supplier_id, 'supplier-a');
+  assert.equal(grouped.get('va:TS1B2N')?.price, 300);
+});
+
+test('resolveViewerListingForVariant matches by mine id and variant identity', () => {
+  const listings = [
+    { id: 'mine-1', productId: 'prod-1', variantAsin: 'TS161D', price: 4500 },
+    { id: 'mine-2', productId: 'prod-2', variantAsin: 'TS162A', price: 5200 }
+  ];
+
+  assert.equal(resolveViewerListingForVariant(listings, null, 'mine-1')?.price, 4500);
+  assert.equal(
+    resolveViewerListingForVariant(listings, { variantAsin: 'TS162A' }, '')?.id,
+    'mine-2'
+  );
 });
 
 test('aggregateOffersByVariantIdentity splits rows with same variant_key but different variant_asin', () => {

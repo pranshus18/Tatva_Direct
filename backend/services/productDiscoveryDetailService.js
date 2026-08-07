@@ -343,7 +343,25 @@ async function buildVariantRecord({
   };
 }
 
-export function aggregateOffersByVariantIdentity(offers = []) {
+function pickPreferredVariantOffer(existing, candidate, preferSupplierId = '') {
+  const preferredId = String(preferSupplierId || '').trim();
+  if (preferredId) {
+    const candidateIsPreferred = String(candidate?.supplier_id || '').trim() === preferredId;
+    const existingIsPreferred = String(existing?.supplier_id || '').trim() === preferredId;
+    if (candidateIsPreferred && !existingIsPreferred) return candidate;
+    if (existingIsPreferred && !candidateIsPreferred) return existing;
+  }
+
+  if (candidate._stock > existing._stock) return candidate;
+  if (candidate._stock < existing._stock) return existing;
+  if (candidate._price > 0 && existing._price <= 0) return candidate;
+  if (candidate._price > 0 && existing._price > 0 && candidate._price < existing._price) {
+    return candidate;
+  }
+  return existing;
+}
+
+export function aggregateOffersByVariantIdentity(offers = [], { preferSupplierId = null } = {}) {
   const byKey = new Map();
   for (const row of offers) {
     const bucketKey = resolveVariantOfferBucketKey(row);
@@ -351,20 +369,61 @@ export function aggregateOffersByVariantIdentity(offers = []) {
     const stock = parseSupplierStockQuantity(row?.stock) ?? 0;
     const price = parseOfferPrice(row?.price);
     const candidate = { ...row, _stock: stock, _price: price };
-    if (!existing || candidate._stock > existing._stock) {
+    if (!existing) {
       byKey.set(bucketKey, candidate);
       continue;
     }
-    if (candidate._stock < existing._stock) continue;
-    if (candidate._price > 0 && existing._price <= 0) {
-      byKey.set(bucketKey, candidate);
-      continue;
-    }
-    if (candidate._price > 0 && existing._price > 0 && candidate._price < existing._price) {
-      byKey.set(bucketKey, candidate);
-    }
+    byKey.set(bucketKey, pickPreferredVariantOffer(existing, candidate, preferSupplierId));
   }
   return byKey;
+}
+
+function buildViewerListingSnapshot(row, productById) {
+  const productId = String(row?.product_id || '').trim();
+  const product = productById.get(productId) || null;
+  const attrs = row?.attributes && typeof row.attributes === 'object' ? row.attributes : {};
+  const mergedSpecs = mergeOfferSpecifications(product?.specifications, row, null);
+  return {
+    id: row?.id || null,
+    productId: productId || null,
+    variantKey: String(row?.variant_key || '').trim() || null,
+    variantAsin: String(row?.variant_asin || '').trim() || null,
+    price: parseOfferPrice(row?.price),
+    stock: parseSupplierStockQuantity(row?.stock) ?? 0,
+    unit: resolveVariantDisplayUnit(product || {}, row, mergedSpecs),
+    min_order_quantity: row?.min_order_quantity ?? product?.min_order_quantity ?? null,
+    location: String(row?.location || product?.location || '').trim() || null,
+    name: resolveSupplierOfferDisplayName({
+      attributes: attrs,
+      catalogName: product?.name || ''
+    })
+  };
+}
+
+export function resolveViewerListingForVariant(viewerListings = [], variant = null, mineSupplierProductId = '') {
+  const listings = Array.isArray(viewerListings) ? viewerListings : [];
+  const mineId = String(mineSupplierProductId || '').trim();
+  if (mineId) {
+    const byMine = listings.find((listing) => String(listing?.id || '') === mineId);
+    if (byMine) return byMine;
+  }
+  if (!variant) return null;
+
+  const variantAsin = String(variant?.variantAsin || '').trim();
+  const variantKey = String(variant?.variantKey || '').trim();
+  const productId = String(variant?.productId || '').trim();
+
+  return (
+    listings.find((listing) => {
+      const listingAsin = String(listing?.variantAsin || '').trim();
+      const listingKey = String(listing?.variantKey || '').trim();
+      const listingProductId = String(listing?.productId || '').trim();
+      if (variantAsin && listingAsin && listingAsin === variantAsin) return true;
+      if (variantKey && listingKey && listingKey === variantKey) return true;
+      if (productId && listingProductId === productId && !variantAsin && !variantKey) return true;
+      return false;
+    }) || null
+  );
 }
 
 export async function enrichDiscoverySuggestionsWithVariantCounts(supabase, suggestions = []) {
@@ -654,6 +713,39 @@ export async function getProductDiscoveryDetail(
     offersByProductId.get(pid).push(row);
   }
 
+  let viewerListings = [];
+  const normalizedViewerSupplierId = String(viewerSupplierId || '').trim();
+  if (
+    audienceRules.audience === DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM &&
+    normalizedViewerSupplierId
+  ) {
+    const { data: viewerListingRows, error: viewerListingError } = await supabase
+      .from('supplier_products')
+      .select(
+        `
+          id,
+          product_id,
+          supplier_id,
+          price,
+          stock,
+          min_order_quantity,
+          location,
+          variant_key,
+          variant_asin,
+          attributes,
+          status,
+          is_active
+        `
+      )
+      .in('product_id', siblingIds)
+      .eq('supplier_id', normalizedViewerSupplierId)
+      .neq('status', 'rejected');
+    if (viewerListingError) throw viewerListingError;
+    viewerListings = (viewerListingRows || []).map((row) =>
+      buildViewerListingSnapshot(row, productById)
+    );
+  }
+
   const variantCandidates = [];
   const seenVariantKeys = new Set();
   const offersByCatalogProductId = indexListedOffersByCatalogProduct({
@@ -675,7 +767,10 @@ export async function getProductDiscoveryDetail(
       continue;
     }
 
-    const offersByIdentity = aggregateOffersByVariantIdentity(attachedEntries.map((entry) => entry.offer));
+    const offersByIdentity = aggregateOffersByVariantIdentity(
+      attachedEntries.map((entry) => entry.offer),
+      { preferSupplierId: normalizedViewerSupplierId || null }
+    );
     const entryByOfferId = new Map(
       attachedEntries
         .filter((entry) => entry?.offer?.id)
@@ -767,7 +862,13 @@ export async function getProductDiscoveryDetail(
     offerAggregates
   );
 
-  const prices = variantCandidates.map((v) => Number(v.price)).filter((n) => Number.isFinite(n) && n > 0);
+  const priceSource =
+    audienceRules.audience === DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM && viewerListings.length
+      ? viewerListings
+      : variantCandidates;
+  const prices = priceSource
+    .map((entry) => Number(entry?.price))
+    .filter((n) => Number.isFinite(n) && n > 0);
   const priceRange =
     prices.length > 1
       ? { min: Math.min(...prices), max: Math.max(...prices) }
@@ -811,6 +912,7 @@ export async function getProductDiscoveryDetail(
     hasVariants,
     variantCount,
     variantOptions,
-    variants: variantCandidates
+    variants: variantCandidates,
+    viewerListings
   };
 }

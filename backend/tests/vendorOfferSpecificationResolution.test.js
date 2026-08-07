@@ -134,8 +134,12 @@ function makeReconcileSupabase({
             return {
               in() {
                 return {
-                  in() {
-                    return Promise.resolve({ data: offerRows, error: null });
+                  eq() {
+                    return {
+                      eq() {
+                        return Promise.resolve({ data: offerRows, error: null });
+                      }
+                    };
                   }
                 };
               }
