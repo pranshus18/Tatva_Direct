@@ -86,3 +86,26 @@ export function isSupplierMrpLocked(product) {
 
 export const SUPPLIER_MRP_LOCKED_MESSAGE =
   'MRP is locked after the first save. Contact admin if you need to change it.';
+
+/** True when another supplier has already set the canonical MRP for this variant. */
+export function isVariantMrpEnforced(product) {
+  const canonical = parseSupplierOfferPrice(product?.canonicalMrp);
+  return canonical !== null && canonical > 0;
+}
+
+export function getCanonicalVariantMrp(product) {
+  return parseSupplierOfferPrice(product?.canonicalMrp);
+}
+
+export function formatVariantMrpFixedMessage(canonicalMrp) {
+  const amount = parseSupplierOfferPrice(canonicalMrp);
+  if (amount === null) {
+    return 'MRP for this variant is fixed for all suppliers. Contact admin to change it.';
+  }
+  return `MRP for this variant is fixed at ${RUPEE_SYMBOL}${amount.toFixed(2)} for all suppliers. Contact admin to change it.`;
+}
+
+/** Supplier may not edit MRP when their own offer is locked or the variant MRP is already set. */
+export function isSupplierMrpInputDisabled(product) {
+  return isSupplierMrpLocked(product) || isVariantMrpEnforced(product);
+}

@@ -6,11 +6,26 @@ function roundInr(n) {
   return Math.round(Number(n) * 100) / 100;
 }
 
+/** Parse supplier-defined LSA (Low Stock Alert) — whole units only. */
+export function parseLsaThreshold(raw) {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const lsa = parseInt(String(raw).trim(), 10);
+  return Number.isFinite(lsa) && lsa > 0 ? lsa : null;
+}
+
+/** True when on-hand stock is at or below the variant's configured LSA. */
+export function isStockAtOrBelowLsa({ stock, lsa } = {}) {
+  const lsaThreshold = parseLsaThreshold(lsa);
+  if (lsaThreshold == null) return false;
+  const qty = Math.max(0, parseInt(stock, 10) || 0);
+  return qty <= lsaThreshold;
+}
+
 export function crossedLsaThreshold({ previousStock, newStock, lsaThreshold }) {
   const prev = Math.max(0, parseInt(previousStock, 10) || 0);
   const next = Math.max(0, parseInt(newStock, 10) || 0);
-  const lsa = parseInt(lsaThreshold, 10);
-  if (!Number.isFinite(lsa) || lsa <= 0) return false;
+  const lsa = parseLsaThreshold(lsaThreshold);
+  if (lsa == null) return false;
   return prev > lsa && next <= lsa;
 }
 
@@ -66,7 +81,7 @@ export async function maybeNotifyInventoryBelowMov({
         : prod?.name || 'Product';
 
     // LSA alert: notify when stock crosses from above LSA to at/below LSA.
-    const lsaThreshold = parseInt(attrs?.lsa, 10);
+    const lsaThreshold = parseLsaThreshold(attrs?.lsa);
     if (crossedLsaThreshold({ previousStock: prev, newStock: next, lsaThreshold })) {
       await insertNotification({
         user_id: supplierId,

@@ -4,6 +4,10 @@ import {
   getSupplierStockHealth,
   isSupplierInventoryConfigured,
   isSupplierMrpLocked,
+  isVariantMrpEnforced,
+  isSupplierMrpInputDisabled,
+  getCanonicalVariantMrp,
+  formatVariantMrpFixedMessage,
   parseSupplierLsaThreshold
 } from './supplierStockLabel';
 
@@ -30,6 +34,25 @@ describe('isSupplierMrpLocked', () => {
     expect(isSupplierMrpLocked({ price: 250 })).toBe(true);
     expect(isSupplierMrpLocked({ price: 0 })).toBe(false);
     expect(isSupplierMrpLocked(null)).toBe(false);
+  });
+});
+
+describe('variant MRP enforcement', () => {
+  it('detects canonical MRP set by another supplier', () => {
+    expect(isVariantMrpEnforced({ canonicalMrp: 120 })).toBe(true);
+    expect(isVariantMrpEnforced({ canonicalMrp: 0 })).toBe(false);
+    expect(isVariantMrpEnforced({ price: 120 })).toBe(false);
+  });
+
+  it('disables supplier MRP input when locked or variant MRP is fixed', () => {
+    expect(isSupplierMrpInputDisabled({ price: 120 })).toBe(true);
+    expect(isSupplierMrpInputDisabled({ canonicalMrp: 99, price: 0 })).toBe(true);
+    expect(isSupplierMrpInputDisabled({ price: 0 })).toBe(false);
+  });
+
+  it('formats fixed variant MRP message', () => {
+    expect(formatVariantMrpFixedMessage(250)).toMatch(/250\.00/);
+    expect(getCanonicalVariantMrp({ canonicalMrp: '120.5' })).toBe(120.5);
   });
 });
 

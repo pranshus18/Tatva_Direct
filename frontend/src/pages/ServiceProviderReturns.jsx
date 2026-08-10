@@ -253,9 +253,9 @@ const ServiceProviderReturns = () => {
                                 {formatDateTimeIST(r.metadata.buyer_acknowledged_closure_at, '—')}
                               </span>
                             ) : (
-                              <span className="spr-ack spr-ack--pending">
-                                Waiting for your confirmation so inventory can be restored to the
-                                supplier.
+                              <span className="spr-ack">
+                                Supplier inventory was restored when this return was closed. You can
+                                optionally confirm completion below.
                               </span>
                             )}
                           </div>

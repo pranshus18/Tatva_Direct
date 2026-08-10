@@ -20,6 +20,10 @@ import {
   specificationTemplateKeysOnly
 } from '../../services/supplierCatalogHelpersService.js';
 import { areSupplierOfferSpecificationValuesLocked } from '../../services/supplierProductUpdateValidation.js';
+import {
+  buildVariantMrpMapKey,
+  fetchCanonicalMrpMapForVariants
+} from '../../services/variantMrpService.js';
 
 export function registerSupplierProductListRoutes(ctx) {
   const {
@@ -202,6 +206,28 @@ router.get('/products', authenticateToken, async (req, res) => {
         };
       })
       .filter(Boolean);
+
+    try {
+      const mrpPairs = products
+        .filter((row) => row?.variantKey && row?.id)
+        .map((row) => ({
+          productId: row.id,
+          variantKey: row.variantKey
+        }));
+      const mrpMap = await fetchCanonicalMrpMapForVariants(supabase, mrpPairs);
+      for (const product of products) {
+        if (!product?.variantKey || !product?.id) continue;
+        const canonicalMrp =
+          mrpMap.get(buildVariantMrpMapKey(product.id, product.variantKey)) ?? null;
+        product.canonicalMrp = canonicalMrp;
+        product.variantMrpLocked = canonicalMrp !== null;
+      }
+    } catch (mrpError) {
+      console.warn(
+        'Supplier product list canonical MRP enrichment failed:',
+        mrpError?.message || mrpError
+      );
+    }
 
     // Attach brand approval status so cards can warn when brand is not approved yet.
     try {

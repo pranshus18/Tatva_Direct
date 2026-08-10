@@ -66,6 +66,8 @@ import {
   getSupplierStockHealth,
   isSupplierInventoryConfigured,
   isSupplierMrpLocked,
+  formatVariantMrpFixedMessage,
+  getCanonicalVariantMrp,
   parseSupplierOfferPrice
 } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
@@ -2056,6 +2058,16 @@ const ProductDetailsModal = ({
 
 const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, showAdditionSteps = false }) => {
   const mrpLocked = Boolean(product && isSupplierMrpLocked(product));
+  const [recommendedPrice, setRecommendedPrice] = useState(
+    getCanonicalVariantMrp(product) ?? null
+  );
+  const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
+  const [priceTouched, setPriceTouched] = useState(false);
+  const canonicalMrp =
+    getCanonicalVariantMrp(product) ??
+    (typeof recommendedPrice === 'number' ? recommendedPrice : null);
+  const variantMrpEnforced = Boolean(canonicalMrp != null && canonicalMrp > 0 && !mrpLocked);
+  const mrpInputDisabled = mrpLocked || variantMrpEnforced;
   const [formData, setFormData] = useState({
     catalogProductId: product?.catalogProductId || product?.id || '',
     name: product?.name || '',
@@ -2074,9 +2086,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     description: product?.supplierDescription || product?.description || '',
     images: getSupplierOfferImagesForForm(product)
   });
-  const [recommendedPrice, setRecommendedPrice] = useState(null);
-  const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
-  const [priceTouched, setPriceTouched] = useState(false);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [searchTimeout, setSearchTimeout] = useState(null);
@@ -2102,6 +2111,16 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   
   // Locations from supplier profile branches
   const [locations, setLocations] = useState([]);
+
+  useEffect(() => {
+    const fixedMrp = getCanonicalVariantMrp(product);
+    if (fixedMrp == null || mrpLocked || priceTouched) return;
+    setFormData((prev) => {
+      const currentPrice = parseSupplierOfferPrice(prev.price);
+      if (currentPrice != null && currentPrice > 0) return prev;
+      return { ...prev, price: String(Number(fixedMrp).toFixed(2)) };
+    });
+  }, [product, mrpLocked, priceTouched]);
   
   // Track previous category to detect actual changes
   const previousCategoryRef = useRef(null);
@@ -2543,6 +2562,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           category
         });
         if (brand) lookupParams.set('brand', brand);
+        if (product?.variantKey) lookupParams.set('variantKey', product.variantKey);
         const res = await fetch(
           getApiUrl(`/api/supplier/products/lookup?${lookupParams.toString()}`),
           { headers: { 'Authorization': `Bearer ${token}` } }
@@ -2574,14 +2594,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           );
         }
         if (data.status === 'success' && data.found) {
-          setRecommendedPrice(
-            typeof data.recommendedPrice === 'number' ? data.recommendedPrice : null
-          );
+          const canonicalMrpFromLookup =
+            typeof data.canonicalMrp === 'number'
+              ? data.canonicalMrp
+              : typeof data.recommendedPrice === 'number'
+                ? data.recommendedPrice
+                : null;
+          setRecommendedPrice(canonicalMrpFromLookup);
           setRecommendedPriceStats(data.priceStats || null);
-          if (!product && !priceTouched && (formData.price === '' || formData.price === null || formData.price === undefined)) {
-            // Prefill price only when ADDING a product and supplier hasn't typed a price yet
-            if (typeof data.recommendedPrice === 'number' && Number.isFinite(data.recommendedPrice)) {
-              setFormData(prev => ({ ...prev, price: String(Number(data.recommendedPrice).toFixed(2)) }));
+          if (!product && !priceTouched) {
+            const currentPrice = parseSupplierOfferPrice(formData.price);
+            if ((currentPrice === null || currentPrice <= 0) && canonicalMrpFromLookup != null) {
+              setFormData((prev) => ({
+                ...prev,
+                price: String(Number(canonicalMrpFromLookup).toFixed(2))
+              }));
             }
           }
         } else {
@@ -5014,31 +5041,25 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     step="0.01"
                     value={formData.price}
                     onChange={(e) => {
-                      if (mrpLocked) return;
+                      if (mrpInputDisabled) return;
                       setPriceTouched(true);
                       setFormData({...formData, price: e.target.value});
                     }}
-                    disabled={mrpLocked}
+                    disabled={mrpInputDisabled}
                     required
                   />
                   {mrpLocked ? (
                     <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
                       {SUPPLIER_MRP_LOCKED_MESSAGE}
                     </p>
+                  ) : variantMrpEnforced ? (
+                    <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
+                      {formatVariantMrpFixedMessage(canonicalMrp)}
+                    </p>
                   ) : (
                     <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
                       {SUPPLIER_MRP_INCLUSIVE_HINT}
                     </p>
-                  )}
-                  {!mrpLocked && typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
-                    <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#0369a1' }}>
-                      Recommended avg {SUPPLIER_MRP_LABEL}: <strong>{formatRupee(recommendedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-                      {recommendedPriceStats?.supplierCountOthers > 0 && (
-                        <span style={{ color: '#64748b' }}>
-                          {' '}({recommendedPriceStats.supplierCountOthers} other supplier{recommendedPriceStats.supplierCountOthers > 1 ? 's' : ''})
-                        </span>
-                      )}
-                    </div>
                   )}
                 </div>
                 

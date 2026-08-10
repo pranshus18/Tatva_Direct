@@ -51,6 +51,11 @@ import {
   SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE
 } from '../../../services/supplierProductUpdateValidation.js';
 import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
+import {
+  fetchCanonicalVariantMrp,
+  validateSupplierVariantMrpConsistency,
+  formatVariantMrpMismatchMessage
+} from '../../../services/variantMrpService.js';
 
 export function registerSupplierProductUpdateRoute(ctx) {
   const {
@@ -102,6 +107,29 @@ export function registerSupplierProductUpdateRoute(ctx) {
             message: mrpValidation.message || SUPPLIER_MRP_LOCKED_MESSAGE,
             missingFields: mrpValidation.missingFields || ['price']
           });
+        }
+
+        if (req.body?.price !== undefined && supplierProduct?.variant_key) {
+          const canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
+            productId: supplierProduct.product_id,
+            variantKey: supplierProduct.variant_key,
+            excludeOfferId: supplierProduct.id
+          });
+          const variantMrpValidation = validateSupplierVariantMrpConsistency({
+            body: req.body,
+            canonicalMrp
+          });
+          if (!variantMrpValidation.ok) {
+            return res.status(403).json({
+              status: 'error',
+              code: variantMrpValidation.code || 'variant_mrp_mismatch',
+              message:
+                variantMrpValidation.message ||
+                formatVariantMrpMismatchMessage(variantMrpValidation.canonicalMrp),
+              missingFields: variantMrpValidation.missingFields || ['price'],
+              canonicalMrp: variantMrpValidation.canonicalMrp
+            });
+          }
         }
 
         const specValidation = validateSupplierSpecificationUpdateAllowed(supplierProduct, req.body || {});

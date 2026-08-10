@@ -16,6 +16,10 @@ import {
   supplierInventoryAdjustSchema
 } from './supplierImports.js';
 import { expireStaleReservations } from '../../services/checkoutInventoryReservationService.js';
+import {
+  isStockAtOrBelowLsa,
+  parseLsaThreshold
+} from '../../services/lowInventoryMovAlertService.js';
 
 export function registerSupplierInventoryRoutes(ctx) {
   const {
@@ -104,30 +108,47 @@ router.get('/inventory/summary', authenticateToken, async (req, res) => {
   }
 });
 
-// Restock suggestions: for low-stock items, suggest nearest upstream suppliers for same product+brand.
+// Restock suggestions: variants at/below their own LSA, with nearest upstream suppliers.
 router.get('/inventory/restock-suggestions', authenticateToken, async (req, res) => {
   try {
     if (req.user?.user_type !== 'supplier') {
       return res.status(403).json({ status: 'error', message: 'Only suppliers can view restock suggestions' });
     }
 
-    const threshold = Math.max(0, parseInt(req.query.threshold, 10) || 10);
     const limitPerItem = Math.min(5, Math.max(1, parseInt(req.query.limit, 10) || 3));
 
-    // Load my low-stock offers
+    // Load my active offers, then keep only those at/below each variant's configured LSA.
     const { data: myRows, error: myErr } = await supabase
       .from('supplier_products')
       .select('id, product_id, stock, outlet_id, location, attributes, product:products(id, name, brand)')
       .eq('supplier_id', req.userId)
       .eq('is_active', true)
-      .neq('status', 'rejected')
-      .lte('stock', threshold);
+      .neq('status', 'rejected');
 
     if (myErr) throw myErr;
 
-    const myOffers = myRows || [];
+    const myOffers = (myRows || [])
+      .map((r) => {
+        const lsa = parseLsaThreshold(r?.attributes?.lsa);
+        return { ...r, lsa };
+      })
+      .filter((r) => isStockAtOrBelowLsa({ stock: r.stock, lsa: r.lsa }))
+      .sort((a, b) => {
+        const stockA = Math.max(0, parseInt(a.stock, 10) || 0);
+        const stockB = Math.max(0, parseInt(b.stock, 10) || 0);
+        // Most urgent first: lowest stock vs LSA gap, then lowest stock.
+        const gapA = stockA - (a.lsa || 0);
+        const gapB = stockB - (b.lsa || 0);
+        if (gapA !== gapB) return gapA - gapB;
+        return stockA - stockB;
+      });
+
     if (myOffers.length === 0) {
-      return res.json({ status: 'success', threshold, items: [] });
+      return res.json({
+        status: 'success',
+        mode: 'per_variant_lsa',
+        items: []
+      });
     }
 
     // Determine my outlet geo per offer (if available)
@@ -155,11 +176,12 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
     if (parentRolesUnion.size === 0) {
       return res.json({
         status: 'success',
-        threshold,
+        mode: 'per_variant_lsa',
         items: myOffers.map((r) => ({
           supplierProductId: r.id,
           productId: r.product_id,
           stock: r.stock,
+          lsa: r.lsa,
           suggestions: [],
           message: 'No upstream role available for your current supply-chain role (e.g. manufacturer has no upstream).'
         }))
@@ -249,6 +271,7 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
           productId: null,
           productName: null,
           stock: mine.stock,
+          lsa: mine.lsa,
           brandModel: mine?.attributes?.brandModel || null,
           upstreamRole: parentRole,
           suggestions: [],
@@ -324,6 +347,7 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
         productId: mine.product_id,
         productName: mine?.product?.name || null,
         stock: mine.stock,
+        lsa: mine.lsa,
         brandModel: mine?.attributes?.brandModel || mine?.product?.brand || null,
         upstreamRole: parentRole,
         suggestions: candidates,
@@ -333,7 +357,7 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
 
     return res.json({
       status: 'success',
-      threshold,
+      mode: 'per_variant_lsa',
       parentRole,
       parentRoles: parentRolesSorted,
       items

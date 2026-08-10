@@ -188,7 +188,7 @@ const SupplierDashboard = ({ user }) => {
 
   const fetchRestockSuggestions = async () => {
     try {
-      const res = await authFetch('/api/supplier/inventory/restock-suggestions?threshold=10&limit=3');
+      const res = await authFetch('/api/supplier/inventory/restock-suggestions?limit=3');
       const data = await res.json();
       if (data.status === 'success') {
         setRestockSuggestions(data);
@@ -784,8 +784,8 @@ const SupplierDashboard = ({ user }) => {
             <div>
               <div className="supplier-dashboard-restock-title">Restock suggestions</div>
               <div className="supplier-dashboard-restock-subtitle">
-                Items with {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} at or below{' '}
-                {restockSuggestions?.threshold ?? 10}
+                Items with {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} at or below each product’s
+                Low Stock Alert (LSA)
               </div>
             </div>
             <Button variant="outline" size="sm" onClick={() => navigate('/supplier-upstream')}>
@@ -804,6 +804,9 @@ const SupplierDashboard = ({ user }) => {
                       </div>
                       <div className="supplier-dashboard-restock-meta">
                         {SUPPLIER_CURRENT_STOCK_LABEL}: {it.stock ?? 0}
+                        {it.lsa != null ? (
+                          <span className="supplier-dashboard-restock-brand"> · LSA {it.lsa}</span>
+                        ) : null}
                         {it.brandModel ? (
                           <span className="supplier-dashboard-restock-brand"> · {it.brandModel}</span>
                         ) : null}
@@ -847,7 +850,7 @@ const SupplierDashboard = ({ user }) => {
             </div>
           ) : (
             <div className="supplier-dashboard-restock-empty supplier-dashboard-restock-empty--panel">
-              No low-stock items right now. Inventory above the restock threshold looks healthy.
+              No low-stock items right now. Nothing is at or below its Low Stock Alert (LSA).
             </div>
           )}
         </CardContent>

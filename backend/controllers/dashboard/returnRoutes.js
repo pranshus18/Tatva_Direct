@@ -13,8 +13,7 @@ import {
 import {
   canRequestReturnForOrder,
   getRemainingReturnableQuantity,
-  getReturnRequestBlockReason,
-  isSupplierBuyerUser
+  getReturnRequestBlockReason
 } from '../../utils/orderReturnRules.js';
 import { listBuyerOutgoingReturns } from '../../services/returnListService.js';
 export * from './shared/dashboardHelpers.js';
@@ -288,26 +287,20 @@ router.patch('/service-provider/returns/:id/acknowledge-closure', authenticateTo
       merged = updated;
     }
 
-    const { data: buyerUser } = await supabase
-      .from('users')
-      .select('user_type')
-      .eq('id', merged.service_provider_id)
-      .maybeSingle();
-    const upstreamBuyer = isSupplierBuyerUser(buyerUser?.user_type);
-
-    let restock = { ok: true, skipped: true, reason: upstreamBuyer ? 'upstream_auto_restocked' : 'none' };
-    if (!upstreamBuyer) {
-      try {
-        restock = await applyRestockForClosedReturn(merged, req.userId);
-      } catch (restockErr) {
+    // Inventory is restored when the supplier closes the return. Keep this call as an
+    // idempotent safety net for older closed returns that may not have been restocked yet.
+    let restock = { ok: true, already: true, reason: 'closed_auto_restocked' };
+    try {
+      restock = await applyRestockForClosedReturn(merged, req.userId);
+    } catch (restockErr) {
       console.error('[Returns] acknowledge-closure restock error:', restockErr);
-        return res.status(500).json({
-          status: 'error',
-          message: 'Your confirmation was saved, but inventory could not be updated. Please try again or contact support.',
-          returnRequest: merged,
-          inventory: { ok: false, error: String(restockErr.message || restockErr) }
-        });
-      }
+      return res.status(500).json({
+        status: 'error',
+        message:
+          'Your confirmation was saved, but inventory could not be updated. Please try again or contact support.',
+        returnRequest: merged,
+        inventory: { ok: false, error: String(restockErr.message || restockErr) }
+      });
     }
 
     return res.json({

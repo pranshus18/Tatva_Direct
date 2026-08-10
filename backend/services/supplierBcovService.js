@@ -1,13 +1,24 @@
 import { composeBcovNotes, toFiniteNumber } from './supplierCatalogHelpersService.js';
 import { parseCovThresholdNumber } from './procurementSharedService.js';
+import { fetchCanonicalVariantMrp } from './variantMrpService.js';
 
 /**
  * Catalog MRP from supplier_products for a variant (Manage Inventory).
+ * Uses the canonical variant MRP shared across all suppliers when productId is known.
  * @returns {Promise<number|null>}
  */
 export async function fetchVariantCatalogMrp(supabase, supplierId, variantKey, productId = null) {
   const key = String(variantKey || '').trim();
   if (!key || !supplierId) return null;
+
+  const normalizedProductId = String(productId || '').trim();
+  if (normalizedProductId) {
+    const canonical = await fetchCanonicalVariantMrp(supabase, {
+      productId: normalizedProductId,
+      variantKey: key
+    });
+    if (canonical !== null) return canonical;
+  }
 
   let query = supabase
     .from('supplier_products')
@@ -17,7 +28,6 @@ export async function fetchVariantCatalogMrp(supabase, supplierId, variantKey, p
     .order('updated_at', { ascending: false })
     .limit(1);
 
-  const normalizedProductId = String(productId || '').trim();
   if (normalizedProductId) {
     query = query.eq('product_id', normalizedProductId);
   }

@@ -169,8 +169,11 @@ const SupplierReturns = () => {
       });
   }, [returns, statusFilter, searchTerm, sortBy]);
 
-  const updateStatus = async (id, status) => {
-    const supplierNotes = window.prompt(`Notes for "${status}" (optional):`, '') || '';
+  const updateStatus = async (id, status, options = {}) => {
+    const skipNotes = Boolean(options.skipNotes);
+    const supplierNotes = skipNotes
+      ? ''
+      : window.prompt(`Notes for "${status}" (optional):`, '') || '';
     try {
       setUpdatingId(id);
       const token = localStorage.getItem('token');
@@ -187,6 +190,28 @@ const SupplierReturns = () => {
       });
       const data = await res.json();
       if (res.ok && data.status === 'success') {
+        const inv = data.inventory;
+        if (status === 'closed') {
+          if (inv?.ok && inv?.qtyToAdd != null && !inv?.already && !inv?.skipped) {
+            alert(
+              skipNotes
+                ? `${inv.qtyToAdd} unit(s) added back to your inventory.`
+                : `Return closed. ${inv.qtyToAdd} unit(s) added back to your inventory.`
+            );
+          } else if (inv?.ok === false) {
+            alert(
+              inv?.reason === 'missing_supplier_product'
+                ? 'Inventory could not be restocked (product link missing). Contact support.'
+                : 'Inventory restock failed. Please try Sync inventory again or contact support.'
+            );
+          } else if (inv?.skipped && inv?.reason === 'scrap') {
+            alert('Marked as scrap — inventory was not increased.');
+          } else if (inv?.already || inv?.skipped) {
+            alert('Inventory is already up to date for this return.');
+          } else if (!skipNotes) {
+            alert('Return closed. Inventory has been restored.');
+          }
+        }
         await fetchReturns();
       } else {
         alert(data.message || 'Failed to update return');
@@ -332,6 +357,8 @@ const SupplierReturns = () => {
                 const created = r.created_at ? new Date(r.created_at) : null;
                 const closedUpstream =
                   mainTab === 'outgoing' && r.status === 'closed' && r.metadata?.supplier_closed_at;
+                const closedIncoming =
+                  mainTab === 'incoming' && r.status === 'closed' && r.metadata?.supplier_closed_at;
                 const sourceLabel =
                   r.return_scope === 'chain'
                     ? 'Chain partner'
@@ -403,12 +430,35 @@ const SupplierReturns = () => {
                           </div>
                         </div>
                       ) : null}
+                      {closedIncoming ? (
+                        <div className="sr-field sr-field--full">
+                          <div className="sr-field__label">Inventory</div>
+                          <div className="sr-field__value sr-ack-note">
+                            Closed on {formatDateTimeIST(r.metadata.supplier_closed_at, '—')}.
+                            Returned quantity was added back to your inventory automatically
+                            {Number(r.restocked_quantity) > 0
+                              ? ` (${r.restocked_quantity} unit${Number(r.restocked_quantity) === 1 ? '' : 's'}).`
+                              : '.'}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
 
                     {mainTab === 'incoming' ? (
                       <div className="sr-card__actions">
                         {actions.length === 0 ? (
-                          <div className="sr-actionsHint">No actions available for this status.</div>
+                          r.status === 'closed' ? (
+                            <button
+                              type="button"
+                              className="btn-secondary sr-actionBtn"
+                              disabled={updatingId === r.id}
+                              onClick={() => updateStatus(r.id, 'closed', { skipNotes: true })}
+                            >
+                              {updatingId === r.id ? 'Syncing…' : 'Sync inventory'}
+                            </button>
+                          ) : (
+                            <div className="sr-actionsHint">No actions available for this status.</div>
+                          )
                         ) : (
                           actions.map((next) => (
                             <button

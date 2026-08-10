@@ -20,6 +20,9 @@ import { resolveBrandApprovalStatus } from '../../services/brandApprovalService.
 import { isSupplierUserType } from '../../utils/notificationAudience.js';
 import { hasEffectiveRegisteredRole } from '../../utils/portalRoles.js';
 import { dedupeCategoryRowsCaseInsensitive } from '../../utils/categoryNormalize.js';
+import {
+  fetchCanonicalVariantMrp
+} from '../../services/variantMrpService.js';
 
 function isAuthenticatedSupplier(req) {
   if (isSupplierUserType(req.user?.user_type)) return true;
@@ -143,6 +146,7 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     const category = String(req.query.category || '').trim().toLowerCase();
     const brandRaw = String(req.query.brand || req.query.brandName || '').trim();
     const brandKey = brandRaw ? normalizeBrandKey(brandRaw) : '';
+    const variantKey = String(req.query.variantKey || req.query.variant_key || '').trim();
 
     if (!name || !category) {
       return res.json({
@@ -335,51 +339,47 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       });
     }
 
-    // If product exists, calculate recommended price as average of all suppliers' prices
-    // Prefer excluding the current supplier (so they see market average) when possible.
-    let recommendedPrice = null;
-    let avgPriceAll = null;
-    let avgPriceOthers = null;
-    let supplierCountAll = 0;
-    let supplierCountOthers = 0;
-    let minPrice = null;
-    let maxPrice = null;
+    // Canonical MRP for this catalog variant (same for every supplier).
+    let canonicalMrp = null;
+    let supplierCountWithMrp = 0;
     if (product?.id) {
-      const { data: supplierOffers, error: offersError } = await supabase
-        .from('supplier_products')
-        .select('price, supplier_id, status, is_active, variant_key')
-        .eq('product_id', product.id)
-        .neq('status', 'rejected');
-
-      if (offersError) {
-        console.error('Recommended price lookup error:', offersError);
+      if (variantKey) {
+        canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
+          productId: product.id,
+          variantKey
+        });
+        supplierCountWithMrp = canonicalMrp !== null ? 1 : 0;
       } else {
-        const offers = (supplierOffers || [])
-          .filter((o) => String(o?.status || '').toLowerCase() === 'approved' && o?.is_active === true)
-          .map(o => ({
-            price: typeof o.price === 'string' ? parseFloat(o.price) : Number(o.price),
-            supplier_id: o.supplier_id
-          }))
-          .filter(o => Number.isFinite(o.price) && o.price >= 0);
+        const { data: supplierOffers, error: offersError } = await supabase
+          .from('supplier_products')
+          .select('price, variant_key, status')
+          .eq('product_id', product.id)
+          .neq('status', 'rejected')
+          .not('price', 'is', null)
+          .gt('price', 0);
 
-        supplierCountAll = offers.length;
-        if (supplierCountAll > 0) {
-          const sumAll = offers.reduce((sum, o) => sum + o.price, 0);
-          avgPriceAll = sumAll / supplierCountAll;
-          minPrice = Math.min(...offers.map(o => o.price));
-          maxPrice = Math.max(...offers.map(o => o.price));
-
-          const otherOffers = offers.filter(o => o.supplier_id !== req.userId);
-          supplierCountOthers = otherOffers.length;
-          if (supplierCountOthers > 0) {
-            const sumOthers = otherOffers.reduce((sum, o) => sum + o.price, 0);
-            avgPriceOthers = sumOthers / supplierCountOthers;
+        if (offersError) {
+          console.error('Canonical MRP lookup error:', offersError);
+        } else {
+          const variantKeys = [
+            ...new Set(
+              (supplierOffers || [])
+                .map((row) => String(row?.variant_key || '').trim())
+                .filter(Boolean)
+            )
+          ];
+          if (variantKeys.length === 1) {
+            canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
+              productId: product.id,
+              variantKey: variantKeys[0]
+            });
+            supplierCountWithMrp = (supplierOffers || []).length;
           }
-
-          recommendedPrice = supplierCountOthers > 0 ? avgPriceOthers : avgPriceAll;
         }
       }
     }
+
+    const recommendedPrice = canonicalMrp;
 
     return res.json({
       status: 'success',
@@ -390,15 +390,12 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       unit: product?.unit || null,
       specifications: mergedSpecifications
       ,
-      // Price recommendation (average across suppliers for this product)
-      recommendedPrice: recommendedPrice,
+      canonicalMrp,
+      recommendedPrice,
+      variantMrpLocked: canonicalMrp !== null,
       priceStats: {
-        avgPriceAll,
-        avgPriceOthers,
-        supplierCountAll,
-        supplierCountOthers,
-        minPrice,
-        maxPrice
+        canonicalMrp,
+        supplierCountWithMrp
       }
     });
   } catch (error) {

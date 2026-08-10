@@ -15,6 +15,7 @@ import { syncOfferAttributesWithSpecifications } from '../../services/productIde
 import { buildProductIdentification, firstNonEmpty } from '../../services/procurementSharedService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
 import { buildAdminPublishedDescriptionAttributes } from '../../utils/supplierProductDescriptions.js';
+import { propagateVariantMrpToAllOffers } from '../../services/variantMrpService.js';
 
 function scoreSupplierOfferRow(row) {
   const rowStatus = row.status;
@@ -842,7 +843,7 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
         const { data: allOfferRows } = await supabase
           .from('supplier_products')
           .select(
-            'id, product_id, supplier_id, price, stock, min_order_quantity, location, status, is_active, attributes, igst_rate, cgst_rate, sgst_rate'
+            'id, product_id, supplier_id, price, stock, min_order_quantity, location, status, is_active, attributes, igst_rate, cgst_rate, sgst_rate, variant_key'
           )
           .eq('product_id', req.params.id);
 
@@ -882,7 +883,23 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
         spUpdateResult = rowsForAttributeSync;
 
         if (hasInventoryPatch && targetOfferRow?.id) {
-          await supabase.from('supplier_products').update(inventoryPatch).eq('id', targetOfferRow.id);
+          if (updateData.price !== undefined && targetOfferRow.variant_key) {
+            await propagateVariantMrpToAllOffers(supabase, {
+              productId: req.params.id,
+              variantKey: targetOfferRow.variant_key,
+              mrp: updateData.price
+            });
+            const patchWithoutPrice = { ...inventoryPatch };
+            delete patchWithoutPrice.price;
+            if (Object.keys(patchWithoutPrice).length > 1) {
+              await supabase
+                .from('supplier_products')
+                .update(patchWithoutPrice)
+                .eq('id', targetOfferRow.id);
+            }
+          } else {
+            await supabase.from('supplier_products').update(inventoryPatch).eq('id', targetOfferRow.id);
+          }
         }
 
         if (spUpdateResult && spUpdateResult.length > 0) {

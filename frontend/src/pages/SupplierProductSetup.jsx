@@ -14,9 +14,9 @@ import {
   SUPPLIER_CURRENT_STOCK_LABEL,
   SUPPLIER_MRP_FIELD_LABEL,
   SUPPLIER_MRP_INCLUSIVE_HINT,
-  SUPPLIER_MRP_LABEL
+  formatVariantMrpFixedMessage,
+  parseSupplierOfferPrice
 } from '../utils/supplierStockLabel';
-import { formatRupee } from '../utils/formatRupee';
 import RupeeInput from '../components/RupeeInput';
 import BrandSelect from '../components/BrandSelect';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
@@ -53,7 +53,7 @@ const SupplierProductSetup = ({ user }) => {
   const [error, setError] = useState('');
   const [locations, setLocations] = useState([]);
   const [recommendedPrice, setRecommendedPrice] = useState(null);
-  const [recommendedPriceStats, setRecommendedPriceStats] = useState(null);
+  const [variantMrpLocked, setVariantMrpLocked] = useState(false);
   const [priceTouched, setPriceTouched] = useState(false);
   const [specifications, setSpecifications] = useState({});
   const [hasAdminSpecTemplate, setHasAdminSpecTemplate] = useState(false);
@@ -129,6 +129,7 @@ const SupplierProductSetup = ({ user }) => {
 
   const handleChange = (e) => {
     if (e.target?.name === 'price') {
+      if (variantMrpLocked) return;
       setPriceTouched(true);
     }
     if (e.target?.name === 'igst_rate') {
@@ -270,19 +271,26 @@ const SupplierProductSetup = ({ user }) => {
           );
         }
         if (data.status === 'success' && data.found) {
-          setRecommendedPrice(
-            typeof data.recommendedPrice === 'number' ? data.recommendedPrice : null
-          );
-          setRecommendedPriceStats(data.priceStats || null);
-          if (!priceTouched && (formData.price === '' || formData.price === null || formData.price === undefined)) {
-            // Prefill price only if supplier hasn't typed it yet
-            if (typeof data.recommendedPrice === 'number' && Number.isFinite(data.recommendedPrice)) {
-              setFormData(prev => ({ ...prev, price: String(Number(data.recommendedPrice).toFixed(2)) }));
+          const canonicalMrpFromLookup =
+            typeof data.canonicalMrp === 'number'
+              ? data.canonicalMrp
+              : typeof data.recommendedPrice === 'number'
+                ? data.recommendedPrice
+                : null;
+          setRecommendedPrice(canonicalMrpFromLookup);
+          setVariantMrpLocked(Boolean(data.variantMrpLocked) || canonicalMrpFromLookup != null);
+          if (!priceTouched) {
+            const currentPrice = parseSupplierOfferPrice(formData.price);
+            if ((currentPrice === null || currentPrice <= 0) && canonicalMrpFromLookup != null) {
+              setFormData((prev) => ({
+                ...prev,
+                price: String(Number(canonicalMrpFromLookup).toFixed(2))
+              }));
             }
           }
         } else {
           setRecommendedPrice(null);
-          setRecommendedPriceStats(null);
+          setVariantMrpLocked(false);
         }
       } catch (e) {
         // silent
@@ -633,21 +641,18 @@ const SupplierProductSetup = ({ user }) => {
                 placeholder="0.00"
                 min="0"
                 step="0.01"
+                disabled={variantMrpLocked}
                 required
               />
-              <p className="form-hint" style={{ marginTop: '0.35rem', fontSize: '0.82rem', color: '#64748b' }}>
-                {SUPPLIER_MRP_INCLUSIVE_HINT}
-              </p>
-                {typeof recommendedPrice === 'number' && Number.isFinite(recommendedPrice) && (
-                  <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: '#0369a1' }}>
-                    Recommended avg {SUPPLIER_MRP_LABEL}: <strong>{formatRupee(recommendedPrice, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
-                    {recommendedPriceStats?.supplierCountOthers > 0 && (
-                      <span style={{ color: '#64748b' }}>
-                        {' '}({recommendedPriceStats.supplierCountOthers} other supplier{recommendedPriceStats.supplierCountOthers > 1 ? 's' : ''})
-                      </span>
-                    )}
-                  </div>
-                )}
+              {variantMrpLocked ? (
+                <p className="form-hint" style={{ marginTop: '0.35rem', fontSize: '0.82rem', color: '#64748b' }}>
+                  {formatVariantMrpFixedMessage(recommendedPrice)}
+                </p>
+              ) : (
+                <p className="form-hint" style={{ marginTop: '0.35rem', fontSize: '0.82rem', color: '#64748b' }}>
+                  {SUPPLIER_MRP_INCLUSIVE_HINT}
+                </p>
+              )}
             </div>
 
             <div className="form-group">

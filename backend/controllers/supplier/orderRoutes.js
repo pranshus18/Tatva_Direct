@@ -399,6 +399,20 @@ router.patch('/returns/:id/status', authenticateToken, async (req, res) => {
     }
 
     if (existing.status === status) {
+      // Idempotent restock for already-closed returns that may have missed inventory sync.
+      if (status === 'closed') {
+        try {
+          const restock = await applyRestockForClosedReturn(existing, req.userId);
+          return res.json({ status: 'success', returnRequest: existing, inventory: restock });
+        } catch (restockErr) {
+          console.error('[Supplier Returns] closed restock retry failed:', restockErr);
+          return res.status(500).json({
+            status: 'error',
+            message: 'Return is already closed, but inventory could not be restocked. Please try again.',
+            inventory: { ok: false, error: String(restockErr?.message || restockErr) }
+          });
+        }
+      }
       return res.json({ status: 'success', returnRequest: existing });
     }
 
@@ -442,38 +456,36 @@ router.patch('/returns/:id/status', authenticateToken, async (req, res) => {
       return res.status(500).json({ status: 'error', message: 'Failed to update return status' });
     }
 
-    // For upstream chain orders (supplier buyer -> supplier seller), restock immediately on close.
-    // For non-supplier buyers, keep acknowledgement-driven flow from buyer portal.
-    let buyerIsSupplier = false;
+    // Restock seller inventory as soon as the return is closed (retail + upstream).
+    // applyRestockForClosedReturn is idempotent, so buyer acknowledge-closure can safely retry.
+    let restockResult = null;
     if (closingNow) {
       try {
-        const { data: buyerUser } = await supabase
-          .from('users')
-          .select('id, user_type')
-          .eq('id', existing.service_provider_id)
-          .maybeSingle();
-        buyerIsSupplier = String(buyerUser?.user_type || '').toLowerCase() === 'supplier';
-
-        if (buyerIsSupplier) {
-          const restock = await applyRestockForClosedReturn(updated, req.userId);
-          if (restock.ok && !restock.skipped && !restock.already) {
-            console.log('[Supplier Returns] upstream return restocked on close', {
-              returnId: existing.id,
-              qtyToAdd: restock.qtyToAdd
-            });
-          }
+        restockResult = await applyRestockForClosedReturn(updated, req.userId);
+        if (restockResult.ok && !restockResult.skipped && !restockResult.already) {
+          console.log('[Supplier Returns] return restocked on close', {
+            returnId: existing.id,
+            qtyToAdd: restockResult.qtyToAdd
+          });
+        } else if (restockResult && restockResult.ok === false) {
+          console.error('[Supplier Returns] auto-restock on close did not apply', {
+            returnId: existing.id,
+            reason: restockResult.reason
+          });
         }
       } catch (restockErr) {
-        console.error('[Supplier Returns] upstream auto-restock failed:', restockErr);
+        console.error('[Supplier Returns] auto-restock on close failed:', restockErr);
+        restockResult = {
+          ok: false,
+          error: String(restockErr?.message || restockErr)
+        };
       }
     }
 
     // Notify service provider
     try {
       const message = closingNow
-        ? buyerIsSupplier
-          ? `Your return request for order ${existing.order_id} is now ${status}. Inventory has been finalized automatically for this upstream return.`
-          : `Your return request for order ${existing.order_id} is now ${status}. Please confirm return completion under My Returns so inventory can be finalized.`
+        ? `Your return request for order ${existing.order_id} is now ${status}. Inventory has been restored to the supplier automatically.`
         : `Your return request for order ${existing.order_id} is now ${status}.`;
       await insertNotification({
         user_id: existing.service_provider_id,
@@ -488,7 +500,11 @@ router.patch('/returns/:id/status', authenticateToken, async (req, res) => {
       console.error('[Supplier Returns] notification error:', notifErr);
     }
 
-    return res.json({ status: 'success', returnRequest: updated });
+    return res.json({
+      status: 'success',
+      returnRequest: updated,
+      ...(closingNow ? { inventory: restockResult } : {})
+    });
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });

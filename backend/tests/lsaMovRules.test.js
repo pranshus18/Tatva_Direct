@@ -1,10 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { crossedInventoryBelowMov, crossedLsaThreshold } from '../services/lowInventoryMovAlertService.js';
+import {
+  crossedInventoryBelowMov,
+  crossedLsaThreshold,
+  isStockAtOrBelowLsa,
+  parseLsaThreshold
+} from '../services/lowInventoryMovAlertService.js';
 import {
   getMaxMinimumOrderValueInrForSupplierProfile,
   getMinimumOrderValueInrForSellerRole
 } from '../utils/supplierProfile.js';
+
+test('parseLsaThreshold accepts positive whole units only', () => {
+  assert.equal(parseLsaThreshold('12'), 12);
+  assert.equal(parseLsaThreshold(8), 8);
+  assert.equal(parseLsaThreshold('0'), null);
+  assert.equal(parseLsaThreshold(''), null);
+  assert.equal(parseLsaThreshold('abc'), null);
+  assert.equal(parseLsaThreshold(null), null);
+});
+
+test('isStockAtOrBelowLsa uses each variant LSA (no hardcoded threshold)', () => {
+  assert.equal(isStockAtOrBelowLsa({ stock: 8, lsa: 10 }), true);
+  assert.equal(isStockAtOrBelowLsa({ stock: 8, lsa: 5 }), false);
+  assert.equal(isStockAtOrBelowLsa({ stock: 5, lsa: 5 }), true);
+  assert.equal(isStockAtOrBelowLsa({ stock: 0, lsa: 3 }), true);
+  assert.equal(isStockAtOrBelowLsa({ stock: 0, lsa: null }), false);
+  assert.equal(isStockAtOrBelowLsa({ stock: 2, lsa: '' }), false);
+});
 
 test('crossedLsaThreshold triggers only on above-to-below/equal crossing', () => {
   assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 10, lsaThreshold: 10 }), true);

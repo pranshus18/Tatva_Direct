@@ -34,6 +34,11 @@ import {
 } from '../../../services/supplierProductWriteService.js';
 import { resolveCatalogBaselineSpecifications } from '../../../services/supplierCatalogHelpersService.js';
 import { syncOfferAttributesWithSpecifications } from '../../../services/productIdentityService.js';
+import {
+  fetchCanonicalVariantMrp,
+  validateSupplierVariantMrpConsistency,
+  formatVariantMrpMismatchMessage
+} from '../../../services/variantMrpService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import {
   MIN_SUPPLIER_PRODUCT_PHOTOS,
@@ -332,6 +337,29 @@ export function buildSupplierProductCreateHandler(ctx) {
       const parsedPrice = parseFloat(otherData.price);
       const parsedStock = parseSupplierStockQuantity(otherData.stock);
       const parsedMinOrderQty = parseInt(otherData.min_order_quantity);
+
+      if (otherData.price !== undefined && variantIdentityBundle.variantKey) {
+        const canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
+          productId,
+          variantKey: variantIdentityBundle.variantKey
+        });
+        const variantMrpValidation = validateSupplierVariantMrpConsistency({
+          body: { price: otherData.price },
+          canonicalMrp
+        });
+        if (!variantMrpValidation.ok) {
+          return res.status(403).json({
+            status: 'error',
+            code: variantMrpValidation.code || 'variant_mrp_mismatch',
+            message:
+              variantMrpValidation.message ||
+              formatVariantMrpMismatchMessage(variantMrpValidation.canonicalMrp),
+            missingFields: variantMrpValidation.missingFields || ['price'],
+            canonicalMrp: variantMrpValidation.canonicalMrp
+          });
+        }
+      }
+
       const { data: approvedVariantOffer } = await supabase
         .from('supplier_products')
         .select('id')
