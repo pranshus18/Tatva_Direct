@@ -2010,6 +2010,9 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
 
     const mineSupplierProductId = String(req.body?.mineSupplierProductId || '').trim();
     const requestedQuantity = parseSupplierStockQuantity(req.body?.quantity);
+    const replaceQuantity =
+      req.body?.replaceQuantity === true ||
+      String(req.body?.mode || '').trim().toLowerCase() === 'set';
     const targetProjectId = String(req.body?.projectId || '').trim();
     const requestedCartName = String(req.body?.cartName || '').trim();
     const rawRequiredDate = String(req.body?.requiredDate || '').trim();
@@ -2023,13 +2026,13 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         message: 'quantity must be a valid whole number (1 or greater)'
       });
     }
-    if (!targetProjectId && !requestedCartName) {
+    if (!targetProjectId && !requestedCartName && !replaceQuantity) {
       return res.status(400).json({
         status: 'error',
         message: 'cartName is required when creating a new project'
       });
     }
-    if (!targetProjectId && !requiredDate) {
+    if (!targetProjectId && !requiredDate && !replaceQuantity) {
       return res.status(400).json({
         status: 'error',
         message: 'requiredDate is required when creating a new project'
@@ -2120,8 +2123,35 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
     const currentProjects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
     let updatedProject = null;
     let nextProjects = currentProjects;
-    if (targetProjectId) {
-      const idx = currentProjects.findIndex((project) => String(project?.projectId || '') === targetProjectId);
+
+    const findProjectIndexForMine = (mineId) =>
+      currentProjects.findIndex((project) => {
+        const existing = buildUpstreamProject(project);
+        const items = Array.isArray(existing.items)
+          ? existing.items
+          : buildUpstreamItemsFromSelectedMine(existing.selectedMine || {});
+        return items.some(
+          (item) =>
+            String(item?.mineSupplierProductId || item?.mineId || '').trim() === mineId
+        );
+      });
+
+    let resolvedProjectId = targetProjectId;
+    if (!resolvedProjectId && replaceQuantity) {
+      const idx = findProjectIndexForMine(mineSupplierProductId);
+      if (idx < 0) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'This product is not in your upstream cart yet. Add it to a project first.'
+        });
+      }
+      resolvedProjectId = String(currentProjects[idx]?.projectId || '').trim();
+    }
+
+    if (resolvedProjectId) {
+      const idx = currentProjects.findIndex(
+        (project) => String(project?.projectId || '') === resolvedProjectId
+      );
       if (idx < 0) {
         return res.status(404).json({ status: 'error', message: 'Selected project not found' });
       }
@@ -2129,7 +2159,9 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       const existingItems = Array.isArray(existing.items)
         ? existing.items
         : buildUpstreamItemsFromSelectedMine(existing.selectedMine || {});
-      const nextItems = mergeOrAppendUpstreamCartItem(existingItems, newCartItem);
+      const nextItems = mergeOrAppendUpstreamCartItem(existingItems, newCartItem, {
+        replaceQuantity
+      });
       updatedProject = applyShippingToUpstreamProject(
         finalizeUpstreamProjectLines(
           {
@@ -2203,13 +2235,16 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
     return res.json({
       status: 'success',
       message: quantityAdjusted
-        ? `Item added. Quantity adjusted to minimum order quantity (${quantity}).`
-        : 'Item added to upstream cart',
+        ? `Quantity adjusted to minimum order quantity (${quantity}).`
+        : replaceQuantity
+          ? 'Cart quantity updated'
+          : 'Item added to upstream cart',
       item: {
         mineSupplierProductId,
         quantity,
         requestedQuantity,
-        quantityAdjusted
+        quantityAdjusted,
+        replaced: replaceQuantity
       },
       project: {
         projectId: updatedProject.projectId,

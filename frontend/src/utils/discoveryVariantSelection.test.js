@@ -13,14 +13,18 @@ describe('discoveryVariantSelection', () => {
     {
       productId: 'prod-1',
       variantAsin: 'TS1B1H',
+      variantKey: 'silver-1000',
       supplierProductId: 'offer-1',
+      name: 'Steel Taurus 1L',
       price: 100,
       specifications: { height: '1 l', 'leak-proof': 'no' }
     },
     {
       productId: 'prod-1',
       variantAsin: 'TS1B2N',
+      variantKey: 'silver-600',
       supplierProductId: 'offer-2',
+      name: 'Steel Taurus 600',
       price: 150,
       specifications: { height: '8 inch', 'leak-proof': 'yes' }
     }
@@ -41,12 +45,39 @@ describe('discoveryVariantSelection', () => {
     expect(active?.variantAsin).toBe('TS1B2N');
   });
 
-  it('resolves viewer listing by mine id or variant identity', () => {
+  it('prefers the URL variant token over a loose mine productId fallback', () => {
+    // Shared catalog id + listing without variant identity used to pick variants[0].
+    const active = resolveActiveDiscoveryVariant({
+      variants,
+      selectedVariantKey: '',
+      optionSelections: {},
+      urlVariantToken: 'silver-600',
+      mineSupplierProductId: 'mine-loose',
+      viewerListings: [{ id: 'mine-loose', productId: 'prod-1', price: 5200 }]
+    });
+    expect(active?.variantKey).toBe('silver-600');
+    expect(active?.name).toBe('Steel Taurus 600');
+  });
+
+  it('does not guess among multiple variants when mine listing has no variant identity', () => {
+    const active = resolveActiveDiscoveryVariant({
+      variants,
+      selectedVariantKey: '',
+      optionSelections: {},
+      urlVariantToken: '',
+      mineSupplierProductId: 'mine-loose',
+      viewerListings: [{ id: 'mine-loose', productId: 'prod-1', price: 5200 }]
+    });
+    // Falls through to first variant only as last resort (no safe mine match).
+    expect(active?.variantAsin).toBe('TS1B1H');
+  });
+
+  it('resolves viewer listing by variant identity before mine id', () => {
     const listings = [
       { id: 'mine-1', productId: 'prod-1', variantAsin: 'TS1B1H', price: 4500 },
       { id: 'mine-2', productId: 'prod-1', variantAsin: 'TS1B2N', price: 5200 }
     ];
-    expect(resolveViewerListingForVariant(listings, variants[1], 'mine-2')?.price).toBe(5200);
+    expect(resolveViewerListingForVariant(listings, variants[1], 'mine-1')?.price).toBe(5200);
     expect(resolveViewerListingForVariant(listings, variants[0], '')?.price).toBe(4500);
   });
 

@@ -37,6 +37,7 @@ import {
   variantSelectionKey
 } from '../utils/discoveryVariantSelection';
 import { resolveDiscoveryProductDescription } from '../utils/productDisplay';
+import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import {
   buildUpstreamSourcingUrl,
   returnToDiscovery,
@@ -44,6 +45,7 @@ import {
 } from '../utils/discoveryNavigation';
 import './ProductDiscoveryDetail.css';
 import './ProductDiscovery.css';
+import './SupplierUpstream.css';
 
 function formatPrice(price, unit) {
   const num = Number(price);
@@ -252,6 +254,9 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [cartAdded, setCartAdded] = useState(false);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [procurementQty, setProcurementQty] = useState(1);
+  const [upstreamCartBusy, setUpstreamCartBusy] = useState(false);
+  const [upstreamCartQty, setUpstreamCartQty] = useState(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -409,11 +414,96 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const displayStock = isUpstreamPortal
     ? viewerListing?.stock ?? activeListing?.stock
     : activeListing?.stock;
+  const upstreamMineId = useMemo(() => {
+    if (!isUpstreamPortal) return '';
+    return String(
+      viewerListing?.id ||
+        activeListing?.supplierProductId ||
+        mineSupplierProductId ||
+        ''
+    ).trim();
+  }, [
+    isUpstreamPortal,
+    viewerListing?.id,
+    activeListing?.supplierProductId,
+    mineSupplierProductId
+  ]);
+  const upstreamMinQty = Math.max(
+    1,
+    Number(activeListing?.min_order_quantity ?? viewerListing?.min_order_quantity ?? 1) || 1
+  );
+
+  useEffect(() => {
+    if (!isUpstreamPortal) return;
+    setProcurementQty((prev) => {
+      const parsed = parseSupplierStockQuantity(prev);
+      if (parsed != null && parsed >= upstreamMinQty) return parsed;
+      return upstreamMinQty;
+    });
+  }, [isUpstreamPortal, upstreamMinQty, upstreamMineId]);
+
+  useEffect(() => {
+    if (!isUpstreamPortal || !upstreamMineId) {
+      setUpstreamCartQty(null);
+      return undefined;
+    }
+    let cancelled = false;
+    const loadCartQty = async () => {
+      try {
+        const token = localStorage.getItem('token');
+        if (!token) return;
+        const response = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const data = await response.json();
+        if (!response.ok || data.status !== 'success' || cancelled) return;
+        const projects = Array.isArray(data?.cart?.draft?.projects) ? data.cart.draft.projects : [];
+        let found = null;
+        for (const project of projects) {
+          const items = Array.isArray(project?.items) ? project.items : [];
+          for (const item of items) {
+            const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+            if (mineId === upstreamMineId) {
+              found = parseSupplierStockQuantity(item?.quantity);
+              break;
+            }
+          }
+          if (found != null) break;
+          const selected = project?.selectedMine && typeof project.selectedMine === 'object'
+            ? project.selectedMine
+            : {};
+          if (selected[upstreamMineId] != null) {
+            found = parseSupplierStockQuantity(selected[upstreamMineId]);
+            break;
+          }
+        }
+        if (!cancelled) {
+          setUpstreamCartQty(found != null && found > 0 ? found : null);
+          if (found != null && found > 0) {
+            setProcurementQty(Math.max(upstreamMinQty, found));
+          }
+        }
+      } catch {
+        if (!cancelled) setUpstreamCartQty(null);
+      }
+    };
+    loadCartQty();
+    return () => {
+      cancelled = true;
+    };
+  }, [isUpstreamPortal, upstreamMineId, upstreamMinQty]);
+
   const displaySpecifications = useMemo(
     () => resolveVariantDisplaySpecifications(activeListing),
     [activeListing, selectedVariantKey]
   );
-  const displayProductName = activeListing?.name || productSummary.name || 'Product';
+  // Active variant first; upstream viewer listing name is a fallback when the offer row
+  // carries a display name and the catalog variant record does not.
+  const displayProductName =
+    activeListing?.name ||
+    (isUpstreamPortal ? viewerListing?.name : null) ||
+    productSummary.name ||
+    'Product';
   const images = getProductImageList(activeListing || productSummary);
   const safeImageIndex = images.length ? Math.min(activeImageIndex, images.length - 1) : 0;
   const productDescription = resolveDiscoveryProductDescription(productSummary, activeListing);
@@ -455,16 +545,71 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     returnToDiscovery({ navigate, searchParams });
   };
 
-  const openAddToCart = () => {
-    // Upstream sourcing keeps quantity, project and upstream-seller selection on the sourcing
-    // page, so the detail page hands the supplier back to that flow for this listing.
+  const openAddToCart = async () => {
+    // Upstream: set/update procurement qty here, then continue sourcing with that qty —
+    // do not force users back to the catalog grid just to change quantity.
     if (isUpstreamPortal) {
-      const offerId =
-        viewerListing?.id ||
-        activeListing?.supplierProductId ||
-        mineSupplierProductId ||
-        '';
-      navigate(buildUpstreamSourcingUrl({ addSupplierProductId: offerId }));
+      const offerId = upstreamMineId;
+      if (!offerId) {
+        setError('This listing could not be linked for upstream sourcing.');
+        return;
+      }
+      const nextQty = Math.max(
+        upstreamMinQty,
+        parseSupplierStockQuantity(procurementQty) ?? upstreamMinQty
+      );
+
+      // If the listing is already in cart, update quantity in place without leaving this page.
+      if (upstreamCartQty != null) {
+        const token = localStorage.getItem('token');
+        if (!token) {
+          setError('Please log in again to update cart quantity.');
+          return;
+        }
+        setUpstreamCartBusy(true);
+        setError('');
+        try {
+          const response = await fetch(getApiUrl('/api/supplier/upstream/cart/items'), {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              mineSupplierProductId: offerId,
+              quantity: nextQty,
+              replaceQuantity: true,
+              ...(activeListing?.variantKey ? { variantKey: String(activeListing.variantKey) } : {}),
+              ...(activeListing?.variantAsin
+                ? { variantAsin: String(activeListing.variantAsin) }
+                : {}),
+              ...(displayProductName ? { variantLabel: String(displayProductName) } : {})
+            })
+          });
+          const data = await response.json();
+          if (!response.ok || data.status !== 'success') {
+            throw new Error(data?.message || 'Failed to update cart quantity.');
+          }
+          const savedQty = parseSupplierStockQuantity(data?.item?.quantity) ?? nextQty;
+          setUpstreamCartQty(savedQty);
+          setProcurementQty(savedQty);
+          setCartAdded(true);
+          window.setTimeout(() => setCartAdded(false), 1400);
+          window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
+        } catch (updateError) {
+          setError(updateError?.message || 'Failed to update cart quantity.');
+        } finally {
+          setUpstreamCartBusy(false);
+        }
+        return;
+      }
+
+      navigate(
+        buildUpstreamSourcingUrl({
+          addSupplierProductId: offerId,
+          quantity: nextQty
+        })
+      );
       return;
     }
     if (!activeListing) {
@@ -524,6 +669,51 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         {inStock ? `${displayStock} in stock` : 'Product is out of stock'}
       </div>
 
+      {isUpstreamPortal ? (
+        <div className="pdd-buybox__qty">
+          <span className="pdd-buybox__qty-label">Procurement quantity</span>
+          <div className="pdd-buybox__qty-control">
+            <button
+              type="button"
+              className="pdd-buybox__qty-btn"
+              onClick={() =>
+                setProcurementQty((prev) =>
+                  Math.max(upstreamMinQty, (parseSupplierStockQuantity(prev) ?? upstreamMinQty) - 1)
+                )
+              }
+              disabled={
+                upstreamCartBusy ||
+                (parseSupplierStockQuantity(procurementQty) ?? upstreamMinQty) <= upstreamMinQty
+              }
+              aria-label="Decrease procurement quantity"
+            >
+              −
+            </button>
+            <span className="pdd-buybox__qty-value">
+              {parseSupplierStockQuantity(procurementQty) ?? upstreamMinQty}
+            </span>
+            <button
+              type="button"
+              className="pdd-buybox__qty-btn"
+              onClick={() =>
+                setProcurementQty((prev) =>
+                  Math.max(upstreamMinQty, (parseSupplierStockQuantity(prev) ?? upstreamMinQty) + 1)
+                )
+              }
+              disabled={upstreamCartBusy}
+              aria-label="Increase procurement quantity"
+            >
+              +
+            </button>
+          </div>
+          {upstreamCartQty != null ? (
+            <p className="pdd-buybox__qty-hint">In cart: {upstreamCartQty}. Change qty here, then Update Cart.</p>
+          ) : (
+            <p className="pdd-buybox__qty-hint">Set qty here, then continue sourcing — no need to revisit the catalog grid.</p>
+          )}
+        </div>
+      ) : null}
+
       <dl className="pdd-buybox__facts">
         {displayUnit ? (
           <div className="pdd-buybox__fact">
@@ -556,15 +746,28 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         size="lg"
         onClick={openAddToCart}
         disabled={
-          !isUpstreamPortal &&
-          (!inStock || (!activeListing.canAddToCart && !productSummary.canAddToCart))
+          upstreamCartBusy ||
+          (!isUpstreamPortal &&
+            (!inStock || (!activeListing.canAddToCart && !productSummary.canAddToCart)))
         }
         title={!isUpstreamPortal && !inStock ? 'Product is out of stock' : undefined}
       >
         {isUpstreamPortal ? (
-          <>
-            <ShoppingCart className="mr-2 h-4 w-4" /> Source upstream
-          </>
+          upstreamCartBusy ? (
+            <>Updating…</>
+          ) : cartAdded && upstreamCartQty != null ? (
+            <>
+              <Check className="mr-2 h-4 w-4" /> Cart updated
+            </>
+          ) : upstreamCartQty != null ? (
+            <>
+              <ShoppingCart className="mr-2 h-4 w-4" /> Update Cart
+            </>
+          ) : (
+            <>
+              <ShoppingCart className="mr-2 h-4 w-4" /> Continue sourcing
+            </>
+          )
         ) : cartAdded ? (
           <>
             <Check className="mr-2 h-4 w-4" /> Added to cart
@@ -580,7 +783,9 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
 
       <p className="pdd-buybox__note">
         {isUpstreamPortal
-          ? 'Upstream sellers, quantities and projects are chosen on the Upstream Sourcing page.'
+          ? upstreamCartQty != null
+            ? 'Quantity updates apply to your upstream cart from this page.'
+            : 'Choose quantity here, then continue to Upstream Sourcing to pick sellers and projects.'
           : 'Prices and stock reflect eligible supplier listings for your supply chain.'}
       </p>
     </aside>

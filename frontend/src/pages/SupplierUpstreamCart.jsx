@@ -304,7 +304,7 @@ const SupplierUpstreamCart = () => {
     }
   };
 
-  const updateQuantity = async (projectId, mineId, nextQty) => {
+  const updateQuantity = (projectId, mineId, nextQty) => {
     const key = normalizeSupplierProductKey(mineId);
     const parsed = parseSupplierStockQuantity(nextQty);
     if (parsed === null || parsed < 1) return;
@@ -313,6 +313,7 @@ const SupplierUpstreamCart = () => {
     const quantity = Math.max(minQty, parsed);
     const project = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
     if (!project) return;
+    // Draft-only — persist when the user clicks Update Cart.
     const nextProject = {
       ...project,
       selectedMine: {
@@ -325,11 +326,19 @@ const SupplierUpstreamCart = () => {
               ? { ...item, quantity }
               : item
           )
-        : project.items
+        : project.items,
+      _qtyDirty: true
     };
-    const ok = await persistProject(nextProject, { silent: true });
+    replaceProjectInState(projectId, nextProject);
+  };
+
+  const handleUpdateCartProject = async (projectId) => {
+    const project = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
+    if (!project) return;
+    const { _qtyDirty, ...persistable } = project;
+    const ok = await persistProject(persistable);
     if (ok) {
-      replaceProjectInState(projectId, nextProject);
+      replaceProjectInState(projectId, { ...persistable, _qtyDirty: false });
       emitSupplierCartUpdated();
     }
   };
@@ -389,7 +398,15 @@ const SupplierUpstreamCart = () => {
     }
   };
 
-  const continueToUpstream = (project) => {
+  const continueToUpstream = async (project) => {
+    if (project?._qtyDirty) {
+      const projectId = String(project?.projectId || '').trim();
+      const { _qtyDirty, ...persistable } = project;
+      const ok = await persistProject(persistable);
+      if (!ok) return;
+      replaceProjectInState(projectId, { ...persistable, _qtyDirty: false });
+      emitSupplierCartUpdated();
+    }
     clearCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY);
     localStorage.setItem(
       SUPPLIER_UPSTREAM_CART_RESUME_KEY,
@@ -988,9 +1005,21 @@ const SupplierUpstreamCart = () => {
                           </p>
                         ) : null}
                       </div>
-                      <button className="btn-primary" disabled={rows.length === 0} onClick={() => continueToUpstream(project)}>
-                        Continue this project
-                      </button>
+                      <div className="supplier-project-head-actions">
+                        <button className="btn-primary" disabled={rows.length === 0} onClick={() => continueToUpstream(project)}>
+                          Continue this project
+                        </button>
+                        {project?._qtyDirty ? (
+                          <button
+                            type="button"
+                            className="btn-primary"
+                            disabled={saving || rows.length === 0}
+                            onClick={() => handleUpdateCartProject(projectId)}
+                          >
+                            {saving ? 'Updating…' : 'Update Cart'}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
 
                     <div className="supplier-table-wrap">
@@ -1060,6 +1089,11 @@ const SupplierUpstreamCart = () => {
                                       +
                                     </button>
                                   </div>
+                                  {project?._qtyDirty ? (
+                                    <div className="supplier-cart-qty-dirty-hint">
+                                      Click Update Cart to sync
+                                    </div>
+                                  ) : null}
                                 </td>
                                 <td className="supplier-cart-number-cell">{formatRupee(unitPrice * Number(row.quantity || 0))}</td>
                               </tr>

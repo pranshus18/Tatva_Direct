@@ -403,27 +403,40 @@ function buildViewerListingSnapshot(row, productById) {
 export function resolveViewerListingForVariant(viewerListings = [], variant = null, mineSupplierProductId = '') {
   const listings = Array.isArray(viewerListings) ? viewerListings : [];
   const mineId = String(mineSupplierProductId || '').trim();
+
+  const listingMatchesVariant = (listing) => {
+    if (!listing || !variant) return false;
+    const variantAsin = String(variant?.variantAsin || '').trim();
+    const variantKey = String(variant?.variantKey || '').trim();
+    const listingAsin = String(listing?.variantAsin || '').trim();
+    const listingKey = String(listing?.variantKey || '').trim();
+    if (variantAsin && listingAsin && listingAsin === variantAsin) return true;
+    if (variantKey && listingKey && listingKey === variantKey) return true;
+    return false;
+  };
+
+  // Prefer identity match for the active variant so price/stock track the selected chip.
+  if (variant) {
+    const byVariant = listings.find((listing) => listingMatchesVariant(listing));
+    if (byVariant) return byVariant;
+  }
+
   if (mineId) {
     const byMine = listings.find((listing) => String(listing?.id || '') === mineId);
     if (byMine) return byMine;
   }
+
   if (!variant) return null;
 
   const variantAsin = String(variant?.variantAsin || '').trim();
   const variantKey = String(variant?.variantKey || '').trim();
   const productId = String(variant?.productId || '').trim();
+  if (variantAsin || variantKey || !productId) return null;
 
-  return (
-    listings.find((listing) => {
-      const listingAsin = String(listing?.variantAsin || '').trim();
-      const listingKey = String(listing?.variantKey || '').trim();
-      const listingProductId = String(listing?.productId || '').trim();
-      if (variantAsin && listingAsin && listingAsin === variantAsin) return true;
-      if (variantKey && listingKey && listingKey === variantKey) return true;
-      if (productId && listingProductId === productId && !variantAsin && !variantKey) return true;
-      return false;
-    }) || null
+  const sameProduct = listings.filter(
+    (listing) => String(listing?.productId || '').trim() === productId
   );
+  return sameProduct.length === 1 ? sameProduct[0] : null;
 }
 
 export async function enrichDiscoverySuggestionsWithVariantCounts(supabase, suggestions = []) {

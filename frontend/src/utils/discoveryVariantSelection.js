@@ -62,11 +62,13 @@ export function variantSelectionKey(variant) {
 export function variantMatchesUrlToken(variant, token) {
   const normalized = String(token || '').trim();
   if (!normalized) return false;
+  // Match only variant / offer identity — never catalog productId alone.
+  // Multiple offer variants often share one products.id; productId matching
+  // would incorrectly return the first sibling every time.
   return (
     String(variant?.variantKey || '') === normalized ||
     String(variant?.variantAsin || '') === normalized ||
-    String(variant?.supplierProductId || '') === normalized ||
-    String(variant?.productId || '') === normalized
+    String(variant?.supplierProductId || '') === normalized
   );
 }
 
@@ -76,30 +78,78 @@ export function variantMatchesMineListing(variant, mineSupplierProductId) {
   return String(variant?.supplierProductId || '') === mineId;
 }
 
+function listingMatchesVariantIdentity(listing, variant) {
+  if (!listing || !variant) return false;
+  const variantAsin = String(variant?.variantAsin || '').trim();
+  const variantKey = String(variant?.variantKey || '').trim();
+  const listingAsin = String(listing?.variantAsin || '').trim();
+  const listingKey = String(listing?.variantKey || '').trim();
+  if (variantAsin && listingAsin && listingAsin === variantAsin) return true;
+  if (variantKey && listingKey && listingKey === variantKey) return true;
+  return false;
+}
+
+function findVariantForMineListing(variants, mineListing) {
+  if (!mineListing || !variants?.length) return null;
+
+  const listingAsin = String(mineListing?.variantAsin || '').trim();
+  const listingKey = String(mineListing?.variantKey || '').trim();
+  const listingProductId = String(mineListing?.productId || '').trim();
+
+  if (listingAsin || listingKey) {
+    return (
+      variants.find((variant) => {
+        const variantAsin = String(variant?.variantAsin || '').trim();
+        const variantKey = String(variant?.variantKey || '').trim();
+        if (listingAsin && variantAsin && listingAsin === variantAsin) return true;
+        if (listingKey && variantKey && listingKey === variantKey) return true;
+        return false;
+      }) || null
+    );
+  }
+
+  // No variant identity on the listing: only safe when exactly one catalog row matches.
+  if (!listingProductId) return null;
+  const sameProduct = variants.filter(
+    (variant) => String(variant?.productId || '').trim() === listingProductId
+  );
+  return sameProduct.length === 1 ? sameProduct[0] : null;
+}
+
 export function resolveViewerListingForVariant(viewerListings = [], variant = null, mineSupplierProductId = '') {
   const listings = Array.isArray(viewerListings) ? viewerListings : [];
   const mineId = String(mineSupplierProductId || '').trim();
+
+  // Prefer a listing that matches the active variant's identity so switching chips
+  // updates price/stock. Fall back to the mine listing used to open the page.
+  if (variant) {
+    const byVariant = listings.find((listing) => listingMatchesVariantIdentity(listing, variant));
+    if (byVariant) return byVariant;
+
+    const mineListing = mineId
+      ? listings.find((listing) => String(listing?.id || '') === mineId)
+      : null;
+    if (mineListing && listingMatchesVariantIdentity(mineListing, variant)) {
+      return mineListing;
+    }
+  }
+
   if (mineId) {
     const byMine = listings.find((listing) => String(listing?.id || '') === mineId);
     if (byMine) return byMine;
   }
+
   if (!variant) return null;
 
+  const productId = String(variant?.productId || '').trim();
   const variantAsin = String(variant?.variantAsin || '').trim();
   const variantKey = String(variant?.variantKey || '').trim();
-  const productId = String(variant?.productId || '').trim();
+  if (variantAsin || variantKey) return null;
 
-  return (
-    listings.find((listing) => {
-      const listingAsin = String(listing?.variantAsin || '').trim();
-      const listingKey = String(listing?.variantKey || '').trim();
-      const listingProductId = String(listing?.productId || '').trim();
-      if (variantAsin && listingAsin && listingAsin === variantAsin) return true;
-      if (variantKey && listingKey && listingKey === variantKey) return true;
-      if (productId && listingProductId === productId && !variantAsin && !variantKey) return true;
-      return false;
-    }) || null
+  const sameProduct = listings.filter(
+    (listing) => String(listing?.productId || '').trim() === productId
   );
+  return sameProduct.length === 1 ? sameProduct[0] : null;
 }
 
 export function resolveVariantDisplaySpecifications(variant) {
@@ -129,8 +179,16 @@ export function variantMatchesSelections(variant, selections) {
 }
 
 /**
- * Prefer a variant matching option chips. When chips form an incompatible combo,
- * do NOT fall through to URL/first variant (would disagree with highlighted chips).
+ * Resolve which catalog variant the detail page should show.
+ *
+ * Priority:
+ * 1. Option chips / explicit selection (user intent on the page)
+ * 2. URL variant token (the listing the user clicked to open details)
+ * 3. Mine listing identity (upstream handoff when URL has no variant token)
+ * 4. First variant as last resort
+ *
+ * When chips form an incompatible combo, do NOT fall through to URL/first variant
+ * (that would disagree with highlighted chips).
  */
 export function resolveActiveDiscoveryVariant({
   variants = [],
@@ -141,31 +199,6 @@ export function resolveActiveDiscoveryVariant({
   viewerListings = []
 } = {}) {
   if (!variants.length) return null;
-
-  const mineId = String(mineSupplierProductId || '').trim();
-  if (mineId) {
-    const byMineVariant = variants.find((variant) => variantMatchesMineListing(variant, mineId));
-    if (byMineVariant) return byMineVariant;
-
-    const mineListing = resolveViewerListingForVariant(viewerListings, null, mineId);
-    if (mineListing) {
-      const listingAsin = String(mineListing?.variantAsin || '').trim();
-      const listingKey = String(mineListing?.variantKey || '').trim();
-      const byListing = variants.find((variant) => {
-        const variantAsin = String(variant?.variantAsin || '').trim();
-        const variantKey = String(variant?.variantKey || '').trim();
-        const productId = String(variant?.productId || '').trim();
-        const listingProductId = String(mineListing?.productId || '').trim();
-        if (listingAsin && variantAsin && listingAsin === variantAsin) return true;
-        if (listingKey && variantKey && listingKey === variantKey) return true;
-        if (listingProductId && productId === listingProductId && !listingAsin && !listingKey) {
-          return true;
-        }
-        return false;
-      });
-      if (byListing) return byListing;
-    }
-  }
 
   const selectionEntries = Object.entries(optionSelections || {}).filter(([, value]) =>
     String(value || '').trim()
@@ -197,6 +230,18 @@ export function resolveActiveDiscoveryVariant({
   if (urlVariant) {
     const byToken = variants.find((variant) => variantMatchesUrlToken(variant, urlVariant));
     if (byToken) return byToken;
+  }
+
+  const mineId = String(mineSupplierProductId || '').trim();
+  if (mineId) {
+    const byMineVariant = variants.find((variant) => variantMatchesMineListing(variant, mineId));
+    if (byMineVariant) return byMineVariant;
+
+    const mineListing = Array.isArray(viewerListings)
+      ? viewerListings.find((listing) => String(listing?.id || '') === mineId)
+      : null;
+    const byListing = findVariantForMineListing(variants, mineListing);
+    if (byListing) return byListing;
   }
 
   return variants[0];

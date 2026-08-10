@@ -18,7 +18,8 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
-  ImageOff
+  ImageOff,
+  ArrowRight
 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
@@ -87,7 +88,27 @@ const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
 /** Set when returning from Place Order so upstream page restores in-progress draft once. */
 const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
+/** Last project chosen in this browser session — reused when adding more qty for any listing. */
+const SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY = 'supplierUpstreamSessionProjectId';
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
+
+const readSessionProjectId = () => {
+  try {
+    return String(sessionStorage.getItem(SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+};
+
+const writeSessionProjectId = (projectId) => {
+  const id = String(projectId || '').trim();
+  if (!id || id === '__new__') return;
+  try {
+    sessionStorage.setItem(SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY, id);
+  } catch {
+    // Ignore quota / private-mode failures; in-memory activeProjectId still works.
+  }
+};
 
 /** Display names for each supply-chain tier (must match backend role keys). */
 const SELLER_LAYER_LABELS = {
@@ -196,6 +217,12 @@ const SupplierUpstream = ({ user }) => {
 
   // Selected mine items (supplier_products junction IDs) -> quantity desired
   const [selectedMine, setSelectedMine] = useState({});
+  // Draft procurement qty on cards — not synced to cart until Add/Update Cart is clicked.
+  const [procurementQtyByMineId, setProcurementQtyByMineId] = useState({});
+  // Quantities already saved in the upstream cart (mineId -> qty).
+  const [cartQtyByMineId, setCartQtyByMineId] = useState({});
+  // Which cart project currently holds each mine listing (for in-place quantity updates).
+  const [cartProjectByMineId, setCartProjectByMineId] = useState({});
 
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState(null);
@@ -212,6 +239,7 @@ const SupplierUpstream = ({ user }) => {
   const [cartProjects, setCartProjects] = useState([]);
   const [addCartDialogOpen, setAddCartDialogOpen] = useState(false);
   const [pendingCartProduct, setPendingCartProduct] = useState(null);
+  const [dialogQty, setDialogQty] = useState(1);
   const [targetCartProjectId, setTargetCartProjectId] = useState('__new__');
   const [newCartProjectName, setNewCartProjectName] = useState('');
   const [newCartRequiredDate, setNewCartRequiredDate] = useState('');
@@ -227,6 +255,7 @@ const SupplierUpstream = ({ user }) => {
   const [supplierDetails, setSupplierDetails] = useState(null);
   const [supplierOfferDetails, setSupplierOfferDetails] = useState(null);
   const [viewingProduct, setViewingProduct] = useState(null);
+  const [completionBanner, setCompletionBanner] = useState('');
 
   const filteredProducts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -285,21 +314,27 @@ const SupplierUpstream = ({ user }) => {
     fetchMyProducts();
   }, []);
 
-  // Handoff from the product detail page: `?add=<supplier_product_id>` reopens the cart dialog
-  // for that listing so sourcing decisions stay on this page.
+  // Handoff from the product detail page: `?add=<supplier_product_id>&qty=` continues
+  // sourcing with the quantity chosen on the detail page (no catalog-grid detour).
   const handledAddParamRef = useRef('');
   useEffect(() => {
     if (loading) return;
-    const requestedMineId = normalizeSupplierProductKey(
-      new URLSearchParams(window.location.search).get('add')
-    );
+    const params = new URLSearchParams(window.location.search);
+    const requestedMineId = normalizeSupplierProductKey(params.get('add'));
     if (!requestedMineId || handledAddParamRef.current === requestedMineId) return;
     handledAddParamRef.current = requestedMineId;
+    const requestedQty = parseSupplierStockQuantity(params.get('qty'));
     navigate(UPSTREAM_SOURCING_PATH, { replace: true });
     const product = (products || []).find(
       (p) => normalizeSupplierProductKey(p?.supplier_product_id) === requestedMineId
     );
-    if (product) openAddToCartDialog(product);
+    if (!product) return;
+    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+    const nextQty =
+      requestedQty != null && requestedQty > 0 ? Math.max(minQty, requestedQty) : minQty;
+    setProcurementQtyByMineId((prev) => ({ ...prev, [requestedMineId]: nextQty }));
+    setSelectedMine((prev) => ({ ...prev, [requestedMineId]: nextQty }));
+    void addOrUpdateCartForProduct(product, nextQty);
   }, [loading, products, navigate]);
 
   const applyActiveCartProject = (project) => {
@@ -308,6 +343,7 @@ const SupplierUpstream = ({ user }) => {
     if (!projectId) return;
     setActiveProjectId(projectId);
     setCartName(String(project?.cartName || '').trim());
+    writeSessionProjectId(projectId);
   };
 
   const hydrateActiveCartProject = async (preferredProjectId = '') => {
@@ -339,13 +375,19 @@ const SupplierUpstream = ({ user }) => {
             project?.location ||
             project?.shippingAddressId
         );
+      const sessionProjectId = readSessionProjectId();
+      const sessionPreferred = sessionProjectId
+        ? projects.find((project) => String(project?.projectId || '') === sessionProjectId)
+        : null;
       const preferred = preferredProjectId
         ? projects.find((project) => String(project?.projectId || '') === String(preferredProjectId))
         : null;
       const active =
         (preferred && hasShipping(preferred) ? preferred : null) ||
+        (sessionPreferred && hasShipping(sessionPreferred) ? sessionPreferred : null) ||
         projects.find(hasShipping) ||
         preferred ||
+        sessionPreferred ||
         projects[0] ||
         null;
       if (active) applyActiveCartProject(active);
@@ -403,6 +445,7 @@ const SupplierUpstream = ({ user }) => {
   useEffect(() => {
     const onCartUpdated = () => {
       void hydrateActiveCartProject(activeProjectId);
+      void refreshSyncedCartQuantities();
     };
     window.addEventListener('supplier-upstream-cart-updated', onCartUpdated);
     return () => window.removeEventListener('supplier-upstream-cart-updated', onCartUpdated);
@@ -413,6 +456,90 @@ const SupplierUpstream = ({ user }) => {
     [selectedMine]
   );
   const suggestedGroupCount = Array.isArray(suggestions) ? suggestions.length : 0;
+
+  const refreshSyncedCartQuantities = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        setCartQtyByMineId({});
+        setCartProjectByMineId({});
+        return { quantities: {}, projectsByMine: {} };
+      }
+      const res = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
+        setCartQtyByMineId({});
+        setCartProjectByMineId({});
+        return { quantities: {}, projectsByMine: {} };
+      }
+      const projects = Array.isArray(data?.cart?.draft?.projects) ? data.cart.draft.projects : [];
+      const next = {};
+      const nextProjects = {};
+      for (const project of projects) {
+        const projectId = String(project?.projectId || '').trim();
+        const items = Array.isArray(project?.items) ? project.items : [];
+        if (items.length) {
+          for (const item of items) {
+            const mineId = normalizeSupplierProductKey(
+              item?.mineSupplierProductId || item?.mineId
+            );
+            const qty = parseSupplierStockQuantity(item?.quantity);
+            if (mineId && qty != null && qty > 0) {
+              next[mineId] = (next[mineId] || 0) + qty;
+              if (projectId && !nextProjects[mineId]) nextProjects[mineId] = projectId;
+            }
+          }
+          continue;
+        }
+        const selected = normalizeSelectionMap(project?.selectedMine || {});
+        for (const [mineId, rawQty] of Object.entries(selected)) {
+          const qty = parseSupplierStockQuantity(rawQty);
+          if (mineId && qty != null && qty > 0) {
+            next[mineId] = (next[mineId] || 0) + qty;
+            if (projectId && !nextProjects[mineId]) nextProjects[mineId] = projectId;
+          }
+        }
+      }
+      setCartQtyByMineId(next);
+      setCartProjectByMineId(nextProjects);
+      return { quantities: next, projectsByMine: nextProjects };
+    } catch {
+      setCartQtyByMineId({});
+      setCartProjectByMineId({});
+      return { quantities: {}, projectsByMine: {} };
+    }
+  };
+
+  useEffect(() => {
+    void refreshSyncedCartQuantities();
+  }, []);
+
+  const getProcurementQty = (mineId, minQty = 1) => {
+    const key = normalizeSupplierProductKey(mineId);
+    const floor = Math.max(1, minQty);
+    const fromDraft = parseSupplierStockQuantity(procurementQtyByMineId[key]);
+    if (fromDraft != null && fromDraft > 0) return Math.max(floor, fromDraft);
+    const fromSelected = parseSupplierStockQuantity(selectedMine[key]);
+    if (fromSelected != null && fromSelected > 0) return Math.max(floor, fromSelected);
+    const fromCart = parseSupplierStockQuantity(cartQtyByMineId[key]);
+    if (fromCart != null && fromCart > 0) return Math.max(floor, fromCart);
+    return floor;
+  };
+
+  const setProcurementQty = (mineId, minQty, nextRaw) => {
+    const key = normalizeSupplierProductKey(mineId);
+    if (!key) return;
+    const floor = Math.max(1, minQty);
+    const parsed = parseSupplierStockQuantity(nextRaw);
+    const qty = Math.max(floor, parsed != null && parsed > 0 ? parsed : floor);
+    setProcurementQtyByMineId((prev) => ({ ...prev, [key]: qty }));
+    setSelectedMine((prev) => {
+      if (!prev?.[key]) return prev;
+      return { ...prev, [key]: qty };
+    });
+  };
 
   function resolveMineProduct(mineSupplierProductId) {
     const key = normalizeSupplierProductKey(mineSupplierProductId);
@@ -455,6 +582,18 @@ const SupplierUpstream = ({ user }) => {
     }).length;
   }, [suggestions, selectedUpstreamOffer, products]);
 
+  const cartLineCount = useMemo(
+    () => Object.keys(normalizeSelectionMap(cartQtyByMineId || {})).length,
+    [cartQtyByMineId]
+  );
+  const sourcingConfigured = Boolean(
+    Array.isArray(suggestions) && suggestions.length > 0 && linesReadyToPlace > 0
+  );
+  const showCompletionBar =
+    cartLineCount > 0 ||
+    selectedMineIds.length > 0 ||
+    (Array.isArray(suggestions) && suggestions.length > 0);
+
   const handleToggleMine = (mineId) => {
     const key = normalizeSupplierProductKey(mineId);
     if (!key) return;
@@ -467,7 +606,7 @@ const SupplierUpstream = ({ user }) => {
           (p) => normalizeSupplierProductKey(p.supplier_product_id) === key
         );
         const minQty = Math.max(1, product?.min_order_quantity ?? 1);
-        next[key] = minQty;
+        next[key] = getProcurementQty(key, minQty);
       }
       return next;
     });
@@ -549,6 +688,14 @@ const SupplierUpstream = ({ user }) => {
         });
         return next;
       });
+      const itemCount = Array.isArray(data.items) ? data.items.length : 0;
+      if (itemCount > 0) {
+        setCompletionBanner(
+          'Upstream suppliers loaded. Confirm your selections below, then Review Cart or Proceed to Place Order.'
+        );
+      } else {
+        setCompletionBanner('');
+      }
     } catch (e) {
       console.error('Upstream suggestions error:', e);
       alert(`Failed to load upstream suggestions: ${e?.message || 'Please check your connection and try again.'}`);
@@ -583,9 +730,7 @@ const SupplierUpstream = ({ user }) => {
           const chosenOffer = getCompatibleOffersForItem(it).find(
                 (o) => normalizeSupplierProductKey(o.upstreamSupplierProductId) === upstreamOfferId
               ) || null;
-          const qty =
-            parseSupplierStockQuantity(selectedMine[mineId]) ??
-            Math.max(1, mine?.min_order_quantity ?? 1);
+          const qty = getProcurementQty(mineId, Math.max(1, mine?.min_order_quantity ?? 1));
           const unitPrice = Number(chosenOffer?.price || 0) || 0;
 
           return {
@@ -909,15 +1054,57 @@ const SupplierUpstream = ({ user }) => {
     };
   };
 
-  const openAddToCartDialog = async (product) => {
+  const rememberProjectForSession = (projectId, mineId = '') => {
+    const id = String(projectId || '').trim();
+    if (!id || id === '__new__') return;
+    setActiveProjectId(id);
+    writeSessionProjectId(id);
+    const key = normalizeSupplierProductKey(mineId);
+    if (key) {
+      setCartProjectByMineId((prev) => ({ ...prev, [key]: id }));
+    }
+  };
+
+  const resolvePreferredProjectId = (mineId, projects = [], projectsByMine = {}) => {
+    const list = Array.isArray(projects) ? projects : [];
+    const knownIds = new Set(
+      list.map((project) => String(project?.projectId || '').trim()).filter(Boolean)
+    );
+    const key = normalizeSupplierProductKey(mineId);
+    const candidates = [
+      projectsByMine?.[key],
+      cartProjectByMineId[key],
+      activeProjectId,
+      readSessionProjectId(),
+      list[0]?.projectId
+    ];
+    for (const candidate of candidates) {
+      const id = String(candidate || '').trim();
+      if (!id || id === '__new__') continue;
+      if (knownIds.size === 0 || knownIds.has(id)) return id;
+    }
+    return '';
+  };
+
+  const openAddToCartDialog = async (product, options = {}) => {
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return;
+    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+    const preferredQty = parseSupplierStockQuantity(options?.quantity);
     const [projects, addresses] = await Promise.all([
       loadSupplierCartProjects(),
       loadProfileShippingAddresses()
     ]);
-    const initialProjectId = projects[0]?.projectId || '__new__';
+    await refreshSyncedCartQuantities();
+    const preferredProjectId = resolvePreferredProjectId(mineId, projects);
+    const initialProjectId = preferredProjectId || projects[0]?.projectId || '__new__';
+    const initialQty =
+      preferredQty != null && preferredQty > 0
+        ? Math.max(minQty, preferredQty)
+        : getProcurementQty(mineId, minQty);
+    setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: initialQty }));
     setPendingCartProduct(product);
+    setDialogQty(initialQty);
     setTargetCartProjectId(initialProjectId);
     setNewCartProjectName(String(product?.name || '').trim() || 'Supplier Project');
     setNewCartRequiredDate('');
@@ -927,14 +1114,138 @@ const SupplierUpstream = ({ user }) => {
     setAddCartDialogOpen(true);
   };
 
+  /** Set quantity on an existing cart line without leaving Upstream Sourcing / re-adding. */
+  const syncExistingCartQuantity = async (product, requestedQty, options = {}) => {
+    const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
+    if (!mineId) return false;
+    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+    const parsedQty = parseSupplierStockQuantity(requestedQty);
+    const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
+    const token = localStorage.getItem('token');
+    if (!token) {
+      alert('Please log in again to update cart quantity.');
+      return false;
+    }
+
+    const projectId = String(
+      options?.projectId || cartProjectByMineId[mineId] || activeProjectId || readSessionProjectId() || ''
+    ).trim();
+    const replaceQuantity = options?.replaceQuantity !== false;
+    setAddingCartByMineId((prev) => ({ ...prev, [mineId]: true }));
+    let ok = false;
+    let responseMessage = '';
+    try {
+      const res = await fetch(getApiUrl('/api/supplier/upstream/cart/items'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          mineSupplierProductId: mineId,
+          quantity: nextQty,
+          ...(replaceQuantity ? { replaceQuantity: true } : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(product?.variantKey || product?.variant_key
+            ? { variantKey: String(product.variantKey || product.variant_key) }
+            : {}),
+          ...(product?.variantAsin || product?.variant_asin
+            ? { variantAsin: String(product.variantAsin || product.variant_asin) }
+            : {}),
+          ...(product?.name ? { variantLabel: String(product.name) } : {})
+        })
+      });
+      const data = await res.json();
+      ok = res.ok && data.status === 'success';
+      responseMessage = data?.message || '';
+      if (!ok) {
+        throw new Error(responseMessage || 'Failed to update cart quantity.');
+      }
+      const savedQty = parseSupplierStockQuantity(data?.item?.quantity) ?? nextQty;
+      setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
+      setSelectedMine((prev) => (prev?.[mineId] != null ? { ...prev, [mineId]: savedQty } : prev));
+      setCartQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
+      if (data?.project?.projectId) {
+        rememberProjectForSession(data.project.projectId, mineId);
+        await hydrateActiveCartProject(String(data.project.projectId));
+      }
+      await refreshSyncedCartQuantities();
+      emitSupplierCartUpdated();
+      if (options?.silent !== true) {
+        alert(responseMessage || (replaceQuantity ? 'Cart quantity updated.' : 'Product added to cart.'));
+      }
+    } catch (e) {
+      ok = false;
+      if (options?.silent !== true) {
+        alert(e?.message || 'Failed to update cart quantity.');
+      }
+    }
+    setAddingCartByMineId((prev) => {
+      const { [mineId]: _removed, ...rest } = prev;
+      return rest;
+    });
+    return ok;
+  };
+
+  /**
+   * Add/update cart for a listing. Reuses the product's project or the session project
+   * so the project picker is only shown when no project is known yet (or forced).
+   */
+  const addOrUpdateCartForProduct = async (product, requestedQty, options = {}) => {
+    const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
+    if (!mineId) return false;
+    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+    const parsedQty = parseSupplierStockQuantity(requestedQty);
+    const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
+    setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: nextQty }));
+
+    const projects = await loadSupplierCartProjects();
+    const synced = await refreshSyncedCartQuantities();
+    const inCartQty = parseSupplierStockQuantity(synced?.quantities?.[mineId]);
+    const preferredProjectId = resolvePreferredProjectId(
+      mineId,
+      projects,
+      synced?.projectsByMine || {}
+    );
+
+    if (options?.forceProjectPicker === true) {
+      await openAddToCartDialog(product, { quantity: nextQty });
+      return false;
+    }
+
+    // Same product already in cart: update qty on its project — never re-prompt.
+    if (inCartQty != null && inCartQty > 0) {
+      return syncExistingCartQuantity(product, nextQty, {
+        projectId: preferredProjectId || synced?.projectsByMine?.[mineId],
+        replaceQuantity: true
+      });
+    }
+
+    // Active procurement session already has a project: add without the picker.
+    if (preferredProjectId) {
+      return syncExistingCartQuantity(product, nextQty, {
+        projectId: preferredProjectId,
+        replaceQuantity: false
+      });
+    }
+
+    await openAddToCartDialog(product, { quantity: nextQty });
+    return false;
+  };
+
+  const handleCartActionClick = async (product) => {
+    const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
+    if (!mineId) return;
+    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
+    await addOrUpdateCartForProduct(product, getProcurementQty(mineId, minQty));
+  };
+
   const handleAddSingleProductToCart = async () => {
     setDialogError('');
     const product = pendingCartProduct;
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
-    const parsedQty = parseSupplierStockQuantity(selectedMine?.[mineId]);
+    const parsedQty = parseSupplierStockQuantity(dialogQty);
     const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
+    const isUpdate = cartQtyByMineId[mineId] != null;
     const isNewProject = targetCartProjectId === '__new__';
     if (isNewProject) {
       const nextFieldErrors = { ...emptyProjectFieldErrors };
@@ -971,6 +1282,7 @@ const SupplierUpstream = ({ user }) => {
         body: JSON.stringify({
           mineSupplierProductId: mineId,
           quantity: nextQty,
+          ...(isUpdate ? { replaceQuantity: true } : {}),
           ...(product?.variantKey || product?.variant_key
             ? { variantKey: String(product.variantKey || product.variant_key) }
             : {}),
@@ -993,15 +1305,22 @@ const SupplierUpstream = ({ user }) => {
       ok = res.ok && data.status === 'success';
       responseMessage = data?.message || '';
       if (!ok) {
-        throw new Error(responseMessage || 'Failed to add this product to cart.');
+        throw new Error(
+          responseMessage ||
+            (isUpdate ? 'Failed to update cart quantity.' : 'Failed to add this product to cart.')
+        );
       }
-      if (data?.item?.quantity != null) {
-        const savedQty = parseSupplierStockQuantity(data.item.quantity) ?? nextQty;
-        setSelectedMine((prev) => ({ ...prev, [mineId]: savedQty }));
-      }
+      const savedQty = parseSupplierStockQuantity(data?.item?.quantity) ?? nextQty;
+      setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
+      setSelectedMine((prev) => (prev?.[mineId] != null ? { ...prev, [mineId]: savedQty } : prev));
+      setCartQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
       if (data?.project?.projectId) {
+        rememberProjectForSession(data.project.projectId, mineId);
         await hydrateActiveCartProject(String(data.project.projectId));
+      } else if (!isNewProject && targetCartProjectId) {
+        rememberProjectForSession(targetCartProjectId, mineId);
       }
+      await refreshSyncedCartQuantities();
     } catch (e) {
       ok = false;
       responseMessage = e?.message || '';
@@ -1011,14 +1330,22 @@ const SupplierUpstream = ({ user }) => {
       return rest;
     });
     if (!ok) {
-      setDialogError(responseMessage || 'Failed to add this product to cart.');
+      setDialogError(
+        responseMessage ||
+          (isUpdate ? 'Failed to update cart quantity.' : 'Failed to add this product to cart.')
+      );
       return;
     }
 
     setAddCartDialogOpen(false);
     setPendingCartProduct(null);
     emitSupplierCartUpdated();
-    alert(responseMessage || 'Product added to cart.');
+    setCompletionBanner(
+      responseMessage ||
+        (isUpdate
+          ? 'Cart quantity updated. Continue to review your cart or place an order when ready.'
+          : 'Product added to cart. Continue to review your cart or place an order when ready.')
+    );
   };
 
   const openSupplierDetailsForOffer = (offer) => {
@@ -1039,6 +1366,7 @@ const SupplierUpstream = ({ user }) => {
     const openedDetailPage = catalogProductId
       ? openUpstreamProductDetailInNewTab(catalogProductId, {
           variantKey: product?.variantKey || product?.variant_key || '',
+          variantAsin: product?.variantAsin || product?.variant_asin || '',
           mineSupplierProductId: normalizeSupplierProductKey(product?.supplier_product_id)
         })
       : false;
@@ -1088,7 +1416,7 @@ const SupplierUpstream = ({ user }) => {
               My orders
             </Button>
             <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-cart')}>
-              View Cart
+              Review Cart
             </Button>
             <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-dashboard')}>
               Back to Dashboard
@@ -1096,6 +1424,38 @@ const SupplierUpstream = ({ user }) => {
           </>
         }
       />
+
+      {completionBanner ? (
+        <div className="us-completion-banner" role="status">
+          <div className="us-completion-banner__copy">
+            <strong>Ready for the next step</strong>
+            <p>{completionBanner}</p>
+          </div>
+          <div className="us-completion-banner__actions">
+            <Button variant="outline" size="sm" onClick={() => navigate('/supplier-cart')}>
+              Review Cart
+            </Button>
+            {sourcingConfigured ? (
+              <Button size="sm" onClick={handleProceedToPlaceOrder} disabled={creating}>
+                {creating ? <Loader2 size={14} className="upstream-spin" /> : null}
+                Proceed to Place Order
+              </Button>
+            ) : selectedMineIds.length > 0 && !suggestions ? (
+              <Button size="sm" onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading}>
+                Continue
+              </Button>
+            ) : null}
+            <button
+              type="button"
+              className="us-completion-banner__dismiss"
+              aria-label="Dismiss"
+              onClick={() => setCompletionBanner('')}
+            >
+              <X size={16} />
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center gap-3 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur">
         <div className="relative min-w-[200px] flex-1">
@@ -1172,6 +1532,11 @@ const SupplierUpstream = ({ user }) => {
             const price = formatPrice(p?.price, p?.unit);
             const stockQty = p.stock ?? 0;
             const moq = Number(p?.min_order_quantity);
+            const cardQty = getProcurementQty(mineId, minQty);
+            const syncedCartQty = parseSupplierStockQuantity(cartQtyByMineId[mineId]);
+            const inCart = syncedCartQty != null && syncedCartQty > 0;
+            const qtyDirty = inCart && Number(syncedCartQty) !== Number(cardQty);
+            const cartActionLabel = inCart ? 'Update Cart' : 'Add to Cart';
 
             return (
               <article
@@ -1240,47 +1605,57 @@ const SupplierUpstream = ({ user }) => {
                     </div>
                   </div>
 
-                  {isSelected ? (
-                    <div
-                      className="us-pd-card__qty-row"
-                      onClick={(event) => event.stopPropagation()}
-                      onKeyDown={(event) => event.stopPropagation()}
-                    >
-                      <label className="us-pd-card__qty-label">Quantity</label>
-                      <div className="us-pd-card__qty-control">
-                        <button
-                          type="button"
-                          className="us-pd-card__qty-btn"
-                          onClick={() => {
-                            const current = parseSupplierStockQuantity(selectedMine[mineId]) ?? minQty;
-                            setSelectedMine((prev) => ({
-                              ...prev,
-                              [mineId]: Math.max(minQty, current - 1)
-                            }));
-                          }}
-                          disabled={(parseSupplierStockQuantity(selectedMine[mineId]) ?? minQty) <= minQty}
-                          aria-label="Decrease quantity"
-                        >
-                          −
-                        </button>
-                        <span className="us-pd-card__qty-value">{selectedMine[mineId] ?? minQty}</span>
-                        <button
-                          type="button"
-                          className="us-pd-card__qty-btn"
-                          onClick={() => {
-                            const current = parseSupplierStockQuantity(selectedMine[mineId]) ?? minQty;
-                            setSelectedMine((prev) => ({
-                              ...prev,
-                              [mineId]: Math.max(minQty, current + 1)
-                            }));
-                          }}
-                          aria-label="Increase quantity"
-                        >
-                          +
-                        </button>
-                      </div>
+                  <div
+                    className="us-pd-card__qty-row"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <label className="us-pd-card__qty-label">Quantity</label>
+                    <div className="us-pd-card__qty-control">
+                      <button
+                        type="button"
+                        className="us-pd-card__qty-btn"
+                        onClick={() => setProcurementQty(mineId, minQty, cardQty - 1)}
+                        disabled={cardQty <= minQty}
+                        aria-label="Decrease quantity"
+                      >
+                        −
+                      </button>
+                      <span className="us-pd-card__qty-value">{cardQty}</span>
+                      <button
+                        type="button"
+                        className="us-pd-card__qty-btn"
+                        onClick={() => setProcurementQty(mineId, minQty, cardQty + 1)}
+                        aria-label="Increase quantity"
+                      >
+                        +
+                      </button>
                     </div>
-                  ) : null}
+                    {qtyDirty ? (
+                      <p className="us-pd-card__qty-hint">
+                        Qty changed — click Update Cart to sync here
+                      </p>
+                    ) : inCart ? (
+                      <p className="us-pd-card__qty-hint us-pd-card__qty-hint--synced">
+                        In cart: {syncedCartQty} — same project is kept for more qty
+                        {' · '}
+                        <button
+                          type="button"
+                          className="us-pd-card__qty-link"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void addOrUpdateCartForProduct(p, cardQty, { forceProjectPicker: true });
+                          }}
+                        >
+                          Change project
+                        </button>
+                      </p>
+                    ) : (
+                      <p className="us-pd-card__qty-hint">
+                        Click Add to Cart to save quantity
+                      </p>
+                    )}
+                  </div>
                 </div>
 
                 <div className="pd-card__footer">
@@ -1292,17 +1667,17 @@ const SupplierUpstream = ({ user }) => {
                   </div>
                   <button
                     type="button"
-                    className="pd-card__cart-btn"
+                    className={`pd-card__cart-btn${qtyDirty ? ' pd-card__cart-btn--emphasis' : ''}`}
                     onClick={(event) => {
                       event.stopPropagation();
-                      openAddToCartDialog(p);
+                      handleCartActionClick(p);
                     }}
                     disabled={isAddingToCart}
                   >
                     {isAddingToCart ? (
-                      <><Loader2 size={16} className="upstream-spin" /> Adding…</>
+                      <><Loader2 size={16} className="upstream-spin" /> {inCart ? 'Updating…' : 'Adding…'}</>
                     ) : (
-                      <><ShoppingCart size={16} /> Add to Cart</>
+                      <><ShoppingCart size={16} /> {cartActionLabel}</>
                     )}
                   </button>
                 </div>
@@ -1347,6 +1722,14 @@ const SupplierUpstream = ({ user }) => {
             </div>
             <div className="upstream-suggestions-actions">
               <Button
+                variant="outline"
+                className="upstream-nowrap-btn"
+                onClick={() => navigate('/supplier-cart')}
+              >
+                <ShoppingCart size={18} />
+                Review Cart
+              </Button>
+              <Button
                 onClick={handleProceedToPlaceOrder}
                 disabled={
                   creating ||
@@ -1356,7 +1739,7 @@ const SupplierUpstream = ({ user }) => {
                   linesReadyToPlace === 0
                 }
               >
-                {creating ? <Loader2 size={18} className="upstream-spin" /> : <ShoppingCart size={18} />}
+                {creating ? <Loader2 size={18} className="upstream-spin" /> : <ArrowRight size={18} />}
                 Proceed to Place Order
               </Button>
               <Button variant="outline" onClick={handleSaveToCart} disabled={savingCart}>
@@ -1387,7 +1770,10 @@ const SupplierUpstream = ({ user }) => {
               {(suggestions || []).map((it) => {
                 const mine = resolveMineProduct(it.mineSupplierProductId);
                 const mineKey = normalizeSupplierProductKey(it.mineSupplierProductId);
-                const mineSelectedQty = selectedMine[mineKey] || 1;
+                const mineSelectedQty = getProcurementQty(
+                  mineKey,
+                  Math.max(1, mine?.min_order_quantity ?? 1)
+                );
                 const offers = getCompatibleOffersForItem(it);
                 const chosen = normalizeSupplierProductKey(selectedUpstreamOffer[mineKey]);
 
@@ -1400,7 +1786,12 @@ const SupplierUpstream = ({ user }) => {
                   const minQty = parseInt(chosenOffer?.minOrderQuantity || 1, 10) || 1;
                   setSelectedUpstreamOffer((prev) => ({ ...prev, [mineKey]: offerKey }));
                   setSelectedMine((prev) => {
-                    const current = parseInt(prev?.[mineKey] || 1, 10) || 1;
+                    const current = parseInt(prev?.[mineKey] || getProcurementQty(mineKey, minQty), 10) || minQty;
+                    const nextQty = current < minQty ? minQty : current;
+                    return { ...prev, [mineKey]: nextQty };
+                  });
+                  setProcurementQtyByMineId((prev) => {
+                    const current = parseInt(prev?.[mineKey] || getProcurementQty(mineKey, minQty), 10) || minQty;
                     const nextQty = current < minQty ? minQty : current;
                     return { ...prev, [mineKey]: nextQty };
                   });
@@ -1425,8 +1816,54 @@ const SupplierUpstream = ({ user }) => {
                         {mine?.name || 'Product'}
                       </h4>
                       <p className="upstream-offer-product-meta">
-                        Brand: <strong>{it.chainRouting?.brand || it.brandModel || mine?.brand || mine?.brandModel || 'N/A'}</strong> • Qty: <strong>{mineSelectedQty}</strong>
+                        Brand:{' '}
+                        <strong>
+                          {it.chainRouting?.brand || it.brandModel || mine?.brand || mine?.brandModel || 'N/A'}
+                        </strong>
                       </p>
+                      <div className="upstream-offer-qty-row">
+                        <span className="upstream-offer-qty-label">Procurement qty</span>
+                        <div className="us-pd-card__qty-control">
+                          <button
+                            type="button"
+                            className="us-pd-card__qty-btn"
+                            onClick={() => {
+                              const floor = Math.max(1, mine?.min_order_quantity ?? 1);
+                              setProcurementQty(mineKey, floor, mineSelectedQty - 1);
+                            }}
+                            disabled={
+                              mineSelectedQty <= Math.max(1, mine?.min_order_quantity ?? 1)
+                            }
+                            aria-label="Decrease procurement quantity"
+                          >
+                            −
+                          </button>
+                          <span className="us-pd-card__qty-value">{mineSelectedQty}</span>
+                          <button
+                            type="button"
+                            className="us-pd-card__qty-btn"
+                            onClick={() => {
+                              const floor = Math.max(1, mine?.min_order_quantity ?? 1);
+                              setProcurementQty(mineKey, floor, mineSelectedQty + 1);
+                            }}
+                            aria-label="Increase procurement quantity"
+                          >
+                            +
+                          </button>
+                        </div>
+                        {mine &&
+                        parseSupplierStockQuantity(cartQtyByMineId[mineKey]) != null &&
+                        Number(cartQtyByMineId[mineKey]) !== Number(mineSelectedQty) ? (
+                          <button
+                            type="button"
+                            className="btn-secondary upstream-offer-qty-sync"
+                            disabled={!!addingCartByMineId[mineKey]}
+                            onClick={() => syncExistingCartQuantity(mine, mineSelectedQty)}
+                          >
+                            {addingCartByMineId[mineKey] ? 'Updating…' : 'Update Cart'}
+                          </button>
+                        ) : null}
+                      </div>
                       {mine ? <UpstreamProductDisplay product={mine} imageHeight={88} maxSpecs={10} /> : null}
                       {it.chainRouting?.requiredUpstreamRole ? (
                         <p className="upstream-route-rule upstream-route-rule-primary">
@@ -1545,6 +1982,39 @@ const SupplierUpstream = ({ user }) => {
               })}
             </div>
           )}
+
+          {Array.isArray(suggestions) && suggestions.length > 0 ? (
+            <div
+              className={`us-sourcing-next-steps${sourcingConfigured ? ' us-sourcing-next-steps--ready' : ''}`}
+              role="region"
+              aria-label="Next steps after upstream sourcing"
+            >
+              <div className="us-sourcing-next-steps__copy">
+                <h3>Next step</h3>
+                <p>
+                  {sourcingConfigured
+                    ? `${linesReadyToPlace} product${linesReadyToPlace === 1 ? '' : 's'} configured with upstream suppliers. Continue to review your cart or create a purchase order.`
+                    : 'Select an upstream supplier for each product above, then continue to cart or place order.'}
+                </p>
+              </div>
+              <div className="us-sourcing-next-steps__actions">
+                <Button variant="outline" onClick={() => navigate('/supplier-cart')}>
+                  <ShoppingCart size={16} />
+                  Review Cart
+                </Button>
+                <Button
+                  onClick={handleProceedToPlaceOrder}
+                  disabled={creating || linesReadyToPlace === 0}
+                >
+                  {creating ? <Loader2 size={16} className="upstream-spin" /> : <ArrowRight size={16} />}
+                  Proceed to Place Order
+                </Button>
+                <Button variant="outline" onClick={handleSaveToCart} disabled={savingCart}>
+                  {savingCart ? 'Saving…' : 'Save to Cart'}
+                </Button>
+              </div>
+            </div>
+          ) : null}
         </div>
 
       {supplierDetailsOpen && supplierDetails ? createPortal((
@@ -1623,13 +2093,56 @@ const SupplierUpstream = ({ user }) => {
       {viewingProduct ? (
         <SupplierProductDetailsModal product={viewingProduct} onClose={() => setViewingProduct(null)} />
       ) : null}
+
+      {showCompletionBar ? (
+        <div className="us-completion-bar" role="region" aria-label="Procurement next steps">
+          <div className="us-completion-bar__copy">
+            <strong>
+              {sourcingConfigured
+                ? 'Upstream sourcing complete'
+                : cartLineCount > 0
+                  ? 'Cart ready'
+                  : 'Continue procurement'}
+            </strong>
+            <span>
+              {sourcingConfigured
+                ? `${linesReadyToPlace} line${linesReadyToPlace === 1 ? '' : 's'} ready — review cart or create a purchase order.`
+                : Array.isArray(suggestions) && suggestions.length > 0
+                  ? 'Pick upstream suppliers above, then continue.'
+                  : selectedMineIds.length > 0
+                    ? 'Continue to find upstream suppliers for your selection.'
+                    : `${cartLineCount} item${cartLineCount === 1 ? '' : 's'} in cart — review cart or select products to source.`}
+            </span>
+          </div>
+          <div className="us-completion-bar__actions">
+            {selectedMineIds.length > 0 && (!suggestions || suggestions.length === 0) ? (
+              <Button onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading}>
+                {suggestionsLoading ? <Loader2 size={16} className="upstream-spin" /> : <ArrowRight size={16} />}
+                Continue
+              </Button>
+            ) : null}
+            <Button variant="outline" onClick={() => navigate('/supplier-cart')}>
+              <ShoppingCart size={16} />
+              {cartLineCount > 0 || sourcingConfigured ? 'Review Cart' : 'Proceed to Cart'}
+            </Button>
+            {sourcingConfigured ? (
+              <Button onClick={handleProceedToPlaceOrder} disabled={creating || linesReadyToPlace === 0}>
+                {creating ? <Loader2 size={16} className="upstream-spin" /> : <ArrowRight size={16} />}
+                Proceed to Place Order
+              </Button>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
+
       <Dialog open={addCartDialogOpen} onOpenChange={setAddCartDialogOpen}>
         <DialogContent className="flex h-full max-h-none w-full max-w-none flex-col overflow-hidden p-0">
           <div className="shrink-0 border-b px-6 py-4 pr-12">
             <DialogHeader>
               <DialogTitle>Select supplier project</DialogTitle>
               <DialogDescription>
-                Choose an existing project or create a new one for this cart item.
+                Choose a project for this cart item. This choice is remembered for the rest of
+                this procurement session so adding more quantity will not ask again.
               </DialogDescription>
             </DialogHeader>
           </div>
@@ -1653,6 +2166,51 @@ const SupplierUpstream = ({ user }) => {
                     ).trim()}
                   </div>
                 ) : null}
+                {(() => {
+                  const minQty = Math.max(1, pendingCartProduct?.min_order_quantity ?? 1);
+                  const mineId = normalizeSupplierProductKey(pendingCartProduct?.supplier_product_id);
+                  const inCart =
+                    parseSupplierStockQuantity(cartQtyByMineId[mineId]) != null &&
+                    parseSupplierStockQuantity(cartQtyByMineId[mineId]) > 0;
+                  return (
+                    <div className="mt-3 space-y-1">
+                      <label className="text-sm font-medium" htmlFor="upstream-dialog-qty">
+                        Quantity
+                      </label>
+                      <div className="us-pd-card__qty-control">
+                        <button
+                          type="button"
+                          className="us-pd-card__qty-btn"
+                          onClick={() =>
+                            setDialogQty((prev) => Math.max(minQty, (parseSupplierStockQuantity(prev) ?? minQty) - 1))
+                          }
+                          disabled={(parseSupplierStockQuantity(dialogQty) ?? minQty) <= minQty}
+                          aria-label="Decrease quantity"
+                        >
+                          −
+                        </button>
+                        <span id="upstream-dialog-qty" className="us-pd-card__qty-value">
+                          {parseSupplierStockQuantity(dialogQty) ?? minQty}
+                        </span>
+                        <button
+                          type="button"
+                          className="us-pd-card__qty-btn"
+                          onClick={() =>
+                            setDialogQty((prev) => Math.max(minQty, (parseSupplierStockQuantity(prev) ?? minQty) + 1))
+                          }
+                          aria-label="Increase quantity"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {inCart
+                          ? 'Confirm with Update Cart to sync this quantity to your cart.'
+                          : 'Confirm with Add to Cart to save this quantity to your cart.'}
+                      </p>
+                    </div>
+                  );
+                })()}
               </div>
             ) : null}
             <div className="space-y-1">
@@ -1880,7 +2438,15 @@ const SupplierUpstream = ({ user }) => {
               <Button variant="outline" onClick={() => setAddCartDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleAddSingleProductToCart}>Add to cart</Button>
+              <Button onClick={handleAddSingleProductToCart}>
+                {(() => {
+                  const mineId = normalizeSupplierProductKey(pendingCartProduct?.supplier_product_id);
+                  const inCart =
+                    parseSupplierStockQuantity(cartQtyByMineId[mineId]) != null &&
+                    parseSupplierStockQuantity(cartQtyByMineId[mineId]) > 0;
+                  return inCart ? 'Update Cart' : 'Add to Cart';
+                })()}
+              </Button>
             </DialogFooter>
           </div>
         </DialogContent>

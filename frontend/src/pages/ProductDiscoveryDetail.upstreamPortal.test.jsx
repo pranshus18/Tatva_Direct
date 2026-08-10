@@ -96,14 +96,87 @@ describe('ProductDiscoveryDetail in the supplier upstream portal', () => {
     expect(screen.getAllByText('₹120.00 per 600 ml').length).toBeGreaterThan(0);
   });
 
-  it('hands the listing back to the sourcing cart flow', async () => {
-    renderUpstreamDetail();
+  it('opens the variant from the URL when multiple offers share a catalog product', async () => {
+    global.fetch = vi.fn(() =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            ...DETAIL_PAYLOAD,
+            hasVariants: true,
+            variantCount: 2,
+            variantOptions: [{ key: 'capacity', label: 'Capacity', values: ['600 ml', '1 L'] }],
+            viewerListings: [
+              {
+                id: 'mine-600',
+                productId: 'prod-1',
+                variantKey: 'silver-600',
+                variantAsin: 'TS1B2N',
+                name: 'Steel Taurus 600',
+                price: 150,
+                stock: 80,
+                unit: '600 ml'
+              }
+            ],
+            variants: [
+              {
+                productId: 'prod-1',
+                name: 'Steel Taurus 1L',
+                variantKey: 'silver-1000',
+                variantAsin: 'TS1B1H',
+                specifications: { capacity: '1 L' },
+                images: [],
+                price: 100,
+                stock: 50,
+                unit: '1 L',
+                min_order_quantity: 1,
+                supplierCount: 1,
+                canAddToCart: true
+              },
+              {
+                productId: 'prod-1',
+                name: 'Steel Taurus 600',
+                variantKey: 'silver-600',
+                variantAsin: 'TS1B2N',
+                specifications: { capacity: '600 ml' },
+                images: [],
+                price: 150,
+                stock: 80,
+                unit: '600 ml',
+                min_order_quantity: 1,
+                supplierCount: 1,
+                canAddToCart: true
+              }
+            ]
+          })
+      })
+    );
 
-    const sourceButtons = await screen.findAllByRole('button', { name: /Source upstream/i });
-    fireEvent.click(sourceButtons[0]);
+    renderUpstreamDetail(
+      '/supplier-upstream/product/prod-1?variant=silver-600&mine=mine-600'
+    );
 
     await waitFor(() =>
-      expect(screen.getByTestId('location')).toHaveTextContent('/supplier-upstream?add=mine-9')
+      expect(screen.getByRole('heading', { name: 'Steel Taurus 600' })).toBeInTheDocument()
+    );
+    expect(screen.queryByRole('heading', { name: 'Steel Taurus 1L' })).not.toBeInTheDocument();
+    expect(screen.getAllByText('₹150.00 per 600 ml').length).toBeGreaterThan(0);
+  });
+
+  it('hands the listing back to the sourcing cart flow with the chosen quantity', async () => {
+    renderUpstreamDetail();
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Steel Taurus 600' })).toBeInTheDocument()
+    );
+
+    const increaseButtons = screen.getAllByRole('button', { name: /Increase procurement quantity/i });
+    fireEvent.click(increaseButtons[0]);
+    const continueButtons = await screen.findAllByRole('button', { name: /Continue sourcing/i });
+    fireEvent.click(continueButtons[0]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent('/supplier-upstream?add=mine-9&qty=2')
     );
   });
 

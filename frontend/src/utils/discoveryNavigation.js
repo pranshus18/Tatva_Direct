@@ -81,18 +81,21 @@ export function resolveUpstreamReturnPath(searchParams) {
 /**
  * Upstream sourcing detail link. `mine` carries the supplier's own listing id so the detail page
  * can hand the supplier back to the sourcing flow for exactly that listing.
+ * `variant` prefers variantKey, then variantAsin, so the detail page opens the clicked offer
+ * even when multiple offers share one catalog products.id.
  */
 export function buildUpstreamProductDetailUrl(
   productId,
-  { variantKey = '', mineSupplierProductId = '', returnPath = null } = {}
+  { variantKey = '', variantAsin = '', mineSupplierProductId = '', returnPath = null } = {}
 ) {
+  const variantToken = String(variantKey || '').trim() || String(variantAsin || '').trim();
   return buildDetailUrl({
     productId,
     listPath: UPSTREAM_SOURCING_PATH,
     detailPath: UPSTREAM_PRODUCT_DETAIL_PATH,
     detailPattern: UPSTREAM_DETAIL_PATH_PATTERN,
     returnPath,
-    extraParams: { variant: variantKey, mine: mineSupplierProductId }
+    extraParams: { variant: variantToken, mine: mineSupplierProductId }
   });
 }
 
@@ -102,10 +105,19 @@ export function openUpstreamProductDetailInNewTab(productId, options = {}) {
   return Boolean(window.open(url, '_blank'));
 }
 
-export function buildUpstreamSourcingUrl({ addSupplierProductId = '' } = {}) {
+export function buildUpstreamSourcingUrl({
+  addSupplierProductId = '',
+  quantity = ''
+} = {}) {
   const mineId = String(addSupplierProductId || '').trim();
   if (!mineId) return UPSTREAM_SOURCING_PATH;
-  return `${UPSTREAM_SOURCING_PATH}?add=${encodeURIComponent(mineId)}`;
+  const params = new URLSearchParams();
+  params.set('add', mineId);
+  const qty = Number(quantity);
+  if (Number.isFinite(qty) && qty >= 1) {
+    params.set('qty', String(Math.floor(qty)));
+  }
+  return `${UPSTREAM_SOURCING_PATH}?${params.toString()}`;
 }
 
 export function returnToUpstreamSourcing({ navigate, searchParams }) {

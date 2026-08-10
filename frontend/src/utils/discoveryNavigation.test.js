@@ -37,6 +37,16 @@ describe('upstream sourcing product detail links', () => {
     expect(url.searchParams.get('return')).toBe(UPSTREAM_SOURCING_PATH);
   });
 
+  it('falls back to variantAsin when variantKey is missing', () => {
+    const url = new URL(
+      buildUpstreamProductDetailUrl('prod-1', {
+        variantAsin: 'TS1B2N',
+        mineSupplierProductId: 'mine-9'
+      })
+    );
+    expect(url.searchParams.get('variant')).toBe('TS1B2N');
+  });
+
   it('omits empty optional params and rejects a missing product id', () => {
     const url = new URL(buildUpstreamProductDetailUrl('prod-1'));
     expect(url.searchParams.has('variant')).toBe(false);
@@ -78,6 +88,9 @@ describe('returning to upstream sourcing', () => {
     expect(buildUpstreamSourcingUrl({ addSupplierProductId: 'mine-9' })).toBe(
       `${UPSTREAM_SOURCING_PATH}?add=mine-9`
     );
+    expect(
+      buildUpstreamSourcingUrl({ addSupplierProductId: 'mine-9', quantity: 4 })
+    ).toBe(`${UPSTREAM_SOURCING_PATH}?add=mine-9&qty=4`);
     expect(buildUpstreamSourcingUrl()).toBe(UPSTREAM_SOURCING_PATH);
   });
 });

@@ -530,8 +530,10 @@ export function buildUpstreamSelectedMineFromItems(items) {
 /**
  * Upstream cart lines: merge quantity only for the same offer id or same product+variant.
  * Same catalog product with a different variant always stays a separate line.
+ * Pass `{ replaceQuantity: true }` to set the line quantity instead of adding.
  */
-export function mergeOrAppendUpstreamCartItem(existingItems, newItem) {
+export function mergeOrAppendUpstreamCartItem(existingItems, newItem, options = {}) {
+  const replaceQuantity = options?.replaceQuantity === true;
   const items = Array.isArray(existingItems) ? [...existingItems] : [];
   const mineId = String(newItem?.mineSupplierProductId || newItem?.mineId || '').trim();
   const addQty = Math.max(0, Math.floor(Number(newItem?.quantity) || 0));
@@ -544,15 +546,15 @@ export function mergeOrAppendUpstreamCartItem(existingItems, newItem) {
 
   return items.map((it, idx) => {
     if (idx !== existingIndex) return it;
+    const nextQty = replaceQuantity
+      ? addQty
+      : (Number(it.quantity) || 0) + addQty;
     return {
       ...it,
       ...newItem,
       mineSupplierProductId:
         String(it?.mineSupplierProductId || it?.mineId || mineId || '').trim() || mineId,
-      quantity: Math.min(
-        MAX_CART_ITEM_QUANTITY,
-        (Number(it.quantity) || 0) + addQty
-      )
+      quantity: Math.min(MAX_CART_ITEM_QUANTITY, nextQty)
     };
   });
 }

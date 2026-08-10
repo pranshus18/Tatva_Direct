@@ -175,6 +175,31 @@ test('mergeOrAppendUpstreamCartItem increases quantity for the same product and 
   assert.equal(nextItems[0].quantity, 4);
 });
 
+test('mergeOrAppendUpstreamCartItem replaces quantity when replaceQuantity is set', () => {
+  const existingItems = [
+    {
+      id: 'line-red',
+      mineSupplierProductId: 'mine-red',
+      productId: 'p1',
+      variantKey: 'vk-red',
+      quantity: 5
+    }
+  ];
+  const nextItems = mergeOrAppendUpstreamCartItem(
+    existingItems,
+    {
+      id: 'line-red-set',
+      mineSupplierProductId: 'mine-red',
+      productId: 'p1',
+      variantKey: 'vk-red',
+      quantity: 2
+    },
+    { replaceQuantity: true }
+  );
+  assert.equal(nextItems.length, 1);
+  assert.equal(nextItems[0].quantity, 2);
+});
+
 test('mergeUpstreamSelectedMineMaps adds new variant lines without removing existing ones', () => {
   const merged = mergeUpstreamSelectedMineMaps(
     { 'mine-red': 2 },

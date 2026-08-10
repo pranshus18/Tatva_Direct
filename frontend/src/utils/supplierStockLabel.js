@@ -20,9 +20,6 @@ export const SUPPLIER_COV_PRICE_LABEL = 'COV price (incl. GST)';
 export const SUPPLIER_MRP_INCLUSIVE_HINT =
   'This is the final price buyers pay. It already includes the base price and GST — do not add GST separately.';
 
-/** Short note next to catalog price display */
-export const SUPPLIER_MRP_SHORT_NOTE = 'Incl. base price + GST';
-
 /** Form column: COV price with rupee symbol */
 export const SUPPLIER_COV_PRICE_FIELD_LABEL = `${SUPPLIER_COV_PRICE_LABEL} (${RUPEE_SYMBOL})`;
 

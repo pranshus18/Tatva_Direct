@@ -200,6 +200,11 @@ test('resolveViewerListingForVariant matches by mine id and variant identity', (
     resolveViewerListingForVariant(listings, { variantAsin: 'TS162A' }, '')?.id,
     'mine-2'
   );
+  // Active variant identity wins over a stale mine id from the opener URL.
+  assert.equal(
+    resolveViewerListingForVariant(listings, { variantAsin: 'TS162A' }, 'mine-1')?.id,
+    'mine-2'
+  );
 });
 
 test('aggregateOffersByVariantIdentity splits rows with same variant_key but different variant_asin', () => {
