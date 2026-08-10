@@ -27,6 +27,43 @@ test('buildSupplierVariantIdentity: offer specs override empty catalog slots', (
   assert.equal(merged.variant.variantAttributes.weight, '2 kg');
 });
 
+test('buildSupplierVariantIdentity: changed offer specs produce a different variant key', () => {
+  const parent = {
+    specifications: {
+      COLOR: 'Black',
+      'FILTER TYPE': 'Pure Air Filter',
+      'STAR RATING': '3 Star',
+      'AIR FLOW VOLUME': '740 CMH (435 CFM)'
+    }
+  };
+  const sameAsCatalog = buildSupplierVariantIdentity(
+    {
+      specifications: {
+        COLOR: 'Black',
+        'FILTER TYPE': 'Pure Air Filter',
+        'STAR RATING': '3 Star',
+        'AIR FLOW VOLUME': '740 CMH (435 CFM)'
+      }
+    },
+    parent
+  );
+  const changedVariant = buildSupplierVariantIdentity(
+    {
+      specifications: {
+        COLOR: 'White',
+        'FILTER TYPE': 'Pure Air Filter',
+        'STAR RATING': '3 Star',
+        'AIR FLOW VOLUME': '740 CMH (435 CFM)'
+      }
+    },
+    parent
+  );
+
+  assert.equal(sameAsCatalog.variant.variantAttributes.color, 'black');
+  assert.equal(changedVariant.variant.variantAttributes.color, 'white');
+  assert.notEqual(changedVariant.variantKey, sameAsCatalog.variantKey);
+});
+
 test('resolveSupplierVariantKeyForItem: prefers supplier-page variantKey on cart line', () => {
   const parent = { specifications: { weight: '1.5 kg' } };
   const computed = buildSupplierVariantIdentity({ specifications: {} }, parent).variantKey;

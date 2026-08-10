@@ -13,6 +13,10 @@ import {
   supplierUnitCreateSchema
 } from './supplierImports.js';
 import {
+  mergeOwnedIntoDiscoverySuggestions,
+  searchSupplierOwnedCatalogSuggestions
+} from '../../services/productDiscoverySearchService.js';
+import {
   listApprovedCatalogBrands,
   listSupplierSelectableBrands
 } from '../../services/supplierBrandCatalogService.js';
@@ -32,16 +36,30 @@ function isAuthenticatedSupplier(req) {
 
 /**
  * Buyer Product Discovery / voice search must return the full listed catalog.
- * Supplier Product Management autocomplete opts in via brandScoped=1 (or scope=supplier).
- * Dual-role users often keep supplier registeredRoles while browsing SP discovery; never
- * infer brand lock from that alone or an empty Select Yourself profile hides every product.
+ * Brand scoping is only for explicit brandScoped/scope=supplier callers — not Add Product
+ * catalog reuse, which must show every matching approved product from any supplier.
  */
 export function shouldBrandScopeDiscoverySearch(query = {}) {
+  if (shouldCatalogAutocompleteSearch(query)) return false;
   const scopedFlag = String(query.brandScoped ?? query.brand_scoped ?? '')
     .trim()
     .toLowerCase();
   if (scopedFlag === '1' || scopedFlag === 'true' || scopedFlag === 'yes') return true;
   return String(query.scope || '').trim().toLowerCase() === 'supplier';
+}
+
+/**
+ * Supplier Add Product name suggestions: full approved catalog match (any supplier),
+ * not limited to the caller's Select Yourself brands or currently live offers.
+ */
+export function shouldCatalogAutocompleteSearch(query = {}) {
+  const flag = String(
+    query.catalogAutocomplete ?? query.catalog_autocomplete ?? query.forCatalogAutocomplete ?? ''
+  )
+    .trim()
+    .toLowerCase();
+  if (flag === '1' || flag === 'true' || flag === 'yes') return true;
+  return String(query.scope || '').trim().toLowerCase() === 'catalog';
 }
 
 export function filterSuggestionsBySupplierBrandAccess(suggestions, profile) {
@@ -75,28 +93,57 @@ router.get('/products/search', authenticateToken, async (req, res) => {
     const parsedOffset = Number.parseInt(String(req.query.offset || ''), 10);
     const offset = Number.isFinite(parsedOffset) ? Math.max(parsedOffset, 0) : (page - 1) * limit;
 
+    const catalogAutocomplete = shouldCatalogAutocompleteSearch(req.query);
+    const brandScoped = shouldBrandScopeDiscoverySearch(req.query);
+
     const result = await searchProductDiscoveryForUser(supabase, {
       userId: req.userId,
       q,
       category,
-      limit,
+      limit: catalogAutocomplete ? Math.max(limit, 50) : limit,
       page,
-      offset,
-      legacyManualDiscoveryCategoryFilter: true
+      offset: catalogAutocomplete ? 0 : offset,
+      legacyManualDiscoveryCategoryFilter: true,
+      forCatalogAutocomplete: catalogAutocomplete
     });
-    const brandScoped = shouldBrandScopeDiscoverySearch(req.query);
-    const visibleSuggestions = brandScoped
-      ? filterSuggestionsBySupplierBrandAccess(result.suggestions, req.user?.profile)
-      : (result.suggestions || []);
-    const responseTotal = brandScoped ? visibleSuggestions.length : result.total;
+
+    let visibleSuggestions = result.suggestions || [];
+    let responseTotal = result.total;
+
+    if (catalogAutocomplete) {
+      // Full approved catalog for reuse + this supplier's own pending rows for re-select.
+      const ownedSuggestions = await searchSupplierOwnedCatalogSuggestions(supabase, {
+        supplierId: req.userId,
+        q,
+        category,
+        limit: 50
+      });
+      const merged = mergeOwnedIntoDiscoverySuggestions(
+        result.suggestions || [],
+        ownedSuggestions,
+        { query: q }
+      );
+      visibleSuggestions = merged.slice(0, Math.max(limit, 50));
+      responseTotal = merged.length;
+    } else if (brandScoped) {
+      const effectiveProfile = await loadEffectiveSupplierChainProfile(
+        req.userId,
+        req.user?.profile || {}
+      );
+      visibleSuggestions = filterSuggestionsBySupplierBrandAccess(
+        result.suggestions,
+        effectiveProfile
+      );
+      responseTotal = visibleSuggestions.length;
+    }
 
     return res.json({
       status: 'success',
       suggestions: visibleSuggestions,
       categories: Array.isArray(result.categories) ? result.categories : [],
       total: responseTotal,
-      limit: result.limit,
-      offset: result.offset,
+      limit: catalogAutocomplete ? Math.max(limit, 50) : result.limit,
+      offset: catalogAutocomplete ? 0 : result.offset,
       recommendationMode: result.recommendationMode
     });
   } catch (error) {

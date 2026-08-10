@@ -386,10 +386,163 @@ export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [],
 }
 
 /**
+ * Clear or upgrade a local Path B submission banner once admin approval/rejection
+ * is visible in profile, approved-brand lists, or the approved catalog.
+ * Returns the same notice reference when nothing changed.
+ */
+export function reconcileBrandSubmissionNotice(
+  notice,
+  {
+    profile = null,
+    catalogBrands = [],
+    supplierApprovedBrands = []
+  } = {}
+) {
+  if (!notice || notice.tone !== 'pending') return notice;
+  const brands = Array.isArray(notice.brands) ? notice.brands : [];
+  if (brands.length === 0) return null;
+
+  const requests = Array.isArray(profile?.supplierBrandRequests) ? profile.supplierBrandRequests : [];
+  const adminApproved = Array.isArray(profile?.adminApprovedBrands) ? profile.adminApprovedBrands : [];
+  const approvedList =
+    Array.isArray(supplierApprovedBrands) && supplierApprovedBrands.length > 0
+      ? supplierApprovedBrands
+      : adminApproved;
+
+  const stillPending = [];
+  const nowApproved = [];
+  const nowRejected = [];
+
+  for (const row of brands) {
+    const name = String(row?.name || '').trim();
+    if (!name) continue;
+    const request = findSupplierBrandRequest(name, requests);
+    const status = String(request?.status || '').toLowerCase();
+    if (status === 'rejected') {
+      nowRejected.push({
+        ...row,
+        name,
+        status: 'rejected',
+        rejectionReason: request?.rejectionReason || row?.rejectionReason || ''
+      });
+      continue;
+    }
+    const approved =
+      status === 'approved' ||
+      isBrandAlreadyApprovedForSaveBrand(name, {
+        catalogBrands,
+        supplierApprovedBrands: approvedList,
+        supplierBrandRequests: requests,
+        adminApprovedBrands: adminApproved
+      });
+    if (approved) {
+      nowApproved.push({
+        ...row,
+        name,
+        status: 'approved',
+        submittedAt:
+          row?.submittedAt ||
+          request?.submittedAt ||
+          request?.requestedAt ||
+          request?.createdAt ||
+          null
+      });
+      continue;
+    }
+    stillPending.push(row);
+  }
+
+  if (stillPending.length === brands.length) return notice;
+
+  if (stillPending.length > 0) {
+    return {
+      ...notice,
+      tone: 'pending',
+      brands: stillPending,
+      title:
+        stillPending.length === 1
+          ? `Pending Admin Approval — "${stillPending[0].name}"`
+          : `${stillPending.length} brand requests pending admin approval`,
+      message:
+        stillPending.length === 1
+          ? 'Path B: your brand request is still waiting for admin approval.'
+          : 'Path B: some brand requests are still waiting for admin approval.'
+    };
+  }
+
+  if (nowRejected.length > 0 && nowApproved.length === 0) {
+    // Let the brand-status card show rejection details; drop the stale pending banner.
+    return null;
+  }
+
+  return {
+    tone: 'success',
+    title:
+      nowApproved.length === 1
+        ? `Brand "${nowApproved[0].name}" approved by admin`
+        : `${nowApproved.length} brand requests approved by admin`,
+    brands: nowApproved,
+    submittedAt:
+      nowApproved.find((row) => row.submittedAt)?.submittedAt || notice.submittedAt || null,
+    message:
+      nowApproved.length === 1
+        ? 'Admin approved your brand request. Continue with Path A supply-chain role setup for this brand.'
+        : 'Admin approved your brand requests. Continue with Path A supply-chain role setup for each brand.'
+  };
+}
+
+/**
+ * Flip stale pending request rows to approved when Layer 2 access is already true
+ * (catalog / adminApprovedBrands / supplierApprovedBrands). Keeps Supplier UI in sync
+ * after Admin approves even if a local pending merge has not been refreshed yet.
+ */
+export function reconcilePendingSupplierBrandRequests(
+  profile,
+  {
+    catalogBrands = [],
+    supplierApprovedBrands = []
+  } = {}
+) {
+  if (!profile || typeof profile !== 'object') return profile;
+  const requests = Array.isArray(profile.supplierBrandRequests) ? profile.supplierBrandRequests : [];
+  if (requests.length === 0) return profile;
+
+  const adminApproved = Array.isArray(profile.adminApprovedBrands) ? profile.adminApprovedBrands : [];
+  const approvedList =
+    Array.isArray(supplierApprovedBrands) && supplierApprovedBrands.length > 0
+      ? supplierApprovedBrands
+      : adminApproved;
+
+  let changed = false;
+  const nextRequests = requests.map((row) => {
+    const name = String(row?.name || row?.normalizedName || '').trim();
+    const status = String(row?.status || '').toLowerCase();
+    if (!name || status !== 'pending') return row;
+    // Avoid treating the pending row itself as approval evidence — pass peers only.
+    const peers = requests.filter(
+      (item) => brandKeyForDuplicateCheck(item?.name || item?.normalizedName) !== brandKeyForDuplicateCheck(name)
+    );
+    const approved = isBrandAlreadyApprovedForSaveBrand(name, {
+      catalogBrands,
+      supplierApprovedBrands: approvedList,
+      supplierBrandRequests: peers,
+      adminApprovedBrands: adminApproved
+    });
+    if (!approved) return row;
+    changed = true;
+    return { ...row, name, status: 'approved' };
+  });
+
+  if (!changed) return profile;
+  return { ...profile, supplierBrandRequests: nextRequests };
+}
+
+/**
  * Brand-step status card (Path A / Path B). Single source of truth so the UI never
  * shows "Ready to submit" alongside an approved/pending request state.
  *
- * Precedence: empty → pending request → rejected → approved access → catalog match hint → ready.
+ * Precedence: empty → approved access → rejected → pending request → catalog match hint → ready.
+ * Approved Layer 2 / catalog must beat a stale pending request row after Admin approval.
  */
 export function resolveSelectYourselfBrandStepStatus({
   brandName = '',
@@ -429,6 +582,28 @@ export function resolveSelectYourselfBrandStepStatus({
     brandMeta: null
   });
 
+  const isApproved =
+    catalogBrandSelected ||
+    requestStatus === 'approved' ||
+    layers.supplierHasAccess === true;
+
+  if (isApproved) {
+    if (submittedAt) {
+      detailLines.push(`Submitted: ${formatDateTimeIST(submittedAt, '—')}`);
+    }
+    return { tone: 'success', label: 'Approved by admin', detailLines };
+  }
+
+  if (requestStatus === 'rejected') {
+    if (brandRequest?.rejectionReason) detailLines.push(brandRequest.rejectionReason);
+    detailLines.push(
+      submittedAt
+        ? `Originally submitted: ${formatDateTimeIST(submittedAt, '—')}`
+        : 'Originally submitted: date unavailable'
+    );
+    return { tone: 'danger', label: 'Rejected by admin', detailLines };
+  }
+
   if (requestStatus === 'pending') {
     detailLines.push(
       'Your brand approval request was submitted. Waiting for admin review — no need to submit again.'
@@ -443,28 +618,6 @@ export function resolveSelectYourselfBrandStepStatus({
       label: 'Pending Admin Approval',
       detailLines
     };
-  }
-
-  if (requestStatus === 'rejected') {
-    if (brandRequest?.rejectionReason) detailLines.push(brandRequest.rejectionReason);
-    detailLines.push(
-      submittedAt
-        ? `Originally submitted: ${formatDateTimeIST(submittedAt, '—')}`
-        : 'Originally submitted: date unavailable'
-    );
-    return { tone: 'danger', label: 'Rejected by admin', detailLines };
-  }
-
-  const isApproved =
-    catalogBrandSelected ||
-    requestStatus === 'approved' ||
-    layers.supplierHasAccess === true;
-
-  if (isApproved) {
-    if (submittedAt) {
-      detailLines.push(`Submitted: ${formatDateTimeIST(submittedAt, '—')}`);
-    }
-    return { tone: 'success', label: 'Approved by admin', detailLines };
   }
 
   if (approvedCatalogMatchMessage) {
@@ -647,12 +800,21 @@ export function classifyPathBBrandSaveRows({
 
 export function listPendingBrandNamesBlockingSave({
   profile,
+  catalogBrands = [],
+  supplierApprovedBrands = [],
   extraPendingBrandNames = []
 } = {}) {
   const entries = getCompanyInfoEntriesForSave(profile || {}).filter((entry) =>
     String(entry?.brands || '').trim()
   );
   const requests = profile?.supplierBrandRequests || [];
+  const adminApproved = Array.isArray(profile?.adminApprovedBrands)
+    ? profile.adminApprovedBrands
+    : [];
+  const approvedListForAccess =
+    Array.isArray(supplierApprovedBrands) && supplierApprovedBrands.length > 0
+      ? supplierApprovedBrands
+      : adminApproved;
   const extraPendingKeys = new Set(
     (Array.isArray(extraPendingBrandNames) ? extraPendingBrandNames : [])
       .map((name) => brandKeyForDuplicateCheck(name))
@@ -663,6 +825,17 @@ export function listPendingBrandNamesBlockingSave({
     const brand = String(entry?.brands || '').trim();
     if (!brand) continue;
     const brandKey = brandKeyForDuplicateCheck(brand);
+    // Stale local pending notices must not keep blocking after Admin approval.
+    if (
+      isBrandAlreadyApprovedForSaveBrand(brand, {
+        catalogBrands,
+        supplierApprovedBrands: approvedListForAccess,
+        supplierBrandRequests: requests,
+        adminApprovedBrands: adminApproved
+      })
+    ) {
+      continue;
+    }
     const request = findSupplierBrandRequest(brand, requests);
     const status = String(request?.status || '').toLowerCase();
     if (status === 'pending' || (brandKey && extraPendingKeys.has(brandKey))) {

@@ -239,7 +239,7 @@ const SupplierUpstream = ({ user }) => {
   const [cartProjects, setCartProjects] = useState([]);
   const [addCartDialogOpen, setAddCartDialogOpen] = useState(false);
   const [pendingCartProduct, setPendingCartProduct] = useState(null);
-  const [dialogQty, setDialogQty] = useState(1);
+  const [dialogQty, setDialogQty] = useState(0);
   const [targetCartProjectId, setTargetCartProjectId] = useState('__new__');
   const [newCartProjectName, setNewCartProjectName] = useState('');
   const [newCartRequiredDate, setNewCartRequiredDate] = useState('');
@@ -518,22 +518,24 @@ const SupplierUpstream = ({ user }) => {
 
   const getProcurementQty = (mineId, minQty = 1) => {
     const key = normalizeSupplierProductKey(mineId);
-    const floor = Math.max(1, minQty);
-    const fromDraft = parseSupplierStockQuantity(procurementQtyByMineId[key]);
-    if (fromDraft != null && fromDraft > 0) return Math.max(floor, fromDraft);
+    // Explicit card/dialog draft (including 0) wins.
+    if (Object.prototype.hasOwnProperty.call(procurementQtyByMineId, key)) {
+      const fromDraft = parseSupplierStockQuantity(procurementQtyByMineId[key]);
+      return Math.max(0, fromDraft ?? 0);
+    }
     const fromSelected = parseSupplierStockQuantity(selectedMine[key]);
-    if (fromSelected != null && fromSelected > 0) return Math.max(floor, fromSelected);
+    if (fromSelected != null && fromSelected > 0) return fromSelected;
     const fromCart = parseSupplierStockQuantity(cartQtyByMineId[key]);
-    if (fromCart != null && fromCart > 0) return Math.max(floor, fromCart);
-    return floor;
+    if (fromCart != null && fromCart > 0) return fromCart;
+    // Default display quantity before the supplier chooses one.
+    return 0;
   };
 
   const setProcurementQty = (mineId, minQty, nextRaw) => {
     const key = normalizeSupplierProductKey(mineId);
     if (!key) return;
-    const floor = Math.max(1, minQty);
     const parsed = parseSupplierStockQuantity(nextRaw);
-    const qty = Math.max(floor, parsed != null && parsed > 0 ? parsed : floor);
+    const qty = Math.max(0, parsed != null ? parsed : 0);
     setProcurementQtyByMineId((prev) => ({ ...prev, [key]: qty }));
     setSelectedMine((prev) => {
       if (!prev?.[key]) return prev;
@@ -1095,13 +1097,22 @@ const SupplierUpstream = ({ user }) => {
       loadSupplierCartProjects(),
       loadProfileShippingAddresses()
     ]);
-    await refreshSyncedCartQuantities();
+    const synced = await refreshSyncedCartQuantities();
     const preferredProjectId = resolvePreferredProjectId(mineId, projects);
     const initialProjectId = preferredProjectId || projects[0]?.projectId || '__new__';
-    const initialQty =
-      preferredQty != null && preferredQty > 0
+    const inCartQty = parseSupplierStockQuantity(
+      synced?.quantities?.[mineId] ?? cartQtyByMineId[mineId]
+    );
+    const inCart = inCartQty != null && inCartQty > 0;
+    // New adds start at 0 so the supplier must choose a quantity. Existing cart lines
+    // keep the synced qty (or an explicit override from the caller).
+    const initialQty = inCart
+      ? preferredQty != null && preferredQty > 0
         ? Math.max(minQty, preferredQty)
-        : getProcurementQty(mineId, minQty);
+        : inCartQty
+      : preferredQty != null && preferredQty > 0
+        ? preferredQty
+        : 0;
     setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: initialQty }));
     setPendingCartProduct(product);
     setDialogQty(initialQty);
@@ -1185,16 +1196,21 @@ const SupplierUpstream = ({ user }) => {
   };
 
   /**
-   * Add/update cart for a listing. Reuses the product's project or the session project
-   * so the project picker is only shown when no project is known yet (or forced).
+   * Add/update cart for a listing.
+   * - New products always open the project picker (name, dispatch date, address).
+   * - Products already in cart update quantity on the same project without re-prompting
+   *   (use forceProjectPicker to change project).
    */
   const addOrUpdateCartForProduct = async (product, requestedQty, options = {}) => {
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return false;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
     const parsedQty = parseSupplierStockQuantity(requestedQty);
-    const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
-    setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: nextQty }));
+    const hasExplicitQty = parsedQty != null && parsedQty > 0;
+    const nextQty = hasExplicitQty ? Math.max(minQty, parsedQty) : null;
+    if (hasExplicitQty) {
+      setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: nextQty }));
+    }
 
     const projects = await loadSupplierCartProjects();
     const synced = await refreshSyncedCartQuantities();
@@ -1206,27 +1222,20 @@ const SupplierUpstream = ({ user }) => {
     );
 
     if (options?.forceProjectPicker === true) {
-      await openAddToCartDialog(product, { quantity: nextQty });
+      await openAddToCartDialog(product, hasExplicitQty ? { quantity: nextQty } : {});
       return false;
     }
 
     // Same product already in cart: update qty on its project — never re-prompt.
     if (inCartQty != null && inCartQty > 0) {
-      return syncExistingCartQuantity(product, nextQty, {
+      return syncExistingCartQuantity(product, hasExplicitQty ? nextQty : inCartQty, {
         projectId: preferredProjectId || synced?.projectsByMine?.[mineId],
         replaceQuantity: true
       });
     }
 
-    // Active procurement session already has a project: add without the picker.
-    if (preferredProjectId) {
-      return syncExistingCartQuantity(product, nextQty, {
-        projectId: preferredProjectId,
-        replaceQuantity: false
-      });
-    }
-
-    await openAddToCartDialog(product, { quantity: nextQty });
+    // First-time add: always ask which project (quantity defaults to 0 in the dialog).
+    await openAddToCartDialog(product, hasExplicitQty ? { quantity: nextQty } : {});
     return false;
   };
 
@@ -1234,7 +1243,9 @@ const SupplierUpstream = ({ user }) => {
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
-    await addOrUpdateCartForProduct(product, getProcurementQty(mineId, minQty));
+    const cardQty = getProcurementQty(mineId, minQty);
+    // Pass card qty only when the supplier already chose one (> 0); otherwise dialog starts at 0.
+    await addOrUpdateCartForProduct(product, cardQty > 0 ? cardQty : undefined);
   };
 
   const handleAddSingleProductToCart = async () => {
@@ -1244,7 +1255,15 @@ const SupplierUpstream = ({ user }) => {
     if (!mineId) return;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
     const parsedQty = parseSupplierStockQuantity(dialogQty);
-    const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
+    if (parsedQty == null || parsedQty <= 0) {
+      setDialogError('Please set a quantity greater than 0.');
+      return;
+    }
+    if (parsedQty < minQty) {
+      setDialogError(`Quantity must be at least ${minQty} (minimum order quantity).`);
+      return;
+    }
+    const nextQty = parsedQty;
     const isUpdate = cartQtyByMineId[mineId] != null;
     const isNewProject = targetCartProjectId === '__new__';
     if (isNewProject) {
@@ -1616,7 +1635,7 @@ const SupplierUpstream = ({ user }) => {
                         type="button"
                         className="us-pd-card__qty-btn"
                         onClick={() => setProcurementQty(mineId, minQty, cardQty - 1)}
-                        disabled={cardQty <= minQty}
+                        disabled={cardQty <= 0}
                         aria-label="Decrease quantity"
                       >
                         −
@@ -1637,7 +1656,7 @@ const SupplierUpstream = ({ user }) => {
                       </p>
                     ) : inCart ? (
                       <p className="us-pd-card__qty-hint us-pd-card__qty-hint--synced">
-                        In cart: {syncedCartQty} — same project is kept for more qty
+                        In cart: {syncedCartQty}
                         {' · '}
                         <button
                           type="button"
@@ -1652,7 +1671,7 @@ const SupplierUpstream = ({ user }) => {
                       </p>
                     ) : (
                       <p className="us-pd-card__qty-hint">
-                        Click Add to Cart to save quantity
+                        Click Add to Cart to choose a project
                       </p>
                     )}
                   </div>
@@ -1828,12 +1847,9 @@ const SupplierUpstream = ({ user }) => {
                             type="button"
                             className="us-pd-card__qty-btn"
                             onClick={() => {
-                              const floor = Math.max(1, mine?.min_order_quantity ?? 1);
-                              setProcurementQty(mineKey, floor, mineSelectedQty - 1);
+                              setProcurementQty(mineKey, 0, mineSelectedQty - 1);
                             }}
-                            disabled={
-                              mineSelectedQty <= Math.max(1, mine?.min_order_quantity ?? 1)
-                            }
+                            disabled={mineSelectedQty <= 0}
                             aria-label="Decrease procurement quantity"
                           >
                             −
@@ -1843,8 +1859,7 @@ const SupplierUpstream = ({ user }) => {
                             type="button"
                             className="us-pd-card__qty-btn"
                             onClick={() => {
-                              const floor = Math.max(1, mine?.min_order_quantity ?? 1);
-                              setProcurementQty(mineKey, floor, mineSelectedQty + 1);
+                              setProcurementQty(mineKey, 0, mineSelectedQty + 1);
                             }}
                             aria-label="Increase procurement quantity"
                           >
@@ -2172,6 +2187,7 @@ const SupplierUpstream = ({ user }) => {
                   const inCart =
                     parseSupplierStockQuantity(cartQtyByMineId[mineId]) != null &&
                     parseSupplierStockQuantity(cartQtyByMineId[mineId]) > 0;
+                  const currentQty = parseSupplierStockQuantity(dialogQty) ?? 0;
                   return (
                     <div className="mt-3 space-y-1">
                       <label className="text-sm font-medium" htmlFor="upstream-dialog-qty">
@@ -2182,21 +2198,21 @@ const SupplierUpstream = ({ user }) => {
                           type="button"
                           className="us-pd-card__qty-btn"
                           onClick={() =>
-                            setDialogQty((prev) => Math.max(minQty, (parseSupplierStockQuantity(prev) ?? minQty) - 1))
+                            setDialogQty((prev) => Math.max(0, (parseSupplierStockQuantity(prev) ?? 0) - 1))
                           }
-                          disabled={(parseSupplierStockQuantity(dialogQty) ?? minQty) <= minQty}
+                          disabled={currentQty <= 0}
                           aria-label="Decrease quantity"
                         >
                           −
                         </button>
                         <span id="upstream-dialog-qty" className="us-pd-card__qty-value">
-                          {parseSupplierStockQuantity(dialogQty) ?? minQty}
+                          {currentQty}
                         </span>
                         <button
                           type="button"
                           className="us-pd-card__qty-btn"
                           onClick={() =>
-                            setDialogQty((prev) => Math.max(minQty, (parseSupplierStockQuantity(prev) ?? minQty) + 1))
+                            setDialogQty((prev) => Math.max(0, (parseSupplierStockQuantity(prev) ?? 0) + 1))
                           }
                           aria-label="Increase quantity"
                         >
@@ -2206,7 +2222,9 @@ const SupplierUpstream = ({ user }) => {
                       <p className="text-xs text-muted-foreground">
                         {inCart
                           ? 'Confirm with Update Cart to sync this quantity to your cart.'
-                          : 'Confirm with Add to Cart to save this quantity to your cart.'}
+                          : minQty > 1
+                            ? `Start at 0, then set quantity (minimum order: ${minQty}) before adding to cart.`
+                            : 'Start at 0, then set quantity before adding to cart.'}
                       </p>
                     </div>
                   );
@@ -2438,7 +2456,10 @@ const SupplierUpstream = ({ user }) => {
               <Button variant="outline" onClick={() => setAddCartDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleAddSingleProductToCart}>
+              <Button
+                onClick={handleAddSingleProductToCart}
+                disabled={(parseSupplierStockQuantity(dialogQty) ?? 0) <= 0}
+              >
                 {(() => {
                   const mineId = normalizeSupplierProductKey(pendingCartProduct?.supplier_product_id);
                   const inCart =

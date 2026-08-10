@@ -45,6 +45,9 @@ import {
   profileHasBrandsNeedingApprovalRequest,
   buildSelectYourselfChainFormSignature,
   buildSelectYourselfChainEntryRowsSignature,
+  reconcileBrandSubmissionNotice,
+  reconcilePendingSupplierBrandRequests,
+  isBrandAlreadyApprovedForSaveBrand,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from '../utils/supplierSelectYourselfProfile';
 import { resolveActiveBrandPath, shouldShowApprovedBrandPathBAlert, shouldShowMixedApprovedBrandPathBAlert } from '../utils/supplierSelectYourselfPaths';
@@ -207,15 +210,27 @@ export default function SupplierSelectYourself() {
 
   const pendingBrandRequests = useMemo(() => {
     const requests = Array.isArray(profile?.supplierBrandRequests) ? profile.supplierBrandRequests : [];
+    const adminApproved = Array.isArray(profile?.adminApprovedBrands) ? profile.adminApprovedBrands : [];
     return requests
       .filter((row) => String(row?.status || '').toLowerCase() === 'pending')
+      .filter((row) => {
+        const name = String(row?.name || '').trim();
+        if (!name) return false;
+        // Drop from pending list once Admin approval is visible via catalog / approved lists.
+        return !isBrandAlreadyApprovedForSaveBrand(name, {
+          catalogBrands,
+          supplierApprovedBrands: effectiveApprovedBrands,
+          supplierBrandRequests: requests,
+          adminApprovedBrands: adminApproved
+        });
+      })
       .map((row) => ({
         name: String(row?.name || '').trim(),
         submittedAt: row?.submittedAt || row?.requestedAt || row?.createdAt || null
       }))
       .filter((row) => row.name)
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }, [profile?.supplierBrandRequests]);
+  }, [profile?.supplierBrandRequests, profile?.adminApprovedBrands, catalogBrands, effectiveApprovedBrands]);
 
   const brandSaveBlockedForPending = useMemo(() => {
     const noticePendingNames =
@@ -243,9 +258,11 @@ export default function SupplierSelectYourself() {
         : [];
     return listPendingBrandNamesBlockingSave({
       profile,
+      catalogBrands,
+      supplierApprovedBrands: effectiveApprovedBrands,
       extraPendingBrandNames: noticePendingNames
     });
-  }, [profile, brandSubmissionNotice]);
+  }, [profile, catalogBrands, effectiveApprovedBrands, brandSubmissionNotice]);
 
   const approvedBrandsBlockingSave = useMemo(() => {
     const noticeApprovedNames =
@@ -552,6 +569,51 @@ export default function SupplierSelectYourself() {
     if (!profileBrandSig || profileBrandSig !== baselineBrandSig) return;
     setBrandApprovalSubmittedSignature((prev) => (prev === profileBrandSig ? prev : profileBrandSig));
   }, [profile, baseline, catalogBrands, catalogBrandsLoading]);
+
+  // After Admin approves, upgrade stale pending request rows / banners using live catalog + profile.
+  useEffect(() => {
+    if (!profile) return;
+    setProfile((prev) => {
+      if (!prev) return prev;
+      const next = reconcilePendingSupplierBrandRequests(prev, {
+        catalogBrands,
+        supplierApprovedBrands: effectiveApprovedBrands
+      });
+      return next === prev ? prev : next;
+    });
+  }, [catalogBrands, effectiveApprovedBrands, profile?.supplierBrandRequests]);
+
+  useEffect(() => {
+    if (!brandSubmissionNotice || brandSubmissionNotice.tone !== 'pending') return;
+    const next = reconcileBrandSubmissionNotice(brandSubmissionNotice, {
+      profile,
+      catalogBrands,
+      supplierApprovedBrands: effectiveApprovedBrands
+    });
+    if (next !== brandSubmissionNotice) {
+      setBrandSubmissionNotice(next);
+    }
+  }, [brandSubmissionNotice, profile, catalogBrands, effectiveApprovedBrands]);
+
+  // While a Path B request is pending, poll so Admin approval appears without requiring a tab focus.
+  useEffect(() => {
+    const hasPendingNotice = brandSubmissionNotice?.tone === 'pending';
+    const hasPendingRequests = pendingBrandRequests.length > 0;
+    if (!hasPendingNotice && !hasPendingRequests) return undefined;
+
+    const poll = () => {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
+      const refreshBlocked =
+        hasUnsavedChangesRef.current || Date.now() < blockProfileRefreshRef.current;
+      reloadCatalogBrands?.();
+      if (!refreshBlocked) {
+        fetchProfile();
+      }
+    };
+
+    const intervalId = window.setInterval(poll, 8000);
+    return () => window.clearInterval(intervalId);
+  }, [brandSubmissionNotice?.tone, pendingBrandRequests.length, reloadCatalogBrands]);
 
   // Keep approved brands / role options fresh after admin approval in another session.
   // Never reload the full profile while the supplier has unsaved role/document drafts —
@@ -1139,6 +1201,8 @@ export default function SupplierSelectYourself() {
     ) {
       const pendingNames = listPendingBrandNamesBlockingSave({
         profile,
+        catalogBrands,
+        supplierApprovedBrands: effectiveApprovedBrands,
         extraPendingBrandNames: noticePendingNames
       });
       if (pendingNames.length > 0) {

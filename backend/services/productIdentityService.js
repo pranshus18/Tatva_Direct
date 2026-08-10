@@ -1,5 +1,8 @@
 import crypto from 'crypto';
-import { mergeSpecificationMaps, parseSpecificationsObject } from './supplierCatalogHelpersService.js';
+import {
+  mergeCatalogAndOfferSpecificationsForDisplay,
+  parseSpecificationsObject
+} from './supplierCatalogHelpersService.js';
 
 /**
  * Product Identity Service (Phase 1)
@@ -351,7 +354,12 @@ export function buildSupplierVariantIdentity(offerInput = {}, parentProduct = nu
           !Array.isArray(offerInput.variantAttributes)
         ? offerInput.variantAttributes
         : {};
-  const mergedSpecifications = mergeSpecificationMaps(catalogSpecs, offerSpecs);
+  // Offer-filled values must win over catalog defaults. Otherwise changing COLOR/SIZE/etc.
+  // still hashes to the same variant_key and create is blocked as a duplicate listing.
+  const mergedSpecifications = mergeCatalogAndOfferSpecificationsForDisplay(
+    catalogSpecs,
+    offerSpecs
+  );
   return buildIdentityBundle({
     ...offerInput,
     specifications: mergedSpecifications

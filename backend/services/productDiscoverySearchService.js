@@ -133,12 +133,175 @@ function applyTokenSearchFilter(productsQuery, query) {
   return productsQuery.or(parts.slice(0, 16).join(','));
 }
 
+const OWNED_PRODUCT_SELECT = `
+  id,
+  name,
+  category,
+  unit,
+  description,
+  brand,
+  gtin,
+  barcode,
+  specifications,
+  images,
+  price,
+  stock,
+  min_order_quantity,
+  average_rating,
+  total_reviews,
+  tags,
+  location,
+  status,
+  is_active,
+  updated_at,
+  family_id,
+  variant_id,
+  asin
+`;
+
+/**
+ * Catalog rows this supplier already listed (pending or approved).
+ * Used by Product Management autocomplete so suppliers can re-select their own
+ * submissions even before admin approval — discovery search only returns approved listed SKUs.
+ */
+export async function searchSupplierOwnedCatalogSuggestions(
+  supabase,
+  { supplierId, q, category, limit = 50 } = {}
+) {
+  const ownerId = String(supplierId || '').trim();
+  if (!ownerId) return [];
+
+  const parsedLimit = Number.parseInt(String(limit ?? ''), 10);
+  const safeLimit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 50;
+  const query = sanitizeDiscoverySearchQuery(
+    normalizeSearchQueryAliases(sanitizeDiscoverySearchQuery(q))
+  );
+  const trimmedCategory = String(category || '').trim();
+
+  const { data: offerRows, error: offerError } = await supabase
+    .from('supplier_products')
+    .select('product_id, status, updated_at')
+    .eq('supplier_id', ownerId)
+    .neq('status', 'rejected')
+    .order('updated_at', { ascending: false })
+    .limit(500);
+
+  if (offerError) throw offerError;
+
+  const productIds = [
+    ...new Set((offerRows || []).map((row) => row?.product_id).filter(Boolean).map(String))
+  ];
+  if (productIds.length === 0) return [];
+
+  const offerStatusByProductId = new Map();
+  for (const row of offerRows || []) {
+    const productId = String(row?.product_id || '').trim();
+    if (!productId || offerStatusByProductId.has(productId)) continue;
+    offerStatusByProductId.set(productId, String(row?.status || 'pending').trim().toLowerCase());
+  }
+
+  const chunkSize = 100;
+  const products = [];
+  for (let i = 0; i < productIds.length; i += chunkSize) {
+    const chunk = productIds.slice(i, i + chunkSize);
+    let productsQuery = applyCategoryFilter(
+      supabase
+        .from('products')
+        .select(OWNED_PRODUCT_SELECT)
+        .in('id', chunk)
+        .neq('status', 'rejected'),
+      { trimmedCategory }
+    );
+    productsQuery = applyTextSearchFilter(productsQuery, query);
+
+    const { data: rows, error: productsError } = await productsQuery
+      .order('updated_at', { ascending: false })
+      .limit(safeLimit);
+    if (productsError) throw productsError;
+    products.push(...(rows || []));
+  }
+
+  let ranked = rankProductsByQuery(query, products);
+  if (query && !ranked.length && products.length === 0) {
+    // Text search may miss fuzzy short names — fall back to ranking the full owned set.
+    const fallback = [];
+    for (let i = 0; i < productIds.length; i += chunkSize) {
+      const chunk = productIds.slice(i, i + chunkSize);
+      let fallbackQuery = applyCategoryFilter(
+        supabase.from('products').select(OWNED_PRODUCT_SELECT).in('id', chunk).neq('status', 'rejected'),
+        { trimmedCategory }
+      );
+      const { data: rows, error } = await fallbackQuery
+        .order('updated_at', { ascending: false })
+        .limit(250);
+      if (error) throw error;
+      fallback.push(...(rows || []));
+    }
+    ranked = filterByFuzzyScore(rankProductsByQuery(query, fallback), { limit: safeLimit });
+  }
+
+  const byId = new Map();
+  for (const product of ranked.length ? ranked : products) {
+    const id = String(product?.id || '').trim();
+    if (!id || byId.has(id)) continue;
+    byId.set(id, {
+      ...product,
+      supplierCount: 1,
+      canAddToCart: false,
+      ownedBySupplier: true,
+      offerStatus: offerStatusByProductId.get(id) || String(product?.status || 'pending').toLowerCase()
+    });
+  }
+
+  return sortDiscoverySuggestions([...byId.values()], { query }).slice(0, safeLimit);
+}
+
+/**
+ * Union approved discovery hits with the supplier's own catalog rows (dedupe by product id).
+ * Owned rows win on conflict so pending submissions remain visible in Product Management.
+ */
+export function mergeOwnedIntoDiscoverySuggestions(
+  discoverySuggestions = [],
+  ownedSuggestions = [],
+  { query = '' } = {}
+) {
+  const byId = new Map();
+
+  for (const suggestion of discoverySuggestions || []) {
+    const id = String(suggestion?.id || '').trim();
+    if (!id) continue;
+    byId.set(id, suggestion);
+  }
+
+  for (const suggestion of ownedSuggestions || []) {
+    const id = String(suggestion?.id || '').trim();
+    if (!id) continue;
+    const existing = byId.get(id);
+    byId.set(id, existing
+      ? {
+          ...existing,
+          ...suggestion,
+          ownedBySupplier: true,
+          supplierCount: Math.max(
+            Number(existing?.supplierCount) || 0,
+            Number(suggestion?.supplierCount) || 1
+          )
+        }
+      : { ...suggestion, ownedBySupplier: true });
+  }
+
+  return sortDiscoverySuggestions([...byId.values()], { query });
+}
+
 /**
  * Product Discovery search (listed approved products + supplier offers).
  *
  * @param {boolean} [legacyManualDiscoveryCategoryFilter] - When true, uses the original browser
  *   API behaviour: `category` query param is lowercased and matched with `.eq` (manual Product Discovery).
  *   When false, category is matched case-insensitively (ILike).
+ * @param {boolean} [forCatalogAutocomplete] - When true (supplier Add Product name suggestions),
+ *   return every matching approved catalog product even if it currently has no live eligible offers.
+ *   Buyers still require supplierCount > 0 so they only see purchasable listings.
  */
 export async function searchProductDiscoveryForUser(
   supabase,
@@ -149,7 +312,8 @@ export async function searchProductDiscoveryForUser(
     limit,
     page,
     offset: offsetOverride,
-    legacyManualDiscoveryCategoryFilter = false
+    legacyManualDiscoveryCategoryFilter = false,
+    forCatalogAutocomplete = false
   }
 ) {
   const parsedLimit = Number.parseInt(String(limit ?? ''), 10);
@@ -321,7 +485,9 @@ export async function searchProductDiscoveryForUser(
         recommendationScore
       };
     })
-    .filter((p) => Number(p?.supplierCount || 0) > 0);
+    // Buyer discovery: only purchasable listed offers.
+    // Catalog autocomplete: keep all matching approved products so suppliers can reuse details.
+    .filter((p) => forCatalogAutocomplete || Number(p?.supplierCount || 0) > 0);
 
   const suggestionsWithVariants = await enrichDiscoverySuggestionsWithVariantCounts(
     supabase,

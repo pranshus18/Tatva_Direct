@@ -16,6 +16,8 @@ import {
   shouldBlockProfileSnapshotRefresh,
   mergeSupplierBrandRequestsIntoProfile,
   resolveSelectYourselfBrandStepStatus,
+  reconcileBrandSubmissionNotice,
+  reconcilePendingSupplierBrandRequests,
   listPendingBrandNamesBlockingSave,
   listApprovedBrandNamesBlockingSave,
   profileHasBrandsNeedingApprovalRequest,
@@ -249,6 +251,75 @@ describe('resolveSelectYourselfBrandStepStatus', () => {
       approvedCatalogMatchMessage: '"Samsun" looks like approved brand "samsung".'
     });
     expect(status.label).toBe('Pending Admin Approval');
+  });
+
+  it('approved Layer 2 access beats a stale pending request row after Admin approval', () => {
+    const status = resolveSelectYourselfBrandStepStatus({
+      brandName: 'NOKIA',
+      catalogBrandNames: ['NOKIA'],
+      catalogBrands: [{ name: 'NOKIA', status: 'approved' }],
+      supplierBrandRequests: [
+        { name: 'NOKIA', status: 'pending', submittedAt: '2026-07-30T10:00:00.000Z' }
+      ],
+      supplierApprovedBrands: [{ name: 'NOKIA', status: 'approved' }]
+    });
+    expect(status.label).toBe('Approved by admin');
+    expect(status.tone).toBe('success');
+  });
+});
+
+describe('reconcileBrandSubmissionNotice', () => {
+  it('upgrades a pending banner to approved when profile request is approved', () => {
+    const notice = {
+      tone: 'pending',
+      title: 'Brand request submitted for "NOKIA"',
+      brands: [{ name: 'NOKIA', status: 'pending', submittedAt: '2026-07-30T10:00:00.000Z' }],
+      submittedAt: '2026-07-30T10:00:00.000Z',
+      message: 'waiting'
+    };
+    const next = reconcileBrandSubmissionNotice(notice, {
+      profile: {
+        supplierBrandRequests: [{ name: 'NOKIA', status: 'approved', submittedAt: '2026-07-30T10:00:00.000Z' }],
+        adminApprovedBrands: [{ name: 'NOKIA', status: 'approved' }]
+      },
+      catalogBrands: [{ name: 'NOKIA', status: 'approved' }],
+      supplierApprovedBrands: [{ name: 'NOKIA', status: 'approved' }]
+    });
+    expect(next).not.toBe(notice);
+    expect(next.tone).toBe('success');
+    expect(next.brands[0].status).toBe('approved');
+  });
+
+  it('keeps the pending banner when the request is still pending and not in catalog', () => {
+    const notice = {
+      tone: 'pending',
+      title: 'Brand request submitted for "NOKIA"',
+      brands: [{ name: 'NOKIA', status: 'pending' }],
+      message: 'waiting'
+    };
+    const next = reconcileBrandSubmissionNotice(notice, {
+      profile: {
+        supplierBrandRequests: [{ name: 'NOKIA', status: 'pending' }]
+      },
+      catalogBrands: [],
+      supplierApprovedBrands: []
+    });
+    expect(next).toBe(notice);
+  });
+});
+
+describe('reconcilePendingSupplierBrandRequests', () => {
+  it('flips pending request rows to approved when the brand is in the approved catalog', () => {
+    const profile = {
+      supplierBrandRequests: [{ name: 'NOKIA', status: 'pending', submittedAt: '2026-07-30T10:00:00.000Z' }],
+      adminApprovedBrands: []
+    };
+    const next = reconcilePendingSupplierBrandRequests(profile, {
+      catalogBrands: [{ name: 'NOKIA', status: 'approved' }],
+      supplierApprovedBrands: [{ name: 'NOKIA', status: 'approved' }]
+    });
+    expect(next).not.toBe(profile);
+    expect(findSupplierBrandRequest('NOKIA', next.supplierBrandRequests)?.status).toBe('approved');
   });
 });
 

@@ -2460,7 +2460,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       const token = localStorage.getItem('token');
       const params = new URLSearchParams({
         q: query,
-        brandScoped: '1'
+        // Full approved catalog from any supplier (reuse existing product details).
+        catalogAutocomplete: '1',
+        limit: '50'
       });
       const response = await fetch(getApiUrl(`/api/supplier/products/search?${params.toString()}`), {
         headers: {
@@ -2470,7 +2472,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       const data = await response.json();
       if (data.status === 'success') {
         setSuggestions(data.suggestions || []);
-        setShowSuggestions(data.suggestions && data.suggestions.length > 0);
+        // Keep the menu open after search so matching approved products and
+        // "Add new product…" actions remain available.
+        setShowSuggestions(true);
       }
     } catch (error) {
       console.error('Failed to fetch suggestions:', error);
@@ -4562,6 +4566,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                         </div>
                         <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', color: '#64748b' }}>
                           {(suggestion.brand || '-')} • {(suggestion.unit || '-')}
+                          {suggestion.ownedBySupplier
+                            ? String(suggestion.offerStatus || suggestion.status || '').toLowerCase() ===
+                              'pending'
+                              ? ' • Your listing (pending approval)'
+                              : ' • Your listing'
+                            : ''}
                         </div>
                         {hoveredSuggestionId === (suggestion.id || `idx-${index}`) && (
                           <div

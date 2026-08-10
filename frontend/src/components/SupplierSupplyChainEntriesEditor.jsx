@@ -284,8 +284,16 @@ const CompanyInfoEntryCard = ({
   const brandRequestStatus = String(brandRequest?.status || '').toLowerCase();
   const brandRequestSubmittedAt =
     brandRequest?.submittedAt || brandRequest?.requestedAt || brandRequest?.createdAt || null;
-  const isPendingBrandRequest = brandRequestStatus === 'pending';
-  const isRejectedBrandRequest = brandRequestStatus === 'rejected';
+  const brandAlreadyApproved =
+    !!selectedBrand &&
+    isSelectYourselfBrandAlreadyApproved(selectedBrand, {
+      catalogBrands,
+      supplierApprovedBrands,
+      supplierBrandRequests
+    });
+  // Stale pending request rows must not win after Admin approval / catalog access.
+  const isPendingBrandRequest = brandRequestStatus === 'pending' && !brandAlreadyApproved;
+  const isRejectedBrandRequest = brandRequestStatus === 'rejected' && !brandAlreadyApproved;
   const approvedCatalogSuggestions =
     useBrandNameTextInput &&
     hasBrandValue &&
@@ -350,13 +358,6 @@ const CompanyInfoEntryCard = ({
     return opts;
   })();
   const brandOnlyApproved = isBrandOnlyStep && catalogBrandSelected;
-  const brandAlreadyApproved =
-    !!selectedBrand &&
-    isSelectYourselfBrandAlreadyApproved(selectedBrand, {
-      catalogBrands,
-      supplierApprovedBrands,
-      supplierBrandRequests
-    });
   const showBrandDocumentsUpload = editing && !brandAlreadyApproved && !isPendingBrandRequest;
   const brandStatus = String(
     brandMeta?.approvalStatus ||
