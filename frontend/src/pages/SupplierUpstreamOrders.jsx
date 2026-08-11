@@ -671,6 +671,7 @@ export default function SupplierUpstreamOrders() {
                     <th>Status</th>
                     <th>Payment</th>
                     <th>Expected dispatch date</th>
+                    <th>Ordered</th>
                     <th>Updated</th>
                     {!isDownstream ? <th aria-label="Actions" /> : null}
                   </tr>
@@ -724,6 +725,7 @@ export default function SupplierUpstreamOrders() {
                       <td>
                         {o.expectedDeliveryDate ? formatDateIST(o.expectedDeliveryDate, '—') : '—'}
                       </td>
+                      <td>{o.createdAt ? formatDateTimeIST(o.createdAt, '—') : '—'}</td>
                       <td>{o.updatedAt ? formatDateTimeIST(o.updatedAt, '—') : '—'}</td>
                       {!isDownstream ? (
                         <td>
@@ -939,6 +941,12 @@ export default function SupplierUpstreamOrders() {
                   <p>
                     <strong>Payment:</strong> {orderDetails?.paymentStatus || 'pending'} •{' '}
                     {paymentMethodLabel(orderDetails?.paymentMethod)}
+                  </p>
+                  <p>
+                    <strong>Order date:</strong>{' '}
+                    {orderDetails?.createdAt
+                      ? formatDateTimeIST(orderDetails.createdAt, 'N/A')
+                      : '—'}
                   </p>
                   <p>
                     <strong>Expected dispatch date:</strong>{' '}

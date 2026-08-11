@@ -12,6 +12,9 @@ import {
   Wallet
 } from 'lucide-react';
 
+/** Temporary: hide Voice Shop (mic) from the SP sidebar until voice is ready to ship again. */
+export const SP_VOICE_NAV_ENABLED = false;
+
 export const SP_NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', shortLabel: 'Dashboard', icon: BarChart3 },
   { path: '/boq-normalize', label: 'BOQ Normalize', shortLabel: 'BOQ', icon: FileText },
@@ -30,6 +33,17 @@ export const SP_NAV_ITEMS = [
 
 const navByPath = Object.fromEntries(SP_NAV_ITEMS.map((item) => [item.path, item]));
 
+const procureItems = [
+  navByPath['/boq-normalize'],
+  navByPath['/product-discovery'],
+  ...(SP_VOICE_NAV_ENABLED ? [navByPath['/voice']] : []),
+  navByPath['/supplier-select'],
+  navByPath['/substitution'],
+  navByPath['/cart'],
+  navByPath['/create-po'],
+  navByPath['/transport-suggestion']
+];
+
 export const SP_NAV_GROUPS = [
   {
     id: 'home',
@@ -39,16 +53,7 @@ export const SP_NAV_GROUPS = [
   {
     id: 'procure',
     label: 'Procure',
-    items: [
-      navByPath['/boq-normalize'],
-      navByPath['/product-discovery'],
-      navByPath['/voice'],
-      navByPath['/supplier-select'],
-      navByPath['/substitution'],
-      navByPath['/cart'],
-      navByPath['/create-po'],
-      navByPath['/transport-suggestion']
-    ]
+    items: procureItems
   },
   {
     id: 'orders',

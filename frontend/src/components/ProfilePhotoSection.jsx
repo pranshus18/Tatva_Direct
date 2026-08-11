@@ -9,6 +9,8 @@ import {
   resolveProfilePhotoDisplayUrl,
   revokeProfilePhotoPreviewUrl
 } from '@/utils/profilePhoto';
+import { normalizeUserType } from '@/utils/userType';
+import CustomerProfileIcon from './CustomerProfileIcon';
 import ProfileCameraCapture from './ProfileCameraCapture';
 import './ProfilePhotoSection.css';
 
@@ -37,6 +39,7 @@ export default function ProfilePhotoSection({
     profile?.pmCustomerAccount?.fullName || profile?.contactPerson || profile?.companyName || 'User';
   const initials = getProfileInitials(displayName);
   const resolvedPhoto = resolveProfilePhotoDisplayUrl(profile?.profilePhotoUrl, photoDraft);
+  const useCustomerLogo = normalizeUserType(profile?.userType) === 'service_provider';
 
   const closePreview = useCallback(() => setPreviewOpen(false), []);
 
@@ -166,7 +169,11 @@ export default function ProfilePhotoSection({
             </button>
           ) : (
             <div className="profile-photo-section__avatar" aria-hidden>
-              <span className="profile-photo-section__initials">{initials}</span>
+              {useCustomerLogo ? (
+                <CustomerProfileIcon className="profile-photo-section__default-icon" alt="" />
+              ) : (
+                <span className="profile-photo-section__initials">{initials}</span>
+              )}
               {busy ? (
                 <div className="profile-photo-section__overlay">
                   <Loader2 className="profile-photo-section__spinner" />
@@ -197,7 +204,11 @@ export default function ProfilePhotoSection({
             <p className="profile-photo-section__company">{profile.companyName}</p>
           ) : null}
           <p className="profile-photo-section__hint">
-            <User size={14} aria-hidden />
+            {useCustomerLogo ? (
+              <CustomerProfileIcon className="profile-photo-section__hint-icon" alt="" aria-hidden />
+            ) : (
+              <User size={14} aria-hidden />
+            )}
             {editing
               ? 'Use the camera icon to take a photo, or choose one from your device. Click Save Changes to keep it.'
               : 'Click Edit Profile to update your photo.'}

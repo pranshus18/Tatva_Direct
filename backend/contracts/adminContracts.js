@@ -33,7 +33,10 @@ export const adminProductRejectSchema = z.object({
   supplierProductId: z.string().uuid().optional()
 }).passthrough();
 
-export const adminProductDeleteSchema = z.object({});
+export const adminProductDeleteSchema = z.object({
+  supplier_product_id: z.string().uuid().optional(),
+  supplierProductId: z.string().uuid().optional()
+}).passthrough();
 export const adminBrandApproveSchema = z.object({});
 export const adminSupplierChainApproveSchema = z.object({
   entryId: z.string().trim().min(1).optional(),

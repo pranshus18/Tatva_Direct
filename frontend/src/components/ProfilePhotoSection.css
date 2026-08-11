@@ -57,6 +57,18 @@
   letter-spacing: 0.02em;
 }
 
+.profile-photo-section__default-icon {
+  width: 58%;
+  height: 58%;
+  opacity: 0.85;
+}
+
+.profile-photo-section__hint-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
 .profile-photo-section__overlay {
   position: absolute;
   inset: 0;

@@ -4,6 +4,7 @@ import { getApiUrl } from '../config/api';
 import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Users, CheckCircle2 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
+import CustomerProfileIcon from '../components/CustomerProfileIcon';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import ProfilePhotoSection from '../components/ProfilePhotoSection';
 import {
@@ -632,7 +633,7 @@ const Profile = ({ user }) => {
       <SpPageLayout showStepper={false}>
         <SpPageHeader
           title="Customer Account"
-          icon={User}
+          icon={CustomerProfileIcon}
           actions={
             <div className="profile-page-header-actions">
               {editing ? (
@@ -721,7 +722,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
         <div className="profile-section">
           <div className="section-header">
             <h2>
-              <User size={20} />
+              <CustomerProfileIcon className="h-5 w-5" alt="" aria-hidden />
               Customer Account
             </h2>
           </div>

@@ -1,6 +1,6 @@
 /**
  * Remove rows that block deleting a catalog product row.
- * Called before admin hard-deletes rejected catalog products.
+ * Called before admin hard-deletes catalog products.
  */
 export async function clearCatalogProductReferences(supabase, productId) {
   const { error: notificationsError } = await supabase
@@ -133,7 +133,7 @@ function isMissingColumnError(error) {
   );
 }
 
-export async function deleteRejectedCatalogProduct(supabase, productId) {
+export async function deleteCatalogProduct(supabase, productId) {
   await clearCatalogProductReferences(supabase, productId);
 
   const { error: deleteError } = await supabase
@@ -145,3 +145,92 @@ export async function deleteRejectedCatalogProduct(supabase, productId) {
     throw deleteError;
   }
 }
+
+/**
+ * Delete a single supplier offer/variant without removing sibling offers.
+ * If it was the last offer on the catalog product, also remove the catalog row.
+ *
+ * @returns {{ deletedOfferId: string, catalogDeleted: boolean }}
+ */
+export async function deleteCatalogOffer(supabase, { catalogProductId, supplierProductId }) {
+  const offerId = String(supplierProductId || '').trim();
+  const productId = String(catalogProductId || '').trim();
+  if (!offerId || !productId) {
+    const err = new Error('catalogProductId and supplierProductId are required');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const { data: offerRow, error: offerFetchError } = await supabase
+    .from('supplier_products')
+    .select('id, product_id')
+    .eq('id', offerId)
+    .single();
+
+  if (offerFetchError || !offerRow) {
+    const err = new Error('Supplier variant/offer not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  if (String(offerRow.product_id) !== productId) {
+    const err = new Error('Variant does not belong to this catalog product');
+    err.statusCode = 409;
+    throw err;
+  }
+
+  const { error: inventoryByOfferError } = await supabase
+    .from('inventory_movements')
+    .delete()
+    .eq('supplier_product_id', offerId);
+
+  if (inventoryByOfferError && !isMissingRelationError(inventoryByOfferError)) {
+    throw inventoryByOfferError;
+  }
+
+  const { error: orderItemsOfferError } = await supabase
+    .from('order_items')
+    .update({ supplier_product_id: null })
+    .eq('supplier_product_id', offerId);
+
+  if (orderItemsOfferError && !isMissingRelationError(orderItemsOfferError)) {
+    throw orderItemsOfferError;
+  }
+
+  const { data: deletedRows, error: offerDeleteError } = await supabase
+    .from('supplier_products')
+    .delete()
+    .eq('id', offerId)
+    .eq('product_id', productId)
+    .select('id');
+
+  if (offerDeleteError) {
+    throw offerDeleteError;
+  }
+
+  if (!deletedRows || deletedRows.length === 0) {
+    const err = new Error('Supplier variant/offer not found');
+    err.statusCode = 404;
+    throw err;
+  }
+
+  const { count, error: countError } = await supabase
+    .from('supplier_products')
+    .select('id', { count: 'exact', head: true })
+    .eq('product_id', productId);
+
+  if (countError && !isMissingRelationError(countError)) {
+    throw countError;
+  }
+
+  const remainingOffers = count || 0;
+  if (remainingOffers === 0) {
+    await deleteCatalogProduct(supabase, productId);
+    return { deletedOfferId: offerId, catalogDeleted: true };
+  }
+
+  return { deletedOfferId: offerId, catalogDeleted: false };
+}
+
+/** @deprecated Use deleteCatalogProduct — kept for existing tests/imports. */
+export const deleteRejectedCatalogProduct = deleteCatalogProduct;

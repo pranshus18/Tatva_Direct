@@ -782,6 +782,13 @@ const YourOrders = () => {
                           </p>
                     </div>
                     </div>
+                        {po.createdAt ? (
+                          <div className="yo-card__dates">
+                            <span>
+                              Ordered <strong>{formatDate(po.createdAt)}</strong>
+                            </span>
+                          </div>
+                        ) : null}
                         {(po.expectedDeliveryDate || po.actualDeliveryDate) && (
                       <div className="yo-card__dates">
                             {po.expectedDeliveryDate && (

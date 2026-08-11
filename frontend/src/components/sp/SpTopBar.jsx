@@ -164,6 +164,7 @@ export default function SpTopBar({ user, pathname, onMenuClick, onLogout, onPort
                   user={user}
                   className="h-8 w-8"
                   fallbackClassName="bg-primary/10 text-xs text-primary"
+                  fallback="customer"
                 />
                 <span className="hidden max-w-[120px] truncate text-sm font-medium sm:inline">{user?.name}</span>
               </Button>

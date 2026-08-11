@@ -17,7 +17,7 @@ import {
 } from '../../services/supplierCatalogHelpersService.js';
 import { syncOfferAttributesWithSpecifications } from '../../services/productIdentityService.js';
 import { areSupplierOfferSpecificationValuesLocked } from '../../services/supplierProductUpdateValidation.js';
-import { deleteRejectedCatalogProduct } from '../../services/adminProductDeleteService.js';
+import { deleteCatalogOffer, deleteCatalogProduct } from '../../services/adminProductDeleteService.js';
 
 /** Sync admin spec keys onto supplier offers without wiping values the supplier already saved. */
 async function syncApprovedProductSpecificationOffers(supabase, product, nowIso) {
@@ -699,12 +699,19 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
     }
   });
 
-  // Delete a rejected product (admin only)
-  // Safety: only allows deletion if product.status === 'rejected'
+  // Delete a catalog product or a single supplier variant/offer (admin only)
   router.delete('/products/:id', authenticateToken, isAdmin, async (req, res) => {
     try {
-      parseWithSchema(adminProductDeleteSchema, req.body || {});
+      const deleteBody = parseWithSchema(adminProductDeleteSchema, req.body || {});
       const productId = req.params?.id;
+      const supplierProductId = String(
+        deleteBody?.supplier_product_id
+          || deleteBody?.supplierProductId
+          || req.query?.supplier_product_id
+          || req.query?.supplierProductId
+          || ''
+      ).trim();
+
       // Hard safety: never allow deletion with missing/undefined ids.
       if (!productId || productId === 'undefined' || productId === 'null') {
         return res.status(400).json({
@@ -734,22 +741,44 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         });
       }
 
-      if ((product.status || 'pending') !== 'rejected') {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Only rejected products can be deleted'
+      // Offer/variant scoped delete — removes only the selected supplier_products row.
+      if (supplierProductId) {
+        const result = await deleteCatalogOffer(supabase, {
+          catalogProductId: productId,
+          supplierProductId
+        });
+
+        if (!result.catalogDeleted) {
+          void syncCatalogProductSnapshotFromOffers(supabase, productId).catch((syncError) => {
+            console.error('[CatalogSnapshot] admin offer delete sync failed:', syncError?.message || syncError);
+          });
+        }
+
+        return res.json({
+          status: 'success',
+          message: result.catalogDeleted
+            ? 'Variant deleted successfully (catalog product removed; it had no remaining variants)'
+            : 'Variant deleted successfully',
+          data: result
         });
       }
 
-      await deleteRejectedCatalogProduct(supabase, productId);
+      await deleteCatalogProduct(supabase, productId);
 
       return res.json({
         status: 'success',
-        message: 'Rejected product deleted successfully'
+        message: 'Product deleted successfully'
       });
     } catch (error) {
       if (String(error?.name || '') === 'ZodError') {
         return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+      }
+      const statusCode = Number(error?.statusCode) || 500;
+      if (statusCode >= 400 && statusCode < 500) {
+        return res.status(statusCode).json({
+          status: 'error',
+          message: error.message || 'Failed to delete product'
+        });
       }
       console.error('Delete product error:', error);
       return res.status(500).json({

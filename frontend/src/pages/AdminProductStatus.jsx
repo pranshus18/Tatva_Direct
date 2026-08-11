@@ -324,12 +324,20 @@ const AdminProductStatus = ({ user }) => {
   };
 
   const handleDelete = async (product) => {
-    if (getAdminRowEffectiveStatus(product) !== 'rejected') {
-      alert('Only rejected products can be deleted.');
+    const offerId = product?.supplier_product_id || product?.supplierProductId || null;
+    const isVariantDelete = Boolean(product?.isVariantRow || offerId);
+    const displayName = getAdminRowDisplayName(product);
+
+    if (isVariantDelete && !offerId) {
+      alert('Cannot delete this variant: missing variant id.');
       return;
     }
 
-    if (!confirm(`Are you sure you want to permanently delete "${product.name}"?\n\nThis cannot be undone.`)) return;
+    const confirmMessage = isVariantDelete
+      ? `Are you sure you want to permanently delete this variant of "${displayName}"?\n\nOnly this supplier variant will be removed. Other variants of the same product will stay. This cannot be undone.`
+      : `Are you sure you want to permanently delete "${displayName}"?\n\nThis removes the product from the catalog for all suppliers. This cannot be undone.`;
+
+    if (!confirm(confirmMessage)) return;
 
     setActionLoading(true);
     try {
@@ -338,21 +346,27 @@ const AdminProductStatus = ({ user }) => {
       const response = await fetch(getApiUrl(`/api/admin/products/${productId}`), {
         method: 'DELETE',
         headers: {
-          'Authorization': `Bearer ${token}`
-        }
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(
+          isVariantDelete
+            ? { supplier_product_id: offerId }
+            : {}
+        )
       });
 
       const data = await response.json().catch(() => ({}));
       if (response.ok && data.status === 'success') {
-        alert('Product deleted successfully!');
+        alert(data.message || (isVariantDelete ? 'Variant deleted successfully!' : 'Product deleted successfully!'));
         fetchProducts();
         setSelectedProduct(null);
       } else {
-        alert(data.message || 'Failed to delete product');
+        alert(data.message || (isVariantDelete ? 'Failed to delete variant' : 'Failed to delete product'));
       }
     } catch (error) {
       console.error('Error deleting product:', error);
-      alert('Error deleting product');
+      alert(isVariantDelete ? 'Error deleting variant' : 'Error deleting product');
     } finally {
       setActionLoading(false);
     }
@@ -667,20 +681,22 @@ const AdminProductStatus = ({ user }) => {
                         Reject
                       </button>
                     )}
-                    {effectiveStatus === 'rejected' && !product.isVariantRow && (
-                      <button
-                        className="btn-delete"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleDelete(product);
-                        }}
-                        disabled={actionLoading}
-                        title="Permanently delete this rejected product"
-                      >
-                        <X size={16} />
-                        Delete
-                      </button>
-                    )}
+                    <button
+                      className="btn-delete"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(product);
+                      }}
+                      disabled={actionLoading}
+                      title={
+                        product.isVariantRow
+                          ? 'Permanently delete only this supplier variant'
+                          : 'Permanently delete this product from the catalog'
+                      }
+                    >
+                      <X size={16} />
+                      {product.isVariantRow ? 'Delete Variant' : 'Delete'}
+                    </button>
                   </div>
                   </div>
 
@@ -2228,23 +2244,25 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                   {isVariantReview ? 'Reject Variant' : 'Reject Product'}
                 </button>
               )}
-              {product.status === 'rejected' && !isVariantReview && (
-                <button
-                  className="btn-delete-modal"
-                  onClick={onDelete}
-                  disabled={actionLoading}
-                  title="Permanently delete this rejected product"
-                >
-                  <X size={16} />
-                  Delete Product
-                </button>
-              )}
               <button
                 className="btn-close-modal-footer"
                 onClick={onClose}
                 disabled={actionLoading}
               >
                 Close
+              </button>
+              <button
+                className="btn-delete-modal"
+                onClick={onDelete}
+                disabled={actionLoading}
+                title={
+                  product.isVariantRow
+                    ? 'Permanently delete only this supplier variant'
+                    : 'Permanently delete this product from the catalog'
+                }
+              >
+                <X size={16} />
+                {product.isVariantRow ? 'Delete Variant' : 'Delete Product'}
               </button>
             </>
           )}

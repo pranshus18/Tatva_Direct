@@ -1,12 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import CustomerProfileIcon from '@/components/CustomerProfileIcon';
 import { getApiUrl } from '@/config/api';
 import { cacheProfilePhotoUrl, getCachedProfilePhotoUrl, getProfileInitials } from '@/utils/profilePhoto';
 
-export default function UserAvatar({ user, className, fallbackClassName }) {
+export default function UserAvatar({
+  user,
+  className,
+  fallbackClassName,
+  /** SP portal only — supplier/admin keep initials. */
+  fallback = 'initials'
+}) {
   const userId = String(user?.id || '').trim();
   const [photoUrl, setPhotoUrl] = useState(() => getCachedProfilePhotoUrl(userId));
   const initials = getProfileInitials(user?.name);
+  const useCustomerLogo = fallback === 'customer';
 
   useEffect(() => {
     const refresh = (event) => {
@@ -57,7 +65,13 @@ export default function UserAvatar({ user, className, fallbackClassName }) {
   return (
     <Avatar className={className}>
       {photoUrl ? <AvatarImage src={photoUrl} alt={user?.name || 'Profile'} /> : null}
-      <AvatarFallback className={fallbackClassName}>{initials}</AvatarFallback>
+      <AvatarFallback className={fallbackClassName}>
+        {useCustomerLogo ? (
+          <CustomerProfileIcon className="h-[70%] w-[70%]" alt="" aria-hidden />
+        ) : (
+          initials
+        )}
+      </AvatarFallback>
     </Avatar>
   );
 }

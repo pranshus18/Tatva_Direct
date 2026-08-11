@@ -887,7 +887,7 @@ const ServiceProviderDashboard = ({ user }) => {
                     </p>
                     <p style={{ fontSize: '0.9rem', color: '#64748b', marginTop: '0.25rem' }}>
                       Amount: ₹{po.amount.toLocaleString()}
-                      {po.createdAt && ` • ${po.createdAt}`}
+                      {po.createdAt && ` • ${formatDateTimeIST(po.createdAt, '—')}`}
                     </p>
                   </div>
                   <div className="item-status">

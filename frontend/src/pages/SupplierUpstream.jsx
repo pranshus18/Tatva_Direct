@@ -255,7 +255,6 @@ const SupplierUpstream = ({ user }) => {
   const [supplierDetails, setSupplierDetails] = useState(null);
   const [supplierOfferDetails, setSupplierOfferDetails] = useState(null);
   const [viewingProduct, setViewingProduct] = useState(null);
-  const [completionBanner, setCompletionBanner] = useState('');
 
   const filteredProducts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -591,10 +590,6 @@ const SupplierUpstream = ({ user }) => {
   const sourcingConfigured = Boolean(
     Array.isArray(suggestions) && suggestions.length > 0 && linesReadyToPlace > 0
   );
-  const showCompletionBar =
-    cartLineCount > 0 ||
-    selectedMineIds.length > 0 ||
-    (Array.isArray(suggestions) && suggestions.length > 0);
 
   const handleToggleMine = (mineId) => {
     const key = normalizeSupplierProductKey(mineId);
@@ -690,14 +685,6 @@ const SupplierUpstream = ({ user }) => {
         });
         return next;
       });
-      const itemCount = Array.isArray(data.items) ? data.items.length : 0;
-      if (itemCount > 0) {
-        setCompletionBanner(
-          'Upstream suppliers loaded. Confirm your selections below, then Review Cart or Proceed to Place Order.'
-        );
-      } else {
-        setCompletionBanner('');
-      }
     } catch (e) {
       console.error('Upstream suggestions error:', e);
       alert(`Failed to load upstream suggestions: ${e?.message || 'Please check your connection and try again.'}`);
@@ -1359,12 +1346,6 @@ const SupplierUpstream = ({ user }) => {
     setAddCartDialogOpen(false);
     setPendingCartProduct(null);
     emitSupplierCartUpdated();
-    setCompletionBanner(
-      responseMessage ||
-        (isUpdate
-          ? 'Cart quantity updated. Continue to review your cart or place an order when ready.'
-          : 'Product added to cart. Continue to review your cart or place an order when ready.')
-    );
   };
 
   const openSupplierDetailsForOffer = (offer) => {
@@ -1443,38 +1424,6 @@ const SupplierUpstream = ({ user }) => {
           </>
         }
       />
-
-      {completionBanner ? (
-        <div className="us-completion-banner" role="status">
-          <div className="us-completion-banner__copy">
-            <strong>Ready for the next step</strong>
-            <p>{completionBanner}</p>
-          </div>
-          <div className="us-completion-banner__actions">
-            <Button variant="outline" size="sm" onClick={() => navigate('/supplier-cart')}>
-              Review Cart
-            </Button>
-            {sourcingConfigured ? (
-              <Button size="sm" onClick={handleProceedToPlaceOrder} disabled={creating}>
-                {creating ? <Loader2 size={14} className="upstream-spin" /> : null}
-                Proceed to Place Order
-              </Button>
-            ) : selectedMineIds.length > 0 && !suggestions ? (
-              <Button size="sm" onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading}>
-                Continue
-              </Button>
-            ) : null}
-            <button
-              type="button"
-              className="us-completion-banner__dismiss"
-              aria-label="Dismiss"
-              onClick={() => setCompletionBanner('')}
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-      ) : null}
 
       <div className="sticky top-0 z-20 mb-4 flex flex-wrap items-center gap-3 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur">
         <div className="relative min-w-[200px] flex-1">
@@ -1738,32 +1687,6 @@ const SupplierUpstream = ({ user }) => {
               <h2 className={suggestionMeta?.rankPriority ? 'upstream-title-with-meta' : ''}>
                 Choose upstream supplier (top {suggestionMeta?.limit ?? 5} matches)
               </h2>
-            </div>
-            <div className="upstream-suggestions-actions">
-              <Button
-                variant="outline"
-                className="upstream-nowrap-btn"
-                onClick={() => navigate('/supplier-cart')}
-              >
-                <ShoppingCart size={18} />
-                Review Cart
-              </Button>
-              <Button
-                onClick={handleProceedToPlaceOrder}
-                disabled={
-                  creating ||
-                  !suggestions ||
-                  !Array.isArray(suggestions) ||
-                  suggestions.length === 0 ||
-                  linesReadyToPlace === 0
-                }
-              >
-                {creating ? <Loader2 size={18} className="upstream-spin" /> : <ArrowRight size={18} />}
-                Proceed to Place Order
-              </Button>
-              <Button variant="outline" onClick={handleSaveToCart} disabled={savingCart}>
-                {savingCart ? 'Saving Cart...' : 'Save to Cart'}
-              </Button>
             </div>
           </div>
 
@@ -2107,47 +2030,6 @@ const SupplierUpstream = ({ user }) => {
 
       {viewingProduct ? (
         <SupplierProductDetailsModal product={viewingProduct} onClose={() => setViewingProduct(null)} />
-      ) : null}
-
-      {showCompletionBar ? (
-        <div className="us-completion-bar" role="region" aria-label="Procurement next steps">
-          <div className="us-completion-bar__copy">
-            <strong>
-              {sourcingConfigured
-                ? 'Upstream sourcing complete'
-                : cartLineCount > 0
-                  ? 'Cart ready'
-                  : 'Continue procurement'}
-            </strong>
-            <span>
-              {sourcingConfigured
-                ? `${linesReadyToPlace} line${linesReadyToPlace === 1 ? '' : 's'} ready — review cart or create a purchase order.`
-                : Array.isArray(suggestions) && suggestions.length > 0
-                  ? 'Pick upstream suppliers above, then continue.'
-                  : selectedMineIds.length > 0
-                    ? 'Continue to find upstream suppliers for your selection.'
-                    : `${cartLineCount} item${cartLineCount === 1 ? '' : 's'} in cart — review cart or select products to source.`}
-            </span>
-          </div>
-          <div className="us-completion-bar__actions">
-            {selectedMineIds.length > 0 && (!suggestions || suggestions.length === 0) ? (
-              <Button onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading}>
-                {suggestionsLoading ? <Loader2 size={16} className="upstream-spin" /> : <ArrowRight size={16} />}
-                Continue
-              </Button>
-            ) : null}
-            <Button variant="outline" onClick={() => navigate('/supplier-cart')}>
-              <ShoppingCart size={16} />
-              {cartLineCount > 0 || sourcingConfigured ? 'Review Cart' : 'Proceed to Cart'}
-            </Button>
-            {sourcingConfigured ? (
-              <Button onClick={handleProceedToPlaceOrder} disabled={creating || linesReadyToPlace === 0}>
-                {creating ? <Loader2 size={16} className="upstream-spin" /> : <ArrowRight size={16} />}
-                Proceed to Place Order
-              </Button>
-            ) : null}
-          </div>
-        </div>
       ) : null}
 
       <Dialog open={addCartDialogOpen} onOpenChange={setAddCartDialogOpen}>

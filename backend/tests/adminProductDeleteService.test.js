@@ -2,18 +2,68 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clearCatalogProductReferences,
-  deleteRejectedCatalogProduct
+  deleteCatalogOffer,
+  deleteCatalogProduct
 } from '../services/adminProductDeleteService.js';
 
-function createSupabaseMock({ offerIds = [] } = {}) {
+function createSupabaseMock({
+  offerIds = [],
+  offerById = null,
+  remainingOfferCount = 0
+} = {}) {
   const calls = [];
 
   const from = (table) => {
-    const state = { table, action: null, filters: [], payload: undefined, inFilters: [] };
+    const state = {
+      table,
+      action: null,
+      filters: [],
+      payload: undefined,
+      inFilters: [],
+      selectArgs: null,
+      head: false
+    };
+
+    const finalize = () => {
+      calls.push(state);
+
+      if (state.table === 'supplier_products' && state.action === 'select') {
+        const idFilter = state.filters.find((f) => f.column === 'id');
+        if (idFilter && offerById) {
+          if (String(offerById.id) === String(idFilter.value)) {
+            return { data: offerById, error: null, count: null };
+          }
+          return { data: null, error: { message: 'not found' }, count: null };
+        }
+
+        if (state.head || state.selectArgs?.count === 'exact') {
+          return { data: null, error: null, count: remainingOfferCount };
+        }
+
+        return {
+          data: offerIds.map((id) => ({ id })),
+          error: null,
+          count: offerIds.length
+        };
+      }
+
+      if (state.table === 'supplier_products' && state.action === 'delete') {
+        const idFilter = state.filters.find((f) => f.column === 'id');
+        return {
+          data: idFilter ? [{ id: idFilter.value }] : [],
+          error: null,
+          count: null
+        };
+      }
+
+      return { error: null, data: null, count: null };
+    };
 
     const builder = {
-      select() {
+      select(...args) {
         state.action = state.action || 'select';
+        state.selectArgs = args[1] || null;
+        if (args[1]?.head) state.head = true;
         return builder;
       },
       delete() {
@@ -33,16 +83,16 @@ function createSupabaseMock({ offerIds = [] } = {}) {
         state.inFilters.push({ column, values });
         return builder;
       },
+      single() {
+        const result = finalize();
+        return Promise.resolve(result);
+      },
       then(resolve, reject) {
-        calls.push(state);
-        if (state.table === 'supplier_products' && state.action === 'select') {
-          resolve({
-            data: offerIds.map((id) => ({ id })),
-            error: null
-          });
-          return;
+        try {
+          resolve(finalize());
+        } catch (error) {
+          reject(error);
         }
-        resolve({ error: null, data: null });
       }
     };
 
@@ -103,12 +153,78 @@ test('clearCatalogProductReferences clears dependency tables before product dele
   );
 });
 
-test('deleteRejectedCatalogProduct clears references then deletes catalog row', async () => {
+test('deleteCatalogProduct clears references then deletes catalog row', async () => {
   const supabase = createSupabaseMock();
 
-  await deleteRejectedCatalogProduct(supabase, 'product-2');
+  await deleteCatalogProduct(supabase, 'product-2');
 
   assert.equal(supabase.calls.at(-1)?.table, 'products');
   assert.equal(supabase.calls.at(-1)?.action, 'delete');
   assert.deepEqual(supabase.calls.at(-1)?.filters, [{ column: 'id', value: 'product-2' }]);
+});
+
+test('deleteCatalogOffer removes only the selected offer when siblings remain', async () => {
+  const supabase = createSupabaseMock({
+    offerById: { id: 'offer-2', product_id: 'product-1' },
+    remainingOfferCount: 2
+  });
+
+  const result = await deleteCatalogOffer(supabase, {
+    catalogProductId: 'product-1',
+    supplierProductId: 'offer-2'
+  });
+
+  assert.deepEqual(result, { deletedOfferId: 'offer-2', catalogDeleted: false });
+
+  const offerDeletes = supabase.calls.filter(
+    (c) => c.table === 'supplier_products' && c.action === 'delete'
+  );
+  assert.equal(offerDeletes.length, 1);
+  assert.deepEqual(offerDeletes[0].filters, [
+    { column: 'id', value: 'offer-2' },
+    { column: 'product_id', value: 'product-1' }
+  ]);
+
+  const catalogDeletes = supabase.calls.filter(
+    (c) => c.table === 'products' && c.action === 'delete'
+  );
+  assert.equal(catalogDeletes.length, 0);
+
+  const variantDeletes = supabase.calls.filter(
+    (c) => c.table === 'product_variants' && c.action === 'delete'
+  );
+  assert.equal(variantDeletes.length, 0);
+});
+
+test('deleteCatalogOffer deletes catalog product when last offer is removed', async () => {
+  const supabase = createSupabaseMock({
+    offerById: { id: 'offer-only', product_id: 'product-9' },
+    remainingOfferCount: 0
+  });
+
+  const result = await deleteCatalogOffer(supabase, {
+    catalogProductId: 'product-9',
+    supplierProductId: 'offer-only'
+  });
+
+  assert.deepEqual(result, { deletedOfferId: 'offer-only', catalogDeleted: true });
+  assert.ok(
+    supabase.calls.some((c) => c.table === 'products' && c.action === 'delete')
+  );
+});
+
+test('deleteCatalogOffer rejects offer that belongs to another catalog product', async () => {
+  const supabase = createSupabaseMock({
+    offerById: { id: 'offer-2', product_id: 'other-product' },
+    remainingOfferCount: 1
+  });
+
+  await assert.rejects(
+    () =>
+      deleteCatalogOffer(supabase, {
+        catalogProductId: 'product-1',
+        supplierProductId: 'offer-2'
+      }),
+    /does not belong/
+  );
 });
