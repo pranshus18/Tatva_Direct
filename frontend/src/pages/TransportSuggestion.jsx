@@ -238,22 +238,24 @@ const TransportSuggestion = () => {
           items: Array.isArray(group.items) ? group.items : []
         }));
 
-  const isIncomingSelfShip = React.useMemo(() => {
+  const hasIncomingExternalTransport = React.useMemo(() => {
     const st = incomingTransportSelection;
     if (!st || typeof st !== 'object') return false;
     const by = st.byVendorId && typeof st.byVendorId === 'object' ? st.byVendorId : {};
-    const expectedIds = poGroups.map((g) => getTransportGroupKey(g)).filter(Boolean);
-    const values = Object.values(by).map((v) => String(v || '').trim().toLowerCase());
-    if (expectedIds.length > 0 && expectedIds.every((id) => String(by[id] || '').trim())) {
-      return values.every((v) => isSelfShipProviderName(v));
+    const values = Object.values(by)
+      .map((v) => String(v || '').trim())
+      .filter(Boolean);
+    if (values.length > 0) {
+      return values.some((v) => !isSelfShipProviderName(v));
     }
-    const root = String(st.shippingProvider || '').trim().toLowerCase();
-    return isSelfShipProviderName(root);
-  }, [incomingTransportSelection, poGroups]);
+    const root = String(st.shippingProvider || '').trim();
+    return Boolean(root) && !isSelfShipProviderName(root);
+  }, [incomingTransportSelection]);
 
   const [selectedByVendorId, setSelectedByVendorId] = React.useState({});
+  // Default: Shipment by supplier. Only open on external if checkout already picked couriers.
   const [transportModeChoice, setTransportModeChoice] = React.useState(
-    isIncomingSelfShip ? 'self_ship' : 'external'
+    hasIncomingExternalTransport ? 'external' : 'self_ship'
   );
 
   const [logisticsLoading, setLogisticsLoading] = React.useState(false);
@@ -674,21 +676,21 @@ const TransportSuggestion = () => {
                   <input
                     type="radio"
                     name="transport-mode-choice"
-                    value="external"
-                    checked={transportModeChoice === 'external'}
-                    onChange={() => setTransportModeChoice('external')}
-                  />{' '}
-                  External transport service (from logistics module)
-                </label>
-                <label>
-                  <input
-                    type="radio"
-                    name="transport-mode-choice"
                     value="self_ship"
                     checked={transportModeChoice === 'self_ship'}
                     onChange={() => setTransportModeChoice('self_ship')}
                   />{' '}
                   Shipment by supplier (supplier delivers directly)
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="transport-mode-choice"
+                    value="external"
+                    checked={transportModeChoice === 'external'}
+                    onChange={() => setTransportModeChoice('external')}
+                  />{' '}
+                  External transport service (from logistics module)
                 </label>
               </div>
             </div>

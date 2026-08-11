@@ -23,6 +23,8 @@ const BODY = '#374151';
 const MUTED = '#6b7280';
 const GRID = '#e5e7eb';
 const PAID_GREEN = '#059669';
+/** Bump when receipt layout fixes need re-upload for existing orders. */
+export const RECEIPT_PDF_LAYOUT_VERSION = 2;
 
 function safeString(v) {
   if (v === null || v === undefined) return '';
@@ -31,7 +33,8 @@ function safeString(v) {
 
 function formatINR(amount) {
   const n = Number(amount || 0);
-  return `\u20B9${n.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
+  // Helvetica has no ₹ glyph — use INR so amounts do not render as a broken superscript.
+  return `INR ${n.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
 }
 
 function formatAddress(address = {}) {
@@ -230,31 +233,70 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       };
 
       const drawPartyBox = (x, y, width, label, party) => {
-        const boxHeight = 88;
+        const padX = 10;
+        const padTop = 10;
+        const padBottom = 10;
+        const innerW = Math.max(40, width - padX * 2);
+        const gapAfterLabel = 5;
+        const gapAfterName = 4;
+        const lineGap = 2;
+
+        // Measure content height first so the border never clips or overlaps lines.
+        let measured = padTop;
+        doc.fontSize(8).font('Helvetica-Bold');
+        measured += doc.heightOfString(String(label || '').toUpperCase(), { width: innerW });
+        measured += gapAfterLabel;
+
+        doc.fontSize(10.5).font('Helvetica-Bold');
+        measured += doc.heightOfString(party.name || '-', { width: innerW });
+        measured += gapAfterName;
+
+        const detailLines = [];
+        if (party.company && party.company !== '-') detailLines.push(party.company);
+        if (party.email && party.email !== '-') detailLines.push(party.email);
+        if (party.phone && party.phone !== '-') detailLines.push(party.phone);
+        if (party.gstin) detailLines.push(`GSTIN: ${party.gstin}`);
+
+        doc.fontSize(9).font('Helvetica');
+        for (const line of detailLines) {
+          measured += doc.heightOfString(line, { width: innerW });
+          measured += lineGap;
+        }
+
+        const address = party.address || '-';
+        doc.fontSize(8.5).font('Helvetica');
+        measured += doc.heightOfString(address, { width: innerW, lineGap: 1.5 });
+        measured += padBottom;
+
+        const boxHeight = Math.max(96, Math.ceil(measured));
+
         doc.save();
         doc.roundedRect(x, y, width, boxHeight, 4).lineWidth(0.6).strokeColor(GRID).stroke();
         doc.restore();
-        doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED).text(label.toUpperCase(), x + 10, y + 10);
-        doc.fontSize(10.5).font('Helvetica-Bold').fillColor(HEADING).text(party.name || '-', x + 10, y + 24, {
-          width: width - 20
+
+        let cursorY = y + padTop;
+        doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED).text(String(label || '').toUpperCase(), x + padX, cursorY, {
+          width: innerW
         });
+        cursorY = doc.y + gapAfterLabel;
+
+        doc.fontSize(10.5).font('Helvetica-Bold').fillColor(HEADING).text(party.name || '-', x + padX, cursorY, {
+          width: innerW
+        });
+        cursorY = doc.y + gapAfterName;
+
         doc.fontSize(9).font('Helvetica').fillColor(BODY);
-        if (party.company && party.company !== '-') {
-          doc.text(party.company, x + 10, doc.y + 1, { width: width - 20 });
+        for (const line of detailLines) {
+          doc.text(line, x + padX, cursorY, { width: innerW });
+          cursorY = doc.y + lineGap;
         }
-        if (party.email && party.email !== '-') {
-          doc.text(party.email, x + 10, doc.y + 1, { width: width - 20 });
-        }
-        if (party.phone && party.phone !== '-') {
-          doc.text(party.phone, x + 10, doc.y + 1, { width: width - 20 });
-        }
-        if (party.gstin) {
-          doc.text(`GSTIN: ${party.gstin}`, x + 10, doc.y + 1, { width: width - 20 });
-        }
-        doc.fontSize(8.5).fillColor(MUTED).text(party.address || '-', x + 10, y + boxHeight - 22, {
-          width: width - 20,
-          lineGap: 1
+
+        doc.fontSize(8.5).font('Helvetica').fillColor(MUTED).text(address, x + padX, cursorY, {
+          width: innerW,
+          lineGap: 1.5
         });
+
+        return boxHeight;
       };
 
       // —— Header band ——
@@ -307,9 +349,16 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       const boxGap = 14;
       const boxW = (contentWidth - boxGap) / 2;
       const boxesTop = doc.y;
-      drawPartyBox(pageLeft, boxesTop, boxW, 'Sold By (Supplier)', supplierParty);
-      drawPartyBox(pageLeft + boxW + boxGap, boxesTop, boxW, 'Bill To (Customer)', customerParty);
-      doc.y = boxesTop + 98;
+      const supplierBoxHeight = drawPartyBox(pageLeft, boxesTop, boxW, 'Sold By (Supplier)', supplierParty);
+      const customerBoxHeight = drawPartyBox(
+        pageLeft + boxW + boxGap,
+        boxesTop,
+        boxW,
+        'Bill To (Customer)',
+        customerParty
+      );
+      doc.y = boxesTop + Math.max(supplierBoxHeight, customerBoxHeight) + 14;
+      doc.x = pageLeft;
 
       // —— Line items table ——
       drawSectionTitle('Order Items');
@@ -428,11 +477,7 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       // —— GST summary (compact) ——
       doc.moveDown(0.4);
       const gstBoxTop = doc.y;
-      doc.save();
-      doc.roundedRect(pageLeft, gstBoxTop, contentWidth * 0.58, 52, 4).fill(BRAND_LIGHT);
-      doc.restore();
-      doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED).text('GST SUMMARY', pageLeft + 10, gstBoxTop + 8);
-      doc.fontSize(8.5).font('Helvetica').fillColor(BODY);
+      const gstBoxW = contentWidth * 0.58;
       const gstLines = [
         `Supplier state: ${safeString(orderGstSummary?.supplierState || extractUserState(supplier || {}))}`,
         `Place of supply: ${safeString(
@@ -447,7 +492,18 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
             : ''
         }`
       ];
-      doc.text(gstLines.join('\n'), pageLeft + 10, gstBoxTop + 22, { width: contentWidth * 0.54, lineGap: 2 });
+      doc.fontSize(8.5).font('Helvetica');
+      const gstBodyHeight = doc.heightOfString(gstLines.join('\n'), {
+        width: gstBoxW - 20,
+        lineGap: 2
+      });
+      const gstBoxHeight = Math.max(56, 30 + gstBodyHeight);
+      doc.save();
+      doc.roundedRect(pageLeft, gstBoxTop, gstBoxW, gstBoxHeight, 4).fill(BRAND_LIGHT);
+      doc.restore();
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED).text('GST SUMMARY', pageLeft + 10, gstBoxTop + 8);
+      doc.fontSize(8.5).font('Helvetica').fillColor(BODY);
+      doc.text(gstLines.join('\n'), pageLeft + 10, gstBoxTop + 22, { width: gstBoxW - 20, lineGap: 2 });
 
       const strictSummary =
         gstSummary && typeof gstSummary === 'object'
@@ -490,9 +546,11 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED).text('AMOUNT SUMMARY', totalsX + 10, ty);
       ty += 16;
       for (const [label, value] of totalsRows) {
-        doc.fontSize(8.5).font('Helvetica').fillColor(BODY).text(label, totalsX + 10, ty, { width: totalsW * 0.55 });
-        doc.font('Helvetica').text(value, totalsX + totalsW * 0.45, ty, {
-          width: totalsW * 0.48,
+        doc.fontSize(8.5).font('Helvetica').fillColor(BODY).text(label, totalsX + 10, ty, {
+          width: totalsW * 0.48
+        });
+        doc.font('Helvetica').text(value, totalsX + totalsW * 0.48, ty, {
+          width: totalsW * 0.45,
           align: 'right'
         });
         ty += 16;
@@ -502,12 +560,13 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       doc.restore();
       ty += 8;
       doc.fontSize(10.5).font('Helvetica-Bold').fillColor(BRAND_BLUE).text('Grand Total', totalsX + 10, ty);
-      doc.fontSize(11).text(formatINR(totalAmount), totalsX + totalsW * 0.45, ty - 1, {
-        width: totalsW * 0.48,
+      doc.fontSize(11).text(formatINR(totalAmount), totalsX + totalsW * 0.48, ty - 1, {
+        width: totalsW * 0.45,
         align: 'right'
       });
 
-      doc.y = Math.max(gstBoxTop + 58, totalsTop + totalsHeight) + 16;
+      doc.y = Math.max(gstBoxTop + gstBoxHeight, totalsTop + totalsHeight) + 16;
+      doc.x = pageLeft;
 
       // —— Delivery ——
       drawSectionTitle('Delivery Address');
@@ -603,7 +662,8 @@ export async function generateAndAttachReceiptPdf({ receipt, order, supplier, se
     ...(receipt.metadata || {}),
     pdfUrl: url,
     pdfPath: storedPath,
-    pdfGeneratedAt: new Date().toISOString()
+    pdfGeneratedAt: new Date().toISOString(),
+    pdfLayoutVersion: RECEIPT_PDF_LAYOUT_VERSION
   };
 
   const { data: updatedReceipt } = await supabase

@@ -3,7 +3,7 @@ export { createReceiptAndDeliver } from '../../services/paymentReceiptService.js
 export { createInvoiceForOrder } from '../../services/invoiceService.js';
 export { sendEmail } from '../../services/emailService.js';
 export { generateAndUploadInvoicePdf, saveInvoicePdfUrlToInvoice } from '../../services/invoicePdfService.js';
-export { generateAndAttachReceiptPdf } from '../../services/receiptPdfService.js';
+export { generateAndAttachReceiptPdf, RECEIPT_PDF_LAYOUT_VERSION } from '../../services/receiptPdfService.js';
 export { recordInventoryMovement } from '../../services/inventoryService.js';
 export { applyRestockForClosedReturn } from '../../services/returnInventoryService.js';
 export { fetchClosedReturnQuantityByOrderItem, getNetItemMetrics } from '../../utils/netRevenue.js';

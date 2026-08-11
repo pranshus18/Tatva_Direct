@@ -1,6 +1,7 @@
 /** Dashboard routes: orderDetail */
 import {
   generateAndAttachReceiptPdf,
+  RECEIPT_PDF_LAYOUT_VERSION,
   normalizeUserAddress
 } from './dashboardImports.js';
 import { resolveOrderChargeBreakdown } from '../../utils/orderChargeBreakdown.js';
@@ -180,10 +181,14 @@ router.get('/service-provider/orders/:id', authenticateToken, async (req, res) =
         .eq('order_id', order.id)
         .maybeSingle();
       receipt = receiptRow || null;
-      if (receipt && !receipt?.metadata?.pdfUrl) {
+      if (
+        receipt &&
+        (!receipt?.metadata?.pdfUrl ||
+          Number(receipt?.metadata?.pdfLayoutVersion || 0) < RECEIPT_PDF_LAYOUT_VERSION)
+      ) {
         const { data: serviceProviderData } = await supabase
           .from('users')
-          .select('id, name, company, email')
+          .select('id, name, company, email, phone, address, profile, user_type')
           .eq('id', order.service_provider_id)
           .maybeSingle();
         const backfilled = await generateAndAttachReceiptPdf({

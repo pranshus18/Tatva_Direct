@@ -2,6 +2,7 @@
 import {
   applyRestockForClosedReturn,
   generateAndAttachReceiptPdf,
+  RECEIPT_PDF_LAYOUT_VERSION,
   getContractErrorMessage,
   insertNotification,
   isValidPrimaryOrderStatus,
@@ -232,7 +233,7 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
     if (order.service_provider_id) {
       const { data: serviceProviderData, error: serviceProviderError } = await supabase
         .from('users')
-        .select('id, name, company, email, phone, address, user_type')
+        .select('id, name, company, email, phone, address, profile, user_type')
         .eq('id', order.service_provider_id)
         .single();
       
@@ -295,11 +296,20 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
         .eq('order_id', order.id)
         .maybeSingle();
       receipt = receiptRow || null;
-      if (receipt && !receipt?.metadata?.pdfUrl) {
+      if (
+        receipt &&
+        (!receipt?.metadata?.pdfUrl ||
+          Number(receipt?.metadata?.pdfLayoutVersion || 0) < RECEIPT_PDF_LAYOUT_VERSION)
+      ) {
+        const { data: supplierData } = await supabase
+          .from('users')
+          .select('id, name, company, email, phone, address, profile, user_type')
+          .eq('id', req.userId)
+          .maybeSingle();
         const backfilled = await generateAndAttachReceiptPdf({
           receipt,
           order,
-          supplier: { id: req.userId, name: 'Supplier' },
+          supplier: supplierData || { id: req.userId, name: 'Supplier' },
           serviceProvider
         });
         receipt = backfilled?.receipt || receipt;
