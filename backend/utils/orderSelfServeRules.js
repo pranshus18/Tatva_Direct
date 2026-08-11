@@ -30,3 +30,33 @@ export function getSelfServeLockReason({ status, paymentStatus }) {
   }
   return '';
 }
+
+/**
+ * Only fully settled fulfilled orders may be deleted.
+ * Anything else (pending payment, in-progress, etc.) must stay.
+ */
+export function canDeleteOrder({ paymentStatus, status } = {}) {
+  const normalizedPayment = String(paymentStatus || '')
+    .trim()
+    .toLowerCase();
+  const normalizedStatus = normalizeStatus(status);
+  return normalizedStatus === 'delivered' && normalizedPayment === 'paid';
+}
+
+export function getOrderDeleteBlockReason({ paymentStatus, status } = {}) {
+  if (canDeleteOrder({ paymentStatus, status })) return '';
+  const normalizedPayment = String(paymentStatus || '')
+    .trim()
+    .toLowerCase();
+  const normalizedStatus = normalizeStatus(status);
+  if (normalizedPayment === 'pending' || normalizedPayment === 'partial') {
+    return 'Cannot delete an order while payment is pending. Settle payment first.';
+  }
+  if (normalizedStatus !== 'delivered') {
+    return 'Only delivered and paid orders can be deleted.';
+  }
+  if (normalizedPayment !== 'paid') {
+    return 'Only delivered and paid orders can be deleted.';
+  }
+  return 'Only delivered and paid orders can be deleted.';
+}

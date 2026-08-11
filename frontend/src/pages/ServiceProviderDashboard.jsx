@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { getApiUrl, resolveApiPath, authFetch } from '../config/api';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
-import { formatVaultPaymentMethodLabel, isVaultPaymentMethod } from '../utils/vaultPaymentMethod';
+import { formatPaymentMethodLabel, isVaultPaymentMethod } from '../utils/vaultPaymentMethod';
+import { canDeleteOrder, getOrderDeleteBlockReason } from '../utils/orderDeleteRules';
 import { 
   FileText,
   BarChart3,
@@ -431,12 +432,27 @@ const ServiceProviderDashboard = ({ user }) => {
       alert('No order selected for deletion');
       return;
     }
+
+    if (
+      !canDeleteOrder({
+        paymentStatus: orderDetails.paymentStatus,
+        status: orderDetails.status
+      })
+    ) {
+      alert(
+        getOrderDeleteBlockReason({
+          paymentStatus: orderDetails.paymentStatus,
+          status: orderDetails.status
+        }) || 'This order cannot be deleted.'
+      );
+      return;
+    }
     
     const orderNumber = orderDetails.orderNumber || selectedOrder;
     const confirmed = window.confirm(
       `Are you sure you want to delete Order ${orderNumber}?\n\n` +
       `This action cannot be undone. The order will be permanently removed from the system.\n\n` +
-      `Note: Orders that have been delivered and paid cannot be deleted.`
+      `Note: Only delivered and paid orders can be deleted.`
     );
     
     if (!confirmed) return;
@@ -1233,9 +1249,7 @@ const ServiceProviderDashboard = ({ user }) => {
                   {orderDetails.paymentMethod && (
                     <p>
                       <strong>Payment Method:</strong>{' '}
-                      {isVaultPaymentMethod(orderDetails.paymentMethod)
-                        ? formatVaultPaymentMethodLabel(orderDetails.paymentMethod)
-                        : String(orderDetails.paymentMethod).replace(/_/g, ' ')}
+                      {formatPaymentMethodLabel(orderDetails.paymentMethod)}
                     </p>
                   )}
                   {orderDetails.invoicePdfUrl && (
@@ -1480,11 +1494,18 @@ const ServiceProviderDashboard = ({ user }) => {
                   <h3 style={{ color: '#dc2626' }}>Danger Zone</h3>
                   <p style={{ color: '#64748b', marginBottom: '1rem', fontSize: '0.875rem' }}>
                     Deleting an order will permanently remove it from the system. This action cannot be undone.
-                    {orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid' && (
+                    {getOrderDeleteBlockReason({
+                      paymentStatus: orderDetails.paymentStatus,
+                      status: orderDetails.status
+                    }) ? (
                       <span style={{ display: 'block', color: '#dc2626', marginTop: '0.5rem', fontWeight: '600' }}>
-                        ⚠️ This order has been delivered and paid. Deletion may not be allowed.
+                        ⚠️{' '}
+                        {getOrderDeleteBlockReason({
+                          paymentStatus: orderDetails.paymentStatus,
+                          status: orderDetails.status
+                        })}
                       </span>
-                    )}
+                    ) : null}
                   </p>
                   <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
                     {orderDetails.invoicePdfUrl && (
@@ -1502,16 +1523,42 @@ const ServiceProviderDashboard = ({ user }) => {
                     <button
                       className="btn-secondary"
                       onClick={handleDeleteOrder}
-                      disabled={deletingOrder || (orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid')}
+                      disabled={
+                        deletingOrder ||
+                        !canDeleteOrder({
+                          paymentStatus: orderDetails.paymentStatus,
+                          status: orderDetails.status
+                        })
+                      }
+                      title={
+                        getOrderDeleteBlockReason({
+                          paymentStatus: orderDetails.paymentStatus,
+                          status: orderDetails.status
+                        }) || 'Delete order'
+                      }
                       style={{
                         backgroundColor: deletingOrder ? '#9ca3af' : '#fee2e2',
                         color: deletingOrder ? '#6b7280' : '#dc2626',
                         border: '1px solid #dc2626',
-                        cursor: deletingOrder || (orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid') ? 'not-allowed' : 'pointer',
+                        cursor:
+                          deletingOrder ||
+                          !canDeleteOrder({
+                            paymentStatus: orderDetails.paymentStatus,
+                            status: orderDetails.status
+                          })
+                            ? 'not-allowed'
+                            : 'pointer',
                         display: 'flex',
                         alignItems: 'center',
                         gap: '0.5rem',
-                        opacity: deletingOrder || (orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid') ? 0.6 : 1
+                        opacity:
+                          deletingOrder ||
+                          !canDeleteOrder({
+                            paymentStatus: orderDetails.paymentStatus,
+                            status: orderDetails.status
+                          })
+                            ? 0.6
+                            : 1
                       }}
                     >
                       <Trash2 size={16} />

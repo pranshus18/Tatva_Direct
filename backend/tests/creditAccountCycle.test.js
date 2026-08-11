@@ -42,23 +42,24 @@ test('computeCreditCycleFromOrders: sums outstanding and sets due from first ord
   assert.ok(cycle.cycleDueAt);
 });
 
-test('isPayLaterThresholdMet: order below minimum fails even with high prior revenue', () => {
+test('isPayLaterThresholdMet: net revenue below threshold fails even with large current order', () => {
   assert.equal(isPayLaterThresholdMet(100000, 1200415, 1200410), false);
-  assert.equal(isPayLaterThresholdMet(1200415, 1200415, 0), true);
-  assert.equal(isPayLaterThresholdMet(1200416, 1200415, 0), true);
+  assert.equal(isPayLaterThresholdMet(0, 1200415, 1200415), true);
+  assert.equal(isPayLaterThresholdMet(1, 1200415, 1200416), true);
 });
 
-test('isPayLaterThresholdMet: order at or above minimum qualifies', () => {
-  assert.equal(isPayLaterThresholdMet(50000, 50000, 0), true);
-  assert.equal(isPayLaterThresholdMet(40000, 50000, 60000), false);
+test('isPayLaterThresholdMet: cumulative net revenue already meets threshold', () => {
+  assert.equal(isPayLaterThresholdMet(1000, 50000, 60000), true);
+  assert.equal(isPayLaterThresholdMet(1000, 50000, 40000), false);
 });
 
-test('isPayLaterThresholdMet: current order alone must meet minimum', () => {
+test('isPayLaterThresholdMet: current order does not count toward unlocking pay later', () => {
   assert.equal(isPayLaterThresholdMet(15000, 50000, 40000), false);
-  assert.equal(isPayLaterThresholdMet(50000, 50000, 0), true);
+  assert.equal(isPayLaterThresholdMet(5000, 50000, 40000), false);
+  assert.equal(isPayLaterThresholdMet(15000, 50000, 50000), true);
 });
 
-test('isPayLaterThresholdMet: zero threshold means no minimum (always met)', () => {
+test('isPayLaterThresholdMet: zero threshold means no lifetime gate (always met)', () => {
   assert.equal(isPayLaterThresholdMet(50000, 0, 0), true);
   assert.equal(isPayLaterThresholdMet(0, 0, 0), true);
 });

@@ -35,8 +35,11 @@ import {
   clearCheckoutHoldExpired,
   SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY
 } from '../utils/upstreamCheckoutReservation';
+import {
+  SUPPLIER_UPSTREAM_CART_RESUME_KEY,
+  clearUpstreamCartClientProjectState
+} from '../utils/supplierUpstreamCartSession';
 
-const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
 const todayDateMin = getTodayDateInputValue();
 
@@ -365,9 +368,15 @@ const SupplierUpstreamCart = () => {
     const ok = await persistProject(nextProject, { silent: true });
     if (!ok) return;
     if (Object.keys(nextSelectedMine).length === 0) {
-      setProjects((prev) =>
-        (prev || []).filter((p) => String(p?.projectId || '') !== String(projectId || ''))
-      );
+      setProjects((prev) => {
+        const remaining = (prev || []).filter(
+          (p) => String(p?.projectId || '') !== String(projectId || '')
+        );
+        if (remaining.length === 0) {
+          clearUpstreamCartClientProjectState();
+        }
+        return remaining;
+      });
     } else {
       replaceProjectInState(projectId, nextProject);
     }
@@ -390,6 +399,7 @@ const SupplierUpstreamCart = () => {
         throw new Error(data.message || 'Failed to clear cart');
       }
       setProjects([]);
+      clearUpstreamCartClientProjectState();
       emitSupplierCartUpdated();
     } catch (e) {
       setError(e.message || 'Failed to clear cart');

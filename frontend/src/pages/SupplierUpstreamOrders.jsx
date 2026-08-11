@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getApiUrl, authFetch, buildAuthHeaders } from '../config/api';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
-import { isVaultPaymentMethod } from '../utils/vaultPaymentMethod';
+import { formatPaymentMethodLabel, isVaultPaymentMethod } from '../utils/vaultPaymentMethod';
+import { canDeleteOrder, getOrderDeleteBlockReason } from '../utils/orderDeleteRules';
 import './Dashboard.css';
 import './SupplierUpstream.css';
 import './SupplierUpstreamOrders.css';
@@ -51,18 +52,7 @@ const sortStatusHistory = (raw) =>
     return ta - tb;
   });
 
-const paymentMethodLabel = (method) => {
-  const pm = String(method || '').toLowerCase();
-  if (pm === 'wallet' || pm === 'vault') return 'Vault';
-  if (pm === 'cash') return 'Cash on delivery';
-  if (pm === 'online') return 'Pay online';
-  if (pm === 'upi') return 'UPI';
-  if (pm === 'bank_transfer') return 'Bank transfer';
-  if (pm === 'card') return 'Credit / Debit Card';
-  if (pm === 'credit') return 'Credit / pay later';
-  if (!pm) return 'Pay online';
-  return pm.replace(/_/g, ' ');
-};
+const paymentMethodLabel = (method) => formatPaymentMethodLabel(method);
 
 function StatusBadge({ status }) {
   const normalized = String(status || 'pending');
@@ -517,6 +507,22 @@ export default function SupplierUpstreamOrders() {
 
   const handleDeleteOrder = async (orderNumber, e) => {
     e?.stopPropagation();
+    const order = orders.find((row) => String(row.orderNumber) === String(orderNumber));
+    if (
+      order &&
+      !canDeleteOrder({
+        paymentStatus: order.paymentStatus,
+        status: order.status
+      })
+    ) {
+      alert(
+        getOrderDeleteBlockReason({
+          paymentStatus: order.paymentStatus,
+          status: order.status
+        }) || 'This order cannot be deleted.'
+      );
+      return;
+    }
     const confirmed = window.confirm(`Delete order ${orderNumber}?`);
     if (!confirmed) return;
     try {
@@ -730,14 +736,34 @@ export default function SupplierUpstreamOrders() {
                       <td>{o.updatedAt ? formatDateTimeIST(o.updatedAt, '—') : '—'}</td>
                       {!isDownstream ? (
                         <td>
-                          <button
-                            type="button"
-                            className="btn-icon upstream-delete-btn"
-                            title="Delete order"
-                            onClick={(e) => handleDeleteOrder(o.orderNumber, e)}
-                          >
-                            <Trash2 size={16} />
-                          </button>
+                          {canDeleteOrder({
+                            paymentStatus: o.paymentStatus,
+                            status: o.status
+                          }) ? (
+                            <button
+                              type="button"
+                              className="btn-icon upstream-delete-btn"
+                              title="Delete order"
+                              onClick={(e) => handleDeleteOrder(o.orderNumber, e)}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              className="btn-icon upstream-delete-btn upstream-delete-btn--disabled"
+                              title={
+                                getOrderDeleteBlockReason({
+                                  paymentStatus: o.paymentStatus,
+                                  status: o.status
+                                }) || 'Delete unavailable'
+                              }
+                              disabled
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
                         </td>
                       ) : null}
                     </tr>

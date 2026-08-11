@@ -5,6 +5,7 @@ import {
   detectSupplyChainRoleChanges,
   chainRequiresAdminApproval,
   mergeApprovedBrandsIntoChainEntries,
+  mergeSupplierBrandRequestsWithApprovedCatalog,
   mergeSupplierEditableEntrySave,
   normalizeCompanyInfoEntries,
   syncLegacyMinimumOrderValue
@@ -221,4 +222,68 @@ test('mergeSupplierEditableEntrySave updates MOV on one entry without changing t
   assert.equal(merged.brands, 'Milton');
   assert.equal(merged.companyInfoEntries[0].minimumOrderValue, 5000);
   assert.equal(merged.companyInfoEntries[1].minimumOrderValue, 1000);
+});
+
+test('mergeSupplierBrandRequestsWithApprovedCatalog collapses own pending to approved catalog twin', () => {
+  const merged = mergeSupplierBrandRequestsWithApprovedCatalog({
+    userId: 'supplier-1',
+    ownRows: [
+      {
+        name: 'Philips',
+        normalized_name: 'philips',
+        status: 'pending',
+        requested_by: 'supplier-1',
+        requested_at: '2026-06-14T08:55:16.000Z'
+      },
+      {
+        name: 'Prestige',
+        normalized_name: 'prestige',
+        status: 'pending',
+        requested_by: 'supplier-1',
+        requested_at: '2026-06-14T08:55:16.000Z'
+      }
+    ],
+    catalogRows: [
+      {
+        name: 'Philips',
+        normalized_name: 'philips',
+        status: 'approved',
+        requested_by: 'other-supplier',
+        requested_at: '2026-06-13T00:00:00.000Z'
+      },
+      {
+        name: 'Safari',
+        normalized_name: 'safari',
+        status: 'approved',
+        requested_by: 'supplier-1',
+        requested_at: '2026-08-03T00:00:00.000Z'
+      }
+    ],
+    declaredNames: []
+  });
+
+  const byName = Object.fromEntries(merged.map((row) => [row.name, row.status]));
+  assert.equal(byName.Philips, 'approved');
+  assert.equal(byName.Prestige, 'pending');
+  assert.equal(byName.Safari, undefined);
+});
+
+test('mergeSupplierBrandRequestsWithApprovedCatalog still merges declared catalog brands without own request', () => {
+  const merged = mergeSupplierBrandRequestsWithApprovedCatalog({
+    userId: 'supplier-1',
+    ownRows: [],
+    catalogRows: [
+      {
+        name: 'samsung',
+        normalized_name: 'samsung',
+        status: 'approved',
+        requested_by: 'other-supplier'
+      }
+    ],
+    declaredNames: ['Samsung']
+  });
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].name, 'samsung');
+  assert.equal(merged[0].status, 'approved');
 });

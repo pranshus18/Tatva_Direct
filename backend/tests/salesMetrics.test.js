@@ -13,45 +13,58 @@ test('isRevenueRecognizedOrder: paid and not cancelled', () => {
   assert.equal(isRevenueRecognizedOrder({ payment_status: 'paid', status: 'cancelled' }), false);
 });
 
-test('isPayLaterThresholdMet: minimum order amount (not lifetime revenue)', () => {
-  assert.equal(isPayLaterThresholdMet(49999, 50000, 0), false);
-  assert.equal(isPayLaterThresholdMet(50000, 50000, 0), true);
-  assert.equal(isPayLaterThresholdMet(60000, 50000, 0), true);
-  // Prior revenue must not unlock a below-minimum order.
-  assert.equal(isPayLaterThresholdMet(1000, 50000, 100000), false);
+test('isPayLaterThresholdMet: lifetime net revenue unlock (not per-order minimum)', () => {
+  // Prior revenue below threshold — blocked even if this order is large.
+  assert.equal(isPayLaterThresholdMet(100000, 1200, 1125), false);
+  assert.equal(isPayLaterThresholdMet(50000, 50000, 49999), false);
+  // Prior revenue at/above threshold — any later order size is fine.
+  assert.equal(isPayLaterThresholdMet(1125, 1200, 1200), true);
+  assert.equal(isPayLaterThresholdMet(1, 1200, 5000), true);
   assert.equal(isPayLaterThresholdMet(0, 0, 0), true);
 });
 
-test('computePayLaterOffered: threshold is minimum order amount', () => {
-  const below = computePayLaterOffered({
+test('computePayLaterOffered: once lifetime threshold is crossed, small orders can use pay later', () => {
+  const notYet = computePayLaterOffered({
     hasAccount: true,
     creditLimit: 100000,
-    paylaterThreshold: 50000,
-    orderAmount: 40000,
-    priorNetRevenue: 999999,
+    paylaterThreshold: 1200,
+    orderAmount: 1125,
+    priorNetRevenue: 1125,
     hasCreditParty: true
   });
-  assert.equal(below.payLaterOffered, false);
+  assert.equal(notYet.payLaterOffered, false);
 
-  const met = computePayLaterOffered({
+  const unlocked = computePayLaterOffered({
     hasAccount: true,
     creditLimit: 100000,
-    paylaterThreshold: 50000,
-    orderAmount: 50000,
-    priorNetRevenue: 0,
+    paylaterThreshold: 1200,
+    orderAmount: 1125,
+    priorNetRevenue: 1200,
     hasCreditParty: true
   });
-  assert.equal(met.payLaterOffered, true);
+  assert.equal(unlocked.payLaterOffered, true);
 
-  const noParty = computePayLaterOffered({
+  // Large current order does not unlock by itself.
+  const bigOrderOnly = computePayLaterOffered({
     hasAccount: true,
     creditLimit: 100000,
     paylaterThreshold: 50000,
     orderAmount: 60000,
     priorNetRevenue: 0,
+    hasCreditParty: true
+  });
+  assert.equal(bigOrderOnly.payLaterOffered, false);
+
+  // Account alone is enough identity (SP or supplier buyer).
+  const accountWithoutPartyFlag = computePayLaterOffered({
+    hasAccount: true,
+    creditLimit: 100000,
+    paylaterThreshold: 0,
+    orderAmount: 100,
+    priorNetRevenue: 0,
     hasCreditParty: false
   });
-  assert.equal(noParty.payLaterOffered, false);
+  assert.equal(accountWithoutPartyFlag.payLaterOffered, true);
 
   const optional = computePayLaterOffered({
     hasAccount: true,
@@ -64,13 +77,22 @@ test('computePayLaterOffered: threshold is minimum order amount', () => {
   assert.equal(optional.payLaterOffered, true);
 });
 
-test('computePayLaterEligibleForSales: account ready when credit limit is set', () => {
-  const { payLaterEligible } = computePayLaterEligibleForSales({
+test('computePayLaterEligibleForSales: requires lifetime threshold when configured', () => {
+  const locked = computePayLaterEligibleForSales({
     creditLimit: 100000,
     paylaterThreshold: 50000,
-    priorNetRevenue: 0,
+    priorNetRevenue: 10000,
     hasCreditParty: true,
     buyerType: 'unified'
   });
-  assert.equal(payLaterEligible, true);
+  assert.equal(locked.payLaterEligible, false);
+
+  const ready = computePayLaterEligibleForSales({
+    creditLimit: 100000,
+    paylaterThreshold: 50000,
+    priorNetRevenue: 50000,
+    hasCreditParty: true,
+    buyerType: 'unified'
+  });
+  assert.equal(ready.payLaterEligible, true);
 });

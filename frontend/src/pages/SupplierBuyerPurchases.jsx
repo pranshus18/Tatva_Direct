@@ -76,9 +76,9 @@ export default function SupplierBuyerPurchases() {
       return;
     }
     const creditLimit = Number(buyer.creditLimit || 0);
-    if (threshold > 0 && creditLimit <= 0) {
+    if (creditLimit <= 0) {
       alert(
-        'Set a credit limit (₹) for this buyer on Credit on account first, then set the pay-later minimum.'
+        'Set a credit limit (₹) for this buyer on Credit on account first, then adjust the pay-later minimum.'
       );
       return;
     }
@@ -145,12 +145,13 @@ export default function SupplierBuyerPurchases() {
         <div className="profile-section">
           <p style={{ color: '#64748b', fontSize: '0.92rem', marginTop: 0, marginBottom: '0.75rem' }}>
             Gross sales are order totals (online + offline) excluding cancelled/returned orders. Period
-            columns follow your date filter; all-time columns include every matching order. Net revenue
-            is paid sales after returns. Set{' '}
-            <strong>Pay-later minimum</strong> per customer: pay later unlocks once{' '}
-            <strong>all-time net revenue</strong> (paid sales after returns) reaches that amount and a credit
-            limit is configured. Manage limits on{' '}
-            <Link to="/supplier-credit-accounts">Credit on account</Link>.
+            columns follow your date filter; all-time columns include every matching order.{' '}
+            <strong>Net revenue</strong> is paid sales after returns (received / refunded / replaced /
+            closed). Set a <strong>credit limit</strong> on{' '}
+            <Link to="/supplier-credit-accounts">Credit on account</Link> to enable pay later. Optional{' '}
+            <strong>Pay-later minimum</strong> is lifetime net revenue the buyer must already have reached
+            (₹0 = no unlock gate). After that total is crossed, any later order size can use pay later
+            (within the credit limit).
           </p>
           <div className="supplier-summary-grid">
             <div className="supplier-summary-card">
@@ -322,12 +323,13 @@ export default function SupplierBuyerPurchases() {
                       <td style={td}>
                         {buyer.payLaterEligible ? (
                           <span style={{ color: '#15803d', fontWeight: 600 }}>Yes</span>
+                        ) : Number(buyer.creditLimit || 0) <= 0 ? (
+                          <span style={{ color: '#b45309' }}>No (set a credit limit)</span>
                         ) : buyer.paylaterThreshold > 0 ? (
                           <span style={{ color: '#b45309' }}>
                             No (need net revenue ₹{Number(buyer.paylaterThreshold).toLocaleString()} ·
                             current ₹
-                            {Number(buyer.allTimeNetRevenue ?? 0).toLocaleString()}
-                            )
+                            {Number(buyer.allTimeNetRevenue ?? 0).toLocaleString()})
                           </span>
                         ) : (
                           '—'
@@ -362,7 +364,7 @@ export default function SupplierBuyerPurchases() {
                           <div style={{ display: 'flex', gap: '0.35rem', alignItems: 'center', flexWrap: 'wrap' }}>
                             <input
                               type="number"
-                              min="1"
+                              min="0"
                               step="1"
                               value={thresholdDrafts[buyer.buyerId] ?? '0'}
                               onChange={(e) =>
@@ -372,7 +374,8 @@ export default function SupplierBuyerPurchases() {
                                 }))
                               }
                               style={{ ...inputStyle, width: '100px', padding: '0.35rem 0.5rem' }}
-                              aria-label={`Pay-later minimum for ${buyer.name}`}
+                              aria-label={`Pay-later lifetime net revenue unlock for ${buyer.name}`}
+                              title="Lifetime net revenue required before pay later (₹0 = no unlock gate)"
                             />
                             <button
                               type="button"

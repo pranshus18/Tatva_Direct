@@ -137,7 +137,7 @@ export default function SupplierSelectYourself() {
     const rejectedKeys = new Set(
       (Array.isArray(profile?.supplierBrandRequests) ? profile.supplierBrandRequests : [])
         .filter((row) => String(row?.status || '').toLowerCase() === 'rejected')
-        .filter((row) => !/duplicate of approved brand/i.test(String(row?.rejectionReason || '')))
+        .filter((row) => !/duplicate of (approved brand\s+)?["“]?/i.test(String(row?.rejectionReason || '')))
         .map((row) => brandKeyForDuplicateCheck(row?.normalizedName || row?.name))
         .filter(Boolean)
     );
@@ -232,14 +232,28 @@ export default function SupplierSelectYourself() {
       .sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }, [profile?.supplierBrandRequests, profile?.adminApprovedBrands, catalogBrands, effectiveApprovedBrands]);
 
+  // Always derive the visible notice from live catalog/profile so approved brands never
+  // stay stuck under "Pending Admin Approval" after admin approves (or for catalog twins).
+  const visibleBrandSubmissionNotice = useMemo(
+    () =>
+      reconcileBrandSubmissionNotice(brandSubmissionNotice, {
+        profile,
+        catalogBrands,
+        supplierApprovedBrands: effectiveApprovedBrands
+      }),
+    [brandSubmissionNotice, profile, catalogBrands, effectiveApprovedBrands]
+  );
+
   const brandSaveBlockedForPending = useMemo(() => {
     const noticePendingNames =
-      brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
-        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+      visibleBrandSubmissionNotice?.tone === 'pending' &&
+      Array.isArray(visibleBrandSubmissionNotice.brands)
+        ? visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
     const noticeApprovedNames =
-      brandSubmissionNotice?.tone === 'success' && Array.isArray(brandSubmissionNotice.brands)
-        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+      visibleBrandSubmissionNotice?.tone === 'success' &&
+      Array.isArray(visibleBrandSubmissionNotice.brands)
+        ? visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
     return isBrandApprovalSaveBlockedForPendingRequests({
       profile,
@@ -249,12 +263,19 @@ export default function SupplierSelectYourself() {
       extraPendingBrandNames: noticePendingNames,
       extraApprovedBrandNames: noticeApprovedNames
     });
-  }, [profile, catalogBrands, effectiveApprovedBrands, brandApprovalSubmittedSignature, brandSubmissionNotice]);
+  }, [
+    profile,
+    catalogBrands,
+    effectiveApprovedBrands,
+    brandApprovalSubmittedSignature,
+    visibleBrandSubmissionNotice
+  ]);
 
   const pendingBrandsBlockingSave = useMemo(() => {
     const noticePendingNames =
-      brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
-        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+      visibleBrandSubmissionNotice?.tone === 'pending' &&
+      Array.isArray(visibleBrandSubmissionNotice.brands)
+        ? visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
     return listPendingBrandNamesBlockingSave({
       profile,
@@ -262,12 +283,13 @@ export default function SupplierSelectYourself() {
       supplierApprovedBrands: effectiveApprovedBrands,
       extraPendingBrandNames: noticePendingNames
     });
-  }, [profile, catalogBrands, effectiveApprovedBrands, brandSubmissionNotice]);
+  }, [profile, catalogBrands, effectiveApprovedBrands, visibleBrandSubmissionNotice]);
 
   const approvedBrandsBlockingSave = useMemo(() => {
     const noticeApprovedNames =
-      brandSubmissionNotice?.tone === 'success' && Array.isArray(brandSubmissionNotice.brands)
-        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+      visibleBrandSubmissionNotice?.tone === 'success' &&
+      Array.isArray(visibleBrandSubmissionNotice.brands)
+        ? visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
     return listApprovedBrandNamesBlockingSave({
       profile,
@@ -275,7 +297,7 @@ export default function SupplierSelectYourself() {
       supplierApprovedBrands: effectiveApprovedBrands,
       extraApprovedBrandNames: noticeApprovedNames
     });
-  }, [profile, catalogBrands, effectiveApprovedBrands, brandSubmissionNotice]);
+  }, [profile, catalogBrands, effectiveApprovedBrands, visibleBrandSubmissionNotice]);
 
   const brandSaveBlockedByPendingRequest =
     brandSaveBlockedForPending && pendingBrandsBlockingSave.length > 0;
@@ -289,12 +311,14 @@ export default function SupplierSelectYourself() {
 
   const hasBrandsNeedingApprovalRequest = useMemo(() => {
     const noticePendingNames =
-      brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
-        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+      visibleBrandSubmissionNotice?.tone === 'pending' &&
+      Array.isArray(visibleBrandSubmissionNotice.brands)
+        ? visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
     const noticeApprovedNames =
-      brandSubmissionNotice?.tone === 'success' && Array.isArray(brandSubmissionNotice.brands)
-        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+      visibleBrandSubmissionNotice?.tone === 'success' &&
+      Array.isArray(visibleBrandSubmissionNotice.brands)
+        ? visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
     return profileHasBrandsNeedingApprovalRequest({
       profile,
@@ -309,7 +333,7 @@ export default function SupplierSelectYourself() {
     catalogBrands,
     effectiveApprovedBrands,
     brandApprovalSubmittedSignature,
-    brandSubmissionNotice
+    visibleBrandSubmissionNotice
   ]);
 
   const showApprovedBrandPathBAlert = shouldShowApprovedBrandPathBAlert({
@@ -330,14 +354,15 @@ export default function SupplierSelectYourself() {
 
   const pendingRequestStatusBrand =
     pendingBrandsBlockingSave[0] ||
-    (brandSubmissionNotice?.tone === 'pending' && brandSubmissionNotice.brands?.[0]?.name) ||
+    (visibleBrandSubmissionNotice?.tone === 'pending' &&
+      visibleBrandSubmissionNotice.brands?.[0]?.name) ||
     pendingBrandRequests[0]?.name ||
     '';
 
   const showPendingRequestStatusLine =
     activeBrandPath !== 'pathA' &&
     (brandSaveBlockedByPendingRequest ||
-      brandSubmissionNotice?.tone === 'pending' ||
+      visibleBrandSubmissionNotice?.tone === 'pending' ||
       pendingBrandRequests.length > 0);
 
   const brandSaveButtonLabel = useMemo(() => {
@@ -597,7 +622,7 @@ export default function SupplierSelectYourself() {
 
   // While a Path B request is pending, poll so Admin approval appears without requiring a tab focus.
   useEffect(() => {
-    const hasPendingNotice = brandSubmissionNotice?.tone === 'pending';
+    const hasPendingNotice = visibleBrandSubmissionNotice?.tone === 'pending';
     const hasPendingRequests = pendingBrandRequests.length > 0;
     if (!hasPendingNotice && !hasPendingRequests) return undefined;
 
@@ -613,7 +638,7 @@ export default function SupplierSelectYourself() {
 
     const intervalId = window.setInterval(poll, 8000);
     return () => window.clearInterval(intervalId);
-  }, [brandSubmissionNotice?.tone, pendingBrandRequests.length, reloadCatalogBrands]);
+  }, [visibleBrandSubmissionNotice?.tone, pendingBrandRequests.length, reloadCatalogBrands]);
 
   // Keep approved brands / role options fresh after admin approval in another session.
   // Never reload the full profile while the supplier has unsaved role/document drafts —
@@ -1183,12 +1208,14 @@ export default function SupplierSelectYourself() {
       return;
     }
     const noticePendingNames =
-      brandSubmissionNotice?.tone === 'pending' && Array.isArray(brandSubmissionNotice.brands)
-        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+      visibleBrandSubmissionNotice?.tone === 'pending' &&
+      Array.isArray(visibleBrandSubmissionNotice.brands)
+        ? visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
     const noticeApprovedNames =
-      brandSubmissionNotice?.tone === 'success' && Array.isArray(brandSubmissionNotice.brands)
-        ? brandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
+      visibleBrandSubmissionNotice?.tone === 'success' &&
+      Array.isArray(visibleBrandSubmissionNotice.brands)
+        ? visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean)
         : [];
     if (
       isBrandApprovalSaveBlockedForPendingRequests({
@@ -1926,30 +1953,32 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {brandSubmissionNotice ? (
+          {visibleBrandSubmissionNotice ? (
             <div
               className={`supplier-select-alert supplier-select-alert--${
-                brandSubmissionNotice.tone === 'success' ? 'draft' : 'pending'
+                visibleBrandSubmissionNotice.tone === 'success' ? 'draft' : 'pending'
               }`}
               role="status"
             >
               <strong>
-                {brandSubmissionNotice.tone === 'pending' && brandSubmissionNotice.brands?.length === 1
-                  ? `Pending Admin Approval — "${brandSubmissionNotice.brands[0].name}"`
-                  : brandSubmissionNotice.title}
+                {visibleBrandSubmissionNotice.tone === 'pending' &&
+                visibleBrandSubmissionNotice.brands?.length === 1
+                  ? `Pending Admin Approval — "${visibleBrandSubmissionNotice.brands[0].name}"`
+                  : visibleBrandSubmissionNotice.title}
               </strong>
-              <p>{brandSubmissionNotice.message}</p>
-              {brandSubmissionNotice.submittedAt ? (
+              <p>{visibleBrandSubmissionNotice.message}</p>
+              {visibleBrandSubmissionNotice.submittedAt ? (
                 <p className="supplier-select-alert__meta">
-                  Submitted: {formatDateTimeIST(brandSubmissionNotice.submittedAt, '—')}
+                  Submitted: {formatDateTimeIST(visibleBrandSubmissionNotice.submittedAt, '—')}
                 </p>
               ) : null}
-              {Array.isArray(brandSubmissionNotice.brands) && brandSubmissionNotice.brands.length > 0 ? (
+              {Array.isArray(visibleBrandSubmissionNotice.brands) &&
+              visibleBrandSubmissionNotice.brands.length > 0 ? (
                 <ul className="supplier-select-alert__list">
-                  {brandSubmissionNotice.brands.map((row) => (
+                  {visibleBrandSubmissionNotice.brands.map((row) => (
                     <li key={row.name}>
                       {row.name}
-                      {brandSubmissionNotice.tone === 'pending'
+                      {visibleBrandSubmissionNotice.tone === 'pending'
                         ? ' — Pending Admin Approval'
                         : row.submittedAt
                           ? ` — ${formatDateTimeIST(row.submittedAt, '—')}`
@@ -1968,7 +1997,9 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {!brandSubmissionNotice && pendingBrandRequests.length > 0 && activeBrandPath !== 'pathA' ? (
+          {!visibleBrandSubmissionNotice &&
+          pendingBrandRequests.length > 0 &&
+          activeBrandPath !== 'pathA' ? (
             <div className="supplier-select-alert supplier-select-alert--pending" role="status">
               <strong>
                 {pendingBrandRequests.length === 1

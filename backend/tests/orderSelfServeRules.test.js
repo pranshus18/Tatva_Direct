@@ -31,3 +31,21 @@ test('getSelfServeLockReason returns user-friendly lock explanations', () => {
   assert.equal(getSelfServeLockReason({ status: 'processing', paymentStatus: 'pending' }), 'Order has already entered fulfillment');
   assert.equal(getSelfServeLockReason({ status: 'confirmed', paymentStatus: 'pending' }), '');
 });
+
+test('canDeleteOrder allows only delivered and paid orders', async () => {
+  const { canDeleteOrder, getOrderDeleteBlockReason } = await import('../utils/orderSelfServeRules.js');
+  assert.equal(canDeleteOrder({ status: 'delivered', paymentStatus: 'paid' }), true);
+  assert.equal(canDeleteOrder({ status: 'delivered', paymentStatus: 'pending' }), false);
+  assert.equal(canDeleteOrder({ status: 'confirmed', paymentStatus: 'paid' }), false);
+  assert.equal(canDeleteOrder({ status: 'confirmed', paymentStatus: 'pending' }), false);
+  assert.equal(canDeleteOrder({ status: 'confirmed', paymentStatus: 'partial' }), false);
+  assert.match(
+    getOrderDeleteBlockReason({ status: 'delivered', paymentStatus: 'pending' }),
+    /payment is pending/i
+  );
+  assert.match(
+    getOrderDeleteBlockReason({ status: 'confirmed', paymentStatus: 'paid' }),
+    /delivered and paid/i
+  );
+  assert.equal(getOrderDeleteBlockReason({ status: 'delivered', paymentStatus: 'paid' }), '');
+});

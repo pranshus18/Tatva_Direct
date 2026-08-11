@@ -1315,29 +1315,17 @@ export default function SupplierSupplyChainEntriesEditor({
     }
   }, [chainProfileApprovalStatus]);
 
+  // Drop stale request state only if the entry disappears (e.g. removed). Do NOT clear
+  // just because role still equals the approved role — that made "Request Role Change"
+  // appear to do nothing (request opened, then immediately cancelled).
   useEffect(() => {
-    if (savingEntryId || !roleChangeRequestEntryId) return;
+    if (!roleChangeRequestEntryId) return;
     const entries = getDisplayEntriesForProfile(profile);
     const entry = entries.find((row) => String(row?.id || '') === roleChangeRequestEntryId);
-    if (entry && entryMatchesSavedBaseline(entry, savedBaselineEntries)) {
-      const activeRole = getActiveApprovedRoleForEntry(
-        entry,
-        { chainProfileApprovalStatus },
-        approvedBaselineEntries,
-        savedBaselineEntries
-      );
-      if (!activeRole || String(entry.role || '').trim() === activeRole) {
-        setRoleChangeRequestEntryId('');
-      }
+    if (!entry) {
+      setRoleChangeRequestEntryId('');
     }
-  }, [
-    savingEntryId,
-    roleChangeRequestEntryId,
-    profile,
-    savedBaselineEntries,
-    approvedBaselineEntries,
-    chainProfileApprovalStatus
-  ]);
+  }, [roleChangeRequestEntryId, profile]);
   const isBrandStepPicker = sectionView === 'brand' && selectionMode === 'dropdown';
   const lockedBrandKey = brandKeyForDuplicateCheck(lockedBrandName);
   const brandSetupLocked = isBrandStepPicker && !!lockedBrandKey;

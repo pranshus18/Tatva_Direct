@@ -1,6 +1,7 @@
 import { deleteOrderRequestSchema } from '../../contracts/dashboardContracts.js';
 import { deleteOrderById } from '../../repositories/ordersRepository.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
+import { canDeleteOrder, getOrderDeleteBlockReason } from '../../utils/orderSelfServeRules.js';
 
 function registerDeleteOrderRoute({
   router,
@@ -50,11 +51,19 @@ function registerDeleteOrderRoute({
         });
       }
 
-      // Prevent deletion of orders that are already delivered or paid
-      if (order.status === 'delivered' && order.payment_status === 'paid') {
+      if (
+        !canDeleteOrder({
+          status: order.status,
+          paymentStatus: order.payment_status
+        })
+      ) {
         return res.status(400).json({
           status: 'error',
-          message: 'Cannot delete an order that has been delivered and paid. Please contact support if you need to cancel this order.'
+          message:
+            getOrderDeleteBlockReason({
+              status: order.status,
+              paymentStatus: order.payment_status
+            }) || 'This order cannot be deleted.'
         });
       }
 

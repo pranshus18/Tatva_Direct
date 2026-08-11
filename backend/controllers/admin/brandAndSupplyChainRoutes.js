@@ -164,6 +164,12 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
           }
         }
 
+        try {
+          await consolidateDuplicateBrands(supabase);
+        } catch (consolidateError) {
+          console.error('Consolidate brands after merge-approve:', consolidateError);
+        }
+
         return res.json({
           status: 'success',
           message: `Brand approved as "${canonicalName}" (merged with existing catalog entry).`,
@@ -207,6 +213,13 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         } catch (syncError) {
           console.error('Sync approved brand into supplier profile:', syncError);
         }
+      }
+
+      // Close sibling pending/rejected twins so other suppliers stop seeing stale pending.
+      try {
+        await consolidateDuplicateBrands(supabase);
+      } catch (consolidateError) {
+        console.error('Consolidate brands after approve:', consolidateError);
       }
 
       res.json({ status: 'success', message: 'Brand approved', brand });

@@ -15,7 +15,7 @@
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
 
 function isDuplicateOfApprovedRejection(reason = '') {
-  return /duplicate of approved brand/i.test(String(reason || ''));
+  return /duplicate of (approved brand\s+)?["“]?/i.test(String(reason || ''));
 }
 
 function buildApprovedKeys(supplierApprovedBrands = []) {

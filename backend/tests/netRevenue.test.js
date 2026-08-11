@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildOrderNetRevenueMap, getNetItemMetrics } from '../utils/netRevenue.js';
+import {
+  buildOrderNetRevenueMap,
+  getNetItemMetrics,
+  NET_REVENUE_RETURN_STATUSES
+} from '../utils/netRevenue.js';
 
 test('getNetItemMetrics computes net quantity and revenue after returns', () => {
   const returnsByItem = new Map([['item-1', 2]]);
@@ -33,4 +37,13 @@ test('buildOrderNetRevenueMap aggregates net revenue per order', () => {
 
   assert.equal(revenueMap.get('order-a'), 350);
   assert.equal(revenueMap.get('order-b'), 0);
+});
+
+test('NET_REVENUE_RETURN_STATUSES includes progressive return outcomes', () => {
+  assert.ok(NET_REVENUE_RETURN_STATUSES.includes('received'));
+  assert.ok(NET_REVENUE_RETURN_STATUSES.includes('refunded'));
+  assert.ok(NET_REVENUE_RETURN_STATUSES.includes('replaced'));
+  assert.ok(NET_REVENUE_RETURN_STATUSES.includes('closed'));
+  assert.ok(!NET_REVENUE_RETURN_STATUSES.includes('requested'));
+  assert.ok(!NET_REVENUE_RETURN_STATUSES.includes('approved'));
 });

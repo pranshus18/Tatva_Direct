@@ -422,7 +422,7 @@ export async function buildCreditStatus({
     message = 'Credit limit is zero. Update the limit before placing on-account orders.';
     payLaterOffered = false;
   } else if (!thresholdOptional && !payLaterThresholdMet) {
-    message = `Pay later requires an order of at least ₹${payLaterThreshold.toLocaleString('en-IN')}. This order is ₹${requested.toLocaleString('en-IN')}.`;
+    message = `Pay later unlocks after ₹${payLaterThreshold.toLocaleString('en-IN')} in paid net revenue (after returns). Current total: ₹${priorNetRevenue.toLocaleString('en-IN')}.`;
     payLaterOffered = false;
   } else if (!hasCreditParty) {
     message =
@@ -443,10 +443,10 @@ export async function buildCreditStatus({
     if (thresholdOptional) {
       message = `Credit limit ₹${limit.toLocaleString('en-IN')}: ₹${outstanding.toLocaleString('en-IN')} outstanding, ₹${available.toLocaleString('en-IN')} remaining for this order.${cycleHint}`;
     } else {
-      message = `Pay later available. Credit limit ₹${limit.toLocaleString('en-IN')}: ₹${outstanding.toLocaleString('en-IN')} outstanding, ₹${available.toLocaleString('en-IN')} remaining for this order.${cycleHint}`;
+      message = `Pay later available (lifetime net revenue ₹${priorNetRevenue.toLocaleString('en-IN')} meets ₹${payLaterThreshold.toLocaleString('en-IN')}). Credit limit ₹${limit.toLocaleString('en-IN')}: ₹${outstanding.toLocaleString('en-IN')} outstanding, ₹${available.toLocaleString('en-IN')} remaining for this order.${cycleHint}`;
     }
   } else if (requested <= 0 && !thresholdOptional && payLaterThreshold > 0) {
-    message = `Pay later requires an order of at least ₹${payLaterThreshold.toLocaleString('en-IN')}.`;
+    message = `Pay later unlocks after ₹${payLaterThreshold.toLocaleString('en-IN')} in paid net revenue (after returns). Current total: ₹${priorNetRevenue.toLocaleString('en-IN')}.`;
   } else {
     message = 'Pay later is not available for this order.';
     payLaterOffered = false;

@@ -129,6 +129,24 @@ describe('classifyPathBBrandSaveRows', () => {
     });
     expect(rows[0].status).toBe('approved');
   });
+
+  it('keeps catalog-approved brands approved when a sibling brand is still pending', () => {
+    const philipsKey = brandKeyForDuplicateCheck('Philips');
+    const rows = classifyPathBBrandSaveRows({
+      brandsBeingSaved: ['Philips', 'Prestige'],
+      requestSource: [],
+      approvalFailureRows: [
+        { name: 'Prestige', status: 'pending', submittedAt: '2026-08-11T10:00:00.000Z' }
+      ],
+      approvedCatalogKeys: new Set([philipsKey]),
+      adminApprovedKeys: new Set(),
+      brandAlreadyApproved: false,
+      brandApprovalRequested: true,
+      brandAlreadyPending: false
+    });
+    expect(rows.find((row) => row.name === 'Philips')?.status).toBe('approved');
+    expect(rows.find((row) => row.name === 'Prestige')?.status).toBe('pending');
+  });
 });
 
 describe('supply-chain admin-only messaging', () => {
@@ -288,6 +306,36 @@ describe('reconcileBrandSubmissionNotice', () => {
     expect(next).not.toBe(notice);
     expect(next.tone).toBe('success');
     expect(next.brands[0].status).toBe('approved');
+  });
+
+  it('upgrades mixed pending notices when some brands are already in the catalog', () => {
+    const notice = {
+      tone: 'pending',
+      title: '8 brand requests submitted',
+      brands: [
+        { name: 'Philips', status: 'pending' },
+        { name: 'Prestige', status: 'pending' },
+        { name: 'Safari', status: 'pending' }
+      ],
+      message: 'waiting'
+    };
+    const next = reconcileBrandSubmissionNotice(notice, {
+      profile: {
+        supplierBrandRequests: [
+          { name: 'Philips', status: 'pending' },
+          { name: 'Prestige', status: 'pending' },
+          { name: 'Safari', status: 'pending' }
+        ]
+      },
+      catalogBrands: [
+        { name: 'Philips', status: 'approved' },
+        { name: 'Safari', status: 'approved' }
+      ],
+      supplierApprovedBrands: []
+    });
+    expect(next).not.toBe(notice);
+    expect(next.tone).toBe('pending');
+    expect(next.brands.map((row) => row.name)).toEqual(['Prestige']);
   });
 
   it('keeps the pending banner when the request is still pending and not in catalog', () => {

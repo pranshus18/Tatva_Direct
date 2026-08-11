@@ -24,7 +24,7 @@ function brandIdentityKey(nameOrNormalized) {
 }
 
 function isDuplicateOfApprovedRejection(reason = '') {
-  return /duplicate of approved brand/i.test(String(reason || ''));
+  return /duplicate of (approved brand\s+)?["“]?/i.test(String(reason || ''));
 }
 function parseEntryBrandList(brands) {
   if (brands == null || brands === '') return [];
@@ -271,16 +271,23 @@ export function collectDeclaredBrandNamesFromProfiles(...profiles) {
 }
 
 /**
- * Brand requests submitted by this supplier (any status).
- * Used to hide rejected brands from Step 2 dropdown and block false "approved" matches.
+ * Merge a supplier's own brand-request rows with the approved catalog.
+ * Pending (or duplicate-rejected) requests collapse to approved when any catalog
+ * row for the same identity is already approved — even if another supplier owns it.
+ * Pure helper so Select yourself stays in sync without requiring declared profile brands.
  */
-export async function fetchSupplierBrandRequests(userId, profileContext = null) {
-  if (!userId) return [];
+export function mergeSupplierBrandRequestsWithApprovedCatalog({
+  ownRows = [],
+  catalogRows = [],
+  declaredNames = [],
+  userId = ''
+} = {}) {
   const byKey = new Map();
+  const uid = String(userId || '').trim();
 
   const upsert = (row, { force = false } = {}) => {
     const name = String(row?.name || '').trim();
-    const key = brandIdentityKey(row?.normalized_name || name);
+    const key = brandIdentityKey(row?.normalized_name || row?.normalizedName || name);
     if (!name || !key) return;
     const status = String(row?.status || 'pending').trim().toLowerCase();
     const existing = byKey.get(key);
@@ -294,11 +301,67 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
       name,
       normalized_name: key,
       status,
-      rejectionReason: String(row?.rejection_reason || '').trim(),
-      requestedAt: row?.requested_at || row?.updated_at || row?.created_at || null,
-      createdAt: row?.created_at || null
+      rejectionReason: String(row?.rejection_reason || row?.rejectionReason || '').trim(),
+      requestedAt:
+        row?.requested_at ||
+        row?.requestedAt ||
+        row?.updated_at ||
+        row?.created_at ||
+        row?.createdAt ||
+        null,
+      createdAt: row?.created_at || row?.createdAt || null
     });
   };
+
+  for (const row of ownRows || []) {
+    if (
+      String(row?.status || '').toLowerCase() === 'rejected' &&
+      isDuplicateOfApprovedRejection(row?.rejection_reason || row?.rejectionReason)
+    ) {
+      continue;
+    }
+    upsert(row);
+  }
+
+  const ownKeys = new Set(byKey.keys());
+  const declaredKeys = new Set(
+    (Array.isArray(declaredNames) ? declaredNames : [])
+      .map((name) => brandIdentityKey(name))
+      .filter(Boolean)
+  );
+  const eligibleKeys = new Set([...ownKeys, ...declaredKeys]);
+
+  for (const row of catalogRows || []) {
+    const key = brandIdentityKey(row?.normalized_name || row?.normalizedName || row?.name);
+    if (!key || !eligibleKeys.has(key)) continue;
+    const status = String(row?.status || '').toLowerCase();
+    const requestedBy = String(row?.requested_by || row?.requestedBy || '').trim();
+    if (uid && requestedBy === uid) {
+      if (
+        status === 'rejected' &&
+        isDuplicateOfApprovedRejection(row?.rejection_reason || row?.rejectionReason)
+      ) {
+        continue;
+      }
+      upsert(row);
+      continue;
+    }
+    // Surface another account's row only when it is approved for a brand this supplier
+    // already requested or declared. Never attach someone else's pending/rejected request.
+    if (status === 'approved') {
+      upsert(row);
+    }
+  }
+
+  return [...byKey.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+/**
+ * Brand requests submitted by this supplier (any status).
+ * Used to hide rejected brands from Step 2 dropdown and block false "approved" matches.
+ */
+export async function fetchSupplierBrandRequests(userId, profileContext = null) {
+  if (!userId) return [];
 
   try {
     const { data: requestedRows, error: requestedError } = await supabase
@@ -306,46 +369,33 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
       .select('name, normalized_name, status, rejection_reason, requested_by, requested_at, updated_at, created_at')
       .eq('requested_by', userId);
     if (requestedError) throw requestedError;
-    for (const row of requestedRows || []) {
-      // Duplicate-of-approved rejections must not poison Step 2 for the canonical brand.
-      if (
-        String(row?.status || '').toLowerCase() === 'rejected' &&
-        isDuplicateOfApprovedRejection(row?.rejection_reason)
-      ) {
-        continue;
-      }
-      upsert(row);
-    }
 
     const declaredNames = collectDeclaredBrandNamesFromProfiles(profileContext);
-    if (declaredNames.length > 0) {
+    const ownKeys = new Set(
+      (requestedRows || [])
+        .map((row) => brandIdentityKey(row?.normalized_name || row?.name))
+        .filter(Boolean)
+    );
+    const declaredKeys = new Set(declaredNames.map((name) => brandIdentityKey(name)).filter(Boolean));
+    const needsCatalogMerge = ownKeys.size > 0 || declaredKeys.size > 0;
+
+    let catalogRows = [];
+    if (needsCatalogMerge) {
       // Match in memory with catalog dedup keys — DB normalized_name spellings can differ
       // (e.g. Phillips → philips) so .in(normalizeBrandKey) misses approved rows.
       const { data: allBrandRows, error: allBrandError } = await supabase
         .from('brands')
         .select('name, normalized_name, status, rejection_reason, requested_by, requested_at, updated_at, created_at');
       if (allBrandError) throw allBrandError;
-
-      const declaredKeys = new Set(declaredNames.map((name) => brandIdentityKey(name)).filter(Boolean));
-      for (const row of allBrandRows || []) {
-        const key = brandIdentityKey(row?.normalized_name || row?.name);
-        if (!key || !declaredKeys.has(key)) continue;
-        const status = String(row?.status || '').toLowerCase();
-        const requestedBy = String(row?.requested_by || '').trim();
-        if (requestedBy === String(userId)) {
-          if (status === 'rejected' && isDuplicateOfApprovedRejection(row?.rejection_reason)) continue;
-          upsert(row);
-          continue;
-        }
-        // Only surface another account's row when it is approved for a brand this supplier declared.
-        // Never attach someone else's pending/rejected request onto this supplier.
-        if (status === 'approved') {
-          upsert(row);
-        }
-      }
+      catalogRows = allBrandRows || [];
     }
 
-    return [...byKey.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+    return mergeSupplierBrandRequestsWithApprovedCatalog({
+      ownRows: requestedRows || [],
+      catalogRows,
+      declaredNames,
+      userId
+    });
   } catch (e) {
     console.error('[supplierChainProfile] fetchSupplierBrandRequests:', e?.message || e);
     return [];
@@ -380,6 +430,9 @@ export async function fetchSupplierApprovedBrands(userId, profileContext = null)
         .filter(Boolean)
     );
 
+    // Requests that already collapsed to approved (own row or catalog twin).
+    addRows(brandRequests.filter((row) => String(row?.status || '').toLowerCase() === 'approved'));
+
     const { data: requestedRows, error: requestedError } = await supabase
       .from('brands')
       .select('name, normalized_name, status')
@@ -389,19 +442,26 @@ export async function fetchSupplierApprovedBrands(userId, profileContext = null)
     addRows(requestedRows);
 
     const declaredNames = collectDeclaredBrandNamesFromProfiles(profileContext);
-    if (declaredNames.length > 0) {
+    const requestKeys = new Set(
+      brandRequests
+        .map((row) => brandIdentityKey(row?.normalized_name || row?.name))
+        .filter(Boolean)
+    );
+    const declaredKeys = new Set(declaredNames.map((name) => brandIdentityKey(name)).filter(Boolean));
+    const eligibleKeys = new Set([...requestKeys, ...declaredKeys]);
+
+    if (eligibleKeys.size > 0) {
       const { data: approvedRows, error: approvedError } = await supabase
         .from('brands')
         .select('name, normalized_name, status')
         .eq('status', 'approved');
       if (approvedError) throw approvedError;
 
-      const declaredKeys = new Set(declaredNames.map((name) => brandIdentityKey(name)).filter(Boolean));
-      const eligibleDeclaredRows = (approvedRows || []).filter((row) => {
+      const eligibleRows = (approvedRows || []).filter((row) => {
         const key = brandIdentityKey(row?.normalized_name || row?.name);
-        return key && declaredKeys.has(key) && !rejectedKeys.has(key);
+        return key && eligibleKeys.has(key) && !rejectedKeys.has(key);
       });
-      addRows(eligibleDeclaredRows);
+      addRows(eligibleRows);
     }
 
     return [...byKey.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));

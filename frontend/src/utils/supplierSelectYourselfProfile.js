@@ -241,7 +241,7 @@ function buildSupplierApprovedBrandKeys(supplierApprovedBrands = []) {
 }
 
 function isDuplicateOfApprovedRejection(reason = '') {
-  return /duplicate of approved brand/i.test(String(reason || ''));
+  return /duplicate of (approved brand\s+)?["“]?/i.test(String(reason || ''));
 }
 
 function buildSupplierRejectedBrandKeys(supplierBrandRequests = []) {
@@ -774,15 +774,18 @@ export function classifyPathBBrandSaveRows({
         : false) ||
         (adminApprovedKeys instanceof Set ? adminApprovedKeys.has(brandKey) : false));
 
+    // Per-brand outcomes: never let a sibling brand's "pending requested" flag mark an
+    // already-catalog-approved brand as pending in the Path B notice.
     let status = 'pending';
-    if (failureForBrand || requestStatus === 'pending' || brandApprovalRequested || brandAlreadyPending) {
+    if (failureForBrand) {
       status = 'pending';
+    } else if (inApprovedCatalog || requestStatus === 'approved') {
+      status = 'approved';
     } else if (requestStatus === 'rejected') {
       status = 'rejected';
-    } else if (
-      brandAlreadyApproved === true &&
-      (requestStatus === 'approved' || inApprovedCatalog)
-    ) {
+    } else if (requestStatus === 'pending' || brandApprovalRequested || brandAlreadyPending) {
+      status = 'pending';
+    } else if (brandAlreadyApproved === true) {
       status = 'approved';
     }
 

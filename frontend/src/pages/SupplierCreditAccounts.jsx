@@ -255,11 +255,12 @@ export default function SupplierCreditAccounts() {
         <div className="profile-section">
           <p style={{ color: '#64748b', fontSize: '0.92rem', marginTop: 0 }}>
             <strong>Credit limit</strong> is the maximum total outstanding a buyer can have on pay-later
-            orders at once (e.g. ₹1,00,000 — they can use the full amount across orders, but not more).
-            <strong>Pay-later minimum</strong> is the minimum order amount required to use pay later on that
-            checkout (₹0 = no minimum). <strong>Loan cycle:</strong> when
-            the cycle ends, buyers must settle outstanding orders from their vault (top up first if needed) before
-            new pay-later orders.
+            orders at once (e.g. ₹1,00,000 — they can use the full amount across orders, but not more).{' '}
+            <strong>Pay-later minimum</strong> is lifetime paid net revenue (after returns) the buyer must
+            already have reached before pay later unlocks (₹0 = no unlock gate). After that total is
+            crossed, any later order size can use pay later within the credit limit.{' '}
+            <strong>Loan cycle:</strong> when the cycle ends, buyers must settle outstanding orders from
+            their vault (top up first if needed) before new pay-later orders.
           </p>
           <div className="supplier-summary-grid">
             <div className="supplier-summary-card">
@@ -356,8 +357,8 @@ export default function SupplierCreditAccounts() {
                             }
                             style={cellInput}
                             placeholder="0"
-                            title="Minimum order amount for pay later on this order (₹0 = no minimum)"
-                            aria-label="Pay-later minimum order amount"
+                            title="Lifetime net revenue required before pay later unlocks (₹0 = no unlock gate)"
+                            aria-label="Pay-later lifetime net revenue unlock"
                           />
                         </td>
                         <td style={td}>

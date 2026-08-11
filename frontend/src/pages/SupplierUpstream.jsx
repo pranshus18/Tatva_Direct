@@ -67,6 +67,13 @@ import {
   DialogTitle
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
+import {
+  SUPPLIER_UPSTREAM_CART_RESUME_KEY,
+  clearUpstreamCartClientProjectState,
+  clearUpstreamSessionProjectId,
+  readUpstreamSessionProjectId,
+  writeUpstreamSessionProjectId
+} from '../utils/supplierUpstreamCartSession';
 
 const blankShippingAddress = {
   label: '',
@@ -84,39 +91,14 @@ const emptyProjectFieldErrors = {
 
 const todayDateMin = getTodayDateInputValue();
 
-const SUPPLIER_UPSTREAM_CART_RESUME_KEY = 'supplierUpstreamCartResumeDraft';
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
 /** Set when returning from Place Order so upstream page restores in-progress draft once. */
 const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
-/** Last project chosen in this browser session — reused when adding more qty for any listing. */
-const SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY = 'supplierUpstreamSessionProjectId';
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
 
-const readSessionProjectId = () => {
-  try {
-    return String(sessionStorage.getItem(SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY) || '').trim();
-  } catch {
-    return '';
-  }
-};
-
-const writeSessionProjectId = (projectId) => {
-  const id = String(projectId || '').trim();
-  if (!id || id === '__new__') return;
-  try {
-    sessionStorage.setItem(SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY, id);
-  } catch {
-    // Ignore quota / private-mode failures; in-memory activeProjectId still works.
-  }
-};
-
-const clearSessionProjectId = () => {
-  try {
-    sessionStorage.removeItem(SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY);
-  } catch {
-    // Ignore private-mode failures.
-  }
-};
+const readSessionProjectId = readUpstreamSessionProjectId;
+const writeSessionProjectId = writeUpstreamSessionProjectId;
+const clearSessionProjectId = clearUpstreamSessionProjectId;
 
 /** Display names for each supply-chain tier (must match backend role keys). */
 const SELLER_LAYER_LABELS = {
@@ -378,7 +360,8 @@ const SupplierUpstream = ({ user }) => {
 
       if (normalized.length === 0) {
         setActiveProjectId('');
-        clearSessionProjectId();
+        setCartProjectByMineId({});
+        clearUpstreamCartClientProjectState();
         return null;
       }
 
@@ -463,12 +446,13 @@ const SupplierUpstream = ({ user }) => {
 
   useEffect(() => {
     const onCartUpdated = () => {
-      void hydrateActiveCartProject(activeProjectId);
+      // Never prefer a remembered project id after clear/delete — hydrate from live cart only.
+      void hydrateActiveCartProject('');
       void refreshSyncedCartQuantities();
     };
     window.addEventListener('supplier-upstream-cart-updated', onCartUpdated);
     return () => window.removeEventListener('supplier-upstream-cart-updated', onCartUpdated);
-  }, [activeProjectId]);
+  }, []);
 
   const selectedMineIds = useMemo(
     () => Object.keys(normalizeSelectionMap(selectedMine || {})),
@@ -482,6 +466,8 @@ const SupplierUpstream = ({ user }) => {
       if (!token) {
         setCartQtyByMineId({});
         setCartProjectByMineId({});
+        clearUpstreamCartClientProjectState();
+        setActiveProjectId('');
         return { quantities: {}, projectsByMine: {} };
       }
       const res = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
@@ -521,8 +507,31 @@ const SupplierUpstream = ({ user }) => {
           }
         }
       }
-      setCartQtyByMineId(next);
+
+      // Cart cleared / last project deleted: keep last card quantities so Add to Cart
+      // can open create-project instead of forcing the user to re-enter qty from zero.
+      setCartQtyByMineId((prev) => {
+        if (Object.keys(next).length === 0 && Object.keys(prev || {}).length > 0) {
+          setProcurementQtyByMineId((draft) => {
+            const merged = { ...draft };
+            for (const [mineId, qty] of Object.entries(prev)) {
+              const existing = parseSupplierStockQuantity(merged[mineId]);
+              if (existing == null || existing <= 0) {
+                merged[mineId] = qty;
+              }
+            }
+            return merged;
+          });
+          setActiveProjectId('');
+          clearUpstreamCartClientProjectState();
+        }
+        return next;
+      });
       setCartProjectByMineId(nextProjects);
+      if (Object.keys(nextProjects).length === 0) {
+        setActiveProjectId('');
+        clearUpstreamCartClientProjectState();
+      }
       return { quantities: next, projectsByMine: nextProjects };
     } catch {
       setCartQtyByMineId({});
@@ -1140,7 +1149,8 @@ const SupplierUpstream = ({ user }) => {
     const knownProjectIds = new Set(projects.map((project) => project.projectId));
     if (!knownProjectIds.size) {
       if (activeProjectId) setActiveProjectId('');
-      clearSessionProjectId();
+      setCartProjectByMineId({});
+      clearUpstreamCartClientProjectState();
     } else if (activeProjectId && !knownProjectIds.has(activeProjectId)) {
       setActiveProjectId('');
       clearSessionProjectId();
@@ -1185,9 +1195,34 @@ const SupplierUpstream = ({ user }) => {
       return false;
     }
 
-    const projectId = String(
+    let projectId = String(
       options?.projectId || cartProjectByMineId[mineId] || activeProjectId || readSessionProjectId() || ''
     ).trim();
+    const [liveProjects, synced] = await Promise.all([
+      loadSupplierCartProjects(),
+      refreshSyncedCartQuantities()
+    ]);
+    const liveProjectIdForMine = String(
+      synced?.projectsByMine?.[mineId] ||
+        (projectId &&
+        projectId !== '__new__' &&
+        liveProjects.some((project) => String(project?.projectId || '') === projectId)
+          ? projectId
+          : '')
+    ).trim();
+    // Cart/project cleared: open create-new instead of updating a deleted project.
+    if (!liveProjectIdForMine || !synced?.quantities?.[mineId]) {
+      clearUpstreamCartClientProjectState();
+      setActiveProjectId('');
+      setCartProjectByMineId((prev) => {
+        const next = { ...prev };
+        delete next[mineId];
+        return next;
+      });
+      await openAddToCartDialog(product, { quantity: nextQty });
+      return false;
+    }
+    projectId = liveProjectIdForMine;
     const replaceQuantity = options?.replaceQuantity !== false;
     setAddingCartByMineId((prev) => ({ ...prev, [mineId]: true }));
     let ok = false;
@@ -1261,12 +1296,24 @@ const SupplierUpstream = ({ user }) => {
 
     const projects = await loadSupplierCartProjects();
     const synced = await refreshSyncedCartQuantities();
+    // Empty cart after clear/delete: drop every stale project pointer before deciding the path.
+    if (!projects.length) {
+      setActiveProjectId('');
+      setCartProjectByMineId({});
+      clearUpstreamCartClientProjectState();
+    }
     const inCartQty = parseSupplierStockQuantity(synced?.quantities?.[mineId]);
     const preferredProjectId = resolvePreferredProjectId(
       mineId,
       projects,
       synced?.projectsByMine || {}
     );
+    const liveProjectId = String(
+      preferredProjectId || synced?.projectsByMine?.[mineId] || ''
+    ).trim();
+    const projectStillExists =
+      !!liveProjectId &&
+      projects.some((project) => String(project?.projectId || '') === liveProjectId);
 
     if (options?.forceProjectPicker === true) {
       if (!hasExplicitQty) {
@@ -1277,15 +1324,15 @@ const SupplierUpstream = ({ user }) => {
       return false;
     }
 
-    // Same product already in cart: update qty on its project — never re-prompt.
-    if (inCartQty != null && inCartQty > 0) {
+    // Same product already in a live project: update qty without re-prompting.
+    if (inCartQty != null && inCartQty > 0 && projectStillExists) {
       return syncExistingCartQuantity(product, hasExplicitQty ? nextQty : inCartQty, {
-        projectId: preferredProjectId || synced?.projectsByMine?.[mineId],
+        projectId: liveProjectId,
         replaceQuantity: true
       });
     }
 
-    // First-time add: project picker only — quantity must already be set on the card.
+    // First-time add OR cart/project was cleared: always open create/select project.
     if (!hasExplicitQty) {
       window.alert('Set quantity on the product card before adding to cart.');
       return false;

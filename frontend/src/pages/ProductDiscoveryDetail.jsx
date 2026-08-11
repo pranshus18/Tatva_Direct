@@ -488,8 +488,13 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
       }
     };
     loadCartQty();
+    const onCartUpdated = () => {
+      void loadCartQty();
+    };
+    window.addEventListener('supplier-upstream-cart-updated', onCartUpdated);
     return () => {
       cancelled = true;
+      window.removeEventListener('supplier-upstream-cart-updated', onCartUpdated);
     };
   }, [isUpstreamPortal, upstreamMineId, upstreamMinQty]);
 
@@ -588,7 +593,22 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
           });
           const data = await response.json();
           if (!response.ok || data.status !== 'success') {
-            throw new Error(data?.message || 'Failed to update cart quantity.');
+            const message = String(data?.message || '');
+            // Cart/project was cleared while this page still thought the item was in cart.
+            if (
+              /not in your upstream cart/i.test(message) ||
+              /project not found/i.test(message)
+            ) {
+              setUpstreamCartQty(null);
+              navigate(
+                buildUpstreamSourcingUrl({
+                  addSupplierProductId: offerId,
+                  quantity: nextQty
+                })
+              );
+              return;
+            }
+            throw new Error(message || 'Failed to update cart quantity.');
           }
           const savedQty = parseSupplierStockQuantity(data?.item?.quantity) ?? nextQty;
           setUpstreamCartQty(savedQty);

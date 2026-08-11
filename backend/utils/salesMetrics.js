@@ -18,19 +18,22 @@ export function isRevenueRecognizedOrder(order) {
 export const isPaidRecognizedOrder = isRevenueRecognizedOrder;
 
 /**
- * Order amount meets the pay-later minimum (₹0 = no minimum).
- * `priorNetRevenue` is retained for call-site compatibility but is not used — the
- * configured threshold is a minimum order amount, not a lifetime revenue gate.
+ * Lifetime pay-later unlock: prior paid net revenue (after returns) must already meet
+ * the configured threshold. The current cart/order amount does not count — once the
+ * buyer has crossed the threshold historically, any later order size may use pay later
+ * (subject to credit limit / loan cycle).
+ * ₹0 threshold = no lifetime gate.
  */
-export function isPayLaterThresholdMet(orderAmount, paylaterThreshold, _priorNetRevenue = 0) {
+export function isPayLaterThresholdMet(_orderAmount, paylaterThreshold, priorNetRevenue = 0) {
   const threshold = roundMoney(paylaterThreshold);
   if (threshold <= 0) return true;
-  return roundMoney(orderAmount) + 0.009 >= threshold;
+  return roundMoney(priorNetRevenue) + 0.009 >= threshold;
 }
 
 /**
  * Whether pay later should be offered / shown (aligned across Sales page, PO, POS).
- * `paylaterThreshold` is the minimum order amount required for this checkout (₹0 = none).
+ * `paylaterThreshold` is lifetime net-revenue unlock (₹0 = none). Credit limit still
+ * caps outstanding. Buyers may be service providers or suppliers ordering upstream.
  */
 export function computePayLaterOffered({
   hasAccount = false,
@@ -55,7 +58,7 @@ export function computePayLaterOffered({
     isEnabled !== false &&
     limit > 0 &&
     (thresholdOptional || payLaterThresholdMet) &&
-    Boolean(hasCreditParty || thresholdOptional);
+    Boolean(hasCreditParty || hasAccount);
 
   return { payLaterOffered, payLaterThresholdMet, thresholdOptional };
 }
@@ -106,6 +109,9 @@ export function computePayLaterCycleLimitGate({
   };
 }
 
+/**
+ * Sales badge: credit account ready AND lifetime net-revenue threshold met (if any).
+ */
 export function computePayLaterEligibleForSales({
   creditLimit = 0,
   paylaterThreshold = 0,
@@ -113,13 +119,12 @@ export function computePayLaterEligibleForSales({
   hasCreditParty = false,
   buyerType = null
 } = {}) {
-  // Sales badge: account is ready for pay later. Order-amount minimum is enforced at checkout.
-  const hasAccount = roundMoney(creditLimit) > 0 || roundMoney(paylaterThreshold) > 0;
+  const hasAccount = roundMoney(creditLimit) > 0;
   const { payLaterOffered, payLaterThresholdMet } = computePayLaterOffered({
     hasAccount,
     isEnabled: true,
     creditLimit,
-    paylaterThreshold: 0,
+    paylaterThreshold,
     priorNetRevenue,
     orderAmount: 0,
     hasCreditParty,

@@ -49,7 +49,7 @@ import {
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
 import {
-  formatVaultPaymentMethodLabel,
+  formatPaymentMethodLabel,
   isVaultPaymentMethod,
   VAULT_PAGE_PATH,
   VAULT_PAYMENT_METHOD
@@ -84,16 +84,9 @@ const formatAddress = (address) =>
     .join(', ');
 
 const paymentMethodLabel = (order) => {
-  const pm = String(order?.paymentMethod || order?.payment_method || '').toLowerCase();
-  if (isVaultPaymentMethod(pm)) return formatVaultPaymentMethodLabel(pm);
-  if (pm === 'cash') return 'Cash on delivery';
-  if (pm === 'online') return 'Pay online';
-  if (pm === 'upi') return 'UPI';
-  if (pm === 'bank_transfer') return 'Bank transfer';
-  if (pm === 'card') return 'Credit / Debit Card';
-  if (pm === 'credit') return 'Credit / pay later';
-  if (!pm) return 'Not set (pay online)';
-  return pm.replace(/_/g, ' ');
+  const raw = order?.paymentMethod || order?.payment_method;
+  if (!String(raw || '').trim()) return 'Not set (pay online)';
+  return formatPaymentMethodLabel(raw);
 };
 
 const statusBadgeVariant = (status) => {

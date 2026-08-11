@@ -612,8 +612,15 @@ describe('Select yourself — role setup step', () => {
     render(<CompletedFormHarness />);
 
     expect(await screen.findByText(/Active approved role: Dealer/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Request Role Change/i })).toBeInTheDocument();
+    const requestBtn = screen.getByRole('button', { name: /Request Role Change/i });
+    expect(requestBtn).toBeInTheDocument();
     expect(screen.queryByRole('combobox', { name: /Select your position/i })).not.toBeInTheDocument();
     expect(screen.getByLabelText(/Assigned supply-chain role/i)).toHaveValue('Dealer');
+
+    fireEvent.click(requestBtn);
+
+    expect(await screen.findByText(/Role change request/i)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /Select your position/i })).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Assigned supply-chain role/i)).not.toBeInTheDocument();
   });
 });

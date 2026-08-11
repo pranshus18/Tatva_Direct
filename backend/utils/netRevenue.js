@@ -5,6 +5,18 @@ const toNumber = (value) => {
 
 const getOrderItemId = (item) => item?.id || item?.order_item_id || item?.orderItemId || null;
 
+/**
+ * Return statuses that reduce recognized net revenue.
+ * Money/vault refunds may not run yet — until then, net revenue is the source of truth
+ * for "amount given back" after a return progresses past receipt.
+ */
+export const NET_REVENUE_RETURN_STATUSES = Object.freeze([
+  'received',
+  'refunded',
+  'replaced',
+  'closed'
+]);
+
 export async function fetchClosedReturnQuantityByOrderItem(supabaseClient, orderIds = []) {
   const normalizedOrderIds = Array.from(new Set((orderIds || []).filter(Boolean)));
   if (normalizedOrderIds.length === 0) {
@@ -15,7 +27,7 @@ export async function fetchClosedReturnQuantityByOrderItem(supabaseClient, order
     .from('order_returns')
     .select('order_id, order_item_id, quantity, status')
     .in('order_id', normalizedOrderIds)
-    .eq('status', 'closed');
+    .in('status', [...NET_REVENUE_RETURN_STATUSES]);
 
   if (error) {
     throw error;
@@ -24,6 +36,8 @@ export async function fetchClosedReturnQuantityByOrderItem(supabaseClient, order
   const closedReturnedQtyByOrderItem = new Map();
   for (const row of data || []) {
     if (!row?.order_item_id) continue;
+    const status = String(row?.status || '').toLowerCase();
+    if (!NET_REVENUE_RETURN_STATUSES.includes(status)) continue;
     const prev = closedReturnedQtyByOrderItem.get(row.order_item_id) || 0;
     const qty = Math.max(0, toNumber(row.quantity));
     closedReturnedQtyByOrderItem.set(row.order_item_id, prev + qty);

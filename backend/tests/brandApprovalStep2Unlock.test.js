@@ -20,5 +20,9 @@ test('catalogBrandDedupKey matches Phillips spelling variants used after admin a
 
 test('duplicate-of-approved rejection reason is detectable', () => {
   const reason = 'Duplicate of approved brand "Samsung".';
-  assert.match(reason, /duplicate of approved brand/i);
+  assert.match(reason, /duplicate of (approved brand\s+)?["“]?/i);
+  assert.match(
+    'Duplicate of "Samsung" — merged automatically.',
+    /duplicate of (approved brand\s+)?["“]?/i
+  );
 });
