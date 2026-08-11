@@ -30,6 +30,7 @@ import {
   labelReturnStatus
 } from '../utils/orderReturnUi';
 import ProductImageCarousel from '../components/ProductImageCarousel';
+import { getOrderItemImages } from '../utils/productImages';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpStatCard from '../components/sp/SpStatCard';
@@ -1105,21 +1106,15 @@ export default function SupplierUpstreamOrders() {
                         </tr>
                       </thead>
                       <tbody>
-                        {orderDetails.items.map((item, idx) => (
+                        {orderDetails.items.map((item, idx) => {
+                          const itemImages = getOrderItemImages(item);
+                          return (
                           <tr key={idx}>
                             <td>
-                              {(item.productImage ||
-                                item.product?.image ||
-                                item.images?.[0] ||
-                                item.product?.images?.[0]) && (
+                              {itemImages.length > 0 && (
                                 <div className="upstream-item-image-wrap">
                                   <ProductImageCarousel
-                                    images={[
-                                      item.productImage,
-                                      item.product?.image,
-                                      ...(Array.isArray(item.images) ? item.images : []),
-                                      ...(Array.isArray(item.product?.images) ? item.product.images : [])
-                                    ]}
+                                    images={itemImages}
                                     alt={item.product?.name || item.name || 'Product'}
                                     height={80}
                                     rounded={6}
@@ -1137,7 +1132,8 @@ export default function SupplierUpstreamOrders() {
                             <td>₹{Number(item.unitPrice || 0).toLocaleString()}</td>
                             <td>₹{Number(item.totalPrice || 0).toLocaleString()}</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   ) : (

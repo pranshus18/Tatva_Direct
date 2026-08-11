@@ -43,17 +43,29 @@ const UPSTREAM_OFFER = {
   supplier: { profile: { supplyChainRole: 'distributor' } }
 };
 
-function makeSupabaseStub({ product, ownershipRows = [], offerRows = [] }) {
+function makeSupabaseStub({
+  product,
+  ownershipRows = [],
+  offerRows = [],
+  familyProducts = null,
+  supplyChains = []
+}) {
   const tablesQueried = [];
 
   const from = (table) => {
     tablesQueried.push(table);
     const filters = {};
     const resolveRows = () => {
-      if (table === 'products') return product ? [product] : [];
+      if (table === 'products') {
+        if (filters.family_id && Array.isArray(familyProducts)) return familyProducts;
+        return product ? [product] : [];
+      }
       if (table === 'supplier_products') {
         return filters.supplier_id ? ownershipRows : offerRows;
       }
+      if (table === 'category_supply_chains') return supplyChains;
+      if (table === 'product_families') return [];
+      if (table === 'product_variants') return [];
       throw new Error(`Unexpected table ${table}`);
     };
 
@@ -242,4 +254,119 @@ test('service-provider detail never exposes unapproved catalog products', async 
 
   assert.equal(result.ok, false);
   assert.equal(result.status, 404);
+});
+
+test('service-provider detail shows only terminal-tier variants, not upstream offers', async () => {
+  const { clearAdminBrandTerminalRoleMapCache } = await import('../utils/adminBrandSupplyChain.js');
+  clearAdminBrandTerminalRoleMapCache();
+
+  const cementBlack = {
+    ...APPROVED_PRODUCT,
+    id: 'cement-black',
+    name: 'ACC cement',
+    brand: 'acc',
+    family_id: 'family-acc',
+    specifications: { color: 'black' },
+    images: ['https://cdn.example.com/cement-black.jpg']
+  };
+  const cementGrey = {
+    ...cementBlack,
+    id: 'cement-grey',
+    specifications: { color: 'Grey' },
+    images: ['https://cdn.example.com/cement-grey.jpg']
+  };
+  const upstreamLaptop = {
+    ...cementBlack,
+    id: 'laptop-upstream',
+    name: 'HP Laptop',
+    brand: 'acc',
+    specifications: { color: 'black' },
+    images: ['https://cdn.example.com/laptop.jpg']
+  };
+
+  const terminalBlack = {
+    id: 'offer-black',
+    product_id: 'cement-black',
+    price: 375,
+    stock: 10,
+    min_order_quantity: 1,
+    location: 'Delhi',
+    variant_key: 'black',
+    variant_asin: 'TS2FAXW',
+    product_variant_id: null,
+    attributes: {
+      images: ['https://cdn.example.com/cement-black.jpg'],
+      specifications: { color: 'black' }
+    },
+    status: 'approved',
+    is_active: true,
+    supplier: {
+      profile: {
+        companyInfoEntries: [{ role: 'retailer', brands: 'acc' }]
+      }
+    }
+  };
+  const terminalGrey = {
+    ...terminalBlack,
+    id: 'offer-grey',
+    product_id: 'cement-grey',
+    variant_key: 'grey',
+    variant_asin: 'TS2FGREY',
+    attributes: {
+      images: ['https://cdn.example.com/cement-grey.jpg'],
+      specifications: { color: 'Grey' }
+    }
+  };
+  const upstreamOffer = {
+    id: 'offer-laptop',
+    product_id: 'laptop-upstream',
+    price: 45000,
+    stock: 5,
+    min_order_quantity: 1,
+    location: 'Pune',
+    variant_key: 'laptop',
+    variant_asin: 'TSLAPTOP',
+    product_variant_id: null,
+    attributes: {
+      images: ['https://cdn.example.com/laptop.jpg'],
+      specifications: { color: 'black' }
+    },
+    status: 'approved',
+    is_active: true,
+    supplier: {
+      profile: {
+        companyInfoEntries: [{ role: 'distributor', brands: 'acc' }]
+      }
+    }
+  };
+
+  const { supabase } = makeSupabaseStub({
+    product: cementBlack,
+    familyProducts: [cementBlack, cementGrey, upstreamLaptop],
+    offerRows: [terminalBlack, terminalGrey, upstreamOffer],
+    supplyChains: [
+      {
+        category_name: 'acc',
+        stages: [{ role: 'manufacturer' }, { role: 'distributor' }, { role: 'retailer' }]
+      }
+    ]
+  });
+
+  const result = await getProductDiscoveryDetail(supabase, {
+    productId: 'cement-black',
+    audience: DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.variants.length, 2);
+  const variantIds = result.variants.map((v) => v.productId).sort();
+  assert.deepEqual(variantIds, ['cement-black', 'cement-grey']);
+  assert.equal(
+    result.variants.some((v) => String(v.name || '').toLowerCase().includes('laptop')),
+    false
+  );
+  assert.equal(
+    result.variants.some((v) => (v.images || []).some((url) => String(url).includes('laptop'))),
+    false
+  );
 });

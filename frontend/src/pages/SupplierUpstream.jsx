@@ -110,6 +110,14 @@ const writeSessionProjectId = (projectId) => {
   }
 };
 
+const clearSessionProjectId = () => {
+  try {
+    sessionStorage.removeItem(SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY);
+  } catch {
+    // Ignore private-mode failures.
+  }
+};
+
 /** Display names for each supply-chain tier (must match backend role keys). */
 const SELLER_LAYER_LABELS = {
   manufacturer: 'Manufacturer (MGF)',
@@ -368,6 +376,12 @@ const SupplierUpstream = ({ user }) => {
         }));
       setCartProjects(normalized);
 
+      if (normalized.length === 0) {
+        setActiveProjectId('');
+        clearSessionProjectId();
+        return null;
+      }
+
       const hasShipping = (project) =>
         Boolean(
           project?.shippingAddress ||
@@ -389,7 +403,13 @@ const SupplierUpstream = ({ user }) => {
         sessionPreferred ||
         projects[0] ||
         null;
-      if (active) applyActiveCartProject(active);
+      if (active) {
+        applyActiveCartProject(active);
+      } else if (sessionProjectId) {
+        // Session pointed at a project that no longer exists in the cart draft.
+        clearSessionProjectId();
+        setActiveProjectId('');
+      }
       return active;
     } catch {
       return null;
@@ -952,6 +972,16 @@ const SupplierUpstream = ({ user }) => {
     });
   }, []);
 
+  // If the dialog is open with a remembered project id that is no longer in the cart,
+  // force create-new mode so name/date fields and the create payload stay available.
+  useEffect(() => {
+    if (!addCartDialogOpen) return;
+    if (targetCartProjectId === '__new__') return;
+    if (cartProjects.some((project) => project.projectId === targetCartProjectId)) return;
+    setTargetCartProjectId('__new__');
+    clearSessionProjectId();
+  }, [addCartDialogOpen, targetCartProjectId, cartProjects]);
+
   const applyProjectShippingSelection = (projectId, projects, addresses) => {
     const project = projects.find((entry) => entry.projectId === projectId);
     const projectAddressId = String(project?.shippingAddressId || '').trim();
@@ -1059,6 +1089,11 @@ const SupplierUpstream = ({ user }) => {
     const knownIds = new Set(
       list.map((project) => String(project?.projectId || '').trim()).filter(Boolean)
     );
+    // Empty cart: never reuse a stale session/active id — that leaves the select showing
+    // "+ Create new project" while React state points at a missing projectId, so the
+    // create-project fields never render and onChange may not fire on re-select.
+    if (knownIds.size === 0) return '';
+
     const key = normalizeSupplierProductKey(mineId);
     const candidates = [
       projectsByMine?.[key],
@@ -1070,9 +1105,24 @@ const SupplierUpstream = ({ user }) => {
     for (const candidate of candidates) {
       const id = String(candidate || '').trim();
       if (!id || id === '__new__') continue;
-      if (knownIds.size === 0 || knownIds.has(id)) return id;
+      if (knownIds.has(id)) return id;
     }
     return '';
+  };
+
+  const resolveDialogProjectId = (preferredProjectId, projects = []) => {
+    const list = Array.isArray(projects) ? projects : [];
+    const knownIds = new Set(
+      list.map((project) => String(project?.projectId || '').trim()).filter(Boolean)
+    );
+    const preferred = String(preferredProjectId || '').trim();
+    if (preferred && preferred !== '__new__' && knownIds.has(preferred)) {
+      return preferred;
+    }
+    if (list[0]?.projectId) {
+      return String(list[0].projectId);
+    }
+    return '__new__';
   };
 
   const openAddToCartDialog = async (product, options = {}) => {
@@ -1086,20 +1136,30 @@ const SupplierUpstream = ({ user }) => {
     ]);
     const synced = await refreshSyncedCartQuantities();
     const preferredProjectId = resolvePreferredProjectId(mineId, projects);
-    const initialProjectId = preferredProjectId || projects[0]?.projectId || '__new__';
+    const initialProjectId = resolveDialogProjectId(preferredProjectId, projects);
+    const knownProjectIds = new Set(projects.map((project) => project.projectId));
+    if (!knownProjectIds.size) {
+      if (activeProjectId) setActiveProjectId('');
+      clearSessionProjectId();
+    } else if (activeProjectId && !knownProjectIds.has(activeProjectId)) {
+      setActiveProjectId('');
+      clearSessionProjectId();
+    }
     const inCartQty = parseSupplierStockQuantity(
       synced?.quantities?.[mineId] ?? cartQtyByMineId[mineId]
     );
     const inCart = inCartQty != null && inCartQty > 0;
-    // New adds start at 0 so the supplier must choose a quantity. Existing cart lines
-    // keep the synced qty (or an explicit override from the caller).
-    const initialQty = inCart
-      ? preferredQty != null && preferredQty > 0
+    // Quantity is chosen on the product card before this dialog; keep that value here.
+    const initialQty =
+      preferredQty != null && preferredQty > 0
         ? Math.max(minQty, preferredQty)
-        : inCartQty
-      : preferredQty != null && preferredQty > 0
-        ? preferredQty
-        : 0;
+        : inCart
+          ? inCartQty
+          : 0;
+    if (initialQty <= 0) {
+      window.alert('Set quantity on the product card before adding to cart.');
+      return;
+    }
     setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: initialQty }));
     setPendingCartProduct(product);
     setDialogQty(initialQty);
@@ -1209,7 +1269,11 @@ const SupplierUpstream = ({ user }) => {
     );
 
     if (options?.forceProjectPicker === true) {
-      await openAddToCartDialog(product, hasExplicitQty ? { quantity: nextQty } : {});
+      if (!hasExplicitQty) {
+        window.alert('Set quantity on the product card before choosing a project.');
+        return false;
+      }
+      await openAddToCartDialog(product, { quantity: nextQty });
       return false;
     }
 
@@ -1221,8 +1285,12 @@ const SupplierUpstream = ({ user }) => {
       });
     }
 
-    // First-time add: always ask which project (quantity defaults to 0 in the dialog).
-    await openAddToCartDialog(product, hasExplicitQty ? { quantity: nextQty } : {});
+    // First-time add: project picker only — quantity must already be set on the card.
+    if (!hasExplicitQty) {
+      window.alert('Set quantity on the product card before adding to cart.');
+      return false;
+    }
+    await openAddToCartDialog(product, { quantity: nextQty });
     return false;
   };
 
@@ -1231,8 +1299,11 @@ const SupplierUpstream = ({ user }) => {
     if (!mineId) return;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
     const cardQty = getProcurementQty(mineId, minQty);
-    // Pass card qty only when the supplier already chose one (> 0); otherwise dialog starts at 0.
-    await addOrUpdateCartForProduct(product, cardQty > 0 ? cardQty : undefined);
+    if (cardQty <= 0) {
+      window.alert('Set quantity on the product card before adding to cart.');
+      return;
+    }
+    await addOrUpdateCartForProduct(product, cardQty);
   };
 
   const handleAddSingleProductToCart = async () => {
@@ -1252,7 +1323,14 @@ const SupplierUpstream = ({ user }) => {
     }
     const nextQty = parsedQty;
     const isUpdate = cartQtyByMineId[mineId] != null;
-    const isNewProject = targetCartProjectId === '__new__';
+    const selectedProjectExists = cartProjects.some(
+      (project) => project.projectId === targetCartProjectId
+    );
+    const isNewProject = targetCartProjectId === '__new__' || !selectedProjectExists;
+    if (isNewProject && targetCartProjectId !== '__new__') {
+      // Keep controlled select + payload in sync if a stale id was still in state.
+      setTargetCartProjectId('__new__');
+    }
     if (isNewProject) {
       const nextFieldErrors = { ...emptyProjectFieldErrors };
       if (!newCartProjectName.trim()) {
@@ -1620,7 +1698,7 @@ const SupplierUpstream = ({ user }) => {
                       </p>
                     ) : (
                       <p className="us-pd-card__qty-hint">
-                        Click Add to Cart to choose a project
+                        Set quantity, then click Add to Cart to choose a project
                       </p>
                     )}
                   </div>
@@ -2038,8 +2116,8 @@ const SupplierUpstream = ({ user }) => {
             <DialogHeader>
               <DialogTitle>Select supplier project</DialogTitle>
               <DialogDescription>
-                Choose a project for this cart item. This choice is remembered for the rest of
-                this procurement session so adding more quantity will not ask again.
+                Choose a project for this cart item. Quantity was already set on the product card.
+                This project choice is remembered for the rest of this procurement session.
               </DialogDescription>
             </DialogHeader>
           </div>
@@ -2064,50 +2142,11 @@ const SupplierUpstream = ({ user }) => {
                   </div>
                 ) : null}
                 {(() => {
-                  const minQty = Math.max(1, pendingCartProduct?.min_order_quantity ?? 1);
-                  const mineId = normalizeSupplierProductKey(pendingCartProduct?.supplier_product_id);
-                  const inCart =
-                    parseSupplierStockQuantity(cartQtyByMineId[mineId]) != null &&
-                    parseSupplierStockQuantity(cartQtyByMineId[mineId]) > 0;
                   const currentQty = parseSupplierStockQuantity(dialogQty) ?? 0;
+                  if (currentQty <= 0) return null;
                   return (
-                    <div className="mt-3 space-y-1">
-                      <label className="text-sm font-medium" htmlFor="upstream-dialog-qty">
-                        Quantity
-                      </label>
-                      <div className="us-pd-card__qty-control">
-                        <button
-                          type="button"
-                          className="us-pd-card__qty-btn"
-                          onClick={() =>
-                            setDialogQty((prev) => Math.max(0, (parseSupplierStockQuantity(prev) ?? 0) - 1))
-                          }
-                          disabled={currentQty <= 0}
-                          aria-label="Decrease quantity"
-                        >
-                          −
-                        </button>
-                        <span id="upstream-dialog-qty" className="us-pd-card__qty-value">
-                          {currentQty}
-                        </span>
-                        <button
-                          type="button"
-                          className="us-pd-card__qty-btn"
-                          onClick={() =>
-                            setDialogQty((prev) => Math.max(0, (parseSupplierStockQuantity(prev) ?? 0) + 1))
-                          }
-                          aria-label="Increase quantity"
-                        >
-                          +
-                        </button>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {inCart
-                          ? 'Confirm with Update Cart to sync this quantity to your cart.'
-                          : minQty > 1
-                            ? `Start at 0, then set quantity (minimum order: ${minQty}) before adding to cart.`
-                            : 'Start at 0, then set quantity before adding to cart.'}
-                      </p>
+                    <div className="mt-2 text-muted-foreground">
+                      Quantity: {currentQty}
                     </div>
                   );
                 })()}
@@ -2117,7 +2156,12 @@ const SupplierUpstream = ({ user }) => {
               <label className="text-sm font-medium">Project</label>
               <select
                 className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                value={targetCartProjectId}
+                value={
+                  targetCartProjectId === '__new__' ||
+                  cartProjects.some((project) => project.projectId === targetCartProjectId)
+                    ? targetCartProjectId
+                    : '__new__'
+                }
                 onChange={(event) => {
                   const nextProjectId = event.target.value;
                   setTargetCartProjectId(nextProjectId);
@@ -2137,7 +2181,8 @@ const SupplierUpstream = ({ user }) => {
                 <option value="__new__">+ Create new project</option>
               </select>
             </div>
-            {targetCartProjectId === '__new__' ? (
+            {targetCartProjectId === '__new__' ||
+            !cartProjects.some((project) => project.projectId === targetCartProjectId) ? (
               <div className="space-y-4">
                 <div className="space-y-1">
                   <label className="text-sm font-medium" htmlFor="upstream-new-project-name">
@@ -2333,7 +2378,7 @@ const SupplierUpstream = ({ user }) => {
             </div>
           ) : null}
           </div>
-          <div className="shrink-0 border-t bg-background px-6 py-4">
+          <div className="mt-auto shrink-0 border-t bg-background px-6 py-4">
             <DialogFooter className="gap-2 sm:gap-0">
               <Button variant="outline" onClick={() => setAddCartDialogOpen(false)}>
                 Cancel

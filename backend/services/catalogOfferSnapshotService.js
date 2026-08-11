@@ -95,12 +95,19 @@ export function aggregateEligibleDiscoveryOffers({
 
   for (const row of offerRows) {
     const productId = row?.product_id;
-    if (!productId || !isListedSupplierOffer(row)) continue;
-
-    const product = productById.get(productId);
-    const brandLabel = detectDiscoveryBrand(product);
-    const supplierProfile = row?.supplier?.profile || {};
-    if (!supplierMatchesBrandTerminalRoleFn(supplierProfile, brandLabel, terminalRoleByBrandMap)) continue;
+    if (productId == null || productId === '') continue;
+    if (
+      !isOfferEligibleForDiscoveryAudience({
+        offer: row,
+        product: productById.get(productId),
+        detectDiscoveryBrand,
+        terminalRoleByBrandMap,
+        supplierMatchesBrandTerminalRoleFn,
+        enforceTerminalRole: true
+      })
+    ) {
+      continue;
+    }
 
     eligibleSupplierCountByProduct.set(
       productId,
@@ -119,6 +126,51 @@ export function aggregateEligibleDiscoveryOffers({
   }
 
   return { eligibleSupplierCountByProduct, totalStockByProduct, bestOfferByProduct };
+}
+
+/**
+ * Listed + (optionally) brand-terminal-role eligibility for buyer discovery.
+ * Upstream sellers must not appear as purchasable variants for service providers.
+ */
+export function isOfferEligibleForDiscoveryAudience({
+  offer,
+  product,
+  detectDiscoveryBrand,
+  terminalRoleByBrandMap,
+  supplierMatchesBrandTerminalRoleFn = () => true,
+  enforceTerminalRole = false
+} = {}) {
+  if (!isListedSupplierOffer(offer)) return false;
+  if (!enforceTerminalRole) return true;
+  const brandLabel =
+    typeof detectDiscoveryBrand === 'function' ? detectDiscoveryBrand(product) : '';
+  const supplierProfile = offer?.supplier?.profile || {};
+  return supplierMatchesBrandTerminalRoleFn(
+    supplierProfile,
+    brandLabel,
+    terminalRoleByBrandMap || new Map()
+  );
+}
+
+/** Filter offer rows to those buyers may purchase for the given discovery audience. */
+export function filterListedOffersForDiscoveryAudience({
+  offerRows = [],
+  productById,
+  detectDiscoveryBrand,
+  terminalRoleByBrandMap,
+  supplierMatchesBrandTerminalRoleFn = () => true,
+  enforceTerminalRole = false
+} = {}) {
+  return (offerRows || []).filter((offer) =>
+    isOfferEligibleForDiscoveryAudience({
+      offer,
+      product: productById?.get(offer?.product_id),
+      detectDiscoveryBrand,
+      terminalRoleByBrandMap,
+      supplierMatchesBrandTerminalRoleFn,
+      enforceTerminalRole
+    })
+  );
 }
 
 export function reconcileDiscoveryProductFields(product, aggregates) {

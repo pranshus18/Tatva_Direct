@@ -32,6 +32,7 @@ import { filterSpNotifications } from '../utils/spNotificationAudience';
 import { useNotificationPanelScrollLock } from '../hooks/useNotificationPanelScrollLock';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
+import { getOrderItemImages } from '../utils/productImages';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpStatCard from '../components/sp/SpStatCard';
@@ -1105,18 +1106,15 @@ const ServiceProviderDashboard = ({ user }) => {
                         </tr>
                       </thead>
                       <tbody>
-                        {orderDetails.items.map((item, idx) => (
+                        {orderDetails.items.map((item, idx) => {
+                          const itemImages = getOrderItemImages(item);
+                          return (
                           <tr key={idx}>
                             <td>
-                              {(item.productImage || item.product?.image || item.images?.[0] || item.product?.images?.[0]) && (
+                              {itemImages.length > 0 && (
                                 <div style={{ marginBottom: '0.35rem' }}>
                                   <ProductImageCarousel
-                                    images={[
-                                      item.productImage,
-                                      item.product?.image,
-                                      ...(Array.isArray(item.images) ? item.images : []),
-                                      ...(Array.isArray(item.product?.images) ? item.product.images : [])
-                                    ]}
+                                    images={itemImages}
                                     alt={item.product?.name || item.name || 'Product'}
                                     height={80}
                                     rounded={6}
@@ -1176,7 +1174,8 @@ const ServiceProviderDashboard = ({ user }) => {
                             <td>₹{item.unitPrice?.toLocaleString()}</td>
                             <td>₹{item.totalPrice?.toLocaleString()}</td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                     <OrderChargeSummary order={orderDetails} />

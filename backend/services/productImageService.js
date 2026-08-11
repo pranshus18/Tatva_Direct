@@ -27,6 +27,89 @@ export function resolveSupplierOfferDisplayImages(offerImages, catalogImages = [
 }
 
 /**
+ * Images for a placed order line: prefer the immutable snapshot, then the ordered
+ * supplier-offer / variant gallery. Never fall back to the merged catalog gallery when
+ * the line is tied to a supplier offer — catalog.images accumulates every variant.
+ */
+export function resolveOrderLineDisplayImages({
+  snapshotImages,
+  offerImages,
+  catalogImages = [],
+  hasSupplierOffer = false
+} = {}) {
+  if (Array.isArray(snapshotImages)) {
+    return sanitizeImageUrls(snapshotImages);
+  }
+  if (hasSupplierOffer || (offerImages !== undefined && offerImages !== null)) {
+    return resolveSupplierOfferDisplayImages(offerImages, []);
+  }
+  return sanitizeImageUrls(catalogImages);
+}
+
+/**
+ * Attach per-variant images onto order_items so order UIs do not show the shared
+ * catalog gallery (products.images) that merges photos across variants.
+ */
+export async function enrichOrderItemsWithVariantImages(supabase, orderItems = []) {
+  const items = Array.isArray(orderItems) ? orderItems : [];
+  const supplierProductIds = [
+    ...new Set(items.map((it) => it?.supplier_product_id).filter(Boolean))
+  ];
+
+  const offerById = new Map();
+  if (supabase && supplierProductIds.length) {
+    const { data, error } = await supabase
+      .from('supplier_products')
+      .select('id, attributes')
+      .in('id', supplierProductIds);
+    if (error) {
+      console.error('enrichOrderItemsWithVariantImages failed:', error.message);
+    } else {
+      for (const row of data || []) {
+        if (row?.id) offerById.set(row.id, row);
+      }
+    }
+  }
+
+  return items.map((it) => {
+    let snapshot = {};
+    if (it?.specifications && typeof it.specifications === 'object') {
+      snapshot = it.specifications;
+    } else if (typeof it?.specifications === 'string') {
+      try {
+        snapshot = JSON.parse(it.specifications);
+      } catch {
+        snapshot = {};
+      }
+    }
+
+    const offer = it?.supplier_product_id ? offerById.get(it.supplier_product_id) : null;
+    const images = resolveOrderLineDisplayImages({
+      snapshotImages: snapshot?.images,
+      offerImages: offer?.attributes?.images,
+      catalogImages: it?.product?.images,
+      hasSupplierOffer: Boolean(it?.supplier_product_id)
+    });
+
+    const product = it?.product
+      ? {
+          ...it.product,
+          // Overwrite merged catalog gallery so clients cannot re-leak it.
+          images,
+          image: images[0] || it.product.image || null
+        }
+      : it?.product;
+
+    return {
+      ...it,
+      product,
+      images,
+      productImage: images[0] || null
+    };
+  });
+}
+
+/**
  * Persist uploaded offer images on the shared catalog row so buyer discovery can show thumbnails.
  * Catalog may accumulate images across offers; supplier-facing APIs must use
  * resolveSupplierOfferDisplayImages so those catalog extras do not appear on the offer.

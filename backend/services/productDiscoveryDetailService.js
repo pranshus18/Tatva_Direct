@@ -1,6 +1,7 @@
 import { enrichProductsWithOfferImages, resolveSupplierOfferDisplayImages } from './productImageService.js';
 import {
   aggregateEligibleDiscoveryOffers,
+  filterListedOffersForDiscoveryAudience,
   isListedSupplierOffer,
   parseOfferPrice,
   reconcileDiscoveryProductFields
@@ -439,38 +440,83 @@ export function resolveViewerListingForVariant(viewerListings = [], variant = nu
   return sameProduct.length === 1 ? sameProduct[0] : null;
 }
 
-export async function enrichDiscoverySuggestionsWithVariantCounts(supabase, suggestions = []) {
+export async function enrichDiscoverySuggestionsWithVariantCounts(
+  supabase,
+  suggestions = [],
+  {
+    enforceTerminalRole = true,
+    detectDiscoveryBrand: detectBrand = detectDiscoveryBrand,
+    supplierMatchesBrandTerminalRoleFn = supplierMatchesBrandTerminalRole
+  } = {}
+) {
   const rows = Array.isArray(suggestions) ? suggestions : [];
   if (!rows.length) return rows;
 
   const familyIds = [...new Set(rows.map((p) => p?.family_id).filter(Boolean))];
   const productIds = [...new Set(rows.map((p) => p?.id).filter(Boolean))];
 
-  const countByFamily = new Map();
+  const familySiblingIdsByFamily = new Map();
+  const allFamilyProductIds = new Set();
   if (familyIds.length) {
     const { data: familyProducts } = await supabase
       .from('products')
-      .select('id, family_id')
+      .select('id, family_id, brand, specifications')
       .in('family_id', familyIds)
       .eq('status', 'approved')
       .or('is_active.eq.true,is_active.is.null');
     for (const row of familyProducts || []) {
-      if (!row?.family_id) continue;
-      countByFamily.set(row.family_id, (countByFamily.get(row.family_id) || 0) + 1);
+      if (!row?.family_id || !row?.id) continue;
+      if (!familySiblingIdsByFamily.has(row.family_id)) {
+        familySiblingIdsByFamily.set(row.family_id, []);
+      }
+      familySiblingIdsByFamily.get(row.family_id).push(row);
+      allFamilyProductIds.add(row.id);
     }
   }
 
+  const offerProductIds = [...new Set([...productIds, ...allFamilyProductIds])];
+  const productById = new Map();
+  for (const suggestion of rows) {
+    if (suggestion?.id) productById.set(suggestion.id, suggestion);
+  }
+  for (const siblings of familySiblingIdsByFamily.values()) {
+    for (const sibling of siblings) {
+      if (sibling?.id && !productById.has(sibling.id)) {
+        productById.set(sibling.id, sibling);
+      }
+    }
+  }
+
+  const brandCandidates = [...productById.values()].map((p) => detectBrand(p)).filter(Boolean);
+  const terminalRoleByBrandMap = enforceTerminalRole
+    ? await loadAdminBrandTerminalRoleMap(supabase, brandCandidates)
+    : new Map();
+
   const variantKeysByProduct = new Map();
-  if (productIds.length) {
+  const productsWithEligibleOffers = new Set();
+  if (offerProductIds.length) {
     const { data: offerRows } = await supabase
       .from('supplier_products')
-      .select('product_id, variant_key, status, is_active')
-      .in('product_id', productIds)
+      .select(
+        'product_id, variant_key, status, is_active, supplier:users!supplier_products_supplier_id_fkey(profile)'
+      )
+      .in('product_id', offerProductIds)
       .eq('status', 'approved')
       .eq('is_active', true);
-    for (const row of offerRows || []) {
+
+    const eligibleOffers = filterListedOffersForDiscoveryAudience({
+      offerRows: offerRows || [],
+      productById,
+      detectDiscoveryBrand: detectBrand,
+      terminalRoleByBrandMap,
+      supplierMatchesBrandTerminalRoleFn,
+      enforceTerminalRole
+    });
+
+    for (const row of eligibleOffers) {
       const productId = row?.product_id;
       if (!productId) continue;
+      productsWithEligibleOffers.add(productId);
       const variantKey = String(row?.variant_key || '').trim();
       if (!variantKey) continue;
       if (!variantKeysByProduct.has(productId)) variantKeysByProduct.set(productId, new Set());
@@ -479,7 +525,16 @@ export async function enrichDiscoverySuggestionsWithVariantCounts(supabase, sugg
   }
 
   return rows.map((product) => {
-    const familyCount = product?.family_id ? countByFamily.get(product.family_id) || 1 : 1;
+    const familySiblings = product?.family_id
+      ? familySiblingIdsByFamily.get(product.family_id) || []
+      : [];
+    const eligibleFamilyCount = familySiblings.filter((sibling) =>
+      productsWithEligibleOffers.has(sibling.id)
+    ).length;
+    const familyCount = Math.max(
+      eligibleFamilyCount,
+      productsWithEligibleOffers.has(product?.id) ? 1 : 0
+    );
     const distinctOfferVariants = variantKeysByProduct.get(product?.id)?.size || 0;
     const variantCount = Math.max(familyCount, distinctOfferVariants, 1);
     return {
@@ -680,14 +735,25 @@ export async function getProductDiscoveryDetail(
   const terminalRoleByBrandMap = audienceRules.enforceTerminalRole
     ? await loadAdminBrandTerminalRoleMap(supabase, brandCandidates)
     : new Map();
-  const offerAggregates = aggregateEligibleDiscoveryOffers({
+  const matchTerminalRole = audienceRules.enforceTerminalRole
+    ? supplierMatchesBrandTerminalRole
+    : () => true;
+  // Buyer discovery variants must use the same terminal-tier offer set as stock/price —
+  // otherwise upstream sellers appear as purchasable "variants" under the product.
+  const discoveryOfferRows = filterListedOffersForDiscoveryAudience({
     offerRows: offerRows || [],
     productById,
     detectDiscoveryBrand,
     terminalRoleByBrandMap,
-    supplierMatchesBrandTerminalRoleFn: audienceRules.enforceTerminalRole
-      ? supplierMatchesBrandTerminalRole
-      : () => true
+    supplierMatchesBrandTerminalRoleFn: matchTerminalRole,
+    enforceTerminalRole: audienceRules.enforceTerminalRole
+  });
+  const offerAggregates = aggregateEligibleDiscoveryOffers({
+    offerRows: discoveryOfferRows,
+    productById,
+    detectDiscoveryBrand,
+    terminalRoleByBrandMap,
+    supplierMatchesBrandTerminalRoleFn: matchTerminalRole
   });
 
   const variantMetaByProductId = new Map();
@@ -719,7 +785,7 @@ export async function getProductDiscoveryDetail(
   }
 
   const offersByProductId = new Map();
-  for (const row of offerRows || []) {
+  for (const row of discoveryOfferRows) {
     const pid = row?.product_id;
     if (!pid) continue;
     if (!offersByProductId.has(pid)) offersByProductId.set(pid, []);
@@ -772,11 +838,9 @@ export async function getProductDiscoveryDetail(
   for (const product of enrichedProducts) {
     const reconciled = reconcileDiscoveryProductFields(product, offerAggregates);
     const attachedEntries = offersByCatalogProductId.get(product.id) || [];
-    if (
-      audienceRules.requireEligibleOffers &&
-      Number(reconciled?.supplierCount || 0) <= 0 &&
-      attachedEntries.length === 0
-    ) {
+    // Service providers: skip siblings/variants with no terminal-tier offers.
+    // Do not keep upstream-only attached offers as an escape hatch.
+    if (audienceRules.requireEligibleOffers && Number(reconciled?.supplierCount || 0) <= 0) {
       continue;
     }
 
@@ -791,6 +855,8 @@ export async function getProductDiscoveryDetail(
     );
 
     if (offersByIdentity.size === 0) {
+      // Upstream discovery may still show catalog shells with no offers yet.
+      if (audienceRules.requireEligibleOffers) continue;
       const variantMeta = resolveVariantMeta(variantMetaByProductId, variantMetaByKey, product.id, null);
       const record = await buildVariantRecord({
         product,

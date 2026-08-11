@@ -5,6 +5,7 @@ import {
   normalizeUserAddress
 } from './dashboardImports.js';
 import { resolveOrderChargeBreakdown } from '../../utils/orderChargeBreakdown.js';
+import { enrichOrderItemsWithVariantImages } from '../../services/productImageService.js';
 export * from './shared/dashboardHelpers.js';
 
 export function registerDashboardOrderDetailRoutes(ctx) {
@@ -129,8 +130,11 @@ router.get('/service-provider/orders/:id', authenticateToken, async (req, res) =
     
     // Enrich order items from immutable order snapshot captured at order creation.
     // This prevents later supplier edits from changing already placed order details.
-    const orderItems = Array.isArray(order.order_items) ? order.order_items : [];
-    order.order_items = orderItems.map((it) => {
+    // Resolve images from the ordered supplier offer/variant — not products.images
+    // (catalog gallery merges photos across variants).
+    const rawOrderItems = Array.isArray(order.order_items) ? order.order_items : [];
+    const orderItemsWithImages = await enrichOrderItemsWithVariantImages(supabase, rawOrderItems);
+    order.order_items = orderItemsWithImages.map((it) => {
       let snapshot = {};
       if (it?.specifications && typeof it.specifications === 'object') {
         snapshot = it.specifications;

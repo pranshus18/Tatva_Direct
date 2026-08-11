@@ -1,23 +1,3 @@
-function normalizeSpecShape(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeSpecShape(item));
-  }
-  if (value && typeof value === 'object') {
-    const out = {};
-    Object.keys(value)
-      .sort()
-      .forEach((key) => {
-        out[key] = normalizeSpecShape(value[key]);
-      });
-    return out;
-  }
-  return value;
-}
-
-export function areSpecificationsEqual(currentSpecs = {}, nextSpecs = {}) {
-  return JSON.stringify(normalizeSpecShape(currentSpecs || {})) === JSON.stringify(normalizeSpecShape(nextSpecs || {}));
-}
-
 function normalizeSpecKeyForComparison(key) {
   return String(key || '')
     .trim()
@@ -61,6 +41,20 @@ function buildNormalizedMeaningfulSpecMap(specs = {}) {
     out.set(norm, normalizeSpecValueForComparison(value));
   });
   return out;
+}
+
+function serializeMeaningfulSpecMap(map) {
+  return JSON.stringify([...map.entries()].sort((a, b) => a[0].localeCompare(b[0])));
+}
+
+/**
+ * Spec equality for update gating: ignore empty slots and key casing/spacing so
+ * inventory saves that echo the same values never look like a variant change.
+ */
+export function areSpecificationsEqual(currentSpecs = {}, nextSpecs = {}) {
+  const currentMap = buildNormalizedMeaningfulSpecMap(currentSpecs);
+  const nextMap = buildNormalizedMeaningfulSpecMap(nextSpecs);
+  return serializeMeaningfulSpecMap(currentMap) === serializeMeaningfulSpecMap(nextMap);
 }
 
 /**
@@ -148,19 +142,17 @@ export function shouldRequireApprovalForVariantSpecChange({
 }
 
 /**
- * Only re-hash variant_key when the client explicitly sent specification changes.
- * Inventory-only saves (price/stock/location/tax) must not migrate an offer onto
- * another variant's identity key.
+ * Variant TSIN rules on supplier offer update:
+ * - Inventory-only (price/stock/location/tax/images): never mint a new variant id
+ * - Specs unchanged (even if the client re-sends them): keep the existing variant id
+ * - Specs meaningfully changed: recompute variant_key + variant_asin (new variant id)
  */
 export function shouldRecomputeSupplierVariantKeyOnUpdate({
   specificationsProvided = false,
-  specificationsChanged = false,
-  computedVariantKey = '',
-  storedVariantKey = ''
+  specificationsChanged = false
 } = {}) {
   if (!specificationsProvided) return false;
-  if (specificationsChanged) return true;
-  return String(computedVariantKey || '') !== String(storedVariantKey || '');
+  return Boolean(specificationsChanged);
 }
 
 export default {

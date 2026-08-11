@@ -49,6 +49,24 @@ export function getProductImageList(product) {
   return single;
 }
 
+/**
+ * Order-line carousel images: only the ordered variant/offer photos.
+ * Never use item.product.images — that is the shared catalog gallery merged across variants.
+ */
+export function getOrderItemImages(item) {
+  if (!item) return [];
+  if (Array.isArray(item.images)) {
+    return normalizeProductImages(item.images);
+  }
+  if (item.productImage) {
+    return normalizeProductImages([item.productImage]);
+  }
+  if (item.product?.image) {
+    return normalizeProductImages([item.product.image]);
+  }
+  return [];
+}
+
 export function getProductThumbnailUrl(product) {
   return getProductImageList(product)[0] || '';
 }

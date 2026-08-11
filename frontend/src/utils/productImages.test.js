@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  getOrderItemImages,
   getProductImageList,
   getSupplierOfferImagesForForm,
   normalizeProductImages
@@ -50,5 +51,36 @@ describe('productImages', () => {
     };
     expect(getSupplierOfferImagesForForm(product)).toEqual([]);
     expect(getProductImageList(product)).toEqual([]);
+  });
+
+  it('getOrderItemImages uses variant/order images and ignores catalog product.images', () => {
+    const item = {
+      images: [
+        'https://cdn.example.com/v1.jpg',
+        'https://cdn.example.com/v2.jpg',
+        'https://cdn.example.com/v3.jpg'
+      ],
+      product: {
+        images: [
+          'https://cdn.example.com/v1.jpg',
+          'https://cdn.example.com/other-a.jpg',
+          'https://cdn.example.com/other-b.jpg'
+        ],
+        image: 'https://cdn.example.com/v1.jpg'
+      }
+    };
+    expect(getOrderItemImages(item)).toEqual([
+      'https://cdn.example.com/v1.jpg',
+      'https://cdn.example.com/v2.jpg',
+      'https://cdn.example.com/v3.jpg'
+    ]);
+    expect(
+      getOrderItemImages({
+        product: {
+          images: ['https://cdn.example.com/catalog-only.jpg'],
+          image: 'https://cdn.example.com/single.jpg'
+        }
+      })
+    ).toEqual(['https://cdn.example.com/single.jpg']);
   });
 });

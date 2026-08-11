@@ -291,7 +291,17 @@ export async function findCreditAccount({
     if (data) return data;
   }
 
-  const phone = normalizeCustomerPhone(customerPhone);
+  let phone = normalizeCustomerPhone(customerPhone);
+  // Checkout often has buyerUserId but accounts may have been saved phone-only.
+  if (!phone && buyerUserId) {
+    const { data: user } = await supabase
+      .from('users')
+      .select('phone')
+      .eq('id', buyerUserId)
+      .maybeSingle();
+    phone = normalizeCustomerPhone(user?.phone);
+  }
+
   if (phone) {
     const { data } = await supabase
       .from('supplier_credit_accounts')
@@ -299,7 +309,23 @@ export async function findCreditAccount({
       .eq('supplier_id', supplierId)
       .eq('customer_phone', phone)
       .maybeSingle();
-    if (data) return data;
+    if (data) {
+      // Link the buyer user id so future checkout lookups hit buyer_user_id directly.
+      if (buyerUserId && !data.buyer_user_id) {
+        const { data: linked, error } = await supabase
+          .from('supplier_credit_accounts')
+          .update({
+            buyer_user_id: buyerUserId,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', data.id)
+          .eq('supplier_id', supplierId)
+          .select('*')
+          .maybeSingle();
+        if (!error && linked) return linked;
+      }
+      return data;
+    }
   }
 
   return null;
@@ -366,6 +392,7 @@ export async function buildCreditStatus({
     creditLimit: limit,
     paylaterThreshold: payLaterThreshold,
     priorNetRevenue,
+    orderAmount: requested,
     hasCreditParty,
     buyerType: null
   });
@@ -395,9 +422,9 @@ export async function buildCreditStatus({
     message = 'Credit limit is zero. Update the limit before placing on-account orders.';
     payLaterOffered = false;
   } else if (!thresholdOptional && !payLaterThresholdMet) {
-    message = `Pay later unlocks when net revenue reaches ₹${payLaterThreshold.toLocaleString('en-IN')}. Current net revenue: ₹${priorNetRevenue.toLocaleString('en-IN')}.`;
+    message = `Pay later requires an order of at least ₹${payLaterThreshold.toLocaleString('en-IN')}. This order is ₹${requested.toLocaleString('en-IN')}.`;
     payLaterOffered = false;
-  } else if (!thresholdOptional && !hasCreditParty) {
+  } else if (!hasCreditParty) {
     message =
       'Pay later mapping requires a linked buyer/customer identity. Link this account to a buyer or customer (or add phone) and try again.';
     payLaterOffered = false;
@@ -419,7 +446,7 @@ export async function buildCreditStatus({
       message = `Pay later available. Credit limit ₹${limit.toLocaleString('en-IN')}: ₹${outstanding.toLocaleString('en-IN')} outstanding, ₹${available.toLocaleString('en-IN')} remaining for this order.${cycleHint}`;
     }
   } else if (requested <= 0 && !thresholdOptional && payLaterThreshold > 0) {
-    message = `Pay later when net revenue reaches ₹${payLaterThreshold.toLocaleString('en-IN')}. Current net revenue: ₹${priorNetRevenue.toLocaleString('en-IN')}.`;
+    message = `Pay later requires an order of at least ₹${payLaterThreshold.toLocaleString('en-IN')}.`;
   } else {
     message = 'Pay later is not available for this order.';
     payLaterOffered = false;
@@ -609,7 +636,15 @@ export async function upsertCreditAccount({
 }) {
   const limit = roundMoney(creditLimit);
   const period = Math.max(1, Math.floor(Number(creditPeriodDays) || 30));
-  const phone = normalizeCustomerPhone(customerPhone) || null;
+  let phone = normalizeCustomerPhone(customerPhone) || null;
+  if (!phone && buyerUserId) {
+    const { data: user } = await supabase
+      .from('users')
+      .select('phone')
+      .eq('id', buyerUserId)
+      .maybeSingle();
+    phone = normalizeCustomerPhone(user?.phone) || null;
+  }
 
   const existing = await findCreditAccount({
     supplierId,
@@ -625,9 +660,9 @@ export async function upsertCreditAccount({
 
   const row = {
     supplier_id: supplierId,
-    buyer_user_id: buyerUserId || null,
-    customer_id: customerId || null,
-    customer_phone: phone,
+    buyer_user_id: buyerUserId || existing?.buyer_user_id || null,
+    customer_id: customerId || existing?.customer_id || null,
+    customer_phone: phone || existing?.customer_phone || null,
     credit_limit: limit,
     paylater_threshold: threshold,
     credit_period_days: period,

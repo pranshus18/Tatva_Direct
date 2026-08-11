@@ -24,6 +24,16 @@ test('areSpecificationsEqual treats same spec object with different key order as
   assert.equal(areSpecificationsEqual(currentSpecs, nextSpecs), true);
 });
 
+test('areSpecificationsEqual ignores casing and empty slots', () => {
+  assert.equal(
+    areSpecificationsEqual(
+      { Color: 'Black', Capacity: '500ML', Height: '' },
+      { color: 'black', capacity: '500ml' }
+    ),
+    true
+  );
+});
+
 test('shouldMoveToPendingForSpecChange returns false when specifications are not provided', () => {
   const result = shouldMoveToPendingForSpecChange({
     specificationsProvided: false,
@@ -42,6 +52,36 @@ test('shouldMoveToPendingForSpecChange returns true when supplier changes specif
   });
 
   assert.equal(result, true);
+});
+
+test('inventory-only update does not recompute variant id', () => {
+  assert.equal(
+    shouldRecomputeSupplierVariantKeyOnUpdate({
+      specificationsProvided: false,
+      specificationsChanged: false
+    }),
+    false
+  );
+});
+
+test('same specs with inventory save does not recompute variant id', () => {
+  assert.equal(
+    shouldRecomputeSupplierVariantKeyOnUpdate({
+      specificationsProvided: true,
+      specificationsChanged: false
+    }),
+    false
+  );
+});
+
+test('changed specs recompute a new variant id', () => {
+  assert.equal(
+    shouldRecomputeSupplierVariantKeyOnUpdate({
+      specificationsProvided: true,
+      specificationsChanged: true
+    }),
+    true
+  );
 });
 
 test('shouldAutoApproveSupplierOfferOnCreate approves when same variant already approved', () => {
@@ -190,6 +230,18 @@ test('shouldRecomputeSupplierVariantKeyOnUpdate is true when specs changed', () 
       storedVariantKey: 'stored-key'
     }),
     true
+  );
+});
+
+test('shouldRecomputeSupplierVariantKeyOnUpdate is false when specs are unchanged even if computed key drifts', () => {
+  assert.equal(
+    shouldRecomputeSupplierVariantKeyOnUpdate({
+      specificationsProvided: true,
+      specificationsChanged: false,
+      computedVariantKey: 'next-key-from-catalog-drift',
+      storedVariantKey: 'stored-key'
+    }),
+    false
   );
 });
 

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  enrichOrderItemsWithVariantImages,
   mergeProductImageLists,
+  resolveOrderLineDisplayImages,
   resolveSupplierOfferDisplayImages
 } from '../services/productImageService.js';
 
@@ -20,6 +22,75 @@ test('resolveSupplierOfferDisplayImages falls back to catalog when offer images 
   const catalog = ['https://cdn.example.com/old-catalog.jpg'];
   assert.deepEqual(resolveSupplierOfferDisplayImages(null, catalog), catalog);
   assert.deepEqual(resolveSupplierOfferDisplayImages(undefined, catalog), catalog);
+});
+
+test('resolveOrderLineDisplayImages prefers snapshot then offer, not merged catalog', () => {
+  const snapshot = ['https://cdn.example.com/snap.jpg'];
+  const offer = ['https://cdn.example.com/v1.jpg', 'https://cdn.example.com/v2.jpg', 'https://cdn.example.com/v3.jpg'];
+  const catalog = [
+    'https://cdn.example.com/v1.jpg',
+    'https://cdn.example.com/other-variant.jpg',
+    'https://cdn.example.com/another.jpg'
+  ];
+  assert.deepEqual(
+    resolveOrderLineDisplayImages({ snapshotImages: snapshot, offerImages: offer, catalogImages: catalog }),
+    snapshot
+  );
+  assert.deepEqual(
+    resolveOrderLineDisplayImages({
+      offerImages: offer,
+      catalogImages: catalog,
+      hasSupplierOffer: true
+    }),
+    offer
+  );
+  assert.deepEqual(
+    resolveOrderLineDisplayImages({
+      offerImages: null,
+      catalogImages: catalog,
+      hasSupplierOffer: true
+    }),
+    []
+  );
+});
+
+test('enrichOrderItemsWithVariantImages overwrites product.images with offer gallery', async () => {
+  const offerImages = [
+    'https://cdn.example.com/v1.jpg',
+    'https://cdn.example.com/v2.jpg',
+    'https://cdn.example.com/v3.jpg'
+  ];
+  const catalogImages = [
+    ...offerImages,
+    'https://cdn.example.com/other-a.jpg',
+    'https://cdn.example.com/other-b.jpg'
+  ];
+  const supabase = {
+    from() {
+      return {
+        select() {
+          return {
+            in: async () => ({
+              data: [{ id: 'offer-1', attributes: { images: offerImages } }],
+              error: null
+            })
+          };
+        }
+      };
+    }
+  };
+
+  const [enriched] = await enrichOrderItemsWithVariantImages(supabase, [
+    {
+      supplier_product_id: 'offer-1',
+      product: { id: 'p1', name: 'ACC cement', images: catalogImages },
+      specifications: { variantAsin: 'TS2F' }
+    }
+  ]);
+
+  assert.deepEqual(enriched.images, offerImages);
+  assert.deepEqual(enriched.product.images, offerImages);
+  assert.equal(enriched.productImage, offerImages[0]);
 });
 
 test('mergeProductImageLists still combines lists for catalog sync / buyer discovery', () => {

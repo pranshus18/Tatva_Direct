@@ -383,11 +383,11 @@ test('mergeOfferSpecifications flattens variantAttributes instead of exposing ra
   assert.equal(merged.variantAttributes, undefined);
 });
 
-test('enrichDiscoverySuggestionsWithVariantCounts marks family siblings as variants', async () => {
+test('enrichDiscoverySuggestionsWithVariantCounts counts only siblings with eligible offers', async () => {
   const familyId = '11111111-1111-1111-1111-111111111111';
   const suggestions = [
-    { id: 'product-a', family_id: familyId },
-    { id: 'product-b', family_id: null }
+    { id: 'product-a', family_id: familyId, brand: 'acc' },
+    { id: 'product-b', family_id: null, brand: 'acc' }
   ];
 
   const supabase = {
@@ -406,10 +406,11 @@ test('enrichDiscoverySuggestionsWithVariantCounts marks family siblings as varia
           },
           or() {
             return Promise.resolve({
-              data: (this._values || []).flatMap((id) => [
-                { id: `${id}-1`, family_id: familyId },
-                { id: `${id}-2`, family_id: familyId }
-              ])
+              data: [
+                { id: 'product-a', family_id: familyId, brand: 'acc' },
+                { id: 'product-a-sibling', family_id: familyId, brand: 'acc' },
+                { id: 'product-upstream-only', family_id: familyId, brand: 'acc' }
+              ]
             });
           }
         };
@@ -426,13 +427,69 @@ test('enrichDiscoverySuggestionsWithVariantCounts marks family siblings as varia
             return this;
           },
           then(resolve) {
-            return Promise.resolve({ data: [] }).then(resolve);
+            return Promise.resolve({
+              data: [
+                {
+                  product_id: 'product-a',
+                  variant_key: 'black',
+                  status: 'approved',
+                  is_active: true,
+                  supplier: {
+                    profile: {
+                      companyInfoEntries: [{ role: 'retailer', brands: 'acc' }]
+                    }
+                  }
+                },
+                {
+                  product_id: 'product-a-sibling',
+                  variant_key: 'grey',
+                  status: 'approved',
+                  is_active: true,
+                  supplier: {
+                    profile: {
+                      companyInfoEntries: [{ role: 'retailer', brands: 'acc' }]
+                    }
+                  }
+                },
+                {
+                  product_id: 'product-upstream-only',
+                  variant_key: 'laptop',
+                  status: 'approved',
+                  is_active: true,
+                  supplier: {
+                    profile: {
+                      companyInfoEntries: [{ role: 'distributor', brands: 'acc' }]
+                    }
+                  }
+                }
+              ]
+            }).then(resolve);
+          }
+        };
+      }
+      if (table === 'category_supply_chains') {
+        return {
+          select() {
+            return Promise.resolve({
+              data: [
+                {
+                  category_name: 'acc',
+                  stages: [{ role: 'distributor' }, { role: 'retailer' }]
+                }
+              ],
+              error: null
+            });
           }
         };
       }
       throw new Error(`Unexpected table ${table}`);
     }
   };
+
+  const { clearAdminBrandTerminalRoleMapCache } = await import(
+    '../utils/adminBrandSupplyChain.js'
+  );
+  clearAdminBrandTerminalRoleMapCache();
 
   const enriched = await enrichDiscoverySuggestionsWithVariantCounts(supabase, suggestions);
   assert.equal(enriched[0].variantCount, 2);

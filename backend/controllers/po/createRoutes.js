@@ -53,6 +53,7 @@ import {
 import {
   sumPoGroupsProductsInclGst
 } from '../../utils/orderChargeBreakdown.js';
+import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
 
 export function registerPoCreateRoutes(ctx) {
   const {
@@ -471,6 +472,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             supplierProduct
           });
 
+          const lineImages = resolveSupplierOfferDisplayImages(
+            supplierProduct?.attributes?.images,
+            []
+          );
+
           const orderItemRow = {
             product_id: supplierProduct.product.id,
             supplier_product_id: supplierProduct.id,
@@ -489,6 +495,8 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
                 typeof supplierProduct.attributes.variantAttributes === 'object'
                   ? supplierProduct.attributes.variantAttributes
                   : {},
+              // Snapshot variant/offer images at placement — never the merged catalog gallery.
+              images: lineImages,
               bcov: bcovResolved
                 ? {
                     applied: true,

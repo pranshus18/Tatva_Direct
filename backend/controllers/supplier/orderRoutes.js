@@ -21,6 +21,7 @@ import {
 } from './shared/productHelpers.js';
 import { isValidSupplierReturnTransition } from '../../utils/orderReturnRules.js';
 import { listSupplierIncomingReturns } from '../../services/returnListService.js';
+import { enrichOrderItemsWithVariantImages } from '../../services/productImageService.js';
 
 export function registerSupplierOrderRoutes(ctx) {
   const {
@@ -252,8 +253,10 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
     
     // Format order for frontend.
     // Use immutable order snapshot fields so placed orders never drift with later edits.
-    const orderItems = Array.isArray(order.order_items) ? order.order_items : [];
-    order.order_items = orderItems.map((it) => {
+    // Resolve images from the ordered supplier offer/variant — not catalog products.images.
+    const rawOrderItems = Array.isArray(order.order_items) ? order.order_items : [];
+    const orderItemsWithImages = await enrichOrderItemsWithVariantImages(supabase, rawOrderItems);
+    order.order_items = orderItemsWithImages.map((it) => {
       const snapshot = parseSpecificationsObject(it?.specifications) || {};
       const variantAttributes =
         snapshot?.variantAttributes && typeof snapshot.variantAttributes === 'object'

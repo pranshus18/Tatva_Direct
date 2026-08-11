@@ -42,6 +42,7 @@ import {
   roundMoney,
   sumGstLines
 } from './poImports.js';
+import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
 
 export function registerPoGroupRoutes(ctx) {
   const {
@@ -399,9 +400,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       const itemTotal = quantity * price;
       const attrs = supplierProduct?.attributes || {};
       const specs = supplierProduct?.product?.specifications || {};
-      const productImages = Array.isArray(attrs.images) && attrs.images.length > 0
-        ? attrs.images.filter(Boolean)
-        : (Array.isArray(supplierProduct?.product?.images) ? supplierProduct.product.images.filter(Boolean) : []);
+      const productImages = resolveSupplierOfferDisplayImages(attrs.images, []);
       const productIdentification = buildProductIdentification({
         skuNo: firstNonEmpty(specs.skuNo, specs.sku, specs.SKU, specs.gsku, specs.GSKU),
         modelBrand: firstNonEmpty(attrs.brandModel, specs.modelBrand, specs.brandModel, specs.brand)

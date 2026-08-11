@@ -1,7 +1,6 @@
 import {
   buildIdentityBundle,
   buildSupplierVariantIdentity,
-  buildVariantAsinLikeId,
   crypto,
   decideOnboardingAction,
   ensureBrandApprovedOrRequest,
@@ -33,7 +32,10 @@ import {
   reopenRejectedCatalogProductForResubmit
 } from '../../../services/supplierProductWriteService.js';
 import { resolveCatalogBaselineSpecifications } from '../../../services/supplierCatalogHelpersService.js';
-import { syncOfferAttributesWithSpecifications } from '../../../services/productIdentityService.js';
+import {
+  resolveStableVariantIdentityFromExistingOffers,
+  syncOfferAttributesWithSpecifications
+} from '../../../services/productIdentityService.js';
 import {
   fetchCanonicalVariantMrp,
   validateSupplierVariantMrpConsistency,
@@ -315,15 +317,53 @@ export function buildSupplierProductCreateHandler(ctx) {
         parentProductForVariant
       );
 
+      const [{ data: existingOffersForProduct }, productVariantsResult] = await Promise.all([
+        supabase
+          .from('supplier_products')
+          .select('id, supplier_id, location, status, is_active, variant_key, variant_asin, attributes, unit')
+          .eq('product_id', productId)
+          .limit(200),
+        supabase
+          .from('product_variants')
+          .select('id, product_id, variant_key, variant_asin, canonical_attributes, status, unit, pack_size')
+          .eq('product_id', productId)
+          .limit(200)
+      ]);
+      const existingProductVariants = productVariantsResult?.error
+        ? []
+        : productVariantsResult?.data || [];
+
+      const catalogSpecsForVariantReuse =
+        parentProductForVariant?.specifications || existingProduct?.specifications || {};
+      const specsUnchangedFromCatalog =
+        !isNewProduct && Boolean(existingProduct)
+          ? !hasSupplierSpecificationChangesFromCatalog({
+              catalogSpecs: catalogSpecsForVariantReuse,
+              supplierSpecs: normalizedSpecs
+            })
+          : false;
+
+      const stableVariantIdentity = resolveStableVariantIdentityFromExistingOffers({
+        parentAsin: catalogAsin || identityBundle.asinLikeId || parentProductForVariant?.asin || '',
+        parentProduct: parentProductForVariant,
+        computedIdentity: variantIdentityBundle,
+        existingOffers: existingOffersForProduct || [],
+        existingProductVariants,
+        offerSpecifications: normalizedSpecs,
+        catalogSpecifications: catalogSpecsForVariantReuse,
+        specsUnchangedFromCatalog
+      });
+      const resolvedVariantKey = stableVariantIdentity.variantKey || variantIdentityBundle.variantKey;
+      const variantAsin = stableVariantIdentity.variantAsin;
+
       const currentLocation = (otherData.location || '').trim();
-      const { data: existingSupplierProduct } = await supabase
-        .from('supplier_products')
-        .select('*')
-        .eq('product_id', productId)
-        .eq('supplier_id', req.userId)
-        .eq('location', currentLocation)
-        .eq('variant_key', variantIdentityBundle.variantKey)
-        .maybeSingle();
+      const existingSupplierProduct =
+        (existingOffersForProduct || []).find(
+          (row) =>
+            String(row.supplier_id) === String(req.userId) &&
+            String(row.location || '').trim() === currentLocation &&
+            String(row.variant_key || '').trim() === String(resolvedVariantKey || '').trim()
+        ) || null;
       const resubmittingRejectedOffer =
         existingSupplierProduct &&
         String(existingSupplierProduct.status || '').toLowerCase() === 'rejected';
@@ -338,10 +378,10 @@ export function buildSupplierProductCreateHandler(ctx) {
       const parsedStock = parseSupplierStockQuantity(otherData.stock);
       const parsedMinOrderQty = parseInt(otherData.min_order_quantity);
 
-      if (otherData.price !== undefined && variantIdentityBundle.variantKey) {
+      if (otherData.price !== undefined && resolvedVariantKey) {
         const canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
           productId,
-          variantKey: variantIdentityBundle.variantKey
+          variantKey: resolvedVariantKey
         });
         const variantMrpValidation = validateSupplierVariantMrpConsistency({
           body: { price: otherData.price },
@@ -360,24 +400,17 @@ export function buildSupplierProductCreateHandler(ctx) {
         }
       }
 
-      const { data: approvedVariantOffer } = await supabase
-        .from('supplier_products')
-        .select('id')
-        .eq('product_id', productId)
-        .eq('variant_key', variantIdentityBundle.variantKey)
-        .eq('status', 'approved')
-        .eq('is_active', true)
-        .limit(1)
-        .maybeSingle();
+      const approvedVariantOffer = (existingOffersForProduct || []).find(
+        (row) =>
+          String(row.variant_key || '').trim() === String(resolvedVariantKey || '').trim() &&
+          String(row.status || '').toLowerCase() === 'approved' &&
+          row.is_active !== false
+      );
       // Any approved offer for this catalog product means the product is already live —
       // a different variant from another (or the same) supplier must not re-enter approval.
-      const { data: anyApprovedOfferForProduct } = await supabase
-        .from('supplier_products')
-        .select('id')
-        .eq('product_id', productId)
-        .eq('status', 'approved')
-        .limit(1)
-        .maybeSingle();
+      const anyApprovedOfferForProduct = (existingOffersForProduct || []).find(
+        (row) => String(row.status || '').toLowerCase() === 'approved'
+      );
       const catalogProductStatus =
         existingProduct?.status ||
         (isNewProduct ? 'pending' : null);
@@ -396,7 +429,7 @@ export function buildSupplierProductCreateHandler(ctx) {
               productId,
               catalogSpecs:
                 parentProductForVariant?.specifications || existingProduct?.specifications || {},
-              variantKey: variantIdentityBundle.variantKey
+              variantKey: resolvedVariantKey
             })
           : {};
       const hasSpecificationChanges =
@@ -414,10 +447,6 @@ export function buildSupplierProductCreateHandler(ctx) {
         matchStrength: isNewProduct ? 'none' : matchStrength,
         hasSpecificationChanges
       });
-      const variantAsin = buildVariantAsinLikeId(
-        catalogAsin || identityBundle.asinLikeId,
-        variantIdentityBundle.variantKey
-      );
 
       const supplierProductData = {
         product_id: productId,
@@ -432,7 +461,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         igst_rate: igstRate,
         cgst_rate: cgstRate,
         sgst_rate: sgstRate,
-        variant_key: variantIdentityBundle.variantKey,
+        variant_key: resolvedVariantKey,
         variant_asin: variantAsin,
         attributes: syncOfferAttributesWithSpecifications({
           supplierDescription: String(otherData.description || '').trim(),
@@ -520,7 +549,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         is_active: createdOffer?.is_active,
         supplier_id: req.userId,
         supplier_product_id: createdOffer?.id || newSupplierProduct?.id,
-        variantKey: createdOffer?.variant_key || variantIdentityBundle.variantKey,
+        variantKey: createdOffer?.variant_key || resolvedVariantKey,
         variantAsin: createdOffer?.variant_asin || variantAsin,
         // Only images uploaded for this offer — never catalog history from prior listings.
         images: resolveSupplierOfferDisplayImages(normalizedImageUrls, baseProduct?.images)
@@ -593,7 +622,7 @@ export function buildSupplierProductCreateHandler(ctx) {
                 : `${supplier?.name} (${supplier?.company || supplier?.email}) added "${responseProduct.name}" with variant specifications that require your approval.`,
               related_product_id: productId,
               related_supplier_id: supplier?.id || req.userId,
-              metadata: { productId, supplierId: req.userId, variantKey: variantIdentityBundle.variantKey },
+              metadata: { productId, supplierId: req.userId, variantKey: resolvedVariantKey },
               is_read: false
             }));
             await insertNotifications(notifications, supabase);

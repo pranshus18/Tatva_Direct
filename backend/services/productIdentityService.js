@@ -1,8 +1,11 @@
 import crypto from 'crypto';
 import {
+  catalogSpecificationTemplateForVariantMerge,
   mergeCatalogAndOfferSpecificationsForDisplay,
-  parseSpecificationsObject
+  parseSpecificationsObject,
+  parseSupplierOfferAttributes
 } from './supplierCatalogHelpersService.js';
+import { areSpecificationsEqual } from '../utils/supplierProductApproval.js';
 
 /**
  * Product Identity Service (Phase 1)
@@ -284,10 +287,6 @@ export function buildIdentityBundle(input = {}) {
   };
 }
 
-/**
- * Variant identity for a supplier offer: merge shared catalog specs with offer specs
- * (same rules as supplier product list / detail UI) before hashing variant_key.
- */
 /** Supplier-page variant key already chosen (cart / listing) — wins over recomputation. */
 export function extractExplicitVariantKey(source = {}) {
   return String(source.variantKey || source.variant_key || '').trim();
@@ -337,6 +336,14 @@ export function hasSupplierVariantSignals(item = {}, variantIdentity = null) {
   );
 }
 
+/**
+ * Variant identity for a supplier offer.
+ *
+ * Shared catalog rows may carry filled values from an older single-variant flow or another
+ * offer. Those filled values must NOT enter the variant_key hash — only template keys — or
+ * re-listing the same offer specs produces a new Variant TSIN whenever the catalog drifts.
+ * Offer-filled values alone distinguish variants (COLOR/SIZE/etc.).
+ */
 export function buildSupplierVariantIdentity(offerInput = {}, parentProduct = null) {
   const catalogSpecs =
     parentProduct?.specifications &&
@@ -354,10 +361,8 @@ export function buildSupplierVariantIdentity(offerInput = {}, parentProduct = nu
           !Array.isArray(offerInput.variantAttributes)
         ? offerInput.variantAttributes
         : {};
-  // Offer-filled values must win over catalog defaults. Otherwise changing COLOR/SIZE/etc.
-  // still hashes to the same variant_key and create is blocked as a duplicate listing.
   const mergedSpecifications = mergeCatalogAndOfferSpecificationsForDisplay(
-    catalogSpecs,
+    catalogSpecificationTemplateForVariantMerge(catalogSpecs),
     offerSpecs
   );
   return buildIdentityBundle({
@@ -383,6 +388,224 @@ export function syncOfferAttributesWithSpecifications(attributes = {}) {
   };
 }
 
+function offerInputFromSupplierProductRow(row = {}) {
+  const attrs = parseSupplierOfferAttributes(row?.attributes);
+  const specs =
+    parseSpecificationsObject(attrs.specifications) ||
+    parseSpecificationsObject(attrs.specs) ||
+    parseSpecificationsObject(attrs.specification) ||
+    {};
+  return {
+    unit: attrs.unit || row.unit,
+    brandModel: attrs.brandModel,
+    gtin: attrs.gtin,
+    mpn: attrs.mpn,
+    sku: attrs.sku || attrs.skuNo || attrs.gsku || specs.sku || specs.skuNo || specs.gsku || '',
+    packSize: attrs.packSize || specs.packSize || specs.pack_size || '',
+    specifications: specs
+  };
+}
+
+function extractSpecsFromOfferRow(row = {}) {
+  return offerInputFromSupplierProductRow(row).specifications || {};
+}
+
+function extractSpecsFromProductVariantRow(row = {}) {
+  const attrs =
+    row?.canonical_attributes &&
+    typeof row.canonical_attributes === 'object' &&
+    !Array.isArray(row.canonical_attributes)
+      ? row.canonical_attributes
+      : {};
+  return (
+    parseSpecificationsObject(attrs.specifications) ||
+    parseSpecificationsObject(attrs.specs) ||
+    parseSpecificationsObject(attrs) ||
+    {}
+  );
+}
+
+function rankOfferForVariantReuse(row = {}) {
+  const status = String(row?.status || '').toLowerCase();
+  if (status === 'approved' && row?.is_active !== false) return 0;
+  if (status === 'approved') return 1;
+  if (status === 'pending') return 2;
+  return 3;
+}
+
+function pickStableIdentityFromRow(row = {}, reason = 'reuse') {
+  const variantKey = String(row?.variant_key || '').trim();
+  const variantAsin = String(row?.variant_asin || '').trim();
+  if (!variantKey || !variantAsin) return null;
+  return {
+    variantKey,
+    variantAsin,
+    reused: true,
+    reason
+  };
+}
+
+/**
+ * Keep Variant TSIN stable when a supplier re-lists from the catalog with the same specs.
+ * Matching is by meaningful specifications (not supplier SKU), so inventory/SKU differences
+ * do not mint a new variant number for an already-stored variant.
+ */
+export function resolveStableVariantIdentityFromExistingOffers({
+  parentAsin = '',
+  parentProduct = null,
+  computedIdentity = null,
+  existingOffers = [],
+  existingProductVariants = [],
+  offerSpecifications = null,
+  catalogSpecifications = null,
+  specsUnchangedFromCatalog = false
+} = {}) {
+  const computedKey = String(computedIdentity?.variantKey || '').trim();
+  const deterministicAsin = computedKey
+    ? buildVariantAsinLikeId(parentAsin, computedKey)
+    : '';
+  const submittedSpecs =
+    offerSpecifications && typeof offerSpecifications === 'object' && !Array.isArray(offerSpecifications)
+      ? offerSpecifications
+      : computedIdentity?.variant?.variantAttributes || {};
+  const catalogSpecs =
+    catalogSpecifications && typeof catalogSpecifications === 'object' && !Array.isArray(catalogSpecifications)
+      ? catalogSpecifications
+      : parentProduct?.specifications &&
+          typeof parentProduct.specifications === 'object' &&
+          !Array.isArray(parentProduct.specifications)
+        ? parentProduct.specifications
+        : {};
+
+  if (!computedKey) {
+    return {
+      variantKey: '',
+      variantAsin: deterministicAsin,
+      reused: false,
+      reason: 'missing_computed_key'
+    };
+  }
+
+  const rankedOffers = [...(existingOffers || [])]
+    .filter((row) => String(row?.status || '').toLowerCase() !== 'rejected')
+    .sort((a, b) => rankOfferForVariantReuse(a) - rankOfferForVariantReuse(b));
+
+  // 1) Exact stored key match
+  for (const row of rankedOffers) {
+    const storedKey = String(row?.variant_key || '').trim();
+    if (storedKey === computedKey) {
+      const picked = pickStableIdentityFromRow(row, 'exact_key');
+      if (picked) return picked;
+    }
+  }
+
+  // 2) Same meaningful offer specs as an existing supplier_products row (ignore SKU drift)
+  for (const row of rankedOffers) {
+    const existingSpecs = extractSpecsFromOfferRow(row);
+    if (!areSpecificationsEqual(submittedSpecs, existingSpecs)) continue;
+    const picked = pickStableIdentityFromRow(row, 'same_offer_specs');
+    if (picked) return picked;
+  }
+
+  // 3) Same specs as a canonical product_variants row already stored for this catalog product
+  const rankedVariants = [...(existingProductVariants || [])].filter((row) => {
+    const status = String(row?.status || '').toLowerCase();
+    return status !== 'rejected' && status !== 'retired';
+  });
+  for (const row of rankedVariants) {
+    const existingSpecs = extractSpecsFromProductVariantRow(row);
+    if (!areSpecificationsEqual(submittedSpecs, existingSpecs)) continue;
+    const picked = pickStableIdentityFromRow(row, 'same_product_variant_specs');
+    if (picked) return picked;
+  }
+
+  // 4) Catalog re-list with no spec changes: reuse the stored variant already tied to this product
+  const unchangedFromCatalog =
+    specsUnchangedFromCatalog ||
+    (Object.keys(buildNormalizedSpecProbe(catalogSpecs)).length > 0 &&
+      areSpecificationsEqual(submittedSpecs, catalogSpecs));
+
+  if (unchangedFromCatalog) {
+    for (const row of rankedOffers) {
+      const existingSpecs = extractSpecsFromOfferRow(row);
+      const legacyEmptyOfferSpecs = Object.keys(buildNormalizedSpecProbe(existingSpecs)).length === 0;
+      if (
+        legacyEmptyOfferSpecs ||
+        areSpecificationsEqual(existingSpecs, catalogSpecs) ||
+        areSpecificationsEqual(existingSpecs, submittedSpecs)
+      ) {
+        const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_offer');
+        if (picked) return picked;
+      }
+    }
+
+    for (const row of rankedVariants) {
+      const existingSpecs = extractSpecsFromProductVariantRow(row);
+      const legacyEmptyVariantSpecs = Object.keys(buildNormalizedSpecProbe(existingSpecs)).length === 0;
+      if (
+        legacyEmptyVariantSpecs ||
+        areSpecificationsEqual(existingSpecs, catalogSpecs) ||
+        areSpecificationsEqual(existingSpecs, submittedSpecs)
+      ) {
+        const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_product_variant');
+        if (picked) return picked;
+      }
+    }
+
+    // Single stored variant on this product → safe to reuse for an unchanged catalog re-list
+    const distinctOfferAsins = [
+      ...new Set(
+        rankedOffers
+          .map((row) => String(row?.variant_asin || '').trim())
+          .filter(Boolean)
+      )
+    ];
+    if (distinctOfferAsins.length === 1) {
+      const row = rankedOffers.find(
+        (candidate) => String(candidate?.variant_asin || '').trim() === distinctOfferAsins[0]
+      );
+      const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_single_offer');
+      if (picked) return picked;
+    }
+
+    const distinctVariantAsins = [
+      ...new Set(
+        rankedVariants
+          .map((row) => String(row?.variant_asin || '').trim())
+          .filter(Boolean)
+      )
+    ];
+    if (distinctVariantAsins.length === 1) {
+      const row = rankedVariants.find(
+        (candidate) => String(candidate?.variant_asin || '').trim() === distinctVariantAsins[0]
+      );
+      const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_single_product_variant');
+      if (picked) return picked;
+    }
+  }
+
+  return {
+    variantKey: computedKey,
+    variantAsin: deterministicAsin,
+    reused: false,
+    reason: 'computed'
+  };
+}
+
+/** Lightweight non-empty probe used only to detect "empty specs" without importing private helpers. */
+function buildNormalizedSpecProbe(specs = {}) {
+  const parsed = specs && typeof specs === 'object' && !Array.isArray(specs) ? specs : {};
+  const out = {};
+  Object.entries(parsed).forEach(([key, value]) => {
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value) && value.length === 0) return;
+    if (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0) return;
+    if (typeof value === 'string' && value.trim() === '') return;
+    out[String(key)] = value;
+  });
+  return out;
+}
+
 export default {
   normalizeTextField,
   normalizeIdentifierField,
@@ -404,6 +627,7 @@ export default {
   buildIdentityBundle,
   buildSupplierVariantIdentity,
   syncOfferAttributesWithSpecifications,
+  resolveStableVariantIdentityFromExistingOffers,
   extractExplicitVariantKey,
   buildSupplierVariantIdentityFromPoItem,
   resolveSupplierVariantKeyForItem,

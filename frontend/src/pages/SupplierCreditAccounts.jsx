@@ -256,7 +256,8 @@ export default function SupplierCreditAccounts() {
           <p style={{ color: '#64748b', fontSize: '0.92rem', marginTop: 0 }}>
             <strong>Credit limit</strong> is the maximum total outstanding a buyer can have on pay-later
             orders at once (e.g. ₹1,00,000 — they can use the full amount across orders, but not more).
-            <strong>Pay-later minimum</strong> is a lifetime net revenue gate. <strong>Loan cycle:</strong> when
+            <strong>Pay-later minimum</strong> is the minimum order amount required to use pay later on that
+            checkout (₹0 = no minimum). <strong>Loan cycle:</strong> when
             the cycle ends, buyers must settle outstanding orders from their vault (top up first if needed) before
             new pay-later orders.
           </p>
@@ -356,6 +357,7 @@ export default function SupplierCreditAccounts() {
                             style={cellInput}
                             placeholder="0"
                             title="Minimum order amount for pay later on this order (₹0 = no minimum)"
+                            aria-label="Pay-later minimum order amount"
                           />
                         </td>
                         <td style={td}>

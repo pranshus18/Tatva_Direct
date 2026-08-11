@@ -729,12 +729,21 @@ const SupplierPlaceOrder = () => {
       return;
     }
     const token = localStorage.getItem('token');
-    const checks = poGroups
-      .filter((g) => g?.vendorId !== null && g?.vendorId !== undefined)
-      .map((g) => ({
-        supplierId: g.vendorId,
-        orderAmount: Number(g.total) || 0
-      }));
+    const checksBySupplier = new Map();
+    for (const g of poGroups) {
+      const supplierId = String(g?.vendorId || '').trim();
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(supplierId)) {
+        continue;
+      }
+      const orderAmount = Number(g.totalInclGst ?? g.total) || 0;
+      const existing = checksBySupplier.get(supplierId);
+      if (existing) {
+        existing.orderAmount = Number(existing.orderAmount || 0) + orderAmount;
+      } else {
+        checksBySupplier.set(supplierId, { supplierId, orderAmount });
+      }
+    }
+    const checks = [...checksBySupplier.values()];
     if (!checks.length) {
       setCreditChecks([]);
       setPayLaterEligibility([]);
@@ -785,8 +794,18 @@ const SupplierPlaceOrder = () => {
     if (creditCheckFailed) return false;
     if (!payLaterEligibility.length) return false;
     const bySupplier = new Map(payLaterEligibility.map((r) => [String(r.supplierId), r]));
-    return poGroups.every((g) => {
-      const row = bySupplier.get(String(g.vendorId));
+    const vendorIds = [
+      ...new Set(
+        poGroups
+          .map((g) => String(g?.vendorId || '').trim())
+          .filter((id) =>
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)
+          )
+      )
+    ];
+    if (!vendorIds.length) return false;
+    return vendorIds.every((vendorId) => {
+      const row = bySupplier.get(vendorId);
       return Boolean(row?.allowed && row?.payLaterOffered);
     });
   }, [creditCheckFailed, payLaterEligibility, poGroups]);
@@ -1268,14 +1287,21 @@ const SupplierPlaceOrder = () => {
                 ) : null}
               </div>
             ) : null}
-            {paymentMethod === 'credit' && creditCheckFailed ? (
+            {creditCheckFailed ? (
               <div className="spo-alert spo-alert--warning" style={{ marginTop: '0.75rem' }}>
                 {PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE}
               </div>
             ) : null}
-            {paymentMethod === 'credit' && !creditCheckFailed && !payLaterOptionAvailable ? (
+            {!creditCheckFailed && !creditCheckLoading && !payLaterOptionAvailable && creditChecks.length > 0 ? (
               <div className="spo-alert spo-alert--warning" style={{ marginTop: '0.75rem' }}>
-                {PAY_LATER_UNAVAILABLE_MESSAGE}
+                <div>{PAY_LATER_UNAVAILABLE_MESSAGE}</div>
+                <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem' }}>
+                  {creditChecks.map((row) => (
+                    <li key={String(row.supplierId)} style={{ marginBottom: '0.35rem' }}>
+                      {row.message || 'Pay later unavailable for this supplier.'}
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : null}
             {paymentMethod === 'credit' && creditChecks.length > 0 ? (

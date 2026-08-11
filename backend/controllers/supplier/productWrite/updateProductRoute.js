@@ -292,11 +292,11 @@ export function registerSupplierProductUpdateRoute(ctx) {
           },
           parentProduct
         );
+        // Inventory-only / same-specs saves must keep the existing Variant TSIN.
+        // Only meaningful specification edits mint a new variant_key + variant_asin.
         const variantKeyChanged = shouldRecomputeSupplierVariantKeyOnUpdate({
           specificationsProvided: req.body.specifications !== undefined,
-          specificationsChanged,
-          computedVariantKey: variantIdentity.variantKey,
-          storedVariantKey: supplierProduct.variant_key
+          specificationsChanged
         });
 
         if (variantKeyChanged) {
@@ -322,6 +322,10 @@ export function registerSupplierProductUpdateRoute(ctx) {
               existingSupplierProductId: duplicateVariant.id
             });
           }
+        } else {
+          // Explicitly preserve identity on inventory / unchanged-spec updates.
+          delete updateSupplierProductData.variant_key;
+          delete updateSupplierProductData.variant_asin;
         }
 
         let movedToPendingForSpecReview = false;
