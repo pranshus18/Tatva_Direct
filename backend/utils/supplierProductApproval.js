@@ -7,8 +7,23 @@ function normalizeSpecKeyForComparison(key) {
 
 function normalizeSpecValueForComparison(value) {
   if (value === null || value === undefined) return null;
-  if (typeof value === 'string') return value.trim().toLowerCase();
-  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  // Booleans / "true" / "yes" must compare equal (template parsing vs catalog strings).
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? String(value) : null;
+  }
+  if (typeof value === 'string') {
+    // Collapse whitespace so "500 ML" and "500ML" compare as the same variant value.
+    const trimmed = value.trim().toLowerCase().replace(/\s+/g, '');
+    if (trimmed === 'true' || trimmed === 'yes') return 'true';
+    if (trimmed === 'false' || trimmed === 'no') return 'false';
+    // "57" (catalog string) and 57 (template number field) must not look like a change.
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+      const asNum = Number(trimmed);
+      return Number.isFinite(asNum) ? String(asNum) : trimmed;
+    }
+    return trimmed;
+  }
   if (Array.isArray(value)) return value.map(normalizeSpecValueForComparison);
   if (typeof value === 'object') {
     const out = {};
@@ -58,8 +73,187 @@ export function areSpecificationsEqual(currentSpecs = {}, nextSpecs = {}) {
 }
 
 /**
+ * True when submitted specs are the same variant as an existing offer, allowing
+ * extra filled template keys on the new submission (category template growth).
+ * Every meaningful key on the existing variant must still be present with the same value.
+ */
+export function submittedSpecsCompatibleWithExistingVariant(
+  submittedSpecs = {},
+  existingSpecs = {}
+) {
+  const submitted = buildNormalizedMeaningfulSpecMap(submittedSpecs);
+  const existing = buildNormalizedMeaningfulSpecMap(existingSpecs);
+  if (existing.size === 0) return false;
+
+  for (const [norm, existingValue] of existing) {
+    if (!submitted.has(norm)) return false;
+    if (JSON.stringify(submitted.get(norm)) !== JSON.stringify(existingValue)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * True when two spec maps share at least one meaningful key and every shared key agrees.
+ * Used for catalog re-lists where template key sets differ between suppliers/offers.
+ */
+export function specificationsAgreeOnOverlappingKeys(leftSpecs = {}, rightSpecs = {}) {
+  const left = buildNormalizedMeaningfulSpecMap(leftSpecs);
+  const right = buildNormalizedMeaningfulSpecMap(rightSpecs);
+  if (left.size === 0 || right.size === 0) return false;
+
+  let shared = 0;
+  for (const [norm, leftValue] of left) {
+    if (!right.has(norm)) continue;
+    shared += 1;
+    if (JSON.stringify(leftValue) !== JSON.stringify(right.get(norm))) {
+      return false;
+    }
+  }
+  return shared > 0;
+}
+
+/**
+ * When re-listing a catalog product, keep the catalog/offer identity keys and drop
+ * unrelated category-template values (e.g. mouse defaults on headphones).
+ * Overlapping submitted values win so intentional edits are preserved.
+ */
+export function retainCatalogCompatibleSpecifications(catalogSpecs = {}, submittedSpecs = {}) {
+  const catalog =
+    catalogSpecs && typeof catalogSpecs === 'object' && !Array.isArray(catalogSpecs)
+      ? catalogSpecs
+      : {};
+  const submitted =
+    submittedSpecs && typeof submittedSpecs === 'object' && !Array.isArray(submittedSpecs)
+      ? submittedSpecs
+      : {};
+
+  const catalogMeaningful = buildNormalizedMeaningfulSpecMap(catalog);
+  if (catalogMeaningful.size === 0) {
+    return { ...submitted };
+  }
+
+  const submittedByNorm = new Map();
+  Object.entries(submitted).forEach(([key, value]) => {
+    const norm = normalizeSpecKeyForComparison(key);
+    if (!norm) return;
+    submittedByNorm.set(norm, { key, value });
+  });
+
+  const out = {};
+  Object.entries(catalog).forEach(([key, catalogValue]) => {
+    const norm = normalizeSpecKeyForComparison(key);
+    if (!norm) return;
+    if (!isMeaningfullyFilledSpecValue(catalogValue) && !submittedByNorm.has(norm)) {
+      return;
+    }
+    const submittedHit = submittedByNorm.get(norm);
+    if (submittedHit && isMeaningfullyFilledSpecValue(submittedHit.value)) {
+      out[submittedHit.key] = submittedHit.value;
+    } else if (isMeaningfullyFilledSpecValue(catalogValue)) {
+      out[key] = catalogValue;
+    }
+  });
+  return out;
+}
+
+/**
+ * Pick the approved offer whose specs best match the submission (no value conflicts).
+ * Returns null when every candidate has at least one overlapping value conflict.
+ */
+export function findBestMatchingApprovedOfferForSpecs(offers = [], submittedSpecs = {}) {
+  let best = null;
+  let bestScore = -1;
+  const approvedRows = [];
+
+  for (const row of offers || []) {
+    if (String(row?.status || '').toLowerCase() !== 'approved') continue;
+    if (row?.is_active === false) continue;
+    approvedRows.push(row);
+
+    const attrs =
+      row?.attributes && typeof row.attributes === 'object' && !Array.isArray(row.attributes)
+        ? row.attributes
+        : {};
+    const existingSpecs =
+      (attrs.specifications && typeof attrs.specifications === 'object'
+        ? attrs.specifications
+        : null) ||
+      (attrs.specs && typeof attrs.specs === 'object' ? attrs.specs : null) ||
+      {};
+
+    const existingMap = buildNormalizedMeaningfulSpecMap(existingSpecs);
+    // Legacy approved offers often store no nested specs — still reusable for re-lists.
+    if (existingMap.size === 0) {
+      if (bestScore < 0) {
+        bestScore = 0;
+        best = row;
+      }
+      continue;
+    }
+
+    if (
+      areSpecificationsEqual(submittedSpecs, existingSpecs) ||
+      submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs) ||
+      submittedSpecsCompatibleWithExistingVariant(existingSpecs, submittedSpecs)
+    ) {
+      const score = existingMap.size + 1000;
+      if (score > bestScore) {
+        bestScore = score;
+        best = row;
+      }
+      continue;
+    }
+
+    if (!specificationsAgreeOnOverlappingKeys(submittedSpecs, existingSpecs)) continue;
+
+    const submitted = buildNormalizedMeaningfulSpecMap(submittedSpecs);
+    let score = 0;
+    for (const [norm] of submitted) {
+      if (existingMap.has(norm)) score += 1;
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = row;
+    }
+  }
+
+  // Single live offer for this catalog product: reuse it when there is no overlapping
+  // value conflict (template key renames / extra keys must not force admin review).
+  if (bestScore < 1000 && approvedRows.length === 1) {
+    const only = approvedRows[0];
+    const attrs =
+      only?.attributes && typeof only.attributes === 'object' && !Array.isArray(only.attributes)
+        ? only.attributes
+        : {};
+    const existingSpecs =
+      (attrs.specifications && typeof attrs.specifications === 'object'
+        ? attrs.specifications
+        : null) ||
+      (attrs.specs && typeof attrs.specs === 'object' ? attrs.specs : null) ||
+      {};
+    const existingMap = buildNormalizedMeaningfulSpecMap(existingSpecs);
+    const submittedMap = buildNormalizedMeaningfulSpecMap(submittedSpecs);
+    let conflict = false;
+    for (const [norm, leftValue] of existingMap) {
+      if (!submittedMap.has(norm)) continue;
+      if (JSON.stringify(leftValue) !== JSON.stringify(submittedMap.get(norm))) {
+        conflict = true;
+        break;
+      }
+    }
+    if (!conflict) return only;
+  }
+
+  return best;
+}
+
+/**
  * True when a supplier re-listing an existing catalog product changed any
- * meaningful specification value from the catalog baseline.
+ * meaningful specification *value* from the catalog baseline.
+ * Extra template keys alone are not treated as a new variant (suppliers must
+ * fill current category templates even when re-listing an unchanged SKU).
  */
 export function hasSupplierSpecificationChangesFromCatalog({
   catalogSpecs = {},
@@ -76,10 +270,6 @@ export function hasSupplierSpecificationChangesFromCatalog({
     if (JSON.stringify(baselineValue) !== JSON.stringify(submittedValue)) {
       return true;
     }
-  }
-
-  for (const norm of submitted.keys()) {
-    if (!baseline.has(norm)) return true;
   }
 
   return false;
@@ -157,6 +347,7 @@ export function shouldRecomputeSupplierVariantKeyOnUpdate({
 
 export default {
   areSpecificationsEqual,
+  submittedSpecsCompatibleWithExistingVariant,
   hasSupplierSpecificationChangesFromCatalog,
   shouldMoveToPendingForSpecChange,
   shouldAutoApproveSupplierOfferOnCreate,

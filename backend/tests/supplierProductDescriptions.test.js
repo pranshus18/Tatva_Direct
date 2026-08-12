@@ -8,12 +8,12 @@ import {
   getSupplierSubmittedDescription
 } from '../utils/supplierProductDescriptions.js';
 
-test('getAdminBuyerFacingDescriptionForApproval ignores stale catalog without publish', () => {
+test('getAdminBuyerFacingDescriptionForApproval ignores stale catalog without publish or supplier text', () => {
   assert.equal(
     getAdminBuyerFacingDescriptionForApproval({
       status: 'pending',
       description: 'Stale polished catalog copy.',
-      supplierDescription: 'Raw supplier submission.',
+      supplierDescription: '',
       publishedDescription: ''
     }),
     ''
@@ -29,6 +29,18 @@ test('getAdminBuyerFacingDescriptionForApproval accepts saved publish copy', () 
       publishedDescription: 'Polished buyer copy.'
     }),
     'Polished buyer copy.'
+  );
+});
+
+test('getAdminBuyerFacingDescriptionForApproval accepts supplier text without polish or re-save', () => {
+  assert.equal(
+    getAdminBuyerFacingDescriptionForApproval({
+      status: 'pending',
+      description: 'Stale polished catalog copy.',
+      supplierDescription: 'Raw supplier submission.',
+      publishedDescription: ''
+    }),
+    'Raw supplier submission.'
   );
 });
 

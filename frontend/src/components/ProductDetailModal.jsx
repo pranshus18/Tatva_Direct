@@ -18,6 +18,10 @@ import {
   getAdminProductApprovalReadiness,
   isAdminProductReadyForApproval
 } from '../utils/adminProductApprovalReadiness';
+import {
+  formatAdminProductApprovalFailureMessage,
+  readAdminApprovalErrorPayload
+} from '../utils/adminProductApprovalFeedback';
 import { IGST_OPTIONS, CGST_SGST_OPTIONS } from '../utils/gstRates';
 
 const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
@@ -49,7 +53,12 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
         },
         body: JSON.stringify({
           ...editedProduct,
-          supplier_id: product?.supplier_id || supplier?.id || editedProduct?.supplier_id || undefined
+          supplier_id: product?.supplier_id || supplier?.id || editedProduct?.supplier_id || undefined,
+          supplier_product_id:
+            product?.supplier_product_id ||
+            product?.supplierProductId ||
+            editedProduct?.supplier_product_id ||
+            undefined
         })
       });
 
@@ -72,13 +81,16 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
     const readiness = getAdminProductApprovalReadiness(product);
     if (!readiness.ok) {
       alert(
-        `${readiness.message}\n\n${readiness.missingRequirements.map((row) => `• ${row.message}`).join('\n')}`
+        formatAdminProductApprovalFailureMessage({
+          message: readiness.message || 'Complete before approval.',
+          missingRequirements: readiness.missingRequirements
+        })
       );
       return;
     }
 
     if (!confirm('Are you sure you want to approve this product?')) return;
-    
+
     setLoading(true);
     try {
       const token = localStorage.getItem('token');
@@ -86,20 +98,36 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
       const response = await fetch(getApiUrl(`/api/admin/products/${productId}/approve`), {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
 
       if (response.ok) {
-        alert('Product approved successfully!');
-        if (onUpdate) onUpdate();
-      } else {
-        alert('Failed to approve product');
+        const data = await response.json().catch(() => ({}));
+        if (data.status === 'success') {
+          alert(data.message || 'Product approved successfully!');
+          if (onUpdate) onUpdate();
+          return;
+        }
+        alert(
+          formatAdminProductApprovalFailureMessage({
+            message: data.message || 'Failed to approve product',
+            missingRequirements: data.missingRequirements
+          })
+        );
+        return;
       }
+
+      const errorPayload = await readAdminApprovalErrorPayload(response);
+      alert(formatAdminProductApprovalFailureMessage(errorPayload));
     } catch (error) {
       console.error('Error approving product:', error);
-      alert('Error approving product');
+      alert(
+        error?.message
+          ? `Error approving product: ${error.message}`
+          : 'Error approving product. Please try again.'
+      );
     } finally {
       setLoading(false);
     }
@@ -273,14 +301,15 @@ const ProductDetailModal = ({ product, supplier, onClose, onUpdate }) => {
                 {product.status !== 'approved' && (
                   <button
                     onClick={handleApprove}
-                    disabled={loading || !canApproveProduct}
+                    disabled={loading || isEditing}
                     className="btn-modal btn-approve-modal"
                     title={
-                      canApproveProduct
-                        ? 'Approve this product'
-                        : isEditing
-                          ? 'Save changes before approving'
-                          : approvalReadiness.message
+                      isEditing
+                        ? 'Save changes before approving'
+                        : canApproveProduct
+                          ? 'Approve this product'
+                          : approvalReadiness.message ||
+                            'Approval is blocked — click to see what still needs to be completed'
                     }
                   >
                     <Check size={16} />

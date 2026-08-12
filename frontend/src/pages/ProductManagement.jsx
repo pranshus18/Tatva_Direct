@@ -2119,6 +2119,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const categoryForSpecTypingRef = useRef(formData.category);
   const preserveSpecsOnNextCategoryLoadRef = useRef(false);
   const selectedSuggestionSpecsRef = useRef(null);
+  const selectedCatalogAttachIdRef = useRef('');
   const [catalogBaselineSpecs, setCatalogBaselineSpecs] = useState({});
   const loadCategorySpecsRequestRef = useRef(0);
   
@@ -2177,12 +2178,22 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     [product, supplierSpecValuesLocked, catalogSpecificationKeys]
   );
   const productStatus = product ? String(product.status || 'pending').toLowerCase() : 'pending';
+  const isExistingCatalogAttach = Boolean(String(formData.catalogProductId || '').trim());
   const categorySpecFillRequired = useMemo(
     () =>
+      // Re-listing a catalog product uses that product's specs — not the category's
+      // example defaults (e.g. mouse fields under Computer Accessories).
+      !isExistingCatalogAttach &&
       hasAdminSpecTemplate &&
       adminSpecTemplateKeys.length > 0 &&
       (!product || productStatus === 'pending'),
-    [hasAdminSpecTemplate, adminSpecTemplateKeys, product, productStatus]
+    [
+      isExistingCatalogAttach,
+      hasAdminSpecTemplate,
+      adminSpecTemplateKeys,
+      product,
+      productStatus
+    ]
   );
   const canEditSpecificationValues = useMemo(() => {
     if (showInventoryFields) return false;
@@ -2190,6 +2201,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     if (productStatus === 'rejected') return false;
     // Existing category with admin template keys: fill while adding or editing a pending product.
     if (categorySpecFillRequired) return true;
+    // Attaching an existing catalog product: allow editing only when values actually differ.
+    if (isExistingCatalogAttach && !product) return true;
     // New category / no category template: fill catalog keys once after admin approval.
     if (productStatus === 'approved' && approvedNeedsSpecFill) return true;
     return false;
@@ -2198,11 +2211,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     supplierSpecValuesLocked,
     productStatus,
     categorySpecFillRequired,
+    isExistingCatalogAttach,
+    product,
     approvedNeedsSpecFill
   ]);
   const canEditSpecificationKeys = false;
 
-  const isExistingCatalogAttach = Boolean(String(formData.catalogProductId || '').trim());
   const catalogSpecChangesDetected = useMemo(
     () =>
       isExistingCatalogAttach
@@ -2345,6 +2359,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           message: data.message || '',
           brandName: data.brand?.name || brandName
         });
+        // Near-typo of an approved brand (Faststark → Fastrack): normalize the form value
+        // so submit stores the canonical approved catalog name.
+        const canonicalName = String(data.brand?.name || '').trim();
+        if (
+          data.brandStatus === 'approved' &&
+          canonicalName &&
+          canonicalName.toLowerCase() !== brandName.toLowerCase()
+        ) {
+          setFormData((prev) => {
+            if (String(prev.brand || '').trim() !== brandName) return prev;
+            return { ...prev, brand: canonicalName };
+          });
+        }
       } catch (_err) {
         if (cancelled) return;
         setBrandApprovalState({
@@ -2471,10 +2498,10 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       });
       const data = await response.json();
       if (data.status === 'success') {
-        setSuggestions(data.suggestions || []);
-        // Keep the menu open after search so matching approved products and
-        // "Add new product…" actions remain available.
-        setShowSuggestions(true);
+        const nextSuggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+        setSuggestions(nextSuggestions);
+        // Only open the menu when the typed name matches something already in the catalog.
+        setShowSuggestions(nextSuggestions.length > 0);
       }
     } catch (error) {
       console.error('Failed to fetch suggestions:', error);
@@ -2485,6 +2512,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
   const handleNameChange = (e) => {
     const value = e.target.value;
+    selectedCatalogAttachIdRef.current = '';
     setFormData({ ...formData, name: value, catalogProductId: '' });
     setCatalogBaselineSpecs({});
     
@@ -2506,88 +2534,155 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     setSearchTimeout(timeout);
   };
 
-  const handleSuggestionClick = (suggestion) => {
-    const nextSpecs =
-      suggestion?.specifications &&
-      typeof suggestion.specifications === 'object' &&
-      !Array.isArray(suggestion.specifications)
-        ? suggestion.specifications
-        : null;
+  const handleSuggestionClick = async (suggestion) => {
+    const selectedProductId = String(suggestion?.id || '').trim();
+    selectedCatalogAttachIdRef.current = selectedProductId;
+    // Clear any previous product's specs immediately so nothing stale remains.
+    setSpecifications({});
+    setCatalogBaselineSpecs({});
+    selectedSuggestionSpecsRef.current = null;
+    preserveSpecsOnNextCategoryLoadRef.current = true;
 
     setFormData({
       ...formData,
-      catalogProductId: suggestion.id || '',
+      catalogProductId: selectedProductId,
       name: suggestion.name,
       brand: formData.brand || suggestion.brand || '',
       gtin: suggestion.gtin || formData.gtin,
       hsnCode: suggestion.hsnCode || suggestion.hsn_code || formData.hsnCode,
       description: suggestion.description || formData.description,
       category: suggestion.category || formData.category,
-      // Auto-fill unit from suggestion if available
       unit: suggestion.unit || formData.unit
     });
-    if (nextSpecs) {
-      preserveSpecsOnNextCategoryLoadRef.current = true;
-      selectedSuggestionSpecsRef.current = { ...nextSpecs };
-      setCatalogBaselineSpecs({ ...nextSpecs });
-      setSpecifications(nextSpecs);
-    }
     setSuggestions([]);
     setShowSuggestions(false);
     setHoveredSuggestionId(null);
-    // Focus back on input after selection
     if (inputRef.current) {
       inputRef.current.focus();
     }
+
+    if (!selectedProductId) return;
+
+    const applySelectedSpecs = (specs) => {
+      if (selectedCatalogAttachIdRef.current !== selectedProductId) return;
+      const nextSpecs =
+        specs && typeof specs === 'object' && !Array.isArray(specs) ? { ...specs } : {};
+      selectedSuggestionSpecsRef.current = { ...nextSpecs };
+      preserveSpecsOnNextCategoryLoadRef.current = true;
+      setCatalogBaselineSpecs({ ...nextSpecs });
+      setSpecifications(nextSpecs);
+    };
+
+    try {
+      const token = localStorage.getItem('token');
+      const lookupParams = new URLSearchParams({ productId: selectedProductId });
+      const res = await fetch(
+        getApiUrl(`/api/supplier/products/lookup?${lookupParams.toString()}`),
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      const data = await res.json();
+      if (selectedCatalogAttachIdRef.current !== selectedProductId) return;
+
+      if (
+        data.status === 'success' &&
+        data.found &&
+        String(data.product?.id || '') === selectedProductId
+      ) {
+        applySelectedSpecs(data.specifications || {});
+        setFormData((prev) => {
+          if (String(prev.catalogProductId || '') !== selectedProductId) return prev;
+          return {
+            ...prev,
+            unit: String(prev.unit || '').trim() ? prev.unit : data.unit || prev.unit,
+            brand: prev.brand || data.product?.brand || suggestion.brand || '',
+            category: prev.category || data.product?.category || suggestion.category || '',
+            name: data.product?.name || prev.name
+          };
+        });
+        if (typeof data.canonicalMrp === 'number') {
+          setRecommendedPrice(data.canonicalMrp);
+          setRecommendedPriceStats(data.priceStats || null);
+        }
+      } else if (
+        suggestion?.specifications &&
+        typeof suggestion.specifications === 'object' &&
+        !Array.isArray(suggestion.specifications)
+      ) {
+        applySelectedSpecs(suggestion.specifications);
+      }
+    } catch (error) {
+      console.error('Failed to load selected product specifications:', error);
+      if (
+        suggestion?.specifications &&
+        typeof suggestion.specifications === 'object' &&
+        !Array.isArray(suggestion.specifications)
+      ) {
+        applySelectedSpecs(suggestion.specifications);
+      }
+    }
   };
 
-  // Auto-fill unit when name + category match an existing product (even if user didn't click suggestion)
+  // Auto-fill unit/specs when name + category match — or by selected catalog product id.
   useEffect(() => {
+    const selectedProductId = String(formData.catalogProductId || '').trim();
     const name = (formData.name || '').trim();
     const category = (formData.category || '').trim();
     const brand = (formData.brand || '').trim();
 
-    if (!name || !category) return;
+    if (!selectedProductId && (!name || !category)) return;
 
     const timeout = setTimeout(async () => {
       try {
         const token = localStorage.getItem('token');
-        const lookupParams = new URLSearchParams({
-          name,
-          category
-        });
-        if (brand) lookupParams.set('brand', brand);
-        if (product?.variantKey) lookupParams.set('variantKey', product.variantKey);
+        const lookupParams = new URLSearchParams();
+        if (selectedProductId) {
+          // Dropdown selection: always resolve by exact product id.
+          lookupParams.set('productId', selectedProductId);
+        } else {
+          lookupParams.set('name', name);
+          lookupParams.set('category', category);
+          if (brand) lookupParams.set('brand', brand);
+          if (product?.variantKey) lookupParams.set('variantKey', product.variantKey);
+        }
         const res = await fetch(
           getApiUrl(`/api/supplier/products/lookup?${lookupParams.toString()}`),
-          { headers: { 'Authorization': `Bearer ${token}` } }
+          { headers: { Authorization: `Bearer ${token}` } }
         );
         const data = await res.json();
         if (data.status === 'success' && data.found && data.unit) {
-          // Never overwrite a unit the supplier already entered.
           setFormData((prev) =>
             String(prev.unit || '').trim() ? prev : { ...prev, unit: data.unit }
           );
         }
+
         if (
           data.status === 'success' &&
+          data.found &&
           data.specifications &&
           typeof data.specifications === 'object' &&
-          !Array.isArray(data.specifications) &&
-          Object.keys(data.specifications).length > 0
+          !Array.isArray(data.specifications)
         ) {
+          // If a catalog product is selected, only accept specs for that same id.
+          if (
+            selectedProductId &&
+            String(data.product?.id || '').trim() !== selectedProductId
+          ) {
+            return;
+          }
+          const nextSpecs = { ...data.specifications };
           preserveSpecsOnNextCategoryLoadRef.current = true;
-          selectedSuggestionSpecsRef.current = { ...data.specifications };
-          setCatalogBaselineSpecs({ ...data.specifications });
-          setSpecifications(data.specifications);
+          selectedSuggestionSpecsRef.current = { ...nextSpecs };
+          setCatalogBaselineSpecs({ ...nextSpecs });
+          setSpecifications(nextSpecs);
+          if (data.product?.id) {
+            setFormData((prev) =>
+              prev.catalogProductId
+                ? prev
+                : { ...prev, catalogProductId: data.product.id }
+            );
+          }
         }
-        if (data.status === 'success' && data.found && data.product?.id) {
-          setFormData((prev) =>
-            prev.catalogProductId
-              ? prev
-              : { ...prev, catalogProductId: data.product.id }
-          );
-        }
+
         if (data.status === 'success' && data.found) {
           const canonicalMrpFromLookup =
             typeof data.canonicalMrp === 'number'
@@ -2606,21 +2701,22 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               }));
             }
           }
-        } else {
+        } else if (!selectedProductId) {
           setRecommendedPrice(null);
           setRecommendedPriceStats(null);
         }
       } catch (e) {
-        // Silent fail: unit will remain user-selected
+        // Silent fail: unit/specs will remain user-selected
       }
     }, 350);
 
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.name, formData.category, formData.brand]);
+  }, [formData.name, formData.category, formData.brand, formData.catalogProductId]);
 
   // Reload model/brand-specific template keys while typing within the same category.
   // Category switches are handled by handleCategoryDropdownChange / the category-change effect.
+  // Skip when attaching an existing catalog product — keep that product's specs intact.
   useEffect(() => {
     const category = String(formData.category || '').trim();
     const modelHint = String(formData.name || '').trim();
@@ -2636,6 +2732,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     categoryForSpecTypingRef.current = category;
 
     if (!category) return;
+    if (String(formData.catalogProductId || '').trim()) return;
     if (product && String(product.status || 'pending').toLowerCase() !== 'pending') return;
     if (categoryChanged) return;
 
@@ -2648,7 +2745,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.name, formData.category, formData.brand, product?.status]);
+  }, [formData.name, formData.category, formData.brand, formData.catalogProductId, product?.status]);
 
   const getMissingMandatoryFields = () => {
     if (showInventoryFields) {
@@ -3112,6 +3209,18 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       const preserveExistingValues = preserveSpecsOnNextCategoryLoadRef.current;
       preserveSpecsOnNextCategoryLoadRef.current = false;
       categoryForSpecTypingRef.current = matchedCategory.name;
+      // Catalog attach: keep the selected product's specs; do not load category mouse defaults.
+      if (String(formData.catalogProductId || '').trim() && preserveExistingValues) {
+        if (
+          selectedSuggestionSpecsRef.current &&
+          typeof selectedSuggestionSpecsRef.current === 'object'
+        ) {
+          setSpecifications({ ...selectedSuggestionSpecsRef.current });
+        }
+        setHasAdminSpecTemplate(false);
+        setAdminSpecTemplateKeys([]);
+        return;
+      }
       if (!preserveExistingValues) {
         setSpecifications({});
         setHasAdminSpecTemplate(false);
@@ -4475,10 +4584,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     onChange={handleNameChange}
                     placeholder='e.g. "Cement OPC", "TMT Steel Bar", "Red Clay Brick"'
                     onFocus={() => {
+                      // Only reopen when there are real catalog matches for the typed name.
                       if (formData.name.trim().length > 0 && suggestions.length > 0) {
-                        setShowSuggestions(true);
-                      } else if (!product) {
-                        // Show dropdown with options even when no suggestions or when field is empty
                         setShowSuggestions(true);
                       }
                     }}
@@ -4499,7 +4606,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     style={{ width: '100%' }}
                   />
 
-                {showSuggestions && !product && (
+                {showSuggestions && !product && suggestions.length > 0 && (
                 <div
                   ref={suggestionsRef}
                   className="pm-suggest-menu"
@@ -4615,74 +4722,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       )}
                     </div>
                   ))}
-                  {!product && (
-                    <>
-                      {suggestions.length > 0 && (
-                        <div style={{
-                          height: '1px',
-                          background: '#e5e7eb',
-                          margin: '0.5rem 0'
-                        }} />
-                      )}
-                      <div
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setProductType('existing_category');
-                          setShowSuggestions(false);
-                        }}
-                        style={{
-                          padding: '0.875rem 1rem',
-                          cursor: 'pointer',
-                          borderBottom: '1px solid #f3f4f6',
-                          background: productType === 'existing_category' ? '#f0f9ff' : 'white',
-                          color: productType === 'existing_category' ? '#0369a1' : '#1e293b',
-                          fontWeight: productType === 'existing_category' ? '600' : '500',
-                          transition: 'background-color 0.15s ease'
-                        }}
-                        onMouseEnter={(e) => {
-                          if (productType !== 'existing_category') {
-                            e.currentTarget.style.backgroundColor = '#f9fafb';
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (productType !== 'existing_category') {
-                            e.currentTarget.style.backgroundColor = productType === 'existing_category' ? '#f0f9ff' : 'white';
-                          }
-                        }}
-                      >
-                        Add new product in existing category
-                      </div>
-                      <div
-                        onClick={(e) => {
-                          e.preventDefault();
-                          e.stopPropagation();
-                          setProductType('new_category');
-                          setShowSuggestions(false);
-                        }}
-                        style={{
-                          padding: '0.875rem 1rem',
-                          cursor: 'pointer',
-                          background: productType === 'new_category' ? '#f0f9ff' : 'white',
-                          color: productType === 'new_category' ? '#0369a1' : '#1e293b',
-                          fontWeight: productType === 'new_category' ? '600' : '500',
-                          transition: 'background-color 0.15s ease'
-                        }}
-                        onMouseEnter={(e) => {
-                          if (productType !== 'new_category') {
-                            e.currentTarget.style.backgroundColor = '#f9fafb';
-                          }
-                        }}
-                        onMouseLeave={(e) => {
-                          if (productType !== 'new_category') {
-                            e.currentTarget.style.backgroundColor = productType === 'new_category' ? '#f0f9ff' : 'white';
-                          }
-                        }}
-                      >
-                        Add new product and new category
-                      </div>
-                    </>
-                  )}
                 </div>
                 )}
 

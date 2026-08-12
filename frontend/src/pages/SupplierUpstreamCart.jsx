@@ -37,7 +37,8 @@ import {
 } from '../utils/upstreamCheckoutReservation';
 import {
   SUPPLIER_UPSTREAM_CART_RESUME_KEY,
-  clearUpstreamCartClientProjectState
+  clearUpstreamCartClientProjectState,
+  resolveUpstreamProjectCartName
 } from '../utils/supplierUpstreamCartSession';
 
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
@@ -235,7 +236,12 @@ const SupplierUpstreamCart = () => {
       }
       const draft = cartData?.cart?.draft && typeof cartData.cart.draft === 'object' ? cartData.cart.draft : {};
       setProjects(
-        (Array.isArray(draft.projects) ? draft.projects : []).filter(hasUpstreamProjectCartLines)
+        (Array.isArray(draft.projects) ? draft.projects : [])
+          .filter(hasUpstreamProjectCartLines)
+          .map((project) => ({
+            ...project,
+            cartName: resolveUpstreamProjectCartName(project?.cartName)
+          }))
       );
       setProducts(
         normalizeSupplierProductsFromApi(

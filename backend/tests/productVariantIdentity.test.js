@@ -126,6 +126,64 @@ test('resolveStableVariantIdentityFromExistingOffers reuses legacy key when offe
   assert.equal(stable.variantAsin, legacyAsin);
 });
 
+test('resolveStableVariantIdentityFromExistingOffers reuses key when variant_asin is missing on legacy offer', () => {
+  const parent = { specifications: { Color: 'Black', Capacity: '500ML' }, asin: 'TSA7K' };
+  const specs = { Color: 'Black', Capacity: '500ML' };
+  const computed = buildSupplierVariantIdentity({ specifications: specs }, parent);
+
+  const stable = resolveStableVariantIdentityFromExistingOffers({
+    parentAsin: 'TSA7K',
+    parentProduct: parent,
+    computedIdentity: computed,
+    offerSpecifications: specs,
+    existingOffers: [
+      {
+        status: 'approved',
+        is_active: true,
+        variant_key: 'legacy-key-no-asin',
+        variant_asin: '',
+        attributes: { specifications: specs }
+      }
+    ]
+  });
+
+  assert.equal(stable.reused, true);
+  assert.equal(stable.variantKey, 'legacy-key-no-asin');
+  assert.ok(String(stable.variantAsin || '').trim());
+});
+
+test('resolveStableVariantIdentityFromExistingOffers reuses key when submitted only adds template fields', () => {
+  const parent = { specifications: { Color: 'Black', Capacity: '500ML' }, asin: 'TSA7K' };
+  const existingSpecs = { Color: 'Black', Capacity: '500ML' };
+  const submittedSpecs = {
+    Color: 'Black',
+    Capacity: '500ML',
+    Material: 'Steel',
+    Finish: 'Matte'
+  };
+  const computed = buildSupplierVariantIdentity({ specifications: submittedSpecs }, parent);
+
+  const stable = resolveStableVariantIdentityFromExistingOffers({
+    parentAsin: 'TSA7K',
+    parentProduct: parent,
+    computedIdentity: computed,
+    offerSpecifications: submittedSpecs,
+    existingOffers: [
+      {
+        status: 'approved',
+        is_active: true,
+        variant_key: 'stored-black-500',
+        variant_asin: 'TSBLK500',
+        attributes: { specifications: existingSpecs }
+      }
+    ]
+  });
+
+  assert.equal(stable.reused, true);
+  assert.equal(stable.variantKey, 'stored-black-500');
+  assert.equal(stable.variantAsin, 'TSBLK500');
+});
+
 test('resolveStableVariantIdentityFromExistingOffers reuses DB variant when catalog specs are unchanged', () => {
   const catalogSpecs = { Color: 'Silver', Capacity: '1 L' };
   const parent = { specifications: catalogSpecs, asin: 'TSA7K' };

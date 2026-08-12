@@ -4,6 +4,7 @@ import {
   SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY,
   clearUpstreamCartClientProjectState,
   readUpstreamSessionProjectId,
+  resolveUpstreamProjectCartName,
   writeUpstreamSessionProjectId
 } from './supplierUpstreamCartSession';
 
@@ -30,5 +31,11 @@ describe('supplierUpstreamCartSession', () => {
     expect(readUpstreamSessionProjectId()).toBe('');
     expect(sessionStorage.getItem(SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY)).toBeNull();
     expect(localStorage.getItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY)).toBeNull();
+  });
+
+  it('keeps project names free of auto-inserted dispatch-looking dates', () => {
+    expect(resolveUpstreamProjectCartName('Project 07/August/26')).toBe('Supplier Project');
+    expect(resolveUpstreamProjectCartName('')).toBe('Supplier Project');
+    expect(resolveUpstreamProjectCartName('July restock')).toBe('July restock');
   });
 });

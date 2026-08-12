@@ -30,11 +30,12 @@ export function resolveBuyerFacingProductDescription({ product = {}, offerAttrib
   return getSupplierSubmittedDescription(offerAttributes);
 }
 
-/** Mirrors admin UI: saved buyer-facing copy before approval (AI polish optional). */
+/** Mirrors admin UI: buyer-facing copy for approval (AI polish / re-save optional). */
 export function getAdminBuyerFacingDescriptionForApproval(product = {}) {
   const status = String(product?.status || 'pending').trim().toLowerCase();
   const publishedFromOffer = String(product?.publishedDescription || '').trim();
   const catalog = String(product?.description || '').trim();
+  const supplier = String(product?.supplierDescription || '').trim();
 
   if (status === 'approved') {
     return catalog;
@@ -45,11 +46,13 @@ export function getAdminBuyerFacingDescriptionForApproval(product = {}) {
     return publishedFromOffer;
   }
 
-  // Catalog + offer publish synced after save (legacy responses).
-  if (catalog && publishedFromOffer && catalog === publishedFromOffer) {
-    return catalog;
+  // Supplier draft is enough when admin is satisfied — polish / re-save is not mandatory.
+  if (supplier) {
+    return supplier;
   }
 
+  // Do not treat a stale catalog description alone as reviewed buyer-facing copy for a
+  // pending offer (leftover from an earlier revision without this offer's publish).
   return '';
 }
 

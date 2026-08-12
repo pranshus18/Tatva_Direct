@@ -106,7 +106,8 @@ async function fetchOauthAccessToken() {
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: params.toString()
+    body: params.toString(),
+    signal: AbortSignal.timeout(8000)
   });
   if (!response.ok) {
     const errPayload = await response.text().catch(() => '');

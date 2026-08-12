@@ -1,6 +1,7 @@
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 import { buildSupplierDescriptionAttributes } from '../utils/supplierProductDescriptions.js';
 import { syncOfferAttributesWithSpecifications } from './productIdentityService.js';
+import { brandTokenKeysMatch } from './supplierBrandGuardService.js';
 
 function normalizeOfferPrice(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === '') return null;
@@ -157,7 +158,9 @@ export async function findExistingProductCandidate(
   const brandsCompatible = (product) => {
     const existingBrand = normalizeText?.(product?.brand) || '';
     if (!candidateBrand || !existingBrand) return true;
-    return candidateBrand === existingBrand;
+    if (candidateBrand === existingBrand) return true;
+    // Same brand identity with spelling variants / near-typos (Philips↔Phillips, etc.).
+    return brandTokenKeysMatch(candidateBrand, existingBrand);
   };
 
   if (selectedCatalogProductId) {

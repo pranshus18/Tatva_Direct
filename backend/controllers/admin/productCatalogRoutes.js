@@ -4,9 +4,8 @@ import { getContractErrorMessage, parseWithSchema } from '../../utils/contractVa
 import {
   normalizeModelIdentifier,
   sanitizeSpecifications,
-  specificationTemplateKeysOnly,
   mergeCatalogAndOfferSpecificationsForDisplay,
-  mergeVariantSpecificationTemplate,
+  mergeAdminEditedSpecificationsOntoOffer,
   parseSpecificationsObject,
   resolveSupplierOfferDisplaySpecifications,
   isMeaningfullyFilledSpecValue
@@ -81,6 +80,14 @@ function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true,
     stock: offerRow.stock,
     min_order_quantity: offerRow.min_order_quantity ?? product.min_order_quantity,
     location: offerRow.location ?? product.location,
+    lsa:
+      offerRow?.attributes?.lsa != null && String(offerRow.attributes.lsa).trim() !== ''
+        ? String(offerRow.attributes.lsa).trim()
+        : product?.lsa != null && String(product.lsa).trim() !== ''
+          ? String(product.lsa).trim()
+          : product?.attributes?.lsa != null
+            ? String(product.attributes.lsa).trim()
+            : '',
     supplier_id: product.supplier_id || offerRow.supplier_id || null,
     igst_rate: offerRow.igst_rate ?? offerRow?.attributes?.igstRate ?? product.igst_rate ?? null,
     cgst_rate: offerRow.cgst_rate ?? offerRow?.attributes?.cgstRate ?? product.cgst_rate ?? null,
@@ -677,6 +684,8 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
     delete updateData.sgstRate;
     delete updateData.hsnCode;
     delete updateData.hsn_code;
+    // LSA is a per-offer inventory attribute on supplier_products, not a catalog column.
+    delete updateData.lsa;
 
     // Convert camelCase field names to snake_case for database
     if (updateData.minOrderQuantity !== undefined) {
@@ -794,6 +803,8 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
     // Tax/HSN already lived on supplier_products; extend the same sync for inventory/copy.
     // Specs must also sync: many customer/supplier UIs prefer or overwrite with
     // supplier_products.attributes.specifications.
+    // Category/unit/images/brand also live on offer attributes and must mirror or suppliers
+    // keep seeing the values stamped at create time.
     const requestedOfferInventoryUpdate =
       validatedBody.price !== undefined ||
       validatedBody.stock !== undefined ||
@@ -802,13 +813,32 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
       validatedBody.min_order_quantity !== undefined;
     const requestedNameUpdate = validatedBody.name !== undefined;
     const requestedDescriptionUpdate = validatedBody.description !== undefined;
+    const requestedCategoryUpdate = validatedBody.category !== undefined;
+    const requestedUnitUpdate = validatedBody.unit !== undefined;
+    const requestedImagesUpdate = validatedBody.images !== undefined;
+    const requestedBrandUpdate =
+      validatedBody.brand !== undefined || validatedBody.brandModel !== undefined;
+    const requestedGtinUpdate = validatedBody.gtin !== undefined;
+    const requestedMpnUpdate = validatedBody.mpn !== undefined;
+    const requestedBarcodeUpdate = validatedBody.barcode !== undefined;
+    const requestedLsaUpdate = validatedBody.lsa !== undefined;
+    const requestedCatalogIdentityUpdate =
+      requestedCategoryUpdate ||
+      requestedUnitUpdate ||
+      requestedImagesUpdate ||
+      requestedBrandUpdate ||
+      requestedGtinUpdate ||
+      requestedMpnUpdate ||
+      requestedBarcodeUpdate;
     const shouldSyncSupplierOffers =
       requestedTaxUpdate ||
       requestedHsnUpdate ||
       requestedOfferInventoryUpdate ||
       requestedNameUpdate ||
       requestedDescriptionUpdate ||
-      requestedSpecsUpdate;
+      requestedSpecsUpdate ||
+      requestedCatalogIdentityUpdate ||
+      requestedLsaUpdate;
 
     if (shouldSyncSupplierOffers) {
       try {
@@ -848,9 +878,6 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
           .eq('product_id', req.params.id);
 
         const offerRows = allOfferRows || [];
-        const explicitOfferId = String(
-          validatedBody?.supplier_product_id || validatedBody?.supplierProductId || ''
-        ).trim();
         const targetOfferRow = resolveAdminTargetOfferRow(offerRows, {
           validatedBody,
           catalogStatus: productResponse?.status,
@@ -872,14 +899,22 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
         );
         const hasInventoryPatch = Object.keys(inventoryPatch).length > 1;
 
-        // Spec template sync: all offers when admin edits shared template keys; one row when targeted.
-        const rowsForAttributeSync = requestedSpecsUpdate
-          ? explicitOfferId && targetOfferRow
-            ? [targetOfferRow]
-            : offerRows
-          : targetOfferRow
-            ? [targetOfferRow]
-            : [];
+        // Shared catalog fields must update every offer attribute override, otherwise
+        // Manage Products keeps showing create-time category/unit/images/name/brand.
+        // Inventory/tax/LSA remain targeted to one offer/variant (handled separately).
+        const rowsForAttributeSync =
+          requestedSpecsUpdate ||
+          requestedNameUpdate ||
+          requestedDescriptionUpdate ||
+          requestedCatalogIdentityUpdate
+            ? offerRows.length
+              ? offerRows
+              : targetOfferRow
+                ? [targetOfferRow]
+                : []
+            : targetOfferRow
+              ? [targetOfferRow]
+              : [];
         spUpdateResult = rowsForAttributeSync;
 
         if (hasInventoryPatch && targetOfferRow?.id) {
@@ -928,14 +963,59 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
                 validatedBody.description || ''
               );
             }
+            if (requestedCategoryUpdate) {
+              mergedAttrs.category = String(
+                validatedBody.category ?? productResponse.category ?? ''
+              ).trim();
+            }
+            if (requestedUnitUpdate) {
+              mergedAttrs.unit = String(validatedBody.unit ?? productResponse.unit ?? '').trim();
+            }
+            if (requestedImagesUpdate) {
+              mergedAttrs.images = Array.isArray(validatedBody.images)
+                ? validatedBody.images
+                : Array.isArray(productResponse.images)
+                  ? productResponse.images
+                  : [];
+            }
+            if (requestedBrandUpdate) {
+              const nextBrand = String(
+                validatedBody.brand ?? productResponse.brand ?? mergedAttrs.brand ?? ''
+              ).trim();
+              if (nextBrand) mergedAttrs.brand = nextBrand;
+              if (validatedBody.brandModel !== undefined) {
+                mergedAttrs.brandModel = String(validatedBody.brandModel || '').trim();
+              }
+            }
+            if (requestedGtinUpdate) {
+              mergedAttrs.gtin = String(validatedBody.gtin ?? productResponse.gtin ?? '').trim();
+            }
+            if (requestedMpnUpdate) {
+              mergedAttrs.mpn = String(validatedBody.mpn ?? productResponse.mpn ?? '').trim();
+            }
+            if (requestedBarcodeUpdate) {
+              mergedAttrs.barcode = String(
+                validatedBody.barcode ?? productResponse.barcode ?? ''
+              ).trim();
+            }
+            // LSA is per-variant inventory — never broadcast to sibling offers.
+            if (
+              requestedLsaUpdate &&
+              targetOfferRow?.id &&
+              String(row.id) === String(targetOfferRow.id)
+            ) {
+              mergedAttrs.lsa = String(validatedBody.lsa ?? '').trim();
+            }
             if (requestedSpecsUpdate) {
-              // Sync admin-defined keys only — preserve supplier-filled values on each offer.
-              const adminSpecKeys = specificationTemplateKeysOnly(safeAdminSpecs || {});
+              // Push admin-filled values to supplier offers; keep supplier values when admin left blanks.
               const existingOfferSpecs =
                 parseSpecificationsObject(mergedAttrs.specifications) || {};
               mergedAttrs = syncOfferAttributesWithSpecifications({
                 ...mergedAttrs,
-                specifications: mergeVariantSpecificationTemplate(adminSpecKeys, existingOfferSpecs)
+                specifications: mergeAdminEditedSpecificationsOntoOffer(
+                  safeAdminSpecs || {},
+                  existingOfferSpecs
+                )
               });
             }
 
@@ -962,6 +1042,9 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
           if (offerPatch.min_order_quantity !== undefined) {
             productResponse.min_order_quantity = offerPatch.min_order_quantity;
             productResponse.minOrderQuantity = offerPatch.min_order_quantity;
+          }
+          if (requestedLsaUpdate) {
+            productResponse.lsa = String(validatedBody.lsa ?? '').trim();
           }
           if (requestedSpecsUpdate) {
             productResponse.specifications = safeAdminSpecs || {};

@@ -10,6 +10,10 @@ import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOffe
 import { isSupplierUserType } from '../../utils/notificationAudience.js';
 import { validateAdminProductApprovalReadiness, mergeOfferIntoProductForApproval } from '../../services/adminProductApprovalReadinessService.js';
 import {
+  buildAdminPublishedDescriptionAttributes,
+  getAdminBuyerFacingDescriptionForApproval
+} from '../../utils/supplierProductDescriptions.js';
+import {
   mergeVariantSpecificationTemplate,
   parseSpecificationsObject,
   sanitizeSpecifications,
@@ -209,17 +213,30 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         });
       }
 
+      // If admin never polished/re-saved, promote supplier description to catalog + offer publish.
+      const approvedBuyerFacingDescription = getAdminBuyerFacingDescriptionForApproval(productForApproval);
+      const catalogDescription = String(existingProduct?.description || '').trim();
+      const publishedFromOffer = String(productForApproval?.publishedDescription || '').trim();
+      const shouldPromoteDescription =
+        Boolean(approvedBuyerFacingDescription) &&
+        (!catalogDescription || catalogDescription !== approvedBuyerFacingDescription || !publishedFromOffer);
+
+      const productUpdatePayload = {
+        status: 'approved',
+        approved_by: req.userId,
+        approved_at: new Date().toISOString(),
+        is_active: true,
+        rejection_reason: null,
+        updated_at: new Date().toISOString()
+      };
+      if (shouldPromoteDescription) {
+        productUpdatePayload.description = approvedBuyerFacingDescription;
+      }
+
       // Update product status
       const { data: product, error: updateError } = await supabase
         .from('products')
-        .update({
-          status: 'approved',
-          approved_by: req.userId,
-          approved_at: new Date().toISOString(),
-          is_active: true,
-          rejection_reason: null,
-          updated_at: new Date().toISOString()
-        })
+        .update(productUpdatePayload)
         .eq('id', req.params.id)
         .select(`
         *,
@@ -304,7 +321,9 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         })
         .eq('product_id', product.id)
         .select(`
+        id,
         supplier_id,
+        attributes,
         supplier:users!supplier_products_supplier_id_fkey (id, name, email, company, user_type)
       `);
 
@@ -315,6 +334,28 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
       }
       console.log(`[ADMIN APPROVE PRODUCT] supplier_products updated rows: ${updatedSupplierProducts?.length || 0}`);
 
+      // Persist buyer-facing copy on offers when admin approved supplier text without a separate save.
+      if (shouldPromoteDescription && Array.isArray(updatedSupplierProducts)) {
+        for (const offer of updatedSupplierProducts) {
+          const attrs =
+            offer?.attributes && typeof offer.attributes === 'object' ? offer.attributes : {};
+          if (String(attrs.publishedDescription || '').trim()) continue;
+          const nextAttrs = buildAdminPublishedDescriptionAttributes(
+            attrs,
+            approvedBuyerFacingDescription
+          );
+          const { error: attrError } = await supabase
+            .from('supplier_products')
+            .update({ attributes: nextAttrs, updated_at: nowIso })
+            .eq('id', offer.id);
+          if (attrError) {
+            console.error(
+              '[ADMIN APPROVE PRODUCT] Failed to promote publishedDescription on offer:',
+              attrError
+            );
+          }
+        }
+      }
       // Push admin specification keys onto each supplier offer.
       // Preserve values the supplier already entered before approval.
       const { adminSpecKeyCount, offerNeedsFillBySupplierId } =
@@ -437,7 +478,9 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
       console.error('Approve product error:', error);
       res.status(500).json({
         status: 'error',
-        message: 'Internal server error'
+        message:
+          String(error?.message || '').trim() ||
+          'Failed to approve product. Please try again, or check description, GST, and specifications.'
       });
     }
   });

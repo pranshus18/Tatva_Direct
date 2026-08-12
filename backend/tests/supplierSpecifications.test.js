@@ -6,7 +6,8 @@ import {
   parseSpecificationsObject,
   buildSpecificationTemplateFromFields,
   countMeaningfulSpecValues,
-  specificationTemplateKeysOnly
+  specificationTemplateKeysOnly,
+  mergeSelectedCatalogProductSpecifications
 } from '../services/supplierCatalogHelpersService.js';
 
 test('parseSpecificationsObject: parses JSON string and legacy array rows', () => {
@@ -96,6 +97,43 @@ test('mergeCatalogAndOfferSpecificationsForDisplay: dedupes keys that differ onl
 
 test('countMeaningfulSpecValues: ignores null placeholders', () => {
   assert.equal(countMeaningfulSpecValues({ finish: null, volume: '20L' }), 1);
+});
+
+test('mergeSelectedCatalogProductSpecifications: catalog wins; offers only fill blanks', () => {
+  const merged = mergeSelectedCatalogProductSpecifications(
+    { Connectivity: 'Bluetooth', Playtime: '57H', Color: '' },
+    [
+      {
+        status: 'approved',
+        updated_at: '2026-01-02T00:00:00.000Z',
+        attributes: {
+          specifications: {
+            Connectivity: 'Wireless',
+            'Product Type': 'Wireless Mouse',
+            Color: 'Black'
+          }
+        }
+      }
+    ]
+  );
+  assert.equal(merged.Connectivity, 'Bluetooth');
+  assert.equal(merged.Playtime, '57H');
+  assert.equal(merged.Color, 'Black');
+  // Foreign offer-only keys must not pollute the selected catalog product.
+  assert.equal(merged['Product Type'], undefined);
+});
+
+test('mergeSelectedCatalogProductSpecifications: ignores non-approved offers', () => {
+  const merged = mergeSelectedCatalogProductSpecifications(
+    { Color: 'Black' },
+    [
+      {
+        status: 'pending',
+        attributes: { specifications: { Color: 'Red', 'Product Type': 'Wireless Mouse' } }
+      }
+    ]
+  );
+  assert.deepEqual(merged, { Color: 'Black' });
 });
 
 test('pickBestSpecificationMap: prefers richer specs and can exclude current product', () => {

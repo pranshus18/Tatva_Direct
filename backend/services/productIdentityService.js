@@ -5,7 +5,7 @@ import {
   parseSpecificationsObject,
   parseSupplierOfferAttributes
 } from './supplierCatalogHelpersService.js';
-import { areSpecificationsEqual } from '../utils/supplierProductApproval.js';
+import { areSpecificationsEqual, submittedSpecsCompatibleWithExistingVariant } from '../utils/supplierProductApproval.js';
 
 /**
  * Product Identity Service (Phase 1)
@@ -433,10 +433,15 @@ function rankOfferForVariantReuse(row = {}) {
   return 3;
 }
 
-function pickStableIdentityFromRow(row = {}, reason = 'reuse') {
+function pickStableIdentityFromRow(row = {}, reason = 'reuse', parentAsin = '') {
   const variantKey = String(row?.variant_key || '').trim();
-  const variantAsin = String(row?.variant_asin || '').trim();
-  if (!variantKey || !variantAsin) return null;
+  if (!variantKey) return null;
+  // Older offers may have variant_key without variant_asin — still reuse the key.
+  const storedAsin = String(row?.variant_asin || '').trim();
+  const variantAsin =
+    storedAsin ||
+    (parentAsin ? buildVariantAsinLikeId(parentAsin, variantKey) : '') ||
+    variantKey;
   return {
     variantKey,
     variantAsin,
@@ -490,20 +495,28 @@ export function resolveStableVariantIdentityFromExistingOffers({
     .filter((row) => String(row?.status || '').toLowerCase() !== 'rejected')
     .sort((a, b) => rankOfferForVariantReuse(a) - rankOfferForVariantReuse(b));
 
+  const parentAsinForReuse = String(parentAsin || parentProduct?.asin || '').trim();
+
   // 1) Exact stored key match
   for (const row of rankedOffers) {
     const storedKey = String(row?.variant_key || '').trim();
     if (storedKey === computedKey) {
-      const picked = pickStableIdentityFromRow(row, 'exact_key');
+      const picked = pickStableIdentityFromRow(row, 'exact_key', parentAsinForReuse);
       if (picked) return picked;
     }
   }
 
-  // 2) Same meaningful offer specs as an existing supplier_products row (ignore SKU drift)
+  // 2) Same meaningful offer specs as an existing supplier_products row
+  //    (submitted may include extra category-template keys; core variant values must match).
   for (const row of rankedOffers) {
     const existingSpecs = extractSpecsFromOfferRow(row);
-    if (!areSpecificationsEqual(submittedSpecs, existingSpecs)) continue;
-    const picked = pickStableIdentityFromRow(row, 'same_offer_specs');
+    if (
+      !areSpecificationsEqual(submittedSpecs, existingSpecs) &&
+      !submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
+    ) {
+      continue;
+    }
+    const picked = pickStableIdentityFromRow(row, 'same_offer_specs', parentAsinForReuse);
     if (picked) return picked;
   }
 
@@ -514,8 +527,13 @@ export function resolveStableVariantIdentityFromExistingOffers({
   });
   for (const row of rankedVariants) {
     const existingSpecs = extractSpecsFromProductVariantRow(row);
-    if (!areSpecificationsEqual(submittedSpecs, existingSpecs)) continue;
-    const picked = pickStableIdentityFromRow(row, 'same_product_variant_specs');
+    if (
+      !areSpecificationsEqual(submittedSpecs, existingSpecs) &&
+      !submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
+    ) {
+      continue;
+    }
+    const picked = pickStableIdentityFromRow(row, 'same_product_variant_specs', parentAsinForReuse);
     if (picked) return picked;
   }
 
@@ -523,7 +541,8 @@ export function resolveStableVariantIdentityFromExistingOffers({
   const unchangedFromCatalog =
     specsUnchangedFromCatalog ||
     (Object.keys(buildNormalizedSpecProbe(catalogSpecs)).length > 0 &&
-      areSpecificationsEqual(submittedSpecs, catalogSpecs));
+      (areSpecificationsEqual(submittedSpecs, catalogSpecs) ||
+        submittedSpecsCompatibleWithExistingVariant(submittedSpecs, catalogSpecs)));
 
   if (unchangedFromCatalog) {
     for (const row of rankedOffers) {
@@ -532,9 +551,10 @@ export function resolveStableVariantIdentityFromExistingOffers({
       if (
         legacyEmptyOfferSpecs ||
         areSpecificationsEqual(existingSpecs, catalogSpecs) ||
-        areSpecificationsEqual(existingSpecs, submittedSpecs)
+        areSpecificationsEqual(existingSpecs, submittedSpecs) ||
+        submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
       ) {
-        const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_offer');
+        const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_offer', parentAsinForReuse);
         if (picked) return picked;
       }
     }
@@ -545,14 +565,38 @@ export function resolveStableVariantIdentityFromExistingOffers({
       if (
         legacyEmptyVariantSpecs ||
         areSpecificationsEqual(existingSpecs, catalogSpecs) ||
-        areSpecificationsEqual(existingSpecs, submittedSpecs)
+        areSpecificationsEqual(existingSpecs, submittedSpecs) ||
+        submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
       ) {
-        const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_product_variant');
+        const picked = pickStableIdentityFromRow(
+          row,
+          'catalog_unchanged_product_variant',
+          parentAsinForReuse
+        );
         if (picked) return picked;
       }
     }
 
     // Single stored variant on this product → safe to reuse for an unchanged catalog re-list
+    const distinctOfferKeys = [
+      ...new Set(
+        rankedOffers
+          .map((row) => String(row?.variant_key || '').trim())
+          .filter(Boolean)
+      )
+    ];
+    if (distinctOfferKeys.length === 1) {
+      const row = rankedOffers.find(
+        (candidate) => String(candidate?.variant_key || '').trim() === distinctOfferKeys[0]
+      );
+      const picked = pickStableIdentityFromRow(
+        row,
+        'catalog_unchanged_single_offer',
+        parentAsinForReuse
+      );
+      if (picked) return picked;
+    }
+
     const distinctOfferAsins = [
       ...new Set(
         rankedOffers
@@ -564,7 +608,30 @@ export function resolveStableVariantIdentityFromExistingOffers({
       const row = rankedOffers.find(
         (candidate) => String(candidate?.variant_asin || '').trim() === distinctOfferAsins[0]
       );
-      const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_single_offer');
+      const picked = pickStableIdentityFromRow(
+        row,
+        'catalog_unchanged_single_offer',
+        parentAsinForReuse
+      );
+      if (picked) return picked;
+    }
+
+    const distinctVariantKeys = [
+      ...new Set(
+        rankedVariants
+          .map((row) => String(row?.variant_key || '').trim())
+          .filter(Boolean)
+      )
+    ];
+    if (distinctVariantKeys.length === 1) {
+      const row = rankedVariants.find(
+        (candidate) => String(candidate?.variant_key || '').trim() === distinctVariantKeys[0]
+      );
+      const picked = pickStableIdentityFromRow(
+        row,
+        'catalog_unchanged_single_product_variant',
+        parentAsinForReuse
+      );
       if (picked) return picked;
     }
 
@@ -579,7 +646,11 @@ export function resolveStableVariantIdentityFromExistingOffers({
       const row = rankedVariants.find(
         (candidate) => String(candidate?.variant_asin || '').trim() === distinctVariantAsins[0]
       );
-      const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_single_product_variant');
+      const picked = pickStableIdentityFromRow(
+        row,
+        'catalog_unchanged_single_product_variant',
+        parentAsinForReuse
+      );
       if (picked) return picked;
     }
   }

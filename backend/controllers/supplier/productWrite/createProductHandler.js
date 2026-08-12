@@ -19,6 +19,8 @@ import {
   scoreOnboardingConfidence,
   shouldAutoApproveSupplierOfferOnCreate,
   hasSupplierSpecificationChangesFromCatalog,
+  findBestMatchingApprovedOfferForSpecs,
+  retainCatalogCompatibleSpecifications,
   validateSpecValues
 } from '../supplierImports.js';
 import { sanitizeImageUrls } from '../shared/productHelpers.js';
@@ -31,7 +33,7 @@ import {
   findExistingProductCandidate,
   reopenRejectedCatalogProductForResubmit
 } from '../../../services/supplierProductWriteService.js';
-import { resolveCatalogBaselineSpecifications } from '../../../services/supplierCatalogHelpersService.js';
+import { resolveCatalogBaselineSpecifications, extractOfferSpecificationsFromRow } from '../../../services/supplierCatalogHelpersService.js';
 import {
   resolveStableVariantIdentityFromExistingOffers,
   syncOfferAttributesWithSpecifications
@@ -48,7 +50,8 @@ import {
 } from '../../../utils/supplierProductPhotos.js';
 import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
 import {
-  validateSupplierCategorySpecificationFillComplete
+  validateSupplierCategorySpecificationFillComplete,
+  validateSupplierOfferSpecificationFillComplete
 } from '../../../services/supplierProductUpdateValidation.js';
 import { notifyServiceProvidersForFulfilledBoqRequests } from '../../../services/serviceProviderRequestNotificationService.js';
 
@@ -237,27 +240,6 @@ export function buildSupplierProductCreateHandler(ctx) {
 
       if (posLookupGsku) normalizedSpecs = { ...normalizedSpecs, gsku: posLookupGsku };
 
-      const categoryTemplateValidation = await validateSupplierCategorySpecificationFillComplete(
-        resolveAdminSpecificationTemplate,
-        {
-          categoryName: categoryName || category,
-          modelRaw: productNameRaw,
-          brandRaw: effectiveBrandInput,
-          specifications: normalizedSpecs
-        }
-      );
-      if (!categoryTemplateValidation.ok) {
-        return res.status(400).json({
-          status: 'error',
-          code: 'specifications_required',
-          message:
-            categoryTemplateValidation.message ||
-            'Please complete all specification values for the selected category.',
-          missingFields: categoryTemplateValidation.missingFields || ['specifications'],
-          errors: categoryTemplateValidation.errors || []
-        });
-      }
-
       const selectedCatalogProductId = String(catalogProductId || '').trim();
       const existingMatch = await findExistingProductCandidate(supabase, {
         selectedCatalogProductId,
@@ -270,6 +252,54 @@ export function buildSupplierProductCreateHandler(ctx) {
       });
       const existingProduct = existingMatch?.product || null;
       const matchStrength = existingMatch?.matchStrength || 'none';
+      const isConfirmedCatalogAttach =
+        Boolean(selectedCatalogProductId) ||
+        String(matchStrength || '').toLowerCase() === 'explicit' ||
+        String(matchStrength || '').toLowerCase() === 'strong';
+
+      // Strip unrelated category defaults before variant identity / approval checks.
+      if (isConfirmedCatalogAttach && existingProduct) {
+        const ownSpecs =
+          existingProduct?.specifications &&
+          typeof existingProduct.specifications === 'object' &&
+          !Array.isArray(existingProduct.specifications)
+            ? existingProduct.specifications
+            : {};
+        if (Object.keys(ownSpecs).length > 0) {
+          normalizedSpecs = retainCatalogCompatibleSpecifications(ownSpecs, normalizedSpecs);
+        }
+      }
+
+      // Re-listing an existing catalog product: require that product's own filled keys,
+      // not the whole category template (Computer Accessories mouse defaults ≠ headphones).
+      let categoryTemplateValidation = { ok: true, missingFields: [], errors: [], message: '' };
+      if (isConfirmedCatalogAttach && existingProduct?.id) {
+        categoryTemplateValidation = await validateSupplierOfferSpecificationFillComplete(supabase, {
+          productId: existingProduct.id,
+          specifications: normalizedSpecs
+        });
+      } else {
+        categoryTemplateValidation = await validateSupplierCategorySpecificationFillComplete(
+          resolveAdminSpecificationTemplate,
+          {
+            categoryName: categoryName || category,
+            modelRaw: productNameRaw,
+            brandRaw: effectiveBrandInput,
+            specifications: normalizedSpecs
+          }
+        );
+      }
+      if (!categoryTemplateValidation.ok) {
+        return res.status(400).json({
+          status: 'error',
+          code: 'specifications_required',
+          message:
+            categoryTemplateValidation.message ||
+            'Please complete all specification values for the selected category.',
+          missingFields: categoryTemplateValidation.missingFields || ['specifications'],
+          errors: categoryTemplateValidation.errors || []
+        });
+      }
 
       const baseProductResult = await createBaseProductIfNeeded(supabase, {
         existingProduct,
@@ -353,8 +383,10 @@ export function buildSupplierProductCreateHandler(ctx) {
         catalogSpecifications: catalogSpecsForVariantReuse,
         specsUnchangedFromCatalog
       });
-      const resolvedVariantKey = stableVariantIdentity.variantKey || variantIdentityBundle.variantKey;
-      const variantAsin = stableVariantIdentity.variantAsin;
+      const resolvedVariantKeyInitial =
+        stableVariantIdentity.variantKey || variantIdentityBundle.variantKey;
+      let resolvedVariantKey = resolvedVariantKeyInitial;
+      let variantAsin = stableVariantIdentity.variantAsin;
 
       const currentLocation = (otherData.location || '').trim();
       const existingSupplierProduct =
@@ -406,6 +438,30 @@ export function buildSupplierProductCreateHandler(ctx) {
           String(row.status || '').toLowerCase() === 'approved' &&
           row.is_active !== false
       );
+      // Prefer deep offer-spec extraction so legacy attribute shapes still match.
+      const compatibleApprovedOffer =
+        findBestMatchingApprovedOfferForSpecs(
+          (existingOffersForProduct || []).map((row) => ({
+            ...row,
+            attributes: {
+              ...(row?.attributes && typeof row.attributes === 'object' ? row.attributes : {}),
+              specifications: extractOfferSpecificationsFromRow(row)
+            }
+          })),
+          normalizedSpecs
+        ) || null;
+      const sameVariantApprovedOffer = approvedVariantOffer || compatibleApprovedOffer || null;
+      if (
+        sameVariantApprovedOffer &&
+        String(resolvedVariantKey || '').trim() !==
+          String(sameVariantApprovedOffer.variant_key || '').trim()
+      ) {
+        // Force stable identity onto the already-live variant.
+        resolvedVariantKey = String(sameVariantApprovedOffer.variant_key || '').trim();
+        if (String(sameVariantApprovedOffer.variant_asin || '').trim()) {
+          variantAsin = String(sameVariantApprovedOffer.variant_asin || '').trim();
+        }
+      }
       // Any approved offer for this catalog product means the product is already live —
       // a different variant from another (or the same) supplier must not re-enter approval.
       const anyApprovedOfferForProduct = (existingOffersForProduct || []).find(
@@ -432,20 +488,76 @@ export function buildSupplierProductCreateHandler(ctx) {
               variantKey: resolvedVariantKey
             })
           : {};
+      const matchedOfferSpecs = sameVariantApprovedOffer
+        ? extractOfferSpecificationsFromRow(sameVariantApprovedOffer)
+        : {};
+      const productOwnSpecs =
+        parentProductForVariant?.specifications || existingProduct?.specifications || {};
+      const comparisonBaseline =
+        Object.keys(matchedOfferSpecs || {}).length > 0
+          ? matchedOfferSpecs
+          : Object.keys(catalogBaselineSpecs || {}).length > 0
+            ? catalogBaselineSpecs
+            : productOwnSpecs;
+
+      // Confirmed catalog re-list: only real overlapping value conflicts block auto-approval.
+      // Extra category-template keys or legacy offer shapes must not force admin review.
+      const confirmedReList =
+        !isNewProduct &&
+        (String(matchStrength || '').toLowerCase() === 'explicit' ||
+          String(matchStrength || '').toLowerCase() === 'strong');
+
+      // Drop unrelated category defaults (mouse fields) that rode in on Computer Accessories.
+      if (confirmedReList && Object.keys(comparisonBaseline || {}).length > 0) {
+        normalizedSpecs = retainCatalogCompatibleSpecifications(
+          comparisonBaseline,
+          normalizedSpecs
+        );
+      }
+
+      const hasValueConflictsWithBaseline = hasSupplierSpecificationChangesFromCatalog({
+        catalogSpecs: comparisonBaseline,
+        supplierSpecs: normalizedSpecs
+      });
+      const hasValueConflictsWithProduct = hasSupplierSpecificationChangesFromCatalog({
+        catalogSpecs: productOwnSpecs,
+        supplierSpecs: normalizedSpecs
+      });
       const hasSpecificationChanges =
-        !isNewProduct && existingProduct
-          ? hasSupplierSpecificationChangesFromCatalog({
-              catalogSpecs: catalogBaselineSpecs,
-              supplierSpecs: normalizedSpecs
-            })
+        !isNewProduct && existingProduct && !sameVariantApprovedOffer
+          ? hasValueConflictsWithBaseline || hasValueConflictsWithProduct
           : false;
-      const shouldBeApproved = shouldAutoApproveSupplierOfferOnCreate({
-        hasApprovedSameVariantOffer: Boolean(approvedVariantOffer?.id),
-        catalogProductStatus: resolvedCatalogStatus,
-        hasAnyApprovedOfferForProduct: Boolean(anyApprovedOfferForProduct?.id),
-        // New catalog rows are always pending; only confirmed re-lists may auto-approve.
+
+      // Explicit/strong attach of an already-approved catalog product with no value conflicts
+      // goes live immediately — this is the "same DB product, no edits" path.
+      const catalogIsLive =
+        String(resolvedCatalogStatus || '').toLowerCase() === 'approved' ||
+        Boolean(anyApprovedOfferForProduct?.id);
+      const shouldBeApproved =
+        Boolean(sameVariantApprovedOffer?.id) ||
+        (confirmedReList &&
+          catalogIsLive &&
+          !hasValueConflictsWithBaseline &&
+          !hasValueConflictsWithProduct) ||
+        shouldAutoApproveSupplierOfferOnCreate({
+          hasApprovedSameVariantOffer: Boolean(sameVariantApprovedOffer?.id),
+          catalogProductStatus: resolvedCatalogStatus,
+          hasAnyApprovedOfferForProduct: Boolean(anyApprovedOfferForProduct?.id),
+          matchStrength: isNewProduct ? 'none' : matchStrength,
+          hasSpecificationChanges
+        });
+
+      console.log('[SUPPLIER CREATE APPROVAL]', {
+        productId,
         matchStrength: isNewProduct ? 'none' : matchStrength,
-        hasSpecificationChanges
+        isNewProduct,
+        confirmedReList,
+        catalogIsLive,
+        reusedVariant: Boolean(stableVariantIdentity?.reused),
+        sameVariantApprovedOfferId: sameVariantApprovedOffer?.id || null,
+        hasSpecificationChanges,
+        shouldBeApproved,
+        resolvedVariantKey
       });
 
       const supplierProductData = {

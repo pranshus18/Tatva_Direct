@@ -38,6 +38,10 @@ import {
   isAdminProductReadyForApproval
 } from '../utils/adminProductApprovalReadiness';
 import {
+  formatAdminProductApprovalFailureMessage,
+  readAdminApprovalErrorPayload
+} from '../utils/adminProductApprovalFeedback';
+import {
   resolveAdminDisplaySpecifications,
   getAdminPolishSourceText
 } from '../utils/adminProductDisplay';
@@ -80,6 +84,7 @@ const AdminProductStatus = ({ user }) => {
   const [statusFilter, setStatusFilter] = useState('all'); // 'all', 'pending', 'approved', 'rejected' - default to all
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [approveError, setApproveError] = useState('');
 
   useEffect(() => {
     fetchProducts();
@@ -231,11 +236,17 @@ const AdminProductStatus = ({ user }) => {
   const handleApprove = async (product) => {
     const isVariantReview =
       product?.pendingReviewType === 'variant_spec' || product?.hasPendingSupplierOffer === true;
-    const readiness = getAdminProductApprovalReadiness(product);
+    const readiness = getAdminProductApprovalReadiness({
+      ...product,
+      status: getAdminRowEffectiveStatus(product)
+    });
     if (!isVariantReview && !readiness.ok) {
-      alert(
-        `${readiness.message}\n\n${readiness.missingRequirements.map((row) => `• ${row.message}`).join('\n')}`
-      );
+      const blockedMessage = formatAdminProductApprovalFailureMessage({
+        message: readiness.message || 'Complete before approval.',
+        missingRequirements: readiness.missingRequirements
+      });
+      setApproveError(blockedMessage);
+      alert(blockedMessage);
       return;
     }
 
@@ -243,15 +254,16 @@ const AdminProductStatus = ({ user }) => {
       ? `approve the updated specification variant for "${product.name}"`
       : `approve "${product.name}"`;
     if (!confirm(`Are you sure you want to ${approveLabel}?`)) return;
-    
+
     setActionLoading(true);
+    setApproveError('');
     try {
       const token = localStorage.getItem('token');
       const productId = product.catalogProductId || product._id || product.id;
       const response = await fetch(getApiUrl(`/api/admin/products/${productId}/approve`), {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${token}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
@@ -261,21 +273,35 @@ const AdminProductStatus = ({ user }) => {
       });
 
       if (response.ok) {
-        const data = await response.json();
+        const data = await response.json().catch(() => ({}));
         if (data.status === 'success') {
-          alert('Product approved successfully!');
-          fetchProducts(); // Refresh the list
+          setApproveError('');
+          alert(data.message || 'Product approved successfully!');
+          fetchProducts();
           setSelectedProduct(null);
-        } else {
-          alert(data.message || 'Failed to approve product');
+          return;
         }
-      } else {
-        const data = await response.json();
-        alert(data.message || 'Failed to approve product');
+        const failureMessage = formatAdminProductApprovalFailureMessage({
+          message: data.message || 'Failed to approve product',
+          missingRequirements: data.missingRequirements
+        });
+        setApproveError(failureMessage);
+        alert(failureMessage);
+        return;
       }
+
+      const errorPayload = await readAdminApprovalErrorPayload(response);
+      const failureMessage = formatAdminProductApprovalFailureMessage(errorPayload);
+      setApproveError(failureMessage);
+      alert(failureMessage);
     } catch (error) {
       console.error('Error approving product:', error);
-      alert('Error approving product');
+      const failureMessage =
+        error?.message && String(error.message).trim()
+          ? `Error approving product: ${error.message}`
+          : 'Error approving product. Please try again.';
+      setApproveError(failureMessage);
+      alert(failureMessage);
     } finally {
       setActionLoading(false);
     }
@@ -655,13 +681,13 @@ const AdminProductStatus = ({ user }) => {
                           e.stopPropagation();
                           handleApprove(product);
                         }}
-                        disabled={actionLoading || !approvalReady}
+                        disabled={actionLoading}
                         title={
                           approvalReady
                             ? isVariantReview
                               ? 'Approve this updated specification variant'
                               : 'Approve this product'
-                            : 'Set description, GST, and specifications before approval'
+                            : 'Approval is blocked until description, GST, and specifications are ready — click to see details'
                         }
                       >
                         <Check size={16} />
@@ -731,7 +757,10 @@ const AdminProductStatus = ({ user }) => {
       {selectedProduct && (
         <ProductDetailModal
           product={selectedProduct}
-          onClose={() => setSelectedProduct(null)}
+          onClose={() => {
+            setApproveError('');
+            setSelectedProduct(null);
+          }}
           onApprove={() => {
             handleApprove(selectedProduct);
           }}
@@ -741,7 +770,10 @@ const AdminProductStatus = ({ user }) => {
           onDelete={() => {
             handleDelete(selectedProduct);
           }}
+          approveError={approveError}
+          onClearApproveError={() => setApproveError('')}
           onUpdate={(updatedProduct) => {
+            setApproveError('');
             const mergedProduct = {
               ...selectedProduct,
               ...updatedProduct,
@@ -771,7 +803,17 @@ const AdminProductStatus = ({ user }) => {
 };
 
 // Product Detail Modal Component
-const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, onUpdate, actionLoading }) => {
+const ProductDetailModal = ({
+  product,
+  onClose,
+  onApprove,
+  onReject,
+  onDelete,
+  onUpdate,
+  actionLoading,
+  approveError = '',
+  onClearApproveError
+}) => {
   const [isEditing, setIsEditing] = useState(false);
   const [isAddingNewKey, setIsAddingNewKey] = useState(false);
   const [newKeyName, setNewKeyName] = useState('');
@@ -788,6 +830,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
     cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
     sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
     location: product?.location || '',
+    lsa: product?.lsa || product?.attributes?.lsa || '',
     description: getAdminBuyerFacingCatalogDescription(product),
     minOrderQuantity: product?.minOrderQuantity || 1,
     specifications: resolveAdminDisplaySpecifications(product)
@@ -825,6 +868,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
       sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
       location: product?.location || '',
+      lsa: product?.lsa || product?.attributes?.lsa || '',
       description: isEditing && instructionInDescription ? '' : isEditing ? editSeed : rawDesc,
       minOrderQuantity: product?.minOrderQuantity || 1,
       specifications: resolveAdminDisplaySpecifications(product)
@@ -867,6 +911,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       unit: savedProduct.unit || draftProduct.unit,
       stock: savedProduct.stock ?? draftProduct.stock,
       location: savedProduct.location || draftProduct.location,
+      lsa: savedProduct.lsa || draftProduct.lsa || '',
       description: buyerFacingDescription,
       publishedDescription: buyerFacingDescription,
       supplierDescription:
@@ -976,6 +1021,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
       cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
       sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
       location: product?.location || '',
+      lsa: product?.lsa || product?.attributes?.lsa || '',
       description: getAdminBuyerFacingCatalogDescription(product),
       minOrderQuantity: product?.minOrderQuantity || 1,
       specifications: resolveAdminDisplaySpecifications(product)
@@ -1403,16 +1449,20 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               )}
             </div>
             <div className="detail-item">
-              <label>Location</label>
+              <label>LSA</label>
               {isEditing ? (
                 <input
                   type="text"
-                  value={editedProduct.location}
-                  onChange={(e) => setEditedProduct({...editedProduct, location: e.target.value})}
+                  inputMode="numeric"
+                  value={editedProduct.lsa}
+                  onChange={(e) => setEditedProduct({ ...editedProduct, lsa: e.target.value })}
+                  placeholder="Supplier Low Stock Alert"
                   style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%' }}
                 />
               ) : (
-                <span>{product.location || 'N/A'}</span>
+                <span>
+                  {String(product.lsa || product?.attributes?.lsa || '').trim() || 'N/A'}
+                </span>
               )}
             </div>
             {(product.minOrderQuantity || isEditing) && (
@@ -1620,7 +1670,7 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
               <p style={{ margin: 0, lineHeight: 1.55, whiteSpace: 'pre-wrap' }}>
                 {buyerFacingDescription ||
                   (showSupplierSubmittedDescription
-                    ? 'Click Edit to review the supplier description. Save as-is or use Polish with AI if you want.'
+                    ? 'Supplier description is shown above. You can approve as-is, or click Edit to change / Polish with AI.'
                     : 'No description yet. Click Edit to add one.')}
               </p>
             )}
@@ -2140,7 +2190,8 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 </p>
               ) : canApproveProduct ? (
                 <p style={{ margin: '0.35rem 0 0', fontSize: '0.875rem', color: '#065f46' }}>
-                  Description, GST, and specifications are saved. You can approve this product.
+                  Description, GST, and specifications are ready. Supplier description is fine as-is —
+                  polishing is optional. You can approve this product.
                 </p>
               ) : (
                 <ul style={{ margin: '0.5rem 0 0', paddingLeft: '1.1rem', fontSize: '0.875rem', color: '#92400e' }}>
@@ -2157,6 +2208,53 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
             </div>
           ) : null}
 
+          {approveError ? (
+            <div
+              role="alert"
+              style={{
+                margin: '0 0 1rem',
+                padding: '0.85rem 1rem',
+                borderRadius: '8px',
+                border: '1px solid #fecaca',
+                background: '#fef2f2',
+                color: '#991b1b'
+              }}
+            >
+              <strong style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                <AlertCircle size={16} />
+                Approval failed
+              </strong>
+              <pre
+                style={{
+                  margin: '0.5rem 0 0',
+                  fontFamily: 'inherit',
+                  fontSize: '0.875rem',
+                  whiteSpace: 'pre-wrap',
+                  lineHeight: 1.45
+                }}
+              >
+                {approveError}
+              </pre>
+              {typeof onClearApproveError === 'function' ? (
+                <button
+                  type="button"
+                  onClick={onClearApproveError}
+                  style={{
+                    marginTop: '0.65rem',
+                    border: 'none',
+                    background: 'transparent',
+                    color: '#b91c1c',
+                    cursor: 'pointer',
+                    padding: 0,
+                    fontSize: '0.82rem',
+                    textDecoration: 'underline'
+                  }}
+                >
+                  Dismiss
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {product.status === 'rejected' && product.rejectionReason && (
             <div className="rejection-section">
               <h3>Rejection Information</h3>
@@ -2219,22 +2317,22 @@ const ProductDetailModal = ({ product, onClose, onApprove, onReject, onDelete, o
                 <button
                   className="btn-approve-modal"
                   onClick={onApprove}
-                  disabled={actionLoading || !canApproveProduct}
+                  disabled={actionLoading || isEditing}
                   title={
-                    canApproveProduct
-                      ? isVariantReview
-                        ? 'Approve this updated specification variant'
-                        : 'Approve this product'
-                      : isEditing
-                        ? 'Save changes before approving'
-                        : approvalReadiness.message || 'Complete description, GST, and specifications first'
+                    isEditing
+                      ? 'Save changes before approving'
+                      : canApproveProduct
+                        ? isVariantReview
+                          ? 'Approve this updated specification variant'
+                          : 'Approve this product'
+                        : approvalReadiness.message ||
+                          'Approval is blocked — click to see what still needs to be completed'
                   }
                 >
                   <Check size={16} />
                   {isVariantReview ? 'Approve Variant' : 'Approve Product'}
                 </button>
-              )}
-              {needsAdminReview && (
+              )}              {needsAdminReview && (
                 <button
                   className="btn-reject-modal"
                   onClick={onReject}

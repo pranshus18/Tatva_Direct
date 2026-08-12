@@ -30,8 +30,7 @@ export const clearUpstreamSessionProjectId = () => {
   }
 };
 
-/**
- * Drop every client-side pointer at a cart project once the cart (or its last
+/** Drop every client-side pointer at a cart project once the cart (or its last
  * project) is cleared — otherwise Add to Cart keeps targeting a deleted project.
  */
 export const clearUpstreamCartClientProjectState = () => {
@@ -41,4 +40,20 @@ export const clearUpstreamCartClientProjectState = () => {
   } catch {
     // Ignore private-mode failures.
   }
+};
+
+/** Legacy auto-name that stuffed today's date into the project label. */
+const AUTO_DATED_UPSTREAM_PROJECT_NAME = /^Project \d{1,2}\/[A-Za-z]+\/\d{2}$/i;
+export const DEFAULT_UPSTREAM_PROJECT_NAME = 'Supplier Project';
+
+/**
+ * Project name must stay separate from expected dispatch date.
+ * Never surface `Project DD/Month/YY` (auto-generated from "today") as the label.
+ */
+export const resolveUpstreamProjectCartName = (value) => {
+  const cartNameRaw = String(value || '').trim();
+  if (!cartNameRaw || AUTO_DATED_UPSTREAM_PROJECT_NAME.test(cartNameRaw)) {
+    return DEFAULT_UPSTREAM_PROJECT_NAME;
+  }
+  return cartNameRaw;
 };

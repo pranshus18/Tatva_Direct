@@ -15,8 +15,10 @@ test('pickCanonicalBrandDisplayName prefers shorter spelling', () => {
   assert.equal(pickCanonicalBrandDisplayName('Phillips', 'Philips'), 'Philips');
 });
 
-test('findApprovedCatalogBrandCloseMatch is exact identity only', async () => {
-  const { findApprovedCatalogBrandCloseMatch } = await import('../services/brandDedupService.js');
+test('findApprovedCatalogBrandCloseMatch matches exact identity and near-typos', async () => {
+  const { findApprovedCatalogBrandCloseMatch, isApprovedBrandNearTypo } = await import(
+    '../services/brandDedupService.js'
+  );
   const rows = [
     {
       id: '1',
@@ -31,6 +33,13 @@ test('findApprovedCatalogBrandCloseMatch is exact identity only', async () => {
       normalized_name: 'samsung',
       status: 'approved',
       created_at: '2026-06-12T00:00:00.000Z'
+    },
+    {
+      id: '4',
+      name: 'Fastrack',
+      normalized_name: 'fastrack',
+      status: 'approved',
+      created_at: '2026-08-07T00:00:00.000Z'
     }
   ];
 
@@ -52,7 +61,13 @@ test('findApprovedCatalogBrandCloseMatch is exact identity only', async () => {
   assert.equal(sparsga.matchType, null);
 
   const samsun = await findApprovedCatalogBrandCloseMatch('samsun', dbClient);
-  assert.equal(samsun.data, null);
+  assert.equal(samsun.data?.name, 'samsung');
+  assert.equal(samsun.matchType, 'typo');
+
+  const faststark = await findApprovedCatalogBrandCloseMatch('Faststark', dbClient);
+  assert.equal(faststark.data?.name, 'Fastrack');
+  assert.equal(faststark.matchType, 'typo');
+  assert.equal(isApprovedBrandNearTypo('Faststark', 'Fastrack'), true);
 
   const exact = await findApprovedCatalogBrandCloseMatch('Sparsh', dbClient);
   assert.equal(exact.data?.name, 'Sparsh');

@@ -28,6 +28,66 @@ export function brandRowsMatchCatalogDedup(left, right) {
   return Boolean(leftKey && rightKey && leftKey === rightKey);
 }
 
+/** Levenshtein distance for controlled near-typo brand matching. */
+export function brandNameEditDistance(left, right) {
+  const a = String(left || '');
+  const b = String(right || '');
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+  const rows = a.length + 1;
+  const cols = b.length + 1;
+  const matrix = Array.from({ length: rows }, () => new Array(cols).fill(0));
+  for (let i = 0; i < rows; i += 1) matrix[i][0] = i;
+  for (let j = 0; j < cols; j += 1) matrix[0][j] = j;
+  for (let i = 1; i < rows; i += 1) {
+    for (let j = 1; j < cols; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i][j] = Math.min(
+        matrix[i - 1][j] + 1,
+        matrix[i][j - 1] + 1,
+        matrix[i - 1][j - 1] + cost
+      );
+    }
+  }
+  return matrix[a.length][b.length];
+}
+
+/**
+ * True when typed brand is a near-typo of an approved catalog name.
+ * - distance 1: samsun ≈ samsung, Fasttrack ≈ Fastrack
+ * - distance 2–3 (longer names only): Faststark ≈ Fastrack
+ * Rejects distant/short collisions (SPARSGA ↛ Sparsh, prans ↛ pran, AB ↛ ABB).
+ */
+export function isApprovedBrandNearTypo(typedName, approvedName) {
+  const typed = normalizeBrandKey(typedName);
+  const approved = normalizeBrandKey(approvedName);
+  if (!typed || !approved || typed === approved) return false;
+
+  const maxLen = Math.max(typed.length, approved.length);
+  const minLen = Math.min(typed.length, approved.length);
+  const lengthDelta = Math.abs(typed.length - approved.length);
+  if (maxLen < 5 || lengthDelta > 2) return false;
+
+  const distance = brandNameEditDistance(typed, approved);
+  if (distance === 1 && lengthDelta <= 1) {
+    // Avoid treating short extensions of short brands as typos (pran → prans).
+    if (typed.length > approved.length && approved.length < 6) return false;
+    return true;
+  }
+
+  // Longer brands: allow a couple of character mistakes when they share a solid prefix.
+  let sharedPrefix = 0;
+  while (
+    sharedPrefix < minLen &&
+    typed[sharedPrefix] === approved[sharedPrefix]
+  ) {
+    sharedPrefix += 1;
+  }
+  if (minLen >= 8 && sharedPrefix >= 4 && distance <= 3) return true;
+  return false;
+}
+
 export async function findBrandByCatalogDedupKey(brandName, dbClient, { excludeId } = {}) {
   const targetKey = catalogBrandDedupKey(brandName);
   if (!targetKey) return { data: null, error: null };
@@ -47,13 +107,15 @@ export async function findBrandByCatalogDedupKey(brandName, dbClient, { excludeI
 }
 
 /**
- * Match a typed brand request against already-approved catalog brands.
- * Exact / controlled identity only (same catalog dedup key, e.g. Philips ↔ Phillips).
- * Does not block on partial typing or near-typos (SPARSGA must not match Sparsh).
+ * Match a typed brand against already-approved catalog brands.
+ * 1) Exact / controlled identity (same catalog dedup key, e.g. Philips ↔ Phillips)
+ * 2) Near-typo (edit distance 1), e.g. Faststark ↔ Fastrack
+ * Never matches distant names (SPARSGA ↛ Sparsh) or short acronym collisions.
  */
 export async function findApprovedCatalogBrandCloseMatch(brandName, dbClient) {
   const typedKey = catalogBrandDedupKey(brandName);
-  if (!typedKey) return { data: null, error: null, matchType: null };
+  const typedNorm = normalizeBrandKey(brandName);
+  if (!typedKey && !typedNorm) return { data: null, error: null, matchType: null };
 
   const { data: rows, error } = await listAllBrands(dbClient);
   if (error) return { data: null, error, matchType: null };
@@ -66,14 +128,23 @@ export async function findApprovedCatalogBrandCloseMatch(brandName, dbClient) {
   const withKeys = approved
     .map((row) => ({
       row,
-      key: catalogBrandDedupKey(row?.name || row?.normalized_name)
+      key: catalogBrandDedupKey(row?.name || row?.normalized_name),
+      norm: normalizeBrandKey(row?.name || row?.normalized_name)
     }))
-    .filter((item) => item.key);
+    .filter((item) => item.key || item.norm);
 
-  const exact = withKeys.filter((item) => item.key === typedKey);
-  if (exact.length > 0) {
-    const [best] = sortBrandRowsForCanonicalPick(exact.map((item) => item.row));
-    return { data: best || null, error: null, matchType: 'exact' };
+  if (typedKey) {
+    const exact = withKeys.filter((item) => item.key === typedKey);
+    if (exact.length > 0) {
+      const [best] = sortBrandRowsForCanonicalPick(exact.map((item) => item.row));
+      return { data: best || null, error: null, matchType: 'exact' };
+    }
+  }
+
+  const typos = withKeys.filter((item) => isApprovedBrandNearTypo(typedNorm, item.norm));
+  if (typos.length > 0) {
+    const [best] = sortBrandRowsForCanonicalPick(typos.map((item) => item.row));
+    return { data: best || null, error: null, matchType: 'typo' };
   }
 
   return { data: null, error: null, matchType: null };

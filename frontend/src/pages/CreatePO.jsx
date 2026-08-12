@@ -237,6 +237,9 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     return '';
   }, [boqProject?.requiredDate, navVoiceCart?.requiredDate]);
   const [requiredDate, setRequiredDate] = useState(initialRequiredDateFromContext);
+  const [requiredDateFromCart, setRequiredDateFromCart] = useState(
+    Boolean(initialRequiredDateFromContext)
+  );
   const [creatingOrders, setCreatingOrders] = useState(false);
   /** Vault checkout: SP vault debits products only; transport uses logistics vault at booking. */
   const [poPaymentMethod, setPoPaymentMethod] = useState(VAULT_PAYMENT_METHOD);
@@ -599,11 +602,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     const fromProject = String(boqProject?.requiredDate || '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(fromProject)) {
       setRequiredDate(fromProject);
+      setRequiredDateFromCart(true);
       return;
     }
     const fromVoice = String(voiceCart?.requiredDate || '').trim();
     if (/^\d{4}-\d{2}-\d{2}$/.test(fromVoice)) {
       setRequiredDate(fromVoice);
+      setRequiredDateFromCart(true);
     }
   }, [boqProject?.requiredDate, voiceCart?.requiredDate, requiredDate]);
 
@@ -1558,15 +1563,22 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             value={requiredDate}
             onChange={(e) => {
               setRequiredDate(e.target.value);
+              setRequiredDateFromCart(false);
             }}
             style={{
               width: '100%',
               padding: '0.5rem 0.75rem',
               borderRadius: '6px',
               border: '1px solid #d1d5db',
-              fontSize: '0.9rem'
+              fontSize: '0.9rem',
+              background: '#fff'
             }}
           />
+          {requiredDateFromCart && requiredDate ? (
+            <p style={{ margin: '0.35rem 0 0', fontSize: '0.78rem', color: '#475569' }}>
+              Pre-filled from your cart project. You can still change it before confirming.
+            </p>
+          ) : null}
         </div>
         <div style={{ width: '100%', flexBasis: '100%', marginTop: '0.5rem' }}>
           <label style={{ 

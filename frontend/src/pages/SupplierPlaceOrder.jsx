@@ -155,6 +155,7 @@ const SupplierPlaceOrder = () => {
 
   const [draft, setDraft] = useState(null);
   const [requiredDate, setRequiredDate] = useState('');
+  const [requiredDateFromCart, setRequiredDateFromCart] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState(VAULT_PAYMENT_METHOD);
   const [placing, setPlacing] = useState(false);
   const [loadingDraft, setLoadingDraft] = useState(true);
@@ -243,7 +244,11 @@ const SupplierPlaceOrder = () => {
       if (!Array.isArray(parsed.lines) || parsed.lines.length === 0) return;
 
       setDraft(parsed);
-      setRequiredDate(typeof parsed.requiredDate === 'string' ? parsed.requiredDate : '');
+      const draftRequiredDate =
+        typeof parsed.requiredDate === 'string' ? String(parsed.requiredDate).trim().slice(0, 10) : '';
+      const hasCartDate = /^\d{4}-\d{2}-\d{2}$/.test(draftRequiredDate);
+      setRequiredDate(hasCartDate ? draftRequiredDate : '');
+      setRequiredDateFromCart(Boolean(parsed.requiredDateFromCart) && hasCartDate);
       const savedPaymentMethod = String(parsed.paymentMethod || VAULT_PAYMENT_METHOD).trim();
       setPaymentMethod(savedPaymentMethod === 'credit' ? 'credit' : VAULT_PAYMENT_METHOD);
       const expiresAt = typeof parsed.reservationExpiresAt === 'string' ? parsed.reservationExpiresAt : '';
@@ -513,6 +518,7 @@ const SupplierPlaceOrder = () => {
         JSON.stringify({
           ...draft,
           requiredDate: requiredDate || '',
+          requiredDateFromCart: Boolean(requiredDateFromCart) && Boolean(requiredDate),
           paymentMethod,
           transportSelection: selectedTransport,
           checkoutShippingAddress: normalizeShippingAddress(shippingAddress),
@@ -526,7 +532,7 @@ const SupplierPlaceOrder = () => {
     } catch (_) {
       // Non-fatal.
     }
-  }, [draft, requiredDate, paymentMethod, selectedTransport, shippingAddress, billingAddress, deliveryDestination, cartShippingAddressId, cartShippingLabel]);
+  }, [draft, requiredDate, requiredDateFromCart, paymentMethod, selectedTransport, shippingAddress, billingAddress, deliveryDestination, cartShippingAddressId, cartShippingLabel]);
 
   // Prefill billing address from profile when delivery is not locked to cart selection.
   useEffect(() => {
@@ -605,7 +611,12 @@ const SupplierPlaceOrder = () => {
       setBillingAddress((prev) => ({ ...prev, ...routeState.billingAddress }));
     }
 
-    if (typeof routeState.requiredDate === 'string') setRequiredDate(routeState.requiredDate || '');
+    if (typeof routeState.requiredDate === 'string') {
+      const nextDate = String(routeState.requiredDate || '').trim().slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(nextDate)) {
+        setRequiredDate(nextDate);
+      }
+    }
 
     if (incomingTransport) {
       navigate(location.pathname, { replace: true, state: null });
@@ -954,7 +965,12 @@ const SupplierPlaceOrder = () => {
     setPlacing(true);
     try {
       const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl('/api/supplier/upstream/orders'), {
+      const useVault = isVaultPaymentMethod(paymentMethod);
+
+      // Warm vault session while the order create request is in flight.
+      const vaultSessionPromise = useVault ? restorePmVaultSession() : Promise.resolve(null);
+
+      const createPromise = fetch(getApiUrl('/api/supplier/upstream/orders'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -971,6 +987,8 @@ const SupplierPlaceOrder = () => {
           deliveryDestination
         })
       });
+
+      const [res] = await Promise.all([createPromise, vaultSessionPromise]);
 
       const data = await res.json().catch(() => null);
       if (!res.ok || !data || data.status !== 'success') {
@@ -1030,28 +1048,37 @@ const SupplierPlaceOrder = () => {
       const perOrderTransport = buildPerOrderTransport();
       const orderIds = createdOrders.map((o) => o.id).filter(Boolean);
 
-      // Save transport selection first so order totals include freight before vault debit.
-      if (perOrderTransport?.length) {
+      const confirmTransport = async ({ persistOnly }) => {
+        if (!perOrderTransport?.length) return { ok: true, data: {} };
         const confirmRes = await fetch(getApiUrl('/api/po/transport/confirm'), {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`
           },
-          body: JSON.stringify({ orderIds, perOrderTransport, persistOnly: true })
+          body: JSON.stringify({ orderIds, perOrderTransport, persistOnly })
         });
         const confirmData = await confirmRes.json().catch(() => ({}));
-        if (!confirmRes.ok || confirmData?.status !== 'success') {
-          alert(confirmData?.message || 'Upstream order(s) created, but transport selection failed.');
+        return {
+          ok: confirmRes.ok && confirmData?.status === 'success',
+          data: confirmData,
+          message: confirmData?.message
+        };
+      };
+
+      // Vault: persist freight onto order totals before debit, then book after payment.
+      // Non-vault: one confirm that both persists and books (skips an extra round-trip).
+      if (perOrderTransport?.length) {
+        const firstConfirm = await confirmTransport({ persistOnly: useVault });
+        if (!firstConfirm.ok) {
+          alert(firstConfirm.message || 'Upstream order(s) created, but transport selection failed.');
           localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
           navigate('/supplier-orders?direction=upstream');
           return;
         }
       }
 
-      // Vault checkout: debit immediately at placement (includes saved transport when selected).
-      if (isVaultPaymentMethod(paymentMethod)) {
-        await restorePmVaultSession();
+      if (useVault) {
         const payOutcomes = await Promise.all(
           createdOrders.map(async (order) => {
             if (!order?.id) return { ok: true, order };
@@ -1092,29 +1119,20 @@ const SupplierPlaceOrder = () => {
           navigate('/supplier-orders?direction=upstream');
           return;
         }
-      }
 
-      // After vault payment succeeds, book carrier / persist tracking.
-      if (perOrderTransport?.length && isVaultPaymentMethod(paymentMethod)) {
-        const bookRes = await fetch(getApiUrl('/api/po/transport/confirm'), {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`
-          },
-          body: JSON.stringify({ orderIds, perOrderTransport })
-        });
-        const bookData = await bookRes.json().catch(() => ({}));
-        if (!bookRes.ok || bookData?.status !== 'success') {
-          alert(bookData?.message || 'Paid, but carrier booking failed. Tracking can be retried later.');
-          localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-          navigate('/supplier-orders?direction=upstream');
-          return;
+        if (perOrderTransport?.length) {
+          const bookConfirm = await confirmTransport({ persistOnly: false });
+          if (!bookConfirm.ok) {
+            alert(bookConfirm.message || 'Paid, but carrier booking failed. Tracking can be retried later.');
+            localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+            navigate('/supplier-orders?direction=upstream');
+            return;
+          }
         }
       }
 
       alert(
-        isVaultPaymentMethod(paymentMethod)
+        useVault
           ? data.message || 'Upstream order(s) placed and paid from vault.'
           : paymentMethod === 'credit'
             ? data.message ||
@@ -1238,10 +1256,15 @@ const SupplierPlaceOrder = () => {
                   value={requiredDate}
                   onChange={(e) => {
                     setRequiredDate(e.target.value);
+                    setRequiredDateFromCart(false);
                   }}
                   min={todayDateInput}
                 />
-                <p className="spo-hint">Stored on each upstream order as the expected dispatch date.</p>
+                <p className="spo-hint">
+                  {requiredDateFromCart && requiredDate
+                    ? 'Pre-filled from your upstream cart project. You can still change it before placing the order.'
+                    : 'Stored on each upstream order as the expected dispatch date.'}
+                </p>
               </div>
               <div className="spo-field">
                 <label htmlFor="spo-payment-method">Payment method</label>

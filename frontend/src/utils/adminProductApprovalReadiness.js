@@ -1,5 +1,6 @@
 import {
   getAdminBuyerFacingCatalogDescription,
+  getAdminSupplierSubmittedDescription,
   isMeaningfulProductDescription
 } from './productDisplay';
 import { parseSpecificationsObject } from './specifications';
@@ -46,17 +47,31 @@ function countSpecificationKeys(specifications) {
   return Object.keys(specs).filter((key) => String(key || '').trim()).length;
 }
 
+/** Description used for approval: saved buyer copy, else supplier draft (polish optional). */
+export function getDescriptionForAdminApproval(product = {}) {
+  const saved = getAdminBuyerFacingCatalogDescription(product);
+  if (isMeaningfulProductDescription(saved, { allowInlineSpecs: true })) {
+    return saved;
+  }
+  const supplier = getAdminSupplierSubmittedDescription(product);
+  if (isMeaningfulProductDescription(supplier, { allowInlineSpecs: true })) {
+    return supplier;
+  }
+  return '';
+}
+
 /** Admin catalog products need description, GST, and specification keys before approval. */
 export function getAdminProductApprovalReadiness(product = {}) {
   const missingRequirements = [];
 
-  const buyerFacingDescription = getAdminBuyerFacingCatalogDescription(product);
+  const buyerFacingDescription = getDescriptionForAdminApproval(product);
 
   if (!isMeaningfulProductDescription(buyerFacingDescription, { allowInlineSpecs: true })) {
     missingRequirements.push({
       id: 'description',
       label: 'Product description',
-      message: 'Add and save a product description for buyers (edit manually or use Polish with AI if you want).'
+      message:
+        'Add a product description (supplier text is enough if it looks good, or edit / Polish with AI).'
     });
   }
 

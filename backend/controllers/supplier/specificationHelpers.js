@@ -127,7 +127,6 @@ export async function resolveAdminSpecificationTemplate(supabase, {
   if (!categoryName) return {};
 
   const modelIdentifier = normalizeModelIdentifier(modelRaw);
-  const brandKey = brandRaw ? normalizeBrandKey(brandRaw) : '';
 
   let { data: category } = await supabase
     .from('categories')
@@ -143,8 +142,8 @@ export async function resolveAdminSpecificationTemplate(supabase, {
     category = (allCategories || []).find((cat) => String(cat?.name || '').toLowerCase() === categoryName);
   }
 
-  // Always start from the category's predefined template keys (defaults + active spec_templates).
-  // Values from model/catalog profiles are merged on top so keys never disappear.
+  // Category defaults often contain example values (e.g. "Wireless Mouse" for Computer Accessories).
+  // Those are KEY scaffolding only — never treat them as this product's filled specs.
   let templateSkeleton = {};
   if (category) {
     const defaultSpecs = parseSpecificationsObject(category.default_specifications);
@@ -157,13 +156,16 @@ export async function resolveAdminSpecificationTemplate(supabase, {
   if (Object.keys(fieldTemplate).length > 0) {
     templateSkeleton = mergeSpecificationMaps(fieldTemplate, templateSkeleton);
   }
+  templateSkeleton = specificationTemplateKeysOnly(templateSkeleton);
 
   if (keysOnly) {
-    return specificationTemplateKeysOnly(templateSkeleton);
+    return templateSkeleton;
   }
 
   let specs = { ...templateSkeleton };
 
+  // Only exact model matches may contribute filled values.
+  // Never copy the "richest" brand/category sibling (that turned headphones into a mouse).
   if (modelIdentifier) {
     const { data: profile, error: profileError } = await supabase
       .from('model_spec_profiles')
@@ -179,9 +181,7 @@ export async function resolveAdminSpecificationTemplate(supabase, {
         specs = mergeSpecificationMaps(specs, profileSpecs);
       }
     }
-  }
 
-  if (modelIdentifier) {
     const { data: productMatches, error: productMatchError } = await supabase
       .from('products')
       .select('id, name, specifications, status, updated_at')
@@ -192,6 +192,7 @@ export async function resolveAdminSpecificationTemplate(supabase, {
       console.error('resolveAdminSpecificationTemplate product match error:', productMatchError);
     } else {
       const modelRows = (productMatches || []).filter((row) => {
+        if (excludeProductId && row?.id === excludeProductId) return false;
         const status = String(row?.status ?? '').trim().toLowerCase();
         if (status && status !== 'approved') return false;
         const normalizedName = normalizeModelIdentifier(row?.name || '');
@@ -202,33 +203,6 @@ export async function resolveAdminSpecificationTemplate(supabase, {
         specs = mergeSpecificationMaps(specs, matchSpecs);
       }
     }
-  }
-
-  let catalogRows = await fetchApprovedCatalogSpecificationRows(supabase, categoryName, brandKey);
-  if (brandKey && catalogRows.length === 0) {
-    catalogRows = await fetchApprovedCatalogSpecificationRows(supabase, categoryName, '');
-  }
-  if (excludeProductId) {
-    catalogRows = catalogRows.filter((row) => row.id !== excludeProductId);
-  }
-
-  const modelMatchedRows = modelIdentifier
-    ? catalogRows.filter((row) => normalizeModelIdentifier(row?.name || '') === modelIdentifier)
-    : catalogRows;
-
-  const modelMatchedSpecs = pickBestSpecificationMap(modelMatchedRows, { excludeProductId });
-  if (modelMatchedSpecs) {
-    specs = mergeSpecificationMaps(specs, modelMatchedSpecs);
-  } else if (brandKey) {
-    const brandMatchedSpecs = pickBestSpecificationMap(catalogRows, { excludeProductId });
-    if (brandMatchedSpecs) {
-      specs = mergeSpecificationMaps(specs, brandMatchedSpecs);
-    }
-  }
-
-  if (Object.keys(specs).length === 0) {
-    const categoryFallbackSpecs = pickBestSpecificationMap(catalogRows, { excludeProductId });
-    if (categoryFallbackSpecs) specs = categoryFallbackSpecs;
   }
 
   return specs;
@@ -242,14 +216,19 @@ export async function enrichProductSpecificationsForDisplay(supabase, {
   productId = null
 }) {
   const storedSpecs = parseSpecificationsObject(existingSpecs) || {};
-  const brandHint = String(brand || name || '').trim();
+  // Known catalog product: return that product's (and offer-overlay) specs only.
+  // Do not scaffold unrelated category example keys (mouse fields on headphones).
+  if (productId && Object.keys(storedSpecs).length > 0) {
+    return storedSpecs;
+  }
   const adminTemplate = await resolveAdminSpecificationTemplate(supabase, {
     categoryName: category,
     modelRaw: name,
-    brandRaw: brandHint,
-    excludeProductId: productId
+    brandRaw: String(brand || name || '').trim(),
+    excludeProductId: productId,
+    keysOnly: true
   });
-  return mergeSpecificationMaps(adminTemplate, storedSpecs);
+  return mergeVariantSpecificationTemplate(adminTemplate, storedSpecs);
 }
 
 /** Discovery detail: all template fields for the variant, preserving empty supplier values. */
@@ -261,12 +240,12 @@ export async function enrichVariantSpecificationsForDiscovery(supabase, {
   productId = null
 }) {
   const storedSpecs = parseSpecificationsObject(existingSpecs) || {};
-  const brandHint = String(brand || name || '').trim();
   const adminTemplate = await resolveAdminSpecificationTemplate(supabase, {
     categoryName: category,
     modelRaw: name,
-    brandRaw: brandHint,
-    excludeProductId: productId
+    brandRaw: String(brand || name || '').trim(),
+    excludeProductId: productId,
+    keysOnly: true
   });
   return mergeVariantSpecificationTemplate(adminTemplate, storedSpecs);
 }

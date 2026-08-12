@@ -165,6 +165,11 @@ export {
   shouldAutoApproveSupplierOfferOnCreate,
   shouldRequireApprovalForVariantSpecChange,
   shouldRecomputeSupplierVariantKeyOnUpdate,
-  hasSupplierSpecificationChangesFromCatalog
+  hasSupplierSpecificationChangesFromCatalog,
+  submittedSpecsCompatibleWithExistingVariant,
+  areSpecificationsEqual,
+  findBestMatchingApprovedOfferForSpecs,
+  specificationsAgreeOnOverlappingKeys,
+  retainCatalogCompatibleSpecifications
 } from '../../utils/supplierProductApproval.js';
 export { PRODUCT_IMAGES_BUCKET, uploadFile } from '../../services/storage.js';

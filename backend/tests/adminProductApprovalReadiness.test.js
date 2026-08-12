@@ -35,11 +35,24 @@ test('validateAdminProductApprovalReadiness passes when admin saves supplier tex
   );
 });
 
-test('validateAdminProductApprovalReadiness fails without saved buyer-facing description', () => {
+test('validateAdminProductApprovalReadiness passes with supplier description alone', () => {
+  assert.equal(
+    isAdminProductReadyForApproval({
+      ...readyPendingProduct,
+      publishedDescription: '',
+      description: '',
+      supplierDescription: 'Durable steel bottle suitable for daily hydration.'
+    }),
+    true
+  );
+});
+
+test('validateAdminProductApprovalReadiness fails without any meaningful description', () => {
   const result = validateAdminProductApprovalReadiness({
     ...readyPendingProduct,
     publishedDescription: '',
-    description: 'Stale polished catalog copy.'
+    description: 'Stale polished catalog copy.',
+    supplierDescription: ''
   });
   assert.equal(result.ok, false);
   assert.ok(result.missingRequirements.some((row) => row.id === 'description'));

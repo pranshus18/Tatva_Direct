@@ -22,6 +22,7 @@ import {
   normalizeShippingAddressBookEntry
 } from '../../utils/shippingAddressLabel';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../../utils/dateTime';
+import { resolveUpstreamProjectCartName } from '../../utils/supplierUpstreamCartSession';
 import { cn } from '@/lib/utils';
 
 const blankShippingAddress = {
@@ -94,7 +95,7 @@ export default function DiscoveryAddToCartDialog({
             .filter((group) => String(group?.groupId || '').trim())
             .map((group) => ({
               groupId: String(group.groupId),
-              boqName: String(group?.boqName || '').trim() || 'Untitled project',
+              boqName: resolveUpstreamProjectCartName(group?.boqName),
               requiredDate: String(group?.boqProject?.requiredDate || '').trim().slice(0, 10),
               shippingAddressId: String(group?.boqProject?.shippingAddressId || '').trim()
             }));
@@ -126,7 +127,8 @@ export default function DiscoveryAddToCartDialog({
       setShippingAddressBook(addresses);
       const initialProjectId = groups[0]?.groupId || '__new__';
       setTargetProjectId(initialProjectId);
-      setNewProjectName(String(product?.name || '').trim());
+      // Keep project name and expected dispatch date empty until the user enters them.
+      setNewProjectName('');
       setExpectedDeliveryDate('');
       setProjectFieldErrors(emptyProjectFieldErrors);
       setDialogError('');

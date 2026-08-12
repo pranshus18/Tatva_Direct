@@ -72,6 +72,7 @@ import {
   clearUpstreamCartClientProjectState,
   clearUpstreamSessionProjectId,
   readUpstreamSessionProjectId,
+  resolveUpstreamProjectCartName,
   writeUpstreamSessionProjectId
 } from '../utils/supplierUpstreamCartSession';
 
@@ -303,8 +304,8 @@ const SupplierUpstream = ({ user }) => {
     fetchMyProducts();
   }, []);
 
-  // Handoff from the product detail page: `?add=<supplier_product_id>&qty=` continues
-  // sourcing with the quantity chosen on the detail page (no catalog-grid detour).
+  // Handoff from the product detail page: `?add=<supplier_product_id>&qty=` only
+  // prefills the card quantity. Cart changes require an explicit Add to Cart click.
   const handledAddParamRef = useRef('');
   useEffect(() => {
     if (loading) return;
@@ -322,8 +323,6 @@ const SupplierUpstream = ({ user }) => {
     const nextQty =
       requestedQty != null && requestedQty > 0 ? Math.max(minQty, requestedQty) : minQty;
     setProcurementQtyByMineId((prev) => ({ ...prev, [requestedMineId]: nextQty }));
-    setSelectedMine((prev) => ({ ...prev, [requestedMineId]: nextQty }));
-    void addOrUpdateCartForProduct(product, nextQty);
   }, [loading, products, navigate]);
 
   const applyActiveCartProject = (project) => {
@@ -832,14 +831,19 @@ const SupplierUpstream = ({ user }) => {
           ? formatShippingAddressPreview(projectShipping)
           : '';
 
-      // Persist a draft so the next page can ask required date + payment method.
+      // Persist a lean draft (only checkout fields). Large suggestion catalogs made
+      // this button feel stuck while JSON.stringify/localStorage ran.
+      const projectRequiredDate = String(activeProject?.requiredDate || '')
+        .trim()
+        .slice(0, 10);
       localStorage.setItem(
         SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY,
         JSON.stringify({
           lines,
           checkoutSessionId,
           reservationExpiresAt: reservation.expiresAt || null,
-          requiredDate: '',
+          requiredDate: /^\d{4}-\d{2}-\d{2}$/.test(projectRequiredDate) ? projectRequiredDate : '',
+          requiredDateFromCart: /^\d{4}-\d{2}-\d{2}$/.test(projectRequiredDate),
           paymentMethod: 'online',
           itemCount: lines.length,
           totalAmountEstimate,
@@ -847,11 +851,6 @@ const SupplierUpstream = ({ user }) => {
           checkoutShippingAddress: projectShipping,
           shippingAddressId: projectShippingId || null,
           shippingAddressLabel,
-          selectedMine,
-          selectedUpstreamOffer,
-          suggestions,
-          searchQuery,
-          selectedCategory,
           transportSelection: null
         })
       );
@@ -941,7 +940,7 @@ const SupplierUpstream = ({ user }) => {
         .filter((project) => String(project?.projectId || '').trim())
         .map((project) => ({
           projectId: String(project.projectId),
-          cartName: String(project?.cartName || '').trim() || 'Supplier Project',
+          cartName: resolveUpstreamProjectCartName(project?.cartName),
           requiredDate: String(project?.requiredDate || '').trim().slice(0, 10),
           shippingAddressId: String(project?.shippingAddressId || '').trim()
         }));
@@ -1174,7 +1173,8 @@ const SupplierUpstream = ({ user }) => {
     setPendingCartProduct(product);
     setDialogQty(initialQty);
     setTargetCartProjectId(initialProjectId);
-    setNewCartProjectName(String(product?.name || '').trim() || 'Supplier Project');
+    // Keep project name and expected dispatch date empty until the user enters them.
+    setNewCartProjectName('');
     setNewCartRequiredDate('');
     setProjectFieldErrors(emptyProjectFieldErrors);
     setDialogError('');
@@ -1541,7 +1541,7 @@ const SupplierUpstream = ({ user }) => {
               My orders
             </Button>
             <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-cart')}>
-              Review Cart
+              {cartLineCount > 0 ? `View Cart (${cartLineCount})` : 'View Cart'}
             </Button>
             <Button variant="outline" className="upstream-nowrap-btn" onClick={() => navigate('/supplier-dashboard')}>
               Back to Dashboard
@@ -2056,14 +2056,14 @@ const SupplierUpstream = ({ user }) => {
                 <h3>Next step</h3>
                 <p>
                   {sourcingConfigured
-                    ? `${linesReadyToPlace} product${linesReadyToPlace === 1 ? '' : 's'} configured with upstream suppliers. Continue to review your cart or create a purchase order.`
+                    ? `${linesReadyToPlace} product${linesReadyToPlace === 1 ? '' : 's'} configured with upstream suppliers. Continue to view your cart or create a purchase order.`
                     : 'Select an upstream supplier for each product above, then continue to cart or place order.'}
                 </p>
               </div>
               <div className="us-sourcing-next-steps__actions">
                 <Button variant="outline" onClick={() => navigate('/supplier-cart')}>
                   <ShoppingCart size={16} />
-                  Review Cart
+                  {cartLineCount > 0 ? `View Cart (${cartLineCount})` : 'View Cart'}
                 </Button>
                 <Button
                   onClick={handleProceedToPlaceOrder}

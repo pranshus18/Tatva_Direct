@@ -40,19 +40,22 @@ describe('brand duplicate matching', () => {
     expect(areBrandNamesExactDuplicates('Philips', 'Phillips')).toBe(true);
   });
 
-  it('blocks Path B only on exact approved-catalog identity, not partial typing', () => {
+  it('blocks Path B on exact identity and near-typos of approved catalog brands', () => {
     const catalog = [
       { name: 'Sparsh', status: 'approved' },
       { name: 'samsung', status: 'approved' },
       { name: 'Stella', status: 'approved' },
       { name: 'ABB', status: 'approved' },
-      { name: 'Phillips', status: 'approved' }
+      { name: 'Phillips', status: 'approved' },
+      { name: 'Fastrack', status: 'approved' }
     ];
 
     expect(findApprovedCatalogBrandMatch('SPARSGA', catalog)).toBeNull();
-    expect(findApprovedCatalogBrandMatch('samsun', catalog)).toBeNull();
     expect(findApprovedCatalogBrandMatch('sam', catalog)).toBeNull();
     expect(findApprovedCatalogBrandMatch('AB', catalog)).toBeNull();
+    expect(findApprovedCatalogBrandMatch('samsun', catalog)?.name).toBe('samsung');
+    expect(findApprovedCatalogBrandMatch('samsun', catalog)?.matchType).toBe('typo');
+    expect(findApprovedCatalogBrandMatch('Faststark', catalog)?.name).toBe('Fastrack');
     expect(findApprovedCatalogBrandMatch('Sparsh', catalog)?.name).toBe('Sparsh');
     expect(findApprovedCatalogBrandMatch('sparsh', catalog)?.matchType).toBe('exact');
     expect(findApprovedCatalogBrandMatch('Philips', catalog)?.name).toBe('Phillips');
@@ -70,13 +73,13 @@ describe('brand duplicate matching', () => {
     const prefix = findApprovedCatalogBrandSuggestions('sams', catalog);
     expect(prefix.some((row) => row.name === 'samsung' && row.matchType === 'prefix')).toBe(true);
 
-    // "samsun" is a proper prefix of "samsung" (one letter short), so it stays a soft tip.
-    const nearComplete = findApprovedCatalogBrandSuggestions('samsun', catalog);
-    expect(nearComplete.some((row) => row.name === 'samsung')).toBe(true);
-    expect(findApprovedCatalogBrandMatch('samsun', catalog)).toBeNull();
+    // Incomplete shorter prefix stays a soft tip (not yet a typo match).
+    expect(findApprovedCatalogBrandMatch('sams', catalog)).toBeNull();
 
-    const singleEdit = findApprovedCatalogBrandSuggestions('samsing', catalog);
-    expect(singleEdit.some((row) => row.name === 'samsung' && row.matchType === 'typo')).toBe(true);
+    // Single-edit of a complete brand is treated as an approved match (not only a tip).
+    expect(findApprovedCatalogBrandMatch('samsing', catalog)?.name).toBe('samsung');
+    expect(findApprovedCatalogBrandMatch('samsing', catalog)?.matchType).toBe('typo');
+    expect(findApprovedCatalogBrandSuggestions('samsing', catalog)).toEqual([]);
 
     // SPARSGA is not a prefix of Sparsh and is more than one edit away.
     expect(findApprovedCatalogBrandSuggestions('SPARSGA', catalog)).toEqual([]);

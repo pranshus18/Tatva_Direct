@@ -1249,17 +1249,20 @@ export async function payOrderFromPmVault({
   orderNumber = null,
   amountInRupees,
   description = 'Order payment from PM vault',
-  credentials = {}
+  credentials = {},
+  skipBalanceCheck = false
 }) {
   const { accessToken, pmUserId } = await ensurePmVaultAuth(user, credentials);
 
-  // Balance pre-check is best-effort: if PM vault GET is down, still attempt vault-pay
-  // so PM can return a precise validation/balance error.
-  try {
-    await assertPmVaultBalanceSufficient(user, amountInRupees, credentials);
-  } catch (balanceErr) {
-    if (balanceErr?.code === 'INSUFFICIENT_VAULT_BALANCE') throw balanceErr;
-    logger.warn('[PM vault-pay] balance pre-check skipped:', balanceErr?.message || balanceErr);
+  // UI already gates on vault balance. Skip the extra PM GET unless explicitly needed —
+  // that call alone often costs hundreds of ms and can hang without helping payment.
+  if (!skipBalanceCheck) {
+    try {
+      await assertPmVaultBalanceSufficient(user, amountInRupees, credentials);
+    } catch (balanceErr) {
+      if (balanceErr?.code === 'INSUFFICIENT_VAULT_BALANCE') throw balanceErr;
+      logger.warn('[PM vault-pay] balance pre-check skipped:', balanceErr?.message || balanceErr);
+    }
   }
 
   if (!PM_VAULT_PAY_ORDER_URL) {
@@ -1297,8 +1300,9 @@ export async function payOrderFromPmVault({
   const desc = String(description || 'Order payment from PM vault').trim();
 
   // Buyer debit only — do not pass supplierUserId / split payout fields until PM exposes supplier credit.
+  // Always include amount on the first attempt: PM returns "body.amount: Required" without it,
+  // and a wasted round-trip is a common source of multi-minute checkout delays when PM is slow.
   const attemptBodies = [
-    withPmPlatformFlagBody({ orderId: tatvaOrderId, userId: pmUserId }),
     withPmPlatformFlagBody({
       orderId: tatvaOrderId,
       userId: pmUserId,
@@ -1313,6 +1317,11 @@ export async function payOrderFromPmVault({
     })
   ];
 
+  const payTimeoutMs = Math.max(
+    5000,
+    Number.parseInt(String(process.env.PM_VAULT_PAY_TIMEOUT_MS || '20000'), 10) || 20000
+  );
+
   async function postVaultPay(body) {
     const payUrl = withPmPlatformFlagQuery(PM_VAULT_PAY_ORDER_URL);
     logger.info('[PM vault-pay] requesting debit', {
@@ -1320,14 +1329,32 @@ export async function payOrderFromPmVault({
       orderId: tatvaOrderId,
       userId: pmUserId,
       flag: body.flag || PM_PLATFORM_FLAG,
-      keys: Object.keys(body)
+      keys: Object.keys(body),
+      timeoutMs: payTimeoutMs
     });
 
-    const response = await fetch(payUrl, {
-      method: 'POST',
-      headers: buildPmPlatformHeaders({ accessToken, json: true }),
-      body: JSON.stringify(body)
-    });
+    let response;
+    try {
+      response = await fetch(payUrl, {
+        method: 'POST',
+        headers: buildPmPlatformHeaders({ accessToken, json: true }),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(payTimeoutMs)
+      });
+    } catch (fetchErr) {
+      const timedOut =
+        fetchErr?.name === 'TimeoutError' ||
+        fetchErr?.name === 'AbortError' ||
+        /aborted|timeout/i.test(String(fetchErr?.message || ''));
+      const err = new Error(
+        timedOut
+          ? `PM vault payment timed out after ${payTimeoutMs}ms. Please retry.`
+          : fetchErr?.message || 'Failed to reach PM vault payment API'
+      );
+      err.code = timedOut ? 'PM_VAULT_PAY_TIMEOUT' : 'PM_VAULT_REQUEST_FAILED';
+      err.cause = fetchErr;
+      throw err;
+    }
 
     const payload = await parseJsonResponse(response);
     if (!response.ok || payload.success === false) {

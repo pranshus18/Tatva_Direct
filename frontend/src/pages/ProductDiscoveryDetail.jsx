@@ -805,7 +805,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         {isUpstreamPortal
           ? upstreamCartQty != null
             ? 'Quantity updates apply to your upstream cart from this page.'
-            : 'Choose quantity here, then continue to Upstream Sourcing to pick sellers and projects.'
+            : 'Choose quantity here, then continue to Upstream Sourcing and click Add to Cart to choose a project.'
           : 'Prices and stock reflect eligible supplier listings for your supply chain.'}
       </p>
     </aside>

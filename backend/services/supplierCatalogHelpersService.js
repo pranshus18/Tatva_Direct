@@ -222,7 +222,7 @@ export const mergeCatalogAndOfferSpecificationsForDisplay = (catalogSpecs = {}, 
 export const catalogSpecificationTemplateForVariantMerge = (catalogSpecs = {}) =>
   specificationTemplateKeysOnly(parseSpecificationsObject(catalogSpecs) || {});
 
-const extractOfferSpecificationsFromRow = (row = {}) => {
+export const extractOfferSpecificationsFromRow = (row = {}) => {
   const attributesObj = parseSupplierOfferAttributes(row?.attributes);
   let specs = parseSpecificationsObject(
     attributesObj?.specifications ?? attributesObj?.specs ?? attributesObj?.specification
@@ -239,6 +239,76 @@ const extractOfferSpecificationsFromRow = (row = {}) => {
 
   return specs || {};
 };
+
+/**
+ * Specs for Add Product when the supplier picks a catalog row from the dropdown.
+ * Source of truth = that product's catalog specs; same-product approved offers only
+ * fill empty keys on that product (never import another product / category example values).
+ */
+export function mergeSelectedCatalogProductSpecifications(
+  catalogSpecs = {},
+  sameProductOfferRows = []
+) {
+  let merged = parseSpecificationsObject(catalogSpecs) || {};
+  const catalogHasMeaningfulValues = countMeaningfulSpecValues(merged) > 0;
+  const catalogKeyNorms = new Set(
+    Object.keys(merged)
+      .map((key) => normalizeSpecKeyForDedup(key))
+      .filter(Boolean)
+  );
+
+  const rankedOffers = [...(sameProductOfferRows || [])].sort((a, b) => {
+    const aTime = Date.parse(String(a?.updated_at || '')) || 0;
+    const bTime = Date.parse(String(b?.updated_at || '')) || 0;
+    return bTime - aTime;
+  });
+
+  for (const row of rankedOffers) {
+    const status = String(row?.status || '').trim().toLowerCase();
+    if (status && status !== 'approved') continue;
+    const offerSpecs = extractOfferSpecificationsFromRow(row);
+    if (!offerSpecs || Object.keys(offerSpecs).length === 0) continue;
+
+    if (catalogHasMeaningfulValues) {
+      // Keep this product's identity: only fill blanks for keys the catalog already has.
+      const fillOnly = {};
+      Object.entries(offerSpecs).forEach(([key, value]) => {
+        const norm = normalizeSpecKeyForDedup(key);
+        if (norm && catalogKeyNorms.has(norm)) fillOnly[key] = value;
+      });
+      merged = mergeSpecificationMaps(merged, fillOnly);
+    } else {
+      merged = mergeSpecificationMaps(merged, offerSpecs);
+    }
+  }
+
+  return merged;
+}
+
+/**
+ * Load specifications for one catalog product id (dropdown selection / lookup by id).
+ */
+export async function resolveSelectedCatalogProductSpecifications(supabase, productId) {
+  const id = String(productId || '').trim();
+  if (!id || !supabase) return {};
+
+  const { data: product, error } = await supabase
+    .from('products')
+    .select('id, specifications')
+    .eq('id', id)
+    .maybeSingle();
+  if (error || !product) return {};
+
+  const { data: offerRows } = await supabase
+    .from('supplier_products')
+    .select('attributes, updated_at, status')
+    .eq('product_id', id)
+    .eq('status', 'approved')
+    .order('updated_at', { ascending: false })
+    .limit(50);
+
+  return mergeSelectedCatalogProductSpecifications(product.specifications, offerRows || []);
+}
 
 /**
  * Build the specification baseline for comparing a supplier listing against catalog truth.
@@ -410,6 +480,31 @@ export const mergeVariantSpecificationTemplate = (templateSpecs = {}, variantSpe
   Object.keys(variant).forEach((key) => {
     if (!Object.prototype.hasOwnProperty.call(merged, key)) {
       merged[key] = variant[key];
+    }
+  });
+
+  return merged;
+};
+
+/**
+ * Admin catalog save: push admin-edited specification values onto the supplier offer.
+ * - Filled admin values overwrite the offer (so suppliers see the change).
+ * - Empty admin values keep existing offer values (template keys must not wipe supplier data).
+ * - New admin-only keys are added as empty placeholders when not yet on the offer.
+ */
+export const mergeAdminEditedSpecificationsOntoOffer = (adminSpecs = {}, offerSpecs = {}) => {
+  const admin = parseSpecificationsObject(adminSpecs) || {};
+  const offer = parseSpecificationsObject(offerSpecs) || {};
+  const merged = { ...offer };
+
+  Object.keys(admin).forEach((key) => {
+    const adminValue = admin[key];
+    if (isMeaningfullyFilledSpecValue(adminValue)) {
+      merged[key] = adminValue;
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(merged, key)) {
+      merged[key] = adminValue == null ? '' : adminValue;
     }
   });
 

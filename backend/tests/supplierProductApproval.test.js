@@ -6,7 +6,10 @@ import {
   shouldAutoApproveSupplierOfferOnCreate,
   shouldRequireApprovalForVariantSpecChange,
   hasSupplierSpecificationChangesFromCatalog,
-  shouldRecomputeSupplierVariantKeyOnUpdate
+  shouldRecomputeSupplierVariantKeyOnUpdate,
+  submittedSpecsCompatibleWithExistingVariant,
+  findBestMatchingApprovedOfferForSpecs,
+  retainCatalogCompatibleSpecifications
 } from '../utils/supplierProductApproval.js';
 
 test('areSpecificationsEqual treats same spec object with different key order as equal', () => {
@@ -24,13 +27,105 @@ test('areSpecificationsEqual treats same spec object with different key order as
   assert.equal(areSpecificationsEqual(currentSpecs, nextSpecs), true);
 });
 
-test('areSpecificationsEqual ignores casing and empty slots', () => {
+test('areSpecificationsEqual treats numeric strings and numbers as equal', () => {
   assert.equal(
-    areSpecificationsEqual(
-      { Color: 'Black', Capacity: '500ML', Height: '' },
-      { color: 'black', capacity: '500ml' }
+    areSpecificationsEqual({ playtime: '57', battery: '40' }, { playtime: 57, battery: 40 }),
+    true
+  );
+});
+
+test('hasSupplierSpecificationChangesFromCatalog ignores number vs string for same value', () => {
+  assert.equal(
+    hasSupplierSpecificationChangesFromCatalog({
+      catalogSpecs: { playtime: '57' },
+      supplierSpecs: { playtime: 57 }
+    }),
+    false
+  );
+});
+
+test('findBestMatchingApprovedOfferForSpecs reuses legacy approved offer with empty specs', () => {
+  const matched = findBestMatchingApprovedOfferForSpecs(
+    [
+      {
+        id: 'offer-1',
+        status: 'approved',
+        is_active: true,
+        variant_key: 'vk-1',
+        attributes: { description: 'legacy', name: 'JBL' }
+      }
+    ],
+    { Color: 'Black', Connectivity: 'Bluetooth' }
+  );
+  assert.equal(matched?.id, 'offer-1');
+});
+
+test('retainCatalogCompatibleSpecifications drops unrelated category defaults', () => {
+  const cleaned = retainCatalogCompatibleSpecifications(
+    { Connectivity: 'Bluetooth', Playtime: '57H' },
+    {
+      Connectivity: 'Bluetooth',
+      Playtime: '57H',
+      'Product Type': 'Wireless Mouse',
+      'Sensor Type': 'Optical'
+    }
+  );
+  assert.deepEqual(cleaned, {
+    Connectivity: 'Bluetooth',
+    Playtime: '57H'
+  });
+});
+
+test('retainCatalogCompatibleSpecifications keeps intentional overlapping edits', () => {
+  const cleaned = retainCatalogCompatibleSpecifications(
+    { Color: 'Black', Size: 'M' },
+    { Color: 'White', Size: 'M', Material: 'Plastic' }
+  );
+  assert.equal(cleaned.Color, 'White');
+  assert.equal(cleaned.Size, 'M');
+  assert.equal(cleaned.Material, undefined);
+});
+
+test('findBestMatchingApprovedOfferForSpecs picks overlapping-agreeing offer among several', () => {
+  const matched = findBestMatchingApprovedOfferForSpecs(
+    [
+      {
+        id: 'red',
+        status: 'approved',
+        attributes: { specifications: { Color: 'Red' } }
+      },
+      {
+        id: 'black',
+        status: 'approved',
+        attributes: { specifications: { Color: 'Black', Size: 'M' } }
+      }
+    ],
+    { Color: 'Black', Material: 'Plastic' }
+  );
+  assert.equal(matched?.id, 'black');
+});
+
+test('submittedSpecsCompatibleWithExistingVariant allows extra template fields', () => {
+  assert.equal(
+    submittedSpecsCompatibleWithExistingVariant(
+      { Color: 'Black', Capacity: '500ML', Material: 'Steel' },
+      { Color: 'Black', Capacity: '500ML' }
     ),
     true
+  );
+  assert.equal(
+    submittedSpecsCompatibleWithExistingVariant(
+      { Color: 'Black' },
+      { Color: 'Black', Capacity: '500ML' }
+    ),
+    false
+  );
+  assert.equal(
+    submittedSpecsCompatibleWithExistingVariant(
+      { Color: 'White', Capacity: '500ML' },
+      { Color: 'Black', Capacity: '500ML' }
+    ),
+    false
   );
 });
 
@@ -189,13 +284,13 @@ test('hasSupplierSpecificationChangesFromCatalog treats matching values as uncha
   );
 });
 
-test('hasSupplierSpecificationChangesFromCatalog treats new supplier keys as changes', () => {
+test('hasSupplierSpecificationChangesFromCatalog ignores extra template keys when core values match', () => {
   assert.equal(
     hasSupplierSpecificationChangesFromCatalog({
       catalogSpecs: { ram: '8GB' },
       supplierSpecs: { ram: '8GB', color: 'Black' }
     }),
-    true
+    false
   );
 });
 

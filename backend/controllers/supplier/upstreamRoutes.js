@@ -79,7 +79,6 @@ import {
   resolveUpstreamPaymentSelection
 } from '../../services/upstreamOrderInputService.js';
 import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuantity.js';
-import { formatPlatformDate } from '../../utils/dateTime.js';
 import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js';
 import { formatShippingAddressText, resolveProjectShippingAddress } from '../../services/vendorRequestContextService.js';
 import { geocodeIndianAddress } from '../../utils/geoUtils.js';
@@ -440,9 +439,20 @@ export function registerSupplierUpstreamRoutes(ctx) {
     };
   }
 
+  // Legacy default was `Project DD/Month/YY` (today's date), which looked like a dispatch date.
+  const AUTO_DATED_UPSTREAM_PROJECT_NAME = /^Project \d{1,2}\/[A-Za-z]+\/\d{2}$/i;
+  const DEFAULT_UPSTREAM_PROJECT_NAME = 'Supplier Project';
+  const resolveUpstreamProjectCartName = (value) => {
+    const cartNameRaw = String(value || '').trim();
+    if (!cartNameRaw || AUTO_DATED_UPSTREAM_PROJECT_NAME.test(cartNameRaw)) {
+      return DEFAULT_UPSTREAM_PROJECT_NAME;
+    }
+    return cartNameRaw;
+  };
+
   const buildUpstreamProject = (payload = {}) => {
     const projectId = String(payload.projectId || `sup-proj-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`);
-    const cartNameRaw = String(payload.cartName || '').trim();
+    const cartName = resolveUpstreamProjectCartName(payload.cartName);
     const rawRequiredDate = String(payload.requiredDate || '').trim();
     const requiredDate = /^\d{4}-\d{2}-\d{2}$/.test(rawRequiredDate) ? rawRequiredDate : '';
     const items = Array.isArray(payload.items)
@@ -455,7 +465,7 @@ export function registerSupplierUpstreamRoutes(ctx) {
         );
     const project = {
       projectId,
-      cartName: cartNameRaw || `Project ${formatPlatformDate(new Date())}`,
+      cartName,
       requiredDate,
       items,
       selectedMine: buildUpstreamSelectedMineFromItems(items),
@@ -1437,7 +1447,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     } = payloadInput;
 
     // Scoped to this buyer's own holds before consuming them for the new order.
-    await expireStaleReservations({ buyerUserId: req.userId });
+    const expirePromise = expireStaleReservations({ buyerUserId: req.userId });
 
     const { expectedDeliveryDate, error: requiredDateError } =
       normalizeRequiredDateForUpstream(requiredDate);
@@ -1450,15 +1460,41 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     const { payment_method: upstreamPaymentMethod, payment_status: upstreamPaymentStatus } =
       resolveUpstreamPaymentSelection(paymentMethod);
 
-    // Preload supplier profile for defaults + GSTIN detection.
-    const { data: supplierProfileRow, error: supplierProfileErr } = await supabase
-      .from('users')
-      .select('name, company, address, profile, user_type')
-      .eq('id', req.userId)
-      .single();
+    const mineIds = [...new Set(lines.map((l) => l?.mineSupplierProductId).filter(Boolean))];
+    const upstreamOfferIds = [...new Set(lines.map((l) => l?.upstreamSupplierProductId).filter(Boolean))];
+
+    // Overlap profile + offer loads with stale-hold cleanup.
+    const [
+      ,
+      { data: supplierProfileRow, error: supplierProfileErr },
+      { data: myRows, error: myErr },
+      { data: upstreamOffers, error: upstreamErr }
+    ] = await Promise.all([
+      expirePromise,
+      supabase
+        .from('users')
+        .select('name, company, address, profile, user_type')
+        .eq('id', req.userId)
+        .single(),
+      supabase
+        .from('supplier_products')
+        .select('id, product_id, variant_key, variant_asin, attributes, status, is_active, product:products(brand, status)')
+        .eq('supplier_id', req.userId)
+        .in('id', mineIds),
+      supabase
+        .from('supplier_products')
+        .select(
+          'id, supplier_id, product_id, variant_key, variant_asin, price, stock, min_order_quantity, attributes, outlet_id, location, status, is_active, product:products(id, name, category, unit, description, specifications, brand, status)'
+        )
+        .neq('status', 'rejected')
+        .in('id', upstreamOfferIds)
+    ]);
+
     if (supplierProfileErr || !supplierProfileRow) {
       return res.status(404).json({ status: 'error', message: 'Supplier profile not found' });
     }
+    if (myErr) throw myErr;
+    if (upstreamErr) throw upstreamErr;
 
     const profileGstin = String(supplierProfileRow?.profile?.gstin || supplierProfileRow?.profile?.mainGstin || '').trim();
     const hasGstin = Boolean(profileGstin);
@@ -1506,9 +1542,6 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       gstTaxApplicableOnBillingAddressOnly: hasGstin
     };
 
-    const mineIds = [...new Set(lines.map((l) => l?.mineSupplierProductId).filter(Boolean))];
-    const upstreamOfferIds = [...new Set(lines.map((l) => l?.upstreamSupplierProductId).filter(Boolean))];
-
     try {
       await validateCheckoutReservationsForLines({
         buyerUserId: req.userId,
@@ -1523,13 +1556,6 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       });
     }
 
-    // Validate my selected supplier products
-    const { data: myRows, error: myErr } = await supabase
-      .from('supplier_products')
-      .select('id, product_id, variant_key, variant_asin, attributes, status, is_active, product:products(brand, status)')
-      .eq('supplier_id', req.userId)
-      .in('id', mineIds);
-    if (myErr) throw myErr;
     const myByMineId = {};
     (myRows || [])
       .filter(
@@ -1549,15 +1575,6 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
           'One or more selected products are rejected or pending approval and cannot be used for upstream sourcing.'
       });
     }
-
-    const { data: upstreamOffers, error: upstreamErr } = await supabase
-      .from('supplier_products')
-      .select(
-        'id, supplier_id, product_id, variant_key, variant_asin, price, stock, min_order_quantity, attributes, outlet_id, location, status, is_active, product:products(id, name, category, unit, description, specifications, brand, status)'
-      )
-      .neq('status', 'rejected')
-      .in('id', upstreamOfferIds);
-    if (upstreamErr) throw upstreamErr;
 
     const upstreamOfferById = {};
     const upstreamOffersNeedingSync = [];
@@ -1934,12 +1951,9 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         throw new Error(invErr?.message || 'Failed to finalize inventory for upstream order');
       }
 
-      // Notify upstream supplier
-      try {
-        const supplierUser = upstreamUserById[supplierId];
-        const supplierName = supplierUser?.name || supplierUser?.company || 'Supplier';
-
-        await insertNotification({
+      // Notify upstream supplier (non-blocking — do not delay checkout response).
+      void insertNotification(
+        {
           user_id: supplierId,
           type: 'order_status',
           title: 'New Upstream Order Received',
@@ -1949,21 +1963,20 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
           metadata: {
             buyerId: req.userId
           }
-        }, supabase);
-      } catch (notifErr) {
+        },
+        supabase
+      ).catch((notifErr) => {
         console.error('[Upstream Orders] notification error:', notifErr);
-      }
+      });
 
       if (upstreamPaymentMethod === 'credit') {
-        try {
-          await maybeNotifySupplierCreditAlert({
-            supplierId,
-            buyerUserId: req.userId,
-            partyName: buyerName
-          });
-        } catch (creditNotifyErr) {
+        void maybeNotifySupplierCreditAlert({
+          supplierId,
+          buyerUserId: req.userId,
+          partyName: buyerName
+        }).catch((creditNotifyErr) => {
           console.error('[Upstream Orders] credit limit notification error (non-fatal):', creditNotifyErr);
-        }
+        });
       }
 
       createdOrders.push({
@@ -1988,6 +2001,7 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       console.warn('[Upstream Orders] checkout reservation cleanup after create:', reservationCleanupError?.message || reservationCleanupError);
     }
 
+    // Respond first; leftover hold cleanup already attempted above.
     return res.json({
       status: 'success',
       orders: createdOrders,

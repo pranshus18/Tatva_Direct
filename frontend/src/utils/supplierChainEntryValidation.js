@@ -110,10 +110,11 @@ function collectApprovedCatalogRows(catalogBrands = []) {
 }
 
 /**
- * Exact / controlled approved-catalog match used to block a Path B "new brand" request.
- * Only complete brand identity matches (including Philips/Phillips spelling collapse).
- * Never matches partial typing such as SPARSGA → Sparsh, samsun → samsung, or AB → ABB.
- * @returns {{ name: string, matchType: 'exact' } | null}
+ * Exact / controlled approved-catalog match used to block a Path B "new brand" request
+ * and to treat near-typos of approved brands as the same brand for product submit.
+ * Includes Philips/Phillips spelling collapse and single-character typos (Faststark → Fastrack).
+ * Never matches distant names such as SPARSGA → Sparsh.
+ * @returns {{ name: string, matchType: 'exact'|'typo' } | null}
  */
 export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
   const typed = String(typedName || '').trim();
@@ -126,9 +127,32 @@ export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
   const exact = rows.find((row) => normalizeBrandIdentity(row.name) === typedNorm);
   if (exact) return { name: exact.name, matchType: 'exact' };
 
-  // Controlled spelling variant only (Philips ↔ Phillips), never prefixes/partials.
+  // Controlled spelling variant only (Philips ↔ Phillips).
   const variant = rows.find((row) => areBrandNamesExactDuplicates(typed, row.name));
-  return variant ? { name: variant.name, matchType: 'exact' } : null;
+  if (variant) return { name: variant.name, matchType: 'exact' };
+
+  // Near-typo of an approved brand (edit distance 1, or longer-name distance ≤ 3).
+  const typo = rows.find((row) => {
+    const maxLen = Math.max(typedNorm.length, row.norm.length);
+    const minLen = Math.min(typedNorm.length, row.norm.length);
+    const lengthDelta = Math.abs(typedNorm.length - row.norm.length);
+    if (maxLen < 5 || lengthDelta > 2) return false;
+    const distance = brandNameEditDistance(typedNorm, row.norm);
+    if (distance === 1 && lengthDelta <= 1) {
+      // Avoid short extensions of short brands (pran → prans).
+      if (typedNorm.length > row.norm.length && row.norm.length < 6) return false;
+      return true;
+    }
+    let sharedPrefix = 0;
+    while (
+      sharedPrefix < minLen &&
+      typedNorm[sharedPrefix] === row.norm[sharedPrefix]
+    ) {
+      sharedPrefix += 1;
+    }
+    return minLen >= 8 && sharedPrefix >= 4 && distance <= 3;
+  });
+  return typo ? { name: typo.name, matchType: 'typo' } : null;
 }
 
 /**

@@ -1152,7 +1152,9 @@ export async function payOrderFromWallet({
       orderNumber: order.order_number || null,
       amountInRupees: buyerVaultDebit,
       description: `Order payment for ${order.order_number || order.id}`,
-      credentials: pmCredentials || {}
+      credentials: pmCredentials || {},
+      // Place-order UI already verified vault readiness; skip a second PM balance GET.
+      skipBalanceCheck: true
     });
 
     const pmPaymentRef = pmPayment?.paymentId || `pm-vault-${order.id}`;
@@ -1202,25 +1204,20 @@ export async function payOrderFromWallet({
       amount: buyerVaultDebit
     });
 
-    let receiptDelivery = null;
-    try {
-      receiptDelivery = await createReceiptAndDeliver({
-        order: orderAfterRelease,
-        paymentMethod: 'vault',
-        paymentReference: pmPaymentRef,
-        actorUserId
-      });
-    } catch (receiptErr) {
+    // Receipt PDF + email + invoice must not block checkout — OAuth/email failures
+    // were adding minutes to /api/vault/orders/:id/pay.
+    void createReceiptAndDeliver({
+      order: orderAfterRelease,
+      paymentMethod: 'vault',
+      paymentReference: pmPaymentRef,
+      actorUserId
+    }).catch((receiptErr) => {
       console.error('[Vault] Receipt delivery failed after PM vault pay:', receiptErr);
-    }
+    });
 
-    let invoiceSummary = null;
-    try {
-      const { invoice } = await createInvoiceForOrder(orderAfterRelease);
-      invoiceSummary = { invoiceNumber: invoice?.invoice_number || null };
-    } catch (invoiceErr) {
+    void createInvoiceForOrder(orderAfterRelease).catch((invoiceErr) => {
       console.error('[Vault] Invoice generation failed after PM vault pay:', invoiceErr);
-    }
+    });
 
     await writeAuditLog({
       actorUserId,
@@ -1251,8 +1248,8 @@ export async function payOrderFromWallet({
       orderTotalAmount,
       logisticsVaultDebit: roundMoney(chargeBreakdown.logisticsVaultDebit ?? 0),
       supplierPayoutRelease: payoutRelease,
-      receiptDelivery,
-      invoiceSummary
+      receiptDelivery: null,
+      invoiceSummary: null
     };
   }
 

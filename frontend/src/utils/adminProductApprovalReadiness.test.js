@@ -45,12 +45,23 @@ describe('getAdminProductApprovalReadiness', () => {
     ).toBe(true);
   });
 
-  it('fails when only stale catalog description exists without admin publish', () => {
+  it('passes when only a meaningful supplier description exists (polish optional)', () => {
+    expect(
+      getAdminProductApprovalReadiness({
+        ...readyPendingProduct,
+        publishedDescription: '',
+        description: '',
+        supplierDescription: 'Professional steel bottle for daily hydration.'
+      }).ok
+    ).toBe(true);
+  });
+
+  it('fails when only a stale catalog description exists without supplier or publish copy', () => {
     const result = getAdminProductApprovalReadiness({
       ...readyPendingProduct,
       publishedDescription: '',
       description: 'Stale polished catalog copy.',
-      supplierDescription: 'Raw supplier submission.'
+      supplierDescription: ''
     });
     expect(result.ok).toBe(false);
     expect(result.missingRequirements.some((row) => row.id === 'description')).toBe(true);

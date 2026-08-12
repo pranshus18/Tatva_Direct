@@ -85,3 +85,27 @@ test('approval spec sync still requires fill when supplier values are incomplete
     false
   );
 });
+
+test('admin catalog edit pushes filled values onto supplier offers without wiping blanks', async () => {
+  const { mergeAdminEditedSpecificationsOntoOffer } = await import(
+    '../services/supplierCatalogHelpersService.js'
+  );
+
+  const merged = mergeAdminEditedSpecificationsOntoOffer(
+    {
+      Color: 'Navy',
+      Capacity: '',
+      Material: 'Steel'
+    },
+    {
+      Color: 'Silver',
+      Capacity: '1 L',
+      Finish: 'Matte'
+    }
+  );
+
+  assert.equal(merged.Color, 'Navy');
+  assert.equal(merged.Capacity, '1 L');
+  assert.equal(merged.Material, 'Steel');
+  assert.equal(merged.Finish, 'Matte');
+});

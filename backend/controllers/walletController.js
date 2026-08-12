@@ -507,10 +507,16 @@ walletRouter.post('/orders/:id/pay', authenticateToken, requireServiceProviderOr
     if (
       e?.code === 'PM_VAULT_PAY_NOT_CONFIGURED' ||
       e?.code === 'PM_VAULT_REQUEST_FAILED' ||
+      e?.code === 'PM_VAULT_PAY_TIMEOUT' ||
       e?.code === 'PM_VAULT_VALIDATION_FAILED' ||
       e?.code === 'VALIDATION_ERROR'
     ) {
-      const status = e?.code === 'PM_VAULT_VALIDATION_FAILED' || e?.code === 'VALIDATION_ERROR' ? 400 : 502;
+      const status =
+        e?.code === 'PM_VAULT_VALIDATION_FAILED' || e?.code === 'VALIDATION_ERROR'
+          ? 400
+          : e?.code === 'PM_VAULT_PAY_TIMEOUT'
+            ? 504
+            : 502;
       return res.status(status).json({
         status: 'error',
         code: e.code === 'VALIDATION_ERROR' ? 'PM_VAULT_VALIDATION_FAILED' : e.code,

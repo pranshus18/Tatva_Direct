@@ -27,6 +27,9 @@ import { dedupeCategoryRowsCaseInsensitive } from '../../utils/categoryNormalize
 import {
   fetchCanonicalVariantMrp
 } from '../../services/variantMrpService.js';
+import {
+  mergeSelectedCatalogProductSpecifications
+} from '../../services/supplierCatalogHelpersService.js';
 
 function isAuthenticatedSupplier(req) {
   if (isSupplierUserType(req.user?.user_type)) return true;
@@ -77,7 +80,6 @@ export function registerSupplierCatalogRoutes(ctx) {
     router,
     authenticateToken,
     supabase,
-    enrichProductSpecificationsForDisplay,
     resolveAdminSpecificationTemplate
   } = ctx;
 
@@ -112,11 +114,13 @@ router.get('/products/search', authenticateToken, async (req, res) => {
 
     if (catalogAutocomplete) {
       // Full approved catalog for reuse + this supplier's own pending rows for re-select.
+      // Strict name/brand match only — brand-new products/variants must return an empty list.
       const ownedSuggestions = await searchSupplierOwnedCatalogSuggestions(supabase, {
         supplierId: req.userId,
         q,
         category,
-        limit: 50
+        limit: 50,
+        strictNameMatch: true
       });
       const merged = mergeOwnedIntoDiscoverySuggestions(
         result.suggestions || [],
@@ -186,204 +190,93 @@ router.get('/products/:productId/detail', authenticateToken, async (req, res) =>
   }
 });
 
-// Lookup a product by exact name + category and return its unit (for auto-fill)
+// Lookup a product by id (preferred) or name + category and return THAT product's specs
 router.get('/products/lookup', authenticateToken, async (req, res) => {
   try {
+    const productId = String(req.query.productId || req.query.product_id || '').trim();
     const name = String(req.query.name || '').trim();
     const category = String(req.query.category || '').trim().toLowerCase();
-    const brandRaw = String(req.query.brand || req.query.brandName || '').trim();
-    const brandKey = brandRaw ? normalizeBrandKey(brandRaw) : '';
     const variantKey = String(req.query.variantKey || req.query.variant_key || '').trim();
 
-    if (!name || !category) {
+    let product = null;
+
+    if (productId) {
+      const { data: byId, error: byIdError } = await supabase
+        .from('products')
+        .select('id, name, category, brand, unit, specifications, updated_at')
+        .eq('id', productId)
+        .maybeSingle();
+      if (byIdError) {
+        console.error('Product lookup by id error:', byIdError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Internal server error'
+        });
+      }
+      product = byId || null;
+    } else if (name && category) {
+      // Fallback when the supplier typed a match without clicking a suggestion.
+      const nameNeedle = name.replace(/\s+/g, ' ').trim();
+      const ilikeNeedle = `%${nameNeedle.replace(/\s+/g, '%')}%`;
+      const { data: products, error } = await supabase
+        .from('products')
+        .select('id, name, category, brand, unit, specifications, updated_at')
+        .eq('category', category)
+        .ilike('name', ilikeNeedle)
+        .order('updated_at', { ascending: false })
+        .limit(10);
+
+      if (error) {
+        console.error('Product lookup error:', error);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Internal server error'
+        });
+      }
+
+      const normalizeName = (v) =>
+        String(v || '')
+          .trim()
+          .toLowerCase()
+          .replace(/\s+/g, ' ');
+
+      const productCandidates = products || [];
+      const needleNorm = normalizeName(nameNeedle);
+      product = productCandidates.length > 0 ? productCandidates[0] : null;
+      const exact = productCandidates.find((p) => normalizeName(p?.name) === needleNorm);
+      if (exact) product = exact;
+    } else {
       return res.json({
         status: 'success',
         found: false
       });
     }
 
-    // In production, product names often contain extra spaces / casing differences
-    // (and sometimes trailing whitespace). Using an exact ilike() match can fail,
-    // which then prevents spec prefill. Fetch a small candidate set and pick
-    // the closest normalized name.
-    const nameNeedle = name.replace(/\s+/g, ' ').trim();
-    const ilikeNeedle = `%${nameNeedle.replace(/\s+/g, '%')}%`;
-    const { data: products, error } = await supabase
-      .from('products')
-      .select('id, name, category, brand, unit, specifications, updated_at')
-      .eq('category', category)
-      .ilike('name', ilikeNeedle)
-      .order('updated_at', { ascending: false })
-      .limit(10);
-
-    if (error) {
-      console.error('Product lookup error:', error);
-      return res.status(500).json({
-        status: 'error',
-        message: 'Internal server error'
-      });
-    }
-
-    const normalizeName = (v) =>
-      String(v || '')
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, ' ');
-
-    const productCandidates = products || [];
-    const needleNorm = normalizeName(nameNeedle);
-    let product = productCandidates.length > 0 ? productCandidates[0] : null;
-    const exact = productCandidates.find((p) => normalizeName(p?.name) === needleNorm);
-    if (exact) product = exact;
     if (product) {
       const productBrandLabel = resolveUpstreamBrandLabel({}, product?.brand || '');
-      const brandAllowed = supplierCanAccessBrandStrict(req.user?.profile || {}, productBrandLabel);
+      const brandAllowed = supplierCanAccessBrandStrict(
+        await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {}),
+        productBrandLabel
+      );
       if (!brandAllowed.allowed) {
         product = null;
       }
     }
-    const toObject = (value) => {
-      if (!value) return null;
-      if (typeof value === 'object') {
-        // If it's already a plain object (most common case), keep it.
-        if (!Array.isArray(value)) return value;
 
-        // Handle legacy formats where specifications are stored as an array of key/value items.
-        // Examples that we attempt:
-        //   [{ key: "brandModel", value: "X" }]
-        //   [{ name: "brandModel", value: "X" }]
-        //   [["brandModel","X"], ...]
-        if (Array.isArray(value)) {
-          const out = {};
-          for (const item of value) {
-            if (!item) continue;
-            if (Array.isArray(item) && item.length >= 2) {
-              const k = String(item[0] ?? '').trim();
-              if (!k) continue;
-              out[k] = item[1];
-              continue;
-            }
-            if (typeof item === 'object') {
-              const k = String(item.key ?? item.name ?? '').trim();
-              if (!k) continue;
-              const v = item.value;
-              out[k] = v;
-            }
-          }
-          return Object.keys(out).length > 0 ? out : null;
-        }
-      }
-      if (typeof value === 'string') {
-        try {
-          // Some production rows are double-encoded JSON strings.
-          let parsed = JSON.parse(value);
-          if (typeof parsed === 'string') {
-            try {
-              parsed = JSON.parse(parsed);
-            } catch {
-              // keep as-is
-            }
-          }
-          if (parsed && typeof parsed === 'object') {
-            if (!Array.isArray(parsed)) return parsed;
-
-            // If parsed into an array, try converting to object (same logic as above).
-            if (Array.isArray(parsed)) {
-              const out = {};
-              for (const item of parsed) {
-                if (!item) continue;
-                if (Array.isArray(item) && item.length >= 2) {
-                  const k = String(item[0] ?? '').trim();
-                  if (!k) continue;
-                  out[k] = item[1];
-                  continue;
-                }
-                if (typeof item === 'object') {
-                  const k = String(item.key ?? item.name ?? '').trim();
-                  if (!k) continue;
-                  out[k] = item.value;
-                }
-              }
-              return Object.keys(out).length > 0 ? out : null;
-            }
-          }
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    };
-
-    let mergedSpecifications =
-      toObject(product?.specifications) ? { ...toObject(product.specifications) } : {};
-
+    // Specs for the selected product only — never category defaults / sibling SKUs.
+    let mergedSpecifications = {};
     if (product?.id) {
       const { data: approvedSpecOffers } = await supabase
         .from('supplier_products')
         .select('attributes, updated_at, status')
         .eq('product_id', product.id)
+        .eq('status', 'approved')
         .order('updated_at', { ascending: false })
-        .limit(200);
-
-      const isMeaningfullyFilled = (v) => {
-        if (v === null || v === undefined) return false;
-        if (Array.isArray(v)) return v.length > 0;
-        if (typeof v === 'object') return Object.keys(v).length > 0;
-        if (typeof v === 'number') return Number.isFinite(v);
-        if (typeof v === 'boolean') return true;
-        return String(v).trim() !== '';
-      };
-      const nonEmptyValueCount = (specsObj) =>
-        Object.values(specsObj || {}).filter(isMeaningfullyFilled).length;
-
-      let bestSpecs = null;
-      for (const row of approvedSpecOffers || []) {
-        const status = String(row?.status || '').trim().toLowerCase();
-        if (status !== 'approved') continue;
-        const attributesObj = toObject(row?.attributes);
-        let specs = toObject(attributesObj?.specifications ?? attributesObj?.specs ?? attributesObj?.specification);
-
-        // Backward-compat: some older rows can carry spec keys directly in attributes.
-        if (!specs && attributesObj && typeof attributesObj === 'object' && !Array.isArray(attributesObj)) {
-          const direct = {};
-          Object.keys(attributesObj || {}).forEach((k) => {
-            if (['description', 'name', 'images', 'brandModel', 'lsa', 'hsnCode'].includes(k)) return;
-            direct[k] = attributesObj[k];
-          });
-          if (Object.keys(direct).length > 0) specs = direct;
-        }
-
-        if (!specs) continue;
-        if (!bestSpecs || nonEmptyValueCount(specs) > nonEmptyValueCount(bestSpecs)) {
-          bestSpecs = specs;
-        }
-      }
-
-      if (bestSpecs) {
-        Object.keys(bestSpecs).forEach((k) => {
-          const v = bestSpecs[k];
-          if (v !== undefined && v !== null) {
-            if (isMeaningfullyFilled(v) || !Object.prototype.hasOwnProperty.call(mergedSpecifications, k)) {
-              mergedSpecifications[k] = v;
-            }
-          } else if (!Object.prototype.hasOwnProperty.call(mergedSpecifications, k)) {
-            mergedSpecifications[k] = v;
-          }
-        });
-      }
-    }
-
-    const lookupCategory = String(product?.category || category || '').trim().toLowerCase();
-    const lookupName = String(product?.name || name || '').trim();
-    const brandHint = brandRaw || lookupName;
-    if (lookupCategory) {
-      mergedSpecifications = await enrichProductSpecificationsForDisplay({
-        category: lookupCategory,
-        name: lookupName,
-        brand: brandHint,
-        existingSpecs: mergedSpecifications,
-        productId: product?.id || null
-      });
+        .limit(50);
+      mergedSpecifications = mergeSelectedCatalogProductSpecifications(
+        product.specifications,
+        approvedSpecOffers || []
+      );
     }
 
     // Canonical MRP for this catalog variant (same for every supplier).
@@ -432,11 +325,16 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       status: 'success',
       found: !!product,
       product: product
-        ? { id: product.id, name: product.name, category: product.category, unit: product.unit }
+        ? {
+            id: product.id,
+            name: product.name,
+            category: product.category,
+            unit: product.unit,
+            brand: product.brand || null
+          }
         : null,
       unit: product?.unit || null,
-      specifications: mergedSpecifications
-      ,
+      specifications: mergedSpecifications,
       canonicalMrp,
       recommendedPrice,
       variantMrpLocked: canonicalMrp !== null,
@@ -804,6 +702,7 @@ router.get('/brands/status', authenticateToken, async (req, res) => {
       brandStatus: result.status,
       code: result.code || null,
       message: result.message || '',
+      matchType: result.matchType || null,
       brand: result.brand
         ? {
             id: result.brand.id,

@@ -26,9 +26,16 @@ describe('Select Yourself brand flow contract', () => {
 
   it('1) partial Path B typing is never an approved catalog hit', () => {
     expect(findApprovedCatalogBrandMatch('sam', catalog)).toBeNull();
-    expect(findApprovedCatalogBrandMatch('samsun', catalog)).toBeNull();
     expect(findApprovedCatalogBrandMatch('AB', [{ name: 'ABB', status: 'approved' }])).toBeNull();
     expect(findApprovedCatalogBrandMatch('samsung', catalog)?.name).toBe('samsung');
+  });
+
+  it('1a) near-typos of approved brands resolve to the catalog name', () => {
+    expect(findApprovedCatalogBrandMatch('samsun', catalog)?.name).toBe('samsung');
+    expect(findApprovedCatalogBrandMatch('samsun', catalog)?.matchType).toBe('typo');
+    expect(
+      findApprovedCatalogBrandMatch('Faststark', [{ name: 'Fastrack', status: 'approved' }])?.name
+    ).toBe('Fastrack');
   });
 
   it('1b) partial typing may soft-suggest only — does not block as exact match', () => {

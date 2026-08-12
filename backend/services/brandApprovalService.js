@@ -64,6 +64,7 @@ export async function resolveBrandApprovalStatus({ supabase, brandName }) {
   }
 
   let brandRow = null;
+  let matchType = 'exact';
   try {
     const { data, error } = await findBrandByCatalogDedupKey(name, supabase);
     if (error) throw error;
@@ -72,6 +73,17 @@ export async function resolveBrandApprovalStatus({ supabase, brandName }) {
       const fallback = await findBrandByNormalizedName(normalized, supabase);
       if (fallback.error) throw fallback.error;
       brandRow = fallback.data;
+    }
+    // Near-typo of an approved catalog brand (Faststark → Fastrack) counts as approved.
+    if (!brandRow || String(brandRow.status || '').toLowerCase() !== 'approved') {
+      const closeMatch = await findApprovedCatalogBrandCloseMatch(name, supabase);
+      if (
+        closeMatch.data &&
+        String(closeMatch.data.status || '').toLowerCase() === 'approved'
+      ) {
+        brandRow = closeMatch.data;
+        matchType = closeMatch.matchType || 'typo';
+      }
     }
   } catch (_e) {
     return {
@@ -99,8 +111,12 @@ export async function resolveBrandApprovalStatus({ supabase, brandName }) {
       ok: true,
       status: 'approved',
       code: null,
-      message: '',
-      brand: brandRow
+      message:
+        matchType === 'typo' && String(brandRow.name || '').trim()
+          ? `Matched approved brand "${brandRow.name}".`
+          : '',
+      brand: brandRow,
+      matchType
     };
   }
 
@@ -157,21 +173,15 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     !!brandRow && String(brandRow.status || '').trim().toLowerCase() === 'pending';
 
   if (!brandRow) {
-    // Block new approval requests only when an approved catalog brand already matches
-    // by exact / controlled identity (not partial typing or fuzzy near-typos).
-    // Supply-chain definition alone must never count as brand approval.
+    // Approved catalog match (exact or near-typo) — treat as approved for product submit.
+    // Path B also gets ok:true so the UI can say the brand is already approved.
     const catalogMatch = await findApprovedCatalogBrandCloseMatch(name, supabase);
     if (catalogMatch.data && String(catalogMatch.data.status || '').toLowerCase() === 'approved') {
-      const matchedName = String(catalogMatch.data.name || name).trim() || name;
-      const typedLooksDifferent =
-        getCanonicalBrandNormalizedName(name) !== getCanonicalBrandNormalizedName(matchedName);
       return {
-        ok: false,
-        code: 'brand_already_in_approved_catalog',
-        message: typedLooksDifferent
-          ? `"${name}" looks like approved brand "${matchedName}". Choose "${matchedName}" from the approved brands list instead of requesting a new brand.`
-          : `"${matchedName}" is already an approved brand. Choose it from the approved brands list instead of requesting a new brand.`,
-        brand: catalogMatch.data
+        ok: true,
+        brand: catalogMatch.data,
+        matchedExistingApproved: true,
+        matchType: catalogMatch.matchType || 'exact'
       };
     }
 
@@ -237,25 +247,19 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     }
   }
 
-  // If lookup found a non-approved row but an approved catalog identity match exists,
-  // do not open another pending request — send the supplier back to the approved list.
-  // Supply-chain definition alone must never count as brand approval.
+  // If lookup found a non-approved row but an approved catalog identity/typo match exists,
+  // use the approved brand (do not open another pending request).
   const catalogMatchExisting = await findApprovedCatalogBrandCloseMatch(name, supabase);
   if (
     catalogMatchExisting.data &&
     String(catalogMatchExisting.data.status || '').toLowerCase() === 'approved' &&
     String(catalogMatchExisting.data.id || '') !== String(brandRow?.id || '')
   ) {
-    const matchedName = String(catalogMatchExisting.data.name || name).trim() || name;
-    const typedLooksDifferent =
-      getCanonicalBrandNormalizedName(name) !== getCanonicalBrandNormalizedName(matchedName);
     return {
-      ok: false,
-      code: 'brand_already_in_approved_catalog',
-      message: typedLooksDifferent
-        ? `"${name}" looks like approved brand "${matchedName}". Choose "${matchedName}" from the approved brands list instead of requesting a new brand.`
-        : `"${matchedName}" is already an approved brand. Choose it from the approved brands list instead of requesting a new brand.`,
-      brand: catalogMatchExisting.data
+      ok: true,
+      brand: catalogMatchExisting.data,
+      matchedExistingApproved: true,
+      matchType: catalogMatchExisting.matchType || 'exact'
     };
   }
 

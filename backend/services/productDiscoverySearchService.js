@@ -20,6 +20,8 @@ import {
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 import { dedupeCategoryStrings } from '../utils/categoryNormalize.js';
 import { enrichDiscoverySuggestionsWithVariantCounts } from './productDiscoveryDetailService.js';
+import { normalizeText } from './supplierCatalogHelpersService.js';
+import { extractTokens } from './textMatchingService.js';
 
 /** Stable discovery ordering: relevance when searching, otherwise alphabetical by name. */
 export function sortDiscoverySuggestions(products = [], { query = '' } = {}) {
@@ -116,6 +118,39 @@ function applyTextSearchFilter(productsQuery, query) {
   );
 }
 
+/** Add Product name dropdown: only match catalog name/brand — never description/category noise. */
+function applyCatalogAutocompleteTextFilter(productsQuery, query) {
+  if (!query) return productsQuery;
+  const ilikeQuery = `%${escapeIlikeLiteral(query).replace(/\s+/g, '%')}%`;
+  return productsQuery.or(`name.ilike.${ilikeQuery},brand.ilike.${ilikeQuery}`);
+}
+
+/**
+ * Keep autocomplete rows that actually look like the typed product/variant name.
+ * Completely new names (no DB hit) must yield an empty dropdown.
+ */
+export function filterCatalogAutocompleteNameMatches(query, suggestions = []) {
+  const q = sanitizeDiscoverySearchQuery(String(query || ''));
+  if (!q) return [];
+  const qNorm = normalizeText(q);
+  if (!qNorm) return [];
+  const qTokens = extractTokens(qNorm).filter((t) => t.length >= 2);
+
+  return (suggestions || []).filter((row) => {
+    const nameNorm = normalizeText(row?.name || '');
+    const brandNorm = normalizeText(row?.brand || '');
+    const haystack = [nameNorm, brandNorm, `${brandNorm} ${nameNorm}`].filter(Boolean).join(' ');
+    if (!haystack) return false;
+    if (haystack.includes(qNorm) || nameNorm.includes(qNorm)) return true;
+    if (qNorm.length >= 4 && nameNorm.startsWith(qNorm.slice(0, Math.min(qNorm.length, 12)))) {
+      return true;
+    }
+    if (qTokens.length === 0) return false;
+    // Require every meaningful token to appear in name or brand (not description).
+    return qTokens.every((token) => nameNorm.includes(token) || brandNorm.includes(token));
+  });
+}
+
 function applyTokenSearchFilter(productsQuery, query) {
   const patterns = buildTokenIlikePatterns(query);
   if (!patterns.length) return productsQuery;
@@ -166,7 +201,7 @@ const OWNED_PRODUCT_SELECT = `
  */
 export async function searchSupplierOwnedCatalogSuggestions(
   supabase,
-  { supplierId, q, category, limit = 50 } = {}
+  { supplierId, q, category, limit = 50, strictNameMatch = false } = {}
 ) {
   const ownerId = String(supplierId || '').trim();
   if (!ownerId) return [];
@@ -202,6 +237,7 @@ export async function searchSupplierOwnedCatalogSuggestions(
 
   const chunkSize = 100;
   const products = [];
+  const textFilter = strictNameMatch ? applyCatalogAutocompleteTextFilter : applyTextSearchFilter;
   for (let i = 0; i < productIds.length; i += chunkSize) {
     const chunk = productIds.slice(i, i + chunkSize);
     let productsQuery = applyCategoryFilter(
@@ -212,7 +248,7 @@ export async function searchSupplierOwnedCatalogSuggestions(
         .neq('status', 'rejected'),
       { trimmedCategory }
     );
-    productsQuery = applyTextSearchFilter(productsQuery, query);
+    productsQuery = textFilter(productsQuery, query);
 
     const { data: rows, error: productsError } = await productsQuery
       .order('updated_at', { ascending: false })
@@ -222,7 +258,8 @@ export async function searchSupplierOwnedCatalogSuggestions(
   }
 
   let ranked = rankProductsByQuery(query, products);
-  if (query && !ranked.length && products.length === 0) {
+  // Never fuzzy-expand for Add Product autocomplete — new names must return empty.
+  if (query && !ranked.length && products.length === 0 && !strictNameMatch) {
     // Text search may miss fuzzy short names — fall back to ranking the full owned set.
     const fallback = [];
     for (let i = 0; i < productIds.length; i += chunkSize) {
@@ -253,7 +290,8 @@ export async function searchSupplierOwnedCatalogSuggestions(
     });
   }
 
-  return sortDiscoverySuggestions([...byId.values()], { query }).slice(0, safeLimit);
+  const sorted = sortDiscoverySuggestions([...byId.values()], { query }).slice(0, safeLimit);
+  return strictNameMatch ? filterCatalogAutocompleteNameMatches(query, sorted) : sorted;
 }
 
 /**
@@ -333,7 +371,11 @@ export async function searchProductDiscoveryForUser(
     trimmedCategory
   };
 
-  let productsQuery = applyTextSearchFilter(
+  const textFilter = forCatalogAutocomplete
+    ? applyCatalogAutocompleteTextFilter
+    : applyTextSearchFilter;
+
+  let productsQuery = textFilter(
     buildListedProductsQuery(supabase, categoryOpts),
     query
   );
@@ -348,7 +390,9 @@ export async function searchProductDiscoveryForUser(
 
   let rankedPool = rankProductsByQuery(query, rawProducts || []);
 
-  if (query && !rankedPool.length) {
+  // Buyer/voice search may broaden with token + fuzzy fallbacks.
+  // Add Product autocomplete must only return real catalog name/brand hits.
+  if (query && !rankedPool.length && !forCatalogAutocomplete) {
     const tokenQuery = applyTokenSearchFilter(
       buildListedProductsQuery(supabase, categoryOpts),
       query
@@ -361,7 +405,7 @@ export async function searchProductDiscoveryForUser(
     }
   }
 
-  if (query && shouldRunFuzzyFallback(query, rankedPool, safeLimit)) {
+  if (query && !forCatalogAutocomplete && shouldRunFuzzyFallback(query, rankedPool, safeLimit)) {
     const fallbackQuery = buildListedProductsQuery(supabase, categoryOpts);
     const fallbackRes = await fallbackQuery
       .order('updated_at', { ascending: false })
@@ -506,7 +550,12 @@ export async function searchProductDiscoveryForUser(
     }
   }
 
-  const sortedSuggestions = sortDiscoverySuggestions(suggestionsWithVariants, { query });
+  const sortedSuggestions = sortDiscoverySuggestions(
+    forCatalogAutocomplete
+      ? filterCatalogAutocompleteNameMatches(query, suggestionsWithVariants)
+      : suggestionsWithVariants,
+    { query }
+  );
 
   const categories = dedupeCategoryStrings(
     sortedSuggestions.map((product) => product?.category)
