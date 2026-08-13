@@ -19,8 +19,10 @@ export {
   extractBcovScopeKeys,
   extractBrandForBcov,
   firstNonEmpty,
-  parseFiniteNumber
+  parseFiniteNumber,
+  pickEffectiveOfferPrice
 } from '../../services/procurementSharedService.js';
+export { lineMoneyTotal, parseMoney } from '../../utils/money.js';
 export { insertNotification } from '../../repositories/notificationsRepository.js';
 export {
   assertGstStateInputs,

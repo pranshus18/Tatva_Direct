@@ -3,9 +3,9 @@
  * All dashboards, analytics, and pay-later gates should use these helpers.
  */
 
-export function roundMoney(n) {
-  return Math.round((Number(n) || 0) * 100) / 100;
-}
+import { roundMoney } from './money.js';
+
+export { roundMoney };
 
 /** Paid order whose revenue counts toward net revenue (item-level, after closed returns). */
 export function isRevenueRecognizedOrder(order) {

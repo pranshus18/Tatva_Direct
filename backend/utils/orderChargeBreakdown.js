@@ -1,4 +1,4 @@
-const roundMoney = (value) => Math.round((Number(value) || 0) * 100) / 100;
+import { roundMoney } from './money.js';
 
 /** MRP line total for a PO group (GST already included in unit prices). */
 export function resolvePoGroupMrpTotal(group = {}) {

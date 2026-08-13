@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { composeBcovNotes } from '../services/supplierCatalogHelpersService.js';
-import { validateAndNormalizeBcovLevels } from '../services/supplierBcovService.js';
+import {
+  validateAndNormalizeBcovLevels,
+  deleteSupplierBcovLevelsIfNoRemainingOffer,
+  isBcovLevelOwnedByOffer
+} from '../services/supplierBcovService.js';
 import {
   extractBcovScopeKeys,
   extractBrandForBcov,
@@ -295,4 +299,121 @@ test('validateAndNormalizeBcovLevels: brand COV must be below supplier and platf
   );
   assert.equal(belowSupplier.ok, false);
   assert.match(belowSupplier.message, /greater than or equal to Supplier_purchase_total/i);
+});
+
+test('deleteSupplierBcovLevelsIfNoRemainingOffer deletes only when offer is gone', async () => {
+  const calls = [];
+  const makeClient = (remainingOffers) => ({
+    from(table) {
+      const state = { table, action: null, filters: [], head: false };
+      const finalize = () => {
+        calls.push({ ...state, filters: [...state.filters] });
+        if (table === 'supplier_products' && state.head) {
+          return { data: null, error: null, count: remainingOffers };
+        }
+        return { data: null, error: null, count: null };
+      };
+      const builder = {
+        select(...args) {
+          state.action = 'select';
+          if (args[1]?.head) state.head = true;
+          return builder;
+        },
+        delete() {
+          state.action = 'delete';
+          return builder;
+        },
+        eq(column, value) {
+          state.filters.push({ column, value });
+          return builder;
+        },
+        then(resolve, reject) {
+          try {
+            resolve(finalize());
+          } catch (error) {
+            reject(error);
+          }
+        }
+      };
+      return builder;
+    }
+  });
+
+  const kept = await deleteSupplierBcovLevelsIfNoRemainingOffer(makeClient(1), {
+    supplierId: 'sup-1',
+    variantKey: 'vk-1'
+  });
+  assert.equal(kept.deleted, false);
+  assert.equal(kept.reason, 'offer_still_present');
+
+  const cleared = await deleteSupplierBcovLevelsIfNoRemainingOffer(makeClient(0), {
+    supplierId: 'sup-1',
+    variantKey: 'vk-1'
+  });
+  assert.equal(cleared.deleted, true);
+  assert.ok(
+    calls.some(
+      (c) =>
+        c.table === 'supplier_bcov_levels' &&
+        c.action === 'delete' &&
+        c.filters.some((f) => f.column === 'variant_key' && f.value === 'vk-1')
+    )
+  );
+});
+
+test('isBcovLevelOwnedByOffer hides leftover Product_COV from deleted listings', () => {
+  const offer = {
+    id: 'offer-new',
+    created_at: '2026-08-13T10:00:00.000Z'
+  };
+
+  assert.equal(
+    isBcovLevelOwnedByOffer(
+      {
+        id: 'legacy',
+        notes: JSON.stringify({ levelName: 'Level 1', buyerBcov: '20' }),
+        created_at: '2026-08-01T10:00:00.000Z',
+        updated_at: '2026-08-01T10:00:00.000Z'
+      },
+      offer,
+      { siblingOfferCount: 1 }
+    ),
+    false
+  );
+
+  assert.equal(
+    isBcovLevelOwnedByOffer(
+      {
+        id: 'tagged-other',
+        notes: JSON.stringify({
+          levelName: 'Level 1',
+          buyerBcov: '20',
+          supplierProductId: 'offer-old'
+        }),
+        created_at: '2026-08-13T11:00:00.000Z',
+        updated_at: '2026-08-13T11:00:00.000Z'
+      },
+      offer,
+      { siblingOfferCount: 1 }
+    ),
+    false
+  );
+
+  assert.equal(
+    isBcovLevelOwnedByOffer(
+      {
+        id: 'owned',
+        notes: JSON.stringify({
+          levelName: 'Level 1',
+          buyerBcov: '20',
+          supplierProductId: 'offer-new'
+        }),
+        created_at: '2026-08-13T11:00:00.000Z',
+        updated_at: '2026-08-13T11:00:00.000Z'
+      },
+      offer,
+      { siblingOfferCount: 1 }
+    ),
+    true
+  );
 });

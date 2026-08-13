@@ -6,6 +6,7 @@ import { createInvoiceForOrder } from '../services/invoiceService.js';
 import { generateAndUploadInvoicePdf, saveInvoicePdfUrlToInvoice } from '../services/invoicePdfService.js';
 import { createReceiptIfMissing } from '../services/paymentReceiptService.js';
 import { computeLineGst, sumGstLines } from '../services/gstService.js';
+import { lineMoneyTotal, parseMoney } from '../utils/money.js';
 import { offlineOrderSchema, offlineReturnSchema } from '../contracts/posContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../utils/contractValidation.js';
 import {
@@ -330,8 +331,8 @@ router.post('/offline-order', authenticateToken, async (req, res) => {
     const lineTaxBreakdown = [];
     for (const line of items) {
       const qty = parseFloat(line.quantity) || 0;
-      const unitPrice = parseFloat(line.unit_price) || 0;
-      const taxableAmount = qty * unitPrice;
+      const unitPrice = parseMoney(line.unit_price);
+      const taxableAmount = lineMoneyTotal(unitPrice, qty);
       let igstRate = 0;
       let cgstRate = 0;
       let sgstRate = 0;
@@ -461,7 +462,7 @@ router.post('/offline-order', authenticateToken, async (req, res) => {
       supplier_product_id: item.supplier_product_id || null,
       quantity: item.quantity,
       unit_price: item.unit_price,
-      total_price: (parseFloat(item.quantity) || 0) * (parseFloat(item.unit_price) || 0)
+      total_price: lineMoneyTotal(item.unit_price, item.quantity)
     }));
 
     const { error: orderTotalUpdateError } = await supabase

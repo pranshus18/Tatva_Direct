@@ -501,6 +501,13 @@
   margin-top: 4px;
 }
 
+.upstream-offer-mrp {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  color: #94a3b8;
+  margin-right: 0.15rem;
+}
+
 .upstream-offer-rank-keys {
   font-size: 0.75rem;
   color: #94a3b8;

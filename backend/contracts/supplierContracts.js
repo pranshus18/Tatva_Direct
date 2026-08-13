@@ -6,6 +6,7 @@ export const supplierBcovLevelsUpsertSchema = z.object({
   variantName: z.string().optional(),
   productId: z.string().uuid().optional(),
   catalogProductId: z.string().uuid().optional(),
+  supplierProductId: z.string().uuid().optional(),
   levels: z.array(z.record(z.string(), z.any()))
 });
 

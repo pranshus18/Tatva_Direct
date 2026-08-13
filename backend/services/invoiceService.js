@@ -1,5 +1,6 @@
 import { supabase } from '../config/supabase.js';
 import { recordInvoiceLedger } from './ledgerService.js';
+import { lineMoneyTotal } from '../utils/money.js';
 import {
   assertGstStateInputs,
   assertSupplierProductTaxRates,
@@ -70,7 +71,7 @@ async function buildOrderTaxSummary(order) {
       productRef: `supplier_product_id ${line?.supplier_product_id || 'unknown'}`
     });
     return computeLineGst({
-      taxableAmount: quantity * unitPrice,
+      taxableAmount: lineMoneyTotal(unitPrice, quantity),
       igstRate: supplierProduct?.igst_rate,
       cgstRate: supplierProduct?.cgst_rate,
       sgstRate: supplierProduct?.sgst_rate,

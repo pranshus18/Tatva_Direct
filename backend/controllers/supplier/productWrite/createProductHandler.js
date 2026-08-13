@@ -26,6 +26,7 @@ import {
 import { sanitizeImageUrls } from '../shared/productHelpers.js';
 import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
+import { clearOrphanedSupplierBcovLevelsBeforeNewOffer } from '../../../services/supplierBcovService.js';
 import {
   createBaseProductIfNeeded,
   ensureCategoryAndUnit,
@@ -600,6 +601,22 @@ export function buildSupplierProductCreateHandler(ctx) {
           images: normalizedImageUrls
         })
       };
+
+      // Fresh insert for a variant with no live offer: drop leftover Product_COV from a deleted listing.
+      // Do not clear when resubmitting a rejected offer or when another location already shares the key.
+      if (!resubmittingRejectedOffer && resolvedVariantKey) {
+        try {
+          await clearOrphanedSupplierBcovLevelsBeforeNewOffer(supabase, {
+            supplierId: req.userId,
+            variantKey: resolvedVariantKey
+          });
+        } catch (bcovCleanupError) {
+          console.error(
+            '[Product_COV] failed to clear orphaned levels before new offer:',
+            bcovCleanupError?.message || bcovCleanupError
+          );
+        }
+      }
 
       const { data: newSupplierProduct, error: supplierProductError } = resubmittingRejectedOffer
         ? await supabase

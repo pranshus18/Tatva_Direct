@@ -20,6 +20,9 @@ import {
   mapToDeliveryAddress,
   normalizeAddress,
   parseWithSchema,
+  pickEffectiveOfferPrice,
+  lineMoneyTotal,
+  parseMoney,
   poCreateRequestSchema,
   recordInventoryMovement,
   resolveB2bPaymentFromBody,
@@ -433,7 +436,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             throw err;
           }
 
-          const baseUnitPrice = parseFloat(supplierProduct.price) || 0;
+          const baseUnitPrice = parseMoney(supplierProduct.price);
           const rawQuantity = parseFloat(item?.quantity);
           // order_items.quantity is integer in DB. Validate early and fail
           // with a clear client error instead of a generic DB insert failure.
@@ -455,8 +458,9 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             brandKey: bcovBrandKey,
             scopeKeys: bcovScopeKeys
           });
-          const unitPrice = bcovResolved?.price ?? baseUnitPrice;
-          const lineAmount = unitPrice * quantity;
+          const picked = pickEffectiveOfferPrice(baseUnitPrice, bcovResolved);
+          const unitPrice = picked.price;
+          const lineAmount = lineMoneyTotal(unitPrice, quantity);
           const itemSpecifications =
             item?.specifications && typeof item.specifications === 'object' && !Array.isArray(item.specifications)
               ? item.specifications
@@ -497,11 +501,11 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
                   : {},
               // Snapshot variant/offer images at placement — never the merged catalog gallery.
               images: lineImages,
-              bcov: bcovResolved
+              bcov: picked.bcovApplied
                 ? {
                     applied: true,
-                    levelId: bcovResolved.levelId,
-                    baseUnitPrice
+                    levelId: picked.bcovLevelId,
+                    baseUnitPrice: picked.basePrice
                   }
                 : { applied: false },
               gst: {
@@ -581,7 +585,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
             : {},
         images: Array.isArray(line.images) ? line.images.filter(Boolean) : [],
         productImage: line.productImage || null,
-        lineTotal: (Number(line.quantity) || 0) * (Number(line.price) || 0)
+        lineTotal: lineMoneyTotal(line.price, line.quantity)
       }));
 
       // Duplicate guard: if an equivalent order was just created very recently,

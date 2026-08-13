@@ -8,7 +8,7 @@ import {
   parseSpecificationsForDisplay,
   specificationsObjectForLogistics
 } from '../utils/specifications';
-import { formatRupee } from '../utils/formatRupee';
+import { formatRupee, lineMoneyTotal, roundMoney } from '../utils/formatRupee';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
 import { restorePmVaultSession } from '../services/pmAuthService';
 import { isVaultPaymentMethod, VAULT_PAYMENT_METHOD } from '../utils/vaultPaymentMethod';
@@ -709,9 +709,9 @@ const SupplierPlaceOrder = () => {
       if (!g.vendorName && vendorName) g.vendorName = vendorName;
       const qty = Number(line?.quantity || 0) || 0;
       const unitPrice = Number(line?.unitPrice || 0) || 0;
-      const lineTotal = Number(line?.lineTotal ?? qty * unitPrice) || 0;
+      const lineTotal = lineMoneyTotal(unitPrice, qty);
 
-      g.total += lineTotal;
+      g.total = roundMoney(g.total + lineTotal);
       g.items.push({
         name: line?.productName || 'Product',
         quantity: qty,
@@ -727,7 +727,7 @@ const SupplierPlaceOrder = () => {
 
   const grandTotalAllPos = useMemo(() => {
     if (!poGroups.length) return 0;
-    return poGroups.reduce((s, g) => s + (Number(g.total) || 0), 0);
+    return roundMoney(poGroups.reduce((s, g) => s + (Number(g.total) || 0), 0));
   }, [poGroups]);
   const vaultShortage = Math.max(0, Number(grandTotalAllPos || 0) - Number(vaultBalance || 0));
   const hasSufficientVaultBalance = vaultShortage <= 0;
@@ -1558,7 +1558,7 @@ const SupplierPlaceOrder = () => {
                                   {item.quantity} {item.unit || ''}
                                 </td>
                                 <td>{formatRupee(item.price || 0)}</td>
-                                <td>{formatRupee((item.quantity || 0) * (item.price || 0))}</td>
+                                <td>{formatRupee(lineMoneyTotal(item.price, item.quantity))}</td>
                               </tr>
                             );
                           })}

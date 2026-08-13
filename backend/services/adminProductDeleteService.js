@@ -1,3 +1,5 @@
+import { deleteSupplierBcovLevelsForDeletedOffers } from './supplierBcovService.js';
+
 /**
  * Remove rows that block deleting a catalog product row.
  * Called before admin hard-deletes catalog products.
@@ -52,9 +54,10 @@ export async function clearCatalogProductReferences(supabase, productId) {
   }
 
   // Offer rows block product deletes (FK) and would orphan if left behind.
+  // Capture supplier/variant keys so Product_COV slabs are cleared with the offers.
   const { data: offerRows, error: offerSelectError } = await supabase
     .from('supplier_products')
-    .select('id')
+    .select('id, supplier_id, variant_key')
     .eq('product_id', productId);
 
   if (offerSelectError && !isMissingRelationError(offerSelectError)) {
@@ -88,6 +91,15 @@ export async function clearCatalogProductReferences(supabase, productId) {
 
     if (offersDeleteError) {
       throw offersDeleteError;
+    }
+
+    try {
+      await deleteSupplierBcovLevelsForDeletedOffers(supabase, offerRows || []);
+    } catch (bcovCleanupError) {
+      console.error(
+        '[Product_COV] failed to clear levels after catalog product delete:',
+        bcovCleanupError?.message || bcovCleanupError
+      );
     }
   }
 
@@ -163,7 +175,7 @@ export async function deleteCatalogOffer(supabase, { catalogProductId, supplierP
 
   const { data: offerRow, error: offerFetchError } = await supabase
     .from('supplier_products')
-    .select('id, product_id')
+    .select('id, product_id, supplier_id, variant_key')
     .eq('id', offerId)
     .single();
 
@@ -212,6 +224,15 @@ export async function deleteCatalogOffer(supabase, { catalogProductId, supplierP
     const err = new Error('Supplier variant/offer not found');
     err.statusCode = 404;
     throw err;
+  }
+
+  try {
+    await deleteSupplierBcovLevelsForDeletedOffers(supabase, [offerRow]);
+  } catch (bcovCleanupError) {
+    console.error(
+      '[Product_COV] failed to clear levels after admin variant delete:',
+      bcovCleanupError?.message || bcovCleanupError
+    );
   }
 
   const { count, error: countError } = await supabase

@@ -1,11 +1,14 @@
 import { parseSupplierOfferAttributes } from './supplierCatalogHelpersService.js';
+import { roundMoney } from '../utils/money.js';
+
+export { roundMoney };
 
 const asNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
 };
 
-export const roundMoney = (value) => Math.round(asNumber(value) * 100) / 100;
+const hasNumericField = (value) => value !== null && value !== undefined && value !== '';
 
 const STATE_ALIAS_MAP = new Map([
   ['andhra pradesh', 'andhra pradesh'],
@@ -260,11 +263,28 @@ export function lineGstFromOrderItemSnapshot(item, fallbackTaxableAmount = 0) {
   const gst = specs?.gst;
   if (!gst || typeof gst !== 'object' || !gst.taxType) return null;
 
-  const taxableAmount = asNumber(gst.taxableAmount ?? fallbackTaxableAmount);
-  const taxAmount = asNumber(gst.taxAmount);
-  const igstAmount = asNumber(gst.igstAmount);
-  const cgstAmount = asNumber(gst.cgstAmount);
-  const sgstAmount = asNumber(gst.sgstAmount);
+  const taxableAmount = roundMoney(asNumber(gst.taxableAmount ?? fallbackTaxableAmount));
+  const storedTaxAmount = hasNumericField(gst.taxAmount) ? roundMoney(asNumber(gst.taxAmount)) : null;
+  let igstAmount = hasNumericField(gst.igstAmount) ? roundMoney(asNumber(gst.igstAmount)) : null;
+  let cgstAmount = hasNumericField(gst.cgstAmount) ? roundMoney(asNumber(gst.cgstAmount)) : null;
+  let sgstAmount = hasNumericField(gst.sgstAmount) ? roundMoney(asNumber(gst.sgstAmount)) : null;
+  const taxAmountFallback = storedTaxAmount ?? 0;
+
+  if (igstAmount === null) {
+    igstAmount = gst.taxType === 'IGST' ? taxAmountFallback : 0;
+  }
+  if (cgstAmount === null) {
+    cgstAmount = gst.taxType === 'CGST_SGST' ? roundMoney(taxAmountFallback / 2) : 0;
+  }
+  if (sgstAmount === null) {
+    sgstAmount =
+      gst.taxType === 'CGST_SGST' ? roundMoney(taxAmountFallback - cgstAmount) : 0;
+  }
+
+  const taxAmount =
+    storedTaxAmount !== null
+      ? storedTaxAmount
+      : roundMoney(igstAmount + cgstAmount + sgstAmount);
 
   return {
     taxableAmount,
@@ -272,11 +292,13 @@ export function lineGstFromOrderItemSnapshot(item, fallbackTaxableAmount = 0) {
     igstRate: asNumber(gst.igstRate),
     cgstRate: asNumber(gst.cgstRate),
     sgstRate: asNumber(gst.sgstRate),
-    igstAmount: igstAmount || (gst.taxType === 'IGST' ? taxAmount : 0),
-    cgstAmount: cgstAmount || (gst.taxType === 'CGST_SGST' ? taxAmount / 2 : 0),
-    sgstAmount: sgstAmount || (gst.taxType === 'CGST_SGST' ? taxAmount / 2 : 0),
-    taxAmount: taxAmount || igstAmount + cgstAmount + sgstAmount,
-    totalAmount: asNumber(gst.totalAmount ?? taxableAmount + taxAmount),
+    igstAmount,
+    cgstAmount,
+    sgstAmount,
+    taxAmount,
+    totalAmount: hasNumericField(gst.totalAmount)
+      ? roundMoney(asNumber(gst.totalAmount))
+      : roundMoney(taxableAmount + taxAmount),
     supplierState: gst.supplierState || '',
     billingState: gst.billingState || gst.placeOfSupplyState || '',
     placeOfSupplyState: gst.placeOfSupplyState || gst.billingState || '',

@@ -22,7 +22,11 @@ import SupplierTsinLine from '../components/SupplierTsinLine';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatRupeePerUnit } from '../utils/formatRupee';
+import {
+  formatDiscoveryMrp,
+  formatDiscoveryPrice,
+  resolveDiscoveryDisplayPricing
+} from '../utils/discoveryPricing';
 import {
   specificationEntriesForCustomerDisplay
 } from '../utils/specifications';
@@ -48,12 +52,7 @@ import './ProductDiscovery.css';
 import './SupplierUpstream.css';
 
 function formatPrice(price, unit) {
-  const num = Number(price);
-  if (!Number.isFinite(num) || num <= 0) return null;
-  return formatRupeePerUnit(num, unit, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
+  return formatDiscoveryPrice(price, unit);
 }
 
 function formatPriceRange(range, unit) {
@@ -411,6 +410,15 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const displayPrice = isUpstreamPortal
     ? viewerListing?.price ?? activeListing?.price
     : activeListing?.price;
+  // Upstream portal: Product_COV applies to the selected upstream/catalog listing being sourced,
+  // not to the viewer's own listing price.
+  const displayPricing = resolveDiscoveryDisplayPricing(
+    isUpstreamPortal
+      ? activeListing?.bcovApplied
+        ? activeListing
+        : { price: displayPrice, bcovApplied: false }
+      : activeListing || {}
+  );
   const displayStock = isUpstreamPortal
     ? viewerListing?.stock ?? activeListing?.stock
     : activeListing?.stock;
@@ -532,8 +540,13 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     ]
   );
   const priceLabel = useMemo(
-    () => formatPrice(displayPrice, displayUnit),
-    [displayPrice, displayUnit, selectedVariantKey]
+    () => formatPrice(displayPricing.price ?? displayPrice, displayUnit),
+    [displayPricing.price, displayPrice, displayUnit, selectedVariantKey]
+  );
+  const mrpLabel = useMemo(
+    () =>
+      displayPricing.bcovApplied ? formatDiscoveryMrp(displayPricing.mrp) : null,
+    [displayPricing.bcovApplied, displayPricing.mrp, selectedVariantKey]
   );
   const rangeLabel = isUpstreamPortal
     ? null
@@ -673,7 +686,16 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const buyBox = activeListing ? (
     <aside className="pdd-buybox">
       <div className="pdd-buybox__price-block">
-        {priceLabel ? <div className="pdd-buybox__price">{priceLabel}</div> : null}
+        {priceLabel ? (
+          <div className="pdd-buybox__price">
+            {mrpLabel ? (
+              <span className="pdd-buybox__mrp" aria-label={`MRP ${mrpLabel}`}>
+                {mrpLabel}
+              </span>
+            ) : null}
+            <span className="pdd-buybox__offer-price">{priceLabel}</span>
+          </div>
+        ) : null}
         {!priceLabel && rangeLabel ? <div className="pdd-buybox__price">{rangeLabel}</div> : null}
         {!priceLabel && !rangeLabel ? (
           <div className="pdd-buybox__price pdd-buybox__price--na">
@@ -1096,7 +1118,11 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                           {section.variants.map((variant) => {
                             const active =
                               variantSelectionKey(variant) === variantSelectionKey(selectedVariant);
-                            const rowPrice = formatPrice(variant.price, variant.unit);
+                            const rowPricing = resolveDiscoveryDisplayPricing(variant);
+                            const rowPrice = formatPrice(rowPricing.price, variant.unit);
+                            const rowMrp = rowPricing.bcovApplied
+                              ? formatDiscoveryMrp(rowPricing.mrp)
+                              : null;
                             return (
                               <tr
                                 key={variantSelectionKey(variant)}
@@ -1111,7 +1137,18 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                                     {resolveDiscoveryVariantLabel(variant, allVariantOptions)}
                                   </button>
                                 </td>
-                                <td>{rowPrice || 'On request'}</td>
+                                <td>
+                                  {rowPrice ? (
+                                    <span className="pdd-variant-table__price">
+                                      {rowMrp ? (
+                                        <span className="pdd-variant-table__mrp">{rowMrp}</span>
+                                      ) : null}
+                                      <span>{rowPrice}</span>
+                                    </span>
+                                  ) : (
+                                    'On request'
+                                  )}
+                                </td>
                                 <td>{Number(variant.stock) > 0 ? variant.stock : 'Out of stock'}</td>
                                 <td>{variant.unit || '—'}</td>
                                 <td>{variant.min_order_quantity || 1}</td>

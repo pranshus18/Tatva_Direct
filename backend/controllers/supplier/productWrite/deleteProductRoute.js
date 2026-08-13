@@ -1,5 +1,6 @@
 import { getContractErrorMessage, parseWithSchema, supplierProductDeleteSchema } from '../supplierImports.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
+import { deleteSupplierBcovLevelsIfNoRemainingOffer } from '../../../services/supplierBcovService.js';
 
 export function registerSupplierProductDeleteRoute(ctx) {
   const { router, authenticateToken, supabase } = ctx;
@@ -12,7 +13,7 @@ export function registerSupplierProductDeleteRoute(ctx) {
 
       const { data: supplierProduct, error: fetchError } = await supabase
         .from('supplier_products')
-        .select('id, product_id, supplier_id')
+        .select('id, product_id, supplier_id, variant_key')
         .eq('id', supplierProductId)
         .single();
 
@@ -31,6 +32,7 @@ export function registerSupplierProductDeleteRoute(ctx) {
       }
 
       const productId = supplierProduct.product_id;
+      const variantKey = String(supplierProduct.variant_key || '').trim();
       const { data: deletedRows, error: spError } = await supabase
         .from('supplier_products')
         .delete()
@@ -50,6 +52,21 @@ export function registerSupplierProductDeleteRoute(ctx) {
           status: 'error',
           message: 'Product not found for this supplier'
         });
+      }
+
+      // Product_COV is keyed by variant_key — remove orphaned rows so a re-list starts blank.
+      if (variantKey) {
+        try {
+          await deleteSupplierBcovLevelsIfNoRemainingOffer(supabase, {
+            supplierId: req.userId,
+            variantKey
+          });
+        } catch (bcovCleanupError) {
+          console.error(
+            '[Product_COV] failed to clear levels after supplier product delete:',
+            bcovCleanupError?.message || bcovCleanupError
+          );
+        }
       }
 
       const { count, error: countError } = await supabase

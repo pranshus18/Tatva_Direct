@@ -20,6 +20,9 @@ import {
   mapToDeliveryAddress,
   normalizeAddress,
   parseWithSchema,
+  pickEffectiveOfferPrice,
+  lineMoneyTotal,
+  parseMoney,
   poGroupRequestSchema,
   buildShippingAddressKey,
   buildTransportGroupId,
@@ -385,7 +388,7 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       }
 
       const quantity = parseFloat(item.quantity) || 0;
-      const basePrice = parseFloat(supplierProduct.price) || 0;
+      const basePrice = parseMoney(supplierProduct.price);
       const bcovVariantKey = supplierProduct?.variant_key || item?.variantKey || '';
       const bcovBrandKey = extractBrandForBcov({ supplierProduct, item });
       const bcovScopeKeys = extractBcovScopeKeys({ supplierProduct, item });
@@ -396,8 +399,9 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         brandKey: bcovBrandKey,
         scopeKeys: bcovScopeKeys
       });
-      const price = bcovResolved?.price ?? basePrice;
-      const itemTotal = quantity * price;
+      const picked = pickEffectiveOfferPrice(basePrice, bcovResolved);
+      const price = picked.price;
+      const itemTotal = lineMoneyTotal(price, quantity);
       const attrs = supplierProduct?.attributes || {};
       const specs = supplierProduct?.product?.specifications || {};
       const productImages = resolveSupplierOfferDisplayImages(attrs.images, []);
@@ -416,7 +420,9 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         ...productSpecs
       };
 
-      vendorGroups[transportGroupId].total += itemTotal;
+      vendorGroups[transportGroupId].total = roundMoney(
+        vendorGroups[transportGroupId].total + itemTotal
+      );
 
       let lineGst = null;
       if (placeOfSupplyState) {
@@ -458,9 +464,9 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
         asin: product.asin || null,
         variantKey: supplierProduct.variant_key || null,
         variantAsin: supplierProduct.variant_asin || null,
-        bcovApplied: !!bcovResolved,
-        bcovLevelId: bcovResolved?.levelId || null,
-        basePrice,
+        bcovApplied: picked.bcovApplied,
+        bcovLevelId: picked.bcovLevelId,
+        basePrice: picked.basePrice,
         productIdentification: productIdentification || null,
         specifications: mergedSpecifications,
         images: productImages,

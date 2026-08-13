@@ -1,8 +1,8 @@
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
+import { parseMoney } from '../utils/money.js';
 
 export function parseOfferPrice(raw) {
-  const price = Number.parseFloat(String(raw ?? ''));
-  return Number.isFinite(price) && price >= 0 ? price : 0;
+  return parseMoney(raw);
 }
 
 export function isListedSupplierOffer(row = {}) {
@@ -120,7 +120,10 @@ export function aggregateEligibleDiscoveryOffers({
     const candidate = {
       ...row,
       _stock: stock,
-      _price: parseOfferPrice(row.price)
+      _price:
+        row._price != null && Number.isFinite(Number(row._price))
+          ? Number(row._price)
+          : parseOfferPrice(row.price)
     };
     bestOfferByProduct.set(productId, pickBetterListedOffer(bestOfferByProduct.get(productId), candidate));
   }
@@ -179,16 +182,33 @@ export function reconcileDiscoveryProductFields(product, aggregates) {
   const totalStock = Number(aggregates.totalStockByProduct.get(productId) || 0);
   const bestOffer = aggregates.bestOfferByProduct.get(productId);
   const catalogPrice = parseOfferPrice(product?.price);
-  const offerPrice = parseOfferPrice(bestOffer?.price);
+  const offerMrp = parseOfferPrice(
+    bestOffer?._basePrice ?? bestOffer?.price ?? bestOffer?._price
+  );
+  const offerEffective = parseOfferPrice(
+    bestOffer?._effectivePrice ?? bestOffer?._price ?? bestOffer?.price
+  );
   const catalogStock = parseSupplierStockQuantity(product?.stock);
   const resolvedStock = supplierCount > 0 ? totalStock : (catalogStock ?? 0);
+  const resolvedPrice = offerEffective > 0 ? offerEffective : catalogPrice;
+  const resolvedMrp = offerMrp > 0 ? offerMrp : catalogPrice;
+  const bcovApplied =
+    Boolean(bestOffer?._bcovApplied) &&
+    resolvedMrp > 0 &&
+    resolvedPrice > 0 &&
+    resolvedPrice < resolvedMrp;
 
   return {
     ...product,
     supplierCount,
     canAddToCart: supplierCount > 0 && resolvedStock > 0,
     stock: resolvedStock,
-    price: offerPrice > 0 ? offerPrice : catalogPrice,
+    price: resolvedPrice,
+    // MRP / list price before Product_COV — used for strikethrough in discovery UI.
+    basePrice: resolvedMrp > 0 ? resolvedMrp : null,
+    mrp: resolvedMrp > 0 ? resolvedMrp : null,
+    bcovApplied,
+    bcovLevelId: bcovApplied ? bestOffer?._bcovLevelId || null : null,
     min_order_quantity: bestOffer?.min_order_quantity ?? product?.min_order_quantity ?? null,
     location:
       String(product?.location || '').trim() ||

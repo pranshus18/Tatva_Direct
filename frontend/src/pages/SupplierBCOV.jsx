@@ -13,14 +13,16 @@ import {
 import { formatRupee } from '../utils/formatRupee';
 import RupeeInput from '../components/RupeeInput';
 
-const EMPTY_ROW = {
+const createDefaultRow = (index = 0) => ({
   id: null,
-  levelName: '',
+  levelName: `Level ${index + 1}`,
   buyerBcov: '',
   buyerCov: '',
   buyerPcov: '',
   price: ''
-};
+});
+
+const isDefaultLevelName = (value) => /^Level\s+\d+$/i.test(String(value || '').trim());
 
 const parseCovThresholdNumber = (value) => {
   if (value === null || value === undefined) return null;
@@ -38,13 +40,17 @@ const parseCovThresholdNumber = (value) => {
 
 const isBlankRow = (row) => {
   if (!row) return true;
-  return (
-    String(row.levelName || '').trim() === '' &&
-    String(row.buyerBcov || '').trim() === '' &&
-    String(row.buyerCov || '').trim() === '' &&
-    String(row.buyerPcov || '').trim() === '' &&
-    String(row.price || '').trim() === ''
-  );
+  const hasCovValues =
+    String(row.buyerBcov || '').trim() !== '' ||
+    String(row.buyerCov || '').trim() !== '' ||
+    String(row.buyerPcov || '').trim() !== '' ||
+    String(row.price || '').trim() !== '';
+  if (!hasCovValues) {
+    // Default "Level N" alone is still an empty draft row (not ready to save).
+    const levelName = String(row.levelName || '').trim();
+    return levelName === '' || isDefaultLevelName(levelName);
+  }
+  return false;
 };
 
 const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
@@ -109,7 +115,7 @@ const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
 
 const SupplierBCOV = () => {
   const location = useLocation();
-  const [rows, setRows] = useState([{ ...EMPTY_ROW }]);
+  const [rows, setRows] = useState([createDefaultRow(0)]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
@@ -118,13 +124,16 @@ const SupplierBCOV = () => {
   const [covEligible, setCovEligible] = useState(true);
   const [covBlockedMessage, setCovBlockedMessage] = useState('');
 
-  const { variantKey, variantAsin, variantName } = useMemo(() => {
+  const { variantKey, variantAsin, variantName, supplierProductId } = useMemo(() => {
     const params = new URLSearchParams(location.search || '');
     return {
-      variantKey: String(params.get('variantKey') || params.get('variantAsin') || '').trim(),
+      variantKey: String(params.get('variantKey') || '').trim(),
       variantAsin: String(params.get('variantAsin') || '').trim(),
       variantName: String(
         params.get('variantName') || params.get('productName') || params.get('brand') || ''
+      ).trim(),
+      supplierProductId: String(
+        params.get('supplierProductId') || params.get('supplier_product_id') || ''
       ).trim()
     };
   }, [location.search]);
@@ -140,10 +149,17 @@ const SupplierBCOV = () => {
       return false;
     }
     try {
-      if (!silent) setLoading(true);
+      if (!silent) {
+        setLoading(true);
+        // Never flash previous variant's Product_COV while the next offer loads.
+        setRows([createDefaultRow(0)]);
+        setIsStepCompleted(false);
+      }
       const token = localStorage.getItem('token');
+      const query = new URLSearchParams({ variantKey });
+      if (supplierProductId) query.set('supplierProductId', supplierProductId);
       const res = await fetch(
-        getApiUrl(`/api/supplier/bcov-levels?variantKey=${encodeURIComponent(variantKey)}`),
+        getApiUrl(`/api/supplier/bcov-levels?${query.toString()}`),
         { headers: { Authorization: `Bearer ${token}` } }
       );
       const data = await res.json();
@@ -164,15 +180,15 @@ const SupplierBCOV = () => {
               )
         );
 
-        const mapped = (data.levels || []).map((item) => ({
+        const mapped = (data.levels || []).map((item, index) => ({
           id: item.id || null,
-          levelName: item.levelName ?? '',
+          levelName: String(item.levelName || '').trim() || `Level ${index + 1}`,
           buyerBcov: item.buyerBcov ?? '',
           buyerCov: item.buyerCov ?? item.minPurchaseQty ?? '',
           buyerPcov: item.buyerPcov ?? item.maxPurchaseQty ?? '',
           price: item.price ?? ''
         }));
-        setRows(mapped.length > 0 ? mapped : [{ ...EMPTY_ROW }]);
+        setRows(mapped.length > 0 ? mapped : [createDefaultRow(0)]);
         setIsStepCompleted(mapped.length > 0);
         return true;
       }
@@ -189,17 +205,14 @@ const SupplierBCOV = () => {
 
   useEffect(() => {
     loadRows();
-  }, [variantKey]);
+  }, [variantKey, supplierProductId]);
 
   const updateRow = (index, key, value) => {
     setRows((prev) => prev.map((row, i) => (i === index ? { ...row, [key]: value } : row)));
   };
 
   const addRow = () => {
-    setRows((prev) => [
-      ...prev,
-      { ...EMPTY_ROW, levelName: `Level ${prev.length + 1}` }
-    ]);
+    setRows((prev) => [...prev, createDefaultRow(prev.length)]);
   };
 
   const buildPayloadRows = (rowsToSend) =>
@@ -244,6 +257,7 @@ const SupplierBCOV = () => {
           variantKey,
           variantAsin: variantAsin || undefined,
           variantName: variantName || undefined,
+          supplierProductId: supplierProductId || undefined,
           levels: buildPayloadRows(rowsToSend)
         })
       });
@@ -272,12 +286,17 @@ const SupplierBCOV = () => {
     let nextRows;
     setRows((prev) => {
       if (prev.length === 1) {
-        nextRows = [{ ...EMPTY_ROW }];
+        nextRows = [createDefaultRow(0)];
         return nextRows;
       }
       nextRows = prev.filter((_, i) => i !== index);
       if (nextRows.length === 0) {
-        nextRows = [{ ...EMPTY_ROW }];
+        nextRows = [createDefaultRow(0)];
+      } else {
+        // Keep Level labels sequential after delete when they still use defaults.
+        nextRows = nextRows.map((row, i) =>
+          isDefaultLevelName(row.levelName) ? { ...row, levelName: `Level ${i + 1}` } : row
+        );
       }
       return nextRows;
     });

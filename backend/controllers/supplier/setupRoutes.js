@@ -8,6 +8,7 @@ import {
   normalizeChainNameKey,
   normalizeChainRolesFromStages,
   parseBcovNotes,
+  composeBcovNotes,
   parseCovThresholdNumber,
   parseWithSchema,
   resolveBcovPriceForBuyerMetrics,
@@ -17,7 +18,9 @@ import {
   toFiniteNumber,
   fetchVariantCatalogMrp,
   resolveVariantProductCovEligibility,
-  validateAndNormalizeBcovLevels
+  validateAndNormalizeBcovLevels,
+  deleteSupplierBcovLevelsForVariant,
+  selectBcovLevelsForSupplierOffer
 } from './supplierImports.js';
 import { buildSupplyChainPartnerGroups } from '../../services/supplyChainPartnerGroupsService.js';
 
@@ -170,21 +173,8 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
   try {
     const variantKey = String(req.query.variantKey || '').trim();
     const productId = String(req.query.productId || req.query.catalogProductId || '').trim() || null;
-
-    let query = supabase
-      .from('supplier_bcov_levels')
-      .select('id, variant_key, variant_asin, variant_name, brand_name, min_purchase_qty, max_purchase_qty, unit_price, notes')
-      .eq('supplier_id', req.userId)
-      .order('variant_key', { ascending: true })
-      .order('min_purchase_qty', { ascending: true });
-
-    if (variantKey) {
-      query = query.eq('variant_key', variantKey);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
+    const supplierProductId =
+      String(req.query.supplierProductId || req.query.supplier_product_id || '').trim() || null;
 
     const catalogMrp = variantKey
       ? await fetchVariantCatalogMrp(supabase, req.userId, variantKey, productId)
@@ -193,13 +183,54 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
       ? await resolveVariantProductCovEligibility(supabase, req.userId, variantKey)
       : { eligible: false, status: 'missing', message: 'No product variant selected for Product_COV.' };
 
+    // No live offer for this variant → never show stale Product_COV from a deleted listing.
+    if (variantKey && covEligibility.status === 'missing') {
+      void deleteSupplierBcovLevelsForVariant(supabase, {
+        supplierId: req.userId,
+        variantKey
+      }).catch((cleanupError) => {
+        console.error(
+          '[Product_COV] failed to clear orphaned levels on GET:',
+          cleanupError?.message || cleanupError
+        );
+      });
+      return res.json({
+        status: 'success',
+        catalogMrp,
+        offerStatus: covEligibility.status,
+        covEligible: false,
+        covBlockedMessage: covEligibility.message,
+        levels: []
+      });
+    }
+
+    if (!variantKey) {
+      return res.json({
+        status: 'success',
+        catalogMrp: null,
+        offerStatus: 'missing',
+        covEligible: false,
+        covBlockedMessage: 'No product variant selected for Product_COV.',
+        levels: []
+      });
+    }
+
+    // Per-supplier + per-variant: only return slabs owned by this live offer generation.
+    const scoped = await selectBcovLevelsForSupplierOffer(supabase, {
+      supplierId: req.userId,
+      variantKey,
+      supplierProductId,
+      purgeStale: true
+    });
+
     return res.json({
       status: 'success',
       catalogMrp,
       offerStatus: covEligibility.status,
       covEligible: covEligibility.eligible === true,
       covBlockedMessage: covEligibility.eligible ? '' : covEligibility.message,
-      levels: (data || []).map((r) => {
+      supplierProductId: scoped.offer?.id || supplierProductId || null,
+      levels: (scoped.levels || []).map((r) => {
         const parsedNotes = parseBcovNotes(r.notes);
         return {
           id: r.id,
@@ -213,7 +244,8 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
           minPurchaseQty: Number(r.min_purchase_qty),
           maxPurchaseQty: r.max_purchase_qty == null ? null : Number(r.max_purchase_qty),
           price: Number(r.unit_price),
-          notes: parsedNotes.rawNotes
+          notes: parsedNotes.rawNotes,
+          supplierProductId: parsedNotes.supplierProductId || scoped.offer?.id || null
         };
       })
     });
@@ -229,6 +261,7 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
     const variantKey = String(payloadInput.variantKey || '').trim();
     const variantAsin = String(payloadInput.variantAsin || '').trim() || null;
     const variantName = String(payloadInput.variantName || '').trim() || null;
+    const supplierProductId = String(payloadInput.supplierProductId || '').trim() || null;
 
     if (!variantKey) {
       return res.status(400).json({ status: 'error', message: 'variantKey is required' });
@@ -243,16 +276,59 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
       });
     }
 
+    let owningOfferId = supplierProductId;
+    if (owningOfferId) {
+      const { data: offerRow, error: offerError } = await supabase
+        .from('supplier_products')
+        .select('id, variant_key, supplier_id')
+        .eq('id', owningOfferId)
+        .eq('supplier_id', req.userId)
+        .maybeSingle();
+      if (offerError) throw offerError;
+      if (!offerRow?.id) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Supplier product offer not found for Product_COV.'
+        });
+      }
+      if (
+        String(offerRow.variant_key || '').trim() &&
+        String(offerRow.variant_key || '').trim() !== variantKey
+      ) {
+        return res.status(409).json({
+          status: 'error',
+          message: 'Product_COV variant does not match the selected supplier offer.'
+        });
+      }
+      owningOfferId = offerRow.id;
+    } else {
+      const { data: latestOffer } = await supabase
+        .from('supplier_products')
+        .select('id')
+        .eq('supplier_id', req.userId)
+        .eq('variant_key', variantKey)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      owningOfferId = latestOffer?.id || null;
+    }
+
     const catalogMrp = await fetchVariantCatalogMrp(
       supabase,
       req.userId,
       variantKey,
       String(payloadInput.productId || payloadInput.catalogProductId || '').trim() || null
     );
-    const parsed = validateAndNormalizeBcovLevels(payloadInput.levels || [], {
-      catalogMrp,
-      requireCatalogMrp: true
-    });
+    const parsed = validateAndNormalizeBcovLevels(
+      (payloadInput.levels || []).map((row) => ({
+        ...row,
+        supplierProductId: owningOfferId || row.supplierProductId || null
+      })),
+      {
+        catalogMrp,
+        requireCatalogMrp: true
+      }
+    );
     if (!parsed.ok) {
       return res.status(400).json({ status: 'error', message: parsed.message });
     }
@@ -275,7 +351,11 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
       min_purchase_qty: row.minPurchaseQty,
       max_purchase_qty: row.maxPurchaseQty,
       unit_price: row.price,
-      notes: row.notes
+      notes: composeBcovNotes({
+        levelName: row.levelName,
+        buyerBcov: row.buyerBcov,
+        supplierProductId: owningOfferId
+      })
     }));
 
     const { error: deleteError } = await supabase
@@ -295,7 +375,8 @@ router.put('/bcov-levels', authenticateToken, async (req, res) => {
     return res.json({
       status: 'success',
       message: 'Product_COV levels saved successfully',
-      count: payload.length
+      count: payload.length,
+      supplierProductId: owningOfferId
     });
   } catch (error) {
     if (String(error?.name || '') === 'ZodError') {

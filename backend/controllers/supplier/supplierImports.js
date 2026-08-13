@@ -100,7 +100,9 @@ export { findAdmins, findUserBasicById } from '../../repositories/usersRepositor
 export {
   fetchVariantCatalogMrp,
   resolveVariantProductCovEligibility,
-  validateAndNormalizeBcovLevels
+  validateAndNormalizeBcovLevels,
+  deleteSupplierBcovLevelsForVariant,
+  selectBcovLevelsForSupplierOffer
 } from '../../services/supplierBcovService.js';
 export {
   parseCovThresholdNumber,

@@ -674,9 +674,24 @@ const ProductManagement = ({ user }) => {
             data?.nextStep?.productName || updatedProduct?.name || ''
           ).trim();
           const params = new URLSearchParams();
-          if (data?.nextStep?.variantAsin) params.set('variantAsin', data.nextStep.variantAsin);
-          if (data?.nextStep?.variantKey) params.set('variantKey', data.nextStep.variantKey);
-          if (data?.nextStep?.supplierProductId) params.set('supplierProductId', data.nextStep.supplierProductId);
+          if (data?.nextStep?.variantAsin || updatedProduct?.variantAsin) {
+            params.set(
+              'variantAsin',
+              data?.nextStep?.variantAsin || updatedProduct?.variantAsin
+            );
+          }
+          if (data?.nextStep?.variantKey || updatedProduct?.variantKey) {
+            params.set(
+              'variantKey',
+              data?.nextStep?.variantKey || updatedProduct?.variantKey
+            );
+          }
+          const offerId =
+            data?.nextStep?.supplierProductId ||
+            getSupplierOfferRowId(updatedProduct) ||
+            updatedProduct?.supplier_product_id ||
+            updatedProduct?.id;
+          if (offerId) params.set('supplierProductId', offerId);
           if (nextProductName) params.set('variantName', nextProductName);
           if (nextBrand) params.set('brand', nextBrand);
           if (nextProductName) params.set('productName', nextProductName);
@@ -1173,6 +1188,8 @@ const ProductManagement = ({ user }) => {
                               if (variantCode) params.set('variantAsin', variantCode);
                               if (product.name) params.set('variantName', product.name);
                               if (product.brand) params.set('brand', product.brand);
+                              const offerId = getSupplierOfferRowId(product) || product.supplier_product_id;
+                              if (offerId) params.set('supplierProductId', offerId);
                               navigate(`/supplier-bcov?${params.toString()}`);
                             }}
                             title="ProductCOV"
@@ -1725,6 +1742,9 @@ const ProductDetailsModal = ({
                     }
                     if (product.name) params.set('variantName', product.name);
                     if (product.brand) params.set('brand', product.brand);
+                    const offerId =
+                      getSupplierOfferRowId(product) || product.supplier_product_id || product.id;
+                    if (offerId) params.set('supplierProductId', offerId);
                     detailsNavigate(`/supplier-bcov?${params.toString()}`);
                   }}
                   style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}

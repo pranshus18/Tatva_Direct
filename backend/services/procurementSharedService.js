@@ -1,3 +1,5 @@
+import { parseMoney, roundMoney } from '../utils/money.js';
+
 export const normalizeIdPart = (value) => (value === null || value === undefined ? '' : String(value).trim());
 
 export const firstNonEmpty = (...values) => {
@@ -74,8 +76,30 @@ export const resolveBcovPriceForBuyerMetrics = ({ levels = [], supplierCov = 0, 
   if (!matched) return null;
   return {
     levelId: matched.row.id,
-    price: matched.price
+    price: roundMoney(matched.price)
   };
+};
+
+/**
+ * Charge catalog MRP unless a Product_COV slab is strictly below MRP.
+ * Prevents a misconfigured COV from billing more than list price.
+ */
+export const pickEffectiveOfferPrice = (basePrice, bcovResolved = null) => {
+  const base = parseMoney(basePrice);
+  const covRaw = parseFiniteNumber(bcovResolved?.price);
+  if (covRaw === null || covRaw < 0) {
+    return { price: base, basePrice: base, bcovApplied: false, bcovLevelId: null };
+  }
+  const cov = roundMoney(covRaw);
+  if (base > 0 && cov < base) {
+    return {
+      price: cov,
+      basePrice: base,
+      bcovApplied: true,
+      bcovLevelId: bcovResolved?.levelId || null
+    };
+  }
+  return { price: base, basePrice: base, bcovApplied: false, bcovLevelId: null };
 };
 
 export const extractVariantKeyForBcov = ({ supplierProduct, item }) => {
@@ -231,6 +255,7 @@ export const buildBcovResolver = (supabaseClient) => {
         levels = data || [];
         cache.set(cacheKey, levels);
       }
+      // No Product_COV defined for this variant key → try next key / fall through to MRP.
       if (!levels || levels.length === 0) continue;
 
       const resolved = resolveBcovPriceForBuyerMetrics({
@@ -241,6 +266,7 @@ export const buildBcovResolver = (supabaseClient) => {
       });
       if (resolved) return resolved;
     }
+    // No matching Product_COV slabs → caller must use MRP.
     return null;
   };
 };

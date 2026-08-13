@@ -372,10 +372,42 @@
 }
 
 .pdd-buybox__price {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.7rem;
   font-size: 1.75rem;
   font-weight: 800;
   color: #0f172a;
   line-height: 1.2;
+}
+
+.pdd-buybox__mrp {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.pdd-buybox__offer-price {
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
+}
+
+.pdd-variant-table__price {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.5rem;
+}
+
+.pdd-variant-table__mrp {
+  font-size: 0.85em;
+  color: #94a3b8;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
 }
 
 .pdd-buybox__price--na {

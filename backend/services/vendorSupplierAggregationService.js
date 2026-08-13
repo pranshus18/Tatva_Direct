@@ -3,6 +3,7 @@ import {
   firstNonEmpty,
   normalizeBrandKey,
   parseFiniteNumber,
+  pickEffectiveOfferPrice,
   resolveBcovPriceForBuyerMetrics
 } from './procurementSharedService.js';
 import {
@@ -10,6 +11,7 @@ import {
   supplierLocationCandidates,
   uniqueLocationList
 } from './vendorRankingHelpersService.js';
+import { parseMoney } from '../utils/money.js';
 import {
   mergeOfferSpecifications,
   parseSpecificationsObject,
@@ -37,7 +39,10 @@ export async function buildSupplierProductsForRanking({
       console.error('[Vendor Ranking] BCOV preload error:', bcovError);
     } else {
       for (const row of bcovRows || []) {
-        const key = `${row.supplier_id}::${row.variant_key || row.normalized_brand}`;
+        // Product_COV slabs apply only to their exact variant_key — never brand-wide.
+        const variantKey = String(row.variant_key || '').trim();
+        if (!variantKey) continue;
+        const key = `${row.supplier_id}::${variantKey}`;
         if (!bcovBySupplierVariant.has(key)) bcovBySupplierVariant.set(key, []);
         bcovBySupplierVariant.get(key).push(row);
       }
@@ -93,7 +98,7 @@ export async function buildSupplierProductsForRanking({
 
     const supplierId = product.supplier.id;
     const supplierAddress = product.supplier.address || {};
-    const basePrice = parseFloat(product.price) || 0;
+    const basePrice = parseMoney(product.price);
     const productVariantKey = String(product?.variant_key || '').trim();
     const productBrandKey = normalizeBrandKey(
       product?.attributes?.brandModel ||
@@ -104,16 +109,18 @@ export async function buildSupplierProductsForRanking({
         targetBrand
     );
     const bcovLevels =
-      (productVariantKey && bcovBySupplierVariant.get(`${supplierId}::${productVariantKey}`)) ||
-      bcovBySupplierVariant.get(`${supplierId}::${productBrandKey}`) ||
-      [];
-    const bcovResolved = resolveBcovPriceForBuyerMetrics({
-      levels: bcovLevels,
-      supplierCov: parseFiniteNumber(supplierCovById.get(supplierId)) || 0,
-      platformCov,
-      brandCov: parseFiniteNumber(brandCovByBrand.get(productBrandKey)) || 0
-    });
-    const latestPrice = bcovResolved?.price ?? basePrice;
+      (productVariantKey && bcovBySupplierVariant.get(`${supplierId}::${productVariantKey}`)) || [];
+    const bcovResolved =
+      bcovLevels.length > 0
+        ? resolveBcovPriceForBuyerMetrics({
+            levels: bcovLevels,
+            supplierCov: parseFiniteNumber(supplierCovById.get(supplierId)) || 0,
+            platformCov,
+            brandCov: parseFiniteNumber(brandCovByBrand.get(productBrandKey)) || 0
+          })
+        : null;
+    // No Product_COV for this variant, or COV not below MRP → always use offer MRP.
+    const latestPrice = pickEffectiveOfferPrice(basePrice, bcovResolved).price;
     const latestStock = product.stock || 0;
     const latestDescription = product.description || '';
     const latestName = product.name || itemName;

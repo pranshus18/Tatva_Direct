@@ -13,19 +13,18 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatRupeePerUnit } from '../utils/formatRupee';
 import { specificationEntriesForCustomerDisplay } from '../utils/specifications';
 import { openProductDetailInNewTab } from '../utils/discoveryNavigation';
 import { dedupeLabelsCaseInsensitive } from '../utils/categoryNormalize';
+import {
+  formatDiscoveryMrp,
+  formatDiscoveryPrice,
+  resolveDiscoveryDisplayPricing
+} from '../utils/discoveryPricing';
 import './ProductDiscovery.css';
 
 function formatPrice(price, unit) {
-  const num = Number(price);
-  if (!Number.isFinite(num) || num <= 0) return null;
-  return formatRupeePerUnit(num, unit, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
+  return formatDiscoveryPrice(price, unit);
 }
 
 function RatingStars({ rating, reviews }) {
@@ -335,7 +334,10 @@ const ProductDiscovery = () => {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {products.map((product) => {
             const imgs = imageArray(product);
-            const price = formatPrice(product?.price, product?.unit);
+            const pricing = resolveDiscoveryDisplayPricing(product);
+            const price = formatPrice(pricing.price, product?.unit);
+            const mrpLabel =
+              pricing.bcovApplied ? formatDiscoveryMrp(pricing.mrp) : null;
             const pid = String(product?.id || '');
             const inStock = Number(product?.stock) > 0;
             const hasEligibleSupplier = Number(product?.supplierCount || 0) > 0;
@@ -394,7 +396,16 @@ const ProductDiscovery = () => {
                   <TagList tags={product.tags} />
 
                   <div className="pd-card__details">
-                    {price && <span className="pd-card__price">{price}</span>}
+                    {price ? (
+                      <span className="pd-card__price">
+                        {mrpLabel ? (
+                          <span className="pd-card__mrp" aria-label={`MRP ${mrpLabel}`}>
+                            {mrpLabel}
+                          </span>
+                        ) : null}
+                        <span className="pd-card__offer-price">{price}</span>
+                      </span>
+                    ) : null}
                     {!price && <span className="pd-card__price pd-card__price--na">Price on request</span>}
 
                     <div className="pd-card__meta-row">

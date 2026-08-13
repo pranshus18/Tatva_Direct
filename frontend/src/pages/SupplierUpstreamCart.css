@@ -316,6 +316,14 @@
   white-space: nowrap;
 }
 
+.supplier-cart-mrp {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+  color: #94a3b8;
+  margin-right: 0.25rem;
+  font-size: 0.9em;
+}
+
 /* Professional visual polish */
 .supplier-cart-page .dashboard-section {
   border: 1px solid #e7edf5;

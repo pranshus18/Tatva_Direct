@@ -505,9 +505,27 @@
 }
 
 .pd-card__price {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.45rem 0.65rem;
   font-size: 1.25rem;
   font-weight: 800;
   color: #0f172a;
+}
+
+.pd-card__mrp {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
+.pd-card__offer-price {
+  font-size: inherit;
+  font-weight: inherit;
+  color: inherit;
 }
 
 .pd-card__price small {

@@ -545,27 +545,30 @@ export const toFiniteNumber = (value) => {
 
 export const parseBcovNotes = (rawNotes) => {
   const raw = String(rawNotes || '').trim();
-  if (!raw) return { levelName: null, buyerBcov: null, rawNotes: null };
+  if (!raw) return { levelName: null, buyerBcov: null, supplierProductId: null, rawNotes: null };
   try {
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object') {
       return {
         levelName: String(parsed.levelName || '').trim() || null,
         buyerBcov: String(parsed.buyerBcov || '').trim() || null,
+        supplierProductId: String(parsed.supplierProductId || '').trim() || null,
         rawNotes: raw
       };
     }
   } catch (_) {
     // legacy non-JSON notes
   }
-  return { levelName: null, buyerBcov: raw, rawNotes: raw };
+  return { levelName: null, buyerBcov: raw, supplierProductId: null, rawNotes: raw };
 };
 
-export const composeBcovNotes = ({ levelName, buyerBcov }) => {
+export const composeBcovNotes = ({ levelName, buyerBcov, supplierProductId = null }) => {
   const payload = {
     levelName: String(levelName || '').trim() || null,
     buyerBcov: String(buyerBcov || '').trim() || null
   };
-  if (!payload.levelName && !payload.buyerBcov) return null;
+  const offerId = String(supplierProductId || '').trim();
+  if (offerId) payload.supplierProductId = offerId;
+  if (!payload.levelName && !payload.buyerBcov && !payload.supplierProductId) return null;
   return JSON.stringify(payload);
 };

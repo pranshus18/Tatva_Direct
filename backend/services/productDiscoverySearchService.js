@@ -17,6 +17,7 @@ import {
   reconcileDiscoveryProductFields,
   syncCatalogProductSnapshotFromOffers
 } from './catalogOfferSnapshotService.js';
+import { enrichDiscoveryOffersWithBuyerBcov } from './discoveryBcovPricingService.js';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 import { dedupeCategoryStrings } from '../utils/categoryNormalize.js';
 import { enrichDiscoverySuggestionsWithVariantCounts } from './productDiscoveryDetailService.js';
@@ -505,13 +506,21 @@ export async function searchProductDiscoveryForUser(
     const { data: offerRows } = await supabase
       .from('supplier_products')
       .select(
-        'product_id, price, stock, min_order_quantity, location, status, is_active, supplier:users!supplier_products_supplier_id_fkey(profile)'
+        'id, product_id, supplier_id, price, stock, min_order_quantity, location, status, is_active, variant_key, attributes, supplier:users!supplier_products_supplier_id_fkey(id, profile)'
       )
       .in('product_id', productIds)
       .neq('status', 'rejected');
 
-    offerAggregates = aggregateEligibleDiscoveryOffers({
+    const { offerRows: pricedOfferRows } = await enrichDiscoveryOffersWithBuyerBcov({
+      supabase,
+      userId,
       offerRows: offerRows || [],
+      productById,
+      enabled: !forCatalogAutocomplete && Boolean(userId)
+    });
+
+    offerAggregates = aggregateEligibleDiscoveryOffers({
+      offerRows: pricedOfferRows,
       productById,
       detectDiscoveryBrand,
       terminalRoleByBrandMap,

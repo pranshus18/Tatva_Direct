@@ -39,6 +39,10 @@ import {
 } from '../../../services/supplierCatalogHelpersService.js';
 import { syncOfferAttributesWithSpecifications } from '../../../services/productIdentityService.js';
 import {
+  deleteSupplierBcovLevelsForVariant,
+  deleteSupplierBcovLevelsIfNoRemainingOffer
+} from '../../../services/supplierBcovService.js';
+import {
   bodyHasCatalogUpdateFields,
   bodyHasInventoryUpdateFields,
   validateSupplierProductUpdateRequest,
@@ -394,6 +398,31 @@ export function registerSupplierProductUpdateRoute(ctx) {
               ? 'This exact product variation already exists for the selected location.'
               : (spUpdateError?.message || 'Failed to update product')
           });
+        }
+
+        if (variantKeyChanged) {
+          const previousVariantKey = String(supplierProduct.variant_key || '').trim();
+          const nextVariantKey = String(updatedSupplierProduct.variant_key || '').trim();
+          try {
+            if (previousVariantKey && previousVariantKey !== nextVariantKey) {
+              await deleteSupplierBcovLevelsIfNoRemainingOffer(supabase, {
+                supplierId: req.userId,
+                variantKey: previousVariantKey
+              });
+            }
+            // New variant identity must not inherit another listing's Product_COV.
+            if (nextVariantKey) {
+              await deleteSupplierBcovLevelsForVariant(supabase, {
+                supplierId: req.userId,
+                variantKey: nextVariantKey
+              });
+            }
+          } catch (bcovCleanupError) {
+            console.error(
+              '[Product_COV] failed to reset levels after variant change:',
+              bcovCleanupError?.message || bcovCleanupError
+            );
+          }
         }
 
         if (req.body.unit !== undefined && String(req.body.unit || '').trim()) {

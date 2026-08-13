@@ -43,7 +43,7 @@ import {
   loadPosQueue,
   markPosOrderSynced
 } from '../utils/offlinePosStorage';
-import { formatRupee } from '../utils/formatRupee';
+import { formatRupee, lineMoneyTotal, parseMoney, roundMoney } from '../utils/formatRupee';
 import './SupplierPOS.css';
 
 const selectClassName =
@@ -274,7 +274,7 @@ const SupplierPOS = () => {
     const safeQty = parseFloat(qty) || 0;
     if (!product || safeQty <= 0) return;
 
-    const unitPrice = parseFloat(product.price) || 0;
+    const unitPrice = parseMoney(product.price);
     const supplierProductId = product.supplier_product_id || null;
 
     setCartItems(prev => {
@@ -291,7 +291,7 @@ const SupplierPOS = () => {
         next[idx] = {
           ...existing,
           quantity: newQty,
-          total_price: newQty * unitPrice
+          total_price: lineMoneyTotal(unitPrice, newQty)
         };
         setSuccessMessage(`${product.name} - Quantity updated to ${newQty}`);
         return next;
@@ -303,7 +303,7 @@ const SupplierPOS = () => {
         name: product.name,
         quantity: safeQty,
         unit_price: unitPrice,
-        total_price: safeQty * unitPrice
+        total_price: lineMoneyTotal(unitPrice, safeQty)
       };
       setSuccessMessage(`${product.name} added to bill`);
       return [...prev, newItem];
@@ -318,7 +318,9 @@ const SupplierPOS = () => {
     setCartItems(prev => prev.filter((_, i) => i !== index));
   };
 
-  const totalAmount = cartItems.reduce((sum, item) => sum + (parseFloat(item.total_price) || 0), 0);
+  const totalAmount = roundMoney(
+    cartItems.reduce((sum, item) => sum + parseMoney(item.total_price), 0)
+  );
   const payLaterAvailable = Boolean(creditInfo?.allowed && creditInfo?.payLaterOffered);
 
   useEffect(() => {
@@ -628,7 +630,7 @@ const SupplierPOS = () => {
     const itemsHtml = (receiptData.items || []).map((it) => {
       const qty = Number(it.quantity || 0);
       const unit = Number(it.unit_price || 0);
-      const total = Number(it.total_price || (qty * unit));
+      const total = Number(it.total_price || lineMoneyTotal(unit, qty));
       return `
         <tr>
           <td style="padding:6px 0;">${String(it.name || '')}</td>

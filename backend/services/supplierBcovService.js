@@ -1,4 +1,4 @@
-import { composeBcovNotes, toFiniteNumber } from './supplierCatalogHelpersService.js';
+import { composeBcovNotes, parseBcovNotes, toFiniteNumber } from './supplierCatalogHelpersService.js';
 import { parseCovThresholdNumber } from './procurementSharedService.js';
 import { fetchCanonicalVariantMrp } from './variantMrpService.js';
 
@@ -211,9 +211,211 @@ export function validateAndNormalizeBcovLevels(levelsRaw = [], options = {}) {
       price,
       levelName,
       buyerBcov,
-      notes: composeBcovNotes({ levelName, buyerBcov })
+      supplierProductId: String(row.supplierProductId || '').trim() || null,
+      notes: composeBcovNotes({
+        levelName,
+        buyerBcov,
+        supplierProductId: row.supplierProductId
+      })
     });
   }
 
   return { ok: true, levels: normalized };
+}
+
+/**
+ * Hard-delete Product_COV rows for a supplier + variant_key.
+ * Used when the supplier no longer has any live offer for that variant.
+ */
+export async function deleteSupplierBcovLevelsForVariant(supabase, { supplierId, variantKey }) {
+  const sid = String(supplierId || '').trim();
+  const key = String(variantKey || '').trim();
+  if (!sid || !key) {
+    return { deleted: false, reason: 'missing_ids' };
+  }
+
+  const { error } = await supabase
+    .from('supplier_bcov_levels')
+    .delete()
+    .eq('supplier_id', sid)
+    .eq('variant_key', key);
+
+  if (error) throw error;
+  return { deleted: true, supplierId: sid, variantKey: key };
+}
+
+/**
+ * Delete Product_COV for supplier+variant only when no supplier_products offer remains.
+ * Keeps COV intact when another location/offer still shares the same variant_key.
+ */
+export async function deleteSupplierBcovLevelsIfNoRemainingOffer(
+  supabase,
+  { supplierId, variantKey }
+) {
+  const sid = String(supplierId || '').trim();
+  const key = String(variantKey || '').trim();
+  if (!sid || !key) {
+    return { deleted: false, reason: 'missing_ids' };
+  }
+
+  const { count, error: countError } = await supabase
+    .from('supplier_products')
+    .select('id', { count: 'exact', head: true })
+    .eq('supplier_id', sid)
+    .eq('variant_key', key);
+
+  if (countError) throw countError;
+  if ((count || 0) > 0) {
+    return { deleted: false, reason: 'offer_still_present', remainingOffers: count };
+  }
+
+  return deleteSupplierBcovLevelsForVariant(supabase, { supplierId: sid, variantKey: key });
+}
+
+/**
+ * Clear orphaned Product_COV rows for many (supplierId, variantKey) pairs from deleted offers.
+ * Dedupes pairs and only removes COV when that supplier has no remaining offer for the key.
+ */
+export async function deleteSupplierBcovLevelsForDeletedOffers(supabase, offerRows = []) {
+  const pairs = new Map();
+  for (const row of offerRows || []) {
+    const supplierId = String(row?.supplier_id || '').trim();
+    const variantKey = String(row?.variant_key || '').trim();
+    if (!supplierId || !variantKey) continue;
+    pairs.set(`${supplierId}::${variantKey}`, { supplierId, variantKey });
+  }
+
+  const results = [];
+  for (const pair of pairs.values()) {
+    results.push(await deleteSupplierBcovLevelsIfNoRemainingOffer(supabase, pair));
+  }
+  return results;
+}
+
+/**
+ * When a supplier starts a fresh listing for a variant_key (no prior offer rows),
+ * wipe any leftover Product_COV from a previously deleted product/variant.
+ */
+export async function clearOrphanedSupplierBcovLevelsBeforeNewOffer(
+  supabase,
+  { supplierId, variantKey }
+) {
+  return deleteSupplierBcovLevelsIfNoRemainingOffer(supabase, { supplierId, variantKey });
+}
+
+/**
+ * Decide whether a stored Product_COV row belongs to the current supplier offer.
+ * Product_COV is supplier-owned and per-variant; deleted listings must not refill a new offer.
+ */
+export function isBcovLevelOwnedByOffer(level, offer, { siblingOfferCount = 1 } = {}) {
+  if (!level || !offer) return false;
+  const offerId = String(offer.id || '').trim();
+  const parsed = parseBcovNotes(level.notes);
+  const taggedOfferId = String(parsed.supplierProductId || '').trim();
+
+  if (taggedOfferId) {
+    return taggedOfferId === offerId;
+  }
+
+  // Multiple live locations still share untagged legacy slabs for the same variant_key.
+  if (siblingOfferCount > 1) return true;
+
+  const offerCreatedMs = Date.parse(String(offer.created_at || ''));
+  const levelUpdatedMs = Date.parse(String(level.updated_at || level.created_at || ''));
+  if (!Number.isFinite(offerCreatedMs) || !Number.isFinite(levelUpdatedMs)) {
+    // Without timestamps, never show untagged leftovers on a single fresh offer.
+    return false;
+  }
+  // Allow a small clock skew; anything clearly older than this listing is leftover.
+  return levelUpdatedMs >= offerCreatedMs - 5000;
+}
+
+/**
+ * Keep only Product_COV rows for this supplier offer / live variant generation.
+ * Optionally deletes rejected leftover rows from deleted products/variants.
+ */
+export async function selectBcovLevelsForSupplierOffer(
+  supabase,
+  { supplierId, variantKey, supplierProductId = null, purgeStale = true } = {}
+) {
+  const sid = String(supplierId || '').trim();
+  const key = String(variantKey || '').trim();
+  if (!sid || !key) {
+    return { levels: [], offer: null, siblingOfferCount: 0 };
+  }
+
+  let offerQuery = supabase
+    .from('supplier_products')
+    .select('id, variant_key, created_at, updated_at, status')
+    .eq('supplier_id', sid)
+    .eq('variant_key', key)
+    .order('updated_at', { ascending: false });
+
+  const offerId = String(supplierProductId || '').trim();
+  if (offerId) {
+    offerQuery = supabase
+      .from('supplier_products')
+      .select('id, variant_key, created_at, updated_at, status')
+      .eq('supplier_id', sid)
+      .eq('id', offerId)
+      .maybeSingle();
+  } else {
+    offerQuery = offerQuery.limit(1).maybeSingle();
+  }
+
+  const { data: offer, error: offerError } = await offerQuery;
+  if (offerError) throw offerError;
+  if (!offer?.id) {
+    return { levels: [], offer: null, siblingOfferCount: 0 };
+  }
+
+  if (String(offer.variant_key || '').trim() && String(offer.variant_key).trim() !== key) {
+    return { levels: [], offer, siblingOfferCount: 0 };
+  }
+
+  const { count: siblingOfferCount, error: countError } = await supabase
+    .from('supplier_products')
+    .select('id', { count: 'exact', head: true })
+    .eq('supplier_id', sid)
+    .eq('variant_key', key);
+  if (countError) throw countError;
+
+  const { data: rows, error: levelsError } = await supabase
+    .from('supplier_bcov_levels')
+    .select(
+      'id, variant_key, variant_asin, variant_name, brand_name, min_purchase_qty, max_purchase_qty, unit_price, notes, created_at, updated_at'
+    )
+    .eq('supplier_id', sid)
+    .eq('variant_key', key)
+    .order('min_purchase_qty', { ascending: true });
+  if (levelsError) throw levelsError;
+
+  const allLevels = rows || [];
+  const ownedLevels = allLevels.filter((level) =>
+    isBcovLevelOwnedByOffer(level, offer, { siblingOfferCount: siblingOfferCount || 0 })
+  );
+
+  if (purgeStale) {
+    const ownedIds = new Set(ownedLevels.map((row) => row.id));
+    const staleIds = allLevels.map((row) => row.id).filter((id) => id && !ownedIds.has(id));
+    if (staleIds.length > 0) {
+      const { error: purgeError } = await supabase
+        .from('supplier_bcov_levels')
+        .delete()
+        .eq('supplier_id', sid)
+        .in('id', staleIds);
+      if (purgeError) {
+        console.error(
+          '[Product_COV] failed to purge stale levels for offer:',
+          purgeError?.message || purgeError
+        );
+      }
+    }
+  }
+
+  return {
+    levels: ownedLevels,
+    offer,
+    siblingOfferCount: siblingOfferCount || 0
+  };
 }

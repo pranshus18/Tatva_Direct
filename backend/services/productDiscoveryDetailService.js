@@ -7,6 +7,9 @@ import {
   reconcileDiscoveryProductFields
 } from './catalogOfferSnapshotService.js';
 import {
+  enrichDiscoveryOffersWithBuyerBcov
+} from './discoveryBcovPricingService.js';
+import {
   loadAdminBrandTerminalRoleMap,
   supplierMatchesBrandTerminalRole
 } from '../utils/adminBrandSupplyChain.js';
@@ -209,9 +212,19 @@ function resolveVariantDisplayUnit(product, offer, mergedSpecs = {}) {
 
 function resolveVariantOfferPrice(offer, reconciled) {
   if (offer) {
-    return parseOfferPrice(offer.price ?? offer._price);
+    const effective = parseOfferPrice(offer._effectivePrice ?? offer._price ?? offer.price);
+    if (effective > 0) return effective;
+    return parseOfferPrice(offer.price);
   }
   return parseOfferPrice(reconciled?.price);
+}
+
+function resolveVariantOfferMrp(offer, reconciled) {
+  if (offer) {
+    const mrp = parseOfferPrice(offer._basePrice ?? offer.price);
+    if (mrp > 0) return mrp;
+  }
+  return parseOfferPrice(reconciled?.mrp ?? reconciled?.basePrice ?? reconciled?.price);
 }
 
 /** Map listed offers onto the catalog product each variant row represents (supports family siblings). */
@@ -309,6 +322,12 @@ async function buildVariantRecord({
       ? parseSupplierStockQuantity(offer?.stock) ?? 0
       : reconciled.stock;
   const resolvedPrice = resolveVariantOfferPrice(offer, reconciled);
+  const resolvedMrp = resolveVariantOfferMrp(offer, reconciled);
+  const bcovApplied =
+    Boolean(offer?._bcovApplied ?? reconciled?.bcovApplied) &&
+    resolvedMrp > 0 &&
+    resolvedPrice > 0 &&
+    resolvedPrice < resolvedMrp;
   const resolvedUnit = resolveVariantDisplayUnit(product, offer, mergedSpecs);
 
   return {
@@ -325,6 +344,12 @@ async function buildVariantRecord({
     canonicalAttributes,
     images: resolveVariantDisplayImages(product, offer),
     price: resolvedPrice,
+    basePrice: resolvedMrp > 0 ? resolvedMrp : null,
+    mrp: resolvedMrp > 0 ? resolvedMrp : null,
+    bcovApplied,
+    bcovLevelId: bcovApplied
+      ? offer?._bcovLevelId || reconciled?.bcovLevelId || null
+      : null,
     stock,
     unit: resolvedUnit,
     supplierProductId: offer?.id || null,
@@ -368,7 +393,8 @@ export function aggregateOffersByVariantIdentity(offers = [], { preferSupplierId
     const bucketKey = resolveVariantOfferBucketKey(row);
     const existing = byKey.get(bucketKey);
     const stock = parseSupplierStockQuantity(row?.stock) ?? 0;
-    const price = parseOfferPrice(row?.price);
+    // Prefer buyer-unlocked Product_COV price when present so discovery picks the best deal.
+    const price = parseOfferPrice(row?._effectivePrice ?? row?._price ?? row?.price);
     const candidate = { ...row, _stock: stock, _price: price };
     if (!existing) {
       byKey.set(bucketKey, candidate);
@@ -592,7 +618,8 @@ export async function getProductDiscoveryDetail(
     productId,
     enrichSpecifications = null,
     audience = DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER,
-    viewerSupplierId = null
+    viewerSupplierId = null,
+    buyerUserId = null
   }
 ) {
   const audienceRules = resolveDiscoveryAudienceRules(audience);
@@ -714,6 +741,7 @@ export async function getProductDiscoveryDetail(
       `
         id,
         product_id,
+        supplier_id,
         price,
         stock,
         min_order_quantity,
@@ -724,7 +752,7 @@ export async function getProductDiscoveryDetail(
         attributes,
         status,
         is_active,
-        supplier:users!supplier_products_supplier_id_fkey(profile)
+        supplier:users!supplier_products_supplier_id_fkey(id, profile)
       `
     )
     .in('product_id', siblingIds)
@@ -740,7 +768,7 @@ export async function getProductDiscoveryDetail(
     : () => true;
   // Buyer discovery variants must use the same terminal-tier offer set as stock/price —
   // otherwise upstream sellers appear as purchasable "variants" under the product.
-  const discoveryOfferRows = filterListedOffersForDiscoveryAudience({
+  const listedOfferRows = filterListedOffersForDiscoveryAudience({
     offerRows: offerRows || [],
     productById,
     detectDiscoveryBrand,
@@ -748,6 +776,16 @@ export async function getProductDiscoveryDetail(
     supplierMatchesBrandTerminalRoleFn: matchTerminalRole,
     enforceTerminalRole: audienceRules.enforceTerminalRole
   });
+
+  const applyBuyerBcov = Boolean(buyerUserId);
+  const { offerRows: discoveryOfferRows } = await enrichDiscoveryOffersWithBuyerBcov({
+    supabase,
+    userId: buyerUserId,
+    offerRows: listedOfferRows,
+    productById,
+    enabled: applyBuyerBcov
+  });
+
   const offerAggregates = aggregateEligibleDiscoveryOffers({
     offerRows: discoveryOfferRows,
     productById,

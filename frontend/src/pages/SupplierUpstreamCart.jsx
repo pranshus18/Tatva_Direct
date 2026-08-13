@@ -11,7 +11,7 @@ import UpstreamProductDisplay from '../components/UpstreamProductDisplay';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
-import { formatRupee } from '../utils/formatRupee';
+import { formatRupee, lineMoneyTotal, roundMoney } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import {
   buildSupplierProductLookupMap,
@@ -40,6 +40,10 @@ import {
   clearUpstreamCartClientProjectState,
   resolveUpstreamProjectCartName
 } from '../utils/supplierUpstreamCartSession';
+import {
+  formatDiscoveryMrp,
+  resolveDiscoveryDisplayPricing
+} from '../utils/discoveryPricing';
 
 const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
 const todayDateMin = getTodayDateInputValue();
@@ -52,6 +56,49 @@ const blankShippingAddress = {
   pincode: '',
   country: 'India'
 };
+
+function resolveSelectedUpstreamOffer(project, mineId) {
+  const key = normalizeSupplierProductKey(mineId);
+  const rawSelection = project?.selectedUpstreamOffer?.[key] ?? project?.selectedUpstreamOffer?.[mineId];
+  const offerId =
+    typeof rawSelection === 'object' && rawSelection
+      ? normalizeSupplierProductKey(
+          rawSelection.upstreamSupplierProductId || rawSelection.id || rawSelection.offerId
+        )
+      : normalizeSupplierProductKey(rawSelection);
+  if (offerId) {
+    const suggestions = Array.isArray(project?.suggestions) ? project.suggestions : [];
+    for (const item of suggestions) {
+      const itemMineId = normalizeSupplierProductKey(item?.mineSupplierProductId);
+      if (itemMineId && itemMineId !== key) continue;
+      const offers = Array.isArray(item?.upstreamOffers) ? item.upstreamOffers : [];
+      const match = offers.find(
+        (o) => normalizeSupplierProductKey(o?.upstreamSupplierProductId || o?.id) === offerId
+      );
+      if (match) return match;
+    }
+  }
+  if (typeof rawSelection === 'object' && rawSelection) return rawSelection;
+  return null;
+}
+
+function resolveUpstreamCartLinePricing(project, mineId, product) {
+  const offer = resolveSelectedUpstreamOffer(project, mineId);
+  if (offer) {
+    return resolveDiscoveryDisplayPricing({
+      price: offer.price,
+      mrp: offer.mrp ?? offer.basePrice,
+      basePrice: offer.basePrice ?? offer.mrp,
+      bcovApplied: offer.bcovApplied
+    });
+  }
+  const fallback = Number(product?.price || product?.unitPrice || product?.sellingPrice || 0) || 0;
+  return {
+    price: fallback > 0 ? fallback : null,
+    mrp: fallback > 0 ? fallback : null,
+    bcovApplied: false
+  };
+}
 
 const normalizeSelectionMap = (raw) => {
   if (!raw || typeof raw !== 'object') return {};
@@ -774,12 +821,13 @@ const SupplierUpstreamCart = () => {
                 const shippingPreview = getProjectShippingPreview(project);
                 const totalLines = rows.length;
                 const totalQuantity = rows.reduce((sum, row) => sum + Number(row.quantity || 0), 0);
-                const totalAmount = rows.reduce((sum, row) => {
-                  const offerPrice = Number(project?.selectedUpstreamOffer?.[row.mineId]?.price || 0) || 0;
-                  const productPrice = Number(row?.product?.price || row?.product?.unitPrice || row?.product?.sellingPrice || 0) || 0;
-                  const unitPrice = offerPrice || productPrice;
-                  return sum + (unitPrice * Number(row.quantity || 0));
-                }, 0);
+                const totalAmount = roundMoney(
+                  rows.reduce((sum, row) => {
+                    const pricing = resolveUpstreamCartLinePricing(project, row.mineId, row.product);
+                    const unitPrice = Number(pricing.price || 0) || 0;
+                    return sum + lineMoneyTotal(unitPrice, row.quantity);
+                  }, 0)
+                );
                 return (
                   <section key={projectId} className="supplier-project-card">
                     <div className="supplier-project-head">
@@ -1056,9 +1104,8 @@ const SupplierUpstreamCart = () => {
                             const mineId = row.mineId;
                             const p = row.product;
                             const minQty = Math.max(1, p?.min_order_quantity ?? 1);
-                            const offerPrice = Number(project?.selectedUpstreamOffer?.[mineId]?.price || 0) || 0;
-                            const productPrice = Number(p?.price || p?.unitPrice || p?.sellingPrice || 0) || 0;
-                            const unitPrice = offerPrice || productPrice;
+                            const pricing = resolveUpstreamCartLinePricing(project, mineId, p);
+                            const unitPrice = Number(pricing.price || 0) || 0;
                             const quantity = Number(row.quantity || 0);
                             return (
                               <tr key={`${projectId}-${mineId}`}>
@@ -1078,7 +1125,12 @@ const SupplierUpstreamCart = () => {
                                   />
                                 </td>
                                 <td>{p?.brandModel || p?.brand || 'N/A'}</td>
-                                <td className="supplier-cart-number-cell">{formatRupee(unitPrice)}</td>
+                                <td className="supplier-cart-number-cell">
+                                  {pricing.bcovApplied && pricing.mrp ? (
+                                    <span className="supplier-cart-mrp">{formatDiscoveryMrp(pricing.mrp)}</span>
+                                  ) : null}{' '}
+                                  {formatRupee(unitPrice)}
+                                </td>
                                 <td>{p?.stock ?? 0}</td>
                                 <td>{minQty}</td>
                                 <td>
@@ -1111,7 +1163,7 @@ const SupplierUpstreamCart = () => {
                                     </div>
                                   ) : null}
                                 </td>
-                                <td className="supplier-cart-number-cell">{formatRupee(unitPrice * Number(row.quantity || 0))}</td>
+                                <td className="supplier-cart-number-cell">{formatRupee(lineMoneyTotal(unitPrice, row.quantity))}</td>
                               </tr>
                             );
                           })}

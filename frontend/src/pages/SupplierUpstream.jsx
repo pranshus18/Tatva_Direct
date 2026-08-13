@@ -27,7 +27,7 @@ import SpEmptyState from '../components/sp/SpEmptyState';
 import UpstreamProductDisplay, { collectProductImages } from '../components/UpstreamProductDisplay';
 import SupplierProductDetailsModal from '../components/SupplierProductDetailsModal';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
-import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
+import { formatRupee, formatRupeePerUnit, lineMoneyTotal, roundMoney } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import { dedupeCategoryStrings } from '../utils/categoryNormalize';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
@@ -758,7 +758,7 @@ const SupplierUpstream = ({ user }) => {
             supplierName: chosenOffer?.supplierName || 'Supplier',
             supplierId: chosenOffer?.supplierId || null,
             unitPrice,
-            lineTotal: unitPrice * qty,
+            lineTotal: lineMoneyTotal(unitPrice, qty),
             specifications: mine?.specifications || null,
             images: collectProductImages(mine),
             brandModel: mine?.brandModel || mine?.brand || null,
@@ -786,7 +786,9 @@ const SupplierUpstream = ({ user }) => {
         alert(`Skipped ${skipped} item(s) that had no upstream supplier selected.`);
       }
 
-      const totalAmountEstimate = selectedLinesDetailed.reduce((sum, l) => sum + (Number(l.lineTotal) || 0), 0);
+      const totalAmountEstimate = roundMoney(
+        selectedLinesDetailed.reduce((sum, l) => sum + (Number(l.lineTotal) || 0), 0)
+      );
 
       const checkoutSessionId = createUpstreamCheckoutSessionId();
       clearCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY);
@@ -2007,6 +2009,13 @@ const SupplierUpstream = ({ user }) => {
                                     )}
                                   </div>
                                   <div className="upstream-offer-meta">
+                                    {o.bcovApplied && Number(o.mrp || o.basePrice) > Number(o.price) ? (
+                                      <>
+                                        <span className="upstream-offer-mrp">
+                                          {formatRupee(o.mrp || o.basePrice || 0)}
+                                        </span>{' '}
+                                      </>
+                                    ) : null}
                                     {formatRupee(o.price || 0)} • {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}{' '}
                                     {o.availableStock ?? o.stock ?? 0}
                                     {typeof o.distanceKm === 'number' ? ` • ${o.distanceKm} km` : ' • distance n/a'}

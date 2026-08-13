@@ -79,6 +79,8 @@ import {
   resolveUpstreamPaymentSelection
 } from '../../services/upstreamOrderInputService.js';
 import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuantity.js';
+import { lineMoneyTotal, parseMoney, roundMoney } from '../../utils/money.js';
+import { pickEffectiveOfferPrice } from '../../services/procurementSharedService.js';
 import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js';
 import { formatShippingAddressText, resolveProjectShippingAddress } from '../../services/vendorRequestContextService.js';
 import { geocodeIndianAddress } from '../../utils/geoUtils.js';
@@ -86,6 +88,7 @@ import {
   getUpstreamOfferMatchType,
   upstreamOffersMatchForSupplyChain
 } from '../../services/upstreamOfferMatchService.js';
+import { enrichDiscoveryOffersWithBuyerBcov } from '../../services/discoveryBcovPricingService.js';
 import {
   DISCOVERY_DETAIL_AUDIENCES,
   getProductDiscoveryDetail
@@ -571,7 +574,9 @@ router.get('/upstream/products/:productId/detail', authenticateToken, async (req
     const result = await getProductDiscoveryDetail(supabase, {
       productId,
       audience: DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM,
-      viewerSupplierId: req.userId
+      viewerSupplierId: req.userId,
+      // Supplier-as-buyer: unlock Product_COV using this supplier's paid order history.
+      buyerUserId: req.userId
     });
 
     if (!result.ok) {
@@ -750,7 +755,24 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
         .gt('stock', 0);
       await registerUpstreamRows(rowsByVariantAsin || []);
     }
-    const upstreamOffers = [...upstreamOffersById.values()];
+    const upstreamOffersRaw = [...upstreamOffersById.values()];
+    const productByIdForBcov = new Map();
+    for (const offer of upstreamOffersRaw) {
+      if (offer?.product_id && offer?.product) {
+        productByIdForBcov.set(offer.product_id, { id: offer.product_id, ...offer.product });
+      }
+    }
+    const { offerRows: upstreamOffersPriced } = await enrichDiscoveryOffersWithBuyerBcov({
+      supabase,
+      userId: req.userId,
+      offerRows: upstreamOffersRaw,
+      productById: productByIdForBcov,
+      enabled: true
+    });
+    const upstreamOffers = upstreamOffersPriced;
+    for (const offer of upstreamOffers) {
+      if (offer?.id) upstreamOffersById.set(offer.id, offer);
+    }
     const reservedQtyByProductId = await getActiveReservedQuantitiesByProductIds(
       upstreamOffers.map((offer) => offer.id)
     );
@@ -1097,6 +1119,12 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             onHandStock,
             reservedQtyByProductId.get(u.id) || 0
           );
+          const picked = pickEffectiveOfferPrice(
+            u.price,
+            u._bcovApplied
+              ? { price: u._effectivePrice, levelId: u._bcovLevelId }
+              : null
+          );
           return {
             supplierId: u.supplier_id,
             supplierName: sup?.name || sup?.company || 'Supplier',
@@ -1110,7 +1138,11 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
             isActive: u.is_active,
             stock: availableStock,
             availableStock,
-            price: u.price,
+            price: picked.price,
+            basePrice: picked.basePrice || parseMoney(u._basePrice) || parseMoney(u.price),
+            mrp: picked.basePrice || parseMoney(u._basePrice) || parseMoney(u.price),
+            bcovApplied: picked.bcovApplied,
+            bcovLevelId: picked.bcovLevelId,
             minOrderQuantity: u.min_order_quantity,
             location: locationDisplay,
             locationSource,
@@ -1258,8 +1290,8 @@ router.post('/upstream/orders/preview-groups', authenticateToken, async (req, re
         : defaultDelivery;
       const transportGroupId = buildTransportGroupId(vendorId, lineShipping);
       const qty = Number(line?.quantity || 0) || 0;
-      const unitPrice = Number(line?.unitPrice || 0) || 0;
-      const lineTotal = Number(line?.lineTotal ?? qty * unitPrice) || 0;
+      const unitPrice = parseMoney(line?.unitPrice);
+      const lineTotal = lineMoneyTotal(unitPrice, qty);
 
       rawGroups.push({
         vendorId,
@@ -1599,6 +1631,27 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       }
     }
 
+    // Unlock Product_COV prices for the buying supplier against each upstream offer.
+    {
+      const productByIdForBcov = new Map();
+      const offerList = Object.values(upstreamOfferById);
+      for (const offer of offerList) {
+        if (offer?.product_id && offer?.product) {
+          productByIdForBcov.set(offer.product_id, { id: offer.product_id, ...offer.product });
+        }
+      }
+      const { offerRows: pricedOffers } = await enrichDiscoveryOffersWithBuyerBcov({
+        supabase,
+        userId: req.userId,
+        offerRows: offerList,
+        productById: productByIdForBcov,
+        enabled: true
+      });
+      for (const offer of pricedOffers || []) {
+        if (offer?.id) upstreamOfferById[offer.id] = offer;
+      }
+    }
+
     // Security guard: seller must match at least one immediate upstream role for any role the buyer declared.
     const parentRolesUnion = getImmediateParentRolesUnion(req.user.profile);
     const selectedBrandNames = [
@@ -1742,11 +1795,22 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       if (!groups.has(groupKey)) {
         groups.set(groupKey, { supplierId, transportGroupId: groupKey, items: [] });
       }
+      const baseUnitPrice = parseMoney(upstreamOffer.price);
+      const picked = pickEffectiveOfferPrice(
+        baseUnitPrice,
+        upstreamOffer._bcovApplied
+          ? { price: upstreamOffer._effectivePrice, levelId: upstreamOffer._bcovLevelId }
+          : null
+      );
+      const unitPrice = picked.price;
       groups.get(groupKey).items.push({
         mineSupplierProductId,
         upstreamSupplierProductId,
         quantity,
-        unitPrice: parseFloat(upstreamOffer.price || 0) || 0,
+        unitPrice,
+        baseUnitPrice: picked.basePrice,
+        bcovApplied: picked.bcovApplied,
+        bcovLevelId: picked.bcovLevelId,
         upstreamOffer,
         chainRouting
       });
@@ -1777,9 +1841,9 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       if (mov <= 0) continue;
       let subtotal = 0;
       for (const it of group.items) {
-        subtotal += (parseInt(it.quantity, 10) || 0) * (parseFloat(it.unitPrice) || 0);
+        subtotal += lineMoneyTotal(it.unitPrice, parseInt(it.quantity, 10) || 0);
       }
-      subtotal = Math.round(subtotal * 100) / 100;
+      subtotal = roundMoney(subtotal);
       if (subtotal + 1e-6 < mov) {
         return res.status(400).json({
           status: 'error',
@@ -1818,16 +1882,21 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
           supplier_product_id: it.upstreamSupplierProductId,
           quantity: it.quantity,
           unit_price: it.unitPrice,
-          total_price: it.unitPrice * it.quantity,
+          total_price: lineMoneyTotal(it.unitPrice, it.quantity),
           specifications: JSON.stringify({
             snapshotAt: new Date().toISOString(),
             brandModel: up?.attributes?.brandModel || null,
-            identity
+            identity,
+            bcovApplied: Boolean(it.bcovApplied),
+            bcovLevelId: it.bcovLevelId || null,
+            baseUnitPrice: it.baseUnitPrice ?? null
           })
         };
       });
 
-      const totalAmount = orderItems.reduce((sum, li) => sum + parseFloat(li.total_price || 0), 0);
+      const totalAmount = roundMoney(
+        orderItems.reduce((sum, li) => sum + parseMoney(li.total_price), 0)
+      );
       let order = null;
       let orderErr = null;
       let creditCheck = null;

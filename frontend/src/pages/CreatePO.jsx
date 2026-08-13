@@ -57,6 +57,7 @@ import {
 import {
   sumPoGroupsProductsInclGst
 } from '../utils/orderChargeBreakdown';
+import { lineMoneyTotal } from '../utils/formatRupee';
 import { isSelfShipTransport, SELF_SHIP_PROVIDER_NAME } from '../utils/transportLabels';
 import './CreatePO.css';
 
@@ -1992,7 +1993,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                         <td>
                           ₹
                           {Number(
-                            item.lineTotalInclGst ?? (item.quantity || 0) * (item.price || 0)
+                            item.lineTotalInclGst ?? lineMoneyTotal(item.price, item.quantity)
                           ).toLocaleString('en-IN')}
                         </td>
                       </tr>

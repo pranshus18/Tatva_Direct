@@ -228,3 +228,103 @@ test('deleteCatalogOffer rejects offer that belongs to another catalog product',
     /does not belong/
   );
 });
+
+test('deleteCatalogOffer clears Product_COV when no offer remains for that variant', async () => {
+  const calls = [];
+  let offerExists = true;
+  const supabase = {
+    from(table) {
+      const state = {
+        table,
+        action: null,
+        filters: [],
+        selectArgs: null,
+        head: false
+      };
+      const finalize = () => {
+        calls.push({ ...state, filters: [...state.filters] });
+        if (table === 'supplier_products' && state.action === 'select') {
+          const idFilter = state.filters.find((f) => f.column === 'id');
+          if (idFilter && !state.head) {
+            return {
+              data: {
+                id: 'offer-2',
+                product_id: 'product-1',
+                supplier_id: 'sup-1',
+                variant_key: 'vk-old'
+              },
+              error: null,
+              count: null
+            };
+          }
+          if (state.head) {
+            const variantFilter = state.filters.find((f) => f.column === 'variant_key');
+            if (variantFilter) {
+              return { data: null, error: null, count: offerExists ? 1 : 0 };
+            }
+            // Sibling offers remain on the catalog product.
+            return { data: null, error: null, count: 1 };
+          }
+        }
+        if (table === 'supplier_products' && state.action === 'delete') {
+          offerExists = false;
+          return { data: [{ id: 'offer-2' }], error: null, count: null };
+        }
+        if (table === 'supplier_bcov_levels' && state.action === 'delete') {
+          return { data: null, error: null, count: null };
+        }
+        return { data: null, error: null, count: null };
+      };
+      const builder = {
+        select(...args) {
+          state.action = state.action || 'select';
+          state.selectArgs = args[1] || null;
+          if (args[1]?.head) state.head = true;
+          return builder;
+        },
+        delete() {
+          state.action = 'delete';
+          return builder;
+        },
+        update(payload) {
+          state.action = 'update';
+          state.payload = payload;
+          return builder;
+        },
+        eq(column, value) {
+          state.filters.push({ column, value });
+          return builder;
+        },
+        in() {
+          return builder;
+        },
+        single() {
+          return Promise.resolve(finalize());
+        },
+        then(resolve, reject) {
+          try {
+            resolve(finalize());
+          } catch (error) {
+            reject(error);
+          }
+        }
+      };
+      return builder;
+    }
+  };
+
+  const result = await deleteCatalogOffer(supabase, {
+    catalogProductId: 'product-1',
+    supplierProductId: 'offer-2'
+  });
+
+  assert.deepEqual(result, { deletedOfferId: 'offer-2', catalogDeleted: false });
+  assert.ok(
+    calls.some(
+      (c) =>
+        c.table === 'supplier_bcov_levels' &&
+        c.action === 'delete' &&
+        c.filters.some((f) => f.column === 'variant_key' && f.value === 'vk-old')
+    )
+  );
+});

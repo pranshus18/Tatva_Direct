@@ -163,7 +163,8 @@ router.get('/products/:productId/detail', authenticateToken, async (req, res) =>
   try {
     const productId = String(req.params.productId || '').trim();
     const result = await getProductDiscoveryDetail(supabase, {
-      productId
+      productId,
+      buyerUserId: req.userId
     });
     if (!result.ok) {
       return res.status(result.status || 404).json({

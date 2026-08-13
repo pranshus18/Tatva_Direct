@@ -13,6 +13,7 @@ import {
   resolvePriceIncludesGstFromItem,
   sumGstLines
 } from './gstService.js';
+import { lineMoneyTotal } from '../utils/money.js';
 import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
 
 const PDFDocument = PDFKit?.default || PDFKit;
@@ -158,7 +159,7 @@ export async function loadReceiptItemsAndGst({ order, supplier, serviceProvider 
   const enrichedItems = items.map((item) => {
     const qty = Number(item?.quantity || 0);
     const unitPrice = Number(item?.unit_price || 0);
-    const taxableAmount = Number(item?.total_price || qty * unitPrice);
+    const taxableAmount = Number(item?.total_price || lineMoneyTotal(unitPrice, qty));
     const snapshotLineGst = lineGstFromOrderItemSnapshot(item, taxableAmount);
     if (snapshotLineGst) {
       return {
@@ -440,7 +441,9 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
           const qty = Number(item?.quantity || 0);
           const unitPrice = Number(item?.unit_price || 0);
           const lineGst = item?.lineGst || {};
-          const lineTotal = Number(lineGst?.totalAmount || item?.total_price || qty * unitPrice);
+          const lineTotal = Number(
+            lineGst?.totalAmount || item?.total_price || lineMoneyTotal(unitPrice, qty)
+          );
           const lineName = item?.product?.name || `Item ${idx + 1}`;
           const lineUnit = item?.product?.unit || 'units';
           const lineTaxLabel =
