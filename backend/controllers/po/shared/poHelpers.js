@@ -542,7 +542,12 @@ export function mergeOrAppendUpstreamCartItem(existingItems, newItem, options = 
   }
 
   const existingIndex = items.findIndex((it) => upstreamCartLinesMatch(it, newItem));
-  if (existingIndex < 0) return [...items, newItem];
+  if (existingIndex < 0) {
+    // Quantity updates must not create a new line. Adding a product requires
+    // an explicit add (replaceQuantity false) from Add to Cart / Save to Cart.
+    if (replaceQuantity) return items;
+    return [...items, newItem];
+  }
 
   return items.map((it, idx) => {
     if (idx !== existingIndex) return it;
@@ -580,6 +585,53 @@ export function buildUpstreamItemsFromSelectedMine(selectedMine = {}, metaByMine
     });
   }
   return out;
+}
+
+/**
+ * Apply a selectedMine quantity map onto structured cart lines.
+ * Incoming quantities REPLACE matching lines (they do not add). Lines for mine IDs
+ * that are not in the map are kept so a partial save cannot wipe other products.
+ * New mine IDs are not appended unless `{ appendNew: true }` — reviewing or
+ * selecting a product for sourcing must not persist it into the cart.
+ */
+export function applyUpstreamSelectedMineQuantitiesToItems(
+  existingItems = [],
+  selectedMine = {},
+  metaByMineId = {},
+  options = {}
+) {
+  const quantityByMineId = {};
+  for (const [mineId, qtyRaw] of Object.entries(selectedMine || {})) {
+    const key = String(mineId || '').trim();
+    if (!key) continue;
+    const qty = Math.max(0, Math.floor(Number(qtyRaw) || 0));
+    if (qty <= 0) continue;
+    quantityByMineId[key] = Math.min(MAX_CART_ITEM_QUANTITY, qty);
+  }
+
+  const used = new Set();
+  const nextItems = [];
+  for (const item of Array.isArray(existingItems) ? existingItems : []) {
+    const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+    if (!mineId) {
+      nextItems.push(item);
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(quantityByMineId, mineId)) {
+      nextItems.push(item);
+      continue;
+    }
+    used.add(mineId);
+    nextItems.push({ ...item, quantity: quantityByMineId[mineId] });
+  }
+
+  if (options.appendNew !== true) return nextItems;
+
+  const additions = {};
+  for (const [mineId, quantity] of Object.entries(quantityByMineId)) {
+    if (!used.has(mineId)) additions[mineId] = quantity;
+  }
+  return [...nextItems, ...buildUpstreamItemsFromSelectedMine(additions, metaByMineId)];
 }
 
 export function mergeUpstreamSelectedMineMaps(existingSelectedMine = {}, incomingSelectedMine = {}) {

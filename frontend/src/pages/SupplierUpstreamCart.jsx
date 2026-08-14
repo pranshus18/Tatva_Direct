@@ -38,14 +38,15 @@ import {
 import {
   SUPPLIER_UPSTREAM_CART_RESUME_KEY,
   clearUpstreamCartClientProjectState,
-  resolveUpstreamProjectCartName
+  emitSupplierCartUpdated,
+  resolveUpstreamProjectCartName,
+  subscribeSupplierCartUpdated
 } from '../utils/supplierUpstreamCartSession';
 import {
   formatDiscoveryMrp,
   resolveDiscoveryDisplayPricing
 } from '../utils/discoveryPricing';
 
-const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
 const todayDateMin = getTodayDateInputValue();
 
 const blankShippingAddress = {
@@ -295,7 +296,6 @@ const SupplierUpstreamCart = () => {
           Array.isArray(productsData.products) ? productsData.products : []
         )
       );
-      emitSupplierCartUpdated();
     } catch (e) {
       setError(e.message || 'Failed to load supplier cart');
     } finally {
@@ -314,6 +314,13 @@ const SupplierUpstreamCart = () => {
   useEffect(() => {
     loadCart();
     loadProfileShippingAddresses();
+    const unsubscribe = subscribeSupplierCartUpdated(
+      () => {
+        void loadCart();
+      },
+      { includeSameWindow: false, includeFocus: false }
+    );
+    return unsubscribe;
   }, []);
 
   const replaceProjectInState = (projectId, nextProject) => {
@@ -341,6 +348,21 @@ const SupplierUpstreamCart = () => {
           cartName: String(project.cartName || '').trim(),
           requiredDate: String(project.requiredDate || '').trim(),
           selectedMine: project.selectedMine || {},
+          ...(Array.isArray(project.items)
+            ? {
+                items: project.items.map((item) => ({
+                  id: item?.id,
+                  mineSupplierProductId: item?.mineSupplierProductId || item?.mineId,
+                  mineId: item?.mineId,
+                  productId: item?.productId,
+                  variantKey: item?.variantKey,
+                  variantAsin: item?.variantAsin,
+                  variantLabel: item?.variantLabel,
+                  name: item?.name,
+                  quantity: item?.quantity
+                }))
+              }
+            : {}),
           selectedUpstreamOffer: project.selectedUpstreamOffer || {},
           suggestions: Array.isArray(project.suggestions) ? project.suggestions : [],
           brandFilter: String(project.brandFilter || '').trim(),
@@ -360,7 +382,7 @@ const SupplierUpstreamCart = () => {
     }
   };
 
-  const updateQuantity = (projectId, mineId, nextQty) => {
+  const updateQuantity = async (projectId, mineId, nextQty) => {
     const key = normalizeSupplierProductKey(mineId);
     const parsed = parseSupplierStockQuantity(nextQty);
     if (parsed === null || parsed < 1) return;
@@ -369,34 +391,37 @@ const SupplierUpstreamCart = () => {
     const quantity = Math.max(minQty, parsed);
     const project = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
     if (!project) return;
-    // Draft-only — persist when the user clicks Update Cart.
+    const existingItems = Array.isArray(project.items) ? project.items : [];
+    const itemExists = existingItems.some(
+      (item) => normalizeSupplierProductKey(item?.mineSupplierProductId || item?.mineId) === key
+    );
     const nextProject = {
       ...project,
       selectedMine: {
         ...(project.selectedMine || {}),
         [key]: quantity
       },
-      items: Array.isArray(project.items)
-        ? project.items.map((item) =>
+      items: itemExists
+        ? existingItems.map((item) =>
             normalizeSupplierProductKey(item?.mineSupplierProductId || item?.mineId) === key
               ? { ...item, quantity }
               : item
           )
-        : project.items,
-      _qtyDirty: true
+        : [
+            ...existingItems,
+            {
+              mineSupplierProductId: key,
+              quantity
+            }
+          ]
     };
     replaceProjectInState(projectId, nextProject);
-  };
-
-  const handleUpdateCartProject = async (projectId) => {
-    const project = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
-    if (!project) return;
-    const { _qtyDirty, ...persistable } = project;
-    const ok = await persistProject(persistable);
-    if (ok) {
-      replaceProjectInState(projectId, { ...persistable, _qtyDirty: false });
-      emitSupplierCartUpdated();
+    const ok = await persistProject(nextProject, { silent: true });
+    if (!ok) {
+      void loadCart();
+      return;
     }
+    emitSupplierCartUpdated();
   };
 
   const removeLine = async (projectId, mineId) => {
@@ -462,14 +487,6 @@ const SupplierUpstreamCart = () => {
   };
 
   const continueToUpstream = async (project) => {
-    if (project?._qtyDirty) {
-      const projectId = String(project?.projectId || '').trim();
-      const { _qtyDirty, ...persistable } = project;
-      const ok = await persistProject(persistable);
-      if (!ok) return;
-      replaceProjectInState(projectId, { ...persistable, _qtyDirty: false });
-      emitSupplierCartUpdated();
-    }
     clearCheckoutHoldExpired(SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY);
     localStorage.setItem(
       SUPPLIER_UPSTREAM_CART_RESUME_KEY,
@@ -1073,16 +1090,6 @@ const SupplierUpstreamCart = () => {
                         <button className="btn-primary" disabled={rows.length === 0} onClick={() => continueToUpstream(project)}>
                           Continue this project
                         </button>
-                        {project?._qtyDirty ? (
-                          <button
-                            type="button"
-                            className="btn-primary"
-                            disabled={saving || rows.length === 0}
-                            onClick={() => handleUpdateCartProject(projectId)}
-                          >
-                            {saving ? 'Updating…' : 'Update Cart'}
-                          </button>
-                        ) : null}
                       </div>
                     </div>
 
@@ -1157,11 +1164,6 @@ const SupplierUpstreamCart = () => {
                                       +
                                     </button>
                                   </div>
-                                  {project?._qtyDirty ? (
-                                    <div className="supplier-cart-qty-dirty-hint">
-                                      Click Update Cart to sync
-                                    </div>
-                                  ) : null}
                                 </td>
                                 <td className="supplier-cart-number-cell">{formatRupee(lineMoneyTotal(unitPrice, row.quantity))}</td>
                               </tr>

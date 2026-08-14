@@ -86,6 +86,7 @@ export const supplierUpstreamPreviewGroupsSchema = z.object({
 
 export const supplierUpstreamCartSaveSchema = z.object({
   selectedMine: z.record(z.string(), z.union([z.number(), z.string()])),
+  items: z.array(z.record(z.string(), z.any())).optional(),
   selectedUpstreamOffer: z.record(z.string(), z.union([z.string(), z.number()])),
   suggestions: z.array(z.record(z.string(), z.any())).optional().default([]),
   brandFilter: z.string().optional().default(''),

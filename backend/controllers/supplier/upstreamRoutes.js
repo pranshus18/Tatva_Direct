@@ -70,7 +70,7 @@ import {
   mergeOrAppendUpstreamCartItem,
   buildUpstreamSelectedMineFromItems,
   buildUpstreamItemsFromSelectedMine,
-  mergeUpstreamSelectedMineMaps,
+  applyUpstreamSelectedMineQuantitiesToItems,
   normalizeCartVariantKey
 } from '../po/shared/poHelpers.js';
 import {
@@ -2242,6 +2242,18 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       const existingItems = Array.isArray(existing.items)
         ? existing.items
         : buildUpstreamItemsFromSelectedMine(existing.selectedMine || {});
+      if (replaceQuantity) {
+        const alreadyInProject = existingItems.some(
+          (item) =>
+            String(item?.mineSupplierProductId || item?.mineId || '').trim() === mineSupplierProductId
+        );
+        if (!alreadyInProject) {
+          return res.status(404).json({
+            status: 'error',
+            message: 'This product is not in your upstream cart yet. Add it to a project first.'
+          });
+        }
+      }
       const nextItems = mergeOrAppendUpstreamCartItem(existingItems, newCartItem, {
         replaceQuantity
       });
@@ -2583,17 +2595,39 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       ? nextProjects.find((p) => String(p?.projectId || '') === String(payloadInput.projectId))
       : null;
     const incomingSelectedMine = normalizeSelectedMineQuantities(payloadInput.selectedMine || {});
-    const mergedSelectedMine = existingProject
-      ? mergeUpstreamSelectedMineMaps(existingProject?.selectedMine || {}, incomingSelectedMine)
-      : incomingSelectedMine;
-    const mineIds = Object.keys(mergedSelectedMine);
+    const incomingItems = Array.isArray(payloadInput.items) ? payloadInput.items : null;
+    const existingItems = Array.isArray(existingProject?.items) ? existingProject.items : [];
+    const mineIds = [
+      ...new Set(
+        [
+          ...Object.keys(incomingSelectedMine),
+          ...Object.keys(existingProject?.selectedMine || {}),
+          ...(incomingItems || existingItems).map((item) =>
+            String(item?.mineSupplierProductId || item?.mineId || '').trim()
+          )
+        ].filter(Boolean)
+      )
+    ];
     const metaByMineId = await loadUpstreamMineMetaByIds(req.userId, mineIds);
+    const fallbackExistingItems = existingItems.length
+      ? existingItems
+      : buildUpstreamItemsFromSelectedMine(existingProject?.selectedMine || {}, metaByMineId);
+    // Cart page sends the full `items` list as the source of truth (qty edits + removals).
+    // Partial selectedMine saves still SET matching line quantities instead of adding onto stale items.
+    const nextItems = incomingItems
+      ? incomingItems
+      : applyUpstreamSelectedMineQuantitiesToItems(
+          fallbackExistingItems,
+          incomingSelectedMine,
+          metaByMineId
+        );
     let nextProject = buildUpstreamProject({
       ...(existingProject || {}),
       projectId: payloadInput.projectId || null,
       cartName: String(payloadInput.cartName || '').trim() || existingProject?.cartName,
       requiredDate: String(payloadInput.requiredDate || '').trim() || existingProject?.requiredDate,
-      selectedMine: mergedSelectedMine,
+      items: nextItems,
+      selectedMine: buildUpstreamSelectedMineFromItems(nextItems),
       selectedMineMeta: metaByMineId,
       selectedUpstreamOffer:
         payloadInput.selectedUpstreamOffer || existingProject?.selectedUpstreamOffer || {},

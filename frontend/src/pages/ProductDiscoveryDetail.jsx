@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -42,6 +42,10 @@ import {
 } from '../utils/discoveryVariantSelection';
 import { resolveDiscoveryProductDescription } from '../utils/productDisplay';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
+import {
+  emitSupplierCartUpdated,
+  subscribeSupplierCartUpdated
+} from '../utils/supplierUpstreamCartSession';
 import {
   buildUpstreamSourcingUrl,
   returnToDiscovery,
@@ -256,6 +260,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const [procurementQty, setProcurementQty] = useState(1);
   const [upstreamCartBusy, setUpstreamCartBusy] = useState(false);
   const [upstreamCartQty, setUpstreamCartQty] = useState(null);
+  const upstreamCartQtyRef = useRef(null);
 
   useEffect(() => {
     const token = localStorage.getItem('token');
@@ -486,23 +491,30 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
           }
         }
         if (!cancelled) {
-          setUpstreamCartQty(found != null && found > 0 ? found : null);
-          if (found != null && found > 0) {
-            setProcurementQty(Math.max(upstreamMinQty, found));
+          const liveQty = found != null && found > 0 ? found : null;
+          setUpstreamCartQty(liveQty);
+          const prevQty = upstreamCartQtyRef.current;
+          // Keep the qty stepper at its default on load/refresh. Only follow a
+          // cart change that happens while this page is already open.
+          if (prevQty != null && liveQty != null && prevQty !== liveQty) {
+            setProcurementQty(Math.max(upstreamMinQty, liveQty));
           }
+          upstreamCartQtyRef.current = liveQty;
         }
       } catch {
         if (!cancelled) setUpstreamCartQty(null);
       }
     };
     loadCartQty();
-    const onCartUpdated = () => {
-      void loadCartQty();
-    };
-    window.addEventListener('supplier-upstream-cart-updated', onCartUpdated);
+    const unsubscribe = subscribeSupplierCartUpdated(
+      () => {
+        void loadCartQty();
+      },
+      { includeFocus: false }
+    );
     return () => {
       cancelled = true;
-      window.removeEventListener('supplier-upstream-cart-updated', onCartUpdated);
+      unsubscribe();
     };
   }, [isUpstreamPortal, upstreamMineId, upstreamMinQty]);
 
@@ -628,7 +640,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
           setProcurementQty(savedQty);
           setCartAdded(true);
           window.setTimeout(() => setCartAdded(false), 1400);
-          window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
+          emitSupplierCartUpdated();
         } catch (updateError) {
           setError(updateError?.message || 'Failed to update cart quantity.');
         } finally {
@@ -784,6 +796,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
       </dl>
 
       <Button
+        type="button"
         className="pdd-buybox__cta"
         size="lg"
         onClick={openAddToCart}

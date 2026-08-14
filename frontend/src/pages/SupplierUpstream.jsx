@@ -69,10 +69,13 @@ import {
 import { cn } from '@/lib/utils';
 import {
   SUPPLIER_UPSTREAM_CART_RESUME_KEY,
+  applyLiveCartQuantitiesToMap,
   clearUpstreamCartClientProjectState,
   clearUpstreamSessionProjectId,
+  emitSupplierCartUpdated,
   readUpstreamSessionProjectId,
   resolveUpstreamProjectCartName,
+  subscribeSupplierCartUpdated,
   writeUpstreamSessionProjectId
 } from '../utils/supplierUpstreamCartSession';
 
@@ -95,7 +98,6 @@ const todayDateMin = getTodayDateInputValue();
 const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
 /** Set when returning from Place Order so upstream page restores in-progress draft once. */
 const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
-const emitSupplierCartUpdated = () => window.dispatchEvent(new Event('supplier-upstream-cart-updated'));
 
 const readSessionProjectId = readUpstreamSessionProjectId;
 const writeSessionProjectId = writeUpstreamSessionProjectId;
@@ -241,6 +243,7 @@ const SupplierUpstream = ({ user }) => {
   const [newShippingAddress, setNewShippingAddress] = useState(blankShippingAddress);
   const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState('');
+  const cartQtyByMineIdRef = useRef({});
 
   const [supplierDetailsOpen, setSupplierDetailsOpen] = useState(false);
   const [supplierDetails, setSupplierDetails] = useState(null);
@@ -305,7 +308,8 @@ const SupplierUpstream = ({ user }) => {
   }, []);
 
   // Handoff from the product detail page: `?add=<supplier_product_id>&qty=` only
-  // prefills the card quantity. Cart changes require an explicit Add to Cart click.
+  // prefills the card quantity. Viewing/reviewing a product must never persist
+  // it — cart changes require an explicit Add to Cart / Save to Cart click.
   const handledAddParamRef = useRef('');
   useEffect(() => {
     if (loading) return;
@@ -444,13 +448,14 @@ const SupplierUpstream = ({ user }) => {
   }, []);
 
   useEffect(() => {
-    const onCartUpdated = () => {
-      // Never prefer a remembered project id after clear/delete — hydrate from live cart only.
-      void hydrateActiveCartProject('');
-      void refreshSyncedCartQuantities();
-    };
-    window.addEventListener('supplier-upstream-cart-updated', onCartUpdated);
-    return () => window.removeEventListener('supplier-upstream-cart-updated', onCartUpdated);
+    const unsubscribe = subscribeSupplierCartUpdated(
+      () => {
+        void hydrateActiveCartProject('');
+        void refreshSyncedCartQuantities();
+      },
+      { includeFocus: false }
+    );
+    return unsubscribe;
   }, []);
 
   const selectedMineIds = useMemo(
@@ -463,6 +468,7 @@ const SupplierUpstream = ({ user }) => {
     try {
       const token = localStorage.getItem('token');
       if (!token) {
+        cartQtyByMineIdRef.current = {};
         setCartQtyByMineId({});
         setCartProjectByMineId({});
         clearUpstreamCartClientProjectState();
@@ -474,6 +480,7 @@ const SupplierUpstream = ({ user }) => {
       });
       const data = await res.json();
       if (!res.ok || data.status !== 'success') {
+        cartQtyByMineIdRef.current = {};
         setCartQtyByMineId({});
         setCartProjectByMineId({});
         return { quantities: {}, projectsByMine: {} };
@@ -507,25 +514,23 @@ const SupplierUpstream = ({ user }) => {
         }
       }
 
-      // Cart cleared / last project deleted: keep last card quantities so Add to Cart
-      // can open create-project instead of forcing the user to re-enter qty from zero.
-      setCartQtyByMineId((prev) => {
-        if (Object.keys(next).length === 0 && Object.keys(prev || {}).length > 0) {
-          setProcurementQtyByMineId((draft) => {
-            const merged = { ...draft };
-            for (const [mineId, qty] of Object.entries(prev)) {
-              const existing = parseSupplierStockQuantity(merged[mineId]);
-              if (existing == null || existing <= 0) {
-                merged[mineId] = qty;
-              }
-            }
-            return merged;
-          });
-          setActiveProjectId('');
-          clearUpstreamCartClientProjectState();
-        }
-        return next;
-      });
+      // Keep "In cart" from the saved cart, but do not copy those quantities into
+      // the card field on load/refresh. The field stays at the default until the
+      // user edits it. Overlay only when a known cart line changes this session.
+      const prevCartQty = cartQtyByMineIdRef.current || {};
+      if (Object.keys(next).length === 0 && Object.keys(prevCartQty).length > 0) {
+        setActiveProjectId('');
+        clearUpstreamCartClientProjectState();
+      } else if (Object.keys(next).length > 0 && Object.keys(prevCartQty).length > 0) {
+        setProcurementQtyByMineId((draft) =>
+          applyLiveCartQuantitiesToMap(draft, prevCartQty, next)
+        );
+        setSelectedMine((selected) =>
+          applyLiveCartQuantitiesToMap(selected, prevCartQty, next, { onlyExistingKeys: true })
+        );
+      }
+      cartQtyByMineIdRef.current = next;
+      setCartQtyByMineId(next);
       setCartProjectByMineId(nextProjects);
       if (Object.keys(nextProjects).length === 0) {
         setActiveProjectId('');
@@ -533,6 +538,7 @@ const SupplierUpstream = ({ user }) => {
       }
       return { quantities: next, projectsByMine: nextProjects };
     } catch {
+      cartQtyByMineIdRef.current = {};
       setCartQtyByMineId({});
       setCartProjectByMineId({});
       return { quantities: {}, projectsByMine: {} };
@@ -552,9 +558,8 @@ const SupplierUpstream = ({ user }) => {
     }
     const fromSelected = parseSupplierStockQuantity(selectedMine[key]);
     if (fromSelected != null && fromSelected > 0) return fromSelected;
-    const fromCart = parseSupplierStockQuantity(cartQtyByMineId[key]);
-    if (fromCart != null && fromCart > 0) return fromCart;
     // Default display quantity before the supplier chooses one.
+    // Do not hydrate from the saved cart — "In cart" is shown separately.
     return 0;
   };
 
@@ -871,11 +876,65 @@ const SupplierUpstream = ({ user }) => {
       alert('Select at least one item before saving cart.');
       return;
     }
+    const selectedEntries = Object.entries(normalizeSelectionMap(selectedMine || {}))
+      .map(([mineId, qtyRaw]) => {
+        const quantity = parseSupplierStockQuantity(qtyRaw);
+        if (!mineId || quantity == null || quantity <= 0) return null;
+        const product = resolveMineProduct(mineId);
+        return {
+          mineSupplierProductId: mineId,
+          quantity,
+          name: product?.name || undefined,
+          variantKey: product?.variantKey || product?.variant_key || undefined,
+          variantAsin: product?.variantAsin || product?.variant_asin || undefined,
+          variantLabel: product?.name || undefined
+        };
+      })
+      .filter(Boolean);
+    if (!selectedEntries.length) {
+      alert('Set quantity on each selected product, then click Save to Cart.');
+      return;
+    }
+    const token = localStorage.getItem('token');
+    let existingItems = [];
     const activeProject = cartProjects.find(
       (project) => String(project?.projectId || '') === String(activeProjectId || '')
     );
+    if (token && activeProjectId) {
+      try {
+        const cartRes = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        const cartData = await cartRes.json();
+        const projects = Array.isArray(cartData?.cart?.draft?.projects)
+          ? cartData.cart.draft.projects
+          : [];
+        const liveProject = projects.find(
+          (project) => String(project?.projectId || '') === String(activeProjectId)
+        );
+        existingItems = Array.isArray(liveProject?.items) ? liveProject.items : [];
+      } catch {
+        existingItems = [];
+      }
+    }
+    const nextItems = [...existingItems];
+    for (const entry of selectedEntries) {
+      const idx = nextItems.findIndex(
+        (item) =>
+          normalizeSupplierProductKey(item?.mineSupplierProductId || item?.mineId) ===
+          entry.mineSupplierProductId
+      );
+      if (idx >= 0) {
+        nextItems[idx] = { ...nextItems[idx], ...entry };
+      } else {
+        nextItems.push(entry);
+      }
+    }
     const ok = await persistUpstreamCartDraft({
-      selectedMine,
+      selectedMine: Object.fromEntries(
+        selectedEntries.map((entry) => [entry.mineSupplierProductId, entry.quantity])
+      ),
+      items: nextItems,
       selectedUpstreamOffer,
       suggestions: Array.isArray(suggestions) ? suggestions : [],
       searchQuery,
@@ -1637,8 +1696,12 @@ const SupplierUpstream = ({ user }) => {
               <article
                 key={mineId}
                 className={`pd-card us-pd-card pd-card--clickable flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${isSelected ? 'us-pd-card--selected' : ''}`}
-                onClick={() => openProductDetails(p)}
+                onClick={(event) => {
+                  if (event.target.closest('button, a, input, label, .us-pd-card__qty-row')) return;
+                  openProductDetails(p);
+                }}
                 onKeyDown={(event) => {
+                  if (event.target !== event.currentTarget) return;
                   if (event.key === 'Enter' || event.key === ' ') {
                     event.preventDefault();
                     openProductDetails(p);

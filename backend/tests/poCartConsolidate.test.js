@@ -4,6 +4,7 @@ import {
   appendDiscoveryItemAsNewProject,
   consolidateDuplicateProductLines,
   mergeOrAppendCartGroupItem,
+  applyUpstreamSelectedMineQuantitiesToItems,
   mergeOrAppendUpstreamCartItem,
   mergeUpstreamSelectedMineMaps,
   mergeUpstreamSelectedMineQuantity,
@@ -206,6 +207,61 @@ test('mergeUpstreamSelectedMineMaps adds new variant lines without removing exis
     { 'mine-blue': 3 }
   );
   assert.deepEqual(merged, { 'mine-red': 2, 'mine-blue': 3 });
+});
+
+test('applyUpstreamSelectedMineQuantitiesToItems replaces quantity on existing lines', () => {
+  const nextItems = applyUpstreamSelectedMineQuantitiesToItems(
+    [
+      {
+        id: 'line-watch',
+        mineSupplierProductId: 'mine-watch',
+        quantity: 2
+      },
+      {
+        id: 'line-band',
+        mineSupplierProductId: 'mine-band',
+        quantity: 1
+      }
+    ],
+    { 'mine-watch': 5 }
+  );
+  assert.equal(nextItems.length, 2);
+  assert.equal(nextItems[0].quantity, 5);
+  assert.equal(nextItems[1].quantity, 1);
+});
+
+test('applyUpstreamSelectedMineQuantitiesToItems does not append new mine ids', () => {
+  const nextItems = applyUpstreamSelectedMineQuantitiesToItems(
+    [{ id: 'line-watch', mineSupplierProductId: 'mine-watch', quantity: 2 }],
+    { 'mine-watch': 2, 'mine-band': 1 },
+    { 'mine-band': { name: 'Band', productId: 'p-band' } }
+  );
+  assert.equal(nextItems.length, 1);
+  assert.equal(nextItems[0].mineSupplierProductId, 'mine-watch');
+  assert.equal(nextItems[0].quantity, 2);
+});
+
+test('applyUpstreamSelectedMineQuantitiesToItems appends new mine ids when appendNew is true', () => {
+  const nextItems = applyUpstreamSelectedMineQuantitiesToItems(
+    [{ id: 'line-watch', mineSupplierProductId: 'mine-watch', quantity: 2 }],
+    { 'mine-watch': 2, 'mine-band': 1 },
+    { 'mine-band': { name: 'Band', productId: 'p-band' } },
+    { appendNew: true }
+  );
+  assert.equal(nextItems.length, 2);
+  assert.equal(nextItems[0].quantity, 2);
+  assert.equal(nextItems[1].mineSupplierProductId, 'mine-band');
+  assert.equal(nextItems[1].quantity, 1);
+});
+
+test('mergeOrAppendUpstreamCartItem replaceQuantity does not add a missing line', () => {
+  const nextItems = mergeOrAppendUpstreamCartItem(
+    [{ id: 'line-watch', mineSupplierProductId: 'mine-watch', quantity: 2 }],
+    { mineSupplierProductId: 'mine-band', quantity: 1 },
+    { replaceQuantity: true }
+  );
+  assert.equal(nextItems.length, 1);
+  assert.equal(nextItems[0].mineSupplierProductId, 'mine-watch');
 });
 
 test('normalizePoCartDraft keeps separate lines for the same productId', () => {

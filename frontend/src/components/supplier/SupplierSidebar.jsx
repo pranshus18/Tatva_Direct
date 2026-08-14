@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { SUPPLIER_NAV_GROUPS } from '@/utils/supplierNavConfig';
 import { getApiUrl } from '@/config/api';
 import { countSupplierUpstreamCartDraft } from '@/utils/cartBadge';
+import { subscribeSupplierCartUpdated } from '@/utils/supplierUpstreamCartSession';
 import PillSidebar from '@/components/shared/PillSidebar';
 
 export default function SupplierSidebar({ className, onNavigate, variant = 'desktop' }) {
@@ -32,10 +33,10 @@ export default function SupplierSidebar({ className, onNavigate, variant = 'desk
     };
 
     refresh();
-    window.addEventListener('supplier-upstream-cart-updated', refresh);
+    const unsubscribe = subscribeSupplierCartUpdated(refresh, { includeFocus: true });
     return () => {
       active = false;
-      window.removeEventListener('supplier-upstream-cart-updated', refresh);
+      unsubscribe();
     };
   }, [location.pathname]);
 
