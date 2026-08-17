@@ -226,11 +226,14 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         targetBrand,
         detectProductBrandKey,
         fuzzyNameCompatible,
-        hasModelTokenConflict
+        hasModelTokenConflict,
+        excludeSupplierId: req.userId
       });
 
       const preRetailCount = (products || []).length;
       products = (products || []).filter((p) => {
+        const supplierId = String(p?.supplier?.id || p?.supplier_id || '').trim();
+        if (req.userId && supplierId && supplierId === String(req.userId)) return false;
         const supplierProfile = p?.supplier?.profile;
         return supplierMatchesBrandTerminalRole(supplierProfile, targetBrand, terminalRoleByBrandMap);
       });
@@ -368,13 +371,21 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       // approved, active supplier_products offer. Deleted/deactivated listings must not
       // reappear here via stale catalog metadata.
       if (validVendors.length === 0 && referenceProduct && referenceProduct.supplier && referenceProduct.supplier.id) {
-        const { data: liveOfferRows, error: liveOfferError } = await supabase
+        if (String(referenceProduct.supplier.id) === String(req.userId || '')) {
+          rankLog(
+            `[Vendor Ranking] Skipping reference-product fallback for item ${itemId}: catalog supplier is the buyer`
+          );
+        } else {
+        let liveOfferQuery = supabase
           .from('supplier_products')
           .select('id')
           .eq('product_id', referenceProduct.id)
           .eq('status', 'approved')
-          .eq('is_active', true)
-          .limit(1);
+          .eq('is_active', true);
+        if (req.userId) {
+          liveOfferQuery = liveOfferQuery.neq('supplier_id', req.userId);
+        }
+        const { data: liveOfferRows, error: liveOfferError } = await liveOfferQuery.limit(1);
         if (liveOfferError) {
           console.error(
             `[Vendor Ranking] Live-offer lookup failed for reference product ${referenceProduct.id}:`,
@@ -408,6 +419,7 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
           }
         } else {
           rankLog(`[Vendor Ranking] Reference product has invalid stock/price, cannot create vendor entry`);
+        }
         }
         }
         }

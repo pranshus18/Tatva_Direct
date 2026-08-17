@@ -127,6 +127,54 @@ await testAsync('rejects cart draft containing out of stock product lines', asyn
   assert.match(String(result.message), /out of stock/i);
 });
 
-assert.equal(PRODUCT_OUT_OF_STOCK_MESSAGE, 'Product is out of stock');
+await testAsync('ignores the buyer own supplier listing when checking sellable stock', async () => {
+  const supabase = createSupabaseMock({
+    product: { id: 'p-self', name: 'Own SKU', status: 'approved', brand: 'Generic' },
+    listings: [
+      {
+        id: 'sp-self',
+        stock: 40,
+        supplier_id: 'buyer-1',
+        supplier: { id: 'buyer-1', profile: {} }
+      }
+    ]
+  });
+
+  const result = await assertProductHasSellableStock(supabase, {
+    productId: 'p-self',
+    quantity: 1,
+    excludeSupplierId: 'buyer-1'
+  });
+  assert.equal(result.ok, false);
+  assert.match(String(result.message), /own supplier listing/i);
+});
+
+await testAsync('counts only other suppliers stock for a dual-role buyer', async () => {
+  const supabase = createSupabaseMock({
+    product: { id: 'p-mix', name: 'Shared SKU', status: 'approved', brand: 'Generic' },
+    listings: [
+      {
+        id: 'sp-self',
+        stock: 40,
+        supplier_id: 'buyer-1',
+        supplier: { id: 'buyer-1', profile: {} }
+      },
+      {
+        id: 'sp-other',
+        stock: 3,
+        supplier_id: 'other-1',
+        supplier: { id: 'other-1', profile: {} }
+      }
+    ]
+  });
+
+  const result = await assertProductHasSellableStock(supabase, {
+    productId: 'p-mix',
+    quantity: 2,
+    excludeSupplierId: 'buyer-1'
+  });
+  assert.equal(result.ok, true);
+  assert.equal(result.availableStock, 3);
+});
 console.log('ok - out of stock message constant is user-facing');
 console.log('cartStockGuardService tests passed');

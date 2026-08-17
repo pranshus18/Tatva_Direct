@@ -12,6 +12,7 @@ import {
   isCatalogGuardrailsEnabled,
   isValidGtin,
   loadEffectiveSupplierChainProfile,
+  maybeNotifyInventoryBelowMov,
   normalizeGtin,
   normalizeText,
   onboardingAutoApproveThreshold,
@@ -55,6 +56,12 @@ import {
   validateSupplierOfferSpecificationFillComplete
 } from '../../../services/supplierProductUpdateValidation.js';
 import { notifyServiceProvidersForFulfilledBoqRequests } from '../../../services/serviceProviderRequestNotificationService.js';
+import {
+  DUPLICATE_SUPPLIER_VARIANT_MESSAGE,
+  findOwnOfferForVariantLocation,
+  isExistingOfferUpdatableOnCreate,
+  isSupplierOfferUniqueViolation
+} from '../../../utils/supplierOfferUniqueness.js';
 
 export function buildSupplierProductCreateHandler(ctx) {
   const {
@@ -348,10 +355,12 @@ export function buildSupplierProductCreateHandler(ctx) {
         parentProductForVariant
       );
 
-      const [{ data: existingOffersForProduct }, productVariantsResult] = await Promise.all([
+      const [offersResult, productVariantsResult] = await Promise.all([
         supabase
           .from('supplier_products')
-          .select('id, supplier_id, location, status, is_active, variant_key, variant_asin, attributes, unit')
+          .select(
+            'id, supplier_id, location, outlet_id, status, is_active, variant_key, variant_asin, attributes'
+          )
           .eq('product_id', productId)
           .limit(200),
         supabase
@@ -360,6 +369,13 @@ export function buildSupplierProductCreateHandler(ctx) {
           .eq('product_id', productId)
           .limit(200)
       ]);
+      if (offersResult?.error) {
+        console.warn(
+          '[SupplierProductCreate] existing offers lookup failed:',
+          offersResult.error.message || offersResult.error
+        );
+      }
+      const existingOffersForProduct = offersResult?.error ? [] : offersResult?.data || [];
       const existingProductVariants = productVariantsResult?.error
         ? []
         : productVariantsResult?.data || [];
@@ -389,21 +405,74 @@ export function buildSupplierProductCreateHandler(ctx) {
       let resolvedVariantKey = resolvedVariantKeyInitial;
       let variantAsin = stableVariantIdentity.variantAsin;
 
-      const currentLocation = (otherData.location || '').trim();
-      const existingSupplierProduct =
-        (existingOffersForProduct || []).find(
-          (row) =>
-            String(row.supplier_id) === String(req.userId) &&
-            String(row.location || '').trim() === currentLocation &&
-            String(row.variant_key || '').trim() === String(resolvedVariantKey || '').trim()
+      const approvedVariantOffer = (existingOffersForProduct || []).find(
+        (row) =>
+          String(row.variant_key || '').trim() === String(resolvedVariantKey || '').trim() &&
+          String(row.status || '').toLowerCase() === 'approved' &&
+          row.is_active !== false
+      );
+      // Prefer deep offer-spec extraction so legacy attribute shapes still match.
+      const compatibleApprovedOffer =
+        findBestMatchingApprovedOfferForSpecs(
+          (existingOffersForProduct || []).map((row) => ({
+            ...row,
+            attributes: {
+              ...(row?.attributes && typeof row.attributes === 'object' ? row.attributes : {}),
+              specifications: extractOfferSpecificationsFromRow(row)
+            }
+          })),
+          normalizedSpecs
         ) || null;
+      const sameVariantApprovedOffer = approvedVariantOffer || compatibleApprovedOffer || null;
+      if (
+        sameVariantApprovedOffer &&
+        String(resolvedVariantKey || '').trim() !==
+          String(sameVariantApprovedOffer.variant_key || '').trim()
+      ) {
+        // Force stable identity onto the already-live variant before duplicate detection.
+        resolvedVariantKey = String(sameVariantApprovedOffer.variant_key || '').trim();
+        if (String(sameVariantApprovedOffer.variant_asin || '').trim()) {
+          variantAsin = String(sameVariantApprovedOffer.variant_asin || '').trim();
+        }
+      }
+
+      const currentLocation = (otherData.location || '').trim();
+      const ownOfferLookupArgs = {
+        supplierId: req.userId,
+        location: currentLocation,
+        variantKey: resolvedVariantKey
+      };
+      let existingSupplierProduct = findOwnOfferForVariantLocation(
+        existingOffersForProduct,
+        ownOfferLookupArgs
+      );
+      if (!existingSupplierProduct && resolvedVariantKey) {
+        const { data: exactRows, error: exactLookupError } = await supabase
+          .from('supplier_products')
+          .select(
+            'id, supplier_id, location, outlet_id, status, is_active, variant_key, variant_asin, attributes'
+          )
+          .eq('product_id', productId)
+          .eq('supplier_id', req.userId)
+          .eq('variant_key', resolvedVariantKey)
+          .limit(50);
+        if (exactLookupError) {
+          console.warn(
+            '[SupplierProductCreate] exact offer lookup failed:',
+            exactLookupError.message || exactLookupError
+          );
+        } else {
+          existingSupplierProduct = findOwnOfferForVariantLocation(exactRows, ownOfferLookupArgs);
+        }
+      }
+      const updatingExistingOffer = isExistingOfferUpdatableOnCreate(existingSupplierProduct);
       const resubmittingRejectedOffer =
-        existingSupplierProduct &&
-        String(existingSupplierProduct.status || '').toLowerCase() === 'rejected';
-      if (existingSupplierProduct && !resubmittingRejectedOffer) {
+        String(existingSupplierProduct?.status || '').toLowerCase() === 'rejected';
+      if (existingSupplierProduct && !updatingExistingOffer) {
         return res.status(400).json({
           status: 'error',
-          message: 'You have already added this exact product variation for this location. Please update the existing entry instead.'
+          code: 'duplicate_supplier_variant',
+          message: DUPLICATE_SUPPLIER_VARIANT_MESSAGE
         });
       }
 
@@ -430,37 +499,6 @@ export function buildSupplierProductCreateHandler(ctx) {
             missingFields: variantMrpValidation.missingFields || ['price'],
             canonicalMrp: variantMrpValidation.canonicalMrp
           });
-        }
-      }
-
-      const approvedVariantOffer = (existingOffersForProduct || []).find(
-        (row) =>
-          String(row.variant_key || '').trim() === String(resolvedVariantKey || '').trim() &&
-          String(row.status || '').toLowerCase() === 'approved' &&
-          row.is_active !== false
-      );
-      // Prefer deep offer-spec extraction so legacy attribute shapes still match.
-      const compatibleApprovedOffer =
-        findBestMatchingApprovedOfferForSpecs(
-          (existingOffersForProduct || []).map((row) => ({
-            ...row,
-            attributes: {
-              ...(row?.attributes && typeof row.attributes === 'object' ? row.attributes : {}),
-              specifications: extractOfferSpecificationsFromRow(row)
-            }
-          })),
-          normalizedSpecs
-        ) || null;
-      const sameVariantApprovedOffer = approvedVariantOffer || compatibleApprovedOffer || null;
-      if (
-        sameVariantApprovedOffer &&
-        String(resolvedVariantKey || '').trim() !==
-          String(sameVariantApprovedOffer.variant_key || '').trim()
-      ) {
-        // Force stable identity onto the already-live variant.
-        resolvedVariantKey = String(sameVariantApprovedOffer.variant_key || '').trim();
-        if (String(sameVariantApprovedOffer.variant_asin || '').trim()) {
-          variantAsin = String(sameVariantApprovedOffer.variant_asin || '').trim();
         }
       }
       // Any approved offer for this catalog product means the product is already live —
@@ -603,8 +641,8 @@ export function buildSupplierProductCreateHandler(ctx) {
       };
 
       // Fresh insert for a variant with no live offer: drop leftover Product_COV from a deleted listing.
-      // Do not clear when resubmitting a rejected offer or when another location already shares the key.
-      if (!resubmittingRejectedOffer && resolvedVariantKey) {
+      // Do not clear when updating a pending/rejected offer or when another location already shares the key.
+      if (!updatingExistingOffer && resolvedVariantKey) {
         try {
           await clearOrphanedSupplierBcovLevelsBeforeNewOffer(supabase, {
             supplierId: req.userId,
@@ -618,26 +656,94 @@ export function buildSupplierProductCreateHandler(ctx) {
         }
       }
 
-      const { data: newSupplierProduct, error: supplierProductError } = resubmittingRejectedOffer
-        ? await supabase
+      const offerUpdatePayload = {
+        ...supplierProductData,
+        updated_at: new Date().toISOString()
+      };
+      if (resubmittingRejectedOffer) {
+        offerUpdatePayload.approved_by = null;
+        offerUpdatePayload.approved_at = null;
+        offerUpdatePayload.rejection_reason = null;
+      }
+
+      let newSupplierProduct = null;
+      let supplierProductError = null;
+      if (updatingExistingOffer) {
+        const updated = await supabase
+          .from('supplier_products')
+          .update(offerUpdatePayload)
+          .eq('id', existingSupplierProduct.id)
+          .eq('supplier_id', req.userId)
+          .select()
+          .single();
+        newSupplierProduct = updated.data;
+        supplierProductError = updated.error;
+      } else {
+        const inserted = await supabase
+          .from('supplier_products')
+          .insert(supplierProductData)
+          .select()
+          .single();
+        newSupplierProduct = inserted.data;
+        supplierProductError = inserted.error;
+        if (supplierProductError && isSupplierOfferUniqueViolation(supplierProductError)) {
+          const { data: racedRows, error: racedLookupError } = await supabase
             .from('supplier_products')
-            .update({
-              ...supplierProductData,
-              approved_by: null,
-              approved_at: null,
-              rejection_reason: null,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', existingSupplierProduct.id)
+            .select(
+              'id, supplier_id, location, outlet_id, status, is_active, variant_key, variant_asin, attributes'
+            )
+            .eq('product_id', productId)
             .eq('supplier_id', req.userId)
-            .select()
-            .single()
-        : await supabase
-            .from('supplier_products')
-            .insert(supplierProductData)
-            .select()
-            .single();
+            .eq('variant_key', resolvedVariantKey)
+            .limit(50);
+          if (racedLookupError) {
+            console.warn(
+              '[SupplierProductCreate] unique-violation lookup failed:',
+              racedLookupError.message || racedLookupError
+            );
+          }
+          const racedOffer = findOwnOfferForVariantLocation(racedRows, ownOfferLookupArgs);
+          if (racedOffer && isExistingOfferUpdatableOnCreate(racedOffer)) {
+            const racedRejected =
+              String(racedOffer.status || '').toLowerCase() === 'rejected';
+            const racedPayload = {
+              ...supplierProductData,
+              updated_at: new Date().toISOString()
+            };
+            if (racedRejected) {
+              racedPayload.approved_by = null;
+              racedPayload.approved_at = null;
+              racedPayload.rejection_reason = null;
+            }
+            const racedUpdate = await supabase
+              .from('supplier_products')
+              .update(racedPayload)
+              .eq('id', racedOffer.id)
+              .eq('supplier_id', req.userId)
+              .select()
+              .single();
+            newSupplierProduct = racedUpdate.data;
+            supplierProductError = racedUpdate.error;
+            if (!supplierProductError) {
+              existingSupplierProduct = racedOffer;
+            }
+          } else {
+            return res.status(400).json({
+              status: 'error',
+              code: 'duplicate_supplier_variant',
+              message: DUPLICATE_SUPPLIER_VARIANT_MESSAGE
+            });
+          }
+        }
+      }
       if (supplierProductError) {
+        if (isSupplierOfferUniqueViolation(supplierProductError)) {
+          return res.status(400).json({
+            status: 'error',
+            code: 'duplicate_supplier_variant',
+            message: DUPLICATE_SUPPLIER_VARIANT_MESSAGE
+          });
+        }
         return res.status(400).json({
           status: 'error',
           message: supplierProductError.message || 'Error creating supplier product entry'
@@ -646,6 +752,15 @@ export function buildSupplierProductCreateHandler(ctx) {
 
       void syncCatalogProductSnapshotFromOffers(supabase, productId).catch((syncError) => {
         console.error('[CatalogSnapshot] create product sync failed:', syncError?.message || syncError);
+      });
+
+      void maybeNotifyInventoryBelowMov({
+        supplierId: req.userId,
+        supplierProductId: newSupplierProduct.id,
+        previousStock: newSupplierProduct.stock,
+        newStock: newSupplierProduct.stock,
+        quantityChange: 0,
+        previousLsaThreshold: null
       });
 
       if (normalizedImageUrls.length > 0) {
@@ -667,6 +782,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         ...(baseProduct || {}),
         // Prefer the name the supplier just typed for this row, not a shared catalog rename.
         name: submittedName || baseProduct?.name || 'Product',
+        brand: effectiveBrandInput || baseProduct?.brand || '',
         supplierDescription: supplierSubmittedDescription,
         publishedDescription: '',
         description: supplierSubmittedDescription,
@@ -786,7 +902,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         }
       })();
 
-      return res.status(resubmittingRejectedOffer ? 200 : 201).json({
+      return res.status(existingSupplierProduct ? 200 : 201).json({
         status: 'success',
         message: shouldBeApproved
           ? 'Product added successfully and is immediately available.'
@@ -796,6 +912,13 @@ export function buildSupplierProductCreateHandler(ctx) {
               ? 'Product added successfully. Specification changes require admin approval before this listing goes live.'
               : 'Product added successfully and is pending admin approval.',
         product: responseProduct,
+        nextStep: {
+          brand: effectiveBrandInput || responseProduct.brand || '',
+          productName: submittedName || responseProduct.name || '',
+          supplierProductId: createdOffer?.id || newSupplierProduct?.id || null,
+          variantKey: createdOffer?.variant_key || resolvedVariantKey || null,
+          variantAsin: createdOffer?.variant_asin || variantAsin || null
+        },
         requiresAdminApproval: !shouldBeApproved,
         specificationChangesDetected: hasSpecificationChanges
       });

@@ -152,7 +152,7 @@ router.post('/products/extract-specifications', authenticateToken, async (req, r
     const adminTemplate = await resolveAdminSpecificationTemplate({
       categoryName: category,
       modelRaw: productName,
-      brandRaw: productName,
+      brandRaw: String(payload.brand || '').trim(),
       keysOnly: true
     });
 

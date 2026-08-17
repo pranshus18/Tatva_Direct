@@ -34,6 +34,7 @@ import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogO
 import {
   mergeCatalogAndOfferSpecificationsForDisplay,
   parseSpecificationsObject,
+  parseSupplierOfferAttributes,
   resolveSupplierOfferDisplaySpecifications,
   specificationTemplateKeysOnly
 } from '../../../services/supplierCatalogHelpersService.js';
@@ -468,18 +469,19 @@ export function registerSupplierProductUpdateRoute(ctx) {
           console.error('[CatalogSnapshot] update product sync failed:', syncError?.message || syncError);
         });
 
-        if (req.body.stock !== undefined) {
-          const prevS = parseInt(supplierProduct.stock, 10) || 0;
-          const newS = parseInt(updatedSupplierProduct.stock, 10) || 0;
-          if (newS !== prevS) {
-            void maybeNotifyInventoryBelowMov({
-              supplierId: req.userId,
-              supplierProductId: updatedSupplierProduct.id,
-              previousStock: prevS,
-              newStock: newS,
-              quantityChange: newS - prevS
-            });
-          }
+        const prevS = parseInt(supplierProduct.stock, 10) || 0;
+        const newS = parseInt(updatedSupplierProduct.stock, 10) || 0;
+        const previousLsa = parseSupplierOfferAttributes(supplierProduct.attributes).lsa;
+        const nextLsa = parseSupplierOfferAttributes(updatedSupplierProduct.attributes).lsa;
+        if (newS !== prevS || String(previousLsa || '') !== String(nextLsa || '')) {
+          void maybeNotifyInventoryBelowMov({
+            supplierId: req.userId,
+            supplierProductId: updatedSupplierProduct.id,
+            previousStock: prevS,
+            newStock: newS,
+            quantityChange: newS - prevS,
+            previousLsaThreshold: previousLsa ?? null
+          });
         }
 
         const offerImages = sanitizeImageUrls(updatedSupplierProduct.attributes?.images);

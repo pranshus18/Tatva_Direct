@@ -32,6 +32,7 @@ import {
   resolveGstPlaceOfSupplyState,
   resolvePoGroupSupplierId,
   isPoVendorSupplierUser,
+  isSameUserId,
   resolveSupplierStateForGst,
   supplierMatchesBrandTerminalRole,
   toLifecycleStateFromStatus
@@ -57,6 +58,7 @@ import {
   sumPoGroupsProductsInclGst
 } from '../../utils/orderChargeBreakdown.js';
 import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
+import { BUYER_OWN_LISTING_PURCHASE_MESSAGE } from '../../services/catalogOfferSnapshotService.js';
 
 export function registerPoCreateRoutes(ctx) {
   const {
@@ -348,6 +350,9 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
           403,
           `Vendor "${group.vendorName || supplier.name || supplier.company}" is not registered as a supplier account.`
         );
+      }
+      if (isSameUserId(req.userId, supplier.id)) {
+        throw createHttpError(400, BUYER_OWN_LISTING_PURCHASE_MESSAGE);
       }
 
       const vendorId = resolvedVendorId;

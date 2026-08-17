@@ -472,7 +472,8 @@ export async function enrichDiscoverySuggestionsWithVariantCounts(
   {
     enforceTerminalRole = true,
     detectDiscoveryBrand: detectBrand = detectDiscoveryBrand,
-    supplierMatchesBrandTerminalRoleFn = supplierMatchesBrandTerminalRole
+    supplierMatchesBrandTerminalRoleFn = supplierMatchesBrandTerminalRole,
+    excludeSupplierId = null
   } = {}
 ) {
   const rows = Array.isArray(suggestions) ? suggestions : [];
@@ -524,7 +525,7 @@ export async function enrichDiscoverySuggestionsWithVariantCounts(
     const { data: offerRows } = await supabase
       .from('supplier_products')
       .select(
-        'product_id, variant_key, status, is_active, supplier:users!supplier_products_supplier_id_fkey(profile)'
+        'product_id, supplier_id, variant_key, status, is_active, supplier:users!supplier_products_supplier_id_fkey(id, profile)'
       )
       .in('product_id', offerProductIds)
       .eq('status', 'approved')
@@ -536,7 +537,8 @@ export async function enrichDiscoverySuggestionsWithVariantCounts(
       detectDiscoveryBrand: detectBrand,
       terminalRoleByBrandMap,
       supplierMatchesBrandTerminalRoleFn,
-      enforceTerminalRole
+      enforceTerminalRole,
+      excludeSupplierId
     });
 
     for (const row of eligibleOffers) {
@@ -766,6 +768,10 @@ export async function getProductDiscoveryDetail(
   const matchTerminalRole = audienceRules.enforceTerminalRole
     ? supplierMatchesBrandTerminalRole
     : () => true;
+  const excludeSupplierId =
+    audienceRules.audience === DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER
+      ? String(buyerUserId || '').trim() || null
+      : null;
   // Buyer discovery variants must use the same terminal-tier offer set as stock/price —
   // otherwise upstream sellers appear as purchasable "variants" under the product.
   const listedOfferRows = filterListedOffersForDiscoveryAudience({
@@ -774,7 +780,8 @@ export async function getProductDiscoveryDetail(
     detectDiscoveryBrand,
     terminalRoleByBrandMap,
     supplierMatchesBrandTerminalRoleFn: matchTerminalRole,
-    enforceTerminalRole: audienceRules.enforceTerminalRole
+    enforceTerminalRole: audienceRules.enforceTerminalRole,
+    excludeSupplierId
   });
 
   const applyBuyerBcov = Boolean(buyerUserId);
@@ -791,7 +798,8 @@ export async function getProductDiscoveryDetail(
     productById,
     detectDiscoveryBrand,
     terminalRoleByBrandMap,
-    supplierMatchesBrandTerminalRoleFn: matchTerminalRole
+    supplierMatchesBrandTerminalRoleFn: matchTerminalRole,
+    excludeSupplierId
   });
 
   const variantMetaByProductId = new Map();

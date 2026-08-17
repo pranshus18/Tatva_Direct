@@ -234,28 +234,31 @@ const SupplierProductSetup = ({ user }) => {
     fetchLocations();
   }, []);
 
-  // Auto-fill unit when product name + category match an existing product
+  // Auto-fill unit/MRP only when this form already attached a specific catalog product.
   useEffect(() => {
-    const name = (formData.name || '').trim();
-    const category = (formData.category || '').trim();
-    const brand = (formData.brand || '').trim();
-    if (!name || !category) return;
+    const selectedProductId = String(formData.catalogProductId || '').trim();
+    if (!selectedProductId) return;
 
     const timeout = setTimeout(async () => {
       try {
         const token = localStorage.getItem('token');
-        const lookupParams = new URLSearchParams({ name, category });
-        if (brand) lookupParams.set('brand', brand);
+        const lookupParams = new URLSearchParams({ productId: selectedProductId });
         const res = await fetch(
           getApiUrl(`/api/supplier/products/lookup?${lookupParams.toString()}`),
           { headers: { 'Authorization': `Bearer ${token}` } }
         );
         const data = await res.json();
-        if (data.status === 'success' && data.found && data.unit) {
-          setFormData(prev => ({ ...prev, unit: data.unit }));
+        if (
+          data.status !== 'success' ||
+          !data.found ||
+          String(data.product?.id || '') !== selectedProductId
+        ) {
+          return;
+        }
+        if (data.unit) {
+          setFormData((prev) => ({ ...prev, unit: data.unit }));
         }
         if (
-          data.status === 'success' &&
           data.specifications &&
           typeof data.specifications === 'object' &&
           !Array.isArray(data.specifications) &&
@@ -263,34 +266,22 @@ const SupplierProductSetup = ({ user }) => {
         ) {
           setSpecifications(data.specifications);
         }
-        if (data.status === 'success' && data.found && data.product?.id) {
-          setFormData((prev) =>
-            prev.catalogProductId
-              ? prev
-              : { ...prev, catalogProductId: data.product.id }
-          );
-        }
-        if (data.status === 'success' && data.found) {
-          const canonicalMrpFromLookup =
-            typeof data.canonicalMrp === 'number'
-              ? data.canonicalMrp
-              : typeof data.recommendedPrice === 'number'
-                ? data.recommendedPrice
-                : null;
-          setRecommendedPrice(canonicalMrpFromLookup);
-          setVariantMrpLocked(Boolean(data.variantMrpLocked) || canonicalMrpFromLookup != null);
-          if (!priceTouched) {
-            const currentPrice = parseSupplierOfferPrice(formData.price);
+        const canonicalMrpFromLookup =
+          typeof data.canonicalMrp === 'number'
+            ? data.canonicalMrp
+            : typeof data.recommendedPrice === 'number'
+              ? data.recommendedPrice
+              : null;
+        setRecommendedPrice(canonicalMrpFromLookup);
+        setVariantMrpLocked(Boolean(data.variantMrpLocked) || canonicalMrpFromLookup != null);
+        if (!priceTouched && canonicalMrpFromLookup != null) {
+          setFormData((prev) => {
+            const currentPrice = parseSupplierOfferPrice(prev.price);
             if ((currentPrice === null || currentPrice <= 0) && canonicalMrpFromLookup != null) {
-              setFormData((prev) => ({
-                ...prev,
-                price: String(Number(canonicalMrpFromLookup).toFixed(2))
-              }));
+              return { ...prev, price: String(Number(canonicalMrpFromLookup).toFixed(2)) };
             }
-          }
-        } else {
-          setRecommendedPrice(null);
-          setVariantMrpLocked(false);
+            return prev;
+          });
         }
       } catch (e) {
         // silent
@@ -298,7 +289,7 @@ const SupplierProductSetup = ({ user }) => {
     }, 350);
 
     return () => clearTimeout(timeout);
-  }, [formData.name, formData.category, formData.brand]);
+  }, [formData.catalogProductId]);
 
   // Load admin-defined specs for selected category + product/model hint.
   useEffect(() => {

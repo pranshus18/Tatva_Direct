@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  buildLsaNotificationPayload,
   crossedInventoryBelowMov,
   crossedLsaThreshold,
   isStockAtOrBelowLsa,
-  parseLsaThreshold
+  parseLsaThreshold,
+  resolveLsaThreshold,
+  shouldNotifyLsaHit
 } from '../services/lowInventoryMovAlertService.js';
 import {
   getMaxMinimumOrderValueInrForSupplierProfile,
@@ -55,6 +58,82 @@ test('crossedLsaThreshold edge cases', () => {
   assert.equal(crossedLsaThreshold({ previousStock: '20', newStock: '10', lsaThreshold: '10' }), true);
   // Negative stock inputs clamp to 0
   assert.equal(crossedLsaThreshold({ previousStock: 4, newStock: -2, lsaThreshold: 2 }), true);
+});
+
+test('resolveLsaThreshold reads LSA from JSON-string attributes and nested specs', () => {
+  assert.equal(resolveLsaThreshold({ lsa: '12' }), 12);
+  assert.equal(resolveLsaThreshold('{"lsa":"8"}'), 8);
+  assert.equal(resolveLsaThreshold({ LSA: 6 }), 6);
+  assert.equal(resolveLsaThreshold({ specifications: { lsa: 4 } }), 4);
+  assert.equal(resolveLsaThreshold({}, { lsa: 9 }), 9);
+  assert.equal(resolveLsaThreshold({}, { attributes: { lsa: '7' } }), 7);
+  assert.equal(resolveLsaThreshold({}), null);
+});
+
+test('shouldNotifyLsaHit covers crossing, already-below decrease, and newly set LSA', () => {
+  assert.equal(
+    shouldNotifyLsaHit({ previousStock: 20, newStock: 10, lsaThreshold: 10 }),
+    true
+  );
+  assert.equal(
+    shouldNotifyLsaHit({ previousStock: 8, newStock: 5, lsaThreshold: 10 }),
+    true
+  );
+  assert.equal(
+    shouldNotifyLsaHit({
+      previousStock: 8,
+      newStock: 8,
+      lsaThreshold: 10,
+      previousLsaThreshold: null
+    }),
+    true
+  );
+  assert.equal(
+    shouldNotifyLsaHit({
+      previousStock: 8,
+      newStock: 8,
+      lsaThreshold: 10,
+      previousLsaThreshold: 5
+    }),
+    true
+  );
+  assert.equal(
+    shouldNotifyLsaHit({
+      previousStock: 8,
+      newStock: 8,
+      lsaThreshold: 10,
+      previousLsaThreshold: 10
+    }),
+    false
+  );
+  assert.equal(
+    shouldNotifyLsaHit({ previousStock: 25, newStock: 16, lsaThreshold: 10 }),
+    false
+  );
+  assert.equal(
+    shouldNotifyLsaHit({ previousStock: 8, newStock: 8, lsaThreshold: 10 }),
+    false
+  );
+});
+
+test('buildLsaNotificationPayload is a supplier-visible low-stock alert', () => {
+  const payload = buildLsaNotificationPayload({
+    supplierId: 'sup-1',
+    productId: 'prod-1',
+    supplierProductId: 'offer-1',
+    productName: 'OPC 53 Cement',
+    previousStock: 12,
+    newStock: 8,
+    lsaThreshold: 10
+  });
+  assert.equal(payload.user_id, 'sup-1');
+  assert.equal(payload.type, 'system');
+  assert.match(payload.title.toLowerCase(), /low stock/);
+  assert.match(payload.title, /LSA/);
+  assert.equal(payload.metadata.source, 'low_inventory');
+  assert.equal(payload.metadata.kind, 'inventory_below_lsa');
+  assert.equal(payload.metadata.lsa_threshold, 10);
+  assert.equal(payload.related_product_id, 'prod-1');
 });
 
 test('crossedInventoryBelowMov triggers when inventory value drops under MOV', () => {

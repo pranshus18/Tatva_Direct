@@ -44,6 +44,7 @@ import { resolveDiscoveryProductDescription } from '../utils/productDisplay';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import {
   emitSupplierCartUpdated,
+  readLastOrderedQuantity,
   subscribeSupplierCartUpdated
 } from '../utils/supplierUpstreamCartSession';
 import {
@@ -498,6 +499,11 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
           // cart change that happens while this page is already open.
           if (prevQty != null && liveQty != null && prevQty !== liveQty) {
             setProcurementQty(Math.max(upstreamMinQty, liveQty));
+                          } else if (prevQty != null && prevQty > 0 && liveQty == null) {
+            // Ordered or removed from cart: start a new order qty. Do not keep
+            // the previous cart quantity attached to Add / Continue sourcing.
+            setProcurementQty(upstreamMinQty);
+            setCartAdded(false);
           }
           upstreamCartQtyRef.current = liveQty;
         }
@@ -564,6 +570,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     ? null
     : formatPriceRange(productSummary.priceRange, productSummary.unit);
   const inStock = Number(displayStock) > 0;
+  const lastOrderedQty =
+    isUpstreamPortal && upstreamMineId && upstreamCartQty == null
+      ? readLastOrderedQuantity(upstreamMineId)
+      : null;
 
   const backLabel = isUpstreamPortal ? 'Back to upstream sourcing' : 'Back to discovery';
 
@@ -762,6 +772,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
           </div>
           {upstreamCartQty != null ? (
             <p className="pdd-buybox__qty-hint">In cart: {upstreamCartQty}. Change qty here, then Update Cart.</p>
+          ) : lastOrderedQty != null ? (
+            <p className="pdd-buybox__qty-hint">
+              Last ordered: {lastOrderedQty}. Set a new quantity here to place another order — this is not in your cart.
+            </p>
           ) : (
             <p className="pdd-buybox__qty-hint">Set qty here, then continue sourcing — no need to revisit the catalog grid.</p>
           )}
@@ -840,7 +854,9 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         {isUpstreamPortal
           ? upstreamCartQty != null
             ? 'Quantity updates apply to your upstream cart from this page.'
-            : 'Choose quantity here, then continue to Upstream Sourcing and click Add to Cart to choose a project.'
+            : lastOrderedQty != null
+              ? 'Previously ordered quantity is shown for reference only. Set a new quantity to start another order.'
+              : 'Choose quantity here, then continue to Upstream Sourcing and click Add to Cart to choose a project.'
           : 'Prices and stock reflect eligible supplier listings for your supply chain.'}
       </p>
     </aside>

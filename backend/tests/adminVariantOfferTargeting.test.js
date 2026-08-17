@@ -37,7 +37,8 @@ test('expandCatalogProductIntoAdminReviewRows creates one admin row per supplier
   const rows = expandCatalogProductIntoAdminReviewRows(
     {
       id: 'prod-1',
-      name: 'Logitech Mouse',
+      name: 'JBL Wireless Over-Ear Headphones',
+      brand: 'JBL',
       status: 'approved',
       category: 'electronics',
       specifications: { color: 'Black' }
@@ -63,7 +64,12 @@ test('expandCatalogProductIntoAdminReviewRows creates one admin row per supplier
         variant_key: 'v2',
         variant_asin: 'TSA7V2',
         updated_at: '2026-02-01T00:00:00.000Z',
-        attributes: { specifications: { color: 'Black', dpi: '1600' } }
+        attributes: {
+          name: 'Nothing Power (45W)',
+          listingName: 'Nothing Power (45W)',
+          brand: 'Nothing',
+          specifications: { color: 'Black', dpi: '1600' }
+        }
       }
     ],
     {
@@ -75,6 +81,8 @@ test('expandCatalogProductIntoAdminReviewRows creates one admin row per supplier
   assert.equal(rows.length, 2);
   assert.equal(rows[0].adminRowKey, 'prod-1:offer-b');
   assert.equal(rows[0].displayStatus, 'pending');
+  assert.equal(rows[0].name, 'Nothing Power (45W)');
+  assert.equal(rows[0].brand, 'Nothing');
   assert.equal(rows[1].displayStatus, 'approved');
   assert.match(rows[0].variantLabel || '', /1600/i);
 });

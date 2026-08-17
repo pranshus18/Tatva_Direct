@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isPoVendorSupplierUser } from '../controllers/po/shared/poHelpers.js';
+import { isPoVendorSupplierUser, isSameUserId } from '../controllers/po/shared/poHelpers.js';
 
 test('dual-role vendor stays eligible when active portal is service_provider', () => {
   const vendor = {
@@ -22,4 +22,12 @@ test('service_provider without supplier registration is not a PO vendor', () => 
     profile: { registeredRoles: ['service_provider'] }
   };
   assert.equal(isPoVendorSupplierUser(vendor), false);
+});
+
+test('isSameUserId detects a dual-role buyer selecting their own supplier account', () => {
+  const userId = '54e4ec86-5de6-44fa-b8a8-2468e3af9df4';
+  assert.equal(isSameUserId(userId, userId), true);
+  assert.equal(isSameUserId(userId, 'other-supplier'), false);
+  assert.equal(isSameUserId('', userId), false);
+  assert.equal(isSameUserId(null, null), false);
 });

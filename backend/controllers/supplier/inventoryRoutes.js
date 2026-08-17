@@ -18,7 +18,7 @@ import {
 import { expireStaleReservations } from '../../services/checkoutInventoryReservationService.js';
 import {
   isStockAtOrBelowLsa,
-  parseLsaThreshold
+  resolveLsaThreshold
 } from '../../services/lowInventoryMovAlertService.js';
 
 export function registerSupplierInventoryRoutes(ctx) {
@@ -129,7 +129,7 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
 
     const myOffers = (myRows || [])
       .map((r) => {
-        const lsa = parseLsaThreshold(r?.attributes?.lsa);
+        const lsa = resolveLsaThreshold(r?.attributes, r?.product);
         return { ...r, lsa };
       })
       .filter((r) => isStockAtOrBelowLsa({ stock: r.stock, lsa: r.lsa }))

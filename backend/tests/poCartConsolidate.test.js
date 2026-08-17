@@ -10,7 +10,8 @@ import {
   mergeUpstreamSelectedMineQuantity,
   normalizePoCartDraft,
   poCartDraftNeedsPersistAfterPrune,
-  prunePoCartGroups
+  prunePoCartGroups,
+  removeUpstreamCartItemsByMineIds
 } from '../controllers/po/shared/poHelpers.js';
 
 test('consolidateDuplicateProductLines merges same productId when explicitly called', () => {
@@ -295,4 +296,47 @@ test('poCartDraftNeedsPersistAfterPrune detects stale flat items after group del
   const normalizedDraft = normalizePoCartDraft(rawDraft);
   assert.equal(normalizedDraft.items.length, 0);
   assert.equal(poCartDraftNeedsPersistAfterPrune(rawDraft, normalizedDraft), true);
+});
+
+test('removeUpstreamCartItemsByMineIds drops ordered lines and empty projects', () => {
+  const next = removeUpstreamCartItemsByMineIds(
+    [
+      {
+        projectId: 'proj-1',
+        selectedMine: { 'mine-a': 4, 'mine-b': 2 },
+        selectedUpstreamOffer: { 'mine-a': 'offer-a', 'mine-b': 'offer-b' },
+        items: [
+          { mineSupplierProductId: 'mine-a', quantity: 4 },
+          { mineSupplierProductId: 'mine-b', quantity: 2 }
+        ],
+        suggestions: [{ mineSupplierProductId: 'mine-a' }, { mineSupplierProductId: 'mine-b' }]
+      },
+      {
+        projectId: 'proj-2',
+        items: [{ mineSupplierProductId: 'mine-a', quantity: 1 }]
+      }
+    ],
+    ['mine-a']
+  );
+  assert.equal(next.length, 1);
+  assert.equal(next[0].projectId, 'proj-1');
+  assert.equal(next[0].items.length, 1);
+  assert.equal(next[0].items[0].mineSupplierProductId, 'mine-b');
+  assert.deepEqual(next[0].selectedMine, { 'mine-b': 2 });
+  assert.equal(next[0].selectedUpstreamOffer['mine-a'], undefined);
+  assert.equal(next[0].suggestions.length, 1);
+  assert.equal(next[0].suggestions[0].mineSupplierProductId, 'mine-b');
+});
+
+test('removeUpstreamCartItemsByMineIds clears the cart when every line was ordered', () => {
+  const next = removeUpstreamCartItemsByMineIds(
+    [
+      {
+        projectId: 'proj-1',
+        items: [{ mineSupplierProductId: 'mine-a', quantity: 4 }]
+      }
+    ],
+    ['mine-a']
+  );
+  assert.equal(next.length, 0);
 });

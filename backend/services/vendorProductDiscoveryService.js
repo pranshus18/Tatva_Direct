@@ -6,7 +6,7 @@ import {
   resolveOfferCatalogProductId
 } from './supplierCatalogHelpersService.js';
 import { extractExplicitVariantKey } from './productIdentityService.js';
-import { isListedSupplierOffer } from './catalogOfferSnapshotService.js';
+import { isExcludedBuyerSupplierOffer, isListedSupplierOffer } from './catalogOfferSnapshotService.js';
 import { resolveSupplierOfferDisplayName } from './supplierProductWriteService.js';
 
 function isOfferCompatibleWithRequestedItem({
@@ -292,7 +292,8 @@ export async function reconcileWithSupplierOffers({
   targetBrand,
   detectProductBrandKey,
   fuzzyNameCompatible,
-  hasModelTokenConflict
+  hasModelTokenConflict,
+  excludeSupplierId = null
 }) {
   let updatedProducts = products;
   try {
@@ -350,6 +351,7 @@ export async function reconcileWithSupplierOffers({
           attributes,
           status,
           is_active,
+          supplier_id,
           supplier:users!supplier_products_supplier_id_fkey
             (id, name, company, email, phone, address, profile)
         `)
@@ -391,9 +393,13 @@ export async function reconcileWithSupplierOffers({
 
         updatedProducts = scopedOfferRows
           .filter((row) => isListedSupplierOffer(row))
+          .filter((row) => !isExcludedBuyerSupplierOffer(row, excludeSupplierId))
           .map((row) => {
             const supplier = row?.supplier;
             if (!supplier?.id) return null;
+            if (isExcludedBuyerSupplierOffer({ supplier, supplier_id: supplier.id }, excludeSupplierId)) {
+              return null;
+            }
             const parsedAttributes = parseSupplierOfferAttributes(row.attributes);
             const variantMeta = resolveVariantMetaForOffer(row, variantMetaByKey);
             const catalogProductId = resolveOfferCatalogProductId(row, variantMetaByKey);

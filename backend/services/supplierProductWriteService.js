@@ -1,7 +1,7 @@
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 import { buildSupplierDescriptionAttributes } from '../utils/supplierProductDescriptions.js';
 import { syncOfferAttributesWithSpecifications } from './productIdentityService.js';
-import { brandTokenKeysMatch } from './supplierBrandGuardService.js';
+import { catalogBrandsCompatible, catalogBrandsConflict } from '../utils/catalogProductAttach.js';
 
 function normalizeOfferPrice(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === '') return null;
@@ -155,13 +155,8 @@ export async function findExistingProductCandidate(
 ) {
   const candidateBrand = normalizeText?.(identityBundle?.catalog?.brand) || '';
 
-  const brandsCompatible = (product) => {
-    const existingBrand = normalizeText?.(product?.brand) || '';
-    if (!candidateBrand || !existingBrand) return true;
-    if (candidateBrand === existingBrand) return true;
-    // Same brand identity with spelling variants / near-typos (Philips↔Phillips, etc.).
-    return brandTokenKeysMatch(candidateBrand, existingBrand);
-  };
+  const brandsCompatible = (product) =>
+    catalogBrandsCompatible(candidateBrand, product?.brand);
 
   if (selectedCatalogProductId) {
     const { data: bySelectedId } = await supabase
@@ -169,12 +164,15 @@ export async function findExistingProductCandidate(
       .select('id, status, brand, gtin, barcode, name, category, asin, catalog_key, specifications')
       .eq('id', selectedCatalogProductId)
       .maybeSingle();
-    if (bySelectedId) {
+    if (bySelectedId && !catalogBrandsConflict(candidateBrand, bySelectedId.brand)) {
       return { product: bySelectedId, matchStrength: 'explicit' };
     }
   }
 
-  if (canonicalProductFromIdentifier) {
+  if (
+    canonicalProductFromIdentifier &&
+    !catalogBrandsConflict(candidateBrand, canonicalProductFromIdentifier.brand)
+  ) {
     return { product: canonicalProductFromIdentifier, matchStrength: 'strong' };
   }
 
@@ -184,7 +182,7 @@ export async function findExistingProductCandidate(
       .select('*')
       .eq('gtin', identityBundle.catalog.gtin)
       .maybeSingle();
-    if (byGtin) {
+    if (byGtin && !catalogBrandsConflict(candidateBrand, byGtin.brand)) {
       return { product: byGtin, matchStrength: 'strong' };
     }
   }

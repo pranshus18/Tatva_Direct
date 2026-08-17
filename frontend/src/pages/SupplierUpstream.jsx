@@ -69,15 +69,19 @@ import {
 import { cn } from '@/lib/utils';
 import {
   SUPPLIER_UPSTREAM_CART_RESUME_KEY,
+  SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY,
+  SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY,
   applyLiveCartQuantitiesToMap,
   clearUpstreamCartClientProjectState,
   clearUpstreamSessionProjectId,
   emitSupplierCartUpdated,
+  readLastOrderedQuantity,
   readUpstreamSessionProjectId,
   resolveUpstreamProjectCartName,
   subscribeSupplierCartUpdated,
   writeUpstreamSessionProjectId
 } from '../utils/supplierUpstreamCartSession';
+import { sumOrderItemQuantities } from '../utils/orderItemQuantity';
 
 const blankShippingAddress = {
   label: '',
@@ -94,10 +98,6 @@ const emptyProjectFieldErrors = {
 };
 
 const todayDateMin = getTodayDateInputValue();
-
-const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
-/** Set when returning from Place Order so upstream page restores in-progress draft once. */
-const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
 
 const readSessionProjectId = readUpstreamSessionProjectId;
 const writeSessionProjectId = writeUpstreamSessionProjectId;
@@ -244,6 +244,7 @@ const SupplierUpstream = ({ user }) => {
   const [locatingShippingAddress, setLocatingShippingAddress] = useState(false);
   const [activeProjectId, setActiveProjectId] = useState('');
   const cartQtyByMineIdRef = useRef({});
+  const restoredFromCartResumeRef = useRef(false);
 
   const [supplierDetailsOpen, setSupplierDetailsOpen] = useState(false);
   const [supplierDetails, setSupplierDetails] = useState(null);
@@ -436,7 +437,10 @@ const SupplierUpstream = ({ user }) => {
           }
         }
 
-        if (cartRaw) localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
+        if (cartRaw) {
+          restoredFromCartResumeRef.current = true;
+          localStorage.removeItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY);
+        }
         if (restoreFromOrder) sessionStorage.removeItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY);
       }
     } catch (_) {
@@ -517,17 +521,55 @@ const SupplierUpstream = ({ user }) => {
       // Keep "In cart" from the saved cart, but do not copy those quantities into
       // the card field on load/refresh. The field stays at the default until the
       // user edits it. Overlay only when a known cart line changes this session.
+      // When a line leaves the cart (order placed / removed), drop the old qty
+      // so Add to Cart is not still tied to the previous order.
       const prevCartQty = cartQtyByMineIdRef.current || {};
-      if (Object.keys(next).length === 0 && Object.keys(prevCartQty).length > 0) {
+      const cartBecameEmpty = Object.keys(next).length === 0 && Object.keys(prevCartQty).length > 0;
+      const cartChangedThisSession = Object.keys(prevCartQty).length > 0;
+      if (cartBecameEmpty) {
         setActiveProjectId('');
         clearUpstreamCartClientProjectState();
-      } else if (Object.keys(next).length > 0 && Object.keys(prevCartQty).length > 0) {
+      }
+      if (cartChangedThisSession) {
         setProcurementQtyByMineId((draft) =>
-          applyLiveCartQuantitiesToMap(draft, prevCartQty, next)
+          applyLiveCartQuantitiesToMap(draft, prevCartQty, next, { resetRemovedToZero: true })
         );
         setSelectedMine((selected) =>
-          applyLiveCartQuantitiesToMap(selected, prevCartQty, next, { onlyExistingKeys: true })
+          applyLiveCartQuantitiesToMap(selected, prevCartQty, next, {
+            onlyExistingKeys: true,
+            dropRemovedKeys: true
+          })
         );
+        setSelectedUpstreamOffer((offers) => {
+          const nextOffers = { ...(offers || {}) };
+          let changed = false;
+          for (const mineId of Object.keys(prevCartQty)) {
+            if (Number(next[mineId] || 0) > 0) continue;
+            if (Object.prototype.hasOwnProperty.call(nextOffers, mineId)) {
+              delete nextOffers[mineId];
+              changed = true;
+            }
+          }
+          return changed ? nextOffers : offers;
+        });
+      }
+      if (restoredFromCartResumeRef.current) {
+        restoredFromCartResumeRef.current = false;
+        setSelectedMine((selected) => {
+          const live = next;
+          const filtered = {};
+          for (const [mineId, qty] of Object.entries(selected || {})) {
+            if (Number(live[mineId] || 0) > 0) filtered[mineId] = qty;
+          }
+          return filtered;
+        });
+        setProcurementQtyByMineId((draft) => {
+          const nextDraft = { ...(draft || {}) };
+          for (const mineId of Object.keys(nextDraft)) {
+            if (!(Number(next[mineId] || 0) > 0)) nextDraft[mineId] = 0;
+          }
+          return nextDraft;
+        });
       }
       cartQtyByMineIdRef.current = next;
       setCartQtyByMineId(next);
@@ -852,7 +894,7 @@ const SupplierUpstream = ({ user }) => {
           requiredDate: /^\d{4}-\d{2}-\d{2}$/.test(projectRequiredDate) ? projectRequiredDate : '',
           requiredDateFromCart: /^\d{4}-\d{2}-\d{2}$/.test(projectRequiredDate),
           paymentMethod: 'online',
-          itemCount: lines.length,
+          itemCount: sumOrderItemQuantities(lines),
           totalAmountEstimate,
           reviewLines: reviewLinesWithShipping,
           checkoutShippingAddress: projectShipping,
@@ -1689,6 +1731,7 @@ const SupplierUpstream = ({ user }) => {
             const cardQty = getProcurementQty(mineId, minQty);
             const syncedCartQty = parseSupplierStockQuantity(cartQtyByMineId[mineId]);
             const inCart = syncedCartQty != null && syncedCartQty > 0;
+            const lastOrderedQty = inCart ? null : readLastOrderedQuantity(mineId);
             const qtyDirty = inCart && Number(syncedCartQty) !== Number(cardQty);
             const cartActionLabel = inCart ? 'Update Cart' : 'Add to Cart';
 
@@ -1808,6 +1851,10 @@ const SupplierUpstream = ({ user }) => {
                           Change project
                         </button>
                       </p>
+                    ) : lastOrderedQty != null ? (
+                      <p className="us-pd-card__qty-hint us-pd-card__qty-hint--synced">
+                        Last ordered: {lastOrderedQty}. Set a new quantity to place another order.
+                      </p>
                     ) : (
                       <p className="us-pd-card__qty-hint">
                         Set quantity, then click Add to Cart to choose a project
@@ -1906,6 +1953,7 @@ const SupplierUpstream = ({ user }) => {
                   mineKey,
                   Math.max(1, mine?.min_order_quantity ?? 1)
                 );
+                const lastOrderedQty = readLastOrderedQuantity(mineKey);
                 const offers = getCompatibleOffersForItem(it);
                 const chosen = normalizeSupplierProductKey(selectedUpstreamOffer[mineKey]);
 
@@ -1990,6 +2038,11 @@ const SupplierUpstream = ({ user }) => {
                           >
                             {addingCartByMineId[mineKey] ? 'Updating…' : 'Update Cart'}
                           </button>
+                        ) : !parseSupplierStockQuantity(cartQtyByMineId[mineKey]) &&
+                          lastOrderedQty != null ? (
+                          <p className="us-pd-card__qty-hint us-pd-card__qty-hint--synced">
+                            Last ordered: {lastOrderedQty}. Set a new quantity for the next order.
+                          </p>
                         ) : null}
                       </div>
                       {mine ? <UpstreamProductDisplay product={mine} imageHeight={88} maxSpecs={10} /> : null}

@@ -352,7 +352,8 @@ export async function searchProductDiscoveryForUser(
     page,
     offset: offsetOverride,
     legacyManualDiscoveryCategoryFilter = false,
-    forCatalogAutocomplete = false
+    forCatalogAutocomplete = false,
+    excludeSupplierId: excludeSupplierIdOption
   }
 ) {
   const parsedLimit = Number.parseInt(String(limit ?? ''), 10);
@@ -363,6 +364,12 @@ export async function searchProductDiscoveryForUser(
   const offset = Number.isFinite(parsedOffset)
     ? Math.max(parsedOffset, 0)
     : (safePage - 1) * safeLimit;
+  const excludeSupplierId =
+    excludeSupplierIdOption === undefined
+      ? forCatalogAutocomplete
+        ? null
+        : userId
+      : excludeSupplierIdOption;
 
   const query = sanitizeDiscoverySearchQuery(normalizeSearchQueryAliases(sanitizeDiscoverySearchQuery(q)));
   const rankingPoolLimit = query ? 250 : 500;
@@ -524,7 +531,8 @@ export async function searchProductDiscoveryForUser(
       productById,
       detectDiscoveryBrand,
       terminalRoleByBrandMap,
-      supplierMatchesBrandTerminalRoleFn: supplierMatchesBrandTerminalRole
+      supplierMatchesBrandTerminalRoleFn: supplierMatchesBrandTerminalRole,
+      excludeSupplierId
     });
   }
 
@@ -544,7 +552,8 @@ export async function searchProductDiscoveryForUser(
 
   const suggestionsWithVariants = await enrichDiscoverySuggestionsWithVariantCounts(
     supabase,
-    suggestions
+    suggestions,
+    { excludeSupplierId }
   );
 
   for (const suggestion of suggestionsWithVariants) {

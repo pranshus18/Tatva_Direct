@@ -182,9 +182,10 @@ export async function resolveAdminSpecificationTemplate(supabase, {
       }
     }
 
+    const brandKey = normalizeBrandKey(brandRaw);
     const { data: productMatches, error: productMatchError } = await supabase
       .from('products')
-      .select('id, name, specifications, status, updated_at')
+      .select('id, name, brand, specifications, status, updated_at')
       .eq('category', categoryName)
       .order('updated_at', { ascending: false })
       .limit(200);
@@ -196,7 +197,12 @@ export async function resolveAdminSpecificationTemplate(supabase, {
         const status = String(row?.status ?? '').trim().toLowerCase();
         if (status && status !== 'approved') return false;
         const normalizedName = normalizeModelIdentifier(row?.name || '');
-        return normalizedName && normalizedName === modelIdentifier;
+        if (!normalizedName || normalizedName !== modelIdentifier) return false;
+        if (brandKey) {
+          const rowBrand = normalizeBrandKey(row?.brand || '');
+          if (!rowBrand || rowBrand !== brandKey) return false;
+        }
+        return true;
       });
       const matchSpecs = pickBestSpecificationMap(modelRows, { excludeProductId });
       if (matchSpecs) {
@@ -224,7 +230,7 @@ export async function enrichProductSpecificationsForDisplay(supabase, {
   const adminTemplate = await resolveAdminSpecificationTemplate(supabase, {
     categoryName: category,
     modelRaw: name,
-    brandRaw: String(brand || name || '').trim(),
+    brandRaw: String(brand || '').trim(),
     excludeProductId: productId,
     keysOnly: true
   });
@@ -243,7 +249,7 @@ export async function enrichVariantSpecificationsForDiscovery(supabase, {
   const adminTemplate = await resolveAdminSpecificationTemplate(supabase, {
     categoryName: category,
     modelRaw: name,
-    brandRaw: String(brand || name || '').trim(),
+    brandRaw: String(brand || '').trim(),
     excludeProductId: productId,
     keysOnly: true
   });

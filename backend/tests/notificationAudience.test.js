@@ -97,6 +97,17 @@ test('filterNotificationsForRole recomputes unread for SP inbox', () => {
   assert.equal(unreadCount, 1);
 });
 
+test('keeps supplier LSA low-stock system notifications and hides them from SPs', () => {
+  const notification = {
+    type: 'system',
+    title: 'Low stock alert: inventory reached LSA',
+    metadata: { source: 'low_inventory', kind: 'inventory_below_lsa' },
+    is_read: false
+  };
+  assert.equal(isNotificationVisibleToRole(notification, 'supplier'), true);
+  assert.equal(isNotificationVisibleToRole(notification, 'service_provider'), false);
+});
+
 test('isSupplierUserType only matches suppliers', () => {
   assert.equal(isSupplierUserType('supplier'), true);
   assert.equal(isSupplierUserType('service_provider'), false);

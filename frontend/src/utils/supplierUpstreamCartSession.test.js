@@ -3,11 +3,19 @@ import {
   SUPPLIER_UPSTREAM_CART_RESUME_KEY,
   SUPPLIER_UPSTREAM_CART_SYNC_KEY,
   SUPPLIER_UPSTREAM_CART_UPDATED_EVENT,
+  SUPPLIER_UPSTREAM_LAST_ORDERED_KEY,
+  SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY,
+  SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY,
   SUPPLIER_UPSTREAM_SESSION_PROJECT_KEY,
   applyLiveCartQuantitiesToMap,
   clearUpstreamCartClientProjectState,
+  clearUpstreamStateAfterSuccessfulOrder,
   emitSupplierCartUpdated,
+  quantitiesFromOrderLines,
+  readLastOrderedQuantity,
+  readLastOrderedQuantities,
   readUpstreamSessionProjectId,
+  recordLastOrderedQuantitiesFromLines,
   resolveUpstreamProjectCartName,
   subscribeSupplierCartUpdated,
   writeUpstreamSessionProjectId
@@ -71,6 +79,57 @@ describe('supplierUpstreamCartSession', () => {
       { onlyExistingKeys: true }
     );
     expect(next).toEqual({ a: 5 });
+  });
+
+  it('resets local draft quantity to 0 when a cart line is removed after checkout', () => {
+    const next = applyLiveCartQuantitiesToMap(
+      { a: 5, b: 2 },
+      { a: 5, b: 2 },
+      {},
+      { resetRemovedToZero: true }
+    );
+    expect(next).toEqual({ a: 0, b: 0 });
+  });
+
+  it('drops selected-mine keys that left the cart so Add to Cart is not tied to the old qty', () => {
+    const next = applyLiveCartQuantitiesToMap(
+      { a: 5, keep: 3 },
+      { a: 5 },
+      {},
+      { dropRemovedKeys: true }
+    );
+    expect(next).toEqual({ keep: 3 });
+  });
+
+  it('records last-ordered quantity separately from a new order qty', () => {
+    expect(quantitiesFromOrderLines([{ mineSupplierProductId: 'mine-a', quantity: 4 }])).toEqual({
+      'mine-a': 4
+    });
+    recordLastOrderedQuantitiesFromLines([
+      { mineSupplierProductId: 'mine-a', quantity: 4 },
+      { mineId: 'mine-b', quantity: 2 }
+    ]);
+    expect(readLastOrderedQuantities()).toEqual({ 'mine-a': 4, 'mine-b': 2 });
+    expect(readLastOrderedQuantity('mine-a')).toBe(4);
+  });
+
+  it('clears cart/project pointers after a successful order while keeping last-ordered qty', () => {
+    writeUpstreamSessionProjectId('proj-old');
+    localStorage.setItem(
+      SUPPLIER_UPSTREAM_CART_RESUME_KEY,
+      JSON.stringify({ projectId: 'proj-old', selectedMine: { a: 4 } })
+    );
+    localStorage.setItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY, '{"lines":[]}');
+    sessionStorage.setItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY, '1');
+
+    clearUpstreamStateAfterSuccessfulOrder([{ mineSupplierProductId: 'a', quantity: 4 }]);
+
+    expect(readUpstreamSessionProjectId()).toBe('');
+    expect(localStorage.getItem(SUPPLIER_UPSTREAM_CART_RESUME_KEY)).toBeNull();
+    expect(localStorage.getItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY)).toBeNull();
+    expect(sessionStorage.getItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY)).toBeNull();
+    expect(sessionStorage.getItem(SUPPLIER_UPSTREAM_LAST_ORDERED_KEY)).toBeTruthy();
+    expect(readLastOrderedQuantity('a')).toBe(4);
   });
 
   it('notifies other listeners and writes a cross-tab sync stamp', () => {

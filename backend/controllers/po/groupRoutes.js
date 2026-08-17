@@ -14,6 +14,7 @@ import {
   getContractErrorMessage,
   getOutletPickupMeta,
   isPoVendorSupplierUser,
+  isSameUserId,
   getSupplierPickupMeta,
   isAddressComplete,
   loadAdminBrandTerminalRoleMap,
@@ -46,6 +47,7 @@ import {
   sumGstLines
 } from './poImports.js';
 import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
+import { BUYER_OWN_LISTING_PURCHASE_MESSAGE } from '../../services/catalogOfferSnapshotService.js';
 
 export function registerPoGroupRoutes(ctx) {
   const {
@@ -186,6 +188,12 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
       // Find the supplier-specific offer from supplier_products + products
       let supplierProduct = null;
       let vendorId = selectedToken;
+      if (isSameUserId(req.userId, vendorId)) {
+        return res.status(400).json({
+          status: 'error',
+          message: BUYER_OWN_LISTING_PURCHASE_MESSAGE
+        });
+      }
       if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(selectedToken)) {
         const { data: spBySelectionId } = await supabase
           .from('supplier_products')
@@ -198,6 +206,12 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
           .maybeSingle();
         if (spBySelectionId?.supplier_id) {
           vendorId = spBySelectionId.supplier_id;
+          if (isSameUserId(req.userId, vendorId)) {
+            return res.status(400).json({
+              status: 'error',
+              message: BUYER_OWN_LISTING_PURCHASE_MESSAGE
+            });
+          }
           const offerStatus = String(spBySelectionId.status || '').toLowerCase();
           if (offerStatus === 'approved' || offerStatus === 'pending') {
             supplierProduct = spBySelectionId;
@@ -331,6 +345,16 @@ router.post('/group', authenticateToken, isServiceProvider, async (req, res) => 
 
       const product = supplierProduct.product;
       const supplier = supplierProduct.supplier;
+      if (
+        isSameUserId(req.userId, vendorId) ||
+        isSameUserId(req.userId, supplierProduct?.supplier_id) ||
+        isSameUserId(req.userId, supplier?.id)
+      ) {
+        return res.status(400).json({
+          status: 'error',
+          message: BUYER_OWN_LISTING_PURCHASE_MESSAGE
+        });
+      }
       let sellerProfile = supplier?.profile;
       if ((sellerProfile === undefined || sellerProfile === null) && vendorId) {
         const { data: sellerRow } = await supabase

@@ -10,6 +10,20 @@ export function isListedSupplierOffer(row = {}) {
   return normalizedStatus === 'approved' && row?.is_active === true;
 }
 
+export function resolveOfferSupplierId(offer = {}) {
+  return String(offer?.supplier_id || offer?.supplier?.id || '').trim();
+}
+
+export const BUYER_OWN_LISTING_PURCHASE_MESSAGE =
+  'You cannot buy this product from your own supplier listing. Choose another supplier of the same product or variant.';
+
+/** Dual-role buyers must not purchase from their own supplier listing. */
+export function isExcludedBuyerSupplierOffer(offer, excludeSupplierId) {
+  const excluded = String(excludeSupplierId || '').trim();
+  if (!excluded) return false;
+  return resolveOfferSupplierId(offer) === excluded;
+}
+
 /** Prefer higher stock; tie-break on lower positive price. */
 export function pickBetterListedOffer(existing, candidate) {
   if (!existing) return candidate;
@@ -87,7 +101,8 @@ export function aggregateEligibleDiscoveryOffers({
   productById,
   detectDiscoveryBrand,
   terminalRoleByBrandMap,
-  supplierMatchesBrandTerminalRoleFn
+  supplierMatchesBrandTerminalRoleFn,
+  excludeSupplierId = null
 }) {
   const eligibleSupplierCountByProduct = new Map();
   const totalStockByProduct = new Map();
@@ -103,7 +118,8 @@ export function aggregateEligibleDiscoveryOffers({
         detectDiscoveryBrand,
         terminalRoleByBrandMap,
         supplierMatchesBrandTerminalRoleFn,
-        enforceTerminalRole: true
+        enforceTerminalRole: true,
+        excludeSupplierId
       })
     ) {
       continue;
@@ -141,9 +157,11 @@ export function isOfferEligibleForDiscoveryAudience({
   detectDiscoveryBrand,
   terminalRoleByBrandMap,
   supplierMatchesBrandTerminalRoleFn = () => true,
-  enforceTerminalRole = false
+  enforceTerminalRole = false,
+  excludeSupplierId = null
 } = {}) {
   if (!isListedSupplierOffer(offer)) return false;
+  if (isExcludedBuyerSupplierOffer(offer, excludeSupplierId)) return false;
   if (!enforceTerminalRole) return true;
   const brandLabel =
     typeof detectDiscoveryBrand === 'function' ? detectDiscoveryBrand(product) : '';
@@ -162,7 +180,8 @@ export function filterListedOffersForDiscoveryAudience({
   detectDiscoveryBrand,
   terminalRoleByBrandMap,
   supplierMatchesBrandTerminalRoleFn = () => true,
-  enforceTerminalRole = false
+  enforceTerminalRole = false,
+  excludeSupplierId = null
 } = {}) {
   return (offerRows || []).filter((offer) =>
     isOfferEligibleForDiscoveryAudience({
@@ -171,7 +190,8 @@ export function filterListedOffersForDiscoveryAudience({
       detectDiscoveryBrand,
       terminalRoleByBrandMap,
       supplierMatchesBrandTerminalRoleFn,
-      enforceTerminalRole
+      enforceTerminalRole,
+      excludeSupplierId
     })
   );
 }

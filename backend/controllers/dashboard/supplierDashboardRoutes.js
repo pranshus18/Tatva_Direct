@@ -5,6 +5,7 @@ import {
   getNetItemMetrics,
   isRevenueRecognizedOrder
 } from './dashboardImports.js';
+import { sumOrderItemQuantities } from '../../utils/orderItemQuantity.js';
 
 export function registerDashboardSupplierDashboardRoutes(ctx) {
   const {
@@ -160,7 +161,7 @@ router.get('/supplier', authenticateToken, async (req, res) => {
           status: order.status,
           paymentStatus: order.payment_status || 'pending',
           createdAt: formatDate(order.created_at),
-          itemCount: order.order_items?.length || 0,
+          itemCount: sumOrderItemQuantities(order.order_items),
           channel,
           chainUpstreamOrder,
           buyerIsSupplier,

@@ -339,10 +339,11 @@ export function resolveSupplierLocationText(rowLocation, supplier = {}) {
 
 // Helper to compute, per product, the last person in the supply chain
 // (deepest downstream role) and the nearest active outlet to the BOQ site.
-export async function buildSupplyChainInfoForProducts(productIds, siteGeo) {
+export async function buildSupplyChainInfoForProducts(productIds, siteGeo, options = {}) {
   const uniqueIds = [...new Set(productIds.filter(Boolean))];
   const result = {};
   if (uniqueIds.length === 0) return result;
+  const excludeSupplierId = String(options.excludeSupplierId || '').trim();
 
   // Fetch supplier_products + supplier profile for all products in one go
   const { data: spRows, error: spError } = await supabase
@@ -444,6 +445,7 @@ export async function buildSupplyChainInfoForProducts(productIds, siteGeo) {
     for (const row of rows) {
       const supplier = row.supplier;
       if (!supplier) continue;
+      if (excludeSupplierId && String(supplier.id || row.supplier_id || '') === excludeSupplierId) continue;
       if (row.is_active === false || row.status === 'rejected') continue;
       const profile = supplier.profile || {};
       const role = resolveRoleForSupplierAndBrand(profile, productBrand, terminalRoleByBrandMap);
@@ -548,6 +550,7 @@ export const normalizeProductName = async (rawName, options = {}) => {
   const terminalRoleByBrandMap =
     options.terminalRoleByBrandMap ||
     (await loadAdminBrandTerminalRoleMap(supabase, []));
+  const excludeSupplierId = String(options.excludeSupplierId || '').trim();
 
   const PRODUCT_MATCH_SELECT = `
     *,
@@ -630,6 +633,11 @@ export const normalizeProductName = async (rawName, options = {}) => {
           ? product.supplier_products 
           : [product.supplier_products];
       }
+      if (excludeSupplierId) {
+        supplierProducts = supplierProducts.filter(
+          (sp) => String(sp?.supplier_id || sp?.supplier?.id || '').trim() !== excludeSupplierId
+        );
+      }
       
       // Service-provider flow should expose suppliers in the brand's terminal chain role.
       const terminalRoleSupplierProducts = supplierProducts.filter(
@@ -698,9 +706,15 @@ export const normalizeProductName = async (rawName, options = {}) => {
 
     // Count suppliers for the matched product (not every fuzzy search hit).
     const uniqueSupplierIds = new Set();
-    const bestSupplierProducts = Array.isArray(bestProduct.supplier_products)
-      ? bestProduct.supplier_products
-      : [bestProduct.supplier_products].filter(Boolean);
+    const bestSupplierProducts = (
+      Array.isArray(bestProduct.supplier_products)
+        ? bestProduct.supplier_products
+        : [bestProduct.supplier_products].filter(Boolean)
+    ).filter(
+      (sp) =>
+        !excludeSupplierId ||
+        String(sp?.supplier_id || sp?.supplier?.id || '').trim() !== excludeSupplierId
+    );
     bestSupplierProducts.forEach((sp) => {
       const stock = parseInt(sp?.stock, 10) || 0;
       if (
@@ -771,7 +785,7 @@ export const normalizeProductName = async (rawName, options = {}) => {
       confidence: roundedConfidence,
       availableSuppliers: availableSuppliers,
       supplierInfo: supplierInfo,
-      isAvailable: availableSuppliers > 0 || stockValue > 0,
+      isAvailable: availableSuppliers > 0 || (!excludeSupplierId && stockValue > 0),
       price: bestSupplierProduct?.price,
       stock: bestSupplierProduct?.stock
     };
@@ -836,7 +850,10 @@ export async function normalizeProductNamesBatch(rawNames = [], options = {}) {
   const uniqueResults = new Map();
 
   await mapWithConcurrency(uniqueEntries, concurrency, async ([key, rawName]) => {
-    const result = await normalizeProductName(rawName, { terminalRoleByBrandMap });
+    const result = await normalizeProductName(rawName, {
+      terminalRoleByBrandMap,
+      excludeSupplierId: options.excludeSupplierId
+    });
     uniqueResults.set(key, result);
     return result;
   });

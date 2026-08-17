@@ -419,3 +419,76 @@ test('reconcileWithSupplierOffers returns all live suppliers for the anchored pr
     new Set(['offer-a', 'offer-b'])
   );
 });
+
+test('reconcileWithSupplierOffers excludes the buyer own supplier listing', async () => {
+  const catalogProduct = {
+    id: 'product-dell',
+    name: 'Dell Latitude 5420 Laptop',
+    description: 'Business laptop',
+    category: 'laptop',
+    unit: 'nos',
+    asin: 'TS2N',
+    images: [],
+    average_rating: 0,
+    status: 'approved',
+    location: 'Bengaluru',
+    specifications: {}
+  };
+
+  const offerRows = [
+    {
+      id: 'offer-self',
+      product_id: 'product-dell',
+      price: 88440,
+      stock: 95,
+      min_order_quantity: 1,
+      location: 'Pune',
+      outlet_id: null,
+      variant_key: 'silver',
+      variant_asin: null,
+      attributes: {},
+      status: 'approved',
+      is_active: true,
+      supplier: { id: 'buyer-supplier', name: 'Me', company: 'Mine', address: {}, profile: {} }
+    },
+    {
+      id: 'offer-other',
+      product_id: 'product-dell',
+      price: 89999,
+      stock: 12,
+      min_order_quantity: 1,
+      location: 'Bengaluru',
+      outlet_id: null,
+      variant_key: 'silver',
+      variant_asin: null,
+      attributes: {},
+      status: 'approved',
+      is_active: true,
+      supplier: { id: 'other-supplier', name: 'Asha', company: 'Infosys', address: {}, profile: {} }
+    }
+  ];
+
+  const supabase = makeFakeSupabase({
+    offerRows,
+    catalogProducts: [catalogProduct]
+  });
+
+  const result = await reconcileWithSupplierOffers({
+    supabase,
+    products: [catalogProduct],
+    item: { productId: 'product-dell', variantKey: 'silver' },
+    itemId: 'item-dell',
+    itemName: 'Dell Latitude 5420 Laptop',
+    referenceProduct: catalogProduct,
+    includeAllVariants: false,
+    targetBrand: null,
+    detectProductBrandKey: () => null,
+    fuzzyNameCompatible: () => true,
+    hasModelTokenConflict: () => false,
+    excludeSupplierId: 'buyer-supplier'
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].supplierProductId, 'offer-other');
+  assert.equal(result[0].supplier_id, 'other-supplier');
+});

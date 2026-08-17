@@ -485,8 +485,12 @@ const ProductManagement = ({ user }) => {
         // Prefer server list so status/offer id match DB; merge create response if fetch lags.
         await fetchProducts({ silent: true });
         mergeNewlyAddedProduct(addedProduct);
-        const nextBrand = String(data?.nextStep?.brand || data?.product?.brand || productData?.brand || '').trim();
-        const nextProductName = String(data?.nextStep?.productName || data?.product?.name || productData?.name || '').trim();
+        const nextBrand = String(
+          data?.nextStep?.brand || productData?.brand || data?.product?.brand || ''
+        ).trim();
+        const nextProductName = String(
+          data?.nextStep?.productName || productData?.name || data?.product?.name || ''
+        ).trim();
         const params = new URLSearchParams();
         if (nextBrand) params.set('brand', nextBrand);
         if (nextProductName) params.set('productName', nextProductName);
@@ -2532,9 +2536,19 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
   const handleNameChange = (e) => {
     const value = e.target.value;
+    const wasCatalogAttach = Boolean(
+      String(formData.catalogProductId || '').trim() || selectedCatalogAttachIdRef.current
+    );
     selectedCatalogAttachIdRef.current = '';
+    selectedSuggestionSpecsRef.current = null;
+    preserveSpecsOnNextCategoryLoadRef.current = false;
     setFormData({ ...formData, name: value, catalogProductId: '' });
     setCatalogBaselineSpecs({});
+    if (wasCatalogAttach) {
+      setSpecifications({});
+      setHasAdminSpecTemplate(false);
+      setAdminSpecTemplateKeys([]);
+    }
     
     // Clear previous timeout
     if (searchTimeout) {
@@ -2567,7 +2581,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       ...formData,
       catalogProductId: selectedProductId,
       name: suggestion.name,
-      brand: formData.brand || suggestion.brand || '',
+      brand: suggestion.brand || formData.brand || '',
       gtin: suggestion.gtin || formData.gtin,
       hsnCode: suggestion.hsnCode || suggestion.hsn_code || formData.hsnCode,
       description: suggestion.description || formData.description,
@@ -2614,7 +2628,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           return {
             ...prev,
             unit: String(prev.unit || '').trim() ? prev.unit : data.unit || prev.unit,
-            brand: prev.brand || data.product?.brand || suggestion.brand || '',
+            brand: data.product?.brand || prev.brand || suggestion.brand || '',
             category: prev.category || data.product?.category || suggestion.category || '',
             name: data.product?.name || prev.name
           };
@@ -2642,97 +2656,87 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
   };
 
-  // Auto-fill unit/specs when name + category match — or by selected catalog product id.
+  // Specs from another catalog product are copied only when the supplier clicks a suggestion.
+  // Name/category typing must never pull JBL headphone values onto a new Nothing charger.
   useEffect(() => {
     const selectedProductId = String(formData.catalogProductId || '').trim();
-    const name = (formData.name || '').trim();
-    const category = (formData.category || '').trim();
-    const brand = (formData.brand || '').trim();
-
-    if (!selectedProductId && (!name || !category)) return;
+    if (!selectedProductId) return;
+    if (
+      selectedCatalogAttachIdRef.current &&
+      selectedCatalogAttachIdRef.current !== selectedProductId
+    ) {
+      return;
+    }
 
     const timeout = setTimeout(async () => {
       try {
         const token = localStorage.getItem('token');
-        const lookupParams = new URLSearchParams();
-        if (selectedProductId) {
-          // Dropdown selection: always resolve by exact product id.
-          lookupParams.set('productId', selectedProductId);
-        } else {
-          lookupParams.set('name', name);
-          lookupParams.set('category', category);
-          if (brand) lookupParams.set('brand', brand);
-          if (product?.variantKey) lookupParams.set('variantKey', product.variantKey);
-        }
+        const lookupParams = new URLSearchParams({ productId: selectedProductId });
+        const formBrand = String(formData.brand || '').trim();
+        if (formBrand) lookupParams.set('brand', formBrand);
+        if (product?.variantKey) lookupParams.set('variantKey', product.variantKey);
         const res = await fetch(
           getApiUrl(`/api/supplier/products/lookup?${lookupParams.toString()}`),
           { headers: { Authorization: `Bearer ${token}` } }
         );
         const data = await res.json();
-        if (data.status === 'success' && data.found && data.unit) {
+        if (String(formData.catalogProductId || '').trim() !== selectedProductId) return;
+        if (
+          data.status !== 'success' ||
+          !data.found ||
+          String(data.product?.id || '').trim() !== selectedProductId
+        ) {
+          setFormData((prev) =>
+            String(prev.catalogProductId || '').trim() === selectedProductId
+              ? { ...prev, catalogProductId: '' }
+              : prev
+          );
+          return;
+        }
+
+        if (data.unit) {
           setFormData((prev) =>
             String(prev.unit || '').trim() ? prev : { ...prev, unit: data.unit }
           );
         }
 
         if (
-          data.status === 'success' &&
-          data.found &&
           data.specifications &&
           typeof data.specifications === 'object' &&
           !Array.isArray(data.specifications)
         ) {
-          // If a catalog product is selected, only accept specs for that same id.
-          if (
-            selectedProductId &&
-            String(data.product?.id || '').trim() !== selectedProductId
-          ) {
-            return;
-          }
           const nextSpecs = { ...data.specifications };
           preserveSpecsOnNextCategoryLoadRef.current = true;
           selectedSuggestionSpecsRef.current = { ...nextSpecs };
           setCatalogBaselineSpecs({ ...nextSpecs });
           setSpecifications(nextSpecs);
-          if (data.product?.id) {
-            setFormData((prev) =>
-              prev.catalogProductId
-                ? prev
-                : { ...prev, catalogProductId: data.product.id }
-            );
-          }
         }
 
-        if (data.status === 'success' && data.found) {
-          const canonicalMrpFromLookup =
-            typeof data.canonicalMrp === 'number'
-              ? data.canonicalMrp
-              : typeof data.recommendedPrice === 'number'
-                ? data.recommendedPrice
-                : null;
-          setRecommendedPrice(canonicalMrpFromLookup);
-          setRecommendedPriceStats(data.priceStats || null);
-          if (!product && !priceTouched) {
-            const currentPrice = parseSupplierOfferPrice(formData.price);
-            if ((currentPrice === null || currentPrice <= 0) && canonicalMrpFromLookup != null) {
-              setFormData((prev) => ({
-                ...prev,
-                price: String(Number(canonicalMrpFromLookup).toFixed(2))
-              }));
+        const canonicalMrpFromLookup =
+          typeof data.canonicalMrp === 'number'
+            ? data.canonicalMrp
+            : typeof data.recommendedPrice === 'number'
+              ? data.recommendedPrice
+              : null;
+        setRecommendedPrice(canonicalMrpFromLookup);
+        setRecommendedPriceStats(data.priceStats || null);
+        if (!product && !priceTouched && canonicalMrpFromLookup != null) {
+          setFormData((prev) => {
+            const currentPrice = parseSupplierOfferPrice(prev.price);
+            if (currentPrice === null || currentPrice <= 0) {
+              return { ...prev, price: String(Number(canonicalMrpFromLookup).toFixed(2)) };
             }
-          }
-        } else if (!selectedProductId) {
-          setRecommendedPrice(null);
-          setRecommendedPriceStats(null);
+            return prev;
+          });
         }
       } catch (e) {
-        // Silent fail: unit/specs will remain user-selected
+        // Silent fail: keep the specs already shown for this selected product.
       }
     }, 350);
 
     return () => clearTimeout(timeout);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.name, formData.category, formData.brand, formData.catalogProductId]);
+  }, [formData.catalogProductId, formData.brand]);
 
   // Reload model/brand-specific template keys while typing within the same category.
   // Category switches are handled by handleCategoryDropdownChange / the category-change effect.
@@ -3782,14 +3786,22 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       return acc;
     }, {});
 
-    setFormData((prev) => ({
-      ...prev,
-      name: selectedMap.productName || prev.name,
-      unit: selectedMap.unit || prev.unit,
-      brand: selectedMap.brand || prev.brand,
-      gtin: selectedMap.gtin || prev.gtin,
-      category: selectedMap.category || prev.category
-    }));
+    setFormData((prev) => {
+      const nextName = selectedMap.productName || prev.name;
+      const nextBrand = selectedMap.brand || prev.brand;
+      const identityChanged =
+        String(nextName || '').trim() !== String(prev.name || '').trim() ||
+        String(nextBrand || '').trim() !== String(prev.brand || '').trim();
+      return {
+        ...prev,
+        name: nextName,
+        unit: selectedMap.unit || prev.unit,
+        brand: nextBrand,
+        gtin: selectedMap.gtin || prev.gtin,
+        category: selectedMap.category || prev.category,
+        ...(identityChanged ? { catalogProductId: '' } : {})
+      };
+    });
 
     setAiDetectionReview((prev) => {
       if (!prev) return prev;
@@ -4838,7 +4850,28 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   </label>
                   <BrandSelect
                     value={formData.brand}
-                    onChange={(brand) => setFormData((prev) => ({ ...prev, brand }))}
+                    onChange={(brand) => {
+                      setFormData((prev) => {
+                        const brandChanged =
+                          String(prev.brand || '').trim() !== String(brand || '').trim();
+                        const detachCatalog = !product && brandChanged && Boolean(prev.catalogProductId);
+                        if (detachCatalog) {
+                          selectedCatalogAttachIdRef.current = '';
+                          selectedSuggestionSpecsRef.current = null;
+                          preserveSpecsOnNextCategoryLoadRef.current = false;
+                          setCatalogBaselineSpecs({});
+                          setSpecifications({});
+                        }
+                        return {
+                          ...prev,
+                          brand,
+                          ...(!product && brandChanged ? { catalogProductId: '' } : {})
+                        };
+                      });
+                      if (!product) {
+                        selectedCatalogAttachIdRef.current = '';
+                      }
+                    }}
                     disabled={!!product && Boolean(String(formData.brand || '').trim())}
                     required
                     searchable

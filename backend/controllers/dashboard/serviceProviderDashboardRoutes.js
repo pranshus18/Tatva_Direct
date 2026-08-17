@@ -2,6 +2,7 @@
 import { formatDate } from './dashboardImports.js';
 import { buildCreditStatus } from '../../services/creditAccountService.js';
 import { insertNotification } from '../../repositories/notificationsRepository.js';
+import { sumOrderItemQuantities } from '../../utils/orderItemQuantity.js';
 
 function diffCalendarDays(fromDate, toDate) {
   const start = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate()).getTime();
@@ -292,7 +293,7 @@ router.get('/service-provider', authenticateToken, async (req, res) => {
           status: order.status,
           paymentStatus: order.payment_status || 'pending',
           paymentMethod: order.payment_method || null,
-          itemCount: order.order_items?.length || 0,
+          itemCount: sumOrderItemQuantities(order.order_items),
           createdAt: order.created_at,
           createdAtFormatted: formatDate(order.created_at),
           expectedDeliveryDate: order.expected_delivery_date,

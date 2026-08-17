@@ -15,6 +15,7 @@ import { buildProductIdentification, firstNonEmpty } from '../../services/procur
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
 import { buildAdminPublishedDescriptionAttributes } from '../../utils/supplierProductDescriptions.js';
 import { propagateVariantMrpToAllOffers } from '../../services/variantMrpService.js';
+import { resolveSupplierOfferDisplayName } from '../../services/supplierProductWriteService.js';
 
 function scoreSupplierOfferRow(row) {
   const rowStatus = row.status;
@@ -66,9 +67,20 @@ function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true,
   );
   const catalogApproved = String(product.status || '').toLowerCase() === 'approved';
   const offerPending = String(offerRow?.status || '').toLowerCase() === 'pending';
+  const listingName = resolveSupplierOfferDisplayName({
+    attributes: offerRow?.attributes || {},
+    catalogName: product.name
+  });
+  const offerBrand = String(
+    offerRow?.attributes?.brand || offerRow?.attributes?.brandModel || ''
+  ).trim();
 
   return {
     ...product,
+    name: listingName || product.name,
+    brand: offerBrand || product.brand || '',
+    catalogName: product.name,
+    catalogBrand: product.brand || '',
     hasSupplierOffer,
     hasPendingSupplierOffer,
     adminReviewPending: hasPendingSupplierOffer || String(product.status || 'pending').toLowerCase() === 'pending',
@@ -212,6 +224,7 @@ export function expandCatalogProductIntoAdminReviewRows(
         isVariantRow: true,
         variantLabel,
         catalogName: product.name,
+        catalogBrand: product.brand || '',
         supplier: offerSupplier,
         supplier_id: offerRow.supplier_id || product.supplier_id || null
       };

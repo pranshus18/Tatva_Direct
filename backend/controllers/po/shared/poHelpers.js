@@ -239,6 +239,12 @@ export function isPoVendorSupplierUser(user) {
   return hasEffectiveRegisteredRole(user, 'supplier');
 }
 
+export function isSameUserId(left, right) {
+  const a = String(left || '').trim();
+  const b = String(right || '').trim();
+  return Boolean(a && b && a === b);
+}
+
 async function loadSupplierUserFromOfferId(supabase, offerId) {
   const id = String(offerId || '').trim();
   if (!id || !UUID_RE.test(id)) return null;
@@ -585,6 +591,57 @@ export function buildUpstreamItemsFromSelectedMine(selectedMine = {}, metaByMine
     });
   }
   return out;
+}
+
+/**
+ * Drop ordered listings from upstream cart projects so a completed order cannot
+ * keep the previous quantity attached to Add to Cart. Empty projects are removed.
+ */
+export function removeUpstreamCartItemsByMineIds(projects = [], mineIds = []) {
+  const remove = new Set(
+    (Array.isArray(mineIds) ? mineIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+  if (!remove.size) {
+    return Array.isArray(projects) ? projects.slice() : [];
+  }
+
+  return (Array.isArray(projects) ? projects : [])
+    .map((project) => {
+      const existingItems =
+        Array.isArray(project?.items) && project.items.length
+          ? project.items
+          : buildUpstreamItemsFromSelectedMine(project?.selectedMine || {});
+      const items = existingItems.filter((item) => {
+        const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+        return Boolean(mineId) && !remove.has(mineId);
+      });
+      const selectedUpstreamOffer = { ...(project?.selectedUpstreamOffer || {}) };
+      for (const id of remove) {
+        delete selectedUpstreamOffer[id];
+      }
+      const suggestions = Array.isArray(project?.suggestions)
+        ? project.suggestions.filter((row) => {
+            const mineId = String(row?.mineSupplierProductId || row?.mineId || '').trim();
+            return !mineId || !remove.has(mineId);
+          })
+        : project?.suggestions;
+      return {
+        ...project,
+        items,
+        selectedMine: buildUpstreamSelectedMineFromItems(items),
+        selectedUpstreamOffer,
+        suggestions
+      };
+    })
+    .filter((project) => {
+      const items = Array.isArray(project.items) ? project.items : [];
+      if (items.length > 0) return true;
+      const selected =
+        project.selectedMine && typeof project.selectedMine === 'object' ? project.selectedMine : {};
+      return Object.values(selected).some((qty) => Number(qty) > 0);
+    });
 }
 
 /**

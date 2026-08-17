@@ -38,12 +38,23 @@ import SpStatCard from '../components/sp/SpStatCard';
 import OrderChargeSummary from '../components/sp/OrderChargeSummary';
 import SupplierOrderScopeNav from '../components/supplier/SupplierOrderScopeNav';
 import { Button } from '@/components/ui/button';
+import { sumOrderItemQuantities } from '../utils/orderItemQuantity';
 
 const BUYER_SCOPE_FILTERS = [
   { id: 'all', label: 'All buyers' },
   { id: 'retail', label: 'Customers (retail)' },
   { id: 'chain', label: 'Chain partners' }
 ];
+
+const resolveOrderItemQuantity = (order) => {
+  if (Array.isArray(order?.items) && order.items.length) {
+    return sumOrderItemQuantities(order.items);
+  }
+  if (Array.isArray(order?.order_items) && order.order_items.length) {
+    return sumOrderItemQuantities(order.order_items);
+  }
+  return Number(order?.itemCount) || 0;
+};
 
 const sortStatusHistory = (raw) =>
   [...(raw || [])].sort((a, b) => {
@@ -714,7 +725,7 @@ export default function SupplierUpstreamOrders() {
                           o.supplierName || 'Supplier'
                         )}
                       </td>
-                      <td>{o.itemCount ?? '—'}</td>
+                      <td>{resolveOrderItemQuantity(o) || '—'}</td>
                       <td>₹{Number(o.totalAmount || o.amount || 0).toLocaleString('en-IN')}</td>
                       <td>
                         <StatusBadge status={o.status} />

@@ -90,14 +90,26 @@ function getVendorSelectionId(vendor) {
   return String(vendor?.selectionId || vendor?.supplierProductId || vendor?.id || '');
 }
 
+function getStoredBuyerUserId() {
+  if (typeof window === 'undefined') return '';
+  try {
+    const user = JSON.parse(localStorage.getItem('user') || 'null');
+    return String(user?.id || '').trim();
+  } catch {
+    return '';
+  }
+}
+
 /**
  * Normalize rank API / cache payloads so OOS offers cannot keep recommendation flags
  * or inconsistent stock/availability fields that confuse auto-select + badges.
+ * Dual-role buyers must not see their own supplier listing.
  */
-function sanitizeVendorOffers(itemVendors, itemsList = []) {
+function sanitizeVendorOffers(itemVendors, itemsList = [], excludeSupplierId = '') {
   const itemsById = new Map(
     (itemsList || []).map((item) => [String(item?.id ?? ''), item])
   );
+  const buyerId = String(excludeSupplierId || '').trim();
   const cleaned = {};
   Object.keys(itemVendors || {}).forEach((itemId) => {
     const item = itemsById.get(String(itemId)) || null;
@@ -105,6 +117,7 @@ function sanitizeVendorOffers(itemVendors, itemsList = []) {
     cleaned[itemId] = vendors
       .filter((v) => {
         if (!v || !v.id || !v.name) return false;
+        if (buyerId && String(v.id) === buyerId) return false;
         if (!v.supplierProductId) return false;
         if (String(v.status || '').toLowerCase() !== 'approved') return false;
         return true;
@@ -667,7 +680,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         cleanedVendors[itemId] = [];
       }
     });
-    return sanitizeVendorOffers(cleanedVendors, effectiveItems);
+    return sanitizeVendorOffers(cleanedVendors, effectiveItems, getStoredBuyerUserId());
   };
 
   const autoSelectNearestVendors = (cleanedVendors) => {
@@ -706,7 +719,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
   };
 
   const applyRankResults = (cleanedVendors, cacheKey) => {
-    const sanitized = sanitizeVendorOffers(cleanedVendors, effectiveItems);
+    const sanitized = sanitizeVendorOffers(cleanedVendors, effectiveItems, getStoredBuyerUserId());
     setItemVendors(sanitized);
     // Prune OOS selections and auto-select only fulfillable nearest (when allowed).
     autoSelectNearestVendors(sanitized);
@@ -994,6 +1007,23 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         .join('\n');
       alert(
         `Cannot proceed — selected supplier(s) are out of stock or unavailable:\n\n${details}`
+      );
+      return;
+    }
+
+    const buyerId = getStoredBuyerUserId();
+    const selfPurchaseItems = buyerId
+      ? effectiveItems.filter((item) => {
+          const selectionKey = getSelectionKey(item);
+          const selectedVendorId = selections[selectionKey];
+          if (!selectedVendorId) return false;
+          const vendor = findVendorForItem(item, selectedVendorId);
+          return String(vendor?.id || '') === buyerId;
+        })
+      : [];
+    if (selfPurchaseItems.length > 0) {
+      alert(
+        'You cannot buy this product from your own supplier listing. Choose another supplier of the same product or variant.'
       );
       return;
     }
@@ -1547,7 +1577,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     No supplier is available for this requirement
                   </p>
                   <p style={{ color: '#c2410c', fontSize: '0.85rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
-                    Request this product so suppliers can add it.
+                    Your own supplier listing is not shown here. You must buy from another supplier of the same product or variant, or request this product so other suppliers can add it.
                   </p>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <Button

@@ -30,6 +30,7 @@ import {
 import {
   mergeSelectedCatalogProductSpecifications
 } from '../../services/supplierCatalogHelpersService.js';
+import { pickExactCatalogLookupProduct, catalogBrandsConflict } from '../../utils/catalogProductAttach.js';
 
 function isAuthenticatedSupplier(req) {
   if (isSupplierUserType(req.user?.user_type)) return true;
@@ -197,6 +198,7 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     const productId = String(req.query.productId || req.query.product_id || '').trim();
     const name = String(req.query.name || '').trim();
     const category = String(req.query.category || '').trim().toLowerCase();
+    const brand = String(req.query.brand || req.query.brandName || '').trim();
     const variantKey = String(req.query.variantKey || req.query.variant_key || '').trim();
 
     let product = null;
@@ -216,16 +218,19 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       }
       product = byId || null;
     } else if (name && category) {
-      // Fallback when the supplier typed a match without clicking a suggestion.
-      const nameNeedle = name.replace(/\s+/g, ' ').trim();
-      const ilikeNeedle = `%${nameNeedle.replace(/\s+/g, '%')}%`;
+      // Exact name (+ brand) only. Fuzzy ILIKE first-hit attached unrelated catalog rows
+      // (Nothing Power → JBL headphones) and then loaded the wrong specifications.
+      const escapedName = name
+        .replace(/\\/g, '\\\\')
+        .replace(/%/g, '\\%')
+        .replace(/_/g, '\\_');
       const { data: products, error } = await supabase
         .from('products')
         .select('id, name, category, brand, unit, specifications, updated_at')
         .eq('category', category)
-        .ilike('name', ilikeNeedle)
+        .ilike('name', escapedName)
         .order('updated_at', { ascending: false })
-        .limit(10);
+        .limit(20);
 
       if (error) {
         console.error('Product lookup error:', error);
@@ -235,22 +240,16 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
         });
       }
 
-      const normalizeName = (v) =>
-        String(v || '')
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, ' ');
-
-      const productCandidates = products || [];
-      const needleNorm = normalizeName(nameNeedle);
-      product = productCandidates.length > 0 ? productCandidates[0] : null;
-      const exact = productCandidates.find((p) => normalizeName(p?.name) === needleNorm);
-      if (exact) product = exact;
+      product = pickExactCatalogLookupProduct(products || [], { name, brand });
     } else {
       return res.json({
         status: 'success',
         found: false
       });
+    }
+
+    if (product && brand && catalogBrandsConflict(brand, product.brand)) {
+      product = null;
     }
 
     if (product) {
@@ -444,7 +443,7 @@ router.get('/categories/:name/specifications', authenticateToken, async (req, re
     const specs = await resolveAdminSpecificationTemplate({
       categoryName,
       modelRaw,
-      brandRaw: brandRaw || modelRaw,
+      brandRaw,
       keysOnly
     });
 

@@ -53,9 +53,13 @@ import {
   readActiveCheckoutReservation,
   releaseUpstreamCheckoutInventory
 } from '../utils/upstreamCheckoutReservation';
+import {
+  SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY,
+  SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY,
+  clearUpstreamStateAfterSuccessfulOrder
+} from '../utils/supplierUpstreamCartSession';
+import { sumOrderItemQuantities } from '../utils/orderItemQuantity';
 
-const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
-const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
 const PAY_LATER_UNAVAILABLE_MESSAGE =
   'Pay later is unavailable. You can place the order with vault instead.';
 const PAY_LATER_LIMIT_CHECK_FAILED_MESSAGE =
@@ -658,7 +662,7 @@ const SupplierPlaceOrder = () => {
 
   const itemCount = useMemo(() => {
     if (!draft?.lines || !Array.isArray(draft.lines)) return 0;
-    return draft.lines.length;
+    return sumOrderItemQuantities(draft.lines);
   }, [draft]);
 
   const estimatedTotal = useMemo(() => {
@@ -963,6 +967,10 @@ const SupplierPlaceOrder = () => {
     }
 
     setPlacing(true);
+    const finishPlacedOrder = () => {
+      clearUpstreamStateAfterSuccessfulOrder(draft?.lines || draft?.reviewLines || []);
+      navigate('/supplier-orders?direction=upstream');
+    };
     try {
       const token = localStorage.getItem('token');
       const useVault = isVaultPaymentMethod(paymentMethod);
@@ -1072,8 +1080,7 @@ const SupplierPlaceOrder = () => {
         const firstConfirm = await confirmTransport({ persistOnly: useVault });
         if (!firstConfirm.ok) {
           alert(firstConfirm.message || 'Upstream order(s) created, but transport selection failed.');
-          localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-          navigate('/supplier-orders?direction=upstream');
+          finishPlacedOrder();
           return;
         }
       }
@@ -1115,8 +1122,7 @@ const SupplierPlaceOrder = () => {
         const failedPay = payOutcomes.find((outcome) => !outcome.ok);
         if (failedPay) {
           alert(failedPay.message || 'Vault payment failed.');
-          localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-          navigate('/supplier-orders?direction=upstream');
+          finishPlacedOrder();
           return;
         }
 
@@ -1124,8 +1130,7 @@ const SupplierPlaceOrder = () => {
           const bookConfirm = await confirmTransport({ persistOnly: false });
           if (!bookConfirm.ok) {
             alert(bookConfirm.message || 'Paid, but carrier booking failed. Tracking can be retried later.');
-            localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-            navigate('/supplier-orders?direction=upstream');
+            finishPlacedOrder();
             return;
           }
         }
@@ -1139,8 +1144,7 @@ const SupplierPlaceOrder = () => {
               'Upstream order(s) placed on pay later. Settle from your vault before the due date.'
             : data.message || 'Upstream order(s) placed successfully.'
       );
-      localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
-      navigate('/supplier-orders?direction=upstream');
+      finishPlacedOrder();
     } catch (e) {
       console.error('Place upstream orders error:', e);
       alert(e?.message || 'Failed to place upstream orders. Please try again.');

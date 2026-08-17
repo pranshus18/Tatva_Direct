@@ -71,6 +71,7 @@ function renderUpstreamDetail(initialUrl = '/supplier-upstream/product/prod-1?mi
 
 beforeEach(() => {
   localStorage.setItem('token', 'test-token');
+  sessionStorage.clear();
   global.fetch = vi.fn(() =>
     Promise.resolve({ ok: true, json: () => Promise.resolve(DETAIL_PAYLOAD) })
   );
@@ -79,6 +80,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+  sessionStorage.clear();
 });
 
 describe('ProductDiscoveryDetail in the supplier upstream portal', () => {
@@ -178,6 +180,29 @@ describe('ProductDiscoveryDetail in the supplier upstream portal', () => {
     await waitFor(() =>
       expect(screen.getByTestId('location')).toHaveTextContent('/supplier-upstream?add=mine-9&qty=2')
     );
+  });
+
+  it('shows last ordered quantity separately after the listing leaves the cart', async () => {
+    sessionStorage.setItem('supplierUpstreamLastOrderedQty', JSON.stringify({ 'mine-9': 4 }));
+    global.fetch = vi.fn((url) => {
+      if (String(url).includes('/api/supplier/upstream/cart')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ status: 'success', cart: { draft: { projects: [] } } })
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(DETAIL_PAYLOAD) });
+    });
+
+    renderUpstreamDetail();
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Steel Taurus 600' })).toBeInTheDocument()
+    );
+    expect(screen.getAllByText(/Last ordered: 4/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/this is not in your cart/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /Continue sourcing/i }).length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /Update Cart/i })).not.toBeInTheDocument();
   });
 
   it('surfaces a missing product without service-provider wording', async () => {

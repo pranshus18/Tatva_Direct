@@ -71,6 +71,7 @@ import {
   buildUpstreamSelectedMineFromItems,
   buildUpstreamItemsFromSelectedMine,
   applyUpstreamSelectedMineQuantitiesToItems,
+  removeUpstreamCartItemsByMineIds,
   normalizeCartVariantKey
 } from '../po/shared/poHelpers.js';
 import {
@@ -79,6 +80,7 @@ import {
   resolveUpstreamPaymentSelection
 } from '../../services/upstreamOrderInputService.js';
 import { parseSupplierStockQuantity } from '../../utils/parseSupplierStockQuantity.js';
+import { sumOrderItemQuantities } from '../../utils/orderItemQuantity.js';
 import { lineMoneyTotal, parseMoney, roundMoney } from '../../utils/money.js';
 import { pickEffectiveOfferPrice } from '../../services/procurementSharedService.js';
 import { deriveShippingAddressesFromProfile } from '../profile/profileHelpers.js';
@@ -558,6 +560,48 @@ export function registerSupplierUpstreamRoutes(ctx) {
       brandFilter: latestProject?.brandFilter || '',
       searchTerm: latestProject?.searchTerm || ''
     };
+  };
+
+  const persistUpstreamCartAfterOrder = async (userId, orderedMineIds = []) => {
+    const ids = [
+      ...new Set(
+        (Array.isArray(orderedMineIds) ? orderedMineIds : [])
+          .map((id) => String(id || '').trim())
+          .filter(Boolean)
+      )
+    ];
+    if (!ids.length) return;
+    const { data: cartRow, error } = await supabase
+      .from('po_carts')
+      .select('id, draft_payload')
+      .eq('service_provider_id', userId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!cartRow) return;
+
+    const currentDraft = normalizeUpstreamCartDraft(
+      cartRow.draft_payload && typeof cartRow.draft_payload === 'object' ? cartRow.draft_payload : {}
+    );
+    const nextProjects = removeUpstreamCartItemsByMineIds(currentDraft.projects || [], ids);
+    if (nextProjects.length === 0) {
+      const { error: deleteError } = await supabase
+        .from('po_carts')
+        .delete()
+        .eq('service_provider_id', userId);
+      if (deleteError) throw deleteError;
+      return;
+    }
+
+    const nextDraft = normalizeUpstreamCartDraft({
+      ...currentDraft,
+      projects: nextProjects
+    });
+    const { error: saveError } = await supabase
+      .from('po_carts')
+      .update({ draft_payload: nextDraft })
+      .eq('id', cartRow.id)
+      .eq('service_provider_id', userId);
+    if (saveError) throw saveError;
   };
 
 // Catalog detail for a product a supplier is sourcing upstream. Same payload as service-provider
@@ -2070,6 +2114,15 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
       console.warn('[Upstream Orders] checkout reservation cleanup after create:', reservationCleanupError?.message || reservationCleanupError);
     }
 
+    try {
+      await persistUpstreamCartAfterOrder(req.userId, mineIds);
+    } catch (cartCleanupError) {
+      console.warn(
+        '[Upstream Orders] cart cleanup after create:',
+        cartCleanupError?.message || cartCleanupError
+      );
+    }
+
     // Respond first; leftover hold cleanup already attempted above.
     return res.json({
       status: 'success',
@@ -2778,7 +2831,7 @@ router.get('/upstream/orders', authenticateToken, async (req, res) => {
         tracking_number,
         tracking_url,
         shipping_provider,
-        order_items (id),
+        order_items (id, quantity),
         supplier:users!orders_supplier_id_fkey (id, name, company)
       `)
       .eq('service_provider_id', req.userId)
@@ -2839,7 +2892,7 @@ router.get('/upstream/orders', authenticateToken, async (req, res) => {
         trackingNumber: o.tracking_number || null,
         trackingUrl: o.tracking_url || null,
         shippingProvider: o.shipping_provider || null,
-        itemCount: Array.isArray(o.order_items) ? o.order_items.length : 0
+        itemCount: sumOrderItemQuantities(o.order_items)
       }))
     });
   } catch (e) {

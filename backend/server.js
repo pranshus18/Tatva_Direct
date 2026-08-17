@@ -10,6 +10,7 @@ import logger from './utils/logger.js';
 import { createApp } from './app/createApp.js';
 import { setupGracefulShutdown } from './app/gracefulShutdown.js';
 import { expireStaleReservations } from './services/checkoutInventoryReservationService.js';
+import { PM_API_ENV, PM_API_BASE_URL, PM_PAYMENT_API_BASE_URL } from './config/pmApi.js';
 
 registerProcessSafety();
 validateProductionEnv();
@@ -46,6 +47,7 @@ logger.info('Starting server...');
 logger.info(` Host: ${HOST}`);
 logger.info(` Port: ${port}`);
 logger.info(` Environment: ${process.env.NODE_ENV}`);
+logger.info(` PM APIs: ${PM_API_ENV} (${PM_API_BASE_URL} | ${PM_PAYMENT_API_BASE_URL})`);
 logger.info(`  Supabase: ${process.env.SUPABASE_URL ? 'Configured' : 'Not configured'}`);
 
 const server = app.listen(port, HOST, () => {

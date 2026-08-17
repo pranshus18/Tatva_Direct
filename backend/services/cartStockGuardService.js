@@ -3,8 +3,13 @@ import {
   loadAdminBrandTerminalRoleMap,
   supplierMatchesBrandTerminalRole
 } from '../utils/adminBrandSupplyChain.js';
+import {
+  BUYER_OWN_LISTING_PURCHASE_MESSAGE,
+  isExcludedBuyerSupplierOffer
+} from './catalogOfferSnapshotService.js';
 
 export const PRODUCT_OUT_OF_STOCK_MESSAGE = 'Product is out of stock';
+export { BUYER_OWN_LISTING_PURCHASE_MESSAGE };
 
 function detectProductBrand(product = {}) {
   return (
@@ -18,7 +23,10 @@ function detectProductBrand(product = {}) {
  * Sum sellable stock for a product from terminal-role-eligible approved listings.
  * @returns {Promise<{ ok: true, availableStock: number, product: object } | { ok: false, status: number, message: string }>}
  */
-export async function getSellableProductStock(supabase, { productId, variantKey = '', product: preloadedProduct = null } = {}) {
+export async function getSellableProductStock(
+  supabase,
+  { productId, variantKey = '', product: preloadedProduct = null, excludeSupplierId = null } = {}
+) {
   const normalizedProductId = String(productId || '').trim();
   if (!normalizedProductId) {
     return { ok: false, status: 400, message: 'productId is required' };
@@ -41,7 +49,7 @@ export async function getSellableProductStock(supabase, { productId, variantKey 
 
   let listingQuery = supabase
     .from('supplier_products')
-    .select('id, stock, variant_key, supplier:users!supplier_products_supplier_id_fkey(profile)')
+    .select('id, stock, variant_key, supplier_id, supplier:users!supplier_products_supplier_id_fkey(id, profile)')
     .eq('product_id', normalizedProductId)
     .eq('status', 'approved')
     .eq('is_active', true)
@@ -61,20 +69,25 @@ export async function getSellableProductStock(supabase, { productId, variantKey 
     brandLabel ? [brandLabel] : []
   );
 
-  const eligibleListings = (activeListings || []).filter((row) =>
-    supplierMatchesBrandTerminalRole(
+  const eligibleListings = (activeListings || []).filter((row) => {
+    if (isExcludedBuyerSupplierOffer(row, excludeSupplierId)) return false;
+    return supplierMatchesBrandTerminalRole(
       row?.supplier?.profile || {},
       brandLabel,
       terminalRoleByBrandMap
-    )
-  );
+    );
+  });
 
   if (eligibleListings.length === 0) {
+    const hadOwnListing = (activeListings || []).some((row) =>
+      isExcludedBuyerSupplierOffer(row, excludeSupplierId)
+    );
     return {
       ok: false,
       status: 400,
-      message:
-        "This product is not currently listed by the terminal role supplier for this brand's supply chain."
+      message: hadOwnListing
+        ? BUYER_OWN_LISTING_PURCHASE_MESSAGE
+        : "This product is not currently listed by the terminal role supplier for this brand's supply chain."
     };
   }
 
@@ -96,13 +109,14 @@ export async function getSellableProductStock(supabase, { productId, variantKey 
  */
 export async function assertProductHasSellableStock(
   supabase,
-  { productId, variantKey = '', quantity = 1, product = null } = {}
+  { productId, variantKey = '', quantity = 1, product = null, excludeSupplierId = null } = {}
 ) {
   const requestedQty = Math.max(1, Math.floor(Number(quantity) || 1));
   const stockResult = await getSellableProductStock(supabase, {
     productId,
     variantKey,
-    product
+    product,
+    excludeSupplierId
   });
 
   if (!stockResult.ok) return stockResult;
@@ -134,7 +148,11 @@ export async function assertProductHasSellableStock(
 /**
  * Validate every cart line that references a catalog productId.
  */
-export async function assertCartDraftItemsHaveSellableStock(supabase, draftPayload = {}) {
+export async function assertCartDraftItemsHaveSellableStock(
+  supabase,
+  draftPayload = {},
+  { excludeSupplierId = null } = {}
+) {
   const groups = Array.isArray(draftPayload?.boqGroups) ? draftPayload.boqGroups : [];
   const flatItems = Array.isArray(draftPayload?.items) ? draftPayload.items : [];
   const lines = [
@@ -157,7 +175,8 @@ export async function assertCartDraftItemsHaveSellableStock(supabase, draftPaylo
     const result = await assertProductHasSellableStock(supabase, {
       productId,
       variantKey: variantKey || '',
-      quantity
+      quantity,
+      excludeSupplierId
     });
     if (!result.ok) {
       const name = result.product?.name ? ` (${result.product.name})` : '';

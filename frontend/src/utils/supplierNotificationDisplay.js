@@ -22,9 +22,25 @@ export function getSupplierNotificationMessage(notification) {
   return message ? `${message} Reason: ${rejectionReason}` : `Reason: ${rejectionReason}`;
 }
 
+export function isLowStockAlertNotification(notification) {
+  const meta = getNotificationMetadata(notification);
+  if (
+    meta.kind === 'inventory_below_lsa' ||
+    meta.event === 'inventory_below_lsa' ||
+    meta.source === 'low_inventory'
+  ) {
+    return true;
+  }
+  const title = String(notification?.title || '').toLowerCase();
+  return title.includes('low stock alert') || title.includes('reached lsa');
+}
+
 export function getSupplierNotificationTargetPath(notification) {
   if (isBrandRejectedNotification(notification)) {
     return '/supplier-select-yourself';
+  }
+  if (isLowStockAlertNotification(notification)) {
+    return '/supplier-dashboard';
   }
   return null;
 }

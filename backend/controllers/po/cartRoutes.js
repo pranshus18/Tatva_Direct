@@ -169,7 +169,9 @@ router.put('/cart', authenticateToken, isServiceProvider, async (req, res) => {
       seen.add(key);
     }
 
-    const stockCheck = await assertCartDraftItemsHaveSellableStock(supabase, draftPayload);
+    const stockCheck = await assertCartDraftItemsHaveSellableStock(supabase, draftPayload, {
+      excludeSupplierId: req.userId
+    });
     if (!stockCheck.ok) {
       return res.status(stockCheck.status || 400).json({
         status: 'error',
@@ -293,7 +295,8 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
       productId,
       variantKey,
       quantity: requestedQuantity,
-      product
+      product,
+      excludeSupplierId: req.userId
     });
     if (!stockCheck.ok) {
       return res.status(stockCheck.status || 400).json({
@@ -513,7 +516,8 @@ router.patch('/cart/items/:itemId/quantity', authenticateToken, isServiceProvide
       const stockCheck = await assertProductHasSellableStock(supabase, {
         productId,
         variantKey: matchedItem?.variantKey || matchedItem?.variant_key || '',
-        quantity
+        quantity,
+        excludeSupplierId: req.userId
       });
       if (!stockCheck.ok) {
         return res.status(stockCheck.status || 400).json({

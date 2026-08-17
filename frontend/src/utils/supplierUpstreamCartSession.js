@@ -133,6 +133,8 @@ export const applyLiveCartQuantitiesToMap = (
   const prev = prevCartQty && typeof prevCartQty === 'object' ? prevCartQty : {};
   const live = nextCartQty && typeof nextCartQty === 'object' ? nextCartQty : {};
   const onlyExistingKeys = options.onlyExistingKeys === true;
+  const resetRemovedToZero = options.resetRemovedToZero === true;
+  const dropRemovedKeys = options.dropRemovedKeys === true;
   const next = { ...current };
   let changed = false;
   for (const [mineId, qtyRaw] of Object.entries(live)) {
@@ -144,5 +146,98 @@ export const applyLiveCartQuantitiesToMap = (
     next[mineId] = qty;
     changed = true;
   }
+  if (resetRemovedToZero || dropRemovedKeys) {
+    for (const mineId of Object.keys(prev)) {
+      const prevQty = Number(prev[mineId] || 0);
+      const liveQty = Number(live[mineId] || 0);
+      if (!mineId || !(prevQty > 0) || liveQty > 0) continue;
+      if (dropRemovedKeys) {
+        if (Object.prototype.hasOwnProperty.call(next, mineId)) {
+          delete next[mineId];
+          changed = true;
+        }
+      } else if (Object.prototype.hasOwnProperty.call(current, mineId) && Number(current[mineId]) !== 0) {
+        next[mineId] = 0;
+        changed = true;
+      }
+    }
+  }
   return changed ? next : current;
+};
+
+export const SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY = 'supplierUpstreamOrderDraft';
+export const SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY = 'supplierUpstreamRestoreFromOrder';
+export const SUPPLIER_UPSTREAM_LAST_ORDERED_KEY = 'supplierUpstreamLastOrderedQty';
+
+export const quantitiesFromOrderLines = (lines = []) => {
+  const out = {};
+  for (const line of Array.isArray(lines) ? lines : []) {
+    const mineId = String(line?.mineSupplierProductId || line?.mineId || '').trim();
+    const qty = Number(line?.quantity);
+    if (!mineId || !Number.isFinite(qty) || qty <= 0) continue;
+    out[mineId] = (out[mineId] || 0) + qty;
+  }
+  return out;
+};
+
+export const readLastOrderedQuantities = () => {
+  try {
+    const raw = sessionStorage.getItem(SUPPLIER_UPSTREAM_LAST_ORDERED_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out = {};
+    for (const [mineId, qtyRaw] of Object.entries(parsed)) {
+      const key = String(mineId || '').trim();
+      const qty = Number(qtyRaw);
+      if (!key || !Number.isFinite(qty) || qty <= 0) continue;
+      out[key] = qty;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+};
+
+export const readLastOrderedQuantity = (mineId) => {
+  const key = String(mineId || '').trim();
+  if (!key) return null;
+  const qty = Number(readLastOrderedQuantities()[key]);
+  return Number.isFinite(qty) && qty > 0 ? qty : null;
+};
+
+export const mergeLastOrderedQuantities = (qtyByMineId = {}) => {
+  const next = { ...readLastOrderedQuantities() };
+  for (const [mineId, qtyRaw] of Object.entries(qtyByMineId && typeof qtyByMineId === 'object' ? qtyByMineId : {})) {
+    const key = String(mineId || '').trim();
+    const qty = Number(qtyRaw);
+    if (!key || !Number.isFinite(qty) || qty <= 0) continue;
+    next[key] = qty;
+  }
+  try {
+    sessionStorage.setItem(SUPPLIER_UPSTREAM_LAST_ORDERED_KEY, JSON.stringify(next));
+  } catch {
+    // Ignore quota / private-mode failures.
+  }
+  return next;
+};
+
+export const recordLastOrderedQuantitiesFromLines = (lines = []) =>
+  mergeLastOrderedQuantities(quantitiesFromOrderLines(lines));
+
+/** After a successful upstream order: drop cart/project pointers so Add to Cart starts a new order. */
+export const clearUpstreamStateAfterSuccessfulOrder = (lines = []) => {
+  recordLastOrderedQuantitiesFromLines(lines);
+  clearUpstreamCartClientProjectState();
+  try {
+    localStorage.removeItem(SUPPLIER_UPSTREAM_ORDER_DRAFT_KEY);
+  } catch {
+    // Ignore private-mode failures.
+  }
+  try {
+    sessionStorage.removeItem(SUPPLIER_UPSTREAM_RESTORE_FROM_ORDER_KEY);
+  } catch {
+    // Ignore private-mode failures.
+  }
+  emitSupplierCartUpdated();
 };

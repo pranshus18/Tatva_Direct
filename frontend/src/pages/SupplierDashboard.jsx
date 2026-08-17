@@ -29,7 +29,8 @@ import { resolveSupplierPortalDisplayDescription } from '../utils/productDisplay
 import {
   getBrandRejectionReason,
   getSupplierNotificationMessage,
-  getSupplierNotificationTargetPath
+  getSupplierNotificationTargetPath,
+  isLowStockAlertNotification
 } from '../utils/supplierNotificationDisplay';
 import { useNotificationPanelScrollLock } from '../hooks/useNotificationPanelScrollLock';
 import ProductImageCarousel from '../components/ProductImageCarousel';
@@ -662,6 +663,7 @@ const SupplierDashboard = ({ user }) => {
                     const invoicePdfUrl = notification.metadata?.invoicePdfUrl || null;
                     const rejectionReason = getBrandRejectionReason(notification);
                     const displayMessage = getSupplierNotificationMessage(notification);
+                    const isLsaAlert = isLowStockAlertNotification(notification);
                     return (
                     <div
                       key={notification.id}
@@ -702,14 +704,14 @@ const SupplierDashboard = ({ user }) => {
                             background:
                             notification.type === 'payment_received'
                               ? '#d1fae5'
-                              : notification.type === 'credit_limit'
+                              : notification.type === 'credit_limit' || isLsaAlert
                                 ? '#fef3c7'
                                 : '#dbeafe',
                           }}
                         >
                           {notification.type === 'payment_received' ? (
                             <Wallet size={20} color="#059669" />
-                          ) : notification.type === 'credit_limit' ? (
+                          ) : notification.type === 'credit_limit' || isLsaAlert ? (
                             <AlertTriangle size={20} color="#d97706" />
                           ) : (
                             <Bell size={20} color="#3b82f6" />

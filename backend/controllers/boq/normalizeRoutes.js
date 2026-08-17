@@ -220,7 +220,7 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
     const matchStartedAt = Date.now();
     const matchResults = await normalizeProductNamesBatch(
       parsedRows.map((row) => row.description),
-      { concurrency: 8 }
+      { concurrency: 8, excludeSupplierId: req.userId }
     );
     console.log(
       `[BOQ Normalize] Matched ${parsedRows.length} rows ` +
@@ -269,7 +269,9 @@ router.post('/normalize', authenticateToken, isServiceProvider, upload.single('f
 
     // Enrich with supply chain info: last person in chain and nearest supplier per product
     const productIds = normalizedItems.map((item) => item.productId).filter(Boolean);
-    const supplyChainInfoByProduct = await buildSupplyChainInfoForProducts(productIds, siteGeo);
+    const supplyChainInfoByProduct = await buildSupplyChainInfoForProducts(productIds, siteGeo, {
+      excludeSupplierId: req.userId
+    });
 
     // Map normalized items to BOQ items format (DB row shape only)
     // Note: supply-chain info is returned to frontend but not stored in `boq_items`

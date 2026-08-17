@@ -22,6 +22,7 @@ import {
 import { isValidSupplierReturnTransition } from '../../utils/orderReturnRules.js';
 import { listSupplierIncomingReturns } from '../../services/returnListService.js';
 import { enrichOrderItemsWithVariantImages } from '../../services/productImageService.js';
+import { sumOrderItemQuantities } from '../../utils/orderItemQuantity.js';
 
 export function registerSupplierOrderRoutes(ctx) {
   const {
@@ -111,7 +112,7 @@ router.get('/orders', authenticateToken, async (req, res) => {
         paymentMethod: o.payment_method || null,
         createdAt: o.created_at,
         updatedAt: o.updated_at || o.created_at,
-        itemCount: o.order_items?.length || 0,
+        itemCount: sumOrderItemQuantities(o.order_items),
         channel: o.channel || null,
         chainUpstreamOrder,
         buyerIsSupplier: String(buyer?.user_type || '').toLowerCase() === 'supplier',

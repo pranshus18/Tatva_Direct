@@ -17,11 +17,13 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '../.env') });
 
+const { PM_API_BASE_URL, PM_PAYMENT_API_BASE_URL } = await import('../config/pmApi.js');
+
 const PHONE = String(process.env.PHONE || '6003121654').replace(/\D/g, '').slice(-10);
 const OTP = String(process.env.PM_OTP || '').replace(/\D/g, '');
 const API_BASE = String(process.env.API_BASE || 'http://127.0.0.1:8081').replace(/\/$/, '');
-const PM_USERS_BASE = String(process.env.PM_API_BASE_URL || 'https://devopsapi.withtatva.ai/users').replace(/\/$/, '');
-const PM_PAYMENT_BASE = String(process.env.PM_PAYMENT_API_BASE_URL || 'https://devopsapi.withtatva.ai/payment').replace(/\/$/, '');
+const PM_USERS_BASE = PM_API_BASE_URL;
+const PM_PAYMENT_BASE = PM_PAYMENT_API_BASE_URL;
 const TOPUP_AMOUNT = Number(process.env.TOPUP_AMOUNT || 100);
 
 async function parseJson(response) {
