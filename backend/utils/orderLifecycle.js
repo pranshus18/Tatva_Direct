@@ -64,3 +64,91 @@ export function toPrimaryStatusFromLifecycle(lifecycleState) {
   return LIFECYCLE_TO_PRIMARY[normalized] || normalized;
 }
 
+/** Happy-path workflow. Status may only move one step forward. */
+export const SEQUENTIAL_ORDER_STATUSES = [
+  'pending',
+  'confirmed',
+  'processing',
+  'shipped',
+  'delivered'
+];
+
+export const TERMINAL_ORDER_STATUSES = ['delivered', 'cancelled', 'returned'];
+
+const SEQUENTIAL_RANK = Object.fromEntries(
+  SEQUENTIAL_ORDER_STATUSES.map((status, index) => [status, index])
+);
+
+/**
+ * Direct supplier status updates: one step forward, or cancel before delivery.
+ * Returns are handled by the return-request APIs, not this map.
+ */
+export const PRIMARY_STATUS_TRANSITIONS = {
+  pending: ['confirmed', 'cancelled'],
+  confirmed: ['processing', 'cancelled'],
+  processing: ['shipped', 'cancelled'],
+  shipped: ['delivered', 'cancelled'],
+  delivered: [],
+  cancelled: [],
+  returned: []
+};
+
+export function toCanonicalPrimaryStatus(value) {
+  const normalized = normalizeOrderStatus(value);
+  if (!normalized) return 'pending';
+  if (normalized === 'canceled') return 'cancelled';
+  if (PRIMARY_ORDER_STATUSES.includes(normalized)) return normalized;
+  if (LIFECYCLE_TO_PRIMARY[normalized]) return LIFECYCLE_TO_PRIMARY[normalized];
+  return normalized;
+}
+
+export function isCancelledOrderStatus(value) {
+  return toCanonicalPrimaryStatus(value) === 'cancelled';
+}
+
+export function isLockedOrderStatus(value) {
+  const current = toCanonicalPrimaryStatus(value);
+  return current === 'cancelled' || current === 'returned';
+}
+
+export function getAllowedPrimaryStatusTransitions(currentStatus) {
+  const current = toCanonicalPrimaryStatus(currentStatus);
+  if (isLockedOrderStatus(current)) return [];
+  return [...(PRIMARY_STATUS_TRANSITIONS[current] || [])];
+}
+
+export function isValidPrimaryStatusTransition(fromStatus, toStatus) {
+  const from = toCanonicalPrimaryStatus(fromStatus);
+  const to = toCanonicalPrimaryStatus(toStatus);
+  if (isLockedOrderStatus(from)) return false;
+  if (!isValidPrimaryOrderStatus(to)) return false;
+  if (from === to) return true;
+  return getAllowedPrimaryStatusTransitions(from).includes(to);
+}
+
+export function getInvalidPrimaryStatusTransitionMessage(fromStatus, toStatus) {
+  const from = toCanonicalPrimaryStatus(fromStatus);
+  const to = toCanonicalPrimaryStatus(toStatus);
+  if (isCancelledOrderStatus(from)) {
+    return 'This order is cancelled and the status cannot be changed.';
+  }
+  if (from === 'returned') {
+    return 'This order was returned and the status cannot be changed.';
+  }
+  if (from === to) return '';
+  if (TERMINAL_ORDER_STATUSES.includes(from)) {
+    return `Order status "${from}" is final and cannot be changed.`;
+  }
+  const fromRank = SEQUENTIAL_RANK[from];
+  const toRank = SEQUENTIAL_RANK[to];
+  if (Number.isInteger(fromRank) && Number.isInteger(toRank) && toRank < fromRank) {
+    return `Cannot move order status backward from ${from} to ${to}.`;
+  }
+  if (Number.isInteger(fromRank) && Number.isInteger(toRank) && toRank > fromRank + 1) {
+    return `Cannot skip required status steps from ${from} to ${to}.`;
+  }
+  return `Invalid status transition from ${from} to ${to}. Allowed next: ${
+    getAllowedPrimaryStatusTransitions(from).join(', ') || 'none'
+  }.`;
+}
+

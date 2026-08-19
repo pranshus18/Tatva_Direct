@@ -123,19 +123,58 @@ export function buildUpstreamChainContextForMineOffer({
   };
 }
 
+/**
+ * Empty-offer copy for upstream sourcing.
+ * Every path starts with the same "cannot be sourced" headline, then a reason that
+ * distinguishes missing listings, wrong supply-chain layer, brand mismatch, etc.
+ */
 export function buildNoUpstreamOffersMessage(ctx = {}) {
   const brandLabel = String(ctx.brandLabel || ctx.chainRouting?.brand || '').trim();
   const brandText = brandLabel ? `"${brandLabel}"` : 'this brand';
+  const layerLabel =
+    ctx.requiredUpstreamRoleLabel ||
+    formatUpstreamRoleLabel(ctx.requiredUpstreamRole || ctx.chainRouting?.requiredUpstreamRole) ||
+    '';
+  const reason = String(ctx.reason || '').trim();
+  const registeredNames = (Array.isArray(ctx.registeredPartnerNames) ? ctx.registeredPartnerNames : [])
+    .map((name) => String(name || '').trim())
+    .filter(Boolean);
+  const registeredText = registeredNames.length ? ` (${registeredNames.join(', ')})` : '';
+  const headline = layerLabel
+    ? `This product cannot be sourced from ${layerLabel} for ${brandText}.`
+    : `This product cannot be sourced for ${brandText}.`;
+  const layerOrFallback = layerLabel || 'the allowed upstream layer';
 
-  if (ctx.requiredUpstreamRoleLabel) {
-    return `No upstream offers found from ${ctx.requiredUpstreamRoleLabel} for ${brandText}. That is the supply-chain layer directly above you for this brand — ask that partner to list this product with stock.`;
+  if (reason === 'wrong_layer') {
+    const registeredHint = registeredNames.length
+      ? ` Your registered upstream partner(s)${registeredText} also do not list this exact variant with stock.`
+      : '';
+    return `${headline} Other suppliers list this product with stock, but none are ${layerOrFallback} — the only layer allowed to sell to you on this brand's chain.${registeredHint}`;
+  }
+
+  if (reason === 'registered_failed_validation') {
+    return `${headline} Your registered upstream partner(s)${registeredText} list this product, but they do not match the ${layerOrFallback} layer or brand on Who are you.`;
+  }
+
+  if (reason === 'brand_mismatch') {
+    return `${headline} Listings exist, but none match brand ${brandText}.`;
+  }
+
+  if (reason === 'ranking_empty') {
+    return `${headline} Eligible partners were found, but none remained after ranking.`;
+  }
+
+  if (reason === 'no_listings' || layerLabel) {
+    return layerLabel
+      ? `${headline} No ${layerLabel} currently list this product with stock. Ask your ${layerLabel} to add it.`
+      : `${headline} No eligible upstream partner currently lists this product with stock.`;
   }
 
   if (Array.isArray(ctx.chainRouting?.chainRoles) && ctx.chainRouting.chainRoles.length >= 2) {
-    return `No upstream offers found for ${brandText}. Your admin supply chain is defined, but your role could not be matched to it — check Who are you.`;
+    return `${headline} Your admin supply chain is defined, but your role could not be matched to it — check Who are you.`;
   }
 
-  return `No upstream offers found for ${brandText}. Ask admin to define the supply chain in Admin → Supply Chain, then ensure your upstream partner registers at the correct layer.`;
+  return `${headline} Ask admin to define the supply chain in Admin → Supply Chain, then ensure your upstream partner registers at the correct layer.`;
 }
 
 export function collectRequiredUpstreamRolesFromContexts(contexts = []) {

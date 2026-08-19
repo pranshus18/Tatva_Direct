@@ -29,8 +29,6 @@ import {
   buildNoUpstreamOffersMessage,
   buildUpstreamChainContextForMineOffer,
   collectRequiredUpstreamRolesFromContexts,
-  formatUpstreamRoleLabel,
-  formatUpstreamRoleLabels,
   pickMatchingUpstreamRoleForSeller,
   pickUpstreamSellerRoleForBrand,
   getImmediateUpstreamRoleForBrand,
@@ -161,19 +159,21 @@ export function registerSupplierUpstreamRoutes(ctx) {
     const base = project && typeof project === 'object' ? { ...project } : {};
     const existingItems = Array.isArray(base.items) ? base.items : [];
     const fallbackItems = buildUpstreamItemsFromSelectedMine(base.selectedMine || {}, metaByMineId);
-    const items = (existingItems.length ? existingItems : fallbackItems).map((item) => {
-      const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
-      const meta = mineId ? metaByMineId[mineId] : null;
-      if (!meta) return item;
-      return {
-        ...item,
-        productId: item?.productId || meta.productId || undefined,
-        variantKey: normalizeCartVariantKey(item) || normalizeCartVariantKey(meta) || undefined,
-        variantAsin: item?.variantAsin || meta.variantAsin || undefined,
-        variantLabel: item?.variantLabel || meta.variantLabel || undefined,
-        name: item?.name || meta.name || undefined
-      };
-    });
+    const items = (existingItems.length ? existingItems : fallbackItems)
+      .map((item) => {
+        const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+        const meta = mineId ? metaByMineId[mineId] : null;
+        if (!meta) return item;
+        return {
+          ...item,
+          productId: item?.productId || meta.productId || undefined,
+          variantKey: normalizeCartVariantKey(item) || normalizeCartVariantKey(meta) || undefined,
+          variantAsin: item?.variantAsin || meta.variantAsin || undefined,
+          variantLabel: item?.variantLabel || meta.variantLabel || undefined,
+          name: item?.name || meta.name || undefined
+        };
+      })
+      .filter((item) => Math.max(0, Math.floor(Number(item?.quantity) || 0)) > 0);
     return {
       ...base,
       items,
@@ -1219,37 +1219,28 @@ router.get('/upstream/suggestions', authenticateToken, async (req, res) => {
         const exactVariantPool = upstreamEligiblePool.filter((offer) =>
           getUpstreamOfferMatchType(mine, offer) === 'exact_variant'
         );
+        const registeredPartnerNames = [...registeredPartnerIds]
+          .map((id) => upstreamUserMap[id]?.name || upstreamUserMap[id]?.company)
+          .filter(Boolean);
+        const messageCtx = {
+          ...chainContext,
+          registeredPartnerNames
+        };
         if (upstreamEligiblePool.length === 0) {
-          const upstreamLabel =
-            chainContext.requiredUpstreamRoleLabel ||
-            formatUpstreamRoleLabel(chainRouting.requiredUpstreamRole) ||
-            'your upstream supply-chain partner';
-          itemMessage = `No upstream partners list this product with stock right now. Ask your ${upstreamLabel} to add it.`;
+          itemMessage = buildNoUpstreamOffersMessage({ ...messageCtx, reason: 'no_listings' });
         } else if (exactVariantPool.length === 0 && registeredPartnerIds.size > 0) {
-          const registeredNames = [...registeredPartnerIds]
-            .map((id) => upstreamUserMap[id]?.name || upstreamUserMap[id]?.company)
-            .filter(Boolean);
-          itemMessage = `Your upstream partner(s) for "${brandLabel || desiredBrand}" (${registeredNames.join(', ')}) list this product but none passed supply-chain validation. Check their role and brand on Who are you.`;
+          itemMessage = buildNoUpstreamOffersMessage({
+            ...messageCtx,
+            reason: 'registered_failed_validation'
+          });
         } else if (brandMatchedPool.length === 0) {
-          itemMessage = `No upstream listings matched brand "${brandLabel || desiredBrand}".`;
+          itemMessage = buildNoUpstreamOffersMessage({ ...messageCtx, reason: 'brand_mismatch' });
         } else if (candidates.length === 0 && allowedRolesSet.size > 0) {
-          const preferredTier =
-            chainContext.requiredUpstreamRoleLabel ||
-            formatUpstreamRoleLabel(chainRouting.requiredUpstreamRole) ||
-            'your upstream supply-chain partner';
-          const registeredNames = [...registeredPartnerIds]
-            .map((id) => upstreamUserMap[id]?.name || upstreamUserMap[id]?.company)
-            .filter(Boolean);
-          const registeredHint =
-            registeredNames.length > 0
-              ? ` Your registered upstream partner(s) for this brand (${registeredNames.join(', ')}) do not list this exact variant with stock — ask them to add it, or check their supply-chain role and brand on Who are you.`
-              : '';
-          itemMessage = `Listings exist for this product, but none from ${preferredTier} for brand "${brandLabel || desiredBrand}". Only the layer directly above you on the admin supply chain is accepted.${registeredHint}`;
+          itemMessage = buildNoUpstreamOffersMessage({ ...messageCtx, reason: 'wrong_layer' });
         } else if (candidates.length === 0) {
-          itemMessage =
-            'Partners exist for this product, but none match your allowed upstream supply-chain layer.';
+          itemMessage = buildNoUpstreamOffersMessage({ ...messageCtx, reason: 'wrong_layer' });
         } else {
-          itemMessage = 'No upstream offers available after ranking.';
+          itemMessage = buildNoUpstreamOffersMessage({ ...messageCtx, reason: 'ranking_empty' });
         }
       }
 
@@ -2156,10 +2147,18 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
     if (!mineSupplierProductId) {
       return res.status(400).json({ status: 'error', message: 'mineSupplierProductId is required' });
     }
-    if (requestedQuantity === null || requestedQuantity < 1) {
+    if (requestedQuantity === null) {
       return res.status(400).json({
         status: 'error',
-        message: 'quantity must be a valid whole number (1 or greater)'
+        message: 'quantity must be a valid whole number'
+      });
+    }
+    const isRemoveRequest = replaceQuantity && requestedQuantity === 0;
+    if (!isRemoveRequest && requestedQuantity < 1) {
+      return res.status(400).json({
+        status: 'error',
+        message:
+          'quantity must be a valid whole number (1 or greater). Set quantity to 0 and click Update Cart to remove this product from the cart.'
       });
     }
     if (!targetProjectId && !requestedCartName && !replaceQuantity) {
@@ -2201,17 +2200,21 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       .eq('supplier_id', req.userId)
       .maybeSingle();
     if (mineError) throw mineError;
-    if (!mineRow) {
+    if (!mineRow && !isRemoveRequest) {
       return res.status(404).json({ status: 'error', message: 'Selected product was not found in your inventory' });
     }
-    if (!isSupplierOfferEligibleForUpstreamSelection(mineRow, mineRow.product)) {
+    if (mineRow && !isRemoveRequest && !isSupplierOfferEligibleForUpstreamSelection(mineRow, mineRow.product)) {
       return res.status(403).json({
         status: 'error',
         message:
           'This product is not approved for upstream sourcing. Rejected or pending products cannot be sourced from upstream partners.'
       });
     }
-    if (!isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, mineRow?.attributes, mineRow?.product?.brand)) {
+    if (
+      mineRow &&
+      !isRemoveRequest &&
+      !isOfferBrandVisibleForSupplierProfile(req.user?.profile || {}, mineRow?.attributes, mineRow?.product?.brand)
+    ) {
       return res.status(403).json({
         status: 'error',
         message: 'Selected product brand is not approved in your current supplier profile.'
@@ -2220,10 +2223,10 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
 
     const minQty = Math.max(
       1,
-      parseSupplierStockQuantity(mineRow.min_order_quantity) ?? 1
+      parseSupplierStockQuantity(mineRow?.min_order_quantity) ?? 1
     );
-    const quantity = Math.max(minQty, requestedQuantity);
-    const quantityAdjusted = quantity !== requestedQuantity;
+    const quantity = isRemoveRequest ? 0 : Math.max(minQty, requestedQuantity);
+    const quantityAdjusted = !isRemoveRequest && quantity !== requestedQuantity;
     const variantKey = String(req.body?.variantKey || mineRow?.variant_key || '').trim();
     const variantAsin = String(req.body?.variantAsin || mineRow?.variant_asin || '').trim();
     const variantLabel = String(
@@ -2310,11 +2313,16 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       const nextItems = mergeOrAppendUpstreamCartItem(existingItems, newCartItem, {
         replaceQuantity
       });
+      const nextSelectedUpstreamOffer = { ...(existing.selectedUpstreamOffer || {}) };
+      if (isRemoveRequest) {
+        delete nextSelectedUpstreamOffer[mineSupplierProductId];
+      }
       updatedProject = applyShippingToUpstreamProject(
         finalizeUpstreamProjectLines(
           {
             ...existing,
-            items: nextItems
+            items: nextItems,
+            selectedUpstreamOffer: nextSelectedUpstreamOffer
           },
           {
             [mineSupplierProductId]: {
@@ -2328,8 +2336,18 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         ),
         enrichedShipping
       );
-      nextProjects[idx] = updatedProject;
+      if (isRemoveRequest && !hasUpstreamProjectLines(updatedProject)) {
+        nextProjects.splice(idx, 1);
+      } else {
+        nextProjects[idx] = updatedProject;
+      }
     } else {
+      if (isRemoveRequest) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'This product is not in your upstream cart yet. Add it to a project first.'
+        });
+      }
       if (hasDuplicateUpstreamProject(currentProjects, requestedCartName, requiredDate)) {
         return res.status(400).json({
           status: 'error',
@@ -2382,7 +2400,9 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
 
     return res.json({
       status: 'success',
-      message: quantityAdjusted
+      message: isRemoveRequest
+        ? 'Product removed from cart'
+        : quantityAdjusted
         ? `Quantity adjusted to minimum order quantity (${quantity}).`
         : replaceQuantity
           ? 'Cart quantity updated'
@@ -2392,12 +2412,14 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         quantity,
         requestedQuantity,
         quantityAdjusted,
-        replaced: replaceQuantity
+        replaced: replaceQuantity,
+        removed: isRemoveRequest
       },
       project: {
-        projectId: updatedProject.projectId,
-        cartName: updatedProject.cartName,
-        requiredDate: updatedProject.requiredDate || null
+        projectId: updatedProject?.projectId || resolvedProjectId || null,
+        cartName: updatedProject?.cartName || null,
+        requiredDate: updatedProject?.requiredDate || null,
+        removed: Boolean(isRemoveRequest && updatedProject && !hasUpstreamProjectLines(updatedProject))
       },
       cart: {
         id: saved.id,

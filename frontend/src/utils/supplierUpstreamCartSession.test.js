@@ -64,6 +64,19 @@ describe('supplierUpstreamCartSession', () => {
     expect(next).toEqual({});
   });
 
+  it('seeds empty draft from live cart quantities on first hydrate when asked', () => {
+    expect(applyLiveCartQuantitiesToMap({}, {}, { a: 3, b: 1 }, { seedMissingFromLive: true })).toEqual({
+      a: 3,
+      b: 1
+    });
+  });
+
+  it('does not overwrite an existing draft quantity when seeding from live cart', () => {
+    expect(
+      applyLiveCartQuantitiesToMap({ a: 8 }, {}, { a: 3, b: 1 }, { seedMissingFromLive: true })
+    ).toEqual({ a: 8, b: 1 });
+  });
+
   it('does not overwrite a local draft when the saved cart quantity is unchanged', () => {
     const draft = { a: 3 };
     const next = applyLiveCartQuantitiesToMap(draft, { a: 2 }, { a: 2 });

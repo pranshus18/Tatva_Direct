@@ -21,6 +21,7 @@ export function formatOrderStatusLabel(status) {
   if (s === 'processing') return 'Processing';
   if (s === 'shipped') return 'Shipped';
   if (s === 'cancelled') return 'Cancelled';
+  if (s === 'returned') return 'Returned';
   return status || 'Pending';
 }
 

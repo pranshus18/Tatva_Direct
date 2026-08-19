@@ -73,11 +73,6 @@ export default function OrderChargeSummary({ order, compact = false }) {
           <strong>Taxable value:</strong> {formatInr(breakdown.productSubtotal)}
         </p>
         <GstDetails gstSummary={gstSummary} compact />
-        {breakdown.gstAmount > 0 ? (
-          <p style={{ margin: '0.2rem 0 0' }}>
-            <strong>GST (included in MRP):</strong> {formatInr(breakdown.gstAmount)}
-          </p>
-        ) : null}
         <p style={{ margin: '0.2rem 0 0' }}>
           <strong>Product total (MRP):</strong> {formatInr(breakdown.productsInclGst)}
         </p>
@@ -105,16 +100,6 @@ export default function OrderChargeSummary({ order, compact = false }) {
           </td>
         </tr>
         <GstDetails gstSummary={gstSummary} />
-        {breakdown.gstAmount > 0 ? (
-          <tr>
-            <td colSpan="3">
-              <strong>GST (included in MRP)</strong>
-            </td>
-            <td>
-              <strong>{formatInr(breakdown.gstAmount)}</strong>
-            </td>
-          </tr>
-        ) : null}
         <tr>
           <td colSpan="3">
             <strong>Product total (MRP)</strong>

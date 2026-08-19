@@ -1,6 +1,12 @@
 /** Shared static imports for supplier route modules. */
 export { default as crypto } from 'crypto';
-export { isValidPrimaryOrderStatus, toLifecycleStateFromStatus } from '../../utils/orderLifecycle.js';
+export {
+  getInvalidPrimaryStatusTransitionMessage,
+  isCancelledOrderStatus,
+  isValidPrimaryOrderStatus,
+  isValidPrimaryStatusTransition,
+  toLifecycleStateFromStatus
+} from '../../utils/orderLifecycle.js';
 export { default as logger } from '../../utils/logger.js';
 export {
   supplierBcovLevelsUpsertSchema,

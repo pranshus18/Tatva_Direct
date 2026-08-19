@@ -26,6 +26,14 @@ import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import SupplierTsinLine from '../components/SupplierTsinLine';
@@ -85,6 +93,7 @@ const Cart = ({ onLoadCart }) => {
   const [shippingAddressBook, setShippingAddressBook] = useState([]);
   const [locatingShippingByGroup, setLocatingShippingByGroup] = useState({});
   const [busyByGroupId, setBusyByGroupId] = useState({});
+  const [pendingRemoveItem, setPendingRemoveItem] = useState(null);
 
   const token = localStorage.getItem('token');
   const cartRef = useRef(null);
@@ -556,6 +565,15 @@ const Cart = ({ onLoadCart }) => {
     }
   };
 
+  const requestRemoveItem = (itemId, name) => {
+    const normalizedItemId = String(itemId || '').trim();
+    if (!normalizedItemId) return;
+    setPendingRemoveItem({
+      itemId: normalizedItemId,
+      name: String(name || '').trim()
+    });
+  };
+
   const removeItem = async (itemId) => {
     if (!token) {
       setError('Please log in again to remove cart item.');
@@ -607,6 +625,12 @@ const Cart = ({ onLoadCart }) => {
         return rest;
       });
     }
+  };
+
+  const handleConfirmRemoveItem = async () => {
+    const itemId = pendingRemoveItem?.itemId;
+    setPendingRemoveItem(null);
+    if (itemId) await removeItem(itemId);
   };
 
   const handleClearCart = async () => {
@@ -1335,7 +1359,7 @@ const Cart = ({ onLoadCart }) => {
                                   disabled={isBusy}
                                   onClick={() =>
                                     quantity <= 1
-                                      ? removeItem(itemId)
+                                      ? requestRemoveItem(itemId, name)
                                       : updateQuantity(itemId, quantity - 1)
                                   }
                                   aria-label={quantity <= 1 ? 'Remove item' : 'Decrease quantity'}
@@ -1472,6 +1496,33 @@ const Cart = ({ onLoadCart }) => {
           ) : null}
         </div>
       </div>
+
+      <Dialog
+        open={Boolean(pendingRemoveItem)}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveItem(null);
+        }}
+      >
+        <DialogContent className="inset-auto left-1/2 top-1/2 h-auto w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-background p-6 shadow-lg">
+          <DialogHeader className="pr-8">
+            <DialogTitle>Delete product</DialogTitle>
+            <DialogDescription>
+              Do you want to delete this product from the cart?
+              {pendingRemoveItem?.name ? (
+                <span className="mt-2 block font-medium text-foreground">{pendingRemoveItem.name}</span>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPendingRemoveItem(null)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={handleConfirmRemoveItem}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SpWorkflowPage>
   );
 };

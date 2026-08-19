@@ -10,6 +10,14 @@ import SpStatCard from '../components/sp/SpStatCard';
 import UpstreamProductDisplay from '../components/UpstreamProductDisplay';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from '@/components/ui/dialog';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { formatRupee, lineMoneyTotal, roundMoney } from '../utils/formatRupee';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
@@ -130,6 +138,7 @@ const SupplierUpstreamCart = () => {
   const [shippingAddressBook, setShippingAddressBook] = useState([]);
   const [draftProjectShipping, setDraftProjectShipping] = useState({});
   const [locatingShippingByProject, setLocatingShippingByProject] = useState({});
+  const [pendingRemoveLine, setPendingRemoveLine] = useState(null);
 
   const getProjectShippingPreview = (project) => {
     if (!project || typeof project !== 'object') return '';
@@ -459,6 +468,22 @@ const SupplierUpstreamCart = () => {
       replaceProjectInState(projectId, nextProject);
     }
     emitSupplierCartUpdated();
+  };
+
+  const requestRemoveLine = (projectId, mineId, name) => {
+    if (!projectId || !mineId) return;
+    setPendingRemoveLine({
+      projectId,
+      mineId,
+      name: String(name || '').trim()
+    });
+  };
+
+  const handleConfirmRemoveLine = async () => {
+    const projectId = pendingRemoveLine?.projectId;
+    const mineId = pendingRemoveLine?.mineId;
+    setPendingRemoveLine(null);
+    if (projectId && mineId) await removeLine(projectId, mineId);
   };
 
   const clearCart = async () => {
@@ -1147,7 +1172,7 @@ const SupplierUpstreamCart = () => {
                                       className="btn-secondary supplier-cart-qty-btn"
                                       onClick={() =>
                                         quantity <= 1
-                                          ? removeLine(projectId, mineId)
+                                          ? requestRemoveLine(projectId, mineId, p?.name || row.variantLabel)
                                           : updateQuantity(projectId, mineId, quantity - 1)
                                       }
                                       aria-label={quantity <= 1 ? 'Remove item' : 'Decrease quantity'}
@@ -1201,6 +1226,33 @@ const SupplierUpstreamCart = () => {
         </div>
       </div>
       </div>
+
+      <Dialog
+        open={Boolean(pendingRemoveLine)}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveLine(null);
+        }}
+      >
+        <DialogContent className="inset-auto left-1/2 top-1/2 h-auto w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-background p-6 shadow-lg">
+          <DialogHeader className="pr-8">
+            <DialogTitle>Delete product</DialogTitle>
+            <DialogDescription>
+              Do you want to delete this product from the cart?
+              {pendingRemoveLine?.name ? (
+                <span className="mt-2 block font-medium text-foreground">{pendingRemoveLine.name}</span>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setPendingRemoveLine(null)}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={handleConfirmRemoveLine}>
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </SpPageLayout>
   );
 };

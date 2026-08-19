@@ -13,6 +13,15 @@ export const SUPPLIER_MRP_LABEL = 'MRP (incl. GST)';
 /** Form column: MRP with rupee symbol */
 export const SUPPLIER_MRP_FIELD_LABEL = `${SUPPLIER_MRP_LABEL} (${RUPEE_SYMBOL})`;
 
+/** Product_COV purchase thresholds (rupee amounts, same unit as COV price) */
+export const SUPPLIER_COV_LABEL = 'Supplier_COV';
+export const BRAND_COV_LABEL = 'Brand_cov';
+export const PLATFORM_COV_LABEL = 'Platform_COV';
+
+export const SUPPLIER_COV_FIELD_LABEL = `${SUPPLIER_COV_LABEL} (${RUPEE_SYMBOL})`;
+export const BRAND_COV_FIELD_LABEL = `${BRAND_COV_LABEL} (${RUPEE_SYMBOL})`;
+export const PLATFORM_COV_FIELD_LABEL = `${PLATFORM_COV_LABEL} (${RUPEE_SYMBOL})`;
+
 /** Product_COV tier unit price (must not exceed catalog MRP; also GST-inclusive) */
 export const SUPPLIER_COV_PRICE_LABEL = 'COV price (incl. GST)';
 

@@ -39,6 +39,13 @@ import OrderChargeSummary from '../components/sp/OrderChargeSummary';
 import SupplierOrderScopeNav from '../components/supplier/SupplierOrderScopeNav';
 import { Button } from '@/components/ui/button';
 import { sumOrderItemQuantities } from '../utils/orderItemQuantity';
+import {
+  canAdvanceOrderStatus,
+  getSelectableOrderStatusOptions,
+  isCancelledOrder,
+  isValidOrderStatusTransition,
+  normalizePrimaryOrderStatus
+} from '../utils/orderStatusTransitions';
 
 const BUYER_SCOPE_FILTERS = [
   { id: 'all', label: 'All buyers' },
@@ -173,7 +180,7 @@ export default function SupplierUpstreamOrders() {
         const data = await res.json();
         if (data.status === 'success' && data.order) {
           setOrderDetails(data.order);
-          setNewStatus(data.order.status || 'pending');
+          setNewStatus(normalizePrimaryOrderStatus(data.order.status));
           setShipCarrier(data.order.shippingProvider || '');
           setShipTrackingNumber(data.order.trackingNumber || '');
           setShipTrackingUrl(data.order.trackingUrl || '');
@@ -285,6 +292,14 @@ export default function SupplierUpstreamOrders() {
   const handleUpdateDownstreamStatus = async () => {
     if (!orderModalId || !newStatus) {
       alert('Please select a status to update');
+      return;
+    }
+    if (isCancelledOrder(orderDetails)) {
+      alert('This order is cancelled and the status cannot be changed.');
+      return;
+    }
+    if (!isValidOrderStatusTransition(orderDetails?.status, newStatus)) {
+      alert('Order status can only move forward to the next workflow step. Previous statuses cannot be selected.');
       return;
     }
     setUpdatingStatus(true);
@@ -859,21 +874,36 @@ export default function SupplierUpstreamOrders() {
 
                     <div className="order-info-section">
                       <h3>Order status</h3>
+                      {isCancelledOrder(orderDetails) ? (
+                        <>
+                          <p>
+                            <strong>Status:</strong> Cancelled
+                          </p>
+                          <p className="upstream-muted-meta" style={{ marginTop: '0.4rem' }}>
+                            This order is cancelled. The status cannot be changed.
+                          </p>
+                        </>
+                      ) : (
+                        <>
                       <label>
                         <strong>Status:</strong>
                         <select
                           value={newStatus}
                           onChange={(e) => setNewStatus(e.target.value)}
-                          disabled={updatingStatus}
+                          disabled={updatingStatus || !canAdvanceOrderStatus(orderDetails.status)}
                         >
-                          <option value="pending">Pending</option>
-                          <option value="confirmed">Confirmed</option>
-                          <option value="processing">Processing</option>
-                          <option value="shipped">Shipped</option>
-                          <option value="delivered">Delivered</option>
-                          <option value="cancelled">Cancelled</option>
+                          {getSelectableOrderStatusOptions(orderDetails.status).map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
                         </select>
                       </label>
+                      <p className="upstream-muted-meta" style={{ marginTop: '0.4rem' }}>
+                        {canAdvanceOrderStatus(orderDetails.status)
+                          ? 'Status can only move forward one step at a time. Previous statuses cannot be selected.'
+                          : 'This order has reached a final status and cannot be moved backward.'}
+                      </p>
                       {newStatus === 'shipped' ? (
                         <div style={{ marginTop: '0.75rem', display: 'grid', gap: '0.5rem' }}>
                           <input
@@ -904,11 +934,17 @@ export default function SupplierUpstreamOrders() {
                           type="button"
                           className="btn-primary"
                           onClick={handleUpdateDownstreamStatus}
-                          disabled={updatingStatus || newStatus === orderDetails.status}
+                          disabled={
+                            updatingStatus ||
+                            newStatus === normalizePrimaryOrderStatus(orderDetails.status) ||
+                            !canAdvanceOrderStatus(orderDetails.status)
+                          }
                         >
                           {updatingStatus ? 'Updating…' : <><Save size={16} /> Update status</>}
                         </button>
                       </div>
+                        </>
+                      )}
                       <p style={{ marginTop: '0.75rem' }}>
                         <strong>Payment:</strong> {orderDetails.paymentStatus || 'pending'}
                       </p>

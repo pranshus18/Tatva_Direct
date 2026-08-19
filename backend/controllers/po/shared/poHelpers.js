@@ -551,8 +551,13 @@ export function mergeOrAppendUpstreamCartItem(existingItems, newItem, options = 
   if (existingIndex < 0) {
     // Quantity updates must not create a new line. Adding a product requires
     // an explicit add (replaceQuantity false) from Add to Cart / Save to Cart.
-    if (replaceQuantity) return items;
+    if (replaceQuantity || addQty <= 0) return items;
     return [...items, newItem];
+  }
+
+  // Quantity 0 on Update Cart removes the line instead of leaving a zero-qty item.
+  if (replaceQuantity && addQty <= 0) {
+    return items.filter((_, idx) => idx !== existingIndex);
   }
 
   return items.map((it, idx) => {
@@ -565,7 +570,7 @@ export function mergeOrAppendUpstreamCartItem(existingItems, newItem, options = 
       ...newItem,
       mineSupplierProductId:
         String(it?.mineSupplierProductId || it?.mineId || mineId || '').trim() || mineId,
-      quantity: Math.min(MAX_CART_ITEM_QUANTITY, nextQty)
+      quantity: Math.min(MAX_CART_ITEM_QUANTITY, Math.max(0, nextQty))
     };
   });
 }

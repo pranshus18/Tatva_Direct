@@ -45,6 +45,13 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { formatPaymentMethodLabel } from '../utils/vaultPaymentMethod';
 import { canDeleteOrder, getOrderDeleteBlockReason } from '../utils/orderDeleteRules';
+import {
+  canAdvanceOrderStatus,
+  getSelectableOrderStatusOptions,
+  isCancelledOrder,
+  isValidOrderStatusTransition,
+  normalizePrimaryOrderStatus
+} from '../utils/orderStatusTransitions';
 import './Dashboard.css';
 import './SupplierDashboard.css';
 
@@ -281,7 +288,7 @@ const SupplierDashboard = ({ user }) => {
           serviceProviderCompany: data.order.serviceProvider?.company
         });
         setOrderDetails(data.order);
-        setNewStatus(data.order.status);
+        setNewStatus(normalizePrimaryOrderStatus(data.order.status));
         setShipCarrier(data.order.shippingProvider || '');
         setShipTrackingNumber(data.order.trackingNumber || '');
         setShipTrackingUrl(data.order.trackingUrl || '');
@@ -414,6 +421,14 @@ const SupplierDashboard = ({ user }) => {
   const handleUpdateStatus = async () => {
     if (!selectedOrder || !newStatus) {
       alert('Please select a status to update');
+      return;
+    }
+    if (isCancelledOrder(orderDetails)) {
+      alert('This order is cancelled and the status cannot be changed.');
+      return;
+    }
+    if (!isValidOrderStatusTransition(orderDetails?.status, newStatus)) {
+      alert('Order status can only move forward to the next workflow step. Previous statuses cannot be selected.');
       return;
     }
     
@@ -1180,21 +1195,36 @@ const SupplierDashboard = ({ user }) => {
                 <div className="order-info-section">
                   <h3>Order Status & Dates</h3>
                   <div className="status-update-section">
+                    {isCancelledOrder(orderDetails) ? (
+                      <>
+                        <p>
+                          <strong>Current Status:</strong> Cancelled
+                        </p>
+                        <p className="supplier-dashboard-shipping-label-text" style={{ marginTop: '0.35rem' }}>
+                          This order is cancelled. The status cannot be changed.
+                        </p>
+                      </>
+                    ) : (
+                      <>
                     <label>
                       <strong>Current Status:</strong>
                       <select 
                         value={newStatus} 
                         onChange={(e) => setNewStatus(e.target.value)}
-                        disabled={updatingStatus}
+                        disabled={updatingStatus || !canAdvanceOrderStatus(orderDetails.status)}
                       >
-                        <option value="pending">Pending</option>
-                        <option value="confirmed">Confirmed</option>
-                        <option value="processing">Processing</option>
-                        <option value="shipped">Shipped</option>
-                        <option value="delivered">Delivered</option>
-                        <option value="cancelled">Cancelled</option>
+                        {getSelectableOrderStatusOptions(orderDetails.status).map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
                       </select>
                     </label>
+                    <p className="supplier-dashboard-shipping-label-text" style={{ marginTop: '0.35rem' }}>
+                      {canAdvanceOrderStatus(orderDetails.status)
+                        ? 'Status can only move forward one step at a time. Previous statuses cannot be selected.'
+                        : 'This order has reached a final status and cannot be moved backward.'}
+                    </p>
                     {newStatus === 'shipped' && (
                       <div className="supplier-dashboard-shipping-fields">
                         <label className="supplier-dashboard-shipping-label">
@@ -1235,10 +1265,16 @@ const SupplierDashboard = ({ user }) => {
                     <button 
                       className="btn-primary"
                       onClick={handleUpdateStatus}
-                      disabled={updatingStatus || newStatus === orderDetails.status}
+                      disabled={
+                        updatingStatus ||
+                        newStatus === normalizePrimaryOrderStatus(orderDetails.status) ||
+                        !canAdvanceOrderStatus(orderDetails.status)
+                      }
                     >
                       {updatingStatus ? 'Updating...' : <><Save size={16} /> Update Status</>}
                     </button>
+                      </>
+                    )}
                   </div>
                   <p><strong>Payment Status:</strong> {orderDetails.paymentStatus || 'pending'}</p>
                   {orderDetails.paymentMethod && (

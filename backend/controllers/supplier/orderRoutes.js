@@ -5,7 +5,10 @@ import {
   RECEIPT_PDF_LAYOUT_VERSION,
   getContractErrorMessage,
   insertNotification,
+  getInvalidPrimaryStatusTransitionMessage,
+  isCancelledOrderStatus,
   isValidPrimaryOrderStatus,
+  isValidPrimaryStatusTransition,
   logger,
   mergeOrderItemSpecificationsForDisplay,
   parseSpecificationsObject,
@@ -587,7 +590,22 @@ router.patch('/orders/:id/status', authenticateToken, async (req, res) => {
     }
 
     const previousStatus = String(order.status || '');
-    
+    if (
+      isCancelledOrderStatus(previousStatus) ||
+      isCancelledOrderStatus(order.lifecycle_state)
+    ) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'This order is cancelled and the status cannot be changed.'
+      });
+    }
+    if (!isValidPrimaryStatusTransition(previousStatus, normalizedStatus)) {
+      return res.status(400).json({
+        status: 'error',
+        message: getInvalidPrimaryStatusTransitionMessage(previousStatus, normalizedStatus)
+      });
+    }
+
     // Get current status history
     const statusHistory = order.status_history || [];
     

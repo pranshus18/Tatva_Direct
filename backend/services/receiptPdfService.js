@@ -25,11 +25,41 @@ const MUTED = '#6b7280';
 const GRID = '#e5e7eb';
 const PAID_GREEN = '#059669';
 /** Bump when receipt layout fixes need re-upload for existing orders. */
-export const RECEIPT_PDF_LAYOUT_VERSION = 2;
+export const RECEIPT_PDF_LAYOUT_VERSION = 3;
 
 function safeString(v) {
   if (v === null || v === undefined) return '';
   return String(v);
+}
+
+function normalizeStatusToken(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+/**
+ * A payment receipt exists because money was recorded. Never print "pending"
+ * when the vault was already debited or a receipt/paid_at/reference exists.
+ */
+export function resolveReceiptPaymentStatusLabel({ order, receipt } = {}) {
+  const orderStatus = normalizeStatusToken(order?.payment_status || order?.paymentStatus);
+  if (['paid', 'captured', 'success', 'completed'].includes(orderStatus)) return 'Paid';
+  if (orderStatus === 'partial') return 'Partially paid';
+  if (orderStatus === 'refunded') return 'Refunded';
+  if (receipt?.paid_at || String(receipt?.payment_reference || '').trim()) return 'Paid';
+  if (String(order?.payment_verified_at || '').trim()) return 'Paid';
+  const walletStatus = normalizeStatusToken(order?.wallet_payment_status);
+  if (['held', 'released', 'paid'].includes(walletStatus)) return 'Paid';
+  if (receipt?.id || receipt?.receipt_number) return 'Paid';
+  if (orderStatus) return orderStatus.charAt(0).toUpperCase() + orderStatus.slice(1);
+  return 'Paid';
+}
+
+export function resolveReceiptPaymentMethodLabel({ order, receipt } = {}) {
+  const method = normalizeStatusToken(receipt?.payment_method || order?.payment_method);
+  if (method === 'vault' || method === 'wallet' || method === 'pm_vault') return 'Vault';
+  if (method === 'credit' || method === 'pay_later' || method === 'paylater') return 'Pay later';
+  if (!method) return '-';
+  return method.replace(/_/g, ' ');
 }
 
 function formatINR(amount) {
@@ -584,8 +614,8 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       const infoCol = contentWidth / 2;
       const infoPairs = [
         ['Order status', safeString(order?.status || '-')],
-        ['Payment status', safeString(order?.payment_status || '-')],
-        ['Payment method', safeString(order?.payment_method || '-')],
+        ['Payment status', resolveReceiptPaymentStatusLabel({ order, receipt })],
+        ['Payment method', resolveReceiptPaymentMethodLabel({ order, receipt })],
         ['Order date', order?.created_at ? formatPlatformDateTime(order.created_at, '-') : '-'],
         [
           'Expected dispatch',
@@ -632,10 +662,26 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
 export async function generateAndAttachReceiptPdf({ receipt, order, supplier, serviceProvider }) {
   if (!receipt || !order) return { pdfUrl: null, pdfPath: null, receipt: receipt || null };
 
-  const { items, gstSummary } = await loadReceiptItemsAndGst({ order, supplier, serviceProvider });
+  let workingOrder = order;
+  if (order?.id) {
+    const { data: freshOrder } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', order.id)
+      .maybeSingle();
+    if (freshOrder) {
+      workingOrder = { ...order, ...freshOrder };
+    }
+  }
+
+  const { items, gstSummary } = await loadReceiptItemsAndGst({
+    order: workingOrder,
+    supplier,
+    serviceProvider
+  });
   const pdfBuffer = await createReceiptPdfBuffer({
     receipt,
-    order,
+    order: workingOrder,
     supplier,
     serviceProvider,
     items,
@@ -666,7 +712,8 @@ export async function generateAndAttachReceiptPdf({ receipt, order, supplier, se
     pdfUrl: url,
     pdfPath: storedPath,
     pdfGeneratedAt: new Date().toISOString(),
-    pdfLayoutVersion: RECEIPT_PDF_LAYOUT_VERSION
+    pdfLayoutVersion: RECEIPT_PDF_LAYOUT_VERSION,
+    pdfPaymentStatus: resolveReceiptPaymentStatusLabel({ order: workingOrder, receipt })
   };
 
   const { data: updatedReceipt } = await supabase

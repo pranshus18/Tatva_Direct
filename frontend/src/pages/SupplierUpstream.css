@@ -382,6 +382,20 @@
   line-height: 1.45;
 }
 
+.upstream-offer-empty__headline,
+.upstream-offer-empty__reason {
+  margin: 0;
+}
+
+.upstream-offer-empty__headline {
+  font-weight: 600;
+  color: #92400e;
+}
+
+.upstream-offer-empty__reason {
+  margin-top: 0.35rem;
+}
+
 .upstream-route-chain-stages {
   font-size: 0.8rem;
   color: #475569;

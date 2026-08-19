@@ -141,6 +141,29 @@ function SpecBadges({ specifications }) {
   );
 }
 
+function splitUpstreamEmptyOfferMessage(message) {
+  const text = String(message || '').trim();
+  if (!text) {
+    return {
+      headline: 'This product cannot be sourced from your allowed upstream layer.',
+      reason: 'No eligible partner currently lists this product with stock.'
+    };
+  }
+  const match = text.match(/^(.+?\.)\s+([\s\S]+)$/);
+  if (!match) return { headline: text, reason: '' };
+  return { headline: match[1], reason: match[2] };
+}
+
+function UpstreamEmptyOfferMessage({ message }) {
+  const { headline, reason } = splitUpstreamEmptyOfferMessage(message);
+  return (
+    <div className="upstream-offer-empty upstream-offer-empty-detailed">
+      <p className="upstream-offer-empty__headline">{headline}</p>
+      {reason ? <p className="upstream-offer-empty__reason">{reason}</p> : null}
+    </div>
+  );
+}
+
 const UPSTREAM_PAGE_SIZE = 24;
 
 /** Stable keys for supplier_products junction IDs (avoids string/UUID mismatches in selection state). */
@@ -232,6 +255,7 @@ const SupplierUpstream = ({ user }) => {
   const [cartProjects, setCartProjects] = useState([]);
   const [addCartDialogOpen, setAddCartDialogOpen] = useState(false);
   const [pendingCartProduct, setPendingCartProduct] = useState(null);
+  const [pendingRemoveCartProduct, setPendingRemoveCartProduct] = useState(null);
   const [dialogQty, setDialogQty] = useState(0);
   const [targetCartProjectId, setTargetCartProjectId] = useState('__new__');
   const [newCartProjectName, setNewCartProjectName] = useState('');
@@ -518,9 +542,9 @@ const SupplierUpstream = ({ user }) => {
         }
       }
 
-      // Keep "In cart" from the saved cart, but do not copy those quantities into
-      // the card field on load/refresh. The field stays at the default until the
-      // user edits it. Overlay only when a known cart line changes this session.
+      // Keep "In cart" from the saved cart. On first load, copy those quantities
+      // onto the sourcing cards so returning from Cart shows the same qty.
+      // Overlay later only when a known cart line changes this session.
       // When a line leaves the cart (order placed / removed), drop the old qty
       // so Add to Cart is not still tied to the previous order.
       const prevCartQty = cartQtyByMineIdRef.current || {};
@@ -530,10 +554,13 @@ const SupplierUpstream = ({ user }) => {
         setActiveProjectId('');
         clearUpstreamCartClientProjectState();
       }
+      setProcurementQtyByMineId((draft) =>
+        applyLiveCartQuantitiesToMap(draft, prevCartQty, next, {
+          resetRemovedToZero: true,
+          seedMissingFromLive: true
+        })
+      );
       if (cartChangedThisSession) {
-        setProcurementQtyByMineId((draft) =>
-          applyLiveCartQuantitiesToMap(draft, prevCartQty, next, { resetRemovedToZero: true })
-        );
         setSelectedMine((selected) =>
           applyLiveCartQuantitiesToMap(selected, prevCartQty, next, {
             onlyExistingKeys: true,
@@ -562,13 +589,6 @@ const SupplierUpstream = ({ user }) => {
             if (Number(live[mineId] || 0) > 0) filtered[mineId] = qty;
           }
           return filtered;
-        });
-        setProcurementQtyByMineId((draft) => {
-          const nextDraft = { ...(draft || {}) };
-          for (const mineId of Object.keys(nextDraft)) {
-            if (!(Number(next[mineId] || 0) > 0)) nextDraft[mineId] = 0;
-          }
-          return nextDraft;
         });
       }
       cartQtyByMineIdRef.current = next;
@@ -600,8 +620,8 @@ const SupplierUpstream = ({ user }) => {
     }
     const fromSelected = parseSupplierStockQuantity(selectedMine[key]);
     if (fromSelected != null && fromSelected > 0) return fromSelected;
-    // Default display quantity before the supplier chooses one.
-    // Do not hydrate from the saved cart — "In cart" is shown separately.
+    const fromCart = parseSupplierStockQuantity(cartQtyByMineId[key]);
+    if (fromCart != null && fromCart > 0) return fromCart;
     return 0;
   };
 
@@ -1286,12 +1306,57 @@ const SupplierUpstream = ({ user }) => {
   };
 
   /** Set quantity on an existing cart line without leaving Upstream Sourcing / re-adding. */
+  const requestRemoveFromCart = (product, options = {}) => {
+    const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
+    if (!mineId || !product) return;
+    const restoreQty =
+      parseSupplierStockQuantity(options?.restoreQty) ??
+      parseSupplierStockQuantity(cartQtyByMineId[mineId]);
+    setPendingRemoveCartProduct({
+      product,
+      restoreQty: restoreQty != null && restoreQty > 0 ? restoreQty : null,
+      projectId: String(options?.projectId || '').trim()
+    });
+  };
+
+  const handleCancelRemoveFromCart = () => {
+    const pending = pendingRemoveCartProduct;
+    setPendingRemoveCartProduct(null);
+    const mineId = normalizeSupplierProductKey(pending?.product?.supplier_product_id);
+    if (mineId && pending?.restoreQty != null && pending.restoreQty > 0) {
+      setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: pending.restoreQty }));
+    }
+  };
+
+  const handleConfirmRemoveFromCart = async () => {
+    const pending = pendingRemoveCartProduct;
+    setPendingRemoveCartProduct(null);
+    if (!pending?.product) return;
+    await syncExistingCartQuantity(pending.product, 0, {
+      projectId: pending.projectId,
+      confirmedRemove: true
+    });
+  };
+
   const syncExistingCartQuantity = async (product, requestedQty, options = {}) => {
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return false;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
     const parsedQty = parseSupplierStockQuantity(requestedQty);
-    const nextQty = parsedQty != null && parsedQty > 0 ? Math.max(minQty, parsedQty) : minQty;
+    if (parsedQty === 0 && options?.confirmedRemove !== true) {
+      requestRemoveFromCart(product, {
+        projectId: options?.projectId,
+        restoreQty: parseSupplierStockQuantity(cartQtyByMineId[mineId])
+      });
+      return false;
+    }
+    if (parsedQty == null || parsedQty < 0) {
+      window.alert(
+        `Enter a whole-number quantity of ${minQty} or greater. Quantity 0 removes this product from the cart.`
+      );
+      return false;
+    }
+    const nextQty = parsedQty === 0 ? 0 : Math.max(minQty, parsedQty);
     const token = localStorage.getItem('token');
     if (!token) {
       alert('Please log in again to update cart quantity.');
@@ -1322,6 +1387,25 @@ const SupplierUpstream = ({ user }) => {
         delete next[mineId];
         return next;
       });
+      if (nextQty <= 0) {
+        setProcurementQtyByMineId((prev) => {
+          const next = { ...prev };
+          delete next[mineId];
+          return next;
+        });
+        setSelectedMine((prev) => {
+          if (!prev?.[mineId]) return prev;
+          const next = { ...prev };
+          delete next[mineId];
+          return next;
+        });
+        setCartQtyByMineId((prev) => {
+          const next = { ...prev };
+          delete next[mineId];
+          return next;
+        });
+        return true;
+      }
       await openAddToCartDialog(product, { quantity: nextQty });
       return false;
     }
@@ -1354,17 +1438,49 @@ const SupplierUpstream = ({ user }) => {
       if (!ok) {
         throw new Error(responseMessage || 'Failed to update cart quantity.');
       }
-      const savedQty = parseSupplierStockQuantity(data?.item?.quantity) ?? nextQty;
-      setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
-      setSelectedMine((prev) => (prev?.[mineId] != null ? { ...prev, [mineId]: savedQty } : prev));
-      setCartQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
-      if (data?.project?.projectId) {
-        rememberProjectForSession(data.project.projectId, mineId);
-        await hydrateActiveCartProject(String(data.project.projectId));
+      const removed = data?.item?.removed === true || nextQty === 0;
+      const savedQty = removed ? 0 : parseSupplierStockQuantity(data?.item?.quantity) ?? nextQty;
+      if (removed) {
+        setProcurementQtyByMineId((prev) => {
+          const next = { ...prev };
+          delete next[mineId];
+          return next;
+        });
+        setSelectedMine((prev) => {
+          if (!prev?.[mineId]) return prev;
+          const next = { ...prev };
+          delete next[mineId];
+          return next;
+        });
+        setCartQtyByMineId((prev) => {
+          const next = { ...prev };
+          delete next[mineId];
+          return next;
+        });
+        setCartProjectByMineId((prev) => {
+          const next = { ...prev };
+          delete next[mineId];
+          return next;
+        });
+        if (data?.project?.removed) {
+          const remaining = await loadSupplierCartProjects();
+          if (!remaining.length) {
+            setActiveProjectId('');
+            clearUpstreamCartClientProjectState();
+          }
+        }
+      } else {
+        setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
+        setSelectedMine((prev) => (prev?.[mineId] != null ? { ...prev, [mineId]: savedQty } : prev));
+        setCartQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
+        if (data?.project?.projectId) {
+          rememberProjectForSession(data.project.projectId, mineId);
+          await hydrateActiveCartProject(String(data.project.projectId));
+        }
       }
       await refreshSyncedCartQuantities();
       emitSupplierCartUpdated();
-      if (options?.silent !== true) {
+      if (options?.silent !== true && !removed) {
         alert(responseMessage || (replaceQuantity ? 'Cart quantity updated.' : 'Product added to cart.'));
       }
     } catch (e) {
@@ -1391,6 +1507,20 @@ const SupplierUpstream = ({ user }) => {
     if (!mineId) return false;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
     const parsedQty = parseSupplierStockQuantity(requestedQty);
+    if (parsedQty === 0) {
+      const synced = await refreshSyncedCartQuantities();
+      const inCartQty = parseSupplierStockQuantity(synced?.quantities?.[mineId]);
+      if (inCartQty != null && inCartQty > 0) {
+        requestRemoveFromCart(product, { restoreQty: inCartQty });
+        return false;
+      }
+      window.alert(
+        minQty > 1
+          ? `Quantity must be at least ${minQty} (minimum order quantity). Quantity 0 cannot be added to the cart.`
+          : 'Quantity must be at least 1. Set a quantity greater than 0 to add this product to the cart.'
+      );
+      return false;
+    }
     const hasExplicitQty = parsedQty != null && parsedQty > 0;
     const nextQty = hasExplicitQty ? Math.max(minQty, parsedQty) : null;
     if (hasExplicitQty) {
@@ -1449,8 +1579,17 @@ const SupplierUpstream = ({ user }) => {
     if (!mineId) return;
     const minQty = Math.max(1, product?.min_order_quantity ?? 1);
     const cardQty = getProcurementQty(mineId, minQty);
+    const inCartQty = parseSupplierStockQuantity(cartQtyByMineId[mineId]);
     if (cardQty <= 0) {
-      window.alert('Set quantity on the product card before adding to cart.');
+      if (inCartQty != null && inCartQty > 0) {
+        requestRemoveFromCart(product, { restoreQty: inCartQty });
+        return;
+      }
+      window.alert(
+        minQty > 1
+          ? `Quantity must be at least ${minQty} (minimum order quantity). Quantity 0 cannot be added to the cart.`
+          : 'Quantity must be at least 1. Set a quantity greater than 0 to add this product to the cart.'
+      );
       return;
     }
     await addOrUpdateCartForProduct(product, cardQty);
@@ -1733,7 +1872,12 @@ const SupplierUpstream = ({ user }) => {
             const inCart = syncedCartQty != null && syncedCartQty > 0;
             const lastOrderedQty = inCart ? null : readLastOrderedQuantity(mineId);
             const qtyDirty = inCart && Number(syncedCartQty) !== Number(cardQty);
-            const cartActionLabel = inCart ? 'Update Cart' : 'Add to Cart';
+            const removingFromCart = inCart && cardQty <= 0;
+            const cartActionLabel = removingFromCart
+              ? 'Remove from Cart'
+              : inCart
+                ? 'Update Cart'
+                : 'Add to Cart';
 
             return (
               <article
@@ -1832,7 +1976,11 @@ const SupplierUpstream = ({ user }) => {
                         +
                       </button>
                     </div>
-                    {qtyDirty ? (
+                    {removingFromCart ? (
+                      <p className="us-pd-card__qty-hint">
+                        Quantity 0 removes this product from the cart. Click Remove from Cart to confirm.
+                      </p>
+                    ) : qtyDirty ? (
                       <p className="us-pd-card__qty-hint">
                         Qty changed — click Update Cart to sync here
                       </p>
@@ -1880,7 +2028,7 @@ const SupplierUpstream = ({ user }) => {
                     disabled={isAddingToCart}
                   >
                     {isAddingToCart ? (
-                      <><Loader2 size={16} className="upstream-spin" /> {inCart ? 'Updating…' : 'Adding…'}</>
+                      <><Loader2 size={16} className="upstream-spin" /> {removingFromCart ? 'Removing…' : inCart ? 'Updating…' : 'Adding…'}</>
                     ) : (
                       <><ShoppingCart size={16} /> {cartActionLabel}</>
                     )}
@@ -2036,7 +2184,13 @@ const SupplierUpstream = ({ user }) => {
                             disabled={!!addingCartByMineId[mineKey]}
                             onClick={() => syncExistingCartQuantity(mine, mineSelectedQty)}
                           >
-                            {addingCartByMineId[mineKey] ? 'Updating…' : 'Update Cart'}
+                            {addingCartByMineId[mineKey]
+                              ? mineSelectedQty <= 0
+                                ? 'Removing…'
+                                : 'Updating…'
+                              : mineSelectedQty <= 0
+                                ? 'Remove from Cart'
+                                : 'Update Cart'}
                           </button>
                         ) : !parseSupplierStockQuantity(cartQtyByMineId[mineKey]) &&
                           lastOrderedQty != null ? (
@@ -2074,9 +2228,7 @@ const SupplierUpstream = ({ user }) => {
                     </div>
 
                     {offers.length === 0 ? (
-                      <div className="upstream-offer-empty upstream-offer-empty-detailed">
-                        {it.message || 'No upstream offers from your supply-chain partners for this product.'}
-                      </div>
+                      <UpstreamEmptyOfferMessage message={it.message} />
                     ) : (
                       <div className="upstream-offers-stack">
                         <p className="upstream-offers-help">
@@ -2569,6 +2721,35 @@ const SupplierUpstream = ({ user }) => {
               </Button>
             </DialogFooter>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(pendingRemoveCartProduct)}
+        onOpenChange={(open) => {
+          if (!open) setPendingRemoveCartProduct(null);
+        }}
+      >
+        <DialogContent className="inset-auto left-1/2 top-1/2 h-auto w-[calc(100%-2rem)] max-w-md -translate-x-1/2 -translate-y-1/2 gap-4 rounded-lg border bg-background p-6 shadow-lg">
+          <DialogHeader className="pr-8">
+            <DialogTitle>Delete product</DialogTitle>
+            <DialogDescription>
+              Quantity 0 is not a valid cart quantity. Do you want to delete this product from the cart?
+              {pendingRemoveCartProduct?.product?.name ? (
+                <span className="mt-2 block font-medium text-foreground">
+                  {pendingRemoveCartProduct.product.name}
+                </span>
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={handleCancelRemoveFromCart}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={() => void handleConfirmRemoveFromCart()}>
+              Delete
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
       </div>

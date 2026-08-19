@@ -174,7 +174,28 @@ test('buildNoUpstreamOffersMessage: names manufacturer when that is the only ups
     }
   });
 
-  assert.match(message, /Manufacturers \(MGF\)/);
+  assert.match(message, /cannot be sourced from Manufacturers \(MGF\) for "nyka"/);
+  assert.match(message, /No Manufacturers \(MGF\) currently list this product with stock/);
   assert.doesNotMatch(message, /Dealers/);
   assert.doesNotMatch(message, /dealer/i);
+});
+
+test('buildNoUpstreamOffersMessage: missing listings and wrong layer share a headline and distinguish the reason', () => {
+  const noListings = buildNoUpstreamOffersMessage({
+    brandLabel: 'Prestige',
+    requiredUpstreamRoleLabel: 'Regional distributors',
+    reason: 'no_listings'
+  });
+  const wrongLayer = buildNoUpstreamOffersMessage({
+    brandLabel: 'Fastrack',
+    requiredUpstreamRoleLabel: 'Manufacturers (MGF)',
+    reason: 'wrong_layer'
+  });
+
+  assert.match(noListings, /^This product cannot be sourced from Regional distributors for "Prestige"\./);
+  assert.match(wrongLayer, /^This product cannot be sourced from Manufacturers \(MGF\) for "Fastrack"\./);
+  assert.match(noListings, /No Regional distributors currently list this product with stock/);
+  assert.match(wrongLayer, /Other suppliers list this product with stock, but none are Manufacturers \(MGF\)/);
+  assert.doesNotMatch(noListings, /Other suppliers list this product/);
+  assert.doesNotMatch(wrongLayer, /currently list this product with stock/);
 });

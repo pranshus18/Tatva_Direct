@@ -6,6 +6,12 @@ import './SupplierBCOV.css';
 import { useLocation } from 'react-router-dom';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import {
+  BRAND_COV_FIELD_LABEL,
+  BRAND_COV_LABEL,
+  PLATFORM_COV_FIELD_LABEL,
+  PLATFORM_COV_LABEL,
+  SUPPLIER_COV_FIELD_LABEL,
+  SUPPLIER_COV_LABEL,
   SUPPLIER_COV_PRICE_FIELD_LABEL,
   SUPPLIER_COV_PRICE_LABEL,
   SUPPLIER_MRP_LABEL
@@ -75,18 +81,18 @@ const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
     if (!levelName) errs.push(`${label}: Level is required`);
     const buyerBcov = String(row.buyerBcov || '').trim();
     if (!buyerBcov) {
-      errs.push(`${label}: Supplier_COV is required`);
+      errs.push(`${label}: ${SUPPLIER_COV_LABEL} is required`);
     }
     const supplierCovThreshold = parseCovThresholdNumber(buyerBcov);
     if (buyerBcov && (supplierCovThreshold === null || supplierCovThreshold < 0)) {
-      errs.push(`${label}: Supplier_COV must be 0 or more`);
+      errs.push(`${label}: ${SUPPLIER_COV_LABEL} must be 0 or more`);
     }
 
     const buyerCov = Number(row.buyerCov);
     if (!Number.isFinite(buyerCov) || buyerCov < 0) {
-      errs.push(`${label}: Brand_cov must be 0 or more`);
+      errs.push(`${label}: ${BRAND_COV_LABEL} must be 0 or more`);
     } else if (supplierCovThreshold !== null && buyerCov >= supplierCovThreshold) {
-      errs.push(`${label}: Brand_cov must be less than Supplier_COV`);
+      errs.push(`${label}: ${BRAND_COV_LABEL} must be less than ${SUPPLIER_COV_LABEL}`);
     }
     const price = Number(row.price);
     if (!Number.isFinite(price) || price < 0) {
@@ -100,13 +106,13 @@ const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
     if (hasBuyerPcov) {
       const buyerPcov = Number(row.buyerPcov);
       if (!Number.isFinite(buyerPcov) || buyerPcov < 0) {
-        errs.push(`${label}: Platform_COV must be 0 or more`);
+        errs.push(`${label}: ${PLATFORM_COV_LABEL} must be 0 or more`);
       } else if (Number.isFinite(buyerCov) && buyerCov === buyerPcov) {
-        errs.push(`${label}: Brand_cov must not be equal to Platform_COV`);
+        errs.push(`${label}: ${BRAND_COV_LABEL} must not be equal to ${PLATFORM_COV_LABEL}`);
       } else if (Number.isFinite(buyerCov) && buyerCov >= buyerPcov) {
-        errs.push(`${label}: Brand_cov must be less than Platform_COV`);
+        errs.push(`${label}: ${BRAND_COV_LABEL} must be less than ${PLATFORM_COV_LABEL}`);
       } else if (supplierCovThreshold !== null && buyerPcov < supplierCovThreshold) {
-        errs.push(`${label}: Platform_COV must be greater than or equal to Supplier_COV`);
+        errs.push(`${label}: ${PLATFORM_COV_LABEL} must be greater than or equal to ${SUPPLIER_COV_LABEL}`);
       }
     }
   });
@@ -438,9 +444,9 @@ const SupplierBCOV = () => {
             <thead>
               <tr>
                 <th>Level</th>
-                <th>Supplier_COV</th>
-                <th>Brand_cov</th>
-                <th>Platform_COV</th>
+                <th>{SUPPLIER_COV_FIELD_LABEL}</th>
+                <th>{BRAND_COV_FIELD_LABEL}</th>
+                <th>{PLATFORM_COV_FIELD_LABEL}</th>
                 <th>{SUPPLIER_COV_PRICE_FIELD_LABEL}</th>
                 <th>Action</th>
               </tr>
@@ -458,31 +464,38 @@ const SupplierBCOV = () => {
                     />
                   </td>
                   <td>
-                    <input
-                      className="bcov-input"
+                    <RupeeInput
+                      className="bcov-rupee-input"
+                      inputClassName="bcov-input"
                       type="text"
+                      inputMode="decimal"
                       value={row.buyerBcov}
                       onChange={(e) => updateRow(index, 'buyerBcov', e.target.value)}
+                      aria-label={SUPPLIER_COV_FIELD_LABEL}
                     />
                   </td>
                   <td>
-                    <input
-                      className="bcov-input"
+                    <RupeeInput
+                      className="bcov-rupee-input"
+                      inputClassName="bcov-input"
                       type="number"
                       min="0"
                       step="1"
                       value={row.buyerCov}
                       onChange={(e) => updateRow(index, 'buyerCov', e.target.value)}
+                      aria-label={BRAND_COV_FIELD_LABEL}
                     />
                   </td>
                   <td>
-                    <input
-                      className="bcov-input"
+                    <RupeeInput
+                      className="bcov-rupee-input"
+                      inputClassName="bcov-input"
                       type="number"
                       min="0"
                       step="1"
                       value={row.buyerPcov}
                       onChange={(e) => updateRow(index, 'buyerPcov', e.target.value)}
+                      aria-label={PLATFORM_COV_FIELD_LABEL}
                     />
                   </td>
                   <td>
@@ -495,6 +508,7 @@ const SupplierBCOV = () => {
                       step="0.01"
                       value={row.price}
                       onChange={(e) => updateRow(index, 'price', e.target.value)}
+                      aria-label={SUPPLIER_COV_PRICE_FIELD_LABEL}
                       title={
                         catalogMrp != null
                           ? `Max ${SUPPLIER_COV_PRICE_LABEL}: catalog ${SUPPLIER_MRP_LABEL} ${formatRupee(catalogMrp)}`

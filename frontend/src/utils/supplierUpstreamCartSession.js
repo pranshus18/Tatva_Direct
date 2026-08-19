@@ -120,8 +120,8 @@ export const subscribeSupplierCartUpdated = (handler, options = {}) => {
 
 /**
  * Copy live cart quantities into a local qty map when the saved cart changed
- * during this session. Initial page load/refresh must not copy cart qty into
- * empty maps — the quantity field stays at its default until the user edits it.
+ * during this session. Pass `seedMissingFromLive` on first hydrate so cards
+ * show the quantity already in the cart after navigating back to sourcing.
  */
 export const applyLiveCartQuantitiesToMap = (
   prevMap = {},
@@ -135,12 +135,23 @@ export const applyLiveCartQuantitiesToMap = (
   const onlyExistingKeys = options.onlyExistingKeys === true;
   const resetRemovedToZero = options.resetRemovedToZero === true;
   const dropRemovedKeys = options.dropRemovedKeys === true;
+  const seedMissingFromLive = options.seedMissingFromLive === true;
   const next = { ...current };
   let changed = false;
   for (const [mineId, qtyRaw] of Object.entries(live)) {
     const qty = Number(qtyRaw);
     if (!mineId || !Number.isFinite(qty) || qty <= 0) continue;
-    if (!Object.prototype.hasOwnProperty.call(prev, mineId)) continue;
+    if (!Object.prototype.hasOwnProperty.call(prev, mineId)) {
+      if (
+        seedMissingFromLive &&
+        !onlyExistingKeys &&
+        !Object.prototype.hasOwnProperty.call(current, mineId)
+      ) {
+        next[mineId] = qty;
+        changed = true;
+      }
+      continue;
+    }
     if (Number(prev[mineId] || 0) === qty) continue;
     if (onlyExistingKeys && !Object.prototype.hasOwnProperty.call(current, mineId)) continue;
     next[mineId] = qty;
