@@ -30,12 +30,12 @@ describe('Select Yourself brand flow contract', () => {
     expect(findApprovedCatalogBrandMatch('samsung', catalog)?.name).toBe('samsung');
   });
 
-  it('1a) near-typos of approved brands resolve to the catalog name', () => {
-    expect(findApprovedCatalogBrandMatch('samsun', catalog)?.name).toBe('samsung');
-    expect(findApprovedCatalogBrandMatch('samsun', catalog)?.matchType).toBe('typo');
+  it('1a) spelling mistakes of approved brands are a new brand, not a catalog hit', () => {
+    expect(findApprovedCatalogBrandMatch('samsun', catalog)).toBeNull();
     expect(
-      findApprovedCatalogBrandMatch('Faststark', [{ name: 'Fastrack', status: 'approved' }])?.name
-    ).toBe('Fastrack');
+      findApprovedCatalogBrandMatch('Faststark', [{ name: 'Fastrack', status: 'approved' }])
+    ).toBeNull();
+    expect(findApprovedCatalogBrandMatch('Phillips', [{ name: 'Philips', status: 'approved' }])).toBeNull();
   });
 
   it('1b) partial typing may soft-suggest only — does not block as exact match', () => {
@@ -93,7 +93,7 @@ describe('Select Yourself brand flow contract', () => {
   it('4) short acronyms are not collapsed into longer approved brands', () => {
     expect(areBrandNamesExactDuplicates('AB', 'ABB')).toBe(false);
     expect(brandKeyForDuplicateCheck('AB')).not.toBe(brandKeyForDuplicateCheck('ABB'));
-    expect(areBrandNamesExactDuplicates('Philips', 'Phillips')).toBe(true);
+    expect(areBrandNamesExactDuplicates('Philips', 'Phillips')).toBe(false);
   });
 
   it('5) Path B pending stays blocked even after document edits (no duplicate submit)', () => {

@@ -9,7 +9,8 @@ import {
 test('catalogBrandsConflict is true for Nothing vs JBL', () => {
   assert.equal(catalogBrandsConflict('Nothing', 'JBL'), true);
   assert.equal(catalogBrandsCompatible('Nothing', 'JBL'), false);
-  assert.equal(catalogBrandsConflict('Philips', 'Phillips'), false);
+  assert.equal(catalogBrandsConflict('Philips', 'Phillips'), true);
+  assert.equal(catalogBrandsCompatible('Philips', 'Phillips'), false);
   assert.equal(catalogBrandsConflict('Nothing', ''), false);
 });
 

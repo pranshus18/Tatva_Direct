@@ -21,10 +21,28 @@ export function isBrandApprovedForProductSubmit(status) {
   return normalizeBrandApprovalStatus(status) === BRAND_APPROVAL_STATUS.APPROVED;
 }
 
-export function getBrandApprovalWarning(status, brandName = '', apiMessage = '') {
+/** Catalog dedup leftover — not an admin rejection of this supplier's brand request. */
+export function isAutoMergedDuplicateBrandReason(reason) {
+  const text = String(reason || '');
+  return (
+    /merged automatically/i.test(text) || /duplicate of (approved brand\s+)?["“'`]/i.test(text)
+  );
+}
+
+export function getBrandApprovalWarning(status, brandName = '', apiMessage = '', productStatus = '') {
+  const productNormalized = String(productStatus || '').trim().toLowerCase();
+  if (productNormalized === 'approved' || productNormalized === 'active') {
+    return null;
+  }
+
   const normalized = normalizeBrandApprovalStatus(status);
   const label = String(brandName || '').trim() || 'This brand';
-  if (apiMessage && normalized !== BRAND_APPROVAL_STATUS.APPROVED) {
+  const message = String(apiMessage || '');
+  if (isAutoMergedDuplicateBrandReason(message)) {
+    return null;
+  }
+
+  if (message && normalized !== BRAND_APPROVAL_STATUS.APPROVED) {
     return {
       tone: normalized === BRAND_APPROVAL_STATUS.REJECTED ? 'danger' : 'warning',
       title:
@@ -33,7 +51,7 @@ export function getBrandApprovalWarning(status, brandName = '', apiMessage = '')
           : normalized === BRAND_APPROVAL_STATUS.REJECTED
             ? 'Brand approval rejected'
             : 'Brand approval required',
-      message: String(apiMessage)
+      message
     };
   }
 

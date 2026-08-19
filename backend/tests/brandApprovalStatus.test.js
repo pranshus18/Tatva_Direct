@@ -393,3 +393,69 @@ test('ensureBrandApprovedOrRequest does not auto-approve from supply-chain alone
   assert.equal(result.brand?.status, 'pending');
   assert.equal(updatedPayload, null);
 });
+
+test('resolveBrandApprovalStatus prefers pending Philips over an auto-merged duplicate', async () => {
+  const pending = {
+    id: 'live',
+    name: 'Philips',
+    normalized_name: 'philips',
+    status: 'pending'
+  };
+  const rejected = {
+    id: 'dup',
+    name: 'Philips',
+    normalized_name: 'philips',
+    status: 'rejected',
+    rejection_reason: 'Duplicate of "Philips" — merged automatically.'
+  };
+  const supabase = {
+    from() {
+      return {
+        select() {
+          return {
+            order: async () => ({ data: [rejected, pending], error: null })
+          };
+        }
+      };
+    }
+  };
+
+  const result = await resolveBrandApprovalStatus({
+    supabase,
+    brandName: 'Philips'
+  });
+
+  assert.equal(result.status, 'pending');
+  assert.equal(result.brand?.id, 'live');
+  assert.doesNotMatch(String(result.message || ''), /merged automatically/i);
+});
+
+test('resolveBrandApprovalStatus does not treat a merge leftover as an admin rejection', async () => {
+  const rejected = {
+    id: 'dup',
+    name: 'Philips',
+    normalized_name: 'philips',
+    status: 'rejected',
+    rejection_reason: 'Duplicate of "Philips" — merged automatically.'
+  };
+  const supabase = {
+    from() {
+      return {
+        select() {
+          return {
+            order: async () => ({ data: [rejected], error: null })
+          };
+        }
+      };
+    }
+  };
+
+  const result = await resolveBrandApprovalStatus({
+    supabase,
+    brandName: 'Philips'
+  });
+
+  assert.equal(result.status, 'unregistered');
+  assert.equal(result.brand, null);
+  assert.doesNotMatch(String(result.message || ''), /rejected/i);
+});

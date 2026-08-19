@@ -37,36 +37,21 @@ export function collapseRepeatedLetters(value) {
   return String(value || '').replace(/(.)\1+/g, '$1');
 }
 
-/** Dedup key for catalog lists — treats Philips and Phillips as the same brand. */
+/**
+ * Dedup key for catalog lists.
+ * Same letters ignoring case/punctuation are the same brand (Philips === philips).
+ * Spelling variants are distinct brands (Philips !== Phillips).
+ */
 export function catalogBrandDedupKey(value) {
-  const key = normalizeBrandKey(value);
-  if (!key) return '';
-  // Spelling-collapse only for complete names so short/partial tokens cannot
-  // collide with acronyms (AB must not equal ABB) while Philips ≈ Phillips.
-  if (key.length >= 5) {
-    return collapseRepeatedLetters(key);
-  }
-  return key;
+  return normalizeBrandKey(value);
 }
 
 export function brandKeysMatchForChainLookup(wantedKey, categoryKey) {
   if (!wantedKey || !categoryKey) return false;
   if (wantedKey === categoryKey) return true;
-  if (collapseRepeatedLetters(wantedKey) === collapseRepeatedLetters(categoryKey)) return true;
 
   const wantedWords = wantedKey.split(' ').filter(Boolean);
   const categoryWords = categoryKey.split(' ').filter(Boolean);
-  const wantedToken = wantedWords[0] || '';
-  const categoryToken = categoryWords[0] || '';
-
-  // Complete first-token match only — never character prefixes ("h" vs "hp").
-  if (
-    wantedToken.length >= 3 &&
-    categoryToken.length >= 3 &&
-    collapseRepeatedLetters(wantedToken) === collapseRepeatedLetters(categoryToken)
-  ) {
-    return true;
-  }
 
   const isWordPrefix = (shorter, longer) =>
     shorter.length >= 1 &&
@@ -124,7 +109,7 @@ export function prepareSupplyChainStagesForSave(stages) {
   return { ok: true, stages: cleaned };
 }
 
-/** Pick the best admin chain row for a brand (fuzzy name + prefer latest update). */
+/** Pick the best admin chain row for a brand (exact spelling, or extra-word prefix like Havells / Havells Electrical). */
 export function findCategorySupplyChainRowForBrandKey(chainRows, wantedKey) {
   if (!wantedKey) return null;
   const wantedNormalized = normalizeBrandKey(wantedKey);

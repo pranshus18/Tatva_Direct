@@ -84,7 +84,7 @@ test('resolveSupplierProductBrandGuard: allows selected profile brand when catal
   assert.equal(result.brand, 'Phillips');
 });
 
-test('resolveSupplierProductBrandGuard: maps Philips input to declared Phillips profile brand', () => {
+test('resolveSupplierProductBrandGuard: spelling variants are not the same declared brand', () => {
   const profile = {
     companyInfoEntries: [{ id: '1', role: 'dealer', brands: 'Phillips' }]
   };
@@ -92,8 +92,7 @@ test('resolveSupplierProductBrandGuard: maps Philips input to declared Phillips 
     selectedBrand: 'Philips',
     catalogBrand: ''
   });
-  assert.equal(result.allowed, true);
-  assert.equal(result.brand, 'Phillips');
+  assert.equal(result.allowed, false);
 });
 
 test('brandIsAllowedForSupplier: partial prefix H must not match registered HP', () => {

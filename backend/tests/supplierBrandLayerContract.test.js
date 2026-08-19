@@ -20,7 +20,7 @@ describe('resolveSupplierBrandLayers — layer boundaries', () => {
     assert.equal(layers.status, 'approved');
   });
 
-  it('Layer 1: admin chain alone puts brand in catalog without rewriting approvalStatus', () => {
+  it('Layer 1: admin chain for a spelling variant does not apply to a different brand', () => {
     const layers = resolveSupplierBrandLayers({
       brandInput: 'Phillips',
       brandRow: { name: 'Phillips', status: 'pending' },
@@ -29,13 +29,26 @@ describe('resolveSupplierBrandLayers — layer boundaries', () => {
         stages: [{ role: 'dealer' }, { role: 'retailer' }]
       }
     });
-    assert.equal(layers.inApprovedCatalog, true);
-    assert.equal(layers.supplierHasAccess, true);
-    assert.equal(layers.hasSupplyChainDefinition, true);
-    assert.equal(layers.canSelectRoles, true);
-    // brands-table truth stays pending — roles unlock via canSelectRoles, not status.
+    assert.equal(layers.inApprovedCatalog, false);
+    assert.equal(layers.supplierHasAccess, false);
+    assert.equal(layers.canSelectRoles, false);
     assert.equal(layers.approvalStatus, 'pending');
     assert.equal(layers.status, 'pending');
+  });
+
+  it('Layer 1: exact brand name still uses its own admin chain', () => {
+    const layers = resolveSupplierBrandLayers({
+      brandInput: 'Philips',
+      brandRow: { name: 'Philips', status: 'pending' },
+      chainRow: {
+        category_name: 'Philips',
+        stages: [{ role: 'dealer' }, { role: 'retailer' }]
+      }
+    });
+    assert.equal(layers.inApprovedCatalog, true);
+    assert.equal(layers.hasSupplyChainDefinition, true);
+    assert.equal(layers.canSelectRoles, true);
+    assert.equal(layers.approvalStatus, 'pending');
     assert.deepEqual(layers.roles, ['dealer', 'retailer']);
   });
 

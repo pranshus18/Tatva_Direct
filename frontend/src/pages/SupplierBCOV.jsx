@@ -3,7 +3,7 @@ import { getApiUrl } from '../config/api';
 import { Save, Plus, Trash2 } from 'lucide-react';
 import './Dashboard.css';
 import './SupplierBCOV.css';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import {
   BRAND_COV_FIELD_LABEL,
@@ -121,6 +121,7 @@ const getValidationErrorsForRows = (rowsToValidate, catalogMrp) => {
 
 const SupplierBCOV = () => {
   const location = useLocation();
+  const navigate = useNavigate();
   const [rows, setRows] = useState([createDefaultRow(0)]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -238,6 +239,13 @@ const SupplierBCOV = () => {
 
   const persistRows = async (rowsToSend, { showSuccess = false } = {}) => {
     if (!variantKey) {
+      return { ok: false };
+    }
+    if (!covEligible) {
+      alert(
+        covBlockedMessage ||
+          'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.'
+      );
       return { ok: false };
     }
 
@@ -376,6 +384,16 @@ const SupplierBCOV = () => {
             {covBlockedMessage ||
               'This product is rejected. Correct it and wait for admin approval before configuring Product_COV.'}
           </p>
+          {/inventory/i.test(String(covBlockedMessage || '')) ? (
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => navigate('/manage-inventory')}
+              style={{ marginTop: '1rem' }}
+            >
+              Go to Manage Inventory
+            </button>
+          ) : null}
         </div>
       </div>
     );

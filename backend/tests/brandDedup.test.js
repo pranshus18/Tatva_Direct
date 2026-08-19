@@ -3,19 +3,23 @@ import assert from 'node:assert/strict';
 import {
   consolidateDuplicateBrands,
   getCanonicalBrandNormalizedName,
-  pickCanonicalBrandDisplayName
+  indexPreferredBrandRowsByCatalogKey,
+  pickCanonicalBrandDisplayName,
+  toSupplierBrandApprovalView,
+  toSupplierProductCardBrandApprovalView
 } from '../services/brandDedupService.js';
 
-test('getCanonicalBrandNormalizedName merges Philips and Phillips', () => {
+test('getCanonicalBrandNormalizedName keeps spelling variants distinct', () => {
   assert.equal(getCanonicalBrandNormalizedName('Philips'), 'philips');
-  assert.equal(getCanonicalBrandNormalizedName('Phillips'), 'philips');
+  assert.equal(getCanonicalBrandNormalizedName('Phillips'), 'phillips');
+  assert.notEqual(getCanonicalBrandNormalizedName('Philips'), getCanonicalBrandNormalizedName('Phillips'));
 });
 
 test('pickCanonicalBrandDisplayName prefers shorter spelling', () => {
   assert.equal(pickCanonicalBrandDisplayName('Phillips', 'Philips'), 'Philips');
 });
 
-test('findApprovedCatalogBrandCloseMatch matches exact identity and near-typos', async () => {
+test('findApprovedCatalogBrandCloseMatch matches exact spelling only', async () => {
   const { findApprovedCatalogBrandCloseMatch, isApprovedBrandNearTypo } = await import(
     '../services/brandDedupService.js'
   );
@@ -61,12 +65,12 @@ test('findApprovedCatalogBrandCloseMatch matches exact identity and near-typos',
   assert.equal(sparsga.matchType, null);
 
   const samsun = await findApprovedCatalogBrandCloseMatch('samsun', dbClient);
-  assert.equal(samsun.data?.name, 'samsung');
-  assert.equal(samsun.matchType, 'typo');
+  assert.equal(samsun.data, null);
+  assert.equal(samsun.matchType, null);
 
   const faststark = await findApprovedCatalogBrandCloseMatch('Faststark', dbClient);
-  assert.equal(faststark.data?.name, 'Fastrack');
-  assert.equal(faststark.matchType, 'typo');
+  assert.equal(faststark.data, null);
+  assert.equal(faststark.matchType, null);
   assert.equal(isApprovedBrandNearTypo('Faststark', 'Fastrack'), true);
 
   const exact = await findApprovedCatalogBrandCloseMatch('Sparsh', dbClient);
@@ -96,11 +100,11 @@ test('findApprovedCatalogBrandCloseMatch matches exact identity and near-typos',
       };
     }
   });
-  assert.equal(phillipsVariant.data?.name, 'Philips');
-  assert.equal(phillipsVariant.matchType, 'exact');
+  assert.equal(phillipsVariant.data, null);
+  assert.equal(phillipsVariant.matchType, null);
 });
 
-test('consolidateDuplicateBrands keeps one approved Philips row', async () => {
+test('consolidateDuplicateBrands does not merge spelling variants', async () => {
   const rows = [
     {
       id: '1',
@@ -161,7 +165,104 @@ test('consolidateDuplicateBrands keeps one approved Philips row', async () => {
     .map((row) => row.name)
     .sort();
 
-  assert.deepEqual(approvedNames, ['ACC', 'Philips']);
-  assert.equal(rows.find((row) => row.id === '1')?.status, 'rejected');
-  assert.equal(rows.find((row) => row.id === '2')?.normalized_name, 'philips');
+  assert.deepEqual(approvedNames, ['ACC', 'Philips', 'Phillips']);
+  assert.equal(rows.find((row) => row.id === '1')?.status, 'approved');
+  assert.equal(rows.find((row) => row.id === '2')?.status, 'approved');
+});
+
+test('indexPreferredBrandRowsByCatalogKey prefers live pending Philips over auto-merged reject', () => {
+  const preferred = indexPreferredBrandRowsByCatalogKey([
+    {
+      id: 'dup',
+      name: 'Philips',
+      normalized_name: 'philips',
+      status: 'rejected',
+      rejection_reason: 'Duplicate of "Philips" — merged automatically.',
+      created_at: '2026-08-19T00:00:00.000Z'
+    },
+    {
+      id: 'live',
+      name: 'Philips',
+      normalized_name: 'philips',
+      status: 'pending',
+      created_at: '2026-06-13T00:00:00.000Z'
+    }
+  ]);
+  const row = preferred.get('philips');
+  assert.equal(row?.id, 'live');
+  assert.equal(row?.status, 'pending');
+  const view = toSupplierBrandApprovalView(row, 'Philips');
+  assert.equal(view.status, 'pending');
+  assert.doesNotMatch(view.message, /rejected/i);
+  assert.doesNotMatch(view.message, /merged automatically/i);
+});
+
+test('toSupplierBrandApprovalView does not treat auto-merge leftovers as admin rejection', () => {
+  const view = toSupplierBrandApprovalView(
+    {
+      name: 'Philips',
+      status: 'rejected',
+      rejection_reason: 'Duplicate of "Philips" — merged automatically.'
+    },
+    'Philips'
+  );
+  assert.equal(view.status, 'unregistered');
+  assert.doesNotMatch(view.message, /rejected/i);
+  assert.doesNotMatch(view.message, /merged automatically/i);
+});
+
+test('toSupplierProductCardBrandApprovalView hides leftover brand rejection on approved products', () => {
+  const preferred = indexPreferredBrandRowsByCatalogKey([
+    {
+      id: 'dup',
+      name: 'Phillips',
+      normalized_name: 'phillips',
+      status: 'rejected',
+      rejection_reason: 'Duplicate of "Philips" — merged automatically.'
+    },
+    {
+      id: 'live',
+      name: 'Philips',
+      normalized_name: 'philips',
+      status: 'approved'
+    }
+  ]);
+  const view = toSupplierProductCardBrandApprovalView(
+    {
+      status: 'approved',
+      brand: 'Philips',
+      brandModel: 'Phillips',
+      attributes: { brand: 'Philips', brandModel: 'Phillips' }
+    },
+    preferred
+  );
+  assert.equal(view.status, 'approved');
+  assert.equal(view.message, '');
+});
+
+test('toSupplierProductCardBrandApprovalView follows duplicate-of merge to the live brand', () => {
+  const preferred = indexPreferredBrandRowsByCatalogKey([
+    {
+      id: 'dup',
+      name: 'Phillips',
+      normalized_name: 'phillips',
+      status: 'rejected',
+      rejection_reason: 'Duplicate of "Philips" — merged automatically.'
+    },
+    {
+      id: 'live',
+      name: 'Philips',
+      normalized_name: 'philips',
+      status: 'approved'
+    }
+  ]);
+  const view = toSupplierProductCardBrandApprovalView(
+    {
+      status: 'pending',
+      brand: 'Phillips'
+    },
+    preferred
+  );
+  assert.equal(view.status, 'approved');
+  assert.equal(view.message, '');
 });

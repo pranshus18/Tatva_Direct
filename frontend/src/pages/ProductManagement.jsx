@@ -91,6 +91,8 @@ import {
   countSupplierProductPhotos,
   getSupplierCatalogMandatoryMissingFields,
   getSupplierInventoryUpdateMissingFields,
+  getSupplierInventoryCompletionMissingFields,
+  formatInventoryRequiredForProductCovMessage,
   getSupplierProductCreateErrorMessage,
   getSupplierProductUpdateErrorMessage,
   getSupplierSpecificationTemplateMissingFields,
@@ -134,6 +136,45 @@ const STATUS_CONFIG = {
 /** ProductCOV / pricing setup is only for offers that are not rejected. */
 function isSupplierProductEligibleForProductCov(product) {
   return getSupplierOfferApprovalStatus(product) !== 'rejected';
+}
+
+function getSupplierProductCovInventoryBlockMessage(product) {
+  const missing = getSupplierInventoryCompletionMissingFields(product);
+  if (missing.length === 0) return '';
+  return formatInventoryRequiredForProductCovMessage(missing);
+}
+
+function getSupplierProductCovBlockMessage(product) {
+  if (!isSupplierProductEligibleForProductCov(product)) {
+    return 'ProductCOV unavailable while rejected. Correct the product and get approval first.';
+  }
+  return getSupplierProductCovInventoryBlockMessage(product);
+}
+
+function buildSupplierProductCovSearchParams(product) {
+  const params = new URLSearchParams();
+  const variantKey = String(product?.variantKey || '').trim();
+  if (variantKey) params.set('variantKey', variantKey);
+  const variantCode = product?.variantAsin || product?.variant_asin;
+  if (variantCode) params.set('variantAsin', variantCode);
+  if (product?.name) params.set('variantName', product.name);
+  if (product?.brand) params.set('brand', product.brand);
+  const offerId =
+    getSupplierOfferRowId(product) || product?.supplier_product_id || product?.id;
+  if (offerId) params.set('supplierProductId', offerId);
+  return params;
+}
+
+function openSupplierProductCov(navigate, product) {
+  const blockMessage = getSupplierProductCovBlockMessage(product);
+  if (blockMessage) {
+    alert(blockMessage);
+    return false;
+  }
+  const params = buildSupplierProductCovSearchParams(product);
+  if (!params.get('variantKey')) return false;
+  navigate(`/supplier-bcov?${params.toString()}`);
+  return true;
 }
 
 function getSupplierRejectionReason(product) {
@@ -664,8 +705,14 @@ const ProductManagement = ({ user }) => {
           setEditingItem(null);
         }
 
-        // After inventory (step 2), continue to ProductCOV only when the offer is eligible.
-        if (closeEditModal && isInventoryView && isSupplierProductEligibleForProductCov(updatedProduct)) {
+        // After inventory (step 2), continue to ProductCOV only when inventory is complete
+        // and the offer is eligible.
+        if (
+          closeEditModal &&
+          isInventoryView &&
+          isSupplierProductEligibleForProductCov(updatedProduct) &&
+          !getSupplierProductCovInventoryBlockMessage(updatedProduct)
+        ) {
           const nextBrand = String(
             data?.nextStep?.brand ||
               updatedProduct?.brandModel ||
@@ -1088,12 +1135,13 @@ const ProductManagement = ({ user }) => {
                       {productStatus === 'approved' && status.notice ? (
                         <p className="pm-card__notice pm-card__notice--success">{status.notice}</p>
                       ) : null}
-                      {productStatus !== 'rejected'
+                      {productStatus === 'pending'
                         ? (() => {
                             const brandWarning = getBrandApprovalWarning(
                               product.brandApprovalStatus,
                               product.brand || product.brandModel,
-                              product.brandApprovalMessage
+                              product.brandApprovalMessage,
+                              productStatus
                             );
                             if (!brandWarning) return null;
                             return (
@@ -1186,17 +1234,10 @@ const ProductManagement = ({ user }) => {
                           <button
                             type="button"
                             className="pm-card__action-btn"
-                            onClick={() => {
-                              const params = new URLSearchParams();
-                              params.set('variantKey', product.variantKey);
-                              if (variantCode) params.set('variantAsin', variantCode);
-                              if (product.name) params.set('variantName', product.name);
-                              if (product.brand) params.set('brand', product.brand);
-                              const offerId = getSupplierOfferRowId(product) || product.supplier_product_id;
-                              if (offerId) params.set('supplierProductId', offerId);
-                              navigate(`/supplier-bcov?${params.toString()}`);
-                            }}
-                            title="ProductCOV"
+                            onClick={() => openSupplierProductCov(navigate, product)}
+                            title={
+                              getSupplierProductCovInventoryBlockMessage(product) || 'ProductCOV'
+                            }
                           >
                             <Wallet size={15} />
                           </button>
@@ -1738,19 +1779,8 @@ const ProductDetailsModal = ({
                 <button
                   type="button"
                   className="btn-secondary"
-                  onClick={() => {
-                    const params = new URLSearchParams();
-                    params.set('variantKey', product.variantKey);
-                    if (product.variantAsin || product.variant_asin) {
-                      params.set('variantAsin', product.variantAsin || product.variant_asin);
-                    }
-                    if (product.name) params.set('variantName', product.name);
-                    if (product.brand) params.set('brand', product.brand);
-                    const offerId =
-                      getSupplierOfferRowId(product) || product.supplier_product_id || product.id;
-                    if (offerId) params.set('supplierProductId', offerId);
-                    detailsNavigate(`/supplier-bcov?${params.toString()}`);
-                  }}
+                  onClick={() => openSupplierProductCov(detailsNavigate, product)}
+                  title={getSupplierProductCovInventoryBlockMessage(product) || 'ProductCOV'}
                   style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}
                 >
                   ProductCOV
@@ -2383,8 +2413,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           message: data.message || '',
           brandName: data.brand?.name || brandName
         });
-        // Near-typo of an approved brand (Faststark → Fastrack): normalize the form value
-        // so submit stores the canonical approved catalog name.
+        // Exact approved catalog name (case differs): store the catalog spelling.
         const canonicalName = String(data.brand?.name || '').trim();
         if (
           data.brandStatus === 'approved' &&

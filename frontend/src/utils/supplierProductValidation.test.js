@@ -1,20 +1,25 @@
 import { describe, expect, it } from 'vitest';
+import { SUPPLIER_CURRENT_STOCK_LABEL, SUPPLIER_MRP_LABEL } from './supplierStockLabel';
 import {
   countSupplierProductPhotos,
+  formatInventoryRequiredForProductCovMessage,
   formatMissingProductPhotosMessage,
   formatSupplierProductValidationMessage,
   getSupplierCatalogMandatoryMissingFields,
+  getSupplierInventoryCompletionMissingFields,
   getSupplierInventoryUpdateMissingFields,
   getSupplierProductCreateErrorMessage,
   getSupplierProductUpdateErrorMessage,
+  INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE,
+  isSupplierInventoryCompleteForProductCov,
   MIN_SUPPLIER_PRODUCT_PHOTOS
 } from './supplierProductValidation';
 
 describe('supplierProductValidation', () => {
   it('lists missing inventory fields', () => {
     expect(getSupplierInventoryUpdateMissingFields({})).toEqual([
-      'MRP',
-      'Current stock with you',
+      SUPPLIER_MRP_LABEL,
+      SUPPLIER_CURRENT_STOCK_LABEL,
       'SGST',
       'CGST',
       'IGST'
@@ -31,6 +36,36 @@ describe('supplierProductValidation', () => {
         igst_rate: '18'
       })
     ).toEqual([]);
+  });
+
+  it('blocks Product COV until mandatory inventory fields are saved', () => {
+    expect(isSupplierInventoryCompleteForProductCov({ price: 0, stock: 0 })).toBe(false);
+    expect(
+      getSupplierInventoryCompletionMissingFields({
+        price: 0,
+        stock: 0,
+        sgst_rate: null,
+        cgst_rate: null,
+        igst_rate: null
+      })
+    ).toEqual(['SGST', 'CGST', 'IGST']);
+    expect(
+      formatInventoryRequiredForProductCovMessage(['SGST', 'CGST', 'IGST'])
+    ).toBe(
+      'Inventory completion is required before Product COV. Please complete: SGST, CGST, IGST.'
+    );
+    expect(formatInventoryRequiredForProductCovMessage([])).toBe(
+      INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
+    );
+    expect(
+      isSupplierInventoryCompleteForProductCov({
+        price: 120,
+        stock: 0,
+        sgst_rate: 9,
+        cgst_rate: 9,
+        igst_rate: 18
+      })
+    ).toBe(true);
   });
 
   it('requires catalog identity on update', () => {

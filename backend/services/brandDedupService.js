@@ -108,9 +108,7 @@ export async function findBrandByCatalogDedupKey(brandName, dbClient, { excludeI
 
 /**
  * Match a typed brand against already-approved catalog brands.
- * 1) Exact / controlled identity (same catalog dedup key, e.g. Philips ↔ Phillips)
- * 2) Near-typo (edit distance 1), e.g. Faststark ↔ Fastrack
- * Never matches distant names (SPARSGA ↛ Sparsh) or short acronym collisions.
+ * Exact spelling only (case/punctuation ignored). Misspellings are a new brand.
  */
 export async function findApprovedCatalogBrandCloseMatch(brandName, dbClient) {
   const typedKey = catalogBrandDedupKey(brandName);
@@ -133,18 +131,13 @@ export async function findApprovedCatalogBrandCloseMatch(brandName, dbClient) {
     }))
     .filter((item) => item.key || item.norm);
 
-  if (typedKey) {
-    const exact = withKeys.filter((item) => item.key === typedKey);
-    if (exact.length > 0) {
-      const [best] = sortBrandRowsForCanonicalPick(exact.map((item) => item.row));
-      return { data: best || null, error: null, matchType: 'exact' };
-    }
-  }
-
-  const typos = withKeys.filter((item) => isApprovedBrandNearTypo(typedNorm, item.norm));
-  if (typos.length > 0) {
-    const [best] = sortBrandRowsForCanonicalPick(typos.map((item) => item.row));
-    return { data: best || null, error: null, matchType: 'typo' };
+  const exact = withKeys.filter(
+    (item) =>
+      (typedKey && item.key === typedKey) || (typedNorm && item.norm === typedNorm)
+  );
+  if (exact.length > 0) {
+    const [best] = sortBrandRowsForCanonicalPick(exact.map((item) => item.row));
+    return { data: best || null, error: null, matchType: 'exact' };
   }
 
   return { data: null, error: null, matchType: null };
@@ -164,9 +157,166 @@ function sortBrandRowsForCanonicalPick(rows = []) {
   });
 }
 
+export { sortBrandRowsForCanonicalPick };
+
+/** True when a brand row was closed by catalog dedup, not by an admin reject action. */
+export function isAutoMergedDuplicateBrandRejection(reason) {
+  const text = String(reason || '');
+  return (
+    /merged automatically/i.test(text) || /duplicate of (approved brand\s+)?["“'`]/i.test(text)
+  );
+}
+
+export function canonicalBrandNameFromDedupReason(reason) {
+  const text = String(reason || '');
+  const quoted = text.match(/duplicate of (?:approved brand\s+)?["“']([^"”']+)["”']?/i);
+  if (quoted?.[1]) return String(quoted[1]).trim();
+  const plain = text.match(/duplicate of (?:approved brand\s+)?([^\s.]+)/i);
+  return plain?.[1] ? String(plain[1]).trim() : '';
+}
+
+function catalogKeyForLabel(label) {
+  return catalogBrandDedupKey(label) || normalizeBrandKey(label);
+}
+
+export function collectProductBrandLabels(product = {}) {
+  const attrs =
+    product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+      ? product.attributes
+      : {};
+  const labels = [product?.brand, product?.brandModel, attrs.brand, attrs.brandModel];
+  const seen = new Set();
+  const unique = [];
+  for (const raw of labels) {
+    const label = String(raw || '').trim();
+    if (!label) continue;
+    const key = catalogKeyForLabel(label);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(label);
+  }
+  return unique;
+}
+
+export function resolveBrandRowForProductLabels(labels = [], preferredByKey = new Map()) {
+  const entries = (Array.isArray(labels) ? labels : []).map((label) => {
+    const key = catalogKeyForLabel(label);
+    return {
+      label,
+      key,
+      row: key && typeof preferredByKey.get === 'function' ? preferredByKey.get(key) : null
+    };
+  });
+
+  const approved = entries.find(
+    (entry) => String(entry.row?.status || '').toLowerCase() === 'approved'
+  );
+  if (approved) return approved;
+
+  for (const entry of entries) {
+    if (!isAutoMergedDuplicateBrandRejection(entry.row?.rejection_reason)) continue;
+    const canonicalName = canonicalBrandNameFromDedupReason(entry.row.rejection_reason);
+    const canonicalKey = catalogKeyForLabel(canonicalName);
+    const live =
+      canonicalKey && typeof preferredByKey.get === 'function'
+        ? preferredByKey.get(canonicalKey)
+        : null;
+    if (live && String(live.id || '') !== String(entry.row?.id || '')) {
+      return {
+        label: canonicalName || entry.label,
+        key: canonicalKey,
+        row: live
+      };
+    }
+  }
+
+  return entries[0] || { label: '', key: '', row: null };
+}
+
 /**
- * Merge spelling-variant duplicates (Philips / Phillips) in the brands table.
- * Keeps one canonical row per brand and rejects the rest.
+ * Brand-approval banner for supplier product cards.
+ * Approved / active offers never inherit leftover pending or duplicate-merge noise.
+ */
+export function toSupplierProductCardBrandApprovalView(product, preferredByKey) {
+  const offerStatus = String(product?.status || '').trim().toLowerCase();
+  if (offerStatus === 'approved' || offerStatus === 'active') {
+    return { status: 'approved', message: '' };
+  }
+
+  const labels = collectProductBrandLabels(product);
+  const resolved = resolveBrandRowForProductLabels(labels, preferredByKey);
+  return toSupplierBrandApprovalView(resolved.row, resolved.label || labels[0] || '');
+}
+
+export function catalogKeyForBrandRow(row) {
+  const name = String(row?.name || '').trim();
+  return (
+    catalogBrandDedupKey(name) ||
+    normalizeBrandKey(name) ||
+    normalizeBrandKey(row?.normalized_name)
+  );
+}
+
+/**
+ * One preferred brand row per catalog identity (approved > pending > rejected).
+ * Prevents a leftover auto-merged duplicate from hiding the live brand status.
+ */
+export function indexPreferredBrandRowsByCatalogKey(rows = []) {
+  const grouped = new Map();
+  for (const row of rows || []) {
+    const key = catalogKeyForBrandRow(row);
+    if (!key) continue;
+    const list = grouped.get(key);
+    if (list) list.push(row);
+    else grouped.set(key, [row]);
+  }
+  const preferred = new Map();
+  for (const [key, group] of grouped) {
+    const [best] = sortBrandRowsForCanonicalPick(group);
+    preferred.set(key, best);
+  }
+  return preferred;
+}
+
+/** Supplier-facing brand approval fields for a product card. */
+export function toSupplierBrandApprovalView(row, brandLabel = '') {
+  const label = String(brandLabel || row?.name || '').trim();
+  if (!row) {
+    return {
+      status: label ? 'unregistered' : 'missing',
+      message: label ? `Brand approval required for "${label}".` : ''
+    };
+  }
+
+  const status = String(row.status || 'pending').trim().toLowerCase();
+  if (status === 'approved') {
+    return { status: 'approved', message: '' };
+  }
+
+  if (status === 'rejected') {
+    if (isAutoMergedDuplicateBrandRejection(row.rejection_reason)) {
+      return {
+        status: 'unregistered',
+        message: `Brand approval required for "${row.name || label}". Request this brand under Select yourself and wait for admin approval before submitting products.`
+      };
+    }
+    return {
+      status: 'rejected',
+      message: row.rejection_reason
+        ? `Brand "${row.name || label}" was rejected: ${row.rejection_reason}`
+        : `Brand "${row.name || label}" was rejected by admin.`
+    };
+  }
+
+  return {
+    status: 'pending',
+    message: `Brand approval pending for "${row.name || label}".`
+  };
+}
+
+/**
+ * Merge exact duplicate brand rows (same spelling, ignoring case) in the brands table.
+ * Spelling variants stay separate brands and are not auto-rejected.
  */
 export async function consolidateDuplicateBrands(dbClient) {
   const { data: rows, error } = await listAllBrands(dbClient);

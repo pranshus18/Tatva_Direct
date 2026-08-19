@@ -86,7 +86,7 @@ test('mergeApprovedBrandsIntoChainEntries adds stub rows for missing approved br
   assert.equal(appleEntry.role, '');
 });
 
-test('mergeApprovedBrandsIntoChainEntries skips Phillips when Philips already present', () => {
+test('mergeApprovedBrandsIntoChainEntries keeps Philips and Phillips as separate brands', () => {
   const merged = mergeApprovedBrandsIntoChainEntries(
     {
       companyInfoEntries: [{ id: 'e1', role: 'dealer', brands: 'Phillips', companyName: 'Hub' }]
@@ -97,9 +97,8 @@ test('mergeApprovedBrandsIntoChainEntries skips Phillips when Philips already pr
     ]
   );
 
-  const brandNames = merged.companyInfoEntries.map((entry) => entry.brands);
-  assert.equal(brandNames.length, 1);
-  assert.equal(brandNames[0], 'Phillips');
+  const brandNames = merged.companyInfoEntries.map((entry) => entry.brands).sort();
+  assert.deepEqual(brandNames, ['Philips', 'Phillips']);
 });
 
 test('mergeChainEntriesForDisplay keeps separate brands and merges by id', async () => {

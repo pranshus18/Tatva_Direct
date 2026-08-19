@@ -6,6 +6,7 @@ import {
   findBrandByCatalogDedupKey,
   findApprovedCatalogBrandCloseMatch,
   getCanonicalBrandNormalizedName,
+  isAutoMergedDuplicateBrandRejection,
   pickCanonicalBrandDisplayName
 } from './brandDedupService.js';
 import {
@@ -74,7 +75,7 @@ export async function resolveBrandApprovalStatus({ supabase, brandName }) {
       if (fallback.error) throw fallback.error;
       brandRow = fallback.data;
     }
-    // Near-typo of an approved catalog brand (Faststark → Fastrack) counts as approved.
+    // Exact approved catalog match only. Misspellings are a new brand request.
     if (!brandRow || String(brandRow.status || '').toLowerCase() !== 'approved') {
       const closeMatch = await findApprovedCatalogBrandCloseMatch(name, supabase);
       if (
@@ -122,6 +123,15 @@ export async function resolveBrandApprovalStatus({ supabase, brandName }) {
 
   if (status === 'rejected') {
     const reason = String(brandRow.rejection_reason || '').trim();
+    if (isAutoMergedDuplicateBrandRejection(reason)) {
+      return {
+        ok: false,
+        status: 'unregistered',
+        code: 'brand_approval_required',
+        message: `Brand approval required for "${name}". Request this brand under Select yourself and wait for admin approval before submitting products.`,
+        brand: null
+      };
+    }
     return {
       ok: false,
       status: 'rejected',
@@ -173,7 +183,7 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     !!brandRow && String(brandRow.status || '').trim().toLowerCase() === 'pending';
 
   if (!brandRow) {
-    // Approved catalog match (exact or near-typo) — treat as approved for product submit.
+    // Approved catalog match (exact spelling) — treat as approved for product submit.
     // Path B also gets ok:true so the UI can say the brand is already approved.
     const catalogMatch = await findApprovedCatalogBrandCloseMatch(name, supabase);
     if (catalogMatch.data && String(catalogMatch.data.status || '').toLowerCase() === 'approved') {

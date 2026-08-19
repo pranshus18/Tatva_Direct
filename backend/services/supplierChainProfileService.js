@@ -204,14 +204,9 @@ export function buildEffectiveSupplierChainProfile(profile, pendingPayload) {
   };
 }
 
-function collapseRepeatedLetters(value) {
-  return String(value || '').replace(/(.)\1+/g, '$1');
-}
-
 function brandKeysForEntryMatch(label) {
   const key = normalizeBrandKey(String(label || '').trim());
-  if (!key) return [];
-  return [key, collapseRepeatedLetters(key)];
+  return key ? [key] : [];
 }
 
 function chainEntryMatchesBrand(entry, brandName) {
@@ -381,8 +376,7 @@ export async function fetchSupplierBrandRequests(userId, profileContext = null) 
 
     let catalogRows = [];
     if (needsCatalogMerge) {
-      // Match in memory with catalog dedup keys — DB normalized_name spellings can differ
-      // (e.g. Phillips → philips) so .in(normalizeBrandKey) misses approved rows.
+      // Match in memory with exact catalog keys. Misspellings stay separate brands.
       const { data: allBrandRows, error: allBrandError } = await supabase
         .from('brands')
         .select('name, normalized_name, status, rejection_reason, requested_by, requested_at, updated_at, created_at');

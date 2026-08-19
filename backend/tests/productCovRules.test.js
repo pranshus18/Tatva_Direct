@@ -4,7 +4,9 @@ import { composeBcovNotes } from '../services/supplierCatalogHelpersService.js';
 import {
   validateAndNormalizeBcovLevels,
   deleteSupplierBcovLevelsIfNoRemainingOffer,
-  isBcovLevelOwnedByOffer
+  isBcovLevelOwnedByOffer,
+  evaluateProductCovInventoryGate,
+  INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
 } from '../services/supplierBcovService.js';
 import {
   extractBcovScopeKeys,
@@ -416,4 +418,25 @@ test('isBcovLevelOwnedByOffer hides leftover Product_COV from deleted listings',
     ),
     true
   );
+});
+
+test('evaluateProductCovInventoryGate blocks Product_COV until inventory is complete', () => {
+  const incomplete = evaluateProductCovInventoryGate({
+    price: 0,
+    stock: 0,
+    igst_rate: null,
+    cgst_rate: null,
+    sgst_rate: null
+  });
+  assert.equal(incomplete.ok, false);
+  assert.equal(incomplete.message, INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE);
+
+  const complete = evaluateProductCovInventoryGate({
+    price: 120,
+    stock: 0,
+    igst_rate: 18,
+    cgst_rate: 9,
+    sgst_rate: 9
+  });
+  assert.equal(complete.ok, true);
 });

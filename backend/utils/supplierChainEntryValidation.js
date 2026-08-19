@@ -20,19 +20,14 @@ function parseBrandsListForValidation(brands) {
   ];
 }
 
-function collapseRepeatedLetters(value) {
-  return String(value || '').replace(/(.)\1+/g, '$1');
-}
-
-/** Complete-name key only — "H" must not equal "HP"; Philips still equals Phillips. */
+/** Complete-name key only — "H" must not equal "HP". Spelling variants are distinct brands. */
 function brandKeyForDuplicateCheck(raw) {
-  const token = String(raw || '')
+  return String(raw || '')
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return collapseRepeatedLetters(token);
 }
 
 export function validateUniqueBrandsAcrossEntries(entries) {

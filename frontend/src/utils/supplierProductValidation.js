@@ -97,6 +97,33 @@ export function getSupplierInventoryUpdateMissingFields(formData = {}) {
   return missing;
 }
 
+export const INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE =
+  'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.';
+
+/** Map a saved offer/product row onto inventory form fields. */
+export function getSupplierInventoryCompletionMissingFields(product = {}) {
+  if (!product) {
+    return getSupplierInventoryUpdateMissingFields({});
+  }
+  return getSupplierInventoryUpdateMissingFields({
+    price: product.price,
+    stock: product.stock,
+    sgst_rate: product.sgst_rate ?? product.sgstRate,
+    cgst_rate: product.cgst_rate ?? product.cgstRate,
+    igst_rate: product.igst_rate ?? product.igstRate
+  });
+}
+
+export function isSupplierInventoryCompleteForProductCov(product) {
+  return getSupplierInventoryCompletionMissingFields(product).length === 0;
+}
+
+export function formatInventoryRequiredForProductCovMessage(missingFields = []) {
+  const missing = Array.isArray(missingFields) ? missingFields.filter(Boolean) : [];
+  if (missing.length === 0) return INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE;
+  return `Inventory completion is required before Product COV. Please complete: ${missing.join(', ')}.`;
+}
+
 /**
  * Mandatory fields for Manage Products catalog create/update (step 1).
  */

@@ -52,10 +52,10 @@ test('listApprovedCatalogBrands uses brands-table approval only and marks supply
 
   const brands = await listApprovedCatalogBrands(supabase);
   // samsung has a supply chain but is NOT in brands.status=approved — must not appear.
-  assert.equal(brands.length, 2);
+  assert.equal(brands.length, 3);
   assert.deepEqual(
     brands.map((row) => row.name).sort(),
-    ['ACC', 'Philips']
+    ['ACC', 'Philips', 'Phillips']
   );
   const acc = brands.find((row) => row.name === 'ACC');
   assert.equal(acc?.hasAdminSupplyChain, true);

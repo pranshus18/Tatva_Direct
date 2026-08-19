@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
  * Lightweight regression coverage for the Select yourself approval → roles path.
  * Mirrors the catalogBrandDedupKey matching used by fetchSupplierApprovedBrands.
  */
-test('catalogBrandDedupKey matches Phillips spelling variants used after admin approval', async () => {
+test('catalogBrandDedupKey treats spelling variants as distinct brands', async () => {
   const { catalogBrandDedupKey, normalizeBrandKey } = await import(
     '../services/supplyChainSharedService.js'
   );
@@ -14,8 +14,9 @@ test('catalogBrandDedupKey matches Phillips spelling variants used after admin a
   const storedNormalized = 'philips';
   const identity = (value) => catalogBrandDedupKey(value) || normalizeBrandKey(value);
 
-  assert.equal(identity(declared), identity(storedNormalized));
-  assert.equal(identity(declared), identity('Philips'));
+  assert.notEqual(identity(declared), identity(storedNormalized));
+  assert.notEqual(identity(declared), identity('Philips'));
+  assert.equal(identity('Philips'), identity('philips'));
 });
 
 test('duplicate-of-approved rejection reason is detectable', () => {

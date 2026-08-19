@@ -24,4 +24,35 @@ describe('brandApprovalStatus', () => {
     expect(getBrandApprovalWarning('rejected', 'Nykaa')?.tone).toBe('danger');
     expect(getBrandApprovalWarning('approved', 'Nykaa')).toBeNull();
   });
+
+  it('does not show auto-merged duplicate leftovers as brand rejection', () => {
+    expect(
+      getBrandApprovalWarning(
+        'rejected',
+        'Philips',
+        'Brand "Philips" was rejected: Duplicate of "Philips" — merged automatically.'
+      )
+    ).toBeNull();
+  });
+
+  it('hides brand rejection and duplicate messages once the product is approved', () => {
+    expect(
+      getBrandApprovalWarning(
+        'rejected',
+        'Phillips',
+        'Brand "Phillips" was rejected: Duplicate of "Philips" — merged automatically.',
+        'approved'
+      )
+    ).toBeNull();
+    expect(
+      getBrandApprovalWarning('pending', 'Philips', 'Brand approval pending for "Philips".', 'approved')
+    ).toBeNull();
+    expect(
+      getBrandApprovalWarning(
+        'rejected',
+        'Phillips',
+        'Brand "Phillips" was rejected: Duplicate of approved brand "Philips".'
+      )
+    ).toBeNull();
+  });
 });

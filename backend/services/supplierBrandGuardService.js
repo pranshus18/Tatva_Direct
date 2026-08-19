@@ -33,73 +33,20 @@ export function resolveUpstreamBrandLabel(attributes, productBrand) {
   return fromAttrs || fromProduct || '';
 }
 
-function collapseRepeatedLetters(value) {
-  return String(value || '').replace(/(.)\1+/g, '$1');
-}
-
-function brandNameEditDistance(left, right) {
-  const a = String(left || '');
-  const b = String(right || '');
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  const rows = a.length + 1;
-  const cols = b.length + 1;
-  const matrix = Array.from({ length: rows }, () => new Array(cols).fill(0));
-  for (let i = 0; i < rows; i += 1) matrix[i][0] = i;
-  for (let j = 0; j < cols; j += 1) matrix[0][j] = j;
-  for (let i = 1; i < rows; i += 1) {
-    for (let j = 1; j < cols; j += 1) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      matrix[i][j] = Math.min(
-        matrix[i - 1][j] + 1,
-        matrix[i][j - 1] + 1,
-        matrix[i - 1][j - 1] + cost
-      );
-    }
-  }
-  return matrix[a.length][b.length];
-}
-
 export function brandTokenKeysMatch(a, b) {
   const keyA = normalizeBrandKey(String(a).replace(/-/g, ' '));
   const keyB = normalizeBrandKey(String(b).replace(/-/g, ' '));
   if (!keyA || !keyB) return false;
   if (keyA === keyB) return true;
-  if (collapseRepeatedLetters(keyA) === collapseRepeatedLetters(keyB)) return true;
 
   const wordsA = keyA.split(' ').filter(Boolean);
   const wordsB = keyB.split(' ').filter(Boolean);
   const tokenA = wordsA[0] || '';
   const tokenB = wordsB[0] || '';
 
-  // Same leading token (Philips / Phillips Lighting) — require a complete token, never a prefix.
-  if (
-    tokenA.length >= 3 &&
-    tokenB.length >= 3 &&
-    collapseRepeatedLetters(tokenA) === collapseRepeatedLetters(tokenB)
-  ) {
+  // Same complete leading token (Philips / Philips Lighting) — not spelling variants.
+  if (tokenA.length >= 3 && tokenB.length >= 3 && tokenA === tokenB) {
     return true;
-  }
-
-  // Near-typo of a complete brand token (Faststark ≈ Fastrack).
-  const maxLen = Math.max(tokenA.length, tokenB.length);
-  const minLen = Math.min(tokenA.length, tokenB.length);
-  const lengthDelta = Math.abs(tokenA.length - tokenB.length);
-  if (maxLen >= 5 && lengthDelta <= 2) {
-    const distance = brandNameEditDistance(tokenA, tokenB);
-    if (distance === 1 && lengthDelta <= 1) {
-      const shorterLen = Math.min(tokenA.length, tokenB.length);
-      const longerLen = Math.max(tokenA.length, tokenB.length);
-      // Avoid short extensions of short brands (pran → prans).
-      if (!(longerLen > shorterLen && shorterLen < 6)) return true;
-    } else {
-      let sharedPrefix = 0;
-      while (sharedPrefix < minLen && tokenA[sharedPrefix] === tokenB[sharedPrefix]) {
-        sharedPrefix += 1;
-      }
-      if (minLen >= 8 && sharedPrefix >= 4 && distance <= 3) return true;
-    }
   }
 
   // Multi-word containment: "havells" matches "havells electrical", but "h" must not match "hp".

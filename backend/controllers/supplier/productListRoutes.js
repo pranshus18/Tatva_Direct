@@ -14,6 +14,10 @@ import { resolveSupplierOfferDisplayImages } from '../../services/productImageSe
 import { resolveSupplierOfferDisplayName } from '../../services/supplierProductWriteService.js';
 import { catalogBrandDedupKey, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 import {
+  indexPreferredBrandRowsByCatalogKey,
+  toSupplierProductCardBrandApprovalView
+} from '../../services/brandDedupService.js';
+import {
   mergeCatalogAndOfferSpecificationsForDisplay,
   parseSpecificationsObject,
   resolveSupplierOfferDisplaySpecifications,
@@ -242,44 +246,14 @@ router.get('/products', authenticateToken, async (req, res) => {
       if (brandKeys.size > 0) {
         const { data: brandRows } = await supabase
           .from('brands')
-          .select('name, normalized_name, status, rejection_reason');
-        brandStatusByKey = new Map();
-        for (const row of brandRows || []) {
-          const name = String(row?.name || '').trim();
-          const key =
-            catalogBrandDedupKey(name) ||
-            normalizeBrandKey(name) ||
-            normalizeBrandKey(row?.normalized_name);
-          if (!key) continue;
-          brandStatusByKey.set(key, row);
-        }
+          .select('id, name, normalized_name, status, rejection_reason, created_at');
+        brandStatusByKey = indexPreferredBrandRowsByCatalogKey(brandRows || []);
       }
 
       for (const product of products) {
-        const brandLabel = String(product?.brand || product?.brandModel || '').trim();
-        const key = catalogBrandDedupKey(brandLabel) || normalizeBrandKey(brandLabel);
-        const row = key ? brandStatusByKey.get(key) : null;
-        if (!brandLabel) {
-          product.brandApprovalStatus = 'missing';
-          product.brandApprovalMessage = '';
-          continue;
-        }
-        if (!row) {
-          product.brandApprovalStatus = 'unregistered';
-          product.brandApprovalMessage = `Brand approval required for "${brandLabel}".`;
-          continue;
-        }
-        const brandStatus = String(row.status || 'pending').toLowerCase();
-        product.brandApprovalStatus = brandStatus;
-        if (brandStatus === 'approved') {
-          product.brandApprovalMessage = '';
-        } else if (brandStatus === 'rejected') {
-          product.brandApprovalMessage = row.rejection_reason
-            ? `Brand "${row.name || brandLabel}" was rejected: ${row.rejection_reason}`
-            : `Brand "${row.name || brandLabel}" was rejected by admin.`;
-        } else {
-          product.brandApprovalMessage = `Brand approval pending for "${row.name || brandLabel}".`;
-        }
+        const view = toSupplierProductCardBrandApprovalView(product, brandStatusByKey);
+        product.brandApprovalStatus = view.status;
+        product.brandApprovalMessage = view.message;
       }
     } catch (brandStatusError) {
       console.warn(

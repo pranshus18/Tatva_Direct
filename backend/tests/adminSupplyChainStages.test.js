@@ -66,7 +66,7 @@ test('findCategorySupplyChainRowForBrandKey: prefers latest updated chain', () =
   ]);
 });
 
-test('findCategorySupplyChainRowForBrandKey: matches spelling variants via dedup key', () => {
+test('findCategorySupplyChainRowForBrandKey: spelling variants are not the same brand', () => {
   const rows = [
     {
       category_name: 'Philips',
@@ -75,10 +75,7 @@ test('findCategorySupplyChainRowForBrandKey: matches spelling variants via dedup
     }
   ];
   const picked = findCategorySupplyChainRowForBrandKey(rows, 'Phillips');
-  assert.equal(picked?.category_name, 'Philips');
-  assert.deepEqual(normalizeChainRolesFromStages(picked?.stages), [
-    'manufacturer',
-    'dealer',
-    'retailer'
-  ]);
+  assert.equal(picked, null);
+  const exact = findCategorySupplyChainRowForBrandKey(rows, 'Philips');
+  assert.equal(exact?.category_name, 'Philips');
 });

@@ -22,10 +22,6 @@ export function parseBrandsListForValidation(brands) {
   ];
 }
 
-function collapseRepeatedLetters(value) {
-  return String(value || '').replace(/(.)\1+/g, '$1');
-}
-
 /** Normalize brand text without spelling-collapse (spaces/punctuation only). */
 export function normalizeBrandIdentity(raw) {
   return String(raw || '')
@@ -39,35 +35,17 @@ export function normalizeBrandIdentity(raw) {
 /**
  * Case-insensitive brand key for duplicate detection across entries.
  * Uses the complete normalized name only — prefixes must not match
- * (e.g. "H" is not a duplicate of "HP"; "Philips" still matches "Phillips").
- *
- * Spelling-collapse (Phillips → Philips) applies only to complete names (length ≥ 5)
- * so partial/short typing cannot collide with acronyms (AB must not equal ABB).
+ * (e.g. "H" is not a duplicate of "HP"). Spelling variants are distinct brands.
  */
 export function brandKeyForDuplicateCheck(raw) {
-  const token = normalizeBrandIdentity(raw);
-  if (!token) return '';
-  if (token.length >= 5) {
-    return collapseRepeatedLetters(token);
-  }
-  return token;
+  return normalizeBrandIdentity(raw);
 }
 
-/** True only when both values refer to the same complete brand name. */
+/** True only when both values refer to the same complete brand spelling. */
 export function areBrandNamesExactDuplicates(left, right) {
   const leftNorm = normalizeBrandIdentity(left);
   const rightNorm = normalizeBrandIdentity(right);
-  if (!leftNorm || !rightNorm) return false;
-  if (leftNorm === rightNorm) return true;
-
-  const leftKey = brandKeyForDuplicateCheck(left);
-  const rightKey = brandKeyForDuplicateCheck(right);
-  if (!leftKey || !rightKey || leftKey !== rightKey) return false;
-
-  // Collapsed-key equality is only trusted for complete-looking names.
-  const minLen = Math.min(leftNorm.length, rightNorm.length);
-  const lengthDelta = Math.abs(leftNorm.length - rightNorm.length);
-  return minLen >= 5 && lengthDelta <= 2;
+  return Boolean(leftNorm && rightNorm && leftNorm === rightNorm);
 }
 
 function brandNameEditDistance(left, right) {
@@ -110,11 +88,9 @@ function collectApprovedCatalogRows(catalogBrands = []) {
 }
 
 /**
- * Exact / controlled approved-catalog match used to block a Path B "new brand" request
- * and to treat near-typos of approved brands as the same brand for product submit.
- * Includes Philips/Phillips spelling collapse and single-character typos (Faststark → Fastrack).
- * Never matches distant names such as SPARSGA → Sparsh.
- * @returns {{ name: string, matchType: 'exact'|'typo' } | null}
+ * Exact approved-catalog match used to block a Path B "new brand" request.
+ * Misspellings are a new brand. Prefix/typo tips stay in findApprovedCatalogBrandSuggestions.
+ * @returns {{ name: string, matchType: 'exact' } | null}
  */
 export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
   const typed = String(typedName || '').trim();
@@ -123,36 +99,10 @@ export function findApprovedCatalogBrandMatch(typedName, catalogBrands = []) {
 
   const rows = collectApprovedCatalogRows(catalogBrands);
 
-  // Literal normalized identity (no spelling collapse).
   const exact = rows.find((row) => normalizeBrandIdentity(row.name) === typedNorm);
   if (exact) return { name: exact.name, matchType: 'exact' };
 
-  // Controlled spelling variant only (Philips ↔ Phillips).
-  const variant = rows.find((row) => areBrandNamesExactDuplicates(typed, row.name));
-  if (variant) return { name: variant.name, matchType: 'exact' };
-
-  // Near-typo of an approved brand (edit distance 1, or longer-name distance ≤ 3).
-  const typo = rows.find((row) => {
-    const maxLen = Math.max(typedNorm.length, row.norm.length);
-    const minLen = Math.min(typedNorm.length, row.norm.length);
-    const lengthDelta = Math.abs(typedNorm.length - row.norm.length);
-    if (maxLen < 5 || lengthDelta > 2) return false;
-    const distance = brandNameEditDistance(typedNorm, row.norm);
-    if (distance === 1 && lengthDelta <= 1) {
-      // Avoid short extensions of short brands (pran → prans).
-      if (typedNorm.length > row.norm.length && row.norm.length < 6) return false;
-      return true;
-    }
-    let sharedPrefix = 0;
-    while (
-      sharedPrefix < minLen &&
-      typedNorm[sharedPrefix] === row.norm[sharedPrefix]
-    ) {
-      sharedPrefix += 1;
-    }
-    return minLen >= 8 && sharedPrefix >= 4 && distance <= 3;
-  });
-  return typo ? { name: typo.name, matchType: 'typo' } : null;
+  return null;
 }
 
 /**
@@ -215,7 +165,7 @@ export function formatApprovedCatalogBrandSuggestionMessage(typedName, matchedNa
   return `Suggestion: “${typed}” may refer to approved brand “${matched}”. You can keep typing, or select “${matched}” from the approved list.`;
 }
 
-/** Merge spelling variants (e.g. Philips / Phillips) into one display name. */
+/** Keep unique brand names. Same spelling (any case) is one brand; typos stay separate. */
 export function dedupeBrandNames(names = []) {
   const deduped = [];
   const indexByKey = new Map();

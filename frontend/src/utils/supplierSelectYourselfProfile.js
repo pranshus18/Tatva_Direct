@@ -1207,7 +1207,7 @@ export function mergeCompanyInfoEntriesById(...entryLists) {
   return merged;
 }
 
-/** Merge profile rows that refer to the same brand (e.g. Philips vs Phillips). */
+/** Merge profile rows that refer to the same brand spelling (case-insensitive). */
 export function deduplicateCompanyInfoEntriesByBrand(entries = []) {
   const merged = [];
   const indexByBrandKey = new Map();

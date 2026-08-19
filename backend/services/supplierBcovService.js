@@ -1,6 +1,32 @@
 import { composeBcovNotes, parseBcovNotes, toFiniteNumber } from './supplierCatalogHelpersService.js';
 import { parseCovThresholdNumber } from './procurementSharedService.js';
 import { fetchCanonicalVariantMrp } from './variantMrpService.js';
+import { validateSupplierInventoryUpdateFields } from './supplierProductUpdateValidation.js';
+
+export const INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE =
+  'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.';
+
+/** Product_COV requires a completed Manage Inventory save (MRP, stock, GST). */
+export function evaluateProductCovInventoryGate(offer = {}) {
+  const attrs =
+    offer?.attributes && typeof offer.attributes === 'object' && !Array.isArray(offer.attributes)
+      ? offer.attributes
+      : {};
+  const inventoryCheck = validateSupplierInventoryUpdateFields({
+    price: offer?.price,
+    stock: offer?.stock,
+    igst_rate: offer?.igst_rate ?? attrs.igstRate ?? attrs.igst_rate,
+    cgst_rate: offer?.cgst_rate ?? attrs.cgstRate ?? attrs.cgst_rate,
+    sgst_rate: offer?.sgst_rate ?? attrs.sgstRate ?? attrs.sgst_rate
+  });
+  if (inventoryCheck.ok) {
+    return { ok: true, message: '' };
+  }
+  return {
+    ok: false,
+    message: INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
+  };
+}
 
 /**
  * Catalog MRP from supplier_products for a variant (Manage Inventory).
@@ -55,7 +81,7 @@ export async function resolveVariantProductCovEligibility(supabase, supplierId, 
 
   const { data, error } = await supabase
     .from('supplier_products')
-    .select('id, status, is_active')
+    .select('id, status, is_active, price, stock, igst_rate, cgst_rate, sgst_rate, attributes')
     .eq('supplier_id', supplierId)
     .eq('variant_key', key)
     .order('updated_at', { ascending: false })
@@ -85,6 +111,15 @@ export async function resolveVariantProductCovEligibility(supabase, supplierId, 
       status: 'rejected',
       message:
         'This product is rejected. Correct it and wait for admin approval before configuring Product_COV.'
+    };
+  }
+
+  const inventoryGate = evaluateProductCovInventoryGate(offer);
+  if (!inventoryGate.ok) {
+    return {
+      eligible: false,
+      status: 'inventory_incomplete',
+      message: inventoryGate.message
     };
   }
 
