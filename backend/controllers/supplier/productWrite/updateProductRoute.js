@@ -573,7 +573,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
           attributes: updatedSupplierProduct.attributes || {},
           images: resolveSupplierOfferDisplayImages(
             updatedSupplierProduct.attributes?.images,
-            baseProduct?.images
+            []
           )
         };
 

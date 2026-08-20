@@ -929,7 +929,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         variantKey: createdOffer?.variant_key || resolvedVariantKey,
         variantAsin: createdOffer?.variant_asin || variantAsin,
         // Only images uploaded for this offer — never catalog history from prior listings.
-        images: resolveSupplierOfferDisplayImages(normalizedImageUrls, baseProduct?.images)
+        images: resolveSupplierOfferDisplayImages(normalizedImageUrls, [])
       };
 
       if (isCatalogGuardrailsEnabled()) {

@@ -1,4 +1,4 @@
-import { enrichProductsWithOfferImages, resolveSupplierOfferDisplayImages } from './productImageService.js';
+import { resolveSellerOwnedListingImages } from './productImageService.js';
 import {
   aggregateEligibleDiscoveryOffers,
   filterListedOffersForDiscoveryAudience,
@@ -177,10 +177,16 @@ function extractIdentityFields(product, specs = {}, offer = null) {
   };
 }
 
-/** Per-variant gallery: only this offer's photos, not every variant merged on the catalog row. */
-function resolveVariantDisplayImages(product, offer) {
-  const offerImages = offer?.attributes?.images;
-  return resolveSupplierOfferDisplayImages(offerImages, product?.images);
+/**
+ * Gallery for a selected selling listing: only that supplier's photos.
+ * Never the merged catalog dump of every seller who listed this product.
+ */
+function resolveVariantDisplayImages(product, offer, catalogProductOffers = []) {
+  return resolveSellerOwnedListingImages({
+    offer,
+    catalogProductOffers,
+    catalogImages: product?.images
+  });
 }
 
 function resolveVariantOfferBucketKey(row = {}) {
@@ -342,7 +348,7 @@ async function buildVariantRecord({
     asin: tsin.asin,
     specifications: mergedSpecs,
     canonicalAttributes,
-    images: resolveVariantDisplayImages(product, offer),
+    images: resolveVariantDisplayImages(product, offer, offers),
     price: resolvedPrice,
     basePrice: resolvedMrp > 0 ? resolvedMrp : null,
     mrp: resolvedMrp > 0 ? resolvedMrp : null,
@@ -734,8 +740,9 @@ export async function getProductDiscoveryDetail(
   }
 
   const siblingIds = [...new Set(siblingProducts.map((p) => p?.id).filter(Boolean))];
-  const enrichedProducts = await enrichProductsWithOfferImages(supabase, siblingProducts);
-  const productById = new Map(enrichedProducts.map((p) => [p.id, p]));
+  // Do not merge every seller's photos onto the catalog row here. Detail galleries
+  // must stay scoped to the selected offer; list search still enriches thumbnails.
+  const productById = new Map(siblingProducts.map((p) => [p.id, p]));
 
   const { data: offerRows, error: offersError } = await supabase
     .from('supplier_products')
@@ -761,7 +768,7 @@ export async function getProductDiscoveryDetail(
     .neq('status', 'rejected');
   if (offersError) throw offersError;
 
-  const brandCandidates = enrichedProducts.map((p) => detectDiscoveryBrand(p)).filter(Boolean);
+  const brandCandidates = siblingProducts.map((p) => detectDiscoveryBrand(p)).filter(Boolean);
   const terminalRoleByBrandMap = audienceRules.enforceTerminalRole
     ? await loadAdminBrandTerminalRoleMap(supabase, brandCandidates)
     : new Map();
@@ -804,7 +811,7 @@ export async function getProductDiscoveryDetail(
 
   const variantMetaByProductId = new Map();
   const variantMetaByKey = new Map();
-  const variantIds = [...new Set(enrichedProducts.map((p) => p?.variant_id).filter(Boolean))];
+  const variantIds = [...new Set(siblingProducts.map((p) => p?.variant_id).filter(Boolean))];
   if (variantIds.length) {
     const { data: variantRows } = await supabase
       .from('product_variants')
@@ -874,14 +881,14 @@ export async function getProductDiscoveryDetail(
   const variantCandidates = [];
   const seenVariantKeys = new Set();
   const offersByCatalogProductId = indexListedOffersByCatalogProduct({
-    enrichedProducts,
+    enrichedProducts: siblingProducts,
     offersByProductId,
     productById,
     variantMetaByProductId,
     variantMetaByKey
   });
 
-  for (const product of enrichedProducts) {
+  for (const product of siblingProducts) {
     const reconciled = reconcileDiscoveryProductFields(product, offerAggregates);
     const attachedEntries = offersByCatalogProductId.get(product.id) || [];
     // Service providers: skip siblings/variants with no terminal-tier offers.
@@ -938,7 +945,7 @@ export async function getProductDiscoveryDetail(
         product: catalogProduct,
         reconciled: catalogReconciled,
         offer,
-        offers: [offer],
+        offers: attachedEntries.map((entry) => entry.offer),
         variantMeta,
         variantKey: offer?.variant_key || variantMeta?.variant_key || null,
         enrichSpecifications
@@ -951,7 +958,7 @@ export async function getProductDiscoveryDetail(
   }
 
   if (variantCandidates.length === 0) {
-    for (const product of enrichedProducts) {
+    for (const product of siblingProducts) {
       const reconciled = reconcileDiscoveryProductFields(product, offerAggregates);
       if (audienceRules.requireEligibleOffers && Number(reconciled?.supplierCount || 0) <= 0) {
         continue;
@@ -983,7 +990,7 @@ export async function getProductDiscoveryDetail(
   const hasVariants = variantCount > 1;
 
   const summaryProduct = reconcileDiscoveryProductFields(
-    enrichedProducts.find((p) => p.id === baseProduct.id) || baseProduct,
+    siblingProducts.find((p) => p.id === baseProduct.id) || baseProduct,
     offerAggregates
   );
 

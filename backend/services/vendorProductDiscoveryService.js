@@ -8,6 +8,7 @@ import {
 import { extractExplicitVariantKey } from './productIdentityService.js';
 import { isExcludedBuyerSupplierOffer, isListedSupplierOffer } from './catalogOfferSnapshotService.js';
 import { resolveSupplierOfferDisplayName } from './supplierProductWriteService.js';
+import { resolveSellerOwnedListingImages } from './productImageService.js';
 
 function isOfferCompatibleWithRequestedItem({
   item,
@@ -429,6 +430,18 @@ export async function reconcileWithSupplierOffers({
               attributes: parsedAttributes,
               catalogName: meta.name
             });
+            const listingImages = resolveSellerOwnedListingImages({
+              offer: {
+                id: row.id,
+                supplier_id: row.supplier_id || supplier.id,
+                attributes: parsedAttributes
+              },
+              catalogProductOffers: scopedOfferRows.filter(
+                (candidate) =>
+                  String(candidate?.product_id || '') === String(row.product_id || '')
+              ),
+              catalogImages: meta.images
+            });
             return {
               ...meta,
               // Prefer product_variants-linked catalog id so ranking scores the resolved sibling.
@@ -442,15 +455,9 @@ export async function reconcileWithSupplierOffers({
               specifications: displaySpecifications,
               offerSpecificationsMerged: true,
               variantMeta,
-              images:
-                Array.isArray(parsedAttributes?.images) && parsedAttributes.images.length > 0
-                  ? parsedAttributes.images.filter(Boolean)
-                  : (Array.isArray(meta.images) ? meta.images : []),
-              productImage:
-                Array.isArray(parsedAttributes?.images) && parsedAttributes.images.length > 0
-                  ? parsedAttributes.images.find(Boolean) || null
-                  : (Array.isArray(meta.images) ? meta.images.find(Boolean) || null : null),
-              attributes: parsedAttributes,
+              images: listingImages,
+              productImage: listingImages[0] || null,
+              attributes: { ...parsedAttributes, images: listingImages },
               supplierProductId: row.id || null,
               asin: meta.asin || null,
               variant_key: row.variant_key || null,

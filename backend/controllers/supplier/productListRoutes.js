@@ -10,7 +10,7 @@ import {
   supplierOfferTsinFields,
   resolveEffectiveSupplierOfferState
 } from './shared/productHelpers.js';
-import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
+import { resolveSellerOwnedListingImages } from '../../services/productImageService.js';
 import { resolveSupplierOfferDisplayName } from '../../services/supplierProductWriteService.js';
 import { catalogBrandDedupKey, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 import {
@@ -112,6 +112,31 @@ router.get('/products', authenticateToken, async (req, res) => {
       }
     }
 
+    const catalogIds = [
+      ...new Set((supplierProducts || []).map((sp) => sp.product_id).filter(Boolean))
+    ];
+    const siblingOffersByProductId = new Map();
+    if (catalogIds.length) {
+      const { data: siblingRows, error: siblingError } = await supabase
+        .from('supplier_products')
+        .select('id, product_id, supplier_id, attributes')
+        .in('product_id', catalogIds)
+        .neq('status', 'rejected');
+      if (siblingError) {
+        console.warn(
+          '[SupplierProducts] Failed to load sibling offer images:',
+          siblingError.message || siblingError
+        );
+      } else {
+        for (const row of siblingRows || []) {
+          const productId = row?.product_id;
+          if (!productId) continue;
+          if (!siblingOffersByProductId.has(productId)) siblingOffersByProductId.set(productId, []);
+          siblingOffersByProductId.get(productId).push(row);
+        }
+      }
+    }
+
     // Own-catalog list: never hide offers by brand profile matching.
     // Brand access is enforced at create/update time; filtering here caused approved
     // products to disappear from the supplier portal after admin approval.
@@ -159,6 +184,12 @@ router.get('/products', authenticateToken, async (req, res) => {
             ? sp.rejection_reason || baseProduct?.rejection_reason || null
             : null;
 
+        const listingImages = resolveSellerOwnedListingImages({
+          offer: { id: sp.id, supplier_id: sp.supplier_id, attributes },
+          catalogProductOffers: siblingOffersByProductId.get(sp.product_id) || [],
+          catalogImages: baseProduct?.images
+        });
+
         return {
           ...(baseProduct || { id: sp.product_id }),
           // Per-variant display: offer overrides shared catalog (same merge as PUT response)
@@ -182,8 +213,8 @@ router.get('/products', authenticateToken, async (req, res) => {
           catalogSpecificationKeys,
           supplierOfferSpecifications: offerSpecs,
           supplierSpecValuesLocked,
-          // Pass raw attributes.images so an explicit [] (deleted photos) is not treated as "unset".
-          images: resolveSupplierOfferDisplayImages(attributes?.images, baseProduct?.images),
+          // Only this supplier's uploads — never the merged catalog gallery.
+          images: listingImages,
           price: sp.price,
           stock: parseSupplierStockQuantity(sp.stock) ?? 0,
           igst_rate: sp.igst_rate ?? attributes?.igstRate ?? null,
@@ -205,7 +236,7 @@ router.get('/products', authenticateToken, async (req, res) => {
           supplier_product_id: sp.id,
           variantKey: sp.variant_key || null,
           variantAsin: sp.variant_asin || null,
-          attributes,
+          attributes: { ...attributes, images: listingImages },
           catalogMissing: !baseProduct
         };
       })

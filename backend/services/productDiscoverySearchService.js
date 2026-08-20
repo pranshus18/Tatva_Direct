@@ -7,7 +7,6 @@ import {
   buildTokenIlikePatterns
 } from './productDiscoveryFuzzyRank.js';
 import { normalizeSearchQueryAliases } from './voiceSearchAliases.js';
-import { enrichProductsWithOfferImages } from './productImageService.js';
 import {
   loadAdminBrandTerminalRoleMap,
   supplierMatchesBrandTerminalRole
@@ -23,6 +22,7 @@ import { dedupeCategoryStrings } from '../utils/categoryNormalize.js';
 import { enrichDiscoverySuggestionsWithVariantCounts } from './productDiscoveryDetailService.js';
 import { normalizeText } from './supplierCatalogHelpersService.js';
 import { extractTokens } from './textMatchingService.js';
+import { resolveSellerOwnedListingImages } from './productImageService.js';
 
 /** Stable discovery ordering: relevance when searching, otherwise alphabetical by name. */
 export function sortDiscoverySuggestions(products = [], { query = '' } = {}) {
@@ -486,7 +486,7 @@ export async function searchProductDiscoveryForUser(
     }
   }
 
-  const productsWithImages = await enrichProductsWithOfferImages(supabase, rawProducts || []);
+  const listedProducts = rawProducts || [];
   const detectDiscoveryBrand = (product = {}) => {
     const specs =
       product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
@@ -500,15 +500,16 @@ export async function searchProductDiscoveryForUser(
       ''
     );
   };
-  const discoveryBrandCandidates = productsWithImages.map((p) => detectDiscoveryBrand(p)).filter(Boolean);
+  const discoveryBrandCandidates = listedProducts.map((p) => detectDiscoveryBrand(p)).filter(Boolean);
   const terminalRoleByBrandMap = await loadAdminBrandTerminalRoleMap(supabase, discoveryBrandCandidates);
-  const productIds = productsWithImages.map((p) => p?.id).filter(Boolean);
-  const productById = new Map(productsWithImages.map((p) => [p?.id, p]));
+  const productIds = listedProducts.map((p) => p?.id).filter(Boolean);
+  const productById = new Map(listedProducts.map((p) => [p?.id, p]));
   let offerAggregates = {
     eligibleSupplierCountByProduct: new Map(),
     totalStockByProduct: new Map(),
     bestOfferByProduct: new Map()
   };
+  let pricedOfferRows = [];
   if (productIds.length > 0) {
     const { data: offerRows } = await supabase
       .from('supplier_products')
@@ -518,13 +519,14 @@ export async function searchProductDiscoveryForUser(
       .in('product_id', productIds)
       .neq('status', 'rejected');
 
-    const { offerRows: pricedOfferRows } = await enrichDiscoveryOffersWithBuyerBcov({
+    const bcovResult = await enrichDiscoveryOffersWithBuyerBcov({
       supabase,
       userId,
       offerRows: offerRows || [],
       productById,
       enabled: !forCatalogAutocomplete && Boolean(userId)
     });
+    pricedOfferRows = bcovResult.offerRows || [];
 
     offerAggregates = aggregateEligibleDiscoveryOffers({
       offerRows: pricedOfferRows,
@@ -536,13 +538,29 @@ export async function searchProductDiscoveryForUser(
     });
   }
 
-  const suggestions = productsWithImages
+  const offersByProductId = new Map();
+  for (const row of pricedOfferRows) {
+    const productId = row?.product_id;
+    if (!productId) continue;
+    if (!offersByProductId.has(productId)) offersByProductId.set(productId, []);
+    offersByProductId.get(productId).push(row);
+  }
+
+  const suggestions = listedProducts
     .map((p) => {
       const categoryKey = String(p?.category || '').trim().toLowerCase();
       const affinityScore = categoryAffinity.get(categoryKey) || 0;
       const recommendationScore = Number(affinityScore.toFixed(3));
+      const reconciled = reconcileDiscoveryProductFields(p, offerAggregates);
+      const productOffers = offersByProductId.get(p.id) || [];
+      const images = resolveSellerOwnedListingImages({
+        offer: offerAggregates.bestOfferByProduct.get(p.id) || null,
+        catalogProductOffers: productOffers,
+        catalogImages: []
+      });
       return {
-        ...reconcileDiscoveryProductFields(p, offerAggregates),
+        ...reconciled,
+        images,
         recommendationScore
       };
     })

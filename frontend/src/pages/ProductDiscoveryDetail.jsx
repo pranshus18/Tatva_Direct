@@ -13,7 +13,7 @@ import {
   Tag
 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
-import { getProductImageList } from '../utils/productImages';
+import { getSelectedListingImages } from '../utils/productImages';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import SpEmptyState from '../components/sp/SpEmptyState';
@@ -539,7 +539,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     (isUpstreamPortal ? viewerListing?.name : null) ||
     productSummary.name ||
     'Product';
-  const images = getProductImageList(activeListing || productSummary);
+  const images = getSelectedListingImages(activeListing);
   const safeImageIndex = images.length ? Math.min(activeImageIndex, images.length - 1) : 0;
   const productDescription = resolveDiscoveryProductDescription(productSummary, activeListing);
   const detailSections = useMemo(
@@ -1040,7 +1040,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                   <span className="pdd-variant-strip__label">All variants</span>
                   <div className="pdd-thumbs">
                     {variants.map((variant) => {
-                      const thumb = getProductImageList(variant)[0];
+                      const thumb = getSelectedListingImages(variant)[0];
                       const active = variantSelectionKey(variant) === variantSelectionKey(selectedVariant);
                       return (
                         <button

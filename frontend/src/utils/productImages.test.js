@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   getOrderItemImages,
   getProductImageList,
+  getSelectedListingImages,
   getSupplierOfferImagesForForm,
   normalizeProductImages
 } from './productImages.js';
@@ -33,13 +34,11 @@ describe('productImages', () => {
     expect(getProductImageList(product)).toEqual(['https://cdn.example.com/offer.jpg']);
   });
 
-  it('falls back to product.images when attributes have no images', () => {
+  it('does not load catalog product.images into the supplier offer form', () => {
     const product = {
       images: ['https://cdn.example.com/only.jpg']
     };
-    expect(getSupplierOfferImagesForForm(product)).toEqual([
-      'https://cdn.example.com/only.jpg'
-    ]);
+    expect(getSupplierOfferImagesForForm(product)).toEqual([]);
   });
 
   it('does not restore catalog images when offer images were explicitly cleared', () => {
@@ -51,6 +50,29 @@ describe('productImages', () => {
     };
     expect(getSupplierOfferImagesForForm(product)).toEqual([]);
     expect(getProductImageList(product)).toEqual([]);
+  });
+
+  it('getSelectedListingImages does not fall back to merged catalog product images', () => {
+    const listing = {
+      supplierProductId: 'offer-1',
+      images: ['https://cdn.example.com/this-seller.jpg'],
+      attributes: {
+        images: ['https://cdn.example.com/this-seller.jpg']
+      }
+    };
+    const catalogSummary = {
+      images: [
+        'https://cdn.example.com/this-seller.jpg',
+        'https://cdn.example.com/other-seller-a.jpg',
+        'https://cdn.example.com/other-seller-b.jpg'
+      ]
+    };
+    expect(getSelectedListingImages(listing)).toEqual(['https://cdn.example.com/this-seller.jpg']);
+    expect(getSelectedListingImages(null)).toEqual([]);
+    expect(getSelectedListingImages({ images: [] })).toEqual([]);
+    expect(getProductImageList(listing || catalogSummary)).toEqual([
+      'https://cdn.example.com/this-seller.jpg'
+    ]);
   });
 
   it('getOrderItemImages uses variant/order images and ignores catalog product.images', () => {

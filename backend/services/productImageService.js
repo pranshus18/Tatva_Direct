@@ -26,6 +26,100 @@ export function resolveSupplierOfferDisplayImages(offerImages, catalogImages = [
   return sanitizeImageUrls(catalogImages);
 }
 
+function parseOfferAttributes(attributes) {
+  if (!attributes) return {};
+  if (typeof attributes === 'string') {
+    try {
+      const parsed = JSON.parse(attributes);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof attributes === 'object' && !Array.isArray(attributes) ? attributes : {};
+}
+
+function collectOfferImageUrls(row) {
+  return sanitizeImageUrls(parseOfferAttributes(row?.attributes)?.images);
+}
+
+function urlListCovers(candidate = [], universe = []) {
+  const owned = new Set(sanitizeImageUrls(candidate));
+  const needed = sanitizeImageUrls(universe);
+  return needed.length > 1 && needed.every((url) => owned.has(url)) && owned.size >= needed.length;
+}
+
+/**
+ * Product-detail gallery for the seller who listed this offer.
+ * Never returns the merged catalog dump (`products.images` / every supplier's photos).
+ * If this offer copied that dump onto attributes.images, drop photos that belong to
+ * other suppliers and keep only this seller's uploads.
+ */
+export function resolveSellerOwnedListingImages({
+  offer = null,
+  catalogProductOffers = [],
+  catalogImages = []
+} = {}) {
+  if (!offer) return [];
+
+  const attrs = parseOfferAttributes(offer.attributes);
+  const listingImages = sanitizeImageUrls(attrs.images);
+  const supplierId = String(offer.supplier_id || '').trim();
+  const offerId = String(offer.id || '').trim();
+  const siblings = Array.isArray(catalogProductOffers) ? catalogProductOffers : [];
+
+  const otherSupplierUrls = new Set();
+  const sameSupplierUrls = [];
+  const allSiblingUrls = [];
+
+  for (const row of siblings) {
+    const urls = collectOfferImageUrls(row);
+    allSiblingUrls.push(...urls);
+    const rowId = String(row?.id || '').trim();
+    const rowSupplier = String(row?.supplier_id || '').trim();
+    const sameOffer = Boolean(offerId && rowId && rowId === offerId);
+    const sameSupplier = Boolean(supplierId && rowSupplier && rowSupplier === supplierId);
+    if (sameOffer || sameSupplier) {
+      sameSupplierUrls.push(...urls);
+      continue;
+    }
+    for (const url of urls) otherSupplierUrls.add(url);
+  }
+
+  const withoutForeign = (urls) =>
+    sanitizeImageUrls(urls).filter((url) => !otherSupplierUrls.has(url));
+
+  if (Array.isArray(attrs.images) && attrs.images.length === 0) {
+    return [];
+  }
+
+  const copiedMergedGallery =
+    listingImages.length > 1 &&
+    otherSupplierUrls.size > 0 &&
+    (urlListCovers(listingImages, catalogImages) || urlListCovers(listingImages, allSiblingUrls));
+
+  if (listingImages.length > 0 && !copiedMergedGallery) {
+    return listingImages;
+  }
+
+  if (copiedMergedGallery) {
+    return withoutForeign(listingImages);
+  }
+
+  const fromSameSupplier = withoutForeign(sameSupplierUrls);
+  if (fromSameSupplier.length) return fromSameSupplier;
+
+  const catalog = sanitizeImageUrls(catalogImages);
+  if (otherSupplierUrls.size > 0 && catalog.length > otherSupplierUrls.size) {
+    const leftover = catalog.filter((url) => !otherSupplierUrls.has(url));
+    if (leftover.length > 0 && leftover.length < catalog.length) {
+      return leftover;
+    }
+  }
+
+  return [];
+}
+
 /**
  * Images for a placed order line: prefer the immutable snapshot, then the ordered
  * supplier-offer / variant gallery. Never fall back to the merged catalog gallery when
@@ -145,7 +239,7 @@ export async function syncCatalogProductImages(supabase, productId, candidateIma
 }
 
 /**
- * Fill missing catalog images from approved supplier offer attributes (buyer listings).
+ * Discovery list cards: one selling listing's photos, never every supplier merged.
  */
 export async function enrichProductsWithOfferImages(supabase, products = []) {
   const rows = Array.isArray(products) ? products : [];
@@ -154,31 +248,52 @@ export async function enrichProductsWithOfferImages(supabase, products = []) {
 
   const { data: offerRows, error } = await supabase
     .from('supplier_products')
-    .select('product_id, attributes, status, is_active, updated_at')
+    .select('id, product_id, supplier_id, price, stock, attributes, status, is_active, updated_at')
     .in('product_id', productIds)
     .eq('status', 'approved')
     .eq('is_active', true);
 
   if (error) {
     console.error('enrichProductsWithOfferImages failed:', error.message);
-    return rows;
+    return rows.map((product) => ({ ...product, images: [] }));
   }
 
-  const imagesByProductId = new Map();
+  const offersByProductId = new Map();
   for (const offer of offerRows || []) {
     const productId = offer?.product_id;
     if (!productId) continue;
-    const offerImages = sanitizeImageUrls(offer?.attributes?.images);
-    if (!offerImages.length) continue;
-    const existing = imagesByProductId.get(productId) || [];
-    imagesByProductId.set(productId, mergeProductImageLists(existing, offerImages));
+    if (!offersByProductId.has(productId)) offersByProductId.set(productId, []);
+    offersByProductId.get(productId).push(offer);
   }
 
   return rows.map((product) => {
-    const catalogImages = sanitizeImageUrls(product?.images);
-    const offerImages = imagesByProductId.get(product.id) || [];
-    const merged = mergeProductImageLists(offerImages, catalogImages);
-    if (!merged.length) return product;
-    return { ...product, images: merged };
+    const catalogProductOffers = offersByProductId.get(product.id) || [];
+    let preferred = null;
+    for (const row of catalogProductOffers) {
+      if (!preferred) {
+        preferred = row;
+        continue;
+      }
+      const stock = Number.parseInt(String(row?.stock ?? 0), 10) || 0;
+      const preferredStock = Number.parseInt(String(preferred?.stock ?? 0), 10) || 0;
+      if (stock > preferredStock) {
+        preferred = row;
+        continue;
+      }
+      if (stock < preferredStock) continue;
+      const price = Number.parseFloat(String(row?.price ?? 0)) || 0;
+      const preferredPrice = Number.parseFloat(String(preferred?.price ?? 0)) || 0;
+      if (price > 0 && (preferredPrice <= 0 || price < preferredPrice)) {
+        preferred = row;
+      }
+    }
+    return {
+      ...product,
+      images: resolveSellerOwnedListingImages({
+        offer: preferred,
+        catalogProductOffers,
+        catalogImages: []
+      })
+    };
   });
 }

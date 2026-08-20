@@ -32,7 +32,7 @@ export function getSupplierOfferImagesForForm(product) {
   }
   const fromAttributes = normalizeProductImages(product?.attributes?.images);
   if (fromAttributes.length > 0) return fromAttributes;
-  return normalizeProductImages(product.images);
+  return [];
 }
 
 /** First image URL for thumbnails; prefers supplier offer images when present on the row. */
@@ -47,6 +47,21 @@ export function getProductImageList(product) {
   if (direct.length > 0) return direct;
   const single = product?.image ? normalizeProductImages([product.image]) : [];
   return single;
+}
+
+/**
+ * Gallery for the seller currently being viewed. Uses only that listing's photos.
+ * Never fall back to a catalog/product summary — `products.images` is every supplier's
+ * uploads merged together.
+ */
+export function getSelectedListingImages(listing) {
+  if (!listing) return [];
+  if (Array.isArray(listing.attributes?.images)) {
+    return normalizeProductImages(listing.attributes.images);
+  }
+  const fromAttributes = normalizeProductImages(listing.attributes?.images);
+  if (fromAttributes.length > 0) return fromAttributes;
+  return normalizeProductImages(listing.images);
 }
 
 /**

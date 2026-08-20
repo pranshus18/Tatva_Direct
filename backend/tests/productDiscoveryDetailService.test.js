@@ -315,6 +315,8 @@ test('resolveVariantDisplayImages uses only the selected offer gallery', () => {
     ]
   };
   const offerA = {
+    id: 'offer-a',
+    supplier_id: 'supplier-a',
     attributes: {
       images: [
         'https://cdn.example.com/variant-a-1.jpg',
@@ -323,6 +325,8 @@ test('resolveVariantDisplayImages uses only the selected offer gallery', () => {
     }
   };
   const offerB = {
+    id: 'offer-b',
+    supplier_id: 'supplier-b',
     attributes: {
       images: [
         'https://cdn.example.com/variant-b-1.jpg',
@@ -331,8 +335,83 @@ test('resolveVariantDisplayImages uses only the selected offer gallery', () => {
     }
   };
 
-  assert.deepEqual(resolveVariantDisplayImages(catalogProduct, offerA), offerA.attributes.images);
-  assert.deepEqual(resolveVariantDisplayImages(catalogProduct, offerB), offerB.attributes.images);
+  assert.deepEqual(
+    resolveVariantDisplayImages(catalogProduct, offerA, [offerA, offerB]),
+    offerA.attributes.images
+  );
+  assert.deepEqual(
+    resolveVariantDisplayImages(catalogProduct, offerB, [offerA, offerB]),
+    offerB.attributes.images
+  );
+});
+
+test('resolveVariantDisplayImages does not use merged catalog photos for a selling offer', () => {
+  const catalogProduct = {
+    images: [
+      'https://cdn.example.com/seller-a.jpg',
+      'https://cdn.example.com/seller-b.jpg',
+      'https://cdn.example.com/seller-c.jpg'
+    ]
+  };
+  const sellerOffer = {
+    id: 'offer-a',
+    attributes: { images: ['https://cdn.example.com/seller-a.jpg'] }
+  };
+  const offerWithoutPhotos = { id: 'offer-b', attributes: {} };
+  const offerClearedPhotos = { id: 'offer-c', attributes: { images: [] } };
+  const offerUnsetPhotos = { id: 'offer-d', attributes: { images: null } };
+
+  assert.deepEqual(resolveVariantDisplayImages(catalogProduct, sellerOffer), [
+    'https://cdn.example.com/seller-a.jpg'
+  ]);
+  assert.deepEqual(resolveVariantDisplayImages(catalogProduct, offerWithoutPhotos), []);
+  assert.deepEqual(resolveVariantDisplayImages(catalogProduct, offerClearedPhotos), []);
+  assert.deepEqual(resolveVariantDisplayImages(catalogProduct, offerUnsetPhotos), []);
+});
+
+test('resolveVariantDisplayImages strips other sellers photos copied onto this offer', () => {
+  const catalogProduct = {
+    images: [
+      'https://cdn.example.com/seller-a.jpg',
+      'https://cdn.example.com/seller-b.jpg',
+      'https://cdn.example.com/seller-c.jpg'
+    ]
+  };
+  const offerA = {
+    id: 'offer-a',
+    supplier_id: 'supplier-a',
+    attributes: { images: ['https://cdn.example.com/seller-a.jpg'] }
+  };
+  const offerB = {
+    id: 'offer-b',
+    supplier_id: 'supplier-b',
+    attributes: { images: ['https://cdn.example.com/seller-b.jpg'] }
+  };
+  const offerCopiedCatalog = {
+    id: 'offer-c',
+    supplier_id: 'supplier-c',
+    attributes: { images: catalogProduct.images }
+  };
+
+  assert.deepEqual(
+    resolveVariantDisplayImages(catalogProduct, offerA, [offerA, offerB, offerCopiedCatalog]),
+    ['https://cdn.example.com/seller-a.jpg']
+  );
+  assert.deepEqual(
+    resolveVariantDisplayImages(catalogProduct, offerCopiedCatalog, [
+      offerA,
+      offerB,
+      offerCopiedCatalog
+    ]),
+    ['https://cdn.example.com/seller-c.jpg']
+  );
+});
+
+test('resolveVariantDisplayImages does not use catalog photos when no seller offer is selected', () => {
+  const catalogProduct = {
+    images: ['https://cdn.example.com/catalog-a.jpg', 'https://cdn.example.com/catalog-b.jpg']
+  };
+  assert.deepEqual(resolveVariantDisplayImages(catalogProduct, null), []);
 });
 
 test('resolveVariantCatalogProduct prefers product_variants.product_id over offer product_id', () => {
