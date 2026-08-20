@@ -68,9 +68,13 @@ import {
   mergeOrAppendUpstreamCartItem,
   buildUpstreamSelectedMineFromItems,
   buildUpstreamItemsFromSelectedMine,
+  resolveUpstreamProjectItems,
   applyUpstreamSelectedMineQuantitiesToItems,
   removeUpstreamCartItemsByMineIds,
-  normalizeCartVariantKey
+  pruneUpstreamCartProjectsToLiveMineIds,
+  collectUpstreamCartMineIds,
+  normalizeCartVariantKey,
+  MAX_CART_ITEM_QUANTITY
 } from '../po/shared/poHelpers.js';
 import {
   normalizeRequiredDateForUpstream,
@@ -157,23 +161,19 @@ export function registerSupplierUpstreamRoutes(ctx) {
 
   const finalizeUpstreamProjectLines = (project, metaByMineId = {}) => {
     const base = project && typeof project === 'object' ? { ...project } : {};
-    const existingItems = Array.isArray(base.items) ? base.items : [];
-    const fallbackItems = buildUpstreamItemsFromSelectedMine(base.selectedMine || {}, metaByMineId);
-    const items = (existingItems.length ? existingItems : fallbackItems)
-      .map((item) => {
-        const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
-        const meta = mineId ? metaByMineId[mineId] : null;
-        if (!meta) return item;
-        return {
-          ...item,
-          productId: item?.productId || meta.productId || undefined,
-          variantKey: normalizeCartVariantKey(item) || normalizeCartVariantKey(meta) || undefined,
-          variantAsin: item?.variantAsin || meta.variantAsin || undefined,
-          variantLabel: item?.variantLabel || meta.variantLabel || undefined,
-          name: item?.name || meta.name || undefined
-        };
-      })
-      .filter((item) => Math.max(0, Math.floor(Number(item?.quantity) || 0)) > 0);
+    const items = resolveUpstreamProjectItems(base, metaByMineId).map((item) => {
+      const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+      const meta = mineId ? metaByMineId[mineId] : null;
+      if (!meta) return item;
+      return {
+        ...item,
+        productId: item?.productId || meta.productId || undefined,
+        variantKey: normalizeCartVariantKey(item) || normalizeCartVariantKey(meta) || undefined,
+        variantAsin: item?.variantAsin || meta.variantAsin || undefined,
+        variantLabel: item?.variantLabel || meta.variantLabel || undefined,
+        name: item?.name || meta.name || undefined
+      };
+    });
     return {
       ...base,
       items,
@@ -182,18 +182,14 @@ export function registerSupplierUpstreamRoutes(ctx) {
   };
 
   const upstreamCartDraftNeedsPersistAfterPrune = (rawDraft = {}, normalizedDraft = {}) => {
-    const rawProjects = Array.isArray(rawDraft?.projects) ? rawDraft.projects : [];
+    const rawProjects = Array.isArray(rawDraft?.projects)
+      ? rawDraft.projects
+      : (rawDraft?.selectedMine || Array.isArray(rawDraft?.items) ? [rawDraft] : []);
     const nextProjects = Array.isArray(normalizedDraft?.projects) ? normalizedDraft.projects : [];
     if (rawProjects.length !== nextProjects.length) return true;
-    const rawLineCount = rawProjects.reduce((sum, project) => {
-      const mine = project?.selectedMine && typeof project.selectedMine === 'object' ? project.selectedMine : {};
-      return sum + Object.keys(mine).length;
-    }, 0);
-    const nextLineCount = nextProjects.reduce(
-      (sum, project) => sum + Object.keys(project?.selectedMine || {}).length,
-      0
-    );
-    return rawLineCount !== nextLineCount;
+    const rawIds = [...collectUpstreamCartMineIds(rawProjects)].sort().join(',');
+    const nextIds = [...collectUpstreamCartMineIds(nextProjects)].sort().join(',');
+    return rawIds !== nextIds;
   };
 
   const isOfferBrandVisibleForSupplierProfile = (profile, attributes, productBrand) => {
@@ -559,6 +555,36 @@ export function registerSupplierUpstreamRoutes(ctx) {
       suggestions: latestProject?.suggestions || [],
       brandFilter: latestProject?.brandFilter || '',
       searchTerm: latestProject?.searchTerm || ''
+    };
+  };
+
+  const loadLiveSupplierOfferIds = async (userId) => {
+    const { data, error } = await supabase
+      .from('supplier_products')
+      .select('id')
+      .eq('supplier_id', userId)
+      .limit(5000);
+    if (error) {
+      console.warn('[Upstream Cart] live offer lookup failed:', error.message || error);
+      return null;
+    }
+    return (data || []).map((row) => String(row?.id || '').trim()).filter(Boolean);
+  };
+
+  const applyLiveOfferPruneToDraft = (draft = {}, liveIds) => {
+    if (!liveIds) return draft;
+    const projects = pruneUpstreamCartProjectsToLiveMineIds(draft.projects || [], liveIds);
+    const latestProject = projects.length > 0 ? projects[0] : null;
+    return {
+      ...draft,
+      projects,
+      projectId: latestProject?.projectId || null,
+      cartName: latestProject?.cartName || draft.cartName,
+      selectedMine: latestProject?.selectedMine || {},
+      selectedUpstreamOffer: latestProject?.selectedUpstreamOffer || {},
+      suggestions: latestProject?.suggestions || [],
+      brandFilter: latestProject?.brandFilter || draft.brandFilter || '',
+      searchTerm: latestProject?.searchTerm || draft.searchTerm || ''
     };
   };
 
@@ -2225,8 +2251,16 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       1,
       parseSupplierStockQuantity(mineRow?.min_order_quantity) ?? 1
     );
-    const quantity = isRemoveRequest ? 0 : Math.max(minQty, requestedQuantity);
-    const quantityAdjusted = !isRemoveRequest && quantity !== requestedQuantity;
+    if (!isRemoveRequest && requestedQuantity < minQty) {
+      return res.status(400).json({
+        status: 'error',
+        message: `Quantity must be at least ${minQty} (minimum order quantity).`
+      });
+    }
+    const quantity = isRemoveRequest
+      ? 0
+      : Math.min(MAX_CART_ITEM_QUANTITY, requestedQuantity);
+    const quantityAdjusted = false;
     const variantKey = String(req.body?.variantKey || mineRow?.variant_key || '').trim();
     const variantAsin = String(req.body?.variantAsin || mineRow?.variant_asin || '').trim();
     const variantLabel = String(
@@ -2259,24 +2293,32 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         ? cartRow.draft_payload
         : {}
     );
-    const currentProjects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
+    const liveOfferIds = await loadLiveSupplierOfferIds(req.userId);
+    const prunedDraft = applyLiveOfferPruneToDraft(currentDraft, liveOfferIds);
+    const currentProjects = Array.isArray(prunedDraft.projects) ? [...prunedDraft.projects] : [];
     let updatedProject = null;
     let nextProjects = currentProjects;
 
+    const projectContainsMine = (project, mineId) => {
+      const existing = buildUpstreamProject(project);
+      const items = resolveUpstreamProjectItems(existing);
+      if (
+        items.some(
+          (item) => String(item?.mineSupplierProductId || item?.mineId || '').trim() === mineId
+        )
+      ) {
+        return true;
+      }
+      return Object.keys(existing.selectedMine || {}).some(
+        (key) => String(key || '').trim() === mineId
+      );
+    };
+
     const findProjectIndexForMine = (mineId) =>
-      currentProjects.findIndex((project) => {
-        const existing = buildUpstreamProject(project);
-        const items = Array.isArray(existing.items)
-          ? existing.items
-          : buildUpstreamItemsFromSelectedMine(existing.selectedMine || {});
-        return items.some(
-          (item) =>
-            String(item?.mineSupplierProductId || item?.mineId || '').trim() === mineId
-        );
-      });
+      currentProjects.findIndex((project) => projectContainsMine(project, mineId));
 
     let resolvedProjectId = targetProjectId;
-    if (!resolvedProjectId && replaceQuantity) {
+    if (!resolvedProjectId && replaceQuantity && !requestedCartName) {
       const idx = findProjectIndexForMine(mineSupplierProductId);
       if (idx < 0) {
         return res.status(404).json({
@@ -2292,56 +2334,71 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
         (project) => String(project?.projectId || '') === resolvedProjectId
       );
       if (idx < 0) {
-        return res.status(404).json({ status: 'error', message: 'Selected project not found' });
-      }
-      const existing = buildUpstreamProject(currentProjects[idx]);
-      const existingItems = Array.isArray(existing.items)
-        ? existing.items
-        : buildUpstreamItemsFromSelectedMine(existing.selectedMine || {});
-      if (replaceQuantity) {
-        const alreadyInProject = existingItems.some(
-          (item) =>
-            String(item?.mineSupplierProductId || item?.mineId || '').trim() === mineSupplierProductId
-        );
-        if (!alreadyInProject) {
+        if (replaceQuantity) {
+          return res.status(404).json({ status: 'error', message: 'Selected project not found' });
+        }
+      } else {
+        const existing = buildUpstreamProject(currentProjects[idx]);
+        const existingItems = resolveUpstreamProjectItems(existing);
+        if (replaceQuantity && !projectContainsMine(existing, mineSupplierProductId)) {
           return res.status(404).json({
             status: 'error',
             message: 'This product is not in your upstream cart yet. Add it to a project first.'
           });
         }
-      }
-      const nextItems = mergeOrAppendUpstreamCartItem(existingItems, newCartItem, {
-        replaceQuantity
-      });
-      const nextSelectedUpstreamOffer = { ...(existing.selectedUpstreamOffer || {}) };
-      if (isRemoveRequest) {
-        delete nextSelectedUpstreamOffer[mineSupplierProductId];
-      }
-      updatedProject = applyShippingToUpstreamProject(
-        finalizeUpstreamProjectLines(
-          {
-            ...existing,
-            items: nextItems,
-            selectedUpstreamOffer: nextSelectedUpstreamOffer
-          },
-          {
-            [mineSupplierProductId]: {
-              productId: mineRow?.product_id || null,
-              variantKey,
-              variantAsin,
-              variantLabel,
-              name: productName
-            }
+        const lineMeta = {
+          [mineSupplierProductId]: {
+            productId: mineRow?.product_id || null,
+            variantKey,
+            variantAsin,
+            variantLabel,
+            name: productName
           }
-        ),
-        enrichedShipping
-      );
-      if (isRemoveRequest && !hasUpstreamProjectLines(updatedProject)) {
-        nextProjects.splice(idx, 1);
-      } else {
-        nextProjects[idx] = updatedProject;
+        };
+        if (isRemoveRequest) {
+          const remaining = removeUpstreamCartItemsByMineIds([existing], [mineSupplierProductId]);
+          updatedProject = remaining[0]
+            ? applyShippingToUpstreamProject(
+                finalizeUpstreamProjectLines(remaining[0], lineMeta),
+                enrichedShipping
+              )
+            : finalizeUpstreamProjectLines(
+                {
+                  ...existing,
+                  items: [],
+                  selectedMine: {},
+                  selectedUpstreamOffer: { ...(existing.selectedUpstreamOffer || {}) }
+                },
+                lineMeta
+              );
+          if (updatedProject?.selectedUpstreamOffer) {
+            delete updatedProject.selectedUpstreamOffer[mineSupplierProductId];
+          }
+          if (!hasUpstreamProjectLines(updatedProject)) {
+            nextProjects.splice(idx, 1);
+          } else {
+            nextProjects[idx] = updatedProject;
+          }
+        } else {
+          const nextItems = mergeOrAppendUpstreamCartItem(existingItems, newCartItem, {
+            replaceQuantity
+          });
+          updatedProject = applyShippingToUpstreamProject(
+            finalizeUpstreamProjectLines(
+              {
+                ...existing,
+                items: nextItems,
+                selectedUpstreamOffer: { ...(existing.selectedUpstreamOffer || {}) }
+              },
+              lineMeta
+            ),
+            enrichedShipping
+          );
+          nextProjects[idx] = updatedProject;
+        }
       }
-    } else {
+    }
+    if (!updatedProject) {
       if (isRemoveRequest) {
         return res.status(404).json({
           status: 'error',
@@ -2357,6 +2414,7 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       updatedProject = applyShippingToUpstreamProject(
         finalizeUpstreamProjectLines(
           buildUpstreamProject({
+            projectId: resolvedProjectId || null,
             cartName: requestedCartName || `Quick Add - ${mineSupplierProductId.slice(0, 8)}`,
             requiredDate,
             items: [newCartItem],
@@ -2380,10 +2438,54 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       // New add must appear first in cart.
       nextProjects = [updatedProject, ...currentProjects];
     }
+    if (isRemoveRequest) {
+      nextProjects = removeUpstreamCartItemsByMineIds(nextProjects, [mineSupplierProductId]);
+    }
     const nextDraftPayload = normalizeUpstreamCartDraft({
-      ...currentDraft,
+      ...prunedDraft,
       projects: nextProjects
     });
+
+    if (isRemoveRequest && collectUpstreamCartMineIds(nextDraftPayload.projects || []).has(mineSupplierProductId)) {
+      return res.status(500).json({
+        status: 'error',
+        message: 'Failed to remove this product from the cart. Please try again.'
+      });
+    }
+
+    if (isRemoveRequest && (!Array.isArray(nextDraftPayload.projects) || nextDraftPayload.projects.length === 0)) {
+      if (cartRow?.id) {
+        const { error: deleteError } = await supabase
+          .from('po_carts')
+          .delete()
+          .eq('id', cartRow.id)
+          .eq('service_provider_id', req.userId);
+        if (deleteError) throw deleteError;
+      }
+      return res.json({
+        status: 'success',
+        message: 'Product removed from cart',
+        item: {
+          mineSupplierProductId,
+          quantity: 0,
+          requestedQuantity,
+          quantityAdjusted: false,
+          replaced: true,
+          removed: true
+        },
+        project: {
+          projectId: resolvedProjectId || null,
+          cartName: null,
+          requiredDate: null,
+          removed: true
+        },
+        cart: {
+          id: null,
+          updatedAt: null,
+          draft: { mode: 'supplier_upstream', projects: [] }
+        }
+      });
+    }
 
     const { data: saved, error: saveError } = await supabase
       .from('po_carts')
@@ -2398,18 +2500,29 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       .single();
     if (saveError) throw saveError;
 
+    const persistedQuantity = isRemoveRequest
+      ? 0
+      : (() => {
+          const items = resolveUpstreamProjectItems(updatedProject || {});
+          const match = items.find(
+            (item) =>
+              String(item?.mineSupplierProductId || item?.mineId || '').trim() ===
+              mineSupplierProductId
+          );
+          const lineQty = Math.max(0, Math.floor(Number(match?.quantity) || 0));
+          return lineQty > 0 ? Math.min(MAX_CART_ITEM_QUANTITY, lineQty) : quantity;
+        })();
+
     return res.json({
       status: 'success',
       message: isRemoveRequest
         ? 'Product removed from cart'
-        : quantityAdjusted
-        ? `Quantity adjusted to minimum order quantity (${quantity}).`
         : replaceQuantity
           ? 'Cart quantity updated'
           : 'Item added to upstream cart',
       item: {
         mineSupplierProductId,
-        quantity,
+        quantity: persistedQuantity,
         requestedQuantity,
         quantityAdjusted,
         replaced: replaceQuantity,
@@ -2423,7 +2536,8 @@ router.post('/upstream/cart/items', authenticateToken, async (req, res) => {
       },
       cart: {
         id: saved.id,
-        updatedAt: saved.updated_at
+        updatedAt: saved.updated_at,
+        draft: nextDraftPayload
       }
     });
   } catch (error) {
@@ -2450,7 +2564,20 @@ router.get('/upstream/cart', authenticateToken, async (req, res) => {
     }
 
     const rawDraft = cart.draft_payload && typeof cart.draft_payload === 'object' ? cart.draft_payload : {};
-    const draft = normalizeUpstreamCartDraft(rawDraft);
+    const draft = applyLiveOfferPruneToDraft(
+      normalizeUpstreamCartDraft(rawDraft),
+      await loadLiveSupplierOfferIds(req.userId)
+    );
+    if (!Array.isArray(draft.projects) || draft.projects.length === 0) {
+      if (cart.id && (Array.isArray(rawDraft.projects) || rawDraft.selectedMine)) {
+        await supabase
+          .from('po_carts')
+          .delete()
+          .eq('id', cart.id)
+          .eq('service_provider_id', req.userId);
+      }
+      return res.json({ status: 'success', cart: null });
+    }
     if (upstreamCartDraftNeedsPersistAfterPrune(rawDraft, draft)) {
       await supabase
         .from('po_carts')
@@ -2531,10 +2658,13 @@ router.patch('/upstream/cart/name', authenticateToken, async (req, res) => {
       .maybeSingle();
     if (cartError) throw cartError;
 
-    const currentDraft = normalizeUpstreamCartDraft(
-      cartRow?.draft_payload && typeof cartRow.draft_payload === 'object'
-        ? cartRow.draft_payload
-        : {}
+    const currentDraft = applyLiveOfferPruneToDraft(
+      normalizeUpstreamCartDraft(
+        cartRow?.draft_payload && typeof cartRow.draft_payload === 'object'
+          ? cartRow.draft_payload
+          : {}
+      ),
+      await loadLiveSupplierOfferIds(req.userId)
     );
     const projects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
     const targetIdx = targetProjectId
@@ -2659,10 +2789,14 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       .eq('service_provider_id', req.userId)
       .maybeSingle();
     if (currentCartError) throw currentCartError;
-    const currentDraft = normalizeUpstreamCartDraft(
-      currentCart?.draft_payload && typeof currentCart.draft_payload === 'object'
-        ? currentCart.draft_payload
-        : {}
+    const liveOfferIds = await loadLiveSupplierOfferIds(req.userId);
+    const currentDraft = applyLiveOfferPruneToDraft(
+      normalizeUpstreamCartDraft(
+        currentCart?.draft_payload && typeof currentCart.draft_payload === 'object'
+          ? currentCart.draft_payload
+          : {}
+      ),
+      liveOfferIds
     );
 
     let nextProjects = Array.isArray(currentDraft.projects) ? [...currentDraft.projects] : [];
@@ -2717,6 +2851,16 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
     if (enrichedShipping) {
       nextProject = applyShippingToUpstreamProject(nextProject, enrichedShipping);
     }
+    if (liveOfferIds) {
+      const prunedNext = pruneUpstreamCartProjectsToLiveMineIds([nextProject], liveOfferIds);
+      nextProject = prunedNext[0] || {
+        ...nextProject,
+        items: [],
+        selectedMine: {},
+        selectedUpstreamOffer: {}
+      };
+      nextProjects = pruneUpstreamCartProjectsToLiveMineIds(nextProjects, liveOfferIds);
+    }
     if (payloadInput.projectId) {
       if (
         hasDuplicateUpstreamProject(
@@ -2760,6 +2904,26 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       projects: nextProjects
     });
 
+    if (!Array.isArray(draftPayload.projects) || draftPayload.projects.length === 0) {
+      if (currentCart?.id) {
+        const { error: deleteError } = await supabase
+          .from('po_carts')
+          .delete()
+          .eq('id', currentCart.id)
+          .eq('service_provider_id', req.userId);
+        if (deleteError) throw deleteError;
+      }
+      return res.json({
+        status: 'success',
+        message: 'Upstream cart saved successfully',
+        cart: {
+          id: null,
+          updatedAt: null,
+          draft: { mode: 'supplier_upstream', projects: [] }
+        }
+      });
+    }
+
     const { data: saved, error } = await supabase
       .from('po_carts')
       .upsert(
@@ -2778,7 +2942,8 @@ router.put('/upstream/cart', authenticateToken, async (req, res) => {
       message: 'Upstream cart saved successfully',
       cart: {
         id: saved.id,
-        updatedAt: saved.updated_at
+        updatedAt: saved.updated_at,
+        draft: draftPayload
       }
     });
   } catch (error) {

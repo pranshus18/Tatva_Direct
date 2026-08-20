@@ -129,8 +129,8 @@ function BrandStepHarness({
   };
 
   // Page equivalent: unlockBrandSelection → clearIncompleteBrandSetup.
-  const handleBrandSelectionCleared = () => {
-    const label = lockedBrand;
+  const handleBrandSelectionCleared = (clearedBrand) => {
+    const label = String(clearedBrand || lockedBrand || '').trim();
     setLockedBrand('');
     setBrandPathMode(null);
     if (!label) return;
@@ -442,6 +442,23 @@ describe('Select yourself — Path A approved brand', () => {
     expect(screen.getByText(/Path A — select approved brand/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Or use Path B — request a new brand/i })).toBeInTheDocument();
   });
+
+  it('Cancel setup unlocks Path A when the approved brand was already on the profile', () => {
+    render(
+      <BrandStepHarness
+        initialEntries={[{ ...APPROVED_ROW, brands: 'acc' }]}
+        initialMode="pathA"
+        initialLockedBrand=""
+      />
+    );
+
+    expect(screen.getByText(/Path A only/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Cancel setup/i }));
+
+    expect(screen.getByText(/Path A — select approved brand/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Or use Path B — request a new brand/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Path A only/i)).not.toBeInTheDocument();
+  });
 });
 
 describe('Select yourself — role setup step', () => {
@@ -503,7 +520,12 @@ describe('Select yourself — role setup step', () => {
 
     fireEvent.change(roleSelect, { target: { value: 'dealer' } });
 
-    expect(roleSelect).toHaveValue('dealer');
+    expect(await screen.findByLabelText(/Assigned supply-chain role/i)).toHaveValue('Dealer');
+    expect(screen.queryByRole('combobox', { name: /Select your position/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Change role/i }));
+    const reopened = await screen.findByRole('combobox', { name: /Select your position/i });
+    expect(reopened).toHaveValue('dealer');
     expect(screen.getByRole('option', { name: 'Dealer' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Retailer' })).toBeInTheDocument();
   });
@@ -572,6 +594,27 @@ describe('Select yourself — role setup step', () => {
     fireEvent.change(roleSelect, { target: { value: 'dealer' } });
 
     expect(await screen.findByRole('button', { name: /Save entry|Saved/i })).toBeInTheDocument();
+  });
+
+  it('keeps the selected role until the supplier explicitly clicks Change role', async () => {
+    render(<FormStepHarness />);
+
+    const roleSelect = await screen.findByLabelText(/Select your position/i);
+    await waitFor(() => expect(roleSelect).not.toBeDisabled());
+    fireEvent.change(roleSelect, { target: { value: 'dealer' } });
+
+    expect(await screen.findByLabelText(/Assigned supply-chain role/i)).toHaveValue('Dealer');
+    expect(screen.queryByRole('combobox', { name: /Select your position/i })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText(/Assigned supply-chain role/i));
+    expect(screen.queryByRole('combobox', { name: /Select your position/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Role change request/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Change role/i }));
+    expect(await screen.findByRole('combobox', { name: /Select your position/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Keep current role/i }));
+    expect(screen.getByLabelText(/Assigned supply-chain role/i)).toHaveValue('Dealer');
+    expect(screen.queryByRole('combobox', { name: /Select your position/i })).not.toBeInTheDocument();
   });
 
   it('locks the role picker after onboarding is complete and exposes Request Role Change', async () => {

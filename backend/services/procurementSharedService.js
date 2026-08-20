@@ -71,7 +71,7 @@ export const resolveBcovPriceForBuyerMetrics = ({ levels = [], supplierCov = 0, 
   if (matchedLevels.length === 0) return null;
   const matched = [...matchedLevels]
     .map((row) => ({ row, price: parseFiniteNumber(row.unit_price) }))
-    .filter((entry) => entry.price !== null && entry.price >= 0)
+    .filter((entry) => entry.price !== null && entry.price > 0)
     .sort((a, b) => a.price - b.price)[0];
   if (!matched) return null;
   return {
@@ -87,7 +87,8 @@ export const resolveBcovPriceForBuyerMetrics = ({ levels = [], supplierCov = 0, 
 export const pickEffectiveOfferPrice = (basePrice, bcovResolved = null) => {
   const base = parseMoney(basePrice);
   const covRaw = parseFiniteNumber(bcovResolved?.price);
-  if (covRaw === null || covRaw < 0) {
+  // ₹0 / missing Product_COV is "not configured" — never replace MRP with a free/zero price.
+  if (covRaw === null || covRaw <= 0) {
     return { price: base, basePrice: base, bcovApplied: false, bcovLevelId: null };
   }
   const cov = roundMoney(covRaw);

@@ -171,6 +171,27 @@ test('resolveBcovPriceForBuyerMetrics: multiple slabs match — picks lowest uni
   assert.deepEqual(result, { levelId: 'low-tier', price: 80 });
 });
 
+test('resolveBcovPriceForBuyerMetrics: ignores zero/unconfigured unit prices', () => {
+  const levels = [
+    makeLevel({
+      id: 'empty-price',
+      brandCovThreshold: 0,
+      platformCovThreshold: 0,
+      supplierCovThreshold: 0,
+      price: 0
+    })
+  ];
+  assert.equal(
+    resolveBcovPriceForBuyerMetrics({
+      levels,
+      supplierCov: 100,
+      platformCov: 100,
+      brandCov: 100
+    }),
+    null
+  );
+});
+
 test('resolveBcovPriceForBuyerMetrics: null platform threshold never satisfies platform COV', () => {
   const levels = [
     makeLevel({
@@ -424,16 +445,43 @@ test('evaluateProductCovInventoryGate blocks Product_COV until inventory is comp
   const incomplete = evaluateProductCovInventoryGate({
     price: 0,
     stock: 0,
+    location: '',
     igst_rate: null,
     cgst_rate: null,
     sgst_rate: null
   });
   assert.equal(incomplete.ok, false);
-  assert.equal(incomplete.message, INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE);
+  assert.match(incomplete.message, /Inventory completion is required before Product COV/);
+  assert.ok(incomplete.missingFields.includes('MRP (incl. GST)'));
+  assert.ok(incomplete.missingFields.includes('Location'));
+
+  const catalogOnly = evaluateProductCovInventoryGate({
+    price: 0,
+    stock: 0,
+    location: 'Pune warehouse',
+    igst_rate: 18,
+    cgst_rate: 9,
+    sgst_rate: 9
+  });
+  assert.equal(catalogOnly.ok, false);
+  assert.match(catalogOnly.message, /MRP/);
+
+  const gstInheritedNoLocation = evaluateProductCovInventoryGate({
+    price: 0,
+    stock: 0,
+    location: '',
+    igst_rate: 18,
+    cgst_rate: 9,
+    sgst_rate: 9
+  });
+  assert.equal(gstInheritedNoLocation.ok, false);
+  assert.ok(gstInheritedNoLocation.missingFields.includes('MRP (incl. GST)'));
+  assert.ok(gstInheritedNoLocation.missingFields.includes('Location'));
 
   const complete = evaluateProductCovInventoryGate({
     price: 120,
     stock: 0,
+    location: 'Pune warehouse',
     igst_rate: 18,
     cgst_rate: 9,
     sgst_rate: 9

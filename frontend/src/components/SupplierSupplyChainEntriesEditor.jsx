@@ -21,6 +21,7 @@ import {
   SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE,
   SELECT_YOURSELF_MOV_REQUIRED_MESSAGE,
   REQUEST_ROLE_CHANGE_LABEL,
+  CHANGE_ROLE_LABEL,
   isEntrySupplyChainOnboardingComplete,
   getActiveApprovedRoleForEntry,
   entryMinimumOrderValueChanged,
@@ -323,6 +324,14 @@ const CompanyInfoEntryCard = ({
   };
   const [requestingChainConfig, setRequestingChainConfig] = useState(false);
   const [chainConfigRequestFeedback, setChainConfigRequestFeedback] = useState('');
+  const [roleSelectUnlocked, setRoleSelectUnlocked] = useState(false);
+  useEffect(() => {
+    if (roleChangeRequestActive) {
+      setRoleSelectUnlocked(true);
+      return;
+    }
+    setRoleSelectUnlocked(false);
+  }, [roleChangeRequestActive]);
   const handleRequestChainConfiguration = async () => {
     if (typeof onRequestChainConfiguration !== 'function' || !selectedBrand || requestingChainConfig) return;
     setRequestingChainConfig(true);
@@ -349,6 +358,11 @@ const CompanyInfoEntryCard = ({
   const isSupplyChainOnlyStep = sectionView === 'form';
   const hasResolvedChainRoles = availableRoleOptions.length > 0;
   const currentRoleValue = String(entry.role || '').trim();
+  const assignedRoleValue = currentRoleValue || String(activeApprovedRole || approvedRole || '').trim();
+  const hasChosenRole = Boolean(assignedRoleValue);
+  const assignedRoleLabel = assignedRoleValue
+    ? formatSupplyChainRoleLabel(assignedRoleValue)
+    : '';
   const roleSelectOptions = (() => {
     const opts = Array.isArray(availableRoleOptions) ? [...availableRoleOptions] : [];
     if (currentRoleValue && !opts.some((o) => o.value === currentRoleValue)) {
@@ -488,6 +502,10 @@ const CompanyInfoEntryCard = ({
     isEntrySupplyChainOnboardingComplete(entry, { chainProfileApprovalStatus }, savedBaselineEntries) &&
     !!(activeApprovedRole || approvedRole) &&
     !roleChangeRequestActive;
+  const showRoleSelect =
+    editing &&
+    (!hasChosenRole || roleSelectUnlocked || roleChangeRequestActive) &&
+    !roleLocked;
   const roleSelectionEnabled =
     editing &&
     brandApprovalReadyForRole &&
@@ -1086,29 +1104,46 @@ const CompanyInfoEntryCard = ({
               ) : null}
               <div className="chain-field chain-field--full">
                 <label className="chain-field__label" htmlFor={`role-${entry.id}`}>
-                  {roleLocked
+                  {roleLocked || (hasChosenRole && !showRoleSelect)
                     ? 'Assigned supply-chain role'
                     : isSupplyChainOnlyStep
                       ? 'Select your position'
                       : 'Supply-chain role'}
-                  {adminChainReady && !roleLocked ? <RequiredMark /> : null}
+                  {adminChainReady && showRoleSelect && !roleLocked ? <RequiredMark /> : null}
                 </label>
-                {roleLocked ? (
-                  <input
-                    id={`role-${entry.id}`}
-                    type="text"
-                    className="chain-field__control chain-field__control--readonly"
-                    value={approvedRoleLabel}
-                    readOnly
-                    disabled
-                    aria-readonly="true"
-                  />
+                {roleLocked || (hasChosenRole && !showRoleSelect) ? (
+                  <>
+                    <input
+                      id={`role-${entry.id}`}
+                      type="text"
+                      className="chain-field__control chain-field__control--readonly"
+                      value={approvedRoleLabel || assignedRoleLabel}
+                      readOnly
+                      disabled
+                      aria-readonly="true"
+                    />
+                    {editing && brandApprovalReadyForRole && !roleLocked ? (
+                      <div className="chain-role-lock-actions">
+                        <button
+                          type="button"
+                          className="chain-entry-selector__link"
+                          onClick={() => setRoleSelectUnlocked(true)}
+                        >
+                          {CHANGE_ROLE_LABEL}
+                        </button>
+                      </div>
+                    ) : null}
+                  </>
                 ) : (
                   <select
                     id={`role-${entry.id}`}
                     className="chain-field__control"
                     value={currentRoleValue}
-                    onChange={(e) => onUpdate('role', e.target.value)}
+                    onChange={(e) => {
+                      const nextRole = e.target.value;
+                      onUpdate('role', nextRole);
+                      if (nextRole) setRoleSelectUnlocked(false);
+                    }}
                     disabled={!roleSelectionEnabled}
                     required={editing && brandApprovalReadyForRole}
                     aria-required={editing && brandApprovalReadyForRole ? 'true' : 'false'}
@@ -1128,7 +1163,18 @@ const CompanyInfoEntryCard = ({
                     ))}
                   </select>
                 )}
-                {approvedRoleLabel && !roleLocked ? (
+                {hasChosenRole && showRoleSelect && !roleChangeRequestActive ? (
+                  <div className="chain-role-lock-actions">
+                    <button
+                      type="button"
+                      className="chain-entry-selector__link"
+                      onClick={() => setRoleSelectUnlocked(false)}
+                    >
+                      Keep current role
+                    </button>
+                  </div>
+                ) : null}
+                {approvedRoleLabel && !roleLocked && showRoleSelect ? (
                   <p className="chain-field__sublabel">
                     Approved role: <strong>{approvedRoleLabel}</strong>
                     {pendingRoleChange
@@ -1136,7 +1182,7 @@ const CompanyInfoEntryCard = ({
                       : ''}
                   </p>
                 ) : null}
-                {pendingRoleChange && !roleLocked ? (
+                {pendingRoleChange && !roleLocked && showRoleSelect ? (
                   <p className="chain-callout chain-callout--warning">
                     You selected {formatSupplyChainRoleLabel(entry.role)} instead of your approved role (
                     {approvedRoleLabel}). Save this entry to submit the change for admin approval. Your current approved
@@ -1965,49 +2011,55 @@ export default function SupplierSupplyChainEntriesEditor({
   };
 
   const handleBrandStepClearSelection = (entryId = resolvedSelectedEntryId) => {
-    // Parent owns the active role-setup lock — clear incomplete draft there first.
-    if (brandSetupLocked || pathAExclusive) {
-      setBrandStepOtherMode(false);
-      setBrandStepOtherExplicit(false);
-      onBrandPathModeChange?.(null);
-      onBrandSelectionCleared?.();
-      return;
-    }
+    const currentEntries = getDisplayEntries();
+    const requestedId = String(entryId || '').trim();
+    const lockedKey = brandKeyForDuplicateCheck(lockedBrandName || activeEntryBrandValue);
+    const target =
+      (requestedId &&
+        currentEntries.find((entry) => String(entry?.id || '').trim() === requestedId)) ||
+      (lockedKey &&
+        currentEntries.find(
+          (entry) => brandKeyForDuplicateCheck(normalizeSingleBrand(entry?.brands)) === lockedKey
+        )) ||
+      null;
+    const targetId = String(target?.id || requestedId || '').trim();
+    const clearedBrand =
+      normalizeSingleBrand(target?.brands) ||
+      String(lockedBrandName || activeEntryBrandValue || '').trim();
 
-    const targetId = String(entryId || '').trim();
     setBrandStepOtherMode(false);
     setBrandStepOtherExplicit(false);
     onBrandPathModeChange?.(null);
-    if (targetId) {
-      const currentEntries = getDisplayEntries();
-      const target = currentEntries.find((entry) => entry.id === targetId);
-      if (target && (normalizeSingleBrand(target?.brands) || String(target?.role || '').trim())) {
-        const targetBrand = normalizeSingleBrand(target?.brands);
-        const baseEntries =
-          Array.isArray(profile?.companyInfoEntries) && profile.companyInfoEntries.length > 0
-            ? profile.companyInfoEntries.map((entry) => ({ ...entry }))
-            : currentEntries.map((entry) => ({ ...entry }));
-        let updatedOne = false;
-        const entries = baseEntries.map((entry) => {
-          if (updatedOne) return entry;
-          if (!matchCompanyInfoEntry(entry, { entryId: targetId, brand: targetBrand })) return entry;
-          updatedOne = true;
-          return {
-            ...entry,
-            brands: '',
-            role: '',
-            authorizationCertificateUrl: '',
-            authorizationCertificateUrls: [],
-            supplyChainRegistrationStarted: false
-          };
-        });
-        if (updatedOne) {
-          setProfile(syncProfileFromEntries(profile, entries));
-        }
+
+    // Always drop the local Path A draft. Previously the locked path returned before
+    // clearing, so leftover catalog brands immediately re-locked the chooser.
+    if (target && (normalizeSingleBrand(target?.brands) || String(target?.role || '').trim())) {
+      const targetBrand = normalizeSingleBrand(target?.brands);
+      const baseEntries =
+        Array.isArray(profile?.companyInfoEntries) && profile.companyInfoEntries.length > 0
+          ? profile.companyInfoEntries.map((entry) => ({ ...entry }))
+          : currentEntries.map((entry) => ({ ...entry }));
+      let updatedOne = false;
+      const entries = baseEntries.map((entry) => {
+        if (updatedOne) return entry;
+        if (!matchCompanyInfoEntry(entry, { entryId: targetId, brand: targetBrand })) return entry;
+        updatedOne = true;
+        return {
+          ...entry,
+          brands: '',
+          role: '',
+          authorizationCertificateUrl: '',
+          authorizationCertificateUrls: [],
+          supplyChainRegistrationStarted: false
+        };
+      });
+      if (updatedOne) {
+        setProfile(syncProfileFromEntries(profile, entries));
       }
-      setSelectedEntryId(targetId);
     }
-    onBrandSelectionCleared?.();
+
+    if (targetId) setSelectedEntryId(targetId);
+    onBrandSelectionCleared?.(clearedBrand);
     window.requestAnimationFrame(() => {
       document.getElementById(`entry-selector-${sectionView}`)?.focus();
     });
@@ -2179,15 +2231,10 @@ export default function SupplierSupplyChainEntriesEditor({
     isBrandStepPicker &&
     !pathAExclusive &&
     (pathBExclusive || brandStepOtherMode || activeEntryUsesCustomBrand);
-  // Path A lock: approved catalog brand is chosen — hide Path B entirely until Change/Cancel.
-  const brandStepPathALocked =
-    pathAExclusive ||
-    (isBrandStepPicker &&
-      !!activeEntryBrandValue &&
-      !brandStepOtherMode &&
-      !brandStepOtherExplicit &&
-      !activeEntryUsesCustomBrand &&
-      catalogBrandNames.some((name) => areBrandNamesExactDuplicates(name, activeEntryBrandValue)));
+  // Path A lock: only an explicit Path A session (selected assignment / path mode).
+  // Do not lock just because a catalog brand remains on an entry — that made
+  // Change brand / Cancel setup appear to do nothing after unlocking.
+  const brandStepPathALocked = pathAExclusive;
   // Path B lock: supplier is mid-request for a new brand — hide Path A picker.
   const brandStepPathBLocked =
     isBrandStepPicker &&
@@ -2208,23 +2255,6 @@ export default function SupplierSupplyChainEntriesEditor({
     catalogBrandNames,
     brandSetupLocked,
     pathAExclusive
-  ]);
-
-  useEffect(() => {
-    if (!isBrandStepPicker || !editing) return;
-    if (!brandStepPathALocked || !activeEntryBrandValue) return;
-    if (pathAExclusive || brandPathMode === 'pathA') return;
-    // Align parent path only. Do not auto-call onBrandPickedWithoutRole — that forced a
-    // locked assignment and made the Approved brands dropdown look selectable but inert.
-    onBrandPathModeChange?.('pathA');
-  }, [
-    isBrandStepPicker,
-    editing,
-    brandStepPathALocked,
-    activeEntryBrandValue,
-    pathAExclusive,
-    brandPathMode,
-    onBrandPathModeChange
   ]);
 
   useEffect(() => {

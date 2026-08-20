@@ -165,6 +165,45 @@ describe('ProductDiscoveryDetail in the supplier upstream portal', () => {
     expect(screen.getAllByText('₹150.00 per 600 ml').length).toBeGreaterThan(0);
   });
 
+  it('does not copy a saved cart quantity into the stepper on load', async () => {
+    global.fetch = vi.fn((url) => {
+      if (String(url).includes('/api/supplier/upstream/cart')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              status: 'success',
+              cart: {
+                draft: {
+                  projects: [
+                    {
+                      projectId: 'proj-1',
+                      items: [{ mineSupplierProductId: 'mine-9', quantity: 3 }]
+                    }
+                  ]
+                }
+              }
+            })
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(DETAIL_PAYLOAD) });
+    });
+
+    renderUpstreamDetail();
+
+    await waitFor(() =>
+      expect(screen.getByRole('heading', { name: 'Steel Taurus 600' })).toBeInTheDocument()
+    );
+    await waitFor(() =>
+      expect(screen.getAllByText(/In cart: 3/).length).toBeGreaterThan(0)
+    );
+    const qtyValues = document.querySelectorAll('.pdd-buybox__qty-value');
+    expect([...qtyValues].some((node) => node.textContent.trim() === '1')).toBe(true);
+    expect([...qtyValues].some((node) => node.textContent.trim() === '3')).toBe(false);
+    expect(screen.queryByRole('button', { name: /Update Cart/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Continue sourcing/i }).length).toBeGreaterThan(0);
+  });
+
   it('hands the listing back to the sourcing cart flow with the chosen quantity', async () => {
     renderUpstreamDetail();
 

@@ -275,6 +275,35 @@ test('resolveStableVariantIdentityFromExistingOffers keeps computed identity for
   assert.equal(stable.variantAsin, buildVariantAsinLikeId('TSA7K', computed.variantKey));
 });
 
+test('resolveStableVariantIdentityFromExistingOffers does not reuse a single existing key for a different filled variant', () => {
+  const parent = { specifications: {}, asin: 'TSA7K' };
+  const submitted = { Color: 'White', Capacity: '1 L' };
+  const computed = buildSupplierVariantIdentity({ specifications: submitted }, parent);
+  const stable = resolveStableVariantIdentityFromExistingOffers({
+    parentAsin: 'TSA7K',
+    parentProduct: parent,
+    computedIdentity: computed,
+    offerSpecifications: submitted,
+    catalogSpecifications: {},
+    specsUnchangedFromCatalog: true,
+    existingOffers: [
+      {
+        status: 'approved',
+        is_active: true,
+        variant_key: 'only-existing-key',
+        variant_asin: 'TSONLY01',
+        attributes: {
+          specifications: { Color: 'Black', Capacity: '500ML' }
+        }
+      }
+    ]
+  });
+
+  assert.equal(stable.reused, false);
+  assert.equal(stable.variantKey, computed.variantKey);
+  assert.notEqual(stable.variantKey, 'only-existing-key');
+});
+
 test('resolveSupplierVariantKeyForItem: prefers supplier-page variantKey on cart line', () => {
   const parent = { specifications: { weight: '1.5 kg' } };
   const computed = buildSupplierVariantIdentity({ specifications: {} }, parent).variantKey;

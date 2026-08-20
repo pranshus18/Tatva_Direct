@@ -11,7 +11,9 @@ import {
   normalizePoCartDraft,
   poCartDraftNeedsPersistAfterPrune,
   prunePoCartGroups,
-  removeUpstreamCartItemsByMineIds
+  pruneUpstreamCartProjectsToLiveMineIds,
+  removeUpstreamCartItemsByMineIds,
+  resolveUpstreamProjectItems
 } from '../controllers/po/shared/poHelpers.js';
 
 test('consolidateDuplicateProductLines merges same productId when explicitly called', () => {
@@ -154,6 +156,22 @@ test('mergeOrAppendUpstreamCartItem keeps separate lines for the same product wi
   assert.equal(nextItems.length, 2);
   assert.equal(nextItems[0].quantity, 1);
   assert.equal(nextItems[1].quantity, 2);
+});
+
+test('mergeOrAppendUpstreamCartItem keeps quantity unchanged when no add is performed', () => {
+  const existingItems = [
+    {
+      id: 'line-red',
+      mineSupplierProductId: 'mine-red',
+      quantity: 1
+    }
+  ];
+  const unchanged = mergeOrAppendUpstreamCartItem(existingItems, {
+    mineSupplierProductId: 'mine-red',
+    quantity: 0
+  });
+  assert.equal(unchanged.length, 1);
+  assert.equal(unchanged[0].quantity, 1);
 });
 
 test('mergeOrAppendUpstreamCartItem increases quantity for the same product and variant', () => {
@@ -375,4 +393,111 @@ test('removeUpstreamCartItemsByMineIds clears the cart when every line was order
     ['mine-a']
   );
   assert.equal(next.length, 0);
+});
+
+test('resolveUpstreamProjectItems keeps an explicit empty items list empty', () => {
+  const items = resolveUpstreamProjectItems({
+    items: [],
+    selectedMine: { 'mine-a': 4 }
+  });
+  assert.equal(items.length, 0);
+});
+
+test('resolveUpstreamProjectItems falls back to selectedMine when items are omitted', () => {
+  const items = resolveUpstreamProjectItems({
+    selectedMine: { 'mine-a': 4 }
+  });
+  assert.equal(items.length, 1);
+  assert.equal(items[0].mineSupplierProductId, 'mine-a');
+  assert.equal(items[0].quantity, 4);
+});
+
+test('mergeOrAppendUpstreamCartItem does not treat cart line id as the offer id', () => {
+  const nextItems = mergeOrAppendUpstreamCartItem(
+    [{ id: 'us-item-old', mineSupplierProductId: 'mine-red', quantity: 5 }],
+    { id: 'us-item-old', mineSupplierProductId: 'mine-blue', quantity: 0 },
+    { replaceQuantity: true }
+  );
+  assert.equal(nextItems.length, 1);
+  assert.equal(nextItems[0].mineSupplierProductId, 'mine-red');
+});
+
+test('pruneUpstreamCartProjectsToLiveMineIds drops deleted offer ids and keeps live lines', () => {
+  const next = pruneUpstreamCartProjectsToLiveMineIds(
+    [
+      {
+        projectId: 'proj-backpack',
+        selectedMine: { 'stale-offer': 4, 'live-offer': 3 },
+        items: [
+          {
+            mineSupplierProductId: 'stale-offer',
+            productId: 'prod-1',
+            name: 'Safari Omega 30L Laptop Backpack',
+            quantity: 4
+          },
+          {
+            mineSupplierProductId: 'live-offer',
+            productId: 'prod-1',
+            name: 'Safari Omega 30L Laptop Backpack',
+            quantity: 3
+          }
+        ]
+      }
+    ],
+    ['live-offer']
+  );
+  assert.equal(next.length, 1);
+  assert.equal(next[0].items.length, 1);
+  assert.equal(next[0].items[0].mineSupplierProductId, 'live-offer');
+  assert.equal(next[0].items[0].quantity, 3);
+  assert.deepEqual(next[0].selectedMine, { 'live-offer': 3 });
+});
+
+test('pruneUpstreamCartProjectsToLiveMineIds removes a project that only had deleted offers', () => {
+  const next = pruneUpstreamCartProjectsToLiveMineIds(
+    [
+      {
+        projectId: 'proj-backpack',
+        selectedMine: { 'stale-offer': 4 },
+        items: [{ mineSupplierProductId: 'stale-offer', quantity: 4 }]
+      },
+      {
+        projectId: 'proj-other',
+        selectedMine: { 'live-offer': 2 },
+        items: [{ mineSupplierProductId: 'live-offer', quantity: 2 }]
+      }
+    ],
+    ['live-offer']
+  );
+  assert.equal(next.length, 1);
+  assert.equal(next[0].projectId, 'proj-other');
+});
+
+test('re-add after pruning a deleted offer keeps a single live line with the new quantity', () => {
+  const afterDelete = pruneUpstreamCartProjectsToLiveMineIds(
+    [
+      {
+        projectId: 'proj-backpack',
+        selectedMine: { 'stale-offer': 4 },
+        items: [
+          {
+            mineSupplierProductId: 'stale-offer',
+            productId: 'prod-1',
+            quantity: 4
+          }
+        ]
+      }
+    ],
+    ['recreated-offer']
+  );
+  assert.equal(afterDelete.length, 0);
+
+  const nextItems = mergeOrAppendUpstreamCartItem(afterDelete[0]?.items || [], {
+    mineSupplierProductId: 'recreated-offer',
+    productId: 'prod-1',
+    quantity: 3
+  });
+  assert.equal(nextItems.length, 1);
+  assert.equal(nextItems[0].mineSupplierProductId, 'recreated-offer');
+  assert.equal(nextItems[0].quantity, 3);
 });

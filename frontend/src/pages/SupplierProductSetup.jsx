@@ -26,6 +26,11 @@ import {
   IGST_OPTIONS
 } from '../utils/gstRates';
 import { validateProductUnitCompatibility } from '../utils/productUnitCompatibility';
+import {
+  getSupplierProductCreateErrorMessage,
+  getSupplierInventoryCompletionMissingFields,
+  formatInventoryRequiredForProductCovMessage
+} from '../utils/supplierProductValidation';
 import './Auth.css';
 import './SupplierProductSetup.css';
 
@@ -353,17 +358,13 @@ const SupplierProductSetup = ({ user }) => {
     setLoading(true);
     setError('');
 
-    // Validate required fields
-    if (
-      !formData.name ||
-      !formData.price ||
-      !formData.stock ||
-      !formData.location ||
-      !formData.igst_rate ||
-      !formData.cgst_rate ||
-      !formData.sgst_rate
-    ) {
-      setError('Please fill in all required fields');
+    const missingInventory = getSupplierInventoryCompletionMissingFields(formData);
+    if (!formData.name || missingInventory.length > 0) {
+      setError(
+        missingInventory.length > 0
+          ? formatInventoryRequiredForProductCovMessage(missingInventory)
+          : 'Please fill in all required fields'
+      );
       setLoading(false);
       return;
     }
@@ -440,7 +441,7 @@ const SupplierProductSetup = ({ user }) => {
         } else if (response.status === 403 && data?.code === 'brand_workflow_not_ready') {
           setError(data?.message || 'Brand approval workflow is not available yet. Please contact admin.');
         } else {
-          setError(data.message || 'Failed to save product information');
+          setError(getSupplierProductCreateErrorMessage(data) || 'Failed to save product information');
         }
       }
     } catch (error) {

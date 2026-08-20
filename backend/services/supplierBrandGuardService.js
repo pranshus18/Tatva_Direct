@@ -109,6 +109,43 @@ export function roleDeclaresBrand(profile, role, brandInput) {
   return entryOverlapsViewerBrands({ brands: [...roleTokens].join(', ') }, productTokens);
 }
 
+function getProfileCompanyInfoEntries(profile) {
+  if (Array.isArray(profile?.companyInfoEntries)) return profile.companyInfoEntries;
+  if (profile?.companyInfoEntries && typeof profile.companyInfoEntries === 'object') {
+    return [profile.companyInfoEntries];
+  }
+  return [];
+}
+
+export function entryHasSelectedSupplyChainRole(entry) {
+  return Boolean(String(entry?.role || '').trim());
+}
+
+/** True when Select yourself has a supply-chain role for this brand (saved, draft, or pending). */
+export function supplierHasSelectedRoleForBrand(profile, brandInput) {
+  if (!profile) return false;
+  const candidate = String(brandInput || '').trim();
+  if (!candidate) return false;
+
+  const entries = getProfileCompanyInfoEntries(profile);
+  for (const entry of entries) {
+    if (!entryHasSelectedSupplyChainRole(entry)) continue;
+    if (findMatchingDeclaredBrandLabel({ companyInfoEntries: [entry] }, candidate)) {
+      return true;
+    }
+  }
+
+  if (entries.some((entry) => findMatchingDeclaredBrandLabel({ companyInfoEntries: [entry] }, candidate))) {
+    return false;
+  }
+
+  const legacyRole = String(profile?.supplierRole || '').trim();
+  if (!legacyRole) return false;
+  return Boolean(
+    findMatchingDeclaredBrandLabel({ companyInfoEntries: [], brands: profile?.brands }, candidate)
+  );
+}
+
 export function getAllDeclaredBrandTokens(profile) {
   const tokens = new Set();
   const entries = Array.isArray(profile?.companyInfoEntries)
@@ -172,11 +209,28 @@ function findMatchingDeclaredBrandLabel(profile, brandInput) {
   return null;
 }
 
-export function brandIsAllowedForSupplier(profile, brandInput) {
+export const SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE = 'role_required';
+export const SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_MESSAGE =
+  'Before adding products, the brand must be approved and you must select/add your supplier role in Select yourself.';
+
+export function brandIsAllowedForSupplier(profile, brandInput, { requireRole = false } = {}) {
   const declared = getAllDeclaredBrandTokens(profile);
-  if (declared.size === 0) return { allowed: true, reason: 'no_brand_lock' };
+  if (declared.size === 0) {
+    if (requireRole) {
+      return { allowed: false, reason: SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE, declared: [] };
+    }
+    return { allowed: true, reason: 'no_brand_lock' };
+  }
   const matchedLabel = findMatchingDeclaredBrandLabel(profile, brandInput);
   if (matchedLabel) {
+    if (requireRole && !supplierHasSelectedRoleForBrand(profile, matchedLabel)) {
+      return {
+        allowed: false,
+        reason: SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE,
+        matchedBrand: matchedLabel,
+        declared: [...declared]
+      };
+    }
     return { allowed: true, reason: 'exact', matchedBrand: matchedLabel };
   }
   const b = String(brandInput || '').trim().toLowerCase();
@@ -186,7 +240,7 @@ export function brandIsAllowedForSupplier(profile, brandInput) {
 
 /**
  * Product create/update may receive both the supplier-selected brand and a catalog canonical brand.
- * Allow when either matches the supplier's declared Select yourself brands.
+ * Allow only when the brand is declared in Select yourself and a supply-chain role is selected.
  */
 export function resolveSupplierProductBrandGuard(profile, { selectedBrand = '', catalogBrand = '' } = {}) {
   const candidates = [...new Set(
@@ -196,12 +250,12 @@ export function resolveSupplierProductBrandGuard(profile, { selectedBrand = '', 
   )];
 
   if (candidates.length === 0) {
-    const guard = brandIsAllowedForSupplier(profile, '');
+    const guard = brandIsAllowedForSupplier(profile, '', { requireRole: true });
     return { allowed: guard.allowed, brand: '', guard };
   }
 
   for (const candidate of candidates) {
-    const guard = brandIsAllowedForSupplier(profile, candidate);
+    const guard = brandIsAllowedForSupplier(profile, candidate, { requireRole: true });
     if (guard.allowed) {
       return {
         allowed: true,
@@ -211,7 +265,7 @@ export function resolveSupplierProductBrandGuard(profile, { selectedBrand = '', 
     }
   }
 
-  const guard = brandIsAllowedForSupplier(profile, candidates[0]);
+  const guard = brandIsAllowedForSupplier(profile, candidates[0], { requireRole: true });
   return { allowed: false, brand: '', guard };
 }
 

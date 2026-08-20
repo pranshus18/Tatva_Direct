@@ -170,8 +170,9 @@ export default function BrandSelect({
           <p className="brand-select__hint">{hint}</p>
         ) : (
           <p className="brand-select__hint">
-            Type the complete brand name. Matching approved brands appear in suggestions — your text is not
-            replaced automatically.
+            {source === 'profile'
+              ? 'Type a brand that already has a supply-chain role in Select yourself. Brands without a role cannot be used to add products.'
+              : 'Type the complete brand name. Matching approved brands appear in suggestions — your text is not replaced automatically.'}
           </p>
         )}
       </div>
@@ -246,8 +247,8 @@ export default function BrandSelect({
             </>
           ) : (
             <>
-              No approved brands in your profile yet. Under <strong>Select yourself</strong>, pick an approved brand
-              or request a new one, then wait for approval before adding products.
+              No brands are ready for products yet. Under <strong>Select yourself</strong>, pick an approved brand
+              and add your supply-chain role before adding products.
             </>
           )}
         </p>
@@ -261,8 +262,8 @@ export default function BrandSelect({
             </>
           ) : (
             <>
-              Choose an approved brand from your Select yourself profile. Only brands you declared and admin approved
-              appear here.
+              Choose a brand from Select yourself that already has a supply-chain role. Brands without a role
+              cannot be used to add products.
               {allowOther ? ' New brands may need admin approval before the product goes live.' : ''}
             </>
           )}

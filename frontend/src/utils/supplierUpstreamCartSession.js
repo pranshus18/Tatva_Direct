@@ -120,8 +120,8 @@ export const subscribeSupplierCartUpdated = (handler, options = {}) => {
 
 /**
  * Copy live cart quantities into a local qty map when the saved cart changed
- * during this session. Pass `seedMissingFromLive` on first hydrate so cards
- * show the quantity already in the cart after navigating back to sourcing.
+ * during this session. Do not pass `seedMissingFromLive` on page load/refresh —
+ * the quantity field must stay at its default until the user edits it.
  */
 export const applyLiveCartQuantitiesToMap = (
   prevMap = {},

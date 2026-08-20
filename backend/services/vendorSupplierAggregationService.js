@@ -120,7 +120,8 @@ export async function buildSupplierProductsForRanking({
           })
         : null;
     // No Product_COV for this variant, or COV not below MRP → always use offer MRP.
-    const latestPrice = pickEffectiveOfferPrice(basePrice, bcovResolved).price;
+    const picked = pickEffectiveOfferPrice(basePrice, bcovResolved);
+    const latestPrice = picked.price;
     const latestStock = product.stock || 0;
     const latestDescription = product.description || '';
     const latestName = product.name || itemName;
@@ -206,8 +207,8 @@ export async function buildSupplierProductsForRanking({
       supplierVariantAsin: variantTsin,
       variantAsin: variantTsin,
       basePrice,
-      bcovApplied: !!bcovResolved,
-      bcovLevelId: bcovResolved?.levelId || null,
+      bcovApplied: picked.bcovApplied,
+      bcovLevelId: picked.bcovLevelId,
       price: latestPrice,
       stock: latestStock,
       description: latestDescription,

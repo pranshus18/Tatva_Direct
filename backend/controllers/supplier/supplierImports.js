@@ -119,10 +119,13 @@ export {
   entryOverlapsViewerBrands,
   getViewerBrandTokensForRole,
   supplierCanAccessBrandStrict,
+  supplierHasSelectedRoleForBrand,
   normalizeChainNameKey,
   normalizeBrandKeyFromAttributes,
   parseBrandTokens,
-  resolveUpstreamBrandLabel
+  resolveUpstreamBrandLabel,
+  SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE,
+  SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_MESSAGE
 } from '../../services/supplierBrandGuardService.js';
 export {
   dedupeUpstreamCandidatesBySupplierPreferClosest,

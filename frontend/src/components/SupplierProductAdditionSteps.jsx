@@ -29,8 +29,16 @@ function lineState(variant, afterStep) {
   return 'pending';
 }
 
-export default function SupplierProductAdditionSteps({ variant = 'add-product', hint = '', compact = false }) {
+export default function SupplierProductAdditionSteps({
+  variant = 'add-product',
+  hint = '',
+  compact = false,
+  onStepSelect,
+  lockedSteps = []
+}) {
   const stepState = VARIANT_STEPS[variant] || VARIANT_STEPS['add-product'];
+  const locked = new Set((lockedSteps || []).map((n) => Number(n)));
+  const selectable = typeof onStepSelect === 'function';
 
   return (
     <div
@@ -41,6 +49,21 @@ export default function SupplierProductAdditionSteps({ variant = 'add-product', 
       <div className="supplier-addition-steps__track">
         {STEPS.map((s, i) => {
           const state = stepState[s.n];
+          const isLocked = locked.has(s.n);
+          const nodeClass = `supplier-addition-steps__node supplier-addition-steps__node--${state}${
+            isLocked ? ' supplier-addition-steps__node--locked' : ''
+          }${selectable ? ' supplier-addition-steps__node--clickable' : ''}`;
+          const content = (
+            <>
+              <span className="supplier-addition-steps__circle">
+                {state === 'done' ? <Check size={14} strokeWidth={3} aria-hidden /> : s.n}
+              </span>
+              <span className="supplier-addition-steps__meta">
+                <span className="supplier-addition-steps__title">{s.title}</span>
+                <span className="supplier-addition-steps__sub">{s.sub}</span>
+              </span>
+            </>
+          );
           return (
             <React.Fragment key={s.n}>
               {i > 0 && (
@@ -49,17 +72,23 @@ export default function SupplierProductAdditionSteps({ variant = 'add-product', 
                   aria-hidden
                 />
               )}
-              <div
-                className={`supplier-addition-steps__node supplier-addition-steps__node--${state}`}
-              >
-                <span className="supplier-addition-steps__circle">
-                  {state === 'done' ? <Check size={14} strokeWidth={3} aria-hidden /> : s.n}
-                </span>
-                <span className="supplier-addition-steps__meta">
-                  <span className="supplier-addition-steps__title">{s.title}</span>
-                  <span className="supplier-addition-steps__sub">{s.sub}</span>
-                </span>
-              </div>
+              {selectable ? (
+                <button
+                  type="button"
+                  className={nodeClass}
+                  onClick={() => onStepSelect(s.n, { locked: isLocked })}
+                  aria-disabled={isLocked}
+                  title={
+                    isLocked && s.n === 3
+                      ? 'Complete Inventory before Product COV'
+                      : s.title
+                  }
+                >
+                  {content}
+                </button>
+              ) : (
+                <div className={nodeClass}>{content}</div>
+              )}
             </React.Fragment>
           );
         })}

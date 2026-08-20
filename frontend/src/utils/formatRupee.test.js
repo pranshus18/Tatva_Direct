@@ -35,4 +35,14 @@ describe('resolveDiscoveryDisplayPricing', () => {
     expect(unlocked.price).toBe(8500);
     expect(unlocked.mrp).toBe(10000);
   });
+
+  it('shows list price and no strikethrough when COV is missing or ₹0', () => {
+    const zeroDeal = resolveDiscoveryDisplayPricing({
+      price: 0,
+      mrp: 2995,
+      bcovApplied: true
+    });
+    expect(zeroDeal.bcovApplied).toBe(false);
+    expect(zeroDeal.price).toBe(2995);
+  });
 });

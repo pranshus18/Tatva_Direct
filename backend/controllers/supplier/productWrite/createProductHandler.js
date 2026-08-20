@@ -17,6 +17,8 @@ import {
   normalizeText,
   onboardingAutoApproveThreshold,
   resolveSupplierProductBrandGuard,
+  SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE,
+  SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_MESSAGE,
   scoreOnboardingConfidence,
   shouldAutoApproveSupplierOfferOnCreate,
   hasSupplierSpecificationChangesFromCatalog,
@@ -24,7 +26,7 @@ import {
   retainCatalogCompatibleSpecifications,
   validateSpecValues
 } from '../supplierImports.js';
-import { sanitizeImageUrls } from '../shared/productHelpers.js';
+import { sanitizeImageUrls, validateAndNormalizeTaxRates } from '../shared/productHelpers.js';
 import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 import { clearOrphanedSupplierBcovLevelsBeforeNewOffer } from '../../../services/supplierBcovService.js';
@@ -38,7 +40,9 @@ import {
 import { resolveCatalogBaselineSpecifications, extractOfferSpecificationsFromRow } from '../../../services/supplierCatalogHelpersService.js';
 import {
   resolveStableVariantIdentityFromExistingOffers,
-  syncOfferAttributesWithSpecifications
+  syncOfferAttributesWithSpecifications,
+  isPersistableProductBarcode,
+  buildVariantAsinLikeId
 } from '../../../services/productIdentityService.js';
 import {
   fetchCanonicalVariantMrp,
@@ -58,15 +62,22 @@ import {
 import { notifyServiceProvidersForFulfilledBoqRequests } from '../../../services/serviceProviderRequestNotificationService.js';
 import {
   DUPLICATE_SUPPLIER_VARIANT_MESSAGE,
+  findOwnOfferForUniqueConflict,
   findOwnOfferForVariantLocation,
   isExistingOfferUpdatableOnCreate,
-  isSupplierOfferUniqueViolation
+  isPgUniqueViolation,
+  isSupplierOfferUniqueViolation,
+  loadOwnSupplierOffersForProduct,
+  looksLikePostgresConstraintError,
+  canonicalSupplierOfferLocation,
+  recoverOwnOfferAfterUniqueViolation,
+  toCatalogProductWriteErrorResponse,
+  toSupplierOfferWriteErrorResponse
 } from '../../../utils/supplierOfferUniqueness.js';
 
 export function buildSupplierProductCreateHandler(ctx) {
   const {
     supabase,
-    resolveTaxRatesForProductCreate,
     upsertModelSpecProfile,
     loadSpecTemplateForCategory,
     resolveAdminSpecificationTemplate
@@ -90,7 +101,9 @@ export function buildSupplierProductCreateHandler(ctx) {
           : {};
       const posLookupGsku = String(otherData.gsku || otherData.pos_lookup_code || '').trim();
       if (posLookupGsku) requestSpecs.gsku = posLookupGsku;
-      const explicitBarcode = String(otherData.barcode || '').trim();
+      const explicitBarcode = String(
+        otherData.barcode || requestSpecs?.barcode || requestSpecs?.Barcode || ''
+      ).trim();
       const normalizedImageUrls = sanitizeImageUrls(otherData.images);
       const photoValidation = validateMinSupplierProductPhotos(normalizedImageUrls);
       if (!photoValidation.ok) {
@@ -120,18 +133,34 @@ export function buildSupplierProductCreateHandler(ctx) {
       }
       const brandInput = String(otherData.brand || requestSpecs?.brand || brandModel || '').trim();
       const mpnInput = '';
-      const gtinInput = normalizeGtin(
+      let gtinInput = normalizeGtin(
         otherData.gtin || requestSpecs?.gtin || requestSpecs?.upc || requestSpecs?.ean || ''
       );
 
       if (gtinInput && !isValidGtin(gtinInput)) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Invalid GTIN. Use 8, 12, 13, or 14 digit numeric code.'
-        });
+        if (
+          !isPersistableProductBarcode(gtinInput, {
+            name: otherData.name,
+            description: otherData.description
+          })
+        ) {
+          gtinInput = '';
+        } else {
+          return res.status(400).json({
+            status: 'error',
+            message: 'Invalid GTIN. Use 8, 12, 13, or 14 digit numeric code.'
+          });
+        }
       }
 
-      const resolvedBarcodeForPos = (explicitBarcode || gtinInput || posLookupGsku || '').trim() || null;
+      const barcodeCandidates = [explicitBarcode, gtinInput, posLookupGsku];
+      const resolvedBarcodeForPos =
+        barcodeCandidates.find((candidate) =>
+          isPersistableProductBarcode(candidate, {
+            name: otherData.name,
+            description: otherData.description
+          })
+        ) || null;
 
       const canonicalProductFromIdentifier = await findCanonicalProductFromIdentifiers(supabase, {
         gtinInput,
@@ -150,10 +179,15 @@ export function buildSupplierProductCreateHandler(ctx) {
       });
       if (!brandResolution.allowed) {
         const guard = brandResolution.guard || {};
+        const roleRequired = guard.reason === SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE;
         return res.status(403).json({
           status: 'error',
-          message:
-            guard.reason === 'brand_required'
+          code: roleRequired
+            ? SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE
+            : guard.reason || 'brand_not_allowed',
+          message: roleRequired
+            ? SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_MESSAGE
+            : guard.reason === 'brand_required'
               ? 'Brand is required because you have selected brands in your profile. Please enter a brand that matches your profile.'
               : 'You can only add products for brands you selected in Select yourself (Step 1). Open Select yourself, save your brand, complete supply-chain role if needed, then try again.',
           allowedBrands: guard.declared || []
@@ -184,18 +218,26 @@ export function buildSupplierProductCreateHandler(ctx) {
         });
       }
 
-      const taxValidation = await resolveTaxRatesForProductCreate({
-        input: otherData,
-        preferredProductId: String(catalogProductId || '').trim() || canonicalProductFromIdentifier?.id || null,
-        categoryName: category
-      });
+      const taxValidation = validateAndNormalizeTaxRates(otherData);
       if (!taxValidation.ok) {
         return res.status(400).json({
           status: 'error',
           message: taxValidation.message
         });
       }
-      const { igstRate, cgstRate, sgstRate } = taxValidation.data;
+      const clientSentTax = [
+        otherData.igst_rate,
+        otherData.igstRate,
+        otherData.cgst_rate,
+        otherData.cgstRate,
+        otherData.sgst_rate,
+        otherData.sgstRate
+      ].some((value) => value !== undefined && value !== null && String(value).trim() !== '');
+      // Catalog-only create must not inherit category GST. Otherwise Product COV
+      // treats Inventory as complete before the supplier fills step 2.
+      const { igstRate, cgstRate, sgstRate } = clientSentTax
+        ? taxValidation.data
+        : { igstRate: null, cgstRate: null, sgstRate: null };
 
       const { categoryName, unitName } = await ensureCategoryAndUnit(supabase, {
         category,
@@ -321,10 +363,9 @@ export function buildSupplierProductCreateHandler(ctx) {
         resolvedBarcodeForPos
       });
       if (baseProductResult.error) {
-        return res.status(400).json({
-          status: 'error',
-          message: baseProductResult.error.message || 'Error creating product'
-        });
+        return res.status(400).json(
+          baseProductResult.publicError || toCatalogProductWriteErrorResponse(baseProductResult.error)
+        );
       }
       const { productId, catalogAsin, isNewProduct } = baseProductResult;
 
@@ -355,7 +396,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         parentProductForVariant
       );
 
-      const [offersResult, productVariantsResult] = await Promise.all([
+      const [offersResult, productVariantsResult, ownOffersResult] = await Promise.all([
         supabase
           .from('supplier_products')
           .select(
@@ -367,7 +408,11 @@ export function buildSupplierProductCreateHandler(ctx) {
           .from('product_variants')
           .select('id, product_id, variant_key, variant_asin, canonical_attributes, status, unit, pack_size')
           .eq('product_id', productId)
-          .limit(200)
+          .limit(200),
+        loadOwnSupplierOffersForProduct(supabase, {
+          productId,
+          supplierId: req.userId
+        })
       ]);
       if (offersResult?.error) {
         console.warn(
@@ -375,21 +420,35 @@ export function buildSupplierProductCreateHandler(ctx) {
           offersResult.error.message || offersResult.error
         );
       }
+      if (ownOffersResult?.error) {
+        console.warn(
+          '[SupplierProductCreate] own offers lookup failed:',
+          ownOffersResult.error.message || ownOffersResult.error
+        );
+      }
       const existingOffersForProduct = offersResult?.error ? [] : offersResult?.data || [];
       const existingProductVariants = productVariantsResult?.error
         ? []
         : productVariantsResult?.data || [];
+      const ownOffersForProduct = ownOffersResult?.rows || [];
 
       const catalogSpecsForVariantReuse =
         parentProductForVariant?.specifications || existingProduct?.specifications || {};
+      const catalogHasFilledSpecs = Object.values(catalogSpecsForVariantReuse || {}).some((value) => {
+        if (value == null) return false;
+        if (Array.isArray(value)) return value.length > 0;
+        if (typeof value === 'object') return Object.keys(value).length > 0;
+        return String(value).trim() !== '';
+      });
       const specsUnchangedFromCatalog =
-        !isNewProduct && Boolean(existingProduct)
+        !isNewProduct && Boolean(existingProduct) && catalogHasFilledSpecs
           ? !hasSupplierSpecificationChangesFromCatalog({
               catalogSpecs: catalogSpecsForVariantReuse,
               supplierSpecs: normalizedSpecs
             })
           : false;
 
+      const computedVariantKey = String(variantIdentityBundle.variantKey || '').trim();
       const stableVariantIdentity = resolveStableVariantIdentityFromExistingOffers({
         parentAsin: catalogAsin || identityBundle.asinLikeId || parentProductForVariant?.asin || '',
         parentProduct: parentProductForVariant,
@@ -436,33 +495,33 @@ export function buildSupplierProductCreateHandler(ctx) {
         }
       }
 
-      const currentLocation = (otherData.location || '').trim();
+      const currentLocation = canonicalSupplierOfferLocation(otherData.location);
       const ownOfferLookupArgs = {
         supplierId: req.userId,
         location: currentLocation,
-        variantKey: resolvedVariantKey
+        variantKey: resolvedVariantKey,
+        outletId: outlet_id || null
       };
       let existingSupplierProduct = findOwnOfferForVariantLocation(
-        existingOffersForProduct,
+        ownOffersForProduct.length ? ownOffersForProduct : existingOffersForProduct,
         ownOfferLookupArgs
       );
-      if (!existingSupplierProduct && resolvedVariantKey) {
-        const { data: exactRows, error: exactLookupError } = await supabase
-          .from('supplier_products')
-          .select(
-            'id, supplier_id, location, outlet_id, status, is_active, variant_key, variant_asin, attributes'
-          )
-          .eq('product_id', productId)
-          .eq('supplier_id', req.userId)
-          .eq('variant_key', resolvedVariantKey)
-          .limit(50);
-        if (exactLookupError) {
+      if (!existingSupplierProduct) {
+        const exactLookup = await loadOwnSupplierOffersForProduct(supabase, {
+          productId,
+          supplierId: req.userId,
+          variantKey: resolvedVariantKey || null
+        });
+        if (exactLookup.error) {
           console.warn(
             '[SupplierProductCreate] exact offer lookup failed:',
-            exactLookupError.message || exactLookupError
+            exactLookup.error.message || exactLookup.error
           );
         } else {
-          existingSupplierProduct = findOwnOfferForVariantLocation(exactRows, ownOfferLookupArgs);
+          existingSupplierProduct = findOwnOfferForUniqueConflict(
+            exactLookup.rows,
+            ownOfferLookupArgs
+          );
         }
       }
       const updatingExistingOffer = isExistingOfferUpdatableOnCreate(existingSupplierProduct);
@@ -632,9 +691,7 @@ export function buildSupplierProductCreateHandler(ctx) {
           sku: (requestSpecs?.skuNo || requestSpecs?.sku || requestSpecs?.gsku || '').toString().trim(),
           packSize: (requestSpecs?.packSize || requestSpecs?.pack_size || '').toString().trim(),
           unit: (unit || '').toString().trim(),
-          igstRate,
-          cgstRate,
-          sgstRate,
+          ...(clientSentTax ? { igstRate, cgstRate, sgstRate } : {}),
           tags: otherData.tags || [],
           images: normalizedImageUrls
         })
@@ -660,10 +717,46 @@ export function buildSupplierProductCreateHandler(ctx) {
         ...supplierProductData,
         updated_at: new Date().toISOString()
       };
+      const clientSentPrice =
+        otherData.price !== undefined && otherData.price !== null && String(otherData.price).trim() !== '';
+      const clientSentStock =
+        otherData.stock !== undefined && otherData.stock !== null && String(otherData.stock).trim() !== '';
+      const clientSentLocation = Boolean(String(otherData.location || '').trim());
+      const preserveExistingInventoryOnCatalogUpdate = (payload, existingRow) => {
+        const next = { ...payload };
+        if (!clientSentPrice) delete next.price;
+        if (!clientSentStock) delete next.stock;
+        if (!clientSentLocation) {
+          delete next.location;
+          if (!outlet_id) delete next.outlet_id;
+        }
+        if (!clientSentTax) {
+          delete next.igst_rate;
+          delete next.cgst_rate;
+          delete next.sgst_rate;
+          const existingAttrs =
+            existingRow?.attributes &&
+            typeof existingRow.attributes === 'object' &&
+            !Array.isArray(existingRow.attributes)
+              ? existingRow.attributes
+              : {};
+          next.attributes = {
+            ...existingAttrs,
+            ...next.attributes,
+            igstRate: existingAttrs.igstRate ?? existingRow?.igst_rate,
+            cgstRate: existingAttrs.cgstRate ?? existingRow?.cgst_rate,
+            sgstRate: existingAttrs.sgstRate ?? existingRow?.sgst_rate
+          };
+        }
+        return next;
+      };
+      const catalogUpdatePayload = updatingExistingOffer
+        ? preserveExistingInventoryOnCatalogUpdate(offerUpdatePayload, existingSupplierProduct)
+        : offerUpdatePayload;
       if (resubmittingRejectedOffer) {
-        offerUpdatePayload.approved_by = null;
-        offerUpdatePayload.approved_at = null;
-        offerUpdatePayload.rejection_reason = null;
+        catalogUpdatePayload.approved_by = null;
+        catalogUpdatePayload.approved_at = null;
+        catalogUpdatePayload.rejection_reason = null;
       }
 
       let newSupplierProduct = null;
@@ -671,7 +764,7 @@ export function buildSupplierProductCreateHandler(ctx) {
       if (updatingExistingOffer) {
         const updated = await supabase
           .from('supplier_products')
-          .update(offerUpdatePayload)
+          .update(catalogUpdatePayload)
           .eq('id', existingSupplierProduct.id)
           .eq('supplier_id', req.userId)
           .select()
@@ -686,30 +779,36 @@ export function buildSupplierProductCreateHandler(ctx) {
           .single();
         newSupplierProduct = inserted.data;
         supplierProductError = inserted.error;
-        if (supplierProductError && isSupplierOfferUniqueViolation(supplierProductError)) {
-          const { data: racedRows, error: racedLookupError } = await supabase
-            .from('supplier_products')
-            .select(
-              'id, supplier_id, location, outlet_id, status, is_active, variant_key, variant_asin, attributes'
-            )
-            .eq('product_id', productId)
-            .eq('supplier_id', req.userId)
-            .eq('variant_key', resolvedVariantKey)
-            .limit(50);
-          if (racedLookupError) {
+        if (
+          supplierProductError &&
+          (isSupplierOfferUniqueViolation(supplierProductError) ||
+            isPgUniqueViolation(supplierProductError) ||
+            looksLikePostgresConstraintError(supplierProductError))
+        ) {
+          const recovered = await recoverOwnOfferAfterUniqueViolation(supabase, {
+            productId,
+            supplierId: req.userId,
+            location: currentLocation,
+            variantKey: resolvedVariantKey,
+            outletId: outlet_id || null
+          });
+          if (recovered.error) {
             console.warn(
               '[SupplierProductCreate] unique-violation lookup failed:',
-              racedLookupError.message || racedLookupError
+              recovered.error.message || recovered.error
             );
           }
-          const racedOffer = findOwnOfferForVariantLocation(racedRows, ownOfferLookupArgs);
+          const racedOffer = recovered.offer;
           if (racedOffer && isExistingOfferUpdatableOnCreate(racedOffer)) {
             const racedRejected =
               String(racedOffer.status || '').toLowerCase() === 'rejected';
-            const racedPayload = {
-              ...supplierProductData,
-              updated_at: new Date().toISOString()
-            };
+            const racedPayload = preserveExistingInventoryOnCatalogUpdate(
+              {
+                ...supplierProductData,
+                updated_at: new Date().toISOString()
+              },
+              racedOffer
+            );
             if (racedRejected) {
               racedPayload.approved_by = null;
               racedPayload.approved_at = null;
@@ -727,7 +826,46 @@ export function buildSupplierProductCreateHandler(ctx) {
             if (!supplierProductError) {
               existingSupplierProduct = racedOffer;
             }
+          } else if (
+            computedVariantKey &&
+            computedVariantKey !== String(resolvedVariantKey || '').trim()
+          ) {
+            // Reused catalog variant_key collided. Insert this as its own variant instead.
+            const retryAsin =
+              buildVariantAsinLikeId(
+                catalogAsin || identityBundle.asinLikeId || '',
+                computedVariantKey
+              ) || supplierProductData.variant_asin;
+            const retried = await supabase
+              .from('supplier_products')
+              .insert({
+                ...supplierProductData,
+                variant_key: computedVariantKey,
+                variant_asin: retryAsin
+              })
+              .select()
+              .single();
+            newSupplierProduct = retried.data;
+            supplierProductError = retried.error;
+            if (!supplierProductError) {
+              resolvedVariantKey = computedVariantKey;
+              variantAsin = retryAsin;
+            } else if (
+              isSupplierOfferUniqueViolation(supplierProductError) ||
+              isPgUniqueViolation(supplierProductError) ||
+              looksLikePostgresConstraintError(supplierProductError)
+            ) {
+              return res.status(400).json({
+                status: 'error',
+                code: 'duplicate_supplier_variant',
+                message: DUPLICATE_SUPPLIER_VARIANT_MESSAGE
+              });
+            }
           } else {
+            console.warn(
+              '[SupplierProductCreate] unique constraint on supplier_products:',
+              supplierProductError?.message || supplierProductError
+            );
             return res.status(400).json({
               status: 'error',
               code: 'duplicate_supplier_variant',
@@ -737,17 +875,11 @@ export function buildSupplierProductCreateHandler(ctx) {
         }
       }
       if (supplierProductError) {
-        if (isSupplierOfferUniqueViolation(supplierProductError)) {
-          return res.status(400).json({
-            status: 'error',
-            code: 'duplicate_supplier_variant',
-            message: DUPLICATE_SUPPLIER_VARIANT_MESSAGE
-          });
-        }
-        return res.status(400).json({
-          status: 'error',
-          message: supplierProductError.message || 'Error creating supplier product entry'
-        });
+        console.warn(
+          '[SupplierProductCreate] supplier_products write failed:',
+          supplierProductError?.message || supplierProductError
+        );
+        return res.status(400).json(toSupplierOfferWriteErrorResponse(supplierProductError));
       }
 
       void syncCatalogProductSnapshotFromOffers(supabase, productId).catch((syncError) => {
@@ -927,6 +1059,13 @@ export function buildSupplierProductCreateHandler(ctx) {
         return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
       }
       console.error('Add product error:', error);
+      if (
+        isSupplierOfferUniqueViolation(error) ||
+        isPgUniqueViolation(error) ||
+        looksLikePostgresConstraintError(error)
+      ) {
+        return res.status(400).json(toSupplierOfferWriteErrorResponse(error));
+      }
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error'

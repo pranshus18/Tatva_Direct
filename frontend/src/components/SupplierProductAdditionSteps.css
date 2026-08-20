@@ -86,6 +86,26 @@
   background: #10b981;
 }
 
+.supplier-addition-steps__node--clickable {
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+}
+
+.supplier-addition-steps__node--clickable:hover .supplier-addition-steps__circle {
+  border-color: #3b82f6;
+}
+
+.supplier-addition-steps__node--locked {
+  opacity: 0.72;
+}
+
+.supplier-addition-steps__node--locked.supplier-addition-steps__node--clickable {
+  cursor: not-allowed;
+}
+
 .supplier-addition-steps__meta {
   display: flex;
   flex-direction: column;

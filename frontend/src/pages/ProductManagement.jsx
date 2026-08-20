@@ -21,7 +21,8 @@ import {
   MapPin,
   RefreshCw,
   AlertTriangle,
-  ImageOff
+  ImageOff,
+  Table2
 } from 'lucide-react';
 import './Dashboard.css';
 import './ProductDiscovery.css';
@@ -93,6 +94,7 @@ import {
   getSupplierInventoryUpdateMissingFields,
   getSupplierInventoryCompletionMissingFields,
   formatInventoryRequiredForProductCovMessage,
+  INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE,
   getSupplierProductCreateErrorMessage,
   getSupplierProductUpdateErrorMessage,
   getSupplierSpecificationTemplateMissingFields,
@@ -104,6 +106,7 @@ import {
   validateProductUnitCompatibility
 } from '../utils/productUnitCompatibility';
 import {
+  getAddProductPrerequisiteWarning,
   getBrandApprovalWarning,
   isBrandApprovedForProductSubmit
 } from '../utils/brandApprovalStatus';
@@ -271,6 +274,7 @@ const ProductManagement = ({ user }) => {
   const [notifications, setNotifications] = useState([]);
   const [categories, setCategories] = useState([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [productCovGateMessage, setProductCovGateMessage] = useState('');
 
   const [catalogStats, setCatalogStats] = useState(null);
   const [catalogViewEpoch, setCatalogViewEpoch] = useState(0);
@@ -318,6 +322,35 @@ const ProductManagement = ({ user }) => {
       cancelled = true;
     };
   }, [location.pathname]);
+
+  useEffect(() => {
+    const fromNav = String(location.state?.productCovBlockedMessage || '').trim();
+    if (!fromNav) return;
+    setProductCovGateMessage(fromNav);
+    window.alert(fromNav);
+    navigate(`${location.pathname}${location.search}`, { replace: true, state: {} });
+  }, [location.state?.productCovBlockedMessage]);
+
+  const blockProductCovUntilInventoryComplete = () => {
+    const message = INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE;
+    setProductCovGateMessage(message);
+    window.alert(message);
+    if (!isInventoryView) {
+      navigate('/manage-inventory');
+    }
+  };
+
+  const handleProductWorkflowStep = (stepNumber) => {
+    if (stepNumber === 1) {
+      navigate('/product-management');
+      return;
+    }
+    if (stepNumber === 2) {
+      navigate('/manage-inventory');
+      return;
+    }
+    blockProductCovUntilInventoryComplete();
+  };
 
   // Guard against browser restoring the search field after a hard refresh.
   useEffect(() => {
@@ -938,15 +971,27 @@ const ProductManagement = ({ user }) => {
             <Layers size={15} />
             Manage Inventory
           </button>
+          <button
+            type="button"
+            className="pm-tab"
+            onClick={blockProductCovUntilInventoryComplete}
+            aria-disabled="true"
+            title={INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE}
+          >
+            <Table2 size={15} />
+            Product COV
+          </button>
         </nav>
 
         <SupplierProductAdditionSteps
           compact
           variant={isInventoryView ? 'inventory' : 'add-product'}
+          lockedSteps={[3]}
+          onStepSelect={handleProductWorkflowStep}
           hint={
             isInventoryView
-              ? `Complete ${SUPPLIER_MRP_LABEL} and stock, then configure ProductCOV.`
-              : 'After catalog setup, continue to inventory and ProductCOV.'
+              ? `Complete ${SUPPLIER_MRP_LABEL}, stock, location, and GST before Product COV.`
+              : 'After catalog setup, complete Inventory (step 2) before Product COV (step 3).'
           }
         />
       </div>
@@ -971,6 +1016,13 @@ const ProductManagement = ({ user }) => {
           <div className="pm-kpi__label">{isInventoryView ? 'Low / zero stock' : 'Rejected'}</div>
         </div>
       </div>
+
+      {productCovGateMessage ? (
+        <div className="pm-notice pm-notice--cov-gate" role="alert">
+          <AlertTriangle size={16} />
+          <span>{productCovGateMessage}</span>
+        </div>
+      ) : null}
 
       {isInventoryView && pageStats.lowStock > 0 ? (
         <div className="pm-notice">
@@ -1233,9 +1285,17 @@ const ProductManagement = ({ user }) => {
                         isSupplierProductEligibleForProductCov(product) ? (
                           <button
                             type="button"
-                            className="pm-card__action-btn"
+                            className={`pm-card__action-btn${
+                              getSupplierProductCovInventoryBlockMessage(product)
+                                ? ' pm-card__action-btn--disabled'
+                                : ''
+                            }`}
+                            aria-disabled={Boolean(getSupplierProductCovInventoryBlockMessage(product))}
                             onClick={() => openSupplierProductCov(navigate, product)}
                             title={
+                              getSupplierProductCovInventoryBlockMessage(product) || 'ProductCOV'
+                            }
+                            aria-label={
                               getSupplierProductCovInventoryBlockMessage(product) || 'ProductCOV'
                             }
                           >
@@ -1764,6 +1824,7 @@ const ProductDetailsModal = ({
   const detailsSpecsAlreadyExtracted =
     Boolean(lastSuccessfulExtractionSourceKey) &&
     lastSuccessfulExtractionSourceKey === detailsExtractionSourceKey;
+  const covInventoryBlockMessage = getSupplierProductCovInventoryBlockMessage(product);
 
   const modalNode = (
     <div className="modal-overlay" onClick={onClose}>
@@ -1780,8 +1841,11 @@ const ProductDetailsModal = ({
                   type="button"
                   className="btn-secondary"
                   onClick={() => openSupplierProductCov(detailsNavigate, product)}
-                  title={getSupplierProductCovInventoryBlockMessage(product) || 'ProductCOV'}
-                  style={{ color: '#8b5cf6', borderColor: '#8b5cf6' }}
+                  title={covInventoryBlockMessage || 'ProductCOV'}
+                  style={{
+                    color: covInventoryBlockMessage ? '#64748b' : '#8b5cf6',
+                    borderColor: covInventoryBlockMessage ? '#cbd5e1' : '#8b5cf6'
+                  }}
                 >
                   ProductCOV
                 </button>
@@ -1824,6 +1888,11 @@ const ProductDetailsModal = ({
         </div>
 
         <div className="modal-form">
+          {covInventoryBlockMessage ? (
+            <p className="pm-details-cov-gate" role="alert">
+              {covInventoryBlockMessage}
+            </p>
+          ) : null}
           {getProductImageList(product).length > 0 ? (
             <div className="pm-details-hero">
               <ProductImageCarousel
@@ -2320,7 +2389,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     loading: false,
     status: '',
     message: '',
-    brandName: ''
+    brandName: '',
+    hasSelectedRole: null
   });
   const formRef = useRef(null);
   const formScrollRef = useRef(null);
@@ -2370,13 +2440,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
   useEffect(() => {
     if (showInventoryFields) {
-      setBrandApprovalState({ loading: false, status: 'approved', message: '', brandName: '' });
+      setBrandApprovalState({ loading: false, status: 'approved', message: '', brandName: '', hasSelectedRole: true });
       return undefined;
     }
 
     const brandName = String(formData.brand || '').trim();
     if (!brandName) {
-      setBrandApprovalState({ loading: false, status: 'missing', message: '', brandName: '' });
+      setBrandApprovalState({ loading: false, status: 'missing', message: '', brandName: '', hasSelectedRole: null });
       return undefined;
     }
 
@@ -2403,7 +2473,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
             loading: false,
             status: 'unknown',
             message: data.message || 'Could not verify brand approval status.',
-            brandName
+            brandName,
+            hasSelectedRole: null
           });
           return;
         }
@@ -2411,7 +2482,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           loading: false,
           status: data.brandStatus || 'unknown',
           message: data.message || '',
-          brandName: data.brand?.name || brandName
+          brandName: data.brand?.name || brandName,
+          hasSelectedRole: data.hasSelectedRole === true
         });
         // Exact approved catalog name (case differs): store the catalog spelling.
         const canonicalName = String(data.brand?.name || '').trim();
@@ -2431,7 +2503,8 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           loading: false,
           status: 'unknown',
           message: 'Could not verify brand approval status.',
-          brandName
+          brandName,
+          hasSelectedRole: null
         });
       }
     }, 350);
@@ -2847,20 +2920,27 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     /product photos/i.test(String(field || ''))
   );
 
+  const brandIsApproved = isBrandApprovedForProductSubmit(brandApprovalState.status);
   const brandApprovalWarning =
-    !showInventoryFields && formData.brand
-      ? getBrandApprovalWarning(
-          brandApprovalState.status,
-          brandApprovalState.brandName || formData.brand,
-          brandApprovalState.message
-        )
+    !showInventoryFields && !product && String(formData.brand || '').trim() && !brandApprovalState.loading
+      ? getAddProductPrerequisiteWarning({
+          status: brandApprovalState.status,
+          brandName: brandApprovalState.brandName || formData.brand,
+          hasSelectedRole: brandApprovalState.hasSelectedRole,
+          apiMessage: brandApprovalState.message
+        })
       : null;
   const brandApprovalBlocksSubmit =
     !showInventoryFields &&
     !product &&
     Boolean(String(formData.brand || '').trim()) &&
     (brandApprovalState.loading ||
-      !isBrandApprovedForProductSubmit(brandApprovalState.status));
+      !brandIsApproved ||
+      brandApprovalState.hasSelectedRole === false);
+  const brandPrerequisiteLabels = [
+    ...(!brandIsApproved ? ['Brand approval'] : []),
+    ...(brandApprovalState.hasSelectedRole === false ? ['Supplier role'] : [])
+  ];
 
   const unitCompatibility = useMemo(
     () =>
@@ -3027,15 +3107,16 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       setShowMissingHints(true);
       const warning =
         brandApprovalWarning ||
-        getBrandApprovalWarning(
-          brandApprovalState.status || 'unregistered',
-          formData.brand,
-          brandApprovalState.message
-        );
+        getAddProductPrerequisiteWarning({
+          status: brandApprovalState.status || 'unregistered',
+          brandName: formData.brand,
+          hasSelectedRole: brandApprovalState.hasSelectedRole,
+          apiMessage: brandApprovalState.message
+        });
       setFormValidationError(
         warning
           ? `${warning.title}. ${warning.message}`
-          : 'Brand approval is required before submitting this product.'
+          : 'Brand approval and a selected supplier role are required before submitting this product.'
       );
       brandFieldRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
@@ -4921,9 +5002,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                       <span className="pm-brand-approval-warning__title">
                         {brandApprovalWarning.title}
                       </span>
-                      {brandApprovalWarning.message}
+                      {Array.isArray(brandApprovalWarning.prerequisites) &&
+                      brandApprovalWarning.prerequisites.length > 0 ? (
+                        <ul className="pm-brand-approval-warning__list">
+                          {brandApprovalWarning.prerequisites.map((item) => (
+                            <li key={item.id}>
+                              {item.text}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="pm-brand-approval-warning__message">{brandApprovalWarning.message}</p>
+                      )}
                       <div style={{ marginTop: '0.35rem' }}>
-                        Open <strong>Select yourself</strong> to request or track brand approval before submitting products.
+                        Open <strong>Select yourself</strong> to complete brand approval and add your supplier role
+                        before submitting products.
                       </div>
                     </div>
                   ) : null}
@@ -5755,7 +5848,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   ? formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)
                   : `Complete required fields to enable ${product ? 'Update Product' : 'Add Product'}: ${[
                       ...missingMandatoryFields,
-                      ...(brandApprovalBlocksSubmit ? ['Brand approval'] : []),
+                      ...(brandApprovalBlocksSubmit ? brandPrerequisiteLabels : []),
                       ...(unitCompatibilityBlocksSubmit ? ['Compatible unit'] : [])
                     ].join(', ')}.`)}
             </div>

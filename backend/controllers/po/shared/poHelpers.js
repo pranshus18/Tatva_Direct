@@ -498,9 +498,8 @@ export function mergeUpstreamSelectedMineQuantity(existingSelectedMine, key, add
 
 export function upstreamCartLineIdentity(item = {}) {
   return {
-    mineSupplierProductId: String(
-      item?.mineSupplierProductId || item?.mineId || item?.id || ''
-    ).trim(),
+    // Cart row `id` is a local line key (`us-item-…`), not the supplier offer id.
+    mineSupplierProductId: String(item?.mineSupplierProductId || item?.mineId || '').trim(),
     productId: String(item?.productId || '').trim(),
     variantKey: normalizeCartVariantKey(item)
   };
@@ -516,6 +515,25 @@ function upstreamCartLinesMatch(existingItem, newItem) {
     return left.productId === right.productId && left.variantKey === right.variantKey;
   }
   return false;
+}
+
+/**
+ * Structured `items` is the source of truth when present — including an empty
+ * array after Remove. Falling back to `selectedMine` only when `items` is
+ * omitted keeps last-line removal from resurrecting the product on save.
+ */
+export function resolveUpstreamProjectItems(project = {}, metaByMineId = {}) {
+  const sourceItems = Array.isArray(project?.items)
+    ? project.items
+    : buildUpstreamItemsFromSelectedMine(
+        project?.selectedMine && typeof project.selectedMine === 'object'
+          ? project.selectedMine
+          : {},
+        metaByMineId
+      );
+  return (Array.isArray(sourceItems) ? sourceItems : []).filter(
+    (item) => Math.max(0, Math.floor(Number(item?.quantity) || 0)) > 0
+  );
 }
 
 /** Build `{ [mineSupplierProductId]: quantity }` from structured upstream cart lines. */
@@ -598,6 +616,46 @@ export function buildUpstreamItemsFromSelectedMine(selectedMine = {}, metaByMine
   return out;
 }
 
+export function collectUpstreamCartMineIds(projects = []) {
+  const ids = new Set();
+  for (const project of Array.isArray(projects) ? projects : []) {
+    const items =
+      Array.isArray(project?.items) && project.items.length
+        ? project.items
+        : buildUpstreamItemsFromSelectedMine(project?.selectedMine || {});
+    for (const item of items) {
+      const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
+      if (mineId) ids.add(mineId);
+    }
+    for (const key of Object.keys(project?.selectedMine || {})) {
+      const mineId = String(key || '').trim();
+      if (mineId) ids.add(mineId);
+    }
+    for (const key of Object.keys(project?.selectedUpstreamOffer || {})) {
+      const mineId = String(key || '').trim();
+      if (mineId) ids.add(mineId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Drop cart lines whose supplier_products row no longer exists (admin delete /
+ * offer recreation). Live ids are current inventory rows for this supplier.
+ */
+export function pruneUpstreamCartProjectsToLiveMineIds(projects = [], liveMineIds = []) {
+  const live = new Set(
+    (Array.isArray(liveMineIds) ? liveMineIds : [])
+      .map((id) => String(id || '').trim())
+      .filter(Boolean)
+  );
+  const staleIds = [...collectUpstreamCartMineIds(projects)].filter((id) => !live.has(id));
+  if (staleIds.length === 0) {
+    return Array.isArray(projects) ? projects.slice() : [];
+  }
+  return removeUpstreamCartItemsByMineIds(projects, staleIds);
+}
+
 /**
  * Drop ordered listings from upstream cart projects so a completed order cannot
  * keep the previous quantity attached to Add to Cart. Empty projects are removed.
@@ -620,7 +678,8 @@ export function removeUpstreamCartItemsByMineIds(projects = [], mineIds = []) {
           : buildUpstreamItemsFromSelectedMine(project?.selectedMine || {});
       const items = existingItems.filter((item) => {
         const mineId = String(item?.mineSupplierProductId || item?.mineId || '').trim();
-        return Boolean(mineId) && !remove.has(mineId);
+        if (!mineId) return true;
+        return !remove.has(mineId);
       });
       const selectedUpstreamOffer = { ...(project?.selectedUpstreamOffer || {}) };
       for (const id of remove) {
@@ -647,6 +706,64 @@ export function removeUpstreamCartItemsByMineIds(projects = [], mineIds = []) {
         project.selectedMine && typeof project.selectedMine === 'object' ? project.selectedMine : {};
       return Object.values(selected).some((qty) => Number(qty) > 0);
     });
+}
+
+/**
+ * Remove deleted supplier_products ids from one supplier's upstream cart draft.
+ * Deletes the cart row when no lines remain.
+ */
+export async function pruneSupplierUpstreamCartForDeletedMineIds(db, supplierId, mineIds = []) {
+  const userId = String(supplierId || '').trim();
+  const ids = [
+    ...new Set((Array.isArray(mineIds) ? mineIds : []).map((id) => String(id || '').trim()).filter(Boolean))
+  ];
+  if (!db || !userId || ids.length === 0) return { updated: false, deleted: false };
+
+  const { data: cart, error } = await db
+    .from('po_carts')
+    .select('id, draft_payload')
+    .eq('service_provider_id', userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!cart?.id) return { updated: false, deleted: false };
+
+  const draft = cart.draft_payload && typeof cart.draft_payload === 'object' ? cart.draft_payload : {};
+  const projects = Array.isArray(draft.projects)
+    ? draft.projects
+    : (draft.selectedMine || Array.isArray(draft.items) ? [draft] : []);
+  if (!projects.length) return { updated: false, deleted: false };
+
+  const present = collectUpstreamCartMineIds(projects);
+  if (!ids.some((id) => present.has(id))) return { updated: false, deleted: false };
+
+  const nextProjects = removeUpstreamCartItemsByMineIds(projects, ids);
+  if (nextProjects.length === 0) {
+    const { error: deleteError } = await db.from('po_carts').delete().eq('id', cart.id);
+    if (deleteError) throw deleteError;
+    return { updated: true, deleted: true };
+  }
+
+  const latest = nextProjects[0] || {};
+  const nextDraft = Array.isArray(draft.projects)
+    ? {
+        ...draft,
+        projects: nextProjects,
+        projectId: latest.projectId || null,
+        cartName: latest.cartName || draft.cartName,
+        selectedMine: latest.selectedMine || {},
+        selectedUpstreamOffer: latest.selectedUpstreamOffer || {},
+        suggestions: latest.suggestions || []
+      }
+    : {
+        ...latest,
+        mode: draft.mode || 'supplier_upstream'
+      };
+  const { error: saveError } = await db
+    .from('po_carts')
+    .update({ draft_payload: nextDraft })
+    .eq('id', cart.id);
+  if (saveError) throw saveError;
+  return { updated: true, deleted: false };
 }
 
 /**

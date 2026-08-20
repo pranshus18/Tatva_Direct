@@ -61,3 +61,40 @@ test('listApprovedCatalogBrands uses brands-table approval only and marks supply
   assert.equal(acc?.hasAdminSupplyChain, true);
   assert.equal(brands.some((row) => /samsung/i.test(row.name)), false);
 });
+
+test('listSupplierSelectableBrands omits approved brands that have no supply-chain role', async () => {
+  const { listSupplierSelectableBrands } = await import('../services/supplierBrandCatalogService.js');
+  const supabase = {
+    from() {
+      const api = {
+        select() {
+          return api;
+        },
+        order() {
+          return Promise.resolve({
+            data: [
+              { id: '1', name: 'REDMI', normalized_name: 'redmi', status: 'approved' },
+              { id: '2', name: 'HP', normalized_name: 'hp', status: 'approved' }
+            ],
+            error: null
+          });
+        }
+      };
+      return api;
+    }
+  };
+
+  const brands = await listSupplierSelectableBrands(supabase, {
+    profile: {
+      companyInfoEntries: [
+        { id: 'e1', brands: 'REDMI', role: '' },
+        { id: 'e2', brands: 'HP', role: 'dealer' }
+      ]
+    }
+  });
+
+  assert.deepEqual(
+    brands.map((row) => row.name),
+    ['HP']
+  );
+});

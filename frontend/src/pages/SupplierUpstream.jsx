@@ -28,6 +28,7 @@ import UpstreamProductDisplay, { collectProductImages } from '../components/Upst
 import SupplierProductDetailsModal from '../components/SupplierProductDetailsModal';
 import { SUPPLIER_CURRENT_STOCK_LABEL } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit, lineMoneyTotal, roundMoney } from '../utils/formatRupee';
+import { resolveDiscoveryDisplayPricing } from '../utils/discoveryPricing';
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity';
 import { dedupeCategoryStrings } from '../utils/categoryNormalize';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
@@ -120,6 +121,15 @@ function formatPrice(price, unit) {
   return formatRupeePerUnit(num, unit, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
+  });
+}
+
+function resolveUpstreamOfferListPricing(offer = {}) {
+  return resolveDiscoveryDisplayPricing({
+    price: offer.price,
+    mrp: offer.mrp ?? offer.basePrice,
+    basePrice: offer.basePrice ?? offer.mrp,
+    bcovApplied: offer.bcovApplied
   });
 }
 
@@ -233,7 +243,7 @@ const SupplierUpstream = ({ user }) => {
 
   // Selected mine items (supplier_products junction IDs) -> quantity desired
   const [selectedMine, setSelectedMine] = useState({});
-  // Draft procurement qty on cards — not synced to cart until Add/Update Cart is clicked.
+  // Draft procurement qty on cards — not written to cart until Add to Cart is clicked.
   const [procurementQtyByMineId, setProcurementQtyByMineId] = useState({});
   // Quantities already saved in the upstream cart (mineId -> qty).
   const [cartQtyByMineId, setCartQtyByMineId] = useState({});
@@ -368,7 +378,8 @@ const SupplierUpstream = ({ user }) => {
       const token = localStorage.getItem('token');
       if (!token) return null;
       const cartRes = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-cache'
       });
       const data = await cartRes.json();
       if (!cartRes.ok || data.status !== 'success') return null;
@@ -504,7 +515,8 @@ const SupplierUpstream = ({ user }) => {
         return { quantities: {}, projectsByMine: {} };
       }
       const res = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
-        headers: { Authorization: `Bearer ${token}` }
+        headers: { Authorization: `Bearer ${token}` },
+        cache: 'no-cache'
       });
       const data = await res.json();
       if (!res.ok || data.status !== 'success') {
@@ -542,11 +554,9 @@ const SupplierUpstream = ({ user }) => {
         }
       }
 
-      // Keep "In cart" from the saved cart. On first load, copy those quantities
-      // onto the sourcing cards so returning from Cart shows the same qty.
-      // Overlay later only when a known cart line changes this session.
-      // When a line leaves the cart (order placed / removed), drop the old qty
-      // so Add to Cart is not still tied to the previous order.
+      // Keep "In cart" from the saved cart. Do not copy those quantities into the
+      // card field on load/refresh — the stepper stays at its default until the
+      // user edits it. Overlay only when a known cart line changes this session.
       const prevCartQty = cartQtyByMineIdRef.current || {};
       const cartBecameEmpty = Object.keys(next).length === 0 && Object.keys(prevCartQty).length > 0;
       const cartChangedThisSession = Object.keys(prevCartQty).length > 0;
@@ -554,12 +564,13 @@ const SupplierUpstream = ({ user }) => {
         setActiveProjectId('');
         clearUpstreamCartClientProjectState();
       }
-      setProcurementQtyByMineId((draft) =>
-        applyLiveCartQuantitiesToMap(draft, prevCartQty, next, {
-          resetRemovedToZero: true,
-          seedMissingFromLive: true
-        })
-      );
+      if (cartChangedThisSession) {
+        setProcurementQtyByMineId((draft) =>
+          applyLiveCartQuantitiesToMap(draft, prevCartQty, next, {
+            resetRemovedToZero: true
+          })
+        );
+      }
       if (cartChangedThisSession) {
         setSelectedMine((selected) =>
           applyLiveCartQuantitiesToMap(selected, prevCartQty, next, {
@@ -620,8 +631,8 @@ const SupplierUpstream = ({ user }) => {
     }
     const fromSelected = parseSupplierStockQuantity(selectedMine[key]);
     if (fromSelected != null && fromSelected > 0) return fromSelected;
-    const fromCart = parseSupplierStockQuantity(cartQtyByMineId[key]);
-    if (fromCart != null && fromCart > 0) return fromCart;
+    // Default display quantity before the supplier chooses one.
+    // Do not hydrate from the saved cart — "In cart" is shown separately.
     return 0;
   };
 
@@ -1259,13 +1270,12 @@ const SupplierUpstream = ({ user }) => {
   const openAddToCartDialog = async (product, options = {}) => {
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
     if (!mineId) return;
-    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
     const preferredQty = parseSupplierStockQuantity(options?.quantity);
     const [projects, addresses] = await Promise.all([
       loadSupplierCartProjects(),
       loadProfileShippingAddresses()
     ]);
-    const synced = await refreshSyncedCartQuantities();
+    await refreshSyncedCartQuantities();
     const preferredProjectId = resolvePreferredProjectId(mineId, projects);
     const initialProjectId = resolveDialogProjectId(preferredProjectId, projects);
     const knownProjectIds = new Set(projects.map((project) => project.projectId));
@@ -1277,17 +1287,9 @@ const SupplierUpstream = ({ user }) => {
       setActiveProjectId('');
       clearSessionProjectId();
     }
-    const inCartQty = parseSupplierStockQuantity(
-      synced?.quantities?.[mineId] ?? cartQtyByMineId[mineId]
-    );
-    const inCart = inCartQty != null && inCartQty > 0;
-    // Quantity is chosen on the product card before this dialog; keep that value here.
-    const initialQty =
-      preferredQty != null && preferredQty > 0
-        ? Math.max(minQty, preferredQty)
-        : inCart
-          ? inCartQty
-          : 0;
+    // Quantity is chosen on the product card before this dialog. Never fill it
+    // from the saved cart — that made refresh look like the qty had changed.
+    const initialQty = preferredQty != null && preferredQty > 0 ? preferredQty : 0;
     if (initialQty <= 0) {
       window.alert('Set quantity on the product card before adding to cart.');
       return;
@@ -1497,10 +1499,9 @@ const SupplierUpstream = ({ user }) => {
   };
 
   /**
-   * Add/update cart for a listing.
-   * - New products always open the project picker (name, dispatch date, address).
-   * - Products already in cart update quantity on the same project without re-prompting
-   *   (use forceProjectPicker to change project).
+   * Add cart quantity for a listing. Always opens the project picker:
+   * same project increments the existing line; a different project gets its own line.
+   * Quantity is never replaced from this flow (use Cart +/- for an exact set).
    */
   const addOrUpdateCartForProduct = async (product, requestedQty, options = {}) => {
     const mineId = normalizeSupplierProductKey(product?.supplier_product_id);
@@ -1522,31 +1523,22 @@ const SupplierUpstream = ({ user }) => {
       return false;
     }
     const hasExplicitQty = parsedQty != null && parsedQty > 0;
-    const nextQty = hasExplicitQty ? Math.max(minQty, parsedQty) : null;
+    if (hasExplicitQty && parsedQty < minQty) {
+      window.alert(`Quantity must be at least ${minQty} (minimum order quantity).`);
+      return false;
+    }
+    const nextQty = hasExplicitQty ? parsedQty : null;
     if (hasExplicitQty) {
       setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: nextQty }));
     }
 
     const projects = await loadSupplierCartProjects();
-    const synced = await refreshSyncedCartQuantities();
     // Empty cart after clear/delete: drop every stale project pointer before deciding the path.
     if (!projects.length) {
       setActiveProjectId('');
       setCartProjectByMineId({});
       clearUpstreamCartClientProjectState();
     }
-    const inCartQty = parseSupplierStockQuantity(synced?.quantities?.[mineId]);
-    const preferredProjectId = resolvePreferredProjectId(
-      mineId,
-      projects,
-      synced?.projectsByMine || {}
-    );
-    const liveProjectId = String(
-      preferredProjectId || synced?.projectsByMine?.[mineId] || ''
-    ).trim();
-    const projectStillExists =
-      !!liveProjectId &&
-      projects.some((project) => String(project?.projectId || '') === liveProjectId);
 
     if (options?.forceProjectPicker === true) {
       if (!hasExplicitQty) {
@@ -1557,15 +1549,9 @@ const SupplierUpstream = ({ user }) => {
       return false;
     }
 
-    // Same product already in a live project: update qty without re-prompting.
-    if (inCartQty != null && inCartQty > 0 && projectStillExists) {
-      return syncExistingCartQuantity(product, hasExplicitQty ? nextQty : inCartQty, {
-        projectId: liveProjectId,
-        replaceQuantity: true
-      });
-    }
-
-    // First-time add OR cart/project was cleared: always open create/select project.
+    // Always open the project picker for an add. Same project increments the
+    // existing line; a different project gets its own line. Refresh/navigation
+    // must never rewrite cart quantity.
     if (!hasExplicitQty) {
       window.alert('Set quantity on the product card before adding to cart.');
       return false;
@@ -1611,7 +1597,6 @@ const SupplierUpstream = ({ user }) => {
       return;
     }
     const nextQty = parsedQty;
-    const isUpdate = cartQtyByMineId[mineId] != null;
     const selectedProjectExists = cartProjects.some(
       (project) => project.projectId === targetCartProjectId
     );
@@ -1655,7 +1640,6 @@ const SupplierUpstream = ({ user }) => {
         body: JSON.stringify({
           mineSupplierProductId: mineId,
           quantity: nextQty,
-          ...(isUpdate ? { replaceQuantity: true } : {}),
           ...(product?.variantKey || product?.variant_key
             ? { variantKey: String(product.variantKey || product.variant_key) }
             : {}),
@@ -1678,13 +1662,10 @@ const SupplierUpstream = ({ user }) => {
       ok = res.ok && data.status === 'success';
       responseMessage = data?.message || '';
       if (!ok) {
-        throw new Error(
-          responseMessage ||
-            (isUpdate ? 'Failed to update cart quantity.' : 'Failed to add this product to cart.')
-        );
+        throw new Error(responseMessage || 'Failed to add this product to cart.');
       }
       const savedQty = parseSupplierStockQuantity(data?.item?.quantity) ?? nextQty;
-      setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
+      setProcurementQtyByMineId((prev) => ({ ...prev, [mineId]: 0 }));
       setSelectedMine((prev) => (prev?.[mineId] != null ? { ...prev, [mineId]: savedQty } : prev));
       setCartQtyByMineId((prev) => ({ ...prev, [mineId]: savedQty }));
       if (data?.project?.projectId) {
@@ -1703,10 +1684,7 @@ const SupplierUpstream = ({ user }) => {
       return rest;
     });
     if (!ok) {
-      setDialogError(
-        responseMessage ||
-          (isUpdate ? 'Failed to update cart quantity.' : 'Failed to add this product to cart.')
-      );
+      setDialogError(responseMessage || 'Failed to add this product to cart.');
       return;
     }
 
@@ -1871,13 +1849,9 @@ const SupplierUpstream = ({ user }) => {
             const syncedCartQty = parseSupplierStockQuantity(cartQtyByMineId[mineId]);
             const inCart = syncedCartQty != null && syncedCartQty > 0;
             const lastOrderedQty = inCart ? null : readLastOrderedQuantity(mineId);
-            const qtyDirty = inCart && Number(syncedCartQty) !== Number(cardQty);
+            const qtyDirty = cardQty > 0;
             const removingFromCart = inCart && cardQty <= 0;
-            const cartActionLabel = removingFromCart
-              ? 'Remove from Cart'
-              : inCart
-                ? 'Update Cart'
-                : 'Add to Cart';
+            const cartActionLabel = removingFromCart ? 'Remove from Cart' : 'Add to Cart';
 
             return (
               <article
@@ -1980,24 +1954,10 @@ const SupplierUpstream = ({ user }) => {
                       <p className="us-pd-card__qty-hint">
                         Quantity 0 removes this product from the cart. Click Remove from Cart to confirm.
                       </p>
-                    ) : qtyDirty ? (
-                      <p className="us-pd-card__qty-hint">
-                        Qty changed — click Update Cart to sync here
-                      </p>
                     ) : inCart ? (
                       <p className="us-pd-card__qty-hint us-pd-card__qty-hint--synced">
-                        In cart: {syncedCartQty}
-                        {' · '}
-                        <button
-                          type="button"
-                          className="us-pd-card__qty-link"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void addOrUpdateCartForProduct(p, cardQty, { forceProjectPicker: true });
-                          }}
-                        >
-                          Change project
-                        </button>
+                        In cart: {syncedCartQty}. Set a quantity and click Add to Cart to add more
+                        to this project or another one.
                       </p>
                     ) : lastOrderedQty != null ? (
                       <p className="us-pd-card__qty-hint us-pd-card__qty-hint--synced">
@@ -2028,7 +1988,7 @@ const SupplierUpstream = ({ user }) => {
                     disabled={isAddingToCart}
                   >
                     {isAddingToCart ? (
-                      <><Loader2 size={16} className="upstream-spin" /> {removingFromCart ? 'Removing…' : inCart ? 'Updating…' : 'Adding…'}</>
+                      <><Loader2 size={16} className="upstream-spin" /> {removingFromCart ? 'Removing…' : 'Adding…'}</>
                     ) : (
                       <><ShoppingCart size={16} /> {cartActionLabel}</>
                     )}
@@ -2277,14 +2237,22 @@ const SupplierUpstream = ({ user }) => {
                                     )}
                                   </div>
                                   <div className="upstream-offer-meta">
-                                    {o.bcovApplied && Number(o.mrp || o.basePrice) > Number(o.price) ? (
-                                      <>
-                                        <span className="upstream-offer-mrp">
-                                          {formatRupee(o.mrp || o.basePrice || 0)}
-                                        </span>{' '}
-                                      </>
-                                    ) : null}
-                                    {formatRupee(o.price || 0)} • {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}{' '}
+                                    {(() => {
+                                      const pricing = resolveUpstreamOfferListPricing(o);
+                                      const displayPrice = pricing.price ?? o.mrp ?? o.basePrice ?? 0;
+                                      return (
+                                        <>
+                                          {pricing.bcovApplied && pricing.mrp > pricing.price ? (
+                                            <>
+                                              <span className="upstream-offer-mrp">
+                                                {formatRupee(pricing.mrp)}
+                                              </span>{' '}
+                                            </>
+                                          ) : null}
+                                          {formatRupee(displayPrice)} • {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}{' '}
+                                        </>
+                                      );
+                                    })()}
                                     {o.availableStock ?? o.stock ?? 0}
                                     {typeof o.distanceKm === 'number' ? ` • ${o.distanceKm} km` : ' • distance n/a'}
                                     {' • '}
@@ -2297,7 +2265,12 @@ const SupplierUpstream = ({ user }) => {
                                   {o.rankComponents ? (
                                     <div className="upstream-offer-rank-keys">
                                       Sort keys: {o.rankComponents.distanceKm != null ? `${o.rankComponents.distanceKm} km` : '—'} · {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} {o.rankComponents.stock} ·{' '}
-                                      {formatRupee(o.rankComponents.price || 0)} · rating{' '}
+                                      {formatRupee(
+                                        resolveUpstreamOfferListPricing({
+                                          ...o,
+                                          price: o.rankComponents.price ?? o.price
+                                        }).price ?? o.mrp ?? o.basePrice ?? 0
+                                      )} · rating{' '}
                                       {o.rankComponents.averageRating != null ? `${o.rankComponents.averageRating} (${o.rankComponents.ratingCount || 0})` : '—'}
                                     </div>
                                   ) : null}
@@ -2711,13 +2684,7 @@ const SupplierUpstream = ({ user }) => {
                 onClick={handleAddSingleProductToCart}
                 disabled={(parseSupplierStockQuantity(dialogQty) ?? 0) <= 0}
               >
-                {(() => {
-                  const mineId = normalizeSupplierProductKey(pendingCartProduct?.supplier_product_id);
-                  const inCart =
-                    parseSupplierStockQuantity(cartQtyByMineId[mineId]) != null &&
-                    parseSupplierStockQuantity(cartQtyByMineId[mineId]) > 0;
-                  return inCart ? 'Update Cart' : 'Add to Cart';
-                })()}
+                Add to Cart
               </Button>
             </DialogFooter>
           </div>

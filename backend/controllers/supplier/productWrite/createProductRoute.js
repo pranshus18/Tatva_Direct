@@ -1,8 +1,14 @@
 import {
+  getContractErrorMessage,
   parseWithSchema,
   supplierProductCreateSchema
 } from '../supplierImports.js';
 import { buildSupplierProductCreateHandler } from './createProductHandler.js';
+import {
+  isPgUniqueViolation,
+  looksLikePostgresConstraintError,
+  toSupplierOfferWriteErrorResponse
+} from '../../../utils/supplierOfferUniqueness.js';
 
 export function registerSupplierProductCreateRoute(ctx) {
   const { router, authenticateToken } = ctx;
@@ -17,6 +23,9 @@ export function registerSupplierProductCreateRoute(ctx) {
         return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
       }
       console.error('Add product route error:', error);
+      if (isPgUniqueViolation(error) || looksLikePostgresConstraintError(error)) {
+        return res.status(400).json(toSupplierOfferWriteErrorResponse(error));
+      }
       return res.status(500).json({ status: 'error', message: 'Internal server error' });
     }
   });

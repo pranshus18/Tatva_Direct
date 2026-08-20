@@ -142,13 +142,13 @@ export async function listSupplierSelectableBrands(supabase, { profile } = {}) {
     if (String(row?.status || '').toLowerCase() !== 'approved') continue;
     const name = String(row?.name || '').trim();
     if (!name) continue;
-    const guard = brandIsAllowedForSupplier(profile, name);
+    const guard = brandIsAllowedForSupplier(profile, name, { requireRole: true });
     if (!guard.allowed) continue;
     pushBrand(guard.matchedBrand || name, row, { source: 'profile', fromProfile: true });
   }
 
   for (const label of declaredLabels) {
-    const guard = brandIsAllowedForSupplier(profile, label);
+    const guard = brandIsAllowedForSupplier(profile, label, { requireRole: true });
     if (!guard.allowed) continue;
     const display = guard.matchedBrand || label;
     const key = catalogBrandDedupKey(display) || normalizeBrandKey(display);

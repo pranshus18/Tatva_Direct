@@ -18,6 +18,7 @@ export const SELECT_YOURSELF_MOV_REQUIRED_MESSAGE =
   'Enter a minimum order value (₹) for this role before saving.';
 
 export const REQUEST_ROLE_CHANGE_LABEL = 'Request Role Change';
+export const CHANGE_ROLE_LABEL = 'Change role';
 
 /** True when supply-chain onboarding for this entry is complete and the role should stay locked. */
 export function isEntrySupplyChainOnboardingComplete(

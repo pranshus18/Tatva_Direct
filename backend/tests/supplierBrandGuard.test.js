@@ -4,7 +4,9 @@ import {
   brandIsAllowedForSupplier,
   entryOverlapsViewerBrands,
   getViewerBrandTokensForRole,
-  resolveSupplierProductBrandGuard
+  resolveSupplierProductBrandGuard,
+  supplierHasSelectedRoleForBrand,
+  SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE
 } from '../services/supplierBrandGuardService.js';
 import { buildEffectiveSupplierChainProfile } from '../services/supplierChainProfileService.js';
 import { mapSupplyChainPartner } from '../services/supplierPartnerMapperService.js';
@@ -70,6 +72,9 @@ test('buildEffectiveSupplierChainProfile: unions draft and pending brands for pr
   assert.deepEqual(declared.sort(), ['Phillips', 'acc', 'Finolex'].sort());
   assert.equal(brandIsAllowedForSupplier(effective, 'acc').allowed, true);
   assert.equal(brandIsAllowedForSupplier(effective, 'Finolex').allowed, true);
+  assert.equal(brandIsAllowedForSupplier(effective, 'Finolex', { requireRole: true }).allowed, false);
+  assert.equal(brandIsAllowedForSupplier(effective, 'acc', { requireRole: true }).allowed, true);
+  assert.equal(brandIsAllowedForSupplier(effective, 'Phillips', { requireRole: true }).allowed, true);
 });
 
 test('resolveSupplierProductBrandGuard: allows selected profile brand when catalog brand differs', () => {
@@ -109,4 +114,34 @@ test('brandIsAllowedForSupplier: multi-word brand still matches longer product b
     companyInfoEntries: [{ id: '1', role: 'retailer', brands: 'Havells' }]
   };
   assert.equal(brandIsAllowedForSupplier(profile, 'Havells Electrical').allowed, true);
+});
+
+test('resolveSupplierProductBrandGuard: blocks approved brand until a supply-chain role is selected', () => {
+  const profile = {
+    companyInfoEntries: [
+      { id: 'stub-redmi', role: '', brands: 'REDMI' },
+      { id: 'hp-dealer', role: 'dealer', brands: 'HP' }
+    ]
+  };
+
+  const blocked = resolveSupplierProductBrandGuard(profile, {
+    selectedBrand: 'REDMI',
+    catalogBrand: 'REDMI'
+  });
+  assert.equal(blocked.allowed, false);
+  assert.equal(blocked.guard.reason, SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE);
+  assert.equal(supplierHasSelectedRoleForBrand(profile, 'REDMI'), false);
+
+  const allowed = resolveSupplierProductBrandGuard(profile, { selectedBrand: 'HP' });
+  assert.equal(allowed.allowed, true);
+  assert.equal(supplierHasSelectedRoleForBrand(profile, 'HP'), true);
+});
+
+test('resolveSupplierProductBrandGuard: blocks product create when no role exists yet', () => {
+  const result = resolveSupplierProductBrandGuard(
+    { companyInfoEntries: [] },
+    { selectedBrand: 'REDMI' }
+  );
+  assert.equal(result.allowed, false);
+  assert.equal(result.guard.reason, SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE);
 });

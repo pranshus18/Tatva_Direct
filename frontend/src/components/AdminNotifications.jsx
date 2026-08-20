@@ -5,6 +5,60 @@ import { formatDateIST, parseServerDate } from '../utils/dateTime';
 import { useNotificationPanelScrollLock } from '../hooks/useNotificationPanelScrollLock';
 import './AdminNotifications.css';
 
+const getNotificationId = (notification) =>
+  notification?.id || notification?._id || null;
+
+const isNotificationRead = (notification) =>
+  notification?.is_read === true || notification?.isRead === true;
+
+const getRelatedProduct = (notification) =>
+  notification?.related_product || notification?.relatedProduct || null;
+
+const getRelatedSupplier = (notification) =>
+  notification?.related_supplier || notification?.relatedSupplier || null;
+
+const getRelatedProductId = (notification) => {
+  const relatedProduct = getRelatedProduct(notification);
+  if (relatedProduct && typeof relatedProduct === 'object') {
+    return relatedProduct.id || relatedProduct._id || null;
+  }
+  if (typeof relatedProduct === 'string') return relatedProduct;
+  return notification?.related_product_id || notification?.relatedProductId || null;
+};
+
+const normalizeAdminNotification = (notification) => {
+  if (!notification) return notification;
+  const id = getNotificationId(notification);
+  const relatedProduct = getRelatedProduct(notification);
+  const relatedSupplier = getRelatedSupplier(notification);
+  const isRead = isNotificationRead(notification);
+
+  return {
+    ...notification,
+    id,
+    _id: id,
+    isRead,
+    is_read: isRead,
+    createdAt: notification.created_at || notification.createdAt || null,
+    relatedProduct:
+      relatedProduct && typeof relatedProduct === 'object'
+        ? {
+            ...relatedProduct,
+            id: relatedProduct.id || relatedProduct._id,
+            _id: relatedProduct.id || relatedProduct._id
+          }
+        : relatedProduct || getRelatedProductId(notification),
+    relatedSupplier:
+      relatedSupplier && typeof relatedSupplier === 'object'
+        ? {
+            ...relatedSupplier,
+            id: relatedSupplier.id || relatedSupplier._id,
+            _id: relatedSupplier.id || relatedSupplier._id
+          }
+        : relatedSupplier
+  };
+};
+
 const AdminNotifications = ({ onProductClick }) => {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
@@ -53,7 +107,7 @@ const AdminNotifications = ({ onProductClick }) => {
       });
       const data = await response.json();
       if (data.status === 'success') {
-        setNotifications(data.notifications || []);
+        setNotifications((data.notifications || []).map(normalizeAdminNotification));
         setUnreadCount(data.unreadCount || 0);
       }
     } catch (error) {
@@ -61,38 +115,48 @@ const AdminNotifications = ({ onProductClick }) => {
     }
   };
 
+  const applyLocalReadState = (notificationId) => {
+    setNotifications((prev) =>
+      prev.map((notification) => {
+        if (getNotificationId(notification) !== notificationId) return notification;
+        return { ...notification, isRead: true, is_read: true };
+      })
+    );
+    setUnreadCount((prev) => Math.max(0, prev - 1));
+  };
+
   const markAsRead = async (notificationId) => {
+    if (!notificationId) return;
+    applyLocalReadState(notificationId);
     try {
       const token = localStorage.getItem('token');
-      await fetch(getApiUrl(`/api/admin/notifications/${notificationId}/read`), {
+      const response = await fetch(getApiUrl(`/api/admin/notifications/${notificationId}/read`), {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      fetchNotifications();
+      if (!response.ok) {
+        await fetchNotifications();
+        return;
+      }
+      await fetchNotifications();
     } catch (error) {
       console.error('Failed to mark notification as read:', error);
+      await fetchNotifications();
     }
   };
 
   const handleNotificationClick = async (notification) => {
-    // Mark as read if unread
-    if (!notification.isRead) {
-      await markAsRead(notification._id);
+    const notificationId = getNotificationId(notification);
+    if (!isNotificationRead(notification)) {
+      await markAsRead(notificationId);
     }
 
+    const relatedProduct = getRelatedProduct(notification);
     // If notification is product-related, open the product
-    if (notification.relatedProduct || notification.type === 'product_approval') {
-      // Get product ID - handle both populated object and plain ID string
-      let productId = null;
-      if (notification.relatedProduct) {
-        if (typeof notification.relatedProduct === 'object' && notification.relatedProduct._id) {
-          productId = notification.relatedProduct._id;
-        } else if (typeof notification.relatedProduct === 'string') {
-          productId = notification.relatedProduct;
-        }
-      }
+    if (relatedProduct || notification.type === 'product_approval') {
+      const productId = getRelatedProductId(notification);
       
       if (productId && onProductClick) {
         // Fetch the full product details
@@ -141,17 +205,26 @@ const AdminNotifications = ({ onProductClick }) => {
 
   const markAllAsRead = async () => {
     setLoading(true);
+    setNotifications((prev) =>
+      prev.map((notification) => ({ ...notification, isRead: true, is_read: true }))
+    );
+    setUnreadCount(0);
     try {
       const token = localStorage.getItem('token');
-      await fetch(getApiUrl('/api/admin/notifications/read-all'), {
+      const response = await fetch(getApiUrl('/api/admin/notifications/read-all'), {
         method: 'PATCH',
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
-      fetchNotifications();
+      if (!response.ok) {
+        await fetchNotifications();
+        return;
+      }
+      await fetchNotifications();
     } catch (error) {
       console.error('Failed to mark all as read:', error);
+      await fetchNotifications();
     } finally {
       setLoading(false);
     }
@@ -196,7 +269,11 @@ const AdminNotifications = ({ onProductClick }) => {
             <h3>Notifications</h3>
             {unreadCount > 0 && (
               <button 
-                onClick={markAllAsRead} 
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  markAllAsRead();
+                }} 
                 className="mark-all-read-btn"
                 disabled={loading}
               >
@@ -218,20 +295,26 @@ const AdminNotifications = ({ onProductClick }) => {
               </div>
             ) : (
               notifications.map((notification) => {
-                const isProductNotification = notification.relatedProduct || notification.type === 'product_approval';
+                const notificationId = getNotificationId(notification);
+                const isRead = isNotificationRead(notification);
+                const relatedProduct = getRelatedProduct(notification);
+                const relatedSupplier = getRelatedSupplier(notification);
+                const isProductNotification =
+                  Boolean(relatedProduct || getRelatedProductId(notification)) ||
+                  notification.type === 'product_approval';
                 return (
                 <div
-                  key={notification._id}
-                    className={`admin-notification-item ${!notification.isRead ? 'unread' : ''} ${isProductNotification ? 'clickable' : ''}`}
+                  key={notificationId}
+                    className={`admin-notification-item ${!isRead ? 'unread' : 'read'} ${isProductNotification ? 'clickable' : ''}`}
                   onClick={() => {
                       if (isProductNotification) {
                         handleNotificationClick(notification);
-                      } else if (!notification.isRead) {
-                      markAsRead(notification._id);
+                      } else if (!isRead) {
+                      markAsRead(notificationId);
                     }
                   }}
                     style={{
-                      cursor: isProductNotification ? 'pointer' : 'default'
+                      cursor: isProductNotification || !isRead ? 'pointer' : 'default'
                     }}
                 >
                   <div className="admin-notification-icon">
@@ -246,7 +329,7 @@ const AdminNotifications = ({ onProductClick }) => {
                     </div>
                     
                     {/* Show complete product information in notification */}
-                    {isProductNotification && (notification.relatedProduct || notification.metadata) && (
+                    {isProductNotification && (relatedProduct || notification.metadata) && (
                       <div className="admin-notification-product-details">
                         <div style={{ 
                           marginTop: '0.75rem', 
@@ -265,19 +348,19 @@ const AdminNotifications = ({ onProductClick }) => {
                           </div>
                           
                           {/* Product info from populated object or metadata */}
-                          {notification.relatedProduct && typeof notification.relatedProduct === 'object' ? (
+                          {relatedProduct && typeof relatedProduct === 'object' ? (
                             <>
                               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem', fontSize: '0.8125rem' }}>
-                                <div><strong>Category:</strong> {notification.relatedProduct.category || 'N/A'}</div>
-                                <div><strong>Price:</strong> ₹{notification.relatedProduct.price?.toLocaleString() || '0'} / {notification.relatedProduct.unit || 'unit'}</div>
-                                <div><strong>Stock:</strong> {notification.relatedProduct.stock?.toLocaleString() || '0'} {notification.relatedProduct.unit || 'units'}</div>
-                                {notification.relatedProduct.location && (
-                                  <div><strong>Location:</strong> {notification.relatedProduct.location}</div>
+                                <div><strong>Category:</strong> {relatedProduct.category || 'N/A'}</div>
+                                <div><strong>Price:</strong> ₹{relatedProduct.price?.toLocaleString() || '0'} / {relatedProduct.unit || 'unit'}</div>
+                                <div><strong>Stock:</strong> {relatedProduct.stock?.toLocaleString() || '0'} {relatedProduct.unit || 'units'}</div>
+                                {relatedProduct.location && (
+                                  <div><strong>Location:</strong> {relatedProduct.location}</div>
                                 )}
                               </div>
-                              {notification.relatedProduct.description && (
+                              {relatedProduct.description && (
                                 <div style={{ marginTop: '0.5rem', fontSize: '0.8125rem', color: '#64748b' }}>
-                                  <strong>Description:</strong> {notification.relatedProduct.description}
+                                  <strong>Description:</strong> {relatedProduct.description}
                                 </div>
                               )}
                             </>
@@ -314,15 +397,15 @@ const AdminNotifications = ({ onProductClick }) => {
                         </ul>
                       </div>
                     )}
-                    {notification.relatedSupplier && (
+                    {relatedSupplier && (
                       <div className="admin-notification-supplier">
-                        <strong>Supplier:</strong> {notification.relatedSupplier.name || notification.metadata?.supplierName}
-                        {notification.relatedSupplier.company && ` (${notification.relatedSupplier.company})`}
-                        {!notification.relatedSupplier.company && notification.metadata?.supplierCompany && ` (${notification.metadata.supplierCompany})`}
+                        <strong>Supplier:</strong> {relatedSupplier.name || notification.metadata?.supplierName}
+                        {relatedSupplier.company && ` (${relatedSupplier.company})`}
+                        {!relatedSupplier.company && notification.metadata?.supplierCompany && ` (${notification.metadata.supplierCompany})`}
                       </div>
                     )}
                     <div className="admin-notification-time">
-                      {formatDate(notification.createdAt)}
+                      {formatDate(notification.createdAt || notification.created_at)}
                     </div>
                       {isProductNotification && (
                         <div style={{
@@ -340,7 +423,7 @@ const AdminNotifications = ({ onProductClick }) => {
                         </div>
                       )}
                   </div>
-                  {!notification.isRead && (
+                  {!isRead && (
                     <div className="admin-notification-unread-dot" />
                   )}
                 </div>

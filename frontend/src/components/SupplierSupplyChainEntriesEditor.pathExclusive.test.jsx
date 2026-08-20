@@ -56,6 +56,22 @@ function PathModeHarness({
 }) {
   const [brandPathMode, setBrandPathMode] = useState(initialMode);
   const [profile, setProfile] = useState(() => makeProfile(profileBrand));
+  const [lockedBrand, setLockedBrand] = useState(lockedBrandName);
+
+  const handleBrandSelectionCleared = (clearedBrand) => {
+    const label = String(clearedBrand || lockedBrand || '').trim().toLowerCase();
+    setLockedBrand('');
+    setBrandPathMode(null);
+    if (!label) return;
+    setProfile((prev) => ({
+      ...prev,
+      companyInfoEntries: (prev?.companyInfoEntries || []).map((entry) =>
+        String(entry?.brands || '').trim().toLowerCase() === label
+          ? { ...entry, brands: '', role: '', supplyChainRegistrationStarted: false }
+          : entry
+      )
+    }));
+  };
 
   return (
     <SupplierSupplyChainEntriesEditor
@@ -70,12 +86,13 @@ function PathModeHarness({
       catalogBrandsLoading={false}
       catalogBrandsError=""
       onReloadCatalogBrands={vi.fn()}
-      lockedBrandName={lockedBrandName}
+      lockedBrandName={lockedBrand}
       brandPathMode={brandPathMode}
       onBrandPathModeChange={(mode) => {
         setBrandPathMode(mode);
         onModeChange?.(mode);
       }}
+      onBrandSelectionCleared={handleBrandSelectionCleared}
     />
   );
 }
@@ -141,6 +158,30 @@ describe('SupplierSupplyChainEntriesEditor Path A / Path B exclusivity', () => {
 
     expect(screen.getByText(/Path A — select approved brand/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Or use Path B — request a new brand/i })).toBeInTheDocument();
+  });
+
+  it('Change brand from locked Path A returns to the chooser', () => {
+    render(
+      <PathModeHarness profileBrand="acc" lockedBrandName="acc" initialMode="pathA" />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Change brand/i }));
+
+    expect(screen.getByText(/Path A — select approved brand/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Or use Path B — request a new brand/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Path A only/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('brand-select')).toBeInTheDocument();
+  });
+
+  it('Cancel setup unlocks Path A even when only path mode is set', () => {
+    render(<PathModeHarness profileBrand="acc" lockedBrandName="" initialMode="pathA" />);
+
+    expect(screen.getByText(/Path A only/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Cancel setup/i }));
+
+    expect(screen.getByText(/Path A — select approved brand/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Or use Path B — request a new brand/i })).toBeInTheDocument();
+    expect(screen.queryByText(/Path A only/i)).not.toBeInTheDocument();
   });
 
   it('opens the Path B brand input when every saved row already holds an approved brand', () => {

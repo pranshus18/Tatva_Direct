@@ -123,12 +123,25 @@
   border-left: 3px solid #3b82f6;
 }
 
+.admin-notification-item.unread:hover {
+  background: #dbeafe;
+}
+
+.admin-notification-item.read {
+  background: #ffffff;
+  border-left: 3px solid transparent;
+}
+
 .admin-notification-item.clickable {
   transition: all 0.2s ease;
 }
 
 .admin-notification-item.clickable:hover {
-  background: #e0f2fe;
+  background: #f8fafc;
+}
+
+.admin-notification-item.unread.clickable:hover {
+  background: #dbeafe;
   transform: translateX(4px);
   box-shadow: 0 2px 8px rgba(59, 130, 246, 0.15);
 }

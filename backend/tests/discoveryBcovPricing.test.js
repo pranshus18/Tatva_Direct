@@ -98,6 +98,27 @@ test('resolveDiscoveryOfferBcovPricing uses MRP only when Product_COV is not def
   assert.equal(result.basePrice, 1000);
 });
 
+test('resolveDiscoveryOfferBcovPricing uses MRP when Product_COV unit price is zero', () => {
+  const levels = [
+    {
+      id: 'level-zero',
+      min_purchase_qty: 0,
+      max_purchase_qty: 0,
+      unit_price: 0,
+      notes: composeBcovNotes({ levelName: 'Level 1', buyerBcov: '0' })
+    }
+  ];
+  const result = resolveDiscoveryOfferBcovPricing({
+    offer: { supplier_id: 'sup-1', variant_key: 'vk-zero', price: 2995 },
+    platformCov: 100,
+    supplierCovById: new Map([['sup-1', 100]]),
+    brandCovByBrand: new Map(),
+    bcovBySupplierVariant: new Map([['sup-1::vk-zero', levels]])
+  });
+  assert.equal(result.bcovApplied, false);
+  assert.equal(result.price, 2995);
+});
+
 test('resolveDiscoveryOfferBcovPricing never inherits another variant Product_COV via brand', () => {
   const levels = [
     {

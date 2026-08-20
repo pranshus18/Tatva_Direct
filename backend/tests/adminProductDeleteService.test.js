@@ -41,7 +41,7 @@ function createSupabaseMock({
         }
 
         return {
-          data: offerIds.map((id) => ({ id })),
+          data: offerIds.map((id) => ({ id, supplier_id: 'sup-1' })),
           error: null,
           count: offerIds.length
         };
@@ -83,7 +83,14 @@ function createSupabaseMock({
         state.inFilters.push({ column, values });
         return builder;
       },
+      limit() {
+        return builder;
+      },
       single() {
+        const result = finalize();
+        return Promise.resolve(result);
+      },
+      maybeSingle() {
         const result = finalize();
         return Promise.resolve(result);
       },
@@ -165,7 +172,7 @@ test('deleteCatalogProduct clears references then deletes catalog row', async ()
 
 test('deleteCatalogOffer removes only the selected offer when siblings remain', async () => {
   const supabase = createSupabaseMock({
-    offerById: { id: 'offer-2', product_id: 'product-1' },
+    offerById: { id: 'offer-2', product_id: 'product-1', supplier_id: 'sup-1' },
     remainingOfferCount: 2
   });
 
@@ -198,7 +205,7 @@ test('deleteCatalogOffer removes only the selected offer when siblings remain', 
 
 test('deleteCatalogOffer deletes catalog product when last offer is removed', async () => {
   const supabase = createSupabaseMock({
-    offerById: { id: 'offer-only', product_id: 'product-9' },
+    offerById: { id: 'offer-only', product_id: 'product-9', supplier_id: 'sup-1' },
     remainingOfferCount: 0
   });
 
@@ -298,7 +305,13 @@ test('deleteCatalogOffer clears Product_COV when no offer remains for that varia
         in() {
           return builder;
         },
+        limit() {
+          return builder;
+        },
         single() {
+          return Promise.resolve(finalize());
+        },
+        maybeSingle() {
           return Promise.resolve(finalize());
         },
         then(resolve, reject) {

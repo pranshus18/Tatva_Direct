@@ -1,6 +1,11 @@
 import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity.js';
 import { buildSupplierDescriptionAttributes } from '../utils/supplierProductDescriptions.js';
 import { syncOfferAttributesWithSpecifications } from './productIdentityService.js';
+import {
+  isPgUniqueViolation,
+  parsePgUniqueViolationIdentity,
+  toCatalogProductWriteErrorResponse
+} from '../utils/supplierOfferUniqueness.js';
 import { catalogBrandsCompatible, catalogBrandsConflict } from '../utils/catalogProductAttach.js';
 
 function normalizeOfferPrice(rawValue) {
@@ -291,6 +296,65 @@ export async function reopenRejectedCatalogProductForResubmit(supabase, productI
   return reopened || { ...catalogRow, status: 'pending' };
 }
 
+const CATALOG_RECOVERY_SELECT =
+  'id, status, brand, gtin, barcode, name, category, specifications, asin, catalog_key';
+
+export async function recoverExistingCatalogProduct(
+  supabase,
+  { identityBundle, resolvedBarcodeForPos, uniqueError } = {}
+) {
+  if (!supabase) return null;
+  const gtin = String(identityBundle?.catalog?.gtin || '').trim();
+  const barcode = String(resolvedBarcodeForPos || '').trim();
+  const catalogKey = String(identityBundle?.catalogKey || '').trim();
+  const asin = String(identityBundle?.asinLikeId || '').trim();
+  const brand = String(identityBundle?.catalog?.brand || '').trim();
+  const mpn = String(identityBundle?.catalog?.mpn || '').trim();
+
+  const lookup = async (column, value) => {
+    if (!value) return null;
+    const { data, error } = await supabase
+      .from('products')
+      .select(CATALOG_RECOVERY_SELECT)
+      .eq(column, value)
+      .maybeSingle();
+    if (error) return null;
+    return data || null;
+  };
+
+  if (gtin) {
+    const byGtin = await lookup('gtin', gtin);
+    if (byGtin) return byGtin;
+  }
+  if (barcode) {
+    const byBarcode = await lookup('barcode', barcode);
+    if (byBarcode) return byBarcode;
+  }
+  const conflict = parsePgUniqueViolationIdentity(uniqueError);
+  if (conflict?.value && ['barcode', 'gtin', 'asin', 'catalog_key'].includes(conflict.column)) {
+    const byConflict = await lookup(conflict.column, conflict.value);
+    if (byConflict) return byConflict;
+  }
+  if (catalogKey) {
+    const byCatalogKey = await lookup('catalog_key', catalogKey);
+    if (byCatalogKey) return byCatalogKey;
+  }
+  if (asin) {
+    const byAsin = await lookup('asin', asin);
+    if (byAsin) return byAsin;
+  }
+  if (brand && mpn) {
+    const { data, error } = await supabase
+      .from('products')
+      .select(CATALOG_RECOVERY_SELECT)
+      .eq('brand', brand)
+      .eq('mpn', mpn)
+      .maybeSingle();
+    if (!error && data) return data;
+  }
+  return null;
+}
+
 export async function createBaseProductIfNeeded(
   supabase,
   { existingProduct, otherData, categoryName, unitName, normalizedImageUrls, normalizedSpecs, reqUserId, identityBundle, resolvedBarcodeForPos }
@@ -340,7 +404,58 @@ export async function createBaseProductIfNeeded(
     .select()
     .single();
   if (createError) {
-    return { error: createError };
+    if (isPgUniqueViolation(createError)) {
+      const recovered = await recoverExistingCatalogProduct(supabase, {
+        identityBundle,
+        resolvedBarcodeForPos,
+        uniqueError: createError
+      });
+      if (recovered?.id) {
+        return {
+          productId: recovered.id,
+          catalogAsin: recovered.asin || identityBundle.asinLikeId,
+          isNewProduct: false
+        };
+      }
+      const conflict = parsePgUniqueViolationIdentity(createError);
+      const barcodeConflict =
+        conflict?.column === 'barcode' ||
+        /idx_products_barcode|products_.*barcode/i.test(String(createError?.message || ''));
+      if (barcodeConflict && productData.barcode) {
+        const retryPayload = { ...productData };
+        delete retryPayload.barcode;
+        const { data: retriedProduct, error: retryError } = await supabase
+          .from('products')
+          .insert(retryPayload)
+          .select()
+          .single();
+        if (!retryError && retriedProduct?.id) {
+          return {
+            productId: retriedProduct.id,
+            catalogAsin: retriedProduct.asin || identityBundle.asinLikeId,
+            isNewProduct: true
+          };
+        }
+        if (retryError && isPgUniqueViolation(retryError)) {
+          const retryRecovered = await recoverExistingCatalogProduct(supabase, {
+            identityBundle,
+            resolvedBarcodeForPos: null,
+            uniqueError: retryError
+          });
+          if (retryRecovered?.id) {
+            return {
+              productId: retryRecovered.id,
+              catalogAsin: retryRecovered.asin || identityBundle.asinLikeId,
+              isNewProduct: false
+            };
+          }
+        }
+      }
+    }
+    return {
+      error: createError,
+      publicError: toCatalogProductWriteErrorResponse(createError)
+    };
   }
 
   productId = newProduct.id;

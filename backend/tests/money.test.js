@@ -44,6 +44,14 @@ test('pickEffectiveOfferPrice never charges above MRP', () => {
   assert.equal(deal.bcovApplied, true);
   assert.equal(deal.price, 8500);
   assert.equal(deal.bcovLevelId, 'lvl-1');
+
+  const zeroCov = pickEffectiveOfferPrice(2995, { price: 0, levelId: 'empty' });
+  assert.equal(zeroCov.bcovApplied, false);
+  assert.equal(zeroCov.price, 2995);
+
+  const missingCov = pickEffectiveOfferPrice(2995, null);
+  assert.equal(missingCov.bcovApplied, false);
+  assert.equal(missingCov.price, 2995);
 });
 
 test('lineGstFromOrderItemSnapshot keeps explicit zero CGST/SGST', () => {

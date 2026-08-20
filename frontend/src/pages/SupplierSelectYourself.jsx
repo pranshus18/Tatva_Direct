@@ -927,6 +927,7 @@ export default function SupplierSelectYourself() {
       setFocusSupplyChainEntryId('');
       setChainConfigNotice(null);
       setBrandPathMode(null);
+      setEditorResetKey((key) => key + 1);
       if (brandLabel) clearIncompleteBrandSetup(brandLabel);
     },
     [clearIncompleteBrandSetup]
@@ -960,10 +961,13 @@ export default function SupplierSelectYourself() {
     unlockBrandSelection(brandLabel);
   }, [hasUnsavedChanges, selectedAssignment?.brand, unlockBrandSelection]);
 
-  const handleBrandSelectionClearedFromEditor = useCallback(() => {
-    const brandLabel = String(selectedAssignment?.brand || '').trim();
-    unlockBrandSelection(brandLabel);
-  }, [selectedAssignment?.brand, unlockBrandSelection]);
+  const handleBrandSelectionClearedFromEditor = useCallback(
+    (clearedBrand) => {
+      const brandLabel = String(clearedBrand || selectedAssignment?.brand || '').trim();
+      unlockBrandSelection(brandLabel);
+    },
+    [selectedAssignment?.brand, unlockBrandSelection]
+  );
 
   const handleAssignmentBrandChange = (event) => {
     const nextId = String(event?.target?.value || '').trim();
@@ -2060,20 +2064,13 @@ export default function SupplierSelectYourself() {
               ? 'Your active supply-chain role'
               : 'Choose your supply-chain role'}
           </h2>
-          <p className="supplier-select-section__intro">
-            {selectedAssignmentHasCompleteRole ? (
-              <>
-                Onboarding is complete for this brand. Your approved role is shown below. Use{' '}
-                <strong>Request Role Change</strong> if you need a different supply-chain position — changes require
-                admin approval while your current role stays active.
-              </>
-            ) : (
-              <>
-                After you select an approved brand above, choose your role in that brand&apos;s admin-defined supply
-                chain and upload documents. The brand name is filled automatically.
-              </>
-            )}
-          </p>
+          {selectedAssignmentHasCompleteRole ? (
+            <p className="supplier-select-section__intro">
+              Onboarding is complete for this brand. Your approved role is shown below. Use{' '}
+              <strong>Request Role Change</strong> if you need a different supply-chain position — changes require
+              admin approval while your current role stays active.
+            </p>
+          ) : null}
 
           {chainConfigNotice ? (
             <div

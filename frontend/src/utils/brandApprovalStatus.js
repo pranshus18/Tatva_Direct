@@ -1,3 +1,74 @@
+export const SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE = 'role_required';
+export const SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_MESSAGE =
+  'Before adding products, the brand must be approved and you must select/add your supplier role in Select yourself.';
+
+export function getSupplierRoleRequiredForProductWarning(brandName = '') {
+  const label = String(brandName || '').trim() || 'this brand';
+  return {
+    tone: 'danger',
+    title: 'Supply-chain role required',
+    message: `Select your supply-chain role for "${label}" in Select yourself before adding products.`,
+    reason: SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE
+  };
+}
+
+/**
+ * Add Product gate copy: list every outstanding Select yourself prerequisite,
+ * including brand approval and supplier role when both apply.
+ */
+export function getAddProductPrerequisiteWarning({
+  status,
+  brandName = '',
+  hasSelectedRole = null,
+  apiMessage = '',
+  productStatus = ''
+} = {}) {
+  const label = String(brandName || '').trim() || 'this brand';
+  const brandWarning = getBrandApprovalWarning(status, brandName, apiMessage, productStatus);
+  const brandOk = !brandWarning && isBrandApprovedForProductSubmit(status);
+  const roleOk = hasSelectedRole === true;
+
+  if (!String(brandName || '').trim()) return null;
+  if (brandOk && roleOk) return null;
+  if (!brandWarning && hasSelectedRole !== false) return null;
+
+  const brandText = brandOk
+    ? `Brand approval: complete for "${label}".`
+    : `Brand approval: ${
+        brandWarning?.message ||
+        `Brand approval is required for "${label}". Request or wait for admin approval in Select yourself.`
+      }`;
+  const roleText = roleOk
+    ? 'Supplier role: complete. Your supply-chain role is already selected.'
+    : `Supplier role: required. Select/add your supplier role for "${label}" in Select yourself before adding products.`;
+
+  const prerequisites = [
+    { id: 'brand_approval', ok: brandOk, text: brandText },
+    { id: 'supplier_role', ok: roleOk, text: roleText }
+  ];
+  const missingBoth = Boolean(brandWarning) && !roleOk;
+  const title = missingBoth
+    ? 'Brand approval and supplier role required'
+    : brandWarning
+      ? brandWarning.title
+      : 'Supply-chain role required';
+  const message = missingBoth
+    ? `Before adding products for "${label}", complete both prerequisites: ${brandText} ${roleText}`
+    : `${brandText} ${roleText}`;
+
+  return {
+    tone: brandWarning?.tone === 'danger' ? 'danger' : 'warning',
+    title,
+    message,
+    prerequisites,
+    reason: missingBoth
+      ? 'prerequisites'
+      : brandWarning
+        ? 'brand_approval'
+        : SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE
+  };
+}
+
 export const BRAND_APPROVAL_STATUS = {
   APPROVED: 'approved',
   PENDING: 'pending',

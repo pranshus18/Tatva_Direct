@@ -9,6 +9,7 @@ import {
   searchProductDiscoveryForUser,
   getProductDiscoveryDetail,
   supplierCanAccessBrandStrict,
+  supplierHasSelectedRoleForBrand,
   supplierCategoryCreateSchema,
   supplierUnitCreateSchema
 } from './supplierImports.js';
@@ -695,11 +696,16 @@ router.get('/brands/status', authenticateToken, async (req, res) => {
       supabase,
       brandName
     });
+    const effectiveProfile = await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {});
+    const hasSelectedRole = brandName
+      ? supplierHasSelectedRoleForBrand(effectiveProfile, result.brand?.name || brandName)
+      : false;
 
     return res.json({
       status: 'success',
       ok: result.ok === true,
       brandStatus: result.status,
+      hasSelectedRole,
       code: result.code || null,
       message: result.message || '',
       matchType: result.matchType || null,

@@ -458,13 +458,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
 
   useEffect(() => {
     if (!isUpstreamPortal) return;
-    setProcurementQty((prev) => {
-      const parsed = parseSupplierStockQuantity(prev);
-      if (parsed === 0) return 0;
-      if (parsed != null && parsed >= upstreamMinQty) return parsed;
-      return upstreamMinQty;
-    });
-  }, [isUpstreamPortal, upstreamMinQty, upstreamMineId]);
+    // Default stepper on listing/variant change. Do not copy cart qty or bump to MOQ —
+    // refresh/navigation must not rewrite the field; the user sets quantity explicitly.
+    setProcurementQty(1);
+  }, [isUpstreamPortal, upstreamMineId]);
 
   useEffect(() => {
     if (!isUpstreamPortal || !upstreamMineId) {
@@ -477,7 +474,8 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         const token = localStorage.getItem('token');
         if (!token) return;
         const response = await fetch(getApiUrl('/api/supplier/upstream/cart'), {
-          headers: { Authorization: `Bearer ${token}` }
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-cache'
         });
         const data = await response.json();
         if (!response.ok || data.status !== 'success' || cancelled) return;
@@ -505,18 +503,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
           const liveQty = found != null && found > 0 ? found : null;
           setUpstreamCartQty(liveQty);
           const prevQty = upstreamCartQtyRef.current;
-          if (prevQty == null && liveQty != null) {
-            setProcurementQty((prev) => {
-              const parsed = parseSupplierStockQuantity(prev);
-              if (parsed != null && parsed !== upstreamMinQty) return parsed;
-              return Math.max(upstreamMinQty, liveQty);
-            });
-          } else if (prevQty != null && liveQty != null && prevQty !== liveQty) {
-            setProcurementQty(Math.max(upstreamMinQty, liveQty));
-          } else if (prevQty != null && prevQty > 0 && liveQty == null) {
+          if (prevQty != null && prevQty > 0 && liveQty == null) {
             // Ordered or removed from cart: start a new order qty. Do not keep
             // the previous cart quantity attached to Add / Continue sourcing.
-            setProcurementQty(upstreamMinQty);
+            setProcurementQty(1);
             setCartAdded(false);
           }
           upstreamCartQtyRef.current = liveQty;
@@ -634,7 +624,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         ) {
           setUpstreamCartQty(null);
           if (nextQty <= 0) {
-            setProcurementQty(upstreamMinQty);
+            setProcurementQty(1);
             return true;
           }
           navigate(
@@ -649,14 +639,14 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
       }
       if (data?.item?.removed === true || nextQty === 0) {
         setUpstreamCartQty(null);
-        setProcurementQty(upstreamMinQty);
+        setProcurementQty(1);
         setCartAdded(false);
         emitSupplierCartUpdated();
         return true;
       }
       const savedQty = parseSupplierStockQuantity(data?.item?.quantity) ?? nextQty;
       setUpstreamCartQty(savedQty);
-      setProcurementQty(savedQty);
+      setProcurementQty(1);
       setCartAdded(true);
       window.setTimeout(() => setCartAdded(false), 1400);
       emitSupplierCartUpdated();
@@ -705,14 +695,16 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
         );
         return;
       }
-      const nextQty = Math.max(upstreamMinQty, parsedQty);
-
-      // If the listing is already in cart, update quantity in place without leaving this page.
-      if (upstreamCartQty != null) {
-        await persistUpstreamCartQuantity(offerId, nextQty);
+      if (parsedQty < upstreamMinQty) {
+        setError(
+          `Quantity must be at least ${upstreamMinQty} (minimum order quantity).`
+        );
         return;
       }
+      const nextQty = parsedQty;
 
+      // Additional quantity is added from Upstream Sourcing so the user can choose
+      // the same project or a different one. This page never rewrites cart qty on load.
       navigate(
         buildUpstreamSourcingUrl({
           addSupplierProductId: offerId,
@@ -833,7 +825,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
               Quantity 0 removes this product from the cart. Click Remove from Cart to confirm.
             </p>
           ) : upstreamCartQty != null ? (
-            <p className="pdd-buybox__qty-hint">In cart: {upstreamCartQty}. Change qty here, then Update Cart.</p>
+            <p className="pdd-buybox__qty-hint">
+              In cart: {upstreamCartQty}. Set an additional quantity, then continue sourcing to add it
+              to the same project or a different one.
+            </p>
           ) : lastOrderedQty != null ? (
             <p className="pdd-buybox__qty-hint">
               Last ordered: {lastOrderedQty}. Set a new quantity here to place another order — this is not in your cart.
@@ -888,15 +883,11 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
             <>Updating…</>
           ) : cartAdded && upstreamCartQty != null ? (
             <>
-              <Check className="mr-2 h-4 w-4" /> Cart updated
+              <Check className="mr-2 h-4 w-4" /> Added to cart
             </>
           ) : upstreamCartQty != null && (parseSupplierStockQuantity(procurementQty) ?? 0) <= 0 ? (
             <>
               <ShoppingCart className="mr-2 h-4 w-4" /> Remove from Cart
-            </>
-          ) : upstreamCartQty != null ? (
-            <>
-              <ShoppingCart className="mr-2 h-4 w-4" /> Update Cart
             </>
           ) : (
             <>
@@ -919,7 +910,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
       <p className="pdd-buybox__note">
         {isUpstreamPortal
           ? upstreamCartQty != null
-            ? 'Quantity updates apply to your upstream cart from this page.'
+            ? 'Cart quantity stays as saved until you add more from Upstream Sourcing or change it in Cart.'
             : lastOrderedQty != null
               ? 'Previously ordered quantity is shown for reference only. Set a new quantity to start another order.'
               : 'Choose quantity here, then continue to Upstream Sourcing and click Add to Cart to choose a project.'

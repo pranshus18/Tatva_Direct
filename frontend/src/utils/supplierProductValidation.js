@@ -105,13 +105,25 @@ export function getSupplierInventoryCompletionMissingFields(product = {}) {
   if (!product) {
     return getSupplierInventoryUpdateMissingFields({});
   }
-  return getSupplierInventoryUpdateMissingFields({
+  const attrs =
+    product.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+      ? product.attributes
+      : {};
+  const missing = getSupplierInventoryUpdateMissingFields({
     price: product.price,
     stock: product.stock,
-    sgst_rate: product.sgst_rate ?? product.sgstRate,
-    cgst_rate: product.cgst_rate ?? product.cgstRate,
-    igst_rate: product.igst_rate ?? product.igstRate
+    sgst_rate: product.sgst_rate ?? product.sgstRate ?? attrs.sgstRate ?? attrs.sgst_rate,
+    cgst_rate: product.cgst_rate ?? product.cgstRate ?? attrs.cgstRate ?? attrs.cgst_rate,
+    igst_rate: product.igst_rate ?? product.igstRate ?? attrs.igstRate ?? attrs.igst_rate
   });
+  const priceNum = Number(product.price);
+  if (!Number.isFinite(priceNum) || priceNum <= 0) {
+    if (!missing.includes(SUPPLIER_MRP_LABEL)) missing.unshift(SUPPLIER_MRP_LABEL);
+  }
+  if (!String(product.location || attrs.location || '').trim()) {
+    missing.push('Location');
+  }
+  return missing;
 }
 
 export function isSupplierInventoryCompleteForProductCov(product) {
@@ -194,13 +206,72 @@ export function getSupplierProductUpdateErrorMessage(data) {
   if (Array.isArray(data.errors) && data.errors.length > 0) {
     return data.errors.filter(Boolean).join(' ');
   }
-  if (data.message) return String(data.message);
+  const message = data.message ? String(data.message) : '';
+  const haystack = [message, data.error, data.details, data.hint, data.code].filter(Boolean).join(' ');
+  if (isPostgresUniqueConstraintMessage(haystack) || data.code === 'duplicate_supplier_variant') {
+    return DUPLICATE_SUPPLIER_VARIANT_USER_MESSAGE;
+  }
+  if (message) return message;
   return 'Failed to update product';
+}
+
+export const DUPLICATE_SUPPLIER_VARIANT_USER_MESSAGE =
+  'You have already added this exact product variation for this location. Please update the existing entry instead.';
+
+export const DUPLICATE_CATALOG_PRODUCT_USER_MESSAGE =
+  'A product with this identity already exists. Open that listing and update it instead of creating a duplicate.';
+
+function collectClientErrorHaystack(data) {
+  if (!data || typeof data !== 'object') return String(data || '');
+  return [
+    data.message,
+    data.error,
+    data.details,
+    data.hint,
+    data.code,
+    data.constraint
+  ]
+    .map((value) => (value == null ? '' : String(value)))
+    .filter(Boolean)
+    .join(' ');
+}
+
+function isPostgresUniqueConstraintMessage(message) {
+  return /duplicate key value violates unique constraint|violates unique constraint|product_supplier_location_variant|supplier_products_product_supplier_location_variant|23505/i.test(
+    String(message || '')
+  );
+}
+
+function isCatalogIdentityConstraintMessage(message) {
+  return /idx_products_barcode|uq_products_|catalog_key_not_blank|products_.*_(gtin|asin|barcode|catalog_key)/i.test(
+    String(message || '')
+  );
 }
 
 export function getSupplierProductCreateErrorMessage(data) {
   if (!data || typeof data !== 'object') {
     return 'Failed to add product';
+  }
+  const haystack = collectClientErrorHaystack(data);
+  if (isCatalogIdentityConstraintMessage(haystack) || data.code === 'duplicate_catalog_product') {
+    if (
+      data.code === 'duplicate_catalog_product' &&
+      data.message &&
+      !isPostgresUniqueConstraintMessage(data.message)
+    ) {
+      return String(data.message);
+    }
+    return DUPLICATE_CATALOG_PRODUCT_USER_MESSAGE;
+  }
+  if (isPostgresUniqueConstraintMessage(haystack) || data.code === 'duplicate_supplier_variant') {
+    if (
+      data.code === 'duplicate_supplier_variant' &&
+      data.message &&
+      !isPostgresUniqueConstraintMessage(data.message)
+    ) {
+      return String(data.message);
+    }
+    return DUPLICATE_SUPPLIER_VARIANT_USER_MESSAGE;
   }
   if (
     (data.code === 'product_photos_required' ||
@@ -209,14 +280,17 @@ export function getSupplierProductCreateErrorMessage(data) {
       data.code === 'brand_required' ||
       data.code === 'category_required' ||
       data.code === 'specifications_required' ||
-      data.code === 'unit_incompatible') &&
-    data.message
+      data.code === 'unit_incompatible' ||
+      data.code === 'role_required') &&
+    data.message &&
+    !isPostgresUniqueConstraintMessage(data.message)
   ) {
     return String(data.message);
   }
   if (Array.isArray(data.errors) && data.errors.length > 0) {
     return data.errors.filter(Boolean).join(' ');
   }
-  if (data.message) return String(data.message);
+  const message = data.message ? String(data.message) : '';
+  if (message && !isPostgresUniqueConstraintMessage(message)) return message;
   return 'Failed to add product';
 }

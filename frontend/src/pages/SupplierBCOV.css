@@ -41,6 +41,23 @@
   background: #f8fafc;
 }
 
+.bcov-empty--blocked {
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.bcov-empty--blocked p {
+  margin: 0;
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.bcov-empty--blocked .supplier-addition-steps {
+  margin-top: 1rem;
+  background: #fff;
+}
+
 .bcov-brand-group + .bcov-brand-group {
   margin-top: 1rem;
 }

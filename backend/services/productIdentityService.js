@@ -62,6 +62,69 @@ function normalizeSpecKey(key) {
   return normalizeTextField(key).replace(/\s+/g, '_');
 }
 
+/**
+ * Prose / identity fields must not enter variant_key. A description that starts
+ * with the product name is normal copy — not a second catalog identity.
+ */
+const VARIANT_IDENTITY_EXCLUDED_SPEC_KEYS = new Set([
+  'description',
+  'supplier_description',
+  'supplierdescription',
+  'published_description',
+  'publisheddescription',
+  'product_description',
+  'productdescription',
+  'about',
+  'about_this_item',
+  'overview',
+  'details',
+  'name',
+  'product_name',
+  'productname',
+  'listing_name',
+  'listingname',
+  'barcode',
+  'gtin',
+  'upc',
+  'ean',
+  'images',
+  'image',
+  'category',
+  'brand'
+]);
+
+export function isVariantIdentityExcludedSpecKey(key) {
+  return VARIANT_IDENTITY_EXCLUDED_SPEC_KEYS.has(normalizeSpecKey(key));
+}
+
+/**
+ * POS/catalog barcode must be a real scan code — never the product title or
+ * the description (including when description starts with the product name).
+ */
+export function isPersistableProductBarcode(value, { name = '', description = '' } = {}) {
+  const barcode = collapseSpaces(value);
+  if (!barcode) return false;
+  const barcodeNorm = barcode.toLowerCase();
+  const barcodeCompact = barcodeNorm.replace(/\s+/g, '');
+  const nameNorm = collapseSpaces(name).toLowerCase();
+  const nameCompact = nameNorm.replace(/\s+/g, '');
+  const descriptionNorm = collapseSpaces(description).toLowerCase();
+  const descriptionCompact = descriptionNorm.replace(/\s+/g, '');
+  if (nameCompact && barcodeCompact === nameCompact) return false;
+  if (descriptionCompact && barcodeCompact === descriptionCompact) return false;
+  const isGtin = /^\d{8}$|^\d{12}$|^\d{13}$|^\d{14}$/.test(barcode);
+  if (
+    !isGtin &&
+    nameCompact &&
+    descriptionNorm &&
+    (descriptionNorm === nameNorm || descriptionNorm.startsWith(`${nameNorm} `)) &&
+    (barcodeCompact === nameCompact || descriptionCompact.startsWith(barcodeCompact))
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function normalizeSpecValue(value) {
   if (Array.isArray(value)) {
     return value.map((v) => normalizeTextField(v)).filter(Boolean).sort();
@@ -91,7 +154,7 @@ export function normalizeVariantAttributes(specifications = {}) {
     .sort()
     .forEach((key) => {
       const normalizedKey = normalizeSpecKey(key);
-      if (!normalizedKey) return;
+      if (!normalizedKey || VARIANT_IDENTITY_EXCLUDED_SPEC_KEYS.has(normalizedKey)) return;
       const normalizedValue = normalizeSpecValue(specs[key]);
       if (
         normalizedValue === '' ||
@@ -547,37 +610,28 @@ export function resolveStableVariantIdentityFromExistingOffers({
   if (unchangedFromCatalog) {
     for (const row of rankedOffers) {
       const existingSpecs = extractSpecsFromOfferRow(row);
-      const legacyEmptyOfferSpecs = Object.keys(buildNormalizedSpecProbe(existingSpecs)).length === 0;
-      if (
-        legacyEmptyOfferSpecs ||
-        areSpecificationsEqual(existingSpecs, catalogSpecs) ||
-        areSpecificationsEqual(existingSpecs, submittedSpecs) ||
-        submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
-      ) {
-        const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_offer', parentAsinForReuse);
-        if (picked) return picked;
+      if (!canReuseUnchangedCatalogRow(submittedSpecs, existingSpecs, catalogSpecs)) {
+        continue;
       }
+      const picked = pickStableIdentityFromRow(row, 'catalog_unchanged_offer', parentAsinForReuse);
+      if (picked) return picked;
     }
 
     for (const row of rankedVariants) {
       const existingSpecs = extractSpecsFromProductVariantRow(row);
-      const legacyEmptyVariantSpecs = Object.keys(buildNormalizedSpecProbe(existingSpecs)).length === 0;
-      if (
-        legacyEmptyVariantSpecs ||
-        areSpecificationsEqual(existingSpecs, catalogSpecs) ||
-        areSpecificationsEqual(existingSpecs, submittedSpecs) ||
-        submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
-      ) {
-        const picked = pickStableIdentityFromRow(
-          row,
-          'catalog_unchanged_product_variant',
-          parentAsinForReuse
-        );
-        if (picked) return picked;
+      if (!canReuseUnchangedCatalogRow(submittedSpecs, existingSpecs, catalogSpecs)) {
+        continue;
       }
+      const picked = pickStableIdentityFromRow(
+        row,
+        'catalog_unchanged_product_variant',
+        parentAsinForReuse
+      );
+      if (picked) return picked;
     }
 
-    // Single stored variant on this product → safe to reuse for an unchanged catalog re-list
+    // Single stored variant on this product → reuse only when submitted specs
+    // are empty or compatible. A different filled variant must keep its own key.
     const distinctOfferKeys = [
       ...new Set(
         rankedOffers
@@ -589,12 +643,14 @@ export function resolveStableVariantIdentityFromExistingOffers({
       const row = rankedOffers.find(
         (candidate) => String(candidate?.variant_key || '').trim() === distinctOfferKeys[0]
       );
-      const picked = pickStableIdentityFromRow(
-        row,
-        'catalog_unchanged_single_offer',
-        parentAsinForReuse
-      );
-      if (picked) return picked;
+      if (canReuseUnchangedCatalogRow(submittedSpecs, extractSpecsFromOfferRow(row), catalogSpecs)) {
+        const picked = pickStableIdentityFromRow(
+          row,
+          'catalog_unchanged_single_offer',
+          parentAsinForReuse
+        );
+        if (picked) return picked;
+      }
     }
 
     const distinctOfferAsins = [
@@ -608,12 +664,14 @@ export function resolveStableVariantIdentityFromExistingOffers({
       const row = rankedOffers.find(
         (candidate) => String(candidate?.variant_asin || '').trim() === distinctOfferAsins[0]
       );
-      const picked = pickStableIdentityFromRow(
-        row,
-        'catalog_unchanged_single_offer',
-        parentAsinForReuse
-      );
-      if (picked) return picked;
+      if (canReuseUnchangedCatalogRow(submittedSpecs, extractSpecsFromOfferRow(row), catalogSpecs)) {
+        const picked = pickStableIdentityFromRow(
+          row,
+          'catalog_unchanged_single_offer',
+          parentAsinForReuse
+        );
+        if (picked) return picked;
+      }
     }
 
     const distinctVariantKeys = [
@@ -627,12 +685,20 @@ export function resolveStableVariantIdentityFromExistingOffers({
       const row = rankedVariants.find(
         (candidate) => String(candidate?.variant_key || '').trim() === distinctVariantKeys[0]
       );
-      const picked = pickStableIdentityFromRow(
-        row,
-        'catalog_unchanged_single_product_variant',
-        parentAsinForReuse
-      );
-      if (picked) return picked;
+      if (
+        canReuseUnchangedCatalogRow(
+          submittedSpecs,
+          extractSpecsFromProductVariantRow(row),
+          catalogSpecs
+        )
+      ) {
+        const picked = pickStableIdentityFromRow(
+          row,
+          'catalog_unchanged_single_product_variant',
+          parentAsinForReuse
+        );
+        if (picked) return picked;
+      }
     }
 
     const distinctVariantAsins = [
@@ -646,12 +712,20 @@ export function resolveStableVariantIdentityFromExistingOffers({
       const row = rankedVariants.find(
         (candidate) => String(candidate?.variant_asin || '').trim() === distinctVariantAsins[0]
       );
-      const picked = pickStableIdentityFromRow(
-        row,
-        'catalog_unchanged_single_product_variant',
-        parentAsinForReuse
-      );
-      if (picked) return picked;
+      if (
+        canReuseUnchangedCatalogRow(
+          submittedSpecs,
+          extractSpecsFromProductVariantRow(row),
+          catalogSpecs
+        )
+      ) {
+        const picked = pickStableIdentityFromRow(
+          row,
+          'catalog_unchanged_single_product_variant',
+          parentAsinForReuse
+        );
+        if (picked) return picked;
+      }
     }
   }
 
@@ -677,6 +751,36 @@ function buildNormalizedSpecProbe(specs = {}) {
   return out;
 }
 
+function hasMeaningfulSpecs(specs = {}) {
+  return Object.keys(buildNormalizedSpecProbe(specs)).length > 0;
+}
+
+/**
+ * Reuse a stored variant on an "unchanged catalog" re-list only when the submitted
+ * specs are empty, match that row, or match the catalog baseline.
+ * A different filled variant must not inherit the only existing variant_key —
+ * that collision is what surfaces as supplier_products unique-constraint errors.
+ */
+function canReuseUnchangedCatalogRow(submittedSpecs = {}, existingSpecs = {}, catalogSpecs = {}) {
+  if (
+    areSpecificationsEqual(submittedSpecs, existingSpecs) ||
+    submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
+  ) {
+    return true;
+  }
+  if (!hasMeaningfulSpecs(submittedSpecs)) {
+    return !hasMeaningfulSpecs(existingSpecs) || areSpecificationsEqual(existingSpecs, catalogSpecs);
+  }
+  if (!hasMeaningfulSpecs(existingSpecs)) {
+    return false;
+  }
+  return (
+    areSpecificationsEqual(existingSpecs, catalogSpecs) &&
+    (areSpecificationsEqual(submittedSpecs, catalogSpecs) ||
+      submittedSpecsCompatibleWithExistingVariant(submittedSpecs, catalogSpecs))
+  );
+}
+
 export default {
   normalizeTextField,
   normalizeIdentifierField,
@@ -684,6 +788,8 @@ export default {
   normalizeCatalogIdentity,
   normalizeVariantIdentity,
   normalizeVariantAttributes,
+  isPersistableProductBarcode,
+  isVariantIdentityExcludedSpecKey,
   buildAsinLikeId,
   buildVariantAsinLikeId,
   isLegacyCatalogTsin,

@@ -15,9 +15,12 @@ import {
   shouldMoveToPendingForSpecChange,
   shouldRequireApprovalForVariantSpecChange,
   shouldRecomputeSupplierVariantKeyOnUpdate,
-  supplierProductUpdateSchema
+  supplierProductUpdateSchema,
+  SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE,
+  SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_MESSAGE
 } from '../supplierImports.js';
 import { areSpecificationsEqual } from '../../../utils/supplierProductApproval.js';
+import { toSupplierOfferWriteErrorResponse } from '../../../utils/supplierOfferUniqueness.js';
 import {
   sanitizeImageUrls,
   validateAndNormalizeTaxRates
@@ -263,12 +266,19 @@ export function registerSupplierProductUpdateRoute(ctx) {
           // Image/inventory-only saves often omit brand. Do not fail those with brand_required.
           if (brandToValidate) {
             const effectiveProfile = await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {});
-            const brandGuard = brandIsAllowedForSupplier(effectiveProfile, brandToValidate);
+            const brandGuard = brandIsAllowedForSupplier(effectiveProfile, brandToValidate, {
+              requireRole: true
+            });
             if (!brandGuard.allowed) {
+              const roleRequired = brandGuard.reason === SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE;
               return res.status(403).json({
                 status: 'error',
-                message:
-                  brandGuard.reason === 'brand_required'
+                code: roleRequired
+                  ? SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_CODE
+                  : brandGuard.reason || 'brand_not_allowed',
+                message: roleRequired
+                  ? SUPPLIER_ROLE_REQUIRED_FOR_PRODUCT_MESSAGE
+                  : brandGuard.reason === 'brand_required'
                     ? 'Brand is required because you have selected brands in your profile.'
                     : 'You can only update inventory for brands you selected in your profile.',
                 allowedBrands: brandGuard.declared || []
@@ -393,12 +403,7 @@ export function registerSupplierProductUpdateRoute(ctx) {
           .select('*')
           .single();
         if (spUpdateError || !updatedSupplierProduct) {
-          return res.status(400).json({
-            status: 'error',
-            message: spUpdateError?.code === '23505'
-              ? 'This exact product variation already exists for the selected location.'
-              : (spUpdateError?.message || 'Failed to update product')
-          });
+          return res.status(400).json(toSupplierOfferWriteErrorResponse(spUpdateError));
         }
 
         if (variantKeyChanged) {

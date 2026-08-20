@@ -1,4 +1,5 @@
 import { deleteSupplierBcovLevelsForDeletedOffers } from './supplierBcovService.js';
+import { pruneSupplierUpstreamCartForDeletedMineIds } from '../controllers/po/shared/poHelpers.js';
 
 /**
  * Remove rows that block deleting a catalog product row.
@@ -101,6 +102,8 @@ export async function clearCatalogProductReferences(supabase, productId) {
         bcovCleanupError?.message || bcovCleanupError
       );
     }
+
+    await pruneSupplierCartsForDeletedOffers(supabase, offerRows || []);
   }
 
   // Variant meta rows also FK to products.
@@ -143,6 +146,27 @@ function isMissingColumnError(error) {
     code === 'PGRST204' ||
     (message.includes('column') && message.includes('does not exist'))
   );
+}
+
+async function pruneSupplierCartsForDeletedOffers(supabase, offerRows = []) {
+  const bySupplier = new Map();
+  for (const row of offerRows || []) {
+    const supplierId = String(row?.supplier_id || '').trim();
+    const offerId = String(row?.id || '').trim();
+    if (!supplierId || !offerId) continue;
+    if (!bySupplier.has(supplierId)) bySupplier.set(supplierId, []);
+    bySupplier.get(supplierId).push(offerId);
+  }
+  for (const [supplierId, mineIds] of bySupplier.entries()) {
+    try {
+      await pruneSupplierUpstreamCartForDeletedMineIds(supabase, supplierId, mineIds);
+    } catch (cartError) {
+      console.warn(
+        '[AdminProductDelete] failed to prune supplier cart after offer delete:',
+        cartError?.message || cartError
+      );
+    }
+  }
 }
 
 export async function deleteCatalogProduct(supabase, productId) {
@@ -234,6 +258,8 @@ export async function deleteCatalogOffer(supabase, { catalogProductId, supplierP
       bcovCleanupError?.message || bcovCleanupError
     );
   }
+
+  await pruneSupplierCartsForDeletedOffers(supabase, [offerRow]);
 
   const { count, error: countError } = await supabase
     .from('supplier_products')

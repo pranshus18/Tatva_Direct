@@ -6,8 +6,8 @@ import { validateSupplierInventoryUpdateFields } from './supplierProductUpdateVa
 export const INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE =
   'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.';
 
-/** Product_COV requires a completed Manage Inventory save (MRP, stock, GST). */
-export function evaluateProductCovInventoryGate(offer = {}) {
+/** Product_COV requires a completed Manage Inventory save (MRP > 0, stock, location, GST). */
+export function getProductCovInventoryMissingFields(offer = {}) {
   const attrs =
     offer?.attributes && typeof offer.attributes === 'object' && !Array.isArray(offer.attributes)
       ? offer.attributes
@@ -19,12 +19,44 @@ export function evaluateProductCovInventoryGate(offer = {}) {
     cgst_rate: offer?.cgst_rate ?? attrs.cgstRate ?? attrs.cgst_rate,
     sgst_rate: offer?.sgst_rate ?? attrs.sgstRate ?? attrs.sgst_rate
   });
-  if (inventoryCheck.ok) {
-    return { ok: true, message: '' };
+  const missing = [];
+  const priceNum = Number(offer?.price);
+  if (!Number.isFinite(priceNum) || priceNum <= 0) {
+    missing.push('MRP (incl. GST)');
+  }
+  if (inventoryCheck.missingFields.includes('stock')) {
+    missing.push('Current stock with you');
+  }
+  if (!String(offer?.location || attrs.location || '').trim()) {
+    missing.push('Location');
+  }
+  if (inventoryCheck.missingFields.some((field) => /sgst/i.test(String(field)))) {
+    missing.push('SGST');
+  }
+  if (inventoryCheck.missingFields.some((field) => /cgst/i.test(String(field)))) {
+    missing.push('CGST');
+  }
+  if (inventoryCheck.missingFields.some((field) => /igst/i.test(String(field)))) {
+    missing.push('IGST');
+  }
+  return [...new Set(missing)];
+}
+
+export function formatInventoryRequiredForProductCovMessage(missingFields = []) {
+  const missing = Array.isArray(missingFields) ? missingFields.filter(Boolean) : [];
+  if (missing.length === 0) return INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE;
+  return `Inventory completion is required before Product COV. Please complete: ${missing.join(', ')}.`;
+}
+
+export function evaluateProductCovInventoryGate(offer = {}) {
+  const missing = getProductCovInventoryMissingFields(offer);
+  if (missing.length === 0) {
+    return { ok: true, message: '', missingFields: [] };
   }
   return {
     ok: false,
-    message: INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
+    missingFields: missing,
+    message: formatInventoryRequiredForProductCovMessage(missing)
   };
 }
 
@@ -81,7 +113,7 @@ export async function resolveVariantProductCovEligibility(supabase, supplierId, 
 
   const { data, error } = await supabase
     .from('supplier_products')
-    .select('id, status, is_active, price, stock, igst_rate, cgst_rate, sgst_rate, attributes')
+    .select('id, status, is_active, price, stock, location, igst_rate, cgst_rate, sgst_rate, attributes')
     .eq('supplier_id', supplierId)
     .eq('variant_key', key)
     .order('updated_at', { ascending: false })

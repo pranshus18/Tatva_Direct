@@ -210,7 +210,8 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
         catalogMrp: null,
         offerStatus: 'missing',
         covEligible: false,
-        covBlockedMessage: 'No product variant selected for Product_COV.',
+        covBlockedMessage:
+          'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.',
         levels: []
       });
     }

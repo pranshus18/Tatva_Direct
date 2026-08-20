@@ -139,6 +139,7 @@ const SupplierUpstreamCart = () => {
   const [draftProjectShipping, setDraftProjectShipping] = useState({});
   const [locatingShippingByProject, setLocatingShippingByProject] = useState({});
   const [pendingRemoveLine, setPendingRemoveLine] = useState(null);
+  const [removingLineKey, setRemovingLineKey] = useState('');
 
   const getProjectShippingPreview = (project) => {
     if (!project || typeof project !== 'object') return '';
@@ -233,20 +234,9 @@ const SupplierUpstreamCart = () => {
             const key = normalizeSupplierProductKey(mineId);
             const parsed = parseSupplierStockQuantity(lineQuantity);
             if (!key || parsed == null || parsed <= 0) return null;
-            const product =
-              productBySupplierProductId[key] ||
-              (lineMeta
-                ? {
-                    supplier_product_id: key,
-                    name: String(lineMeta.name || lineMeta.variantLabel || 'Product').trim(),
-                    variantKey: lineMeta.variantKey,
-                    variantAsin: lineMeta.variantAsin,
-                    min_order_quantity: 1
-                  }
-                : null);
+            const product = productBySupplierProductId[key];
             if (!product) return null;
-            const minQty = Math.max(1, product?.min_order_quantity ?? 1);
-            const quantity = Math.max(minQty, parsed);
+            const quantity = parsed;
             const variantLabel = String(
               lineMeta?.variantLabel ||
                 lineMeta?.variantAsin ||
@@ -275,6 +265,19 @@ const SupplierUpstreamCart = () => {
     0
   );
 
+  const applyCartDraft = (draft) => {
+    const nextProjects = (Array.isArray(draft?.projects) ? draft.projects : [])
+      .filter(hasUpstreamProjectCartLines)
+      .map((project) => ({
+        ...project,
+        cartName: resolveUpstreamProjectCartName(project?.cartName)
+      }));
+    setProjects(nextProjects);
+    if (nextProjects.length === 0) {
+      clearUpstreamCartClientProjectState();
+    }
+  };
+
   const loadCart = async () => {
     setLoading(true);
     setError('');
@@ -292,14 +295,7 @@ const SupplierUpstreamCart = () => {
         throw new Error(productsData.message || 'Failed to load products');
       }
       const draft = cartData?.cart?.draft && typeof cartData.cart.draft === 'object' ? cartData.cart.draft : {};
-      setProjects(
-        (Array.isArray(draft.projects) ? draft.projects : [])
-          .filter(hasUpstreamProjectCartLines)
-          .map((project) => ({
-            ...project,
-            cartName: resolveUpstreamProjectCartName(project?.cartName)
-          }))
-      );
+      applyCartDraft(draft);
       setProducts(
         normalizeSupplierProductsFromApi(
           Array.isArray(productsData.products) ? productsData.products : []
@@ -382,6 +378,9 @@ const SupplierUpstreamCart = () => {
       if (!res.ok || data.status !== 'success') {
         throw new Error(data.message || 'Failed to save project');
       }
+      if (data?.cart?.draft && typeof data.cart.draft === 'object') {
+        applyCartDraft(data.cart.draft);
+      }
       return true;
     } catch (e) {
       setError(e.message || 'Failed to save project');
@@ -395,9 +394,7 @@ const SupplierUpstreamCart = () => {
     const key = normalizeSupplierProductKey(mineId);
     const parsed = parseSupplierStockQuantity(nextQty);
     if (parsed === null || parsed < 1) return;
-    const product = productBySupplierProductId[key];
-    const minQty = Math.max(1, product?.min_order_quantity ?? 1);
-    const quantity = Math.max(minQty, parsed);
+    const quantity = Math.max(1, parsed);
     const project = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
     if (!project) return;
     const existingItems = Array.isArray(project.items) ? project.items : [];
@@ -434,30 +431,44 @@ const SupplierUpstreamCart = () => {
   };
 
   const removeLine = async (projectId, mineId) => {
-    const project = (projects || []).find((p) => String(p?.projectId || '') === String(projectId || ''));
+    const key = normalizeSupplierProductKey(mineId);
+    const normalizedProjectId = String(projectId || '').trim();
+    if (!normalizedProjectId || !key) return;
+    const project = (projects || []).find((p) => String(p?.projectId || '') === normalizedProjectId);
     if (!project) return;
-    const nextSelectedMine = { ...(project.selectedMine || {}) };
+
+    const lineKey = `${normalizedProjectId}:${key}`;
+    setRemovingLineKey(lineKey);
+    setError('');
+
+    const nextSelectedMine = {};
+    for (const [id, qty] of Object.entries(project.selectedMine || {})) {
+      if (normalizeSupplierProductKey(id) === key) continue;
+      const quantity = Number(qty);
+      if (Number.isFinite(quantity) && quantity > 0) {
+        nextSelectedMine[normalizeSupplierProductKey(id)] = quantity;
+      }
+    }
     const nextSelectedUpstreamOffer = { ...(project.selectedUpstreamOffer || {}) };
-    delete nextSelectedMine[mineId];
+    delete nextSelectedUpstreamOffer[key];
     delete nextSelectedUpstreamOffer[mineId];
+    const nextItems = Array.isArray(project.items)
+      ? project.items.filter(
+          (item) =>
+            normalizeSupplierProductKey(item?.mineSupplierProductId || item?.mineId) !== key
+        )
+      : [];
     const nextProject = {
       ...project,
       selectedMine: nextSelectedMine,
       selectedUpstreamOffer: nextSelectedUpstreamOffer,
-      items: Array.isArray(project.items)
-        ? project.items.filter(
-            (item) =>
-              normalizeSupplierProductKey(item?.mineSupplierProductId || item?.mineId) !==
-              normalizeSupplierProductKey(mineId)
-          )
-        : project.items
+      items: nextItems
     };
-    const ok = await persistProject(nextProject, { silent: true });
-    if (!ok) return;
-    if (Object.keys(nextSelectedMine).length === 0) {
+    const projectNowEmpty = nextItems.length === 0 && Object.keys(nextSelectedMine).length === 0;
+    if (projectNowEmpty) {
       setProjects((prev) => {
         const remaining = (prev || []).filter(
-          (p) => String(p?.projectId || '') !== String(projectId || '')
+          (p) => String(p?.projectId || '') !== normalizedProjectId
         );
         if (remaining.length === 0) {
           clearUpstreamCartClientProjectState();
@@ -465,9 +476,45 @@ const SupplierUpstreamCart = () => {
         return remaining;
       });
     } else {
-      replaceProjectInState(projectId, nextProject);
+      replaceProjectInState(normalizedProjectId, nextProject);
     }
-    emitSupplierCartUpdated();
+
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('Please log in again to remove this product.');
+      }
+      const res = await fetch(getApiUrl('/api/supplier/upstream/cart/items'), {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          mineSupplierProductId: key,
+          quantity: 0,
+          replaceQuantity: true,
+          projectId: normalizedProjectId
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || data.status !== 'success') {
+        throw new Error(data.message || 'Failed to remove product from cart');
+      }
+      const serverDraft =
+        data?.cart?.draft && typeof data.cart.draft === 'object' ? data.cart.draft : null;
+      if (serverDraft) {
+        applyCartDraft(serverDraft);
+      } else {
+        await loadCart();
+      }
+      emitSupplierCartUpdated();
+    } catch (e) {
+      setError(e.message || 'Failed to remove product from cart');
+      await loadCart();
+    } finally {
+      setRemovingLineKey('');
+    }
   };
 
   const requestRemoveLine = (projectId, mineId, name) => {
@@ -1139,6 +1186,7 @@ const SupplierUpstreamCart = () => {
                             const pricing = resolveUpstreamCartLinePricing(project, mineId, p);
                             const unitPrice = Number(pricing.price || 0) || 0;
                             const quantity = Number(row.quantity || 0);
+                            const lineBusy = removingLineKey === `${projectId}:${mineId}`;
                             return (
                               <tr key={`${projectId}-${mineId}`}>
                                 <td className="supplier-cart-product-cell">
@@ -1170,6 +1218,7 @@ const SupplierUpstreamCart = () => {
                                     <button
                                       type="button"
                                       className="btn-secondary supplier-cart-qty-btn"
+                                      disabled={lineBusy}
                                       onClick={() =>
                                         quantity <= 1
                                           ? requestRemoveLine(projectId, mineId, p?.name || row.variantLabel)
@@ -1183,6 +1232,7 @@ const SupplierUpstreamCart = () => {
                                     <button
                                       type="button"
                                       className="btn-secondary supplier-cart-qty-btn"
+                                      disabled={lineBusy}
                                       onClick={() => updateQuantity(projectId, mineId, quantity + 1)}
                                       aria-label="Increase quantity"
                                     >

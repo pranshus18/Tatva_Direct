@@ -5,6 +5,7 @@ import {
   buildVariantAsinLikeId,
   buildIdentityBundle,
   isLegacyCatalogTsin,
+  isPersistableProductBarcode,
   CATALOG_TSIN_TOTAL_LENGTH,
   VARIANT_TSIN_TOTAL_LENGTH,
   CATALOG_TSIN_BODY_LENGTH,
@@ -116,4 +117,34 @@ test('buildAsinLikeId stays mostly unique across moderate catalog volume', () =>
   }
   // ~46k code space (36^3): expect high uniqueness at 1k sample size.
   assert.ok(seen.size / sampleSize >= 0.98, `expected >=98% unique, got ${seen.size}/${sampleSize}`);
+});
+
+test('description starting with the product name does not change variant identity', () => {
+  const specs = { COLOR: 'Black', 'PRODUCT TYPE': '45W Fast Adapter' };
+  const withoutDescription = buildIdentityBundle({
+    name: '45W Fast Adapter',
+    brand: 'Anker',
+    category: 'Chargers',
+    specifications: specs
+  });
+  const descriptionStartsWithName = buildIdentityBundle({
+    name: '45W Fast Adapter',
+    brand: 'Anker',
+    category: 'Chargers',
+    specifications: {
+      ...specs,
+      description: '45W Fast Adapter is a compact USB-C charger for phones and laptops.',
+      name: '45W Fast Adapter'
+    }
+  });
+  assert.equal(withoutDescription.variantKey, descriptionStartsWithName.variantKey);
+  assert.equal(withoutDescription.catalogKey, descriptionStartsWithName.catalogKey);
+});
+
+test('isPersistableProductBarcode rejects the product name and description copy', () => {
+  const name = '45W Fast Adapter';
+  const description = '45W Fast Adapter is a compact USB-C charger.';
+  assert.equal(isPersistableProductBarcode(name, { name, description }), false);
+  assert.equal(isPersistableProductBarcode(description, { name, description }), false);
+  assert.equal(isPersistableProductBarcode('8901234567890', { name, description }), true);
 });

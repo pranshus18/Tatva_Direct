@@ -275,6 +275,16 @@
   color: var(--pm-text-muted);
 }
 
+.pm-notice--cov-gate {
+  border-color: #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.pm-notice--cov-gate svg {
+  color: #d97706;
+}
+
 .pm-notice strong {
   font-weight: 600;
   color: var(--pm-text);
@@ -477,6 +487,19 @@
   display: block;
   font-weight: 700;
   margin-bottom: 0.2rem;
+}
+
+.pm-brand-approval-warning__list {
+  margin: 0.35rem 0 0;
+  padding-left: 1.15rem;
+}
+
+.pm-brand-approval-warning__list li + li {
+  margin-top: 0.25rem;
+}
+
+.pm-brand-approval-warning__message {
+  margin: 0;
 }
 
 .pm-card__codes {
@@ -1103,6 +1126,17 @@
   margin-top: 1.25rem;
   padding-top: 1.25rem;
   border-top: 1px solid var(--pm-border);
+}
+
+.pm-details-cov-gate {
+  margin: 0 0 0.85rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: var(--pm-radius);
+  border: 1px solid #fde68a;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 0.875rem;
+  font-weight: 500;
 }
 
 .pm-details-section h4 {

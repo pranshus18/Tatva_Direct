@@ -3,8 +3,9 @@ import { getApiUrl } from '../config/api';
 import { Save, Plus, Trash2 } from 'lucide-react';
 import './Dashboard.css';
 import './SupplierBCOV.css';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, Navigate } from 'react-router-dom';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
+import { INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE } from '../utils/supplierProductValidation';
 import {
   BRAND_COV_FIELD_LABEL,
   BRAND_COV_LABEL,
@@ -128,7 +129,7 @@ const SupplierBCOV = () => {
   const [saveMessage, setSaveMessage] = useState('');
   const [isStepCompleted, setIsStepCompleted] = useState(false);
   const [catalogMrp, setCatalogMrp] = useState(null);
-  const [covEligible, setCovEligible] = useState(true);
+  const [covEligible, setCovEligible] = useState(false);
   const [covBlockedMessage, setCovBlockedMessage] = useState('');
 
   const { variantKey, variantAsin, variantName, supplierProductId } = useMemo(() => {
@@ -200,10 +201,18 @@ const SupplierBCOV = () => {
         return true;
       }
       alert(data.message || 'Failed to load Product_COV table');
+      setCovEligible(false);
+      setCovBlockedMessage(
+        INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
+      );
       return false;
     } catch (e) {
       console.error('Failed to load Product_COV table:', e);
       alert('Failed to load Product_COV table');
+      setCovEligible(false);
+      setCovBlockedMessage(
+        INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
+      );
       return false;
     } finally {
       if (!silent) setLoading(false);
@@ -244,7 +253,7 @@ const SupplierBCOV = () => {
     if (!covEligible) {
       alert(
         covBlockedMessage ||
-          'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.'
+          INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
       );
       return { ok: false };
     }
@@ -331,7 +340,7 @@ const SupplierBCOV = () => {
     if (!covEligible) {
       alert(
         covBlockedMessage ||
-          'This product is not eligible for Product_COV configuration yet.'
+          INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
       );
       return;
     }
@@ -348,14 +357,11 @@ const SupplierBCOV = () => {
 
   if (!variantKey) {
     return (
-      <div className="dashboard-container bcov-page">
-        <div className="dashboard-header">
-          <h1>Product_COV</h1>
-        </div>
-        <div className="bcov-empty">
-          <p>No variant selected. Please open this page from a product variant to set pricing levels.</p>
-        </div>
-      </div>
+      <Navigate
+        to="/manage-inventory"
+        replace
+        state={{ productCovBlockedMessage: INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE }}
+      />
     );
   }
 
@@ -379,12 +385,24 @@ const SupplierBCOV = () => {
             </p>
           </div>
         </div>
-        <div className="bcov-empty">
+        <div className="bcov-empty bcov-empty--blocked" role="alert">
           <p>
-            {covBlockedMessage ||
-              'This product is rejected. Correct it and wait for admin approval before configuring Product_COV.'}
+            {covBlockedMessage || INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE}
           </p>
-          {/inventory/i.test(String(covBlockedMessage || '')) ? (
+          <SupplierProductAdditionSteps
+            compact
+            variant="inventory"
+            lockedSteps={[3]}
+            onStepSelect={(step) => {
+              if (step === 1) navigate('/product-management');
+              else if (step === 2) navigate('/manage-inventory');
+              else {
+                window.alert(covBlockedMessage || INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE);
+              }
+            }}
+            hint="Inventory (step 2) must be completed before Product COV (step 3)."
+          />
+          {/inventory/i.test(String(covBlockedMessage || 'inventory')) ? (
             <button
               type="button"
               className="btn-primary"
