@@ -5,6 +5,18 @@ import { getApiUrl } from '../config/api';
 import { formatDateTimeIST } from '../utils/dateTime';
 import './Profile.css';
 
+function savedPaylaterThreshold(buyer) {
+  return String(buyer?.paylaterThreshold ?? 0);
+}
+
+function paylaterThresholdHasChanges(draftValue, savedValue) {
+  const left = Number(draftValue);
+  const right = Number(savedValue);
+  const savedAmount = Number.isFinite(right) && right >= 0 ? right : 0;
+  if (!Number.isFinite(left) || left < 0) return true;
+  return left !== savedAmount;
+}
+
 export default function SupplierBuyerPurchases() {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState({ summary: null, buyers: [] });
@@ -16,7 +28,7 @@ export default function SupplierBuyerPurchases() {
   const [thresholdDrafts, setThresholdDrafts] = useState({});
   const [savingThresholdId, setSavingThresholdId] = useState(null);
 
-  const fetchBuyerPurchases = async () => {
+  const fetchBuyerPurchases = async ({ savedBuyerId = null } = {}) => {
     try {
       setLoading(true);
       const token = localStorage.getItem('token');
@@ -38,12 +50,23 @@ export default function SupplierBuyerPurchases() {
           summary: payload.summary || null,
           buyers
         });
-        const drafts = {};
-        buyers.forEach((buyer) => {
-          if (buyer.buyerId === 'walk_in') return;
-          drafts[buyer.buyerId] = String(buyer.paylaterThreshold ?? 0);
+        setThresholdDrafts((prev) => {
+          const drafts = {};
+          buyers.forEach((buyer) => {
+            if (buyer.buyerId === 'walk_in') return;
+            const saved = savedPaylaterThreshold(buyer);
+            if (
+              savedBuyerId !== buyer.buyerId &&
+              prev[buyer.buyerId] != null &&
+              paylaterThresholdHasChanges(prev[buyer.buyerId], saved)
+            ) {
+              drafts[buyer.buyerId] = prev[buyer.buyerId];
+              return;
+            }
+            drafts[buyer.buyerId] = saved;
+          });
+          return drafts;
         });
-        setThresholdDrafts(drafts);
       } else {
         alert(payload.message || 'Failed to load sales');
       }
@@ -63,6 +86,8 @@ export default function SupplierBuyerPurchases() {
   const savePaylaterThreshold = async (buyer) => {
     if (buyer.buyerId === 'walk_in' || buyer.buyerType === 'walk_in') return;
     const raw = thresholdDrafts[buyer.buyerId];
+    const saved = savedPaylaterThreshold(buyer);
+    if (!paylaterThresholdHasChanges(raw, saved)) return;
     const threshold = Number(raw);
     if (!Number.isFinite(threshold) || threshold < 0) {
       alert('Enter a valid pay-later minimum (₹0 or more).');
@@ -105,7 +130,7 @@ export default function SupplierBuyerPurchases() {
       if (!res.ok || payload.status !== 'success') {
         throw new Error(payload.message || 'Failed to save pay-later threshold');
       }
-      await fetchBuyerPurchases();
+      await fetchBuyerPurchases({ savedBuyerId: buyer.buyerId });
     } catch (e) {
       alert(e.message || 'Failed to save pay-later threshold');
     } finally {
@@ -291,7 +316,16 @@ export default function SupplierBuyerPurchases() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredBuyers.map((buyer) => (
+                  {filteredBuyers.map((buyer) => {
+                    const savedThreshold = savedPaylaterThreshold(buyer);
+                    const draftThreshold = thresholdDrafts[buyer.buyerId] ?? savedThreshold;
+                    const isSavingThreshold = savingThresholdId === buyer.buyerId;
+                    const thresholdHasChanges = paylaterThresholdHasChanges(
+                      draftThreshold,
+                      savedThreshold
+                    );
+                    const thresholdSaveDisabled = isSavingThreshold || !thresholdHasChanges;
+                    return (
                     <tr key={buyer.buyerId}>
                       {showBuyerName ? (
                         <td style={td}>
@@ -366,7 +400,7 @@ export default function SupplierBuyerPurchases() {
                               type="number"
                               min="0"
                               step="1"
-                              value={thresholdDrafts[buyer.buyerId] ?? '0'}
+                              value={draftThreshold}
                               onChange={(e) =>
                                 setThresholdDrafts((prev) => ({
                                   ...prev,
@@ -379,11 +413,22 @@ export default function SupplierBuyerPurchases() {
                             />
                             <button
                               type="button"
-                              style={saveBtnStyle}
-                              disabled={savingThresholdId === buyer.buyerId}
+                              style={{
+                                ...saveBtnStyle,
+                                opacity: thresholdSaveDisabled ? 0.5 : 1,
+                                cursor: thresholdSaveDisabled ? 'not-allowed' : 'pointer'
+                              }}
+                              disabled={thresholdSaveDisabled}
+                              title={
+                                isSavingThreshold
+                                  ? 'Saving…'
+                                  : thresholdHasChanges
+                                    ? 'Save pay-later minimum for this buyer'
+                                    : 'No changes to save'
+                              }
                               onClick={() => savePaylaterThreshold(buyer)}
                             >
-                              {savingThresholdId === buyer.buyerId ? '…' : 'Save'}
+                              {isSavingThreshold ? '…' : 'Save'}
                             </button>
                           </div>
                         )}
@@ -392,7 +437,8 @@ export default function SupplierBuyerPurchases() {
                         {buyer.lastOrderAt ? formatDateTimeIST(buyer.lastOrderAt, '—') : '—'}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

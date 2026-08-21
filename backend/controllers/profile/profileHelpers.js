@@ -27,6 +27,7 @@ import {
   resolveSupplierBrandLayers
 } from '../../services/supplierBrandLayerContract.js';
 import { resolveServiceProviderDisplayFromPm } from '../../services/pmUserService.js';
+import { pmAddressToLocalShippingEntry } from '../../services/pmAddressService.js';
 
 const SERVICE_PROVIDER_THEME_IDS = new Set([
   'default',
@@ -394,14 +395,17 @@ export function shippingAddressEntryFromBranch(branch) {
 
 export function normalizeShippingAddressEntry(entry = {}) {
   const nested = entry?.address && typeof entry.address === 'object' ? entry.address : {};
-  const flat = normalizeAddress(mergeParsedShippingAddress({ ...nested, ...entry }));
+  const merged = mergeParsedShippingAddress({ ...nested, ...entry });
+  const mapped = pmAddressToLocalShippingEntry(merged, merged);
+  const flat = normalizeAddress(mapped);
   return {
-    ...(entry.latitude != null ? { latitude: entry.latitude } : {}),
-    ...(entry.longitude != null ? { longitude: entry.longitude } : {}),
-    ...(entry.geoLocation ? { geoLocation: entry.geoLocation } : {}),
-    id: String(entry?.id || '').trim(),
-    label: String(entry?.label || entry?.name || '').trim(),
-    ...flat
+    ...mapped,
+    ...flat,
+    city: mapped.city || flat.city,
+    pincode: mapped.pincode || flat.pincode,
+    line1: mapped.line1 || flat.line1,
+    id: String(mapped.id || entry?.id || '').trim(),
+    label: String(mapped.label || entry?.label || entry?.name || '').trim()
   };
 }
 

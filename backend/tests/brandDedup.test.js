@@ -77,6 +77,34 @@ test('findApprovedCatalogBrandCloseMatch matches exact spelling only', async () 
   assert.equal(exact.data?.name, 'Sparsh');
   assert.equal(exact.matchType, 'exact');
 
+  const safariRows = [
+    ...rows,
+    {
+      id: '5',
+      name: 'Safari',
+      normalized_name: 'safari',
+      status: 'approved',
+      created_at: '2026-08-21T00:00:00.000Z'
+    }
+  ];
+  const safariDb = {
+    from() {
+      return {
+        select() {
+          return this;
+        },
+        order() {
+          return Promise.resolve({ data: safariRows, error: null });
+        }
+      };
+    }
+  };
+  const safarii = await findApprovedCatalogBrandCloseMatch('safarii', safariDb);
+  assert.equal(safarii.data, null);
+  assert.equal(safarii.matchType, null);
+  const safariPrefix = await findApprovedCatalogBrandCloseMatch('safa', safariDb);
+  assert.equal(safariPrefix.data, null);
+
   const phillipsVariant = await findApprovedCatalogBrandCloseMatch('phillips', {
     from() {
       return {

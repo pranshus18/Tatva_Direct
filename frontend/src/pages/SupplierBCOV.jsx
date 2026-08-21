@@ -1,11 +1,14 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { getApiUrl } from '../config/api';
 import { Save, Plus, Trash2 } from 'lucide-react';
 import './Dashboard.css';
 import './SupplierBCOV.css';
-import { useLocation, useNavigate, Navigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
-import { INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE } from '../utils/supplierProductValidation';
+import {
+  INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE,
+  PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE
+} from '../utils/supplierProductValidation';
 import {
   BRAND_COV_FIELD_LABEL,
   BRAND_COV_LABEL,
@@ -30,6 +33,8 @@ const createDefaultRow = (index = 0) => ({
 });
 
 const isDefaultLevelName = (value) => /^Level\s+\d+$/i.test(String(value || '').trim());
+
+let notifiedMissingProductCovVariant = false;
 
 const parseCovThresholdNumber = (value) => {
   if (value === null || value === undefined) return null;
@@ -146,6 +151,19 @@ const SupplierBCOV = () => {
     };
   }, [location.search]);
 
+  const missingVariantNotifiedRef = useRef(false);
+  useEffect(() => {
+    if (variantKey) {
+      notifiedMissingProductCovVariant = false;
+      missingVariantNotifiedRef.current = false;
+      return;
+    }
+    if (notifiedMissingProductCovVariant || missingVariantNotifiedRef.current) return;
+    notifiedMissingProductCovVariant = true;
+    missingVariantNotifiedRef.current = true;
+    window.alert(PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE);
+  }, [variantKey]);
+
   const validationErrors = useMemo(
     () => getValidationErrorsForRows(rows, catalogMrp),
     [rows, catalogMrp]
@@ -202,17 +220,13 @@ const SupplierBCOV = () => {
       }
       alert(data.message || 'Failed to load Product_COV table');
       setCovEligible(false);
-      setCovBlockedMessage(
-        INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
-      );
+      setCovBlockedMessage(data.message || 'Could not load Product_COV for this product.');
       return false;
     } catch (e) {
       console.error('Failed to load Product_COV table:', e);
       alert('Failed to load Product_COV table');
       setCovEligible(false);
-      setCovBlockedMessage(
-        INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
-      );
+      setCovBlockedMessage('Could not load Product_COV for this product.');
       return false;
     } finally {
       if (!silent) setLoading(false);
@@ -357,11 +371,45 @@ const SupplierBCOV = () => {
 
   if (!variantKey) {
     return (
-      <Navigate
-        to="/manage-inventory"
-        replace
-        state={{ productCovBlockedMessage: INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE }}
-      />
+      <div className="dashboard-container bcov-page">
+        <div className="dashboard-header">
+          <div>
+            <h1>Product_COV</h1>
+            <p className="bcov-subtitle">
+              Product COV is set per product. It is not opened from this menu on its own.
+            </p>
+          </div>
+        </div>
+        <div className="bcov-empty bcov-empty--blocked" role="alert">
+          <p>{PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE}</p>
+          <SupplierProductAdditionSteps
+            compact
+            variant="inventory"
+            onStepSelect={(step) => {
+              if (step === 1) navigate('/product-management');
+              else if (step === 2) navigate('/manage-inventory');
+              else window.alert(PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE);
+            }}
+            hint="Open a product from Manage Products or Manage Inventory, then click Product COV."
+          />
+          <div className="bcov-empty-actions">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={() => navigate('/product-management')}
+            >
+              Go to Manage Products
+            </button>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => navigate('/manage-inventory')}
+            >
+              Go to Manage Inventory
+            </button>
+          </div>
+        </div>
+      </div>
     );
   }
 

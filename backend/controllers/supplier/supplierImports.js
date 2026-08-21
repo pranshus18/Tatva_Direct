@@ -105,6 +105,7 @@ export { insertNotification, insertNotifications } from '../../repositories/noti
 export { findAdmins, findUserBasicById } from '../../repositories/usersRepository.js';
 export {
   fetchVariantCatalogMrp,
+  PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE,
   resolveVariantProductCovEligibility,
   validateAndNormalizeBcovLevels,
   deleteSupplierBcovLevelsForVariant,

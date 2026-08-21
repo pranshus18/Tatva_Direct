@@ -43,7 +43,7 @@ import {
   UPSTREAM_SOURCING_PATH,
   openUpstreamProductDetailInNewTab
 } from '../utils/discoveryNavigation';
-import { getProductImageList } from '../utils/productImages';
+import { getSelectedListingImages } from '../utils/productImages';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -1840,7 +1840,7 @@ const SupplierUpstream = ({ user }) => {
             const minQty = Math.max(1, p.min_order_quantity ?? 1);
             const isSelected = !!selectedMine[mineId];
             const isAddingToCart = !!addingCartByMineId[mineId];
-            const imgs = getProductImageList(p);
+            const imgs = getSelectedListingImages(p);
             const brandLabel = p.brandModel || p.brand || '';
             const price = formatPrice(p?.price, p?.unit);
             const stockQty = p.stock ?? 0;

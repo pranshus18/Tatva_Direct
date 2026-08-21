@@ -11,12 +11,18 @@ import {
   syncBrandEntriesForSupplyChainStep
 } from '../utils/supplierSelectYourselfProfile';
 
-const CATALOG = [{ name: 'acc', status: 'approved' }];
+const CATALOG = [
+  { name: 'acc', status: 'approved' },
+  { name: 'Safari', status: 'approved' }
+];
 
 vi.mock('../hooks/useSupplierBrands', () => ({
   useSupplierBrands: () => ({
-    brands: [{ name: 'acc', status: 'approved' }],
-    brandNames: ['acc'],
+    brands: [
+      { name: 'acc', status: 'approved' },
+      { name: 'Safari', status: 'approved' }
+    ],
+    brandNames: ['acc', 'Safari'],
     loading: false,
     error: '',
     reload: vi.fn()
@@ -115,7 +121,9 @@ function BrandStepHarness({
 
   const applyBrandStepProfile = (next) => {
     const entries = syncBrandEntriesForSupplyChainStep(ensureAtLeastOneCompanyInfoEntry(next));
-    const payload = buildSupplierChainSavePayload({ ...next, companyInfoEntries: entries });
+    const payload = buildSupplierChainSavePayload({ ...next, companyInfoEntries: entries }, null, {
+      dedupeByBrand: false
+    });
     setProfile((prev) => {
       const sameContent =
         buildSelectYourselfChainFormSignature(payload) === buildSelectYourselfChainFormSignature(prev);
@@ -292,6 +300,74 @@ describe('Select yourself — Path B new brand request', () => {
 
     expect(screen.getByText(/Path A — select approved brand/i)).toBeInTheDocument();
     expect(screen.getByTestId('brand-select')).toBeInTheDocument();
+  });
+
+  it('shows an approved-brand suggestion without autofilling or locking the input', () => {
+    render(<BrandStepHarness />);
+    openPathB();
+    typeNewBrand('safa');
+
+    const input = screen.getByPlaceholderText(/Enter your brand name/i);
+    expect(input).toHaveValue('safa');
+    expect(input).not.toBeDisabled();
+    expect(screen.getAllByText(/may refer to approved brand/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /Use [“"]Safari[”"]/i })).toBeInTheDocument();
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Path A only/i)).not.toBeInTheDocument();
+
+    typeNewBrand('safal');
+    expect(input).toHaveValue('safal');
+    expect(input).not.toBeDisabled();
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+  });
+
+  it('autofills the suggested brand only after the supplier clicks Use', () => {
+    const onBrandPicked = vi.fn();
+    render(<BrandStepHarness onBrandPicked={onBrandPicked} />);
+    openPathB();
+    typeNewBrand('safa');
+
+    fireEvent.click(screen.getByRole('button', { name: /Use [“"]Safari[”"]/i }));
+
+    expect(onBrandPicked).toHaveBeenCalledWith('Safari');
+    expect(screen.getByText(/Path A only/i)).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Enter your brand name/i)).not.toBeInTheDocument();
+  });
+
+  it('does not lock Path A when the typed name exactly matches an approved brand', () => {
+    render(<BrandStepHarness />);
+    openPathB();
+    typeNewBrand('Safari');
+
+    const input = screen.getByPlaceholderText(/Enter your brand name/i);
+    expect(input).toHaveValue('Safari');
+    expect(input).not.toBeDisabled();
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Path A only/i)).not.toBeInTheDocument();
+
+    typeNewBrand('SafariPlus');
+    expect(input).toHaveValue('SafariPlus');
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+  });
+
+  it('lets the supplier keep typing past an already-approved brand like Safari to safarii', () => {
+    render(
+      <BrandStepHarness initialEntries={[{ ...APPROVED_ROW, id: 'entry-safari', brands: 'Safari' }]} />
+    );
+    openPathB();
+
+    const input = screen.getByPlaceholderText(/Enter your brand name/i);
+    fireEvent.focus(input);
+    typeNewBrand('safari');
+    expect(input).toHaveValue('safari');
+    expect(input).not.toBeDisabled();
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+
+    typeNewBrand('safarii');
+    expect(input).toHaveValue('safarii');
+    expect(input).not.toBeDisabled();
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Path A only/i)).not.toBeInTheDocument();
   });
 });
 

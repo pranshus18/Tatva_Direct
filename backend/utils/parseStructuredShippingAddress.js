@@ -8,10 +8,10 @@ function cleanPart(value) {
 /** @see frontend/src/utils/parseStructuredShippingAddress.js */
 export function parseStructuredShippingAddress(address = {}) {
   const existing = {
-    line1: cleanPart(address.line1 || address.street || address.address),
-    city: cleanPart(address.city),
+    line1: cleanPart(address.line1 || address.street || address.formatted_address || address.building || address.address),
+    city: cleanPart(address.city || address.locality),
     state: cleanPart(address.state),
-    pincode: cleanPart(address.pincode || address.zipCode || address.postalCode),
+    pincode: cleanPart(address.pincode || address.zipCode || address.postalCode || address.zip),
     country: cleanPart(address.country) || 'India'
   };
 

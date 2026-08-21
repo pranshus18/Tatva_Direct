@@ -6,7 +6,10 @@ import { validateSupplierInventoryUpdateFields } from './supplierProductUpdateVa
 export const INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE =
   'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.';
 
-/** Product_COV requires a completed Manage Inventory save (MRP > 0, stock, location, GST). */
+export const PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE =
+  'You can go to Product COV through Manage Products or Manage Inventory. Open a product on those pages, then click Product COV.';
+
+/** Product_COV requires a completed Manage Inventory save (MRP > 0, stock, GST). */
 export function getProductCovInventoryMissingFields(offer = {}) {
   const attrs =
     offer?.attributes && typeof offer.attributes === 'object' && !Array.isArray(offer.attributes)
@@ -26,9 +29,6 @@ export function getProductCovInventoryMissingFields(offer = {}) {
   }
   if (inventoryCheck.missingFields.includes('stock')) {
     missing.push('Current stock with you');
-  }
-  if (!String(offer?.location || attrs.location || '').trim()) {
-    missing.push('Location');
   }
   if (inventoryCheck.missingFields.some((field) => /sgst/i.test(String(field)))) {
     missing.push('SGST');

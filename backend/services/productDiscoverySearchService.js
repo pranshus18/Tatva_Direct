@@ -556,11 +556,22 @@ export async function searchProductDiscoveryForUser(
       const images = resolveSellerOwnedListingImages({
         offer: offerAggregates.bestOfferByProduct.get(p.id) || null,
         catalogProductOffers: productOffers,
-        catalogImages: []
+        catalogImages: p?.images
       });
+      let listingImages = images;
+      if (!listingImages.length) {
+        for (const row of productOffers) {
+          listingImages = resolveSellerOwnedListingImages({
+            offer: row,
+            catalogProductOffers: productOffers,
+            catalogImages: p?.images
+          });
+          if (listingImages.length) break;
+        }
+      }
       return {
         ...reconciled,
-        images,
+        images: listingImages,
         recommendationScore
       };
     })

@@ -367,6 +367,22 @@
   flex-shrink: 0;
 }
 
+.shipping-address-type-badge {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #475569;
+}
+
+.shipping-address-preview {
+  margin: 0;
+  color: #0f172a;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
 .address-location-row {
   display: flex;
   align-items: center;

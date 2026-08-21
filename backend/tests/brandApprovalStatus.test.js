@@ -459,3 +459,66 @@ test('resolveBrandApprovalStatus does not treat a merge leftover as an admin rej
   assert.equal(result.brand, null);
   assert.doesNotMatch(String(result.message || ''), /rejected/i);
 });
+
+test('ensureBrandApprovedOrRequest treats safarii as a new brand when Safari is already approved', async () => {
+  const safari = {
+    id: 'brand-safari',
+    name: 'Safari',
+    normalized_name: 'safari',
+    status: 'approved',
+    approved_by: 'admin-1',
+    requested_by: 'other-user'
+  };
+  let inserted = null;
+
+  const supabase = {
+    from(table) {
+      if (table !== 'brands') {
+        return {
+          select: async () => ({ data: [], error: null })
+        };
+      }
+      return {
+        select() {
+          return {
+            order: async () => ({ data: [safari], error: null }),
+            eq() {
+              return {
+                maybeSingle: async () => ({ data: null, error: null })
+              };
+            }
+          };
+        },
+        insert(payload) {
+          inserted = payload;
+          return {
+            select() {
+              return {
+                single: async () => ({
+                  data: {
+                    id: 'brand-safarii',
+                    ...payload,
+                    status: 'pending'
+                  },
+                  error: null
+                })
+              };
+            }
+          };
+        }
+      };
+    }
+  };
+
+  const result = await ensureBrandApprovedOrRequest({
+    supabase,
+    brandName: 'safarii',
+    requesterUserId: 'user-1'
+  });
+
+  assert.equal(result.matchedExistingApproved, undefined);
+  assert.notEqual(String(result.brand?.name || '').toLowerCase(), 'safari');
+  assert.equal(inserted?.name, 'safarii');
+  assert.equal(result.code, 'brand_approval_pending');
+  assert.equal(result.brand?.status, 'pending');
+});

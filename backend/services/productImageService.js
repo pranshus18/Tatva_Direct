@@ -43,17 +43,10 @@ function collectOfferImageUrls(row) {
   return sanitizeImageUrls(parseOfferAttributes(row?.attributes)?.images);
 }
 
-function urlListCovers(candidate = [], universe = []) {
-  const owned = new Set(sanitizeImageUrls(candidate));
-  const needed = sanitizeImageUrls(universe);
-  return needed.length > 1 && needed.every((url) => owned.has(url)) && owned.size >= needed.length;
-}
-
 /**
- * Product-detail gallery for the seller who listed this offer.
- * Never returns the merged catalog dump (`products.images` / every supplier's photos).
- * If this offer copied that dump onto attributes.images, drop photos that belong to
- * other suppliers and keep only this seller's uploads.
+ * Product-detail / card gallery for the seller who listed this offer.
+ * Only this offer's stored photos. Never `products.images` (every supplier merged).
+ * If this offer copied that shared dump onto attributes.images, drop it.
  */
 export function resolveSellerOwnedListingImages({
   offer = null,
@@ -63,61 +56,55 @@ export function resolveSellerOwnedListingImages({
   if (!offer) return [];
 
   const attrs = parseOfferAttributes(offer.attributes);
-  const listingImages = sanitizeImageUrls(attrs.images);
-  const supplierId = String(offer.supplier_id || '').trim();
-  const offerId = String(offer.id || '').trim();
-  const siblings = Array.isArray(catalogProductOffers) ? catalogProductOffers : [];
-
-  const otherSupplierUrls = new Set();
-  const sameSupplierUrls = [];
-  const allSiblingUrls = [];
-
-  for (const row of siblings) {
-    const urls = collectOfferImageUrls(row);
-    allSiblingUrls.push(...urls);
-    const rowId = String(row?.id || '').trim();
-    const rowSupplier = String(row?.supplier_id || '').trim();
-    const sameOffer = Boolean(offerId && rowId && rowId === offerId);
-    const sameSupplier = Boolean(supplierId && rowSupplier && rowSupplier === supplierId);
-    if (sameOffer || sameSupplier) {
-      sameSupplierUrls.push(...urls);
-      continue;
-    }
-    for (const url of urls) otherSupplierUrls.add(url);
-  }
-
-  const withoutForeign = (urls) =>
-    sanitizeImageUrls(urls).filter((url) => !otherSupplierUrls.has(url));
-
   if (Array.isArray(attrs.images) && attrs.images.length === 0) {
     return [];
   }
 
-  const copiedMergedGallery =
-    listingImages.length > 1 &&
-    otherSupplierUrls.size > 0 &&
-    (urlListCovers(listingImages, catalogImages) || urlListCovers(listingImages, allSiblingUrls));
-
-  if (listingImages.length > 0 && !copiedMergedGallery) {
-    return listingImages;
-  }
-
-  if (copiedMergedGallery) {
-    return withoutForeign(listingImages);
-  }
-
-  const fromSameSupplier = withoutForeign(sameSupplierUrls);
-  if (fromSameSupplier.length) return fromSameSupplier;
+  const mine = sanitizeImageUrls(attrs.images);
+  if (!mine.length) return [];
 
   const catalog = sanitizeImageUrls(catalogImages);
-  if (otherSupplierUrls.size > 0 && catalog.length > otherSupplierUrls.size) {
-    const leftover = catalog.filter((url) => !otherSupplierUrls.has(url));
-    if (leftover.length > 0 && leftover.length < catalog.length) {
-      return leftover;
+  const supplierId = String(offer.supplier_id || '').trim();
+  const offerId = String(offer.id || '').trim();
+  const siblings = Array.isArray(catalogProductOffers) ? catalogProductOffers : [];
+
+  const otherUrls = new Set();
+  let otherSellerCount = 0;
+  const seenOtherSuppliers = new Set();
+
+  for (const row of siblings) {
+    const rowId = String(row?.id || '').trim();
+    const rowSupplier = String(row?.supplier_id || '').trim();
+    const sameOffer = Boolean(offerId && rowId && rowId === offerId);
+    const sameSupplier = Boolean(supplierId && rowSupplier && rowSupplier === supplierId);
+    if (sameOffer || sameSupplier) continue;
+    if (rowSupplier && !seenOtherSuppliers.has(rowSupplier)) {
+      seenOtherSuppliers.add(rowSupplier);
+      otherSellerCount += 1;
+    } else if (!rowSupplier && rowId) {
+      otherSellerCount += 1;
     }
+    for (const url of collectOfferImageUrls(row)) otherUrls.add(url);
   }
 
-  return [];
+  const uniqueMine = mine.filter((url) => !otherUrls.has(url));
+  const copiedCatalogDump =
+    otherSellerCount > 0 &&
+    catalog.length > 1 &&
+    mine.length >= catalog.length &&
+    catalog.every((url) => mine.includes(url));
+
+  if (copiedCatalogDump) {
+    return uniqueMine.length < mine.length ? uniqueMine : [];
+  }
+
+  const coversOtherSellers =
+    otherUrls.size > 0 && [...otherUrls].every((url) => mine.includes(url));
+  if (coversOtherSellers && uniqueMine.length < mine.length) {
+    return uniqueMine;
+  }
+
+  return mine;
 }
 
 /**
@@ -204,9 +191,8 @@ export async function enrichOrderItemsWithVariantImages(supabase, orderItems = [
 }
 
 /**
- * Persist uploaded offer images on the shared catalog row so buyer discovery can show thumbnails.
- * Catalog may accumulate images across offers; supplier-facing APIs must use
- * resolveSupplierOfferDisplayImages so those catalog extras do not appear on the offer.
+ * Seed catalog thumbnails from the first offer that uploads photos.
+ * Do not accumulate later sellers onto `products.images` — that dump leaked into every listing.
  */
 export async function syncCatalogProductImages(supabase, productId, candidateImages = []) {
   if (!productId) return [];
@@ -224,18 +210,20 @@ export async function syncCatalogProductImages(supabase, productId, candidateIma
     return incoming;
   }
 
-  const merged = mergeProductImageLists(row?.images, incoming);
+  const existing = sanitizeImageUrls(row?.images);
+  if (existing.length > 0) return existing;
+
   const { error: updateError } = await supabase
     .from('products')
-    .update({ images: merged, updated_at: new Date().toISOString() })
+    .update({ images: incoming, updated_at: new Date().toISOString() })
     .eq('id', productId);
 
   if (updateError) {
     console.error('syncCatalogProductImages update failed:', updateError.message);
-    return merged;
+    return incoming;
   }
 
-  return merged;
+  return incoming;
 }
 
 /**
@@ -287,13 +275,24 @@ export async function enrichProductsWithOfferImages(supabase, products = []) {
         preferred = row;
       }
     }
+    let images = resolveSellerOwnedListingImages({
+      offer: preferred,
+      catalogProductOffers,
+      catalogImages: product?.images
+    });
+    if (!images.length) {
+      for (const row of catalogProductOffers) {
+        images = resolveSellerOwnedListingImages({
+          offer: row,
+          catalogProductOffers,
+          catalogImages: product?.images
+        });
+        if (images.length) break;
+      }
+    }
     return {
       ...product,
-      images: resolveSellerOwnedListingImages({
-        offer: preferred,
-        catalogProductOffers,
-        catalogImages: []
-      })
+      images
     };
   });
 }

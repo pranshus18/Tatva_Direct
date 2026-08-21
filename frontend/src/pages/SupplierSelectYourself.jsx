@@ -496,7 +496,9 @@ export default function SupplierSelectYourself() {
 
   const applyBrandStepProfile = (next) => {
     const entries = syncBrandEntriesForSupplyChainStep(ensureAtLeastOneCompanyInfoEntry(next));
-    const payload = buildSupplierChainSavePayload({ ...next, companyInfoEntries: entries });
+    const payload = buildSupplierChainSavePayload({ ...next, companyInfoEntries: entries }, null, {
+      dedupeByBrand: false
+    });
     setProfile((prev) => {
       const sameContent =
         buildSelectYourselfChainFormSignature(payload) ===

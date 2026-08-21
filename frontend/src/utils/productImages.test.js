@@ -70,6 +70,18 @@ describe('productImages', () => {
     expect(getSelectedListingImages(listing)).toEqual(['https://cdn.example.com/this-seller.jpg']);
     expect(getSelectedListingImages(null)).toEqual([]);
     expect(getSelectedListingImages({ images: [] })).toEqual([]);
+    expect(
+      getSelectedListingImages({
+        images: ['https://cdn.example.com/this-seller.jpg'],
+        attributes: {
+          images: [
+            'https://cdn.example.com/this-seller.jpg',
+            'https://cdn.example.com/other-seller-a.jpg',
+            'https://cdn.example.com/other-seller-b.jpg'
+          ]
+        }
+      })
+    ).toEqual(['https://cdn.example.com/this-seller.jpg']);
     expect(getProductImageList(listing || catalogSummary)).toEqual([
       'https://cdn.example.com/this-seller.jpg'
     ]);

@@ -36,7 +36,13 @@ import {
   validateShippingAddressEntries
 } from '../profileHelpers.js';
 import { syncPmCustomerProfileForUser, resolvePmPortalFlag } from '../../../services/pmUserService.js';
-import { isAddressComplete, normalizeAddress } from '../../po/shared/poHelpers.js';
+import { isAddressComplete } from '../../po/shared/poHelpers.js';
+import {
+  createPmShippingAddress,
+  pmAddressToLocalShippingEntry,
+  resolvePmAddressAuth
+} from '../../../services/pmAddressService.js';
+import { readPmCredentialsFromRequest } from '../../../services/pmVaultService.js';
 
 export function registerProfileUpdateRoutes(router) {
   router.put('/', authenticateToken, async (req, res) => {
@@ -968,86 +974,80 @@ export function registerProfileUpdateRoutes(router) {
       }
 
       const userType = currentUser.user_type || currentUser.profile?.userType;
-      const normalized = normalizeAddress(payload);
-      if (!isAddressComplete(normalized)) {
-        return res.status(400).json({
-          status: 'error',
-          message: 'Complete shipping address (street, city, state, PIN, country) is required.'
-        });
-      }
-
-      const currentProfile = currentUser.profile || {};
-
-      if (userType === 'supplier') {
-        const existing = resolveSupplierProfileShippingAddresses(currentProfile);
-        const newEntry = normalizeShippingAddressEntry({
-          id: uuidv4(),
-          label: String(payload.label || '').trim() || normalized.city || 'Shipping address',
-          ...normalized,
-          ...(payload.latitude != null ? { latitude: payload.latitude } : {}),
-          ...(payload.longitude != null ? { longitude: payload.longitude } : {}),
-          ...(payload.geoLocation ? { geoLocation: payload.geoLocation } : {})
-        });
-        newEntry.displayName = formatShippingAddressDisplayName(newEntry, existing.length);
-
-        const nextShippingAddresses = [...existing, newEntry];
-        const shippingValidation = validateShippingAddressEntries(nextShippingAddresses, {
-          userType: 'supplier'
-        });
-        if (!shippingValidation.ok) {
-          return res.status(400).json({
-            status: 'error',
-            code: shippingValidation.code,
-            message: shippingValidation.message
-          });
-        }
-
-        const { error: updateError } = await supabase
-          .from('users')
-          .update({
-            profile: {
-              ...currentProfile,
-              shippingAddresses: nextShippingAddresses,
-              branches: []
-            }
-          })
-          .eq('id', req.userId);
-
-        if (updateError) throw updateError;
-
-        return res.json({
-          status: 'success',
-          message: 'Shipping address saved to profile',
-          shippingAddress: newEntry,
-          shippingAddresses: nextShippingAddresses
-        });
-      }
-
-      if (userType !== 'service_provider') {
+      if (userType !== 'supplier' && userType !== 'service_provider') {
         return res.status(403).json({
           status: 'error',
           message: 'Only service providers and suppliers can save shipping addresses to profile.'
         });
       }
 
-      const existing = Array.isArray(currentProfile.shippingAddresses)
-        ? currentProfile.shippingAddresses
-        : [];
+      const currentProfile = currentUser.profile || {};
+      const existing =
+        userType === 'supplier'
+          ? resolveSupplierProfileShippingAddresses(currentProfile)
+          : Array.isArray(currentProfile.shippingAddresses)
+            ? currentProfile.shippingAddresses
+            : [];
+
+      const mapped = normalizeShippingAddressEntry(
+        pmAddressToLocalShippingEntry(
+          {
+            ...payload,
+            isDefault: payload.isDefault === true || existing.length === 0
+          },
+          payload
+        )
+      );
+      if (!mapped.city) mapped.city = mapped.district || mapped.locality || mapped.state || 'India';
+      if (!mapped.country) mapped.country = 'India';
+      if (!mapped.line1) mapped.line1 = mapped.building || mapped.formatted_address;
+      if (!mapped.pincode) mapped.pincode = mapped.zip;
+
+      if (!isAddressComplete(mapped) && !(mapped.building && mapped.pincode && mapped.state)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Complete shipping address (building, city, state, PIN) is required.'
+        });
+      }
+
+      const isPmFormat = Boolean(String(payload.building || '').trim() || String(payload.zip || '').trim());
+      let pmSaved = null;
+      try {
+        const credentials = readPmCredentialsFromRequest(req);
+        const auth = await resolvePmAddressAuth(currentUser, credentials);
+        pmSaved = await createPmShippingAddress({
+          pmUserId: auth.pmUserId,
+          accessToken: auth.accessToken,
+          input: {
+            ...payload,
+            ...mapped,
+            isDefault: mapped.isDefault === true
+          }
+        });
+      } catch (pmError) {
+        console.warn('[PM address] create failed:', pmError?.message || pmError);
+        if (isPmFormat) {
+          const status = pmError.code === 'PM_AUTH_REQUIRED' ? 403 : 502;
+          return res.status(status).json({
+            status: 'error',
+            code: pmError.code || 'PM_ADDRESS_ERROR',
+            message: pmError.message || 'Failed to save shipping address to the PM platform.'
+          });
+        }
+      }
 
       const newEntry = normalizeShippingAddressEntry({
-        id: uuidv4(),
-        label: String(payload.label || '').trim() || normalized.city || 'Shipping address',
-        ...normalized,
-        ...(payload.latitude != null ? { latitude: payload.latitude } : {}),
-        ...(payload.longitude != null ? { longitude: payload.longitude } : {}),
-        ...(payload.geoLocation ? { geoLocation: payload.geoLocation } : {})
+        ...mapped,
+        ...(pmSaved || {}),
+        id: String(pmSaved?.pmAddressId || pmSaved?.id || uuidv4()),
+        pmAddressId: pmSaved?.pmAddressId || pmSaved?.id || undefined,
+        label:
+          String(payload.label || mapped.subType || mapped.label || mapped.city || 'Shipping address').trim()
       });
       newEntry.displayName = formatShippingAddressDisplayName(newEntry, existing.length);
 
       const nextShippingAddresses = [...existing, newEntry];
-      const shippingValidation = validateShippingAddressEntries(nextShippingAddresses, {
-        userType: 'service_provider'
-      });
+      const shippingValidation = validateShippingAddressEntries(nextShippingAddresses, { userType });
       if (!shippingValidation.ok) {
         return res.status(400).json({
           status: 'error',
@@ -1056,21 +1056,26 @@ export function registerProfileUpdateRoutes(router) {
         });
       }
 
+      const nextProfile = {
+        ...currentProfile,
+        shippingAddresses: nextShippingAddresses
+      };
+      if (userType === 'supplier') {
+        nextProfile.branches = [];
+      }
+
       const { error: updateError } = await supabase
         .from('users')
-        .update({
-          profile: {
-            ...currentProfile,
-            shippingAddresses: nextShippingAddresses
-          }
-        })
+        .update({ profile: nextProfile })
         .eq('id', req.userId);
 
       if (updateError) throw updateError;
 
       return res.json({
         status: 'success',
-        message: 'Shipping address saved to profile',
+        message: pmSaved
+          ? 'Shipping address saved to the PM platform'
+          : 'Shipping address saved to profile',
         shippingAddress: newEntry,
         shippingAddresses: nextShippingAddresses
       });

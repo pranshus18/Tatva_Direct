@@ -42,6 +42,12 @@ describe('Select Yourself brand flow contract', () => {
     const tips = findApprovedCatalogBrandSuggestions('sams', catalog);
     expect(tips.some((row) => row.name === 'samsung')).toBe(true);
     expect(findApprovedCatalogBrandMatch('sams', catalog)).toBeNull();
+
+    const safariCatalog = [...catalog, { name: 'Safari', status: 'approved' }];
+    expect(findApprovedCatalogBrandSuggestions('safa', safariCatalog).some((row) => row.name === 'Safari')).toBe(
+      true
+    );
+    expect(findApprovedCatalogBrandMatch('safa', safariCatalog)).toBeNull();
   });
 
   it('2) summary row ids stay stable after the supplier selects a catalog brand (no selection loop)', () => {

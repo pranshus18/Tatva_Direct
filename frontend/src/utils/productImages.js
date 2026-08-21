@@ -56,12 +56,17 @@ export function getProductImageList(product) {
  */
 export function getSelectedListingImages(listing) {
   if (!listing) return [];
+  // Prefer the server-scoped listing.images array. attributes.images may still be the
+  // shared catalog dump copied onto the offer at save time.
+  if (Array.isArray(listing.images)) {
+    return normalizeProductImages(listing.images);
+  }
   if (Array.isArray(listing.attributes?.images)) {
     return normalizeProductImages(listing.attributes.images);
   }
   const fromAttributes = normalizeProductImages(listing.attributes?.images);
   if (fromAttributes.length > 0) return fromAttributes;
-  return normalizeProductImages(listing.images);
+  return [];
 }
 
 /**

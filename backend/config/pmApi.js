@@ -29,6 +29,8 @@ export function buildPmApiCatalog(usersHost, paymentHost) {
     vault: `${users}/api/vault`,
     vaultTransactions: `${users}/api/vault/transactions`,
     vaultAddMoney: `${users}/api/vault/add-money`,
+    address: `${users}/api/address`,
+    stateByPincode: `${users}/api/google-maps/state-by-pincode`,
     vaultTopupInitiate: `${payment}/api/v1/payments/vault/topup/initiate`,
     vaultTopupComplete: `${payment}/api/v1/payments/vault/topup/complete`,
     vaultPayOrder: `${payment}/api/v1/payments/order-payment/vault-pay`
@@ -127,6 +129,10 @@ export const PM_USERS_URL = `${PM_API_BASE_URL}/api/users/`;
 export const PM_USERS_ME_URL = `${PM_API_BASE_URL}/api/users/me`;
 export const PM_SEND_OTP_URL = `${PM_API_BASE_URL}/api/auth/send-otp`;
 export const PM_VERIFY_OTP_URL = `${PM_API_BASE_URL}/api/auth/verify-otp`;
+/** POST/GET shipping (and other) addresses on the PM users host. */
+export const PM_ADDRESS_URL = `${PM_API_BASE_URL}/api/address`;
+/** GET Google Maps state/address lookup by Indian pincode on the PM users host. */
+export const PM_STATE_BY_PINCODE_URL = `${PM_API_BASE_URL}/api/google-maps/state-by-pincode`;
 
 export const PM_USER_FLAG_SERVICE_PROVIDER = 'service_provider';
 export const PM_USER_FLAG_SUPPLIER = 'supplier';

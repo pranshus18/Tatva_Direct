@@ -945,7 +945,7 @@ export async function getProductDiscoveryDetail(
         product: catalogProduct,
         reconciled: catalogReconciled,
         offer,
-        offers: attachedEntries.map((entry) => entry.offer),
+        offers: offerRows || [],
         variantMeta,
         variantKey: offer?.variant_key || variantMeta?.variant_key || null,
         enrichSpecifications

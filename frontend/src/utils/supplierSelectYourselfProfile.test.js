@@ -13,6 +13,7 @@ import {
   isBrandApprovalSaveBlockedForPendingRequests,
   mergeCompanyInfoEntriesById,
   mergeFormStepProfile,
+  matchCompanyInfoEntry,
   shouldBlockProfileSnapshotRefresh,
   mergeSupplierBrandRequestsIntoProfile,
   resolveSelectYourselfBrandStepStatus,
@@ -1054,5 +1055,29 @@ describe('buildSupplierChainSavePayload', () => {
     expect(payload.companyName).toBe('Acme');
     expect(payload.minimumOrderValue).toBe(4500);
     expect(payload.companyInfoEntries.find((entry) => entry.id === 'e2')?.minimumOrderValue).toBe(4500);
+  });
+
+  it('keeps a Path B draft that momentarily matches an approved brand while typing', () => {
+    const profile = {
+      companyInfoEntries: [
+        { id: 'approved-safari', brands: 'Safari', role: 'dealer' },
+        { id: 'path-b-draft', brands: 'safari', role: '' }
+      ]
+    };
+    const live = buildSupplierChainSavePayload(profile, null, { dedupeByBrand: false });
+    expect(live.companyInfoEntries).toHaveLength(2);
+    expect(live.companyInfoEntries.map((row) => row.id)).toEqual(['approved-safari', 'path-b-draft']);
+
+    const saved = buildSupplierChainSavePayload(profile);
+    expect(saved.companyInfoEntries).toHaveLength(1);
+  });
+});
+
+describe('matchCompanyInfoEntry', () => {
+  it('does not treat a Path B draft as the existing approved brand row', () => {
+    const approved = { id: 'approved-safari', brands: 'Safari' };
+    const draft = { id: 'path-b-draft', brands: 'safari' };
+    expect(matchCompanyInfoEntry(approved, { entryId: draft.id, brand: draft.brands })).toBe(false);
+    expect(matchCompanyInfoEntry(draft, { entryId: draft.id, brand: draft.brands })).toBe(true);
   });
 });

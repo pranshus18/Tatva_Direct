@@ -1,23 +1,20 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
-import { getApiUrl } from '../config/api';
+import { buildAuthHeaders, getApiUrl } from '../config/api';
 import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Users, CheckCircle2 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
 import CustomerProfileIcon from '../components/CustomerProfileIcon';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import ProfilePhotoSection from '../components/ProfilePhotoSection';
+import AddShippingAddressModal from '../components/AddShippingAddressModal';
 import {
   cacheProfilePhotoUrl,
   commitProfilePhotoDraft,
   EMPTY_PROFILE_PHOTO_DRAFT,
   revokeProfilePhotoPreviewUrl
 } from '../utils/profilePhoto';
-import {
-  getGeolocationErrorMessage,
-  resolveAddressFromCurrentLocation
-} from '../utils/currentLocationAddress';
-import { formatShippingAddressLabel } from '../utils/shippingAddressLabel';
+import { formatShippingAddressLabel, getShippingAddressFields } from '../utils/shippingAddressLabel';
 import { formatDateTimeIST } from '../utils/dateTime';
 import { sanitizeSignupPlaceholderAddress } from '../utils/addressPlaceholders';
 import { mergeParsedShippingAddress } from '../utils/parseStructuredShippingAddress';
@@ -51,6 +48,18 @@ const formatSavedAddressLabel = (entry, index, options = {}) => {
   return `Address ${index + 1}`;
 };
 
+const SHIPPING_REQUIRED_FIELDS = [
+  { key: 'line1', label: 'Address' },
+  { key: 'city', label: 'City' },
+  { key: 'state', label: 'State' },
+  { key: 'pincode', label: 'PIN code' },
+  { key: 'country', label: 'Country' }
+];
+
+function readShippingField(entry, key) {
+  return String(getShippingAddressFields(entry)?.[key] || entry?.[key] || '').trim();
+}
+
 function ProfileShippingAddressesSection({
   profile,
   setProfile,
@@ -61,8 +70,8 @@ function ProfileShippingAddressesSection({
   chooseLabel = 'Choose shipping address',
   addButtonLabel = 'Add shipping address'
 }) {
-  const [locatingShippingAddressId, setLocatingShippingAddressId] = useState(null);
   const [selectedShippingAddressId, setSelectedShippingAddressId] = useState('');
+  const [addAddressOpen, setAddAddressOpen] = useState(false);
   const shippingAddresses = profile?.shippingAddresses || [];
 
   useEffect(() => {
@@ -81,41 +90,6 @@ function ProfileShippingAddressesSection({
     shippingAddresses[0] ||
     null;
 
-  const addShippingAddress = () => {
-    const newAddress = {
-      id: Date.now(),
-      label: '',
-      line1: '',
-      city: '',
-      state: '',
-      pincode: '',
-      country: ''
-    };
-    setProfile((prev) => ({
-      ...prev,
-      shippingAddresses: [...(prev?.shippingAddresses || []), newAddress]
-    }));
-    setSelectedShippingAddressId(String(newAddress.id));
-  };
-
-  const updateShippingAddress = (addressId, field, value) => {
-    setProfile((prev) => ({
-      ...prev,
-      shippingAddresses: (prev?.shippingAddresses || []).map((addr) =>
-        addr.id === addressId ? { ...addr, [field]: value } : addr
-      )
-    }));
-  };
-
-  const normalizeShippingAddressEntry = (addressId) => {
-    setProfile((prev) => ({
-      ...prev,
-      shippingAddresses: (prev?.shippingAddresses || []).map((addr) =>
-        addr.id === addressId ? mergeParsedShippingAddress(addr) : addr
-      )
-    }));
-  };
-
   const removeShippingAddress = (addressId) => {
     setProfile((prev) => ({
       ...prev,
@@ -123,36 +97,26 @@ function ProfileShippingAddressesSection({
     }));
   };
 
-  const fillShippingAddressFromCurrentLocation = async (addressId) => {
-    if (!editing || !addressId) return;
-    setLocatingShippingAddressId(addressId);
-    try {
-      const resolved = await resolveAddressFromCurrentLocation();
-      setProfile((prev) => ({
-        ...prev,
-        shippingAddresses: (prev?.shippingAddresses || []).map((addr) =>
-          addr.id === addressId
-            ? {
-                ...addr,
-                label: (addr.label || '').trim() || resolved.city || addr.label || '',
-                line1: resolved.line1 || addr.line1 || '',
-                city: resolved.city || addr.city || '',
-                state: resolved.state || addr.state || '',
-                pincode: resolved.pincode || addr.pincode || '',
-                country: resolved.country || addr.country || '',
-                latitude: resolved.latitude,
-                longitude: resolved.longitude,
-                geoLocation: resolved.geoLocation
-              }
-            : addr
-        )
-      }));
-    } catch (error) {
-      alert(getGeolocationErrorMessage(error));
-    } finally {
-      setLocatingShippingAddressId(null);
+  const handleAddressSaved = (data) => {
+    const nextAddresses = Array.isArray(data?.shippingAddresses)
+      ? data.shippingAddresses
+      : data?.shippingAddress
+        ? [...shippingAddresses, data.shippingAddress]
+        : shippingAddresses;
+    setProfile((prev) => ({
+      ...prev,
+      shippingAddresses: nextAddresses
+    }));
+    if (data?.shippingAddress?.id) {
+      setSelectedShippingAddressId(String(data.shippingAddress.id));
     }
+    toast.success(data?.message || 'Shipping address saved.');
   };
+
+  const selectedPreview = selectedShippingAddress
+    ? selectedShippingAddress.formatted_address || formatSavedAddressLabel(selectedShippingAddress, 0)
+    : '';
+  const selectedType = String(selectedShippingAddress?.subType || selectedShippingAddress?.label || '').trim();
 
   return (
     <div className="profile-section">
@@ -161,12 +125,10 @@ function ProfileShippingAddressesSection({
           <MapPin size={20} />
           {title}
         </h2>
-        {editing ? (
-          <button type="button" className="btn-add" onClick={addShippingAddress}>
-            <Plus size={16} />
-            {addButtonLabel}
-          </button>
-        ) : null}
+        <button type="button" className="btn-add" onClick={() => setAddAddressOpen(true)}>
+          <Plus size={16} />
+          {addButtonLabel}
+        </button>
       </div>
       <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
         {description}
@@ -192,16 +154,12 @@ function ProfileShippingAddressesSection({
             <div className="branches-list">
               <div key={selectedShippingAddress.id} className="branch-card">
                 <div className="branch-header">
-                  <input
-                    type="text"
-                    value={selectedShippingAddress.label || ''}
-                    onChange={(e) =>
-                      updateShippingAddress(selectedShippingAddress.id, 'label', e.target.value)
-                    }
-                    disabled={!editing}
-                    placeholder="Address label (e.g. Warehouse, Site A)"
-                    className="branch-name-input"
-                  />
+                  <div>
+                    {selectedType ? (
+                      <p className="shipping-address-type-badge">{selectedType}</p>
+                    ) : null}
+                    <p className="shipping-address-preview">{selectedPreview}</p>
+                  </div>
                   {editing ? (
                     <div className="branch-header-actions">
                       <button
@@ -213,91 +171,16 @@ function ProfileShippingAddressesSection({
                     </div>
                   ) : null}
                 </div>
-                {editing ? (
-                  <div className="address-location-row">
-                    <button
-                      type="button"
-                      className="address-location-btn"
-                      onClick={() =>
-                        fillShippingAddressFromCurrentLocation(selectedShippingAddress.id)
-                      }
-                      disabled={locatingShippingAddressId === selectedShippingAddress.id}
-                    >
-                      <MapPin size={15} aria-hidden />
-                      {locatingShippingAddressId === selectedShippingAddress.id
-                        ? 'Detecting location…'
-                        : 'Use my current location'}
-                    </button>
-                  </div>
-                ) : null}
-                <div className="form-grid">
-                  <div className="form-group span-2">
-                    <label>Address (Street / Area)</label>
-                    <textarea
-                      rows="2"
-                      value={selectedShippingAddress.line1 || ''}
-                      onChange={(e) =>
-                        updateShippingAddress(selectedShippingAddress.id, 'line1', e.target.value)
-                      }
-                      onBlur={() => normalizeShippingAddressEntry(selectedShippingAddress.id)}
-                      disabled={!editing}
-                      placeholder="Building / street / area"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>City</label>
-                    <input
-                      type="text"
-                      value={selectedShippingAddress.city || ''}
-                      onChange={(e) =>
-                        updateShippingAddress(selectedShippingAddress.id, 'city', e.target.value)
-                      }
-                      disabled={!editing}
-                      placeholder="e.g. Pune"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>State / Region</label>
-                    <input
-                      type="text"
-                      value={selectedShippingAddress.state || ''}
-                      onChange={(e) =>
-                        updateShippingAddress(selectedShippingAddress.id, 'state', e.target.value)
-                      }
-                      disabled={!editing}
-                      placeholder="e.g. Maharashtra"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>PIN / ZIP Code</label>
-                    <input
-                      type="text"
-                      value={selectedShippingAddress.pincode || ''}
-                      onChange={(e) =>
-                        updateShippingAddress(selectedShippingAddress.id, 'pincode', e.target.value)
-                      }
-                      disabled={!editing}
-                      placeholder="e.g. 411026"
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Country</label>
-                    <input
-                      type="text"
-                      value={selectedShippingAddress.country || ''}
-                      onChange={(e) =>
-                        updateShippingAddress(selectedShippingAddress.id, 'country', e.target.value)
-                      }
-                      disabled={!editing}
-                      placeholder="e.g. India"
-                    />
-                  </div>
-                </div>
               </div>
             </div>
           ) : null}
         </>
       )}
+      <AddShippingAddressModal
+        open={addAddressOpen}
+        onClose={() => setAddAddressOpen(false)}
+        onSaved={handleAddressSaved}
+      />
     </div>
   );
 }
@@ -367,11 +250,8 @@ const Profile = ({ user }) => {
 
   const fetchProfile = async () => {
     try {
-      const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl('/api/profile'), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: buildAuthHeaders()
       });
       const data = await response.json();
       const profileData = data.profile
@@ -418,24 +298,14 @@ const Profile = ({ user }) => {
           }
         }
 
-        const requiredAddressFields = [
-          { key: 'line1', label: 'Address' },
-          { key: 'city', label: 'City' },
-          { key: 'state', label: 'State' },
-          { key: 'pincode', label: 'PIN code' },
-          { key: 'country', label: 'Country' }
-        ];
-
         const shippingAddresses = Array.isArray(profile?.shippingAddresses) ? profile.shippingAddresses : [];
         for (let i = 0; i < shippingAddresses.length; i += 1) {
           const entry = shippingAddresses[i] || {};
-          const hasAnyField = requiredAddressFields.some((f) => String(entry?.[f.key] || '').trim());
+          const hasAnyField = SHIPPING_REQUIRED_FIELDS.some((f) => readShippingField(entry, f.key));
           if (!hasAnyField) continue;
-          const missingShippingField = requiredAddressFields.find(
-            (f) => !String(entry?.[f.key] || '').trim()
-          );
+          const missingShippingField = SHIPPING_REQUIRED_FIELDS.find((f) => !readShippingField(entry, f.key));
           if (missingShippingField) {
-            const label = String(entry?.label || '').trim() || `Shipping Address ${i + 1}`;
+            const label = String(entry?.label || entry?.subType || '').trim() || `Shipping Address ${i + 1}`;
             alert(`Please enter ${missingShippingField.label} in ${label}.`);
             return;
           }
@@ -443,17 +313,9 @@ const Profile = ({ user }) => {
       }
 
       if (profile?.userType === 'supplier') {
-        const requiredAddressFields = [
-          { key: 'line1', label: 'Address' },
-          { key: 'city', label: 'City' },
-          { key: 'state', label: 'State' },
-          { key: 'pincode', label: 'PIN code' },
-          { key: 'country', label: 'Country' }
-        ];
-
         const shippingAddresses = Array.isArray(profile?.shippingAddresses) ? profile.shippingAddresses : [];
         const hasCompleteShippingAddress = shippingAddresses.some((entry) =>
-          requiredAddressFields.every((field) => String(entry?.[field.key] || '').trim())
+          SHIPPING_REQUIRED_FIELDS.every((field) => readShippingField(entry, field.key))
         );
         if (!hasCompleteShippingAddress) {
           alert(
@@ -464,13 +326,11 @@ const Profile = ({ user }) => {
 
         for (let i = 0; i < shippingAddresses.length; i += 1) {
           const entry = shippingAddresses[i] || {};
-          const hasAnyField = requiredAddressFields.some((f) => String(entry?.[f.key] || '').trim());
+          const hasAnyField = SHIPPING_REQUIRED_FIELDS.some((f) => readShippingField(entry, f.key));
           if (!hasAnyField) continue;
-          const missingShippingField = requiredAddressFields.find(
-            (f) => !String(entry?.[f.key] || '').trim()
-          );
+          const missingShippingField = SHIPPING_REQUIRED_FIELDS.find((f) => !readShippingField(entry, f.key));
           if (missingShippingField) {
-            const label = String(entry?.label || '').trim() || `Shipping address ${i + 1}`;
+            const label = String(entry?.label || entry?.subType || '').trim() || `Shipping address ${i + 1}`;
             alert(`Please enter ${missingShippingField.label} in ${label}.`);
             return;
           }
@@ -500,13 +360,9 @@ const Profile = ({ user }) => {
         cacheProfilePhotoUrl(photoResult.profilePhotoUrl || '', user?.id);
       }
 
-      const token = localStorage.getItem('token');
       const response = await fetch(getApiUrl('/api/profile'), {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
+        headers: buildAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(payload)
       });
       const data = await response.json().catch(() => ({}));
@@ -861,7 +717,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
           setProfile={setProfile}
           editing={editing}
           title="Shipping addresses (for PO)"
-          description="Add one or more delivery sites. These appear in the Create PO shipping address dropdown."
+          description="Add one or more delivery sites. These are saved to the PM platform and appear in the Create PO shipping address dropdown."
           emptyMessage="No shipping addresses added yet. Add one or more addresses to use in Create PO dropdown."
           chooseLabel="Choose shipping address"
           addButtonLabel="Add shipping address"
@@ -1214,7 +1070,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
         setProfile={setProfile}
         editing={editing}
         title="Shipping addresses"
-        description="Used for upstream place order, transport quotes, Create PO, and delivery. Add at least one complete shipping address."
+        description="Used for upstream place order, transport quotes, Create PO, and delivery. Addresses are saved to the PM platform. Add at least one complete shipping address."
         emptyMessage="No shipping addresses added yet."
         chooseLabel="Choose shipping address"
         addButtonLabel="Add shipping address"

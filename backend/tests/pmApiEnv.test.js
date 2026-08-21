@@ -40,6 +40,8 @@ test('every PM API exists for both development and production', () => {
     'vault',
     'vaultTransactions',
     'vaultAddMoney',
+    'address',
+    'stateByPincode',
     'vaultTopupInitiate',
     'vaultTopupComplete',
     'vaultPayOrder'
@@ -49,8 +51,20 @@ test('every PM API exists for both development and production', () => {
   assert.deepEqual(Object.keys(PM_API_CATALOG.production), expectedKeys);
 
   assert.equal(
-    PM_API_CATALOG.development.vendorLeads,
-    'https://devopsapi.withtatva.ai/users/api/users/vendor-leads'
+    PM_API_CATALOG.development.stateByPincode,
+    'https://devopsapi.withtatva.ai/users/api/google-maps/state-by-pincode'
+  );
+  assert.equal(
+    PM_API_CATALOG.production.stateByPincode,
+    'https://opsapi.withtatva.ai/users/api/google-maps/state-by-pincode'
+  );
+  assert.equal(
+    PM_API_CATALOG.development.address,
+    'https://devopsapi.withtatva.ai/users/api/address'
+  );
+  assert.equal(
+    PM_API_CATALOG.production.address,
+    'https://opsapi.withtatva.ai/users/api/address'
   );
   assert.equal(
     PM_API_CATALOG.production.vendorLeads,

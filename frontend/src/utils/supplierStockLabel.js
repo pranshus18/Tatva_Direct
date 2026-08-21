@@ -4,7 +4,7 @@ import { parseSupplierStockQuantity } from './parseSupplierStockQuantity';
 /** Supplier portal label for the logged-in supplier's on-hand quantity */
 export const SUPPLIER_CURRENT_STOCK_LABEL = 'Current stock with you';
 
-/** Shown until MRP / location inventory details are completed (step 2) */
+/** Shown until MRP inventory details are completed (step 2) */
 export const SUPPLIER_INVENTORY_NOT_CONFIGURED_LABEL = 'Inventory Setup Pending';
 
 /** Supplier portal label for catalog / inventory unit amount (API field remains `price`; GST-inclusive MRP) */
@@ -33,15 +33,13 @@ export const SUPPLIER_MRP_INCLUSIVE_HINT =
 export const SUPPLIER_COV_PRICE_FIELD_LABEL = `${SUPPLIER_COV_PRICE_LABEL} (${RUPEE_SYMBOL})`;
 
 /**
- * True once inventory details (MRP and/or location) have been set.
- * Catalog-only offers default to price 0 and empty location until Manage Inventory.
+ * True once inventory MRP has been set.
+ * Catalog-only offers default to price 0 until Manage Inventory.
  */
 export function isSupplierInventoryConfigured(product) {
   if (!product) return false;
   const price = Number(product.price);
-  const hasPrice = Number.isFinite(price) && price > 0;
-  const hasLocation = Boolean(String(product.location || '').trim());
-  return hasPrice || hasLocation;
+  return Number.isFinite(price) && price > 0;
 }
 
 /** Catalog card stock line: "12 in stock" / "Out of stock". */

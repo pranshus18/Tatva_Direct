@@ -453,18 +453,18 @@ test('evaluateProductCovInventoryGate blocks Product_COV until inventory is comp
   assert.equal(incomplete.ok, false);
   assert.match(incomplete.message, /Inventory completion is required before Product COV/);
   assert.ok(incomplete.missingFields.includes('MRP (incl. GST)'));
-  assert.ok(incomplete.missingFields.includes('Location'));
+  assert.equal(incomplete.missingFields.includes('Location'), false);
 
   const catalogOnly = evaluateProductCovInventoryGate({
     price: 0,
     stock: 0,
-    location: 'Pune warehouse',
     igst_rate: 18,
     cgst_rate: 9,
     sgst_rate: 9
   });
   assert.equal(catalogOnly.ok, false);
   assert.match(catalogOnly.message, /MRP/);
+  assert.equal(catalogOnly.missingFields.includes('Location'), false);
 
   const gstInheritedNoLocation = evaluateProductCovInventoryGate({
     price: 0,
@@ -476,15 +476,14 @@ test('evaluateProductCovInventoryGate blocks Product_COV until inventory is comp
   });
   assert.equal(gstInheritedNoLocation.ok, false);
   assert.ok(gstInheritedNoLocation.missingFields.includes('MRP (incl. GST)'));
-  assert.ok(gstInheritedNoLocation.missingFields.includes('Location'));
+  assert.equal(gstInheritedNoLocation.missingFields.includes('Location'), false);
 
-  const complete = evaluateProductCovInventoryGate({
+  const completeWithoutLocation = evaluateProductCovInventoryGate({
     price: 120,
     stock: 0,
-    location: 'Pune warehouse',
     igst_rate: 18,
     cgst_rate: 9,
     sgst_rate: 9
   });
-  assert.equal(complete.ok, true);
+  assert.equal(completeWithoutLocation.ok, true);
 });

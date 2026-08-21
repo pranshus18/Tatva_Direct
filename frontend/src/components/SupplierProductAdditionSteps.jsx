@@ -5,7 +5,7 @@ import './SupplierProductAdditionSteps.css';
 
 const STEPS = [
   { n: 1, title: 'Product', sub: 'Name, brand, specs' },
-  { n: 2, title: 'Inventory', sub: `${SUPPLIER_MRP_LABEL}, ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, location` },
+  { n: 2, title: 'Inventory', sub: `${SUPPLIER_MRP_LABEL}, ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, GST` },
   { n: 3, title: 'ProductCOV', sub: 'Brand quantity pricing' }
 ];
 

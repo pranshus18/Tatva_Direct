@@ -168,14 +168,15 @@ export function ensureCompanyInfoEntryIds(entries = []) {
 
 export function matchCompanyInfoEntry(entry, { entryId, brand } = {}) {
   const id = String(entryId || '').trim();
+  const entryIdValue = String(entry?.id || '').trim();
+  // Prefer row id so a Path B draft is never treated as an existing approved brand
+  // just because the typed name momentarily matches (Safari → safarii).
+  if (id && entryIdValue) {
+    return entryIdValue === id;
+  }
   const brandKey = brandKeyForDuplicateCheck(brand);
   const entryBrandKey = brandKeyForDuplicateCheck(entry?.brands);
-  if (id && String(entry?.id || '').trim() === id) {
-    if (!brandKey || !entryBrandKey || brandKey === entryBrandKey) return true;
-    return false;
-  }
-  if (brandKey && entryBrandKey && brandKey === entryBrandKey) return true;
-  return false;
+  return Boolean(brandKey && entryBrandKey && brandKey === entryBrandKey);
 }
 
 export function normalizeProfileForEditor(profileData) {
@@ -1434,8 +1435,13 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
 
 /** Build PUT payload that keeps every brand entry while syncing legacy top-level fields. */
 export function buildSupplierChainSavePayload(profile, entries = null, options = {}) {
-  const nextEntries = deduplicateCompanyInfoEntriesByBrand(
-    entries || getCompanyInfoEntriesForSave(profile)
+  const sourceEntries = entries || getCompanyInfoEntriesForSave(profile);
+  // Live Path B typing must not collapse a draft into an existing approved row
+  // when the typed name briefly matches (Safari → safarii). Dedupe on save/API only.
+  const nextEntries = (
+    options.dedupeByBrand === false
+      ? sourceEntries
+      : deduplicateCompanyInfoEntriesByBrand(sourceEntries)
   ).map(normalizeEntryDocumentFields);
   const first = nextEntries[0] || {};
   const saveEntryId = String(options.saveSupplyChainEntryId || '').trim();

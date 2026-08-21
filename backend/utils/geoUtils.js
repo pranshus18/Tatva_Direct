@@ -1,3 +1,9 @@
+import {
+  buildPmPlatformHeaders,
+  PM_STATE_BY_PINCODE_URL,
+  withPmPlatformFlagQuery
+} from '../config/pmApi.js';
+
 /** Earth radius in km */
 const R_KM = 6371;
 
@@ -587,12 +593,31 @@ export function parseNominatimReverseAddress(addr = {}, displayName = '') {
     .filter(Boolean)
     .join(', ');
 
+  const building = addr.house_number || '';
+  const buildingName = addr.building || addr.amenity || '';
+  const street = addr.road || addr.pedestrian || addr.residential || addr.footway || '';
+  const locality =
+    addr.suburb ||
+    addr.neighbourhood ||
+    addr.quarter ||
+    addr.city ||
+    addr.town ||
+    addr.village ||
+    '';
+  const district = addr.county || addr.state_district || addr.city_district || '';
+
   return {
     line1: line1 || fallbackLine1,
     city,
     state,
     pincode,
-    country
+    country,
+    building,
+    buildingName,
+    street,
+    locality: locality || city,
+    district,
+    zip: pincode
   };
 }
 
@@ -644,7 +669,13 @@ function parseGoogleReverseGeocodeResult(result) {
         '',
       pincode: parts.find((part) => /^\d{6}$/.test(part)) || pincode,
       country,
-      formattedAddress
+      formattedAddress,
+      building: streetNumber,
+      buildingName: pickGoogleAddressComponent(components, 'premise'),
+      street: route,
+      locality: locality || city,
+      district: pickGoogleAddressComponent(components, 'administrative_area_level_2'),
+      zip: parts.find((part) => /^\d{6}$/.test(part)) || pincode
     };
   }
 
@@ -656,7 +687,13 @@ function parseGoogleReverseGeocodeResult(result) {
     state,
     pincode,
     country,
-    formattedAddress: formattedAddress || [line1, city, state, pincode, country].filter(Boolean).join(', ')
+    formattedAddress: formattedAddress || [line1, city, state, pincode, country].filter(Boolean).join(', '),
+    building: streetNumber,
+    buildingName: pickGoogleAddressComponent(components, 'premise'),
+    street: route,
+    locality: locality || city,
+    district: pickGoogleAddressComponent(components, 'administrative_area_level_2'),
+    zip: pincode
   };
 }
 
@@ -773,3 +810,240 @@ export function inferCityStateFromLocationText(text) {
     state: parts[parts.length - 1].toLowerCase()
   };
 }
+
+const PINCODE_PREFIX_TO_STATE = {
+  11: 'Delhi',
+  12: 'Haryana',
+  13: 'Haryana',
+  14: 'Punjab',
+  15: 'Punjab',
+  16: 'Punjab',
+  17: 'Himachal Pradesh',
+  18: 'Jammu and Kashmir',
+  19: 'Jammu and Kashmir',
+  20: 'Uttar Pradesh',
+  21: 'Uttar Pradesh',
+  22: 'Uttar Pradesh',
+  23: 'Uttar Pradesh',
+  24: 'Uttar Pradesh',
+  25: 'Uttar Pradesh',
+  26: 'Uttar Pradesh',
+  27: 'Uttar Pradesh',
+  28: 'Uttar Pradesh',
+  30: 'Rajasthan',
+  31: 'Rajasthan',
+  32: 'Rajasthan',
+  33: 'Rajasthan',
+  34: 'Rajasthan',
+  36: 'Gujarat',
+  37: 'Gujarat',
+  38: 'Gujarat',
+  39: 'Gujarat',
+  40: 'Maharashtra',
+  41: 'Maharashtra',
+  42: 'Maharashtra',
+  43: 'Maharashtra',
+  44: 'Maharashtra',
+  45: 'Madhya Pradesh',
+  46: 'Madhya Pradesh',
+  47: 'Madhya Pradesh',
+  48: 'Madhya Pradesh',
+  49: 'Chhattisgarh',
+  50: 'Telangana',
+  51: 'Andhra Pradesh',
+  52: 'Andhra Pradesh',
+  53: 'Andhra Pradesh',
+  56: 'Karnataka',
+  57: 'Karnataka',
+  58: 'Karnataka',
+  59: 'Karnataka',
+  60: 'Tamil Nadu',
+  61: 'Tamil Nadu',
+  62: 'Tamil Nadu',
+  63: 'Tamil Nadu',
+  64: 'Tamil Nadu',
+  67: 'Kerala',
+  68: 'Kerala',
+  69: 'Kerala',
+  70: 'West Bengal',
+  71: 'West Bengal',
+  72: 'West Bengal',
+  73: 'West Bengal',
+  74: 'West Bengal',
+  75: 'Odisha',
+  76: 'Odisha',
+  77: 'Odisha',
+  78: 'Assam',
+  79: 'Arunachal Pradesh',
+  80: 'Bihar',
+  81: 'Bihar',
+  82: 'Bihar',
+  83: 'Jharkhand',
+  84: 'Bihar',
+  85: 'Bihar'
+};
+
+function stateFromPincodePrefix(pincode) {
+  const prefix = Number.parseInt(String(pincode || '').slice(0, 2), 10);
+  return PINCODE_PREFIX_TO_STATE[prefix] || '';
+}
+
+function googleComponentName(value) {
+  if (value == null) return '';
+  if (typeof value === 'string' || typeof value === 'number') return String(value).trim();
+  if (typeof value === 'object') {
+    return String(value.long_name || value.name || value.state || value.district || value.locality || '').trim();
+  }
+  return '';
+}
+
+function pickGoogleType(components, ...types) {
+  if (!Array.isArray(components)) return '';
+  for (const type of types) {
+    const hit = components.find((component) => Array.isArray(component?.types) && component.types.includes(type));
+    if (hit?.long_name) return String(hit.long_name).trim();
+  }
+  return '';
+}
+
+/** Normalize PM GET /google-maps/state-by-pincode (and richer Google component payloads). */
+export function parsePmPincodeLookupPayload(payload = {}, pincode = '') {
+  const data = payload?.data && typeof payload.data === 'object' ? payload.data : payload;
+  const components = data?.address_components || data?.components || [];
+  const zip = String(data?.pincode || pincode || '').replace(/\D/g, '').slice(0, 6);
+
+  return {
+    zip,
+    state:
+      googleComponentName(data?.state) ||
+      pickGoogleType(components, 'administrative_area_level_1'),
+    district:
+      googleComponentName(data?.district) ||
+      pickGoogleType(components, 'administrative_area_level_2'),
+    locality:
+      googleComponentName(data?.locality || data?.city || data?.area) ||
+      pickGoogleType(components, 'sublocality_level_1', 'sublocality', 'neighborhood', 'locality'),
+    street:
+      googleComponentName(data?.street || data?.route) ||
+      pickGoogleType(components, 'route'),
+    city:
+      googleComponentName(data?.city || data?.locality) ||
+      pickGoogleType(components, 'locality', 'administrative_area_level_2')
+  };
+}
+
+async function fetchPmStateByPincode(zip) {
+  const url = withPmPlatformFlagQuery(`${PM_STATE_BY_PINCODE_URL}?pincode=${encodeURIComponent(zip)}`);
+  const response = await fetch(url, {
+    headers: buildPmPlatformHeaders({ json: false }),
+    signal: AbortSignal.timeout(8000)
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.success === false) return null;
+  const parsed = parsePmPincodeLookupPayload(body, zip);
+  if (!parsed.state && !parsed.district && !parsed.locality) return null;
+  return parsed;
+}
+
+async function lookupPostalPincode(zip) {
+  const response = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(zip)}`, {
+    headers: { Accept: 'application/json' },
+    signal: AbortSignal.timeout(8000)
+  });
+  if (!response.ok) return null;
+  const body = await response.json();
+  const record = Array.isArray(body) ? body[0] : body;
+  const offices = Array.isArray(record?.PostOffice) ? record.PostOffice : [];
+  const office = offices[0];
+  if (!office) return null;
+  return {
+    zip,
+    state: String(office.State || '').trim() || stateFromPincodePrefix(zip),
+    district: String(office.District || '').trim(),
+    locality: String(office.Block || office.Name || office.Division || '').trim(),
+    city: String(office.Block || office.Name || office.District || '').trim()
+  };
+}
+
+async function enrichPincodeFromGeocode(zip, base = {}) {
+  try {
+    const geo = await geocodeIndianAddress({
+      pincode: zip,
+      city: base.locality || base.city || '',
+      state: base.state || '',
+      country: 'India'
+    });
+    if (!geo) return base;
+    const reversed = await reverseGeocodeCoordinates(geo.lat, geo.lng);
+    if (!reversed) return base;
+    return {
+      zip,
+      state: base.state || reversed.state || '',
+      district: base.district || reversed.district || '',
+      locality: base.locality || reversed.locality || reversed.city || '',
+      street: base.street || reversed.street || '',
+      city: base.city || reversed.city || reversed.locality || ''
+    };
+  } catch (error) {
+    console.warn('[Geo] pincode geocode enrich failed:', error?.message || error);
+    return base;
+  }
+}
+
+function mergePincodeLookups(...parts) {
+  const merged = { zip: '', state: '', district: '', locality: '', street: '', city: '' };
+  for (const part of parts) {
+    if (!part || typeof part !== 'object') continue;
+    for (const key of Object.keys(merged)) {
+      if (!merged[key] && String(part[key] || '').trim()) {
+        merged[key] = String(part[key]).trim();
+      }
+    }
+  }
+  return merged;
+}
+
+/** Resolve Indian pincode to state / district / locality for address autofill. */
+export async function lookupIndianPincode(pincode) {
+  const zip = String(pincode || '').replace(/\D/g, '').slice(0, 6);
+  if (!/^\d{6}$/.test(zip)) return null;
+
+  let pmLookup = null;
+  try {
+    pmLookup = await fetchPmStateByPincode(zip);
+  } catch (error) {
+    console.warn('[Geo] PM state-by-pincode failed:', error?.message || error);
+  }
+
+  let postalLookup = null;
+  try {
+    postalLookup = await lookupPostalPincode(zip);
+  } catch (error) {
+    console.warn('[Geo] postal pincode lookup failed:', error?.message || error);
+  }
+
+  const prefixLookup = {
+    zip,
+    state: stateFromPincodePrefix(zip),
+    district: '',
+    locality: '',
+    street: '',
+    city: ''
+  };
+
+  const merged = mergePincodeLookups({ zip }, pmLookup, postalLookup, prefixLookup);
+  const hasGeoFields = Boolean(merged.state && (merged.district || merged.locality));
+  const enriched = hasGeoFields ? merged : await enrichPincodeFromGeocode(zip, merged);
+  const result = mergePincodeLookups(merged, enriched, prefixLookup);
+
+  if (!result.state && !result.district && !result.locality) return null;
+  return {
+    zip,
+    state: result.state,
+    district: result.district,
+    locality: result.locality || result.city,
+    street: result.street,
+    city: result.city || result.locality
+  };
+}
+

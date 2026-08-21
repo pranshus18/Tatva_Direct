@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Check, ChevronLeft, ChevronRight, ImageOff, MapPin, Package, Search, ShoppingCart, Star, Tag, Users } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import ProductImageCarousel from '../components/ProductImageCarousel';
-import { getProductImageList } from '../utils/productImages';
+import { getSelectedListingImages } from '../utils/productImages';
 import VoiceGuidedBanner from '../components/VoiceGuidedBanner';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
@@ -255,7 +255,7 @@ const ProductDiscovery = () => {
     }, 1400);
   };
 
-  const imageArray = (product) => getProductImageList(product);
+  const imageArray = (product) => getSelectedListingImages(product);
 
   return (
     <SpPageLayout>

@@ -36,23 +36,49 @@ export const profileUpdateSchema = z.object({
     .optional()
 });
 
-const profileShippingAddressFieldsSchema = z.object({
-  label: z.string().max(120).optional().nullable(),
-  line1: z.string().min(1),
-  city: z.string().min(1),
-  state: z.string().min(1),
-  pincode: z.string().min(1),
-  country: z.string().min(1),
-  latitude: z.number().optional().nullable(),
-  longitude: z.number().optional().nullable(),
-  geoLocation: z
-    .object({
-      lat: z.number(),
-      lng: z.number()
-    })
-    .optional()
-    .nullable()
-});
+const profileShippingAddressFieldsSchema = z
+  .object({
+    label: z.string().max(120).optional().nullable(),
+    line1: z.string().optional(),
+    city: z.string().optional(),
+    state: z.string().optional(),
+    pincode: z.string().optional(),
+    country: z.string().optional(),
+    type: z.string().optional(),
+    subType: z.string().optional(),
+    building: z.string().optional(),
+    buildingName: z.string().optional(),
+    floor: z.string().optional(),
+    street: z.string().optional(),
+    locality: z.string().optional(),
+    district: z.string().optional(),
+    zip: z.string().optional(),
+    formatted_address: z.string().optional(),
+    isDefault: z.boolean().optional(),
+    latitude: z.number().optional().nullable(),
+    longitude: z.number().optional().nullable(),
+    geoLocation: z
+      .object({
+        lat: z.number(),
+        lng: z.number()
+      })
+      .optional()
+      .nullable()
+  })
+  .superRefine((value, ctx) => {
+    const buildingOrLine = String(value.building || value.line1 || '').trim();
+    const zip = String(value.zip || value.pincode || '').trim();
+    const state = String(value.state || '').trim();
+    if (!buildingOrLine) {
+      ctx.addIssue({ code: 'custom', path: ['building'], message: 'Building/House No is required' });
+    }
+    if (!zip) {
+      ctx.addIssue({ code: 'custom', path: ['zip'], message: 'Zip/Pincode is required' });
+    }
+    if (!state) {
+      ctx.addIssue({ code: 'custom', path: ['state'], message: 'State is required' });
+    }
+  });
 
 export const profileShippingAddressCreateSchema = profileShippingAddressFieldsSchema;
 

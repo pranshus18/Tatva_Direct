@@ -30,22 +30,32 @@ function parseGoogleClientResult(result) {
     return '';
   };
 
+  const streetNumber = pick('street_number', 'premise', 'subpremise');
+  const route = pick('route', 'neighborhood', 'sublocality_level_2');
+  const locality = pick('sublocality_level_1', 'sublocality', 'neighborhood');
+  const city = pick('locality', 'administrative_area_level_2', 'sublocality_level_1', 'sublocality', 'neighborhood');
   const line1 =
-    [pick('street_number', 'premise'), pick('route', 'neighborhood', 'sublocality_level_2')]
+    [streetNumber, route]
       .filter(Boolean)
       .join(', ')
       .trim() ||
-    pick('sublocality_level_1', 'sublocality', 'neighborhood') ||
+    locality ||
     formattedAddress.split(',')[0]?.trim() ||
     formattedAddress;
 
   return {
     line1,
-    city: pick('locality', 'administrative_area_level_2', 'sublocality_level_1', 'sublocality', 'neighborhood'),
+    city,
     state: pick('administrative_area_level_1'),
     pincode: pick('postal_code'),
     country: pick('country') || 'India',
-    formattedAddress
+    formattedAddress,
+    building: streetNumber,
+    buildingName: pick('premise'),
+    street: route,
+    locality: locality || city,
+    district: pick('administrative_area_level_2'),
+    zip: pick('postal_code')
   };
 }
 

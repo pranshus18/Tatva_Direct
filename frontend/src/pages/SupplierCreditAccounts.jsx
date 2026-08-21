@@ -40,6 +40,48 @@ function buyerCreditTarget(buyer) {
   };
 }
 
+function buildBuyerCreditDraft(buyer, acc) {
+  if (acc) {
+    return {
+      creditLimit: String(acc.creditLimit ?? ''),
+      paylaterThreshold: String(acc.payLaterThreshold ?? buyer?.paylaterThreshold ?? 0),
+      creditPeriodDays: String(acc.creditPeriodDays ?? 30),
+      isEnabled: acc.isEnabled !== false,
+      notes: acc.notes || ''
+    };
+  }
+  return {
+    creditLimit: '',
+    paylaterThreshold: String(buyer?.paylaterThreshold ?? 0),
+    creditPeriodDays: '30',
+    isEnabled: true,
+    notes: ''
+  };
+}
+
+function normalizeCreditDraft(draft = {}) {
+  const period = Number(draft.creditPeriodDays);
+  return {
+    creditLimit: Number(draft.creditLimit) || 0,
+    paylaterThreshold: Number(draft.paylaterThreshold) || 0,
+    creditPeriodDays: Number.isFinite(period) && period > 0 ? period : 30,
+    isEnabled: draft.isEnabled !== false,
+    notes: String(draft.notes || '')
+  };
+}
+
+function creditDraftHasChanges(draft, saved) {
+  const left = normalizeCreditDraft(draft);
+  const right = normalizeCreditDraft(saved);
+  return (
+    left.creditLimit !== right.creditLimit ||
+    left.paylaterThreshold !== right.paylaterThreshold ||
+    left.creditPeriodDays !== right.creditPeriodDays ||
+    left.isEnabled !== right.isEnabled ||
+    left.notes !== right.notes
+  );
+}
+
 export default function SupplierCreditAccounts() {
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState([]);
@@ -48,7 +90,7 @@ export default function SupplierCreditAccounts() {
   const [savingKey, setSavingKey] = useState(null);
   const [filter, setFilter] = useState('');
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async ({ savedDraftKey = null } = {}) => {
     const token = localStorage.getItem('token');
     const headers = { Authorization: `Bearer ${token}` };
     const [creditRes, buyersRes] = await Promise.all([
@@ -66,37 +108,25 @@ export default function SupplierCreditAccounts() {
     list.forEach((acc) => {
       const key = acc.buyerUserId || acc.customerPhone || acc.customerId;
       if (!key) return;
-      nextDrafts[key] = {
-        creditLimit: String(acc.creditLimit ?? ''),
-        paylaterThreshold: String(acc.payLaterThreshold ?? 0),
-        creditPeriodDays: String(acc.creditPeriodDays ?? 30),
-        isEnabled: acc.isEnabled !== false,
-        notes: acc.notes || ''
-      };
+      nextDrafts[key] = buildBuyerCreditDraft(null, acc);
     });
     buyerList.forEach((b) => {
-      const acc = findAccountForBuyer(b, list);
-      if (acc) {
-        nextDrafts[b.buyerId] = {
-          creditLimit: String(acc.creditLimit ?? ''),
-          paylaterThreshold: String(acc.payLaterThreshold ?? b.paylaterThreshold ?? 0),
-          creditPeriodDays: String(acc.creditPeriodDays ?? 30),
-          isEnabled: acc.isEnabled !== false,
-          notes: acc.notes || ''
-        };
-        return;
-      }
-      if (!nextDrafts[b.buyerId]) {
-        nextDrafts[b.buyerId] = {
-          creditLimit: '',
-          paylaterThreshold: String(b.paylaterThreshold ?? 0),
-          creditPeriodDays: '30',
-          isEnabled: true,
-          notes: ''
-        };
-      }
+      nextDrafts[b.buyerId] = buildBuyerCreditDraft(b, findAccountForBuyer(b, list));
     });
-    setDrafts(nextDrafts);
+    setDrafts((prev) => {
+      const merged = { ...nextDrafts };
+      for (const key of Object.keys(prev)) {
+        if (savedDraftKey && key === savedDraftKey) continue;
+        if (!nextDrafts[key]) {
+          merged[key] = prev[key];
+          continue;
+        }
+        if (creditDraftHasChanges(prev[key], nextDrafts[key])) {
+          merged[key] = prev[key];
+        }
+      }
+      return merged;
+    });
   }, []);
 
   useEffect(() => {
@@ -151,6 +181,9 @@ export default function SupplierCreditAccounts() {
 
   const saveCredit = async ({ buyerUserId, customerId, customerPhone, draftKey }) => {
     const draft = drafts[draftKey] || {};
+    const buyer = buyers.find((row) => row.buyerId === draftKey) || null;
+    const saved = buildBuyerCreditDraft(buyer, findAccountForBuyer(buyer, accounts));
+    if (!creditDraftHasChanges(draft, saved)) return;
     const limit = Number(draft.creditLimit);
     if (!Number.isFinite(limit) || limit < 0) {
       alert('Enter a valid credit limit (₹).');
@@ -189,7 +222,7 @@ export default function SupplierCreditAccounts() {
       if (!res.ok || payload.status !== 'success') {
         throw new Error(payload.message || 'Failed to save');
       }
-      await loadData();
+      await loadData({ savedDraftKey: draftKey });
     } catch (e) {
       alert(e.message || 'Failed to save credit account');
     } finally {
@@ -319,13 +352,11 @@ export default function SupplierCreditAccounts() {
                 <tbody>
                   {filteredBuyers.map((buyer) => {
                     const acc = findAccountForBuyer(buyer, accounts);
-                    const draft = drafts[buyer.buyerId] || {
-                      creditLimit: '',
-                      paylaterThreshold: String(buyer.paylaterThreshold ?? 0),
-                      creditPeriodDays: '30',
-                      isEnabled: true,
-                      notes: ''
-                    };
+                    const savedDraft = buildBuyerCreditDraft(buyer, acc);
+                    const draft = drafts[buyer.buyerId] || savedDraft;
+                    const hasChanges = creditDraftHasChanges(draft, savedDraft);
+                    const isSaving = savingKey === buyer.buyerId;
+                    const saveDisabled = isSaving || !hasChanges;
                     const pct = acc ? utilizationPct(acc) : 0;
                     const rowStyle =
                       pct >= 99
@@ -395,11 +426,23 @@ export default function SupplierCreditAccounts() {
                             <button
                               type="button"
                               className="btn-secondary"
-                              style={{ fontSize: '0.8rem', padding: '0.35rem 0.65rem' }}
-                              disabled={savingKey === buyer.buyerId}
+                              style={{
+                                fontSize: '0.8rem',
+                                padding: '0.35rem 0.65rem',
+                                opacity: saveDisabled ? 0.5 : 1,
+                                cursor: saveDisabled ? 'not-allowed' : 'pointer'
+                              }}
+                              disabled={saveDisabled}
+                              title={
+                                isSaving
+                                  ? 'Saving…'
+                                  : hasChanges
+                                    ? 'Save changes for this buyer'
+                                    : 'No changes to save'
+                              }
                               onClick={() => saveCredit(buyerCreditTarget(buyer))}
                             >
-                              {savingKey === buyer.buyerId ? '…' : 'Save'}
+                              {isSaving ? '…' : 'Save'}
                             </button>
                             {acc && Number(acc.outstanding) > 0 ? (
                               <span

@@ -11,6 +11,7 @@ import {
   getSupplierProductCreateErrorMessage,
   getSupplierProductUpdateErrorMessage,
   INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE,
+  PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE,
   isSupplierInventoryCompleteForProductCov,
   MIN_SUPPLIER_PRODUCT_PHOTOS
 } from './supplierProductValidation';
@@ -46,7 +47,7 @@ describe('supplierProductValidation', () => {
         stock: 0,
         attributes: { sgstRate: 9, cgstRate: 9, igstRate: 18 }
       })
-    ).toEqual([SUPPLIER_MRP_LABEL, 'Location']);
+    ).toEqual([SUPPLIER_MRP_LABEL]);
     expect(
       getSupplierInventoryCompletionMissingFields({
         price: 0,
@@ -55,7 +56,7 @@ describe('supplierProductValidation', () => {
         cgst_rate: null,
         igst_rate: null
       })
-    ).toEqual([SUPPLIER_MRP_LABEL, 'SGST', 'CGST', 'IGST', 'Location']);
+    ).toEqual([SUPPLIER_MRP_LABEL, 'SGST', 'CGST', 'IGST']);
     expect(
       formatInventoryRequiredForProductCovMessage(['SGST', 'CGST', 'IGST'])
     ).toBe(
@@ -64,11 +65,12 @@ describe('supplierProductValidation', () => {
     expect(formatInventoryRequiredForProductCovMessage([])).toBe(
       INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE
     );
+    expect(PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE).toMatch(/Manage Products/i);
+    expect(PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE).toMatch(/Manage Inventory/i);
     expect(
       isSupplierInventoryCompleteForProductCov({
         price: 120,
         stock: 0,
-        location: 'Pune warehouse',
         sgst_rate: 9,
         cgst_rate: 9,
         igst_rate: 18

@@ -17,6 +17,7 @@ import {
   supplierBcovResolvePriceSchema,
   toFiniteNumber,
   fetchVariantCatalogMrp,
+  PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE,
   resolveVariantProductCovEligibility,
   validateAndNormalizeBcovLevels,
   deleteSupplierBcovLevelsForVariant,
@@ -210,8 +211,7 @@ router.get('/bcov-levels', authenticateToken, async (req, res) => {
         catalogMrp: null,
         offerStatus: 'missing',
         covEligible: false,
-        covBlockedMessage:
-          'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.',
+        covBlockedMessage: PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE,
         levels: []
       });
     }

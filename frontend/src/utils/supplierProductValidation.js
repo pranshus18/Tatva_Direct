@@ -100,6 +100,9 @@ export function getSupplierInventoryUpdateMissingFields(formData = {}) {
 export const INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE =
   'Inventory completion is required before Product COV. Complete all mandatory Inventory details in Manage Inventory, then try again.';
 
+export const PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE =
+  'You can go to Product COV through Manage Products or Manage Inventory. Open a product on those pages, then click Product COV.';
+
 /** Map a saved offer/product row onto inventory form fields. */
 export function getSupplierInventoryCompletionMissingFields(product = {}) {
   if (!product) {
@@ -119,9 +122,6 @@ export function getSupplierInventoryCompletionMissingFields(product = {}) {
   const priceNum = Number(product.price);
   if (!Number.isFinite(priceNum) || priceNum <= 0) {
     if (!missing.includes(SUPPLIER_MRP_LABEL)) missing.unshift(SUPPLIER_MRP_LABEL);
-  }
-  if (!String(product.location || attrs.location || '').trim()) {
-    missing.push('Location');
   }
   return missing;
 }

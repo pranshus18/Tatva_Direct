@@ -69,11 +69,12 @@ function normalizeSingleBrand(brands) {
   return list[0] || '';
 }
 
+function sanitizeBrandNameWhileTyping(raw) {
+  return String(raw || '').replace(/[,;\n]/g, ' ');
+}
+
 function sanitizeCustomBrandInput(raw) {
-  return String(raw || '')
-    .replace(/[,;\n]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  return sanitizeBrandNameWhileTyping(raw).replace(/\s+/g, ' ').trim();
 }
 
 function normalizeBrandToken(raw) {
@@ -316,12 +317,20 @@ const CompanyInfoEntryCard = ({
   const applySuggestedApprovedBrand = (brandName) => {
     const next = String(brandName || '').trim();
     if (!next) return;
+    setTypedBrandName(next);
+    setBrandNameFieldFocused(false);
     if (typeof onSelectApprovedCatalogBrand === 'function') {
       onSelectApprovedCatalogBrand(next);
       return;
     }
     onUpdate('brands', next);
   };
+  const [typedBrandName, setTypedBrandName] = useState(selectedBrand);
+  const [brandNameFieldFocused, setBrandNameFieldFocused] = useState(false);
+  useEffect(() => {
+    if (brandNameFieldFocused) return;
+    setTypedBrandName(selectedBrand);
+  }, [selectedBrand, brandNameFieldFocused]);
   const [requestingChainConfig, setRequestingChainConfig] = useState(false);
   const [chainConfigRequestFeedback, setChainConfigRequestFeedback] = useState('');
   const [roleSelectUnlocked, setRoleSelectUnlocked] = useState(false);
@@ -572,26 +581,11 @@ const CompanyInfoEntryCard = ({
       : !(sectionView === 'brand' && forceExpanded && !allowEntryManagement);
 
   const handleBrandNameInput = (nextBrand) => {
-    const sanitized = sanitizeCustomBrandInput(nextBrand);
-    onUpdate('brands', sanitized);
-
-    if (!sanitized || !pathBTypingMode || typeof onSelectApprovedCatalogBrand !== 'function') return;
-
-    const catalogMatch = findApprovedCatalogBrandMatch(sanitized, catalogBrandNames);
-    if (catalogMatch?.name) {
-      onSelectApprovedCatalogBrand(catalogMatch.name);
-      return;
-    }
-
-    if (
-      isSelectYourselfBrandAlreadyApproved(sanitized, {
-        catalogBrands,
-        supplierApprovedBrands,
-        supplierBrandRequests
-      })
-    ) {
-      onSelectApprovedCatalogBrand(sanitized);
-    }
+    // Keep the typed characters. Suggestions never replace this unless the supplier
+    // clicks Use “…”. Do not trim while typing — that made “safarii” feel like it vanished.
+    const live = sanitizeBrandNameWhileTyping(nextBrand);
+    setTypedBrandName(live);
+    onUpdate('brands', sanitizeCustomBrandInput(live));
   };
 
   return (
@@ -744,11 +738,22 @@ const CompanyInfoEntryCard = ({
                     id={`brand-name-${entry.id}`}
                     type="text"
                     className="chain-field__control"
-                    value={selectedBrand}
+                    value={typedBrandName}
                     onChange={(e) => handleBrandNameInput(e.target.value)}
+                    onFocus={() => setBrandNameFieldFocused(true)}
+                    onBlur={() => {
+                      setBrandNameFieldFocused(false);
+                      const trimmed = sanitizeCustomBrandInput(typedBrandName);
+                      setTypedBrandName(trimmed);
+                      if (trimmed !== selectedBrand) onUpdate('brands', trimmed);
+                    }}
                     disabled={!brandNameEditable}
                     placeholder="Enter your brand name for admin approval"
                     required={editing}
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck={false}
                     aria-required="true"
                     aria-invalid={duplicateBrandMessage || approvedCatalogMatchMessage ? 'true' : undefined}
                   />

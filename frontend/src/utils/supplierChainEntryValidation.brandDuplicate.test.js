@@ -66,7 +66,8 @@ describe('brand duplicate matching', () => {
   it('soft-suggests prefix/near-typo brands without treating them as blocking matches', () => {
     const catalog = [
       { name: 'Sparsh', status: 'approved' },
-      { name: 'samsung', status: 'approved' }
+      { name: 'samsung', status: 'approved' },
+      { name: 'Safari', status: 'approved' }
     ];
 
     const prefix = findApprovedCatalogBrandSuggestions('sams', catalog);
@@ -74,6 +75,10 @@ describe('brand duplicate matching', () => {
 
     // Incomplete shorter prefix stays a soft tip (not yet a catalog match).
     expect(findApprovedCatalogBrandMatch('sams', catalog)).toBeNull();
+
+    const safariTip = findApprovedCatalogBrandSuggestions('safa', catalog);
+    expect(safariTip.some((row) => row.name === 'Safari' && row.matchType === 'prefix')).toBe(true);
+    expect(findApprovedCatalogBrandMatch('safa', catalog)).toBeNull();
 
     // Single-edit of a complete brand is a new brand; it may still get a typo suggestion.
     expect(findApprovedCatalogBrandMatch('samsing', catalog)).toBeNull();

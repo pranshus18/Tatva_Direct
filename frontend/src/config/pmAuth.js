@@ -27,6 +27,8 @@ export function buildPmApiCatalog(usersHost, paymentHost) {
     vault: `${users}/api/vault`,
     vaultTransactions: `${users}/api/vault/transactions`,
     vaultAddMoney: `${users}/api/vault/add-money`,
+    address: `${users}/api/address`,
+    stateByPincode: `${users}/api/google-maps/state-by-pincode`,
     vaultTopupInitiate: `${payment}/api/v1/payments/vault/topup/initiate`,
     vaultTopupComplete: `${payment}/api/v1/payments/vault/topup/complete`,
     vaultPayOrder: `${payment}/api/v1/payments/order-payment/vault-pay`
@@ -75,6 +77,10 @@ export const PM_VENDOR_LEADS_URL = `${PM_AUTH_BASE_URL}/api/users/vendor-leads`;
 export const PM_VERIFY_GST_URL = `${PM_AUTH_BASE_URL}/api/users/verify-gst`;
 export const PM_USERS_URL = `${PM_AUTH_BASE_URL}/api/users/`;
 export const PM_USERS_ME_URL = `${PM_AUTH_BASE_URL}/api/users/me`;
+/** POST/GET shipping addresses on the PM users host. Called via Tatva backend to avoid CORS. */
+export const PM_ADDRESS_URL = `${PM_AUTH_BASE_URL}/api/address`;
+/** GET Google Maps state/address lookup by Indian pincode. Called via Tatva backend. */
+export const PM_STATE_BY_PINCODE_URL = `${PM_AUTH_BASE_URL}/api/google-maps/state-by-pincode`;
 
 export const PM_VENDOR_LEAD_VENDOR_FLAG = 'supplier';
 /** Platform tenant flag — sent on all PM vault/payment APIs for DB filtering. */

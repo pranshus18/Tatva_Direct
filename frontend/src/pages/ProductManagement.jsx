@@ -18,7 +18,6 @@ import {
   Loader,
   Wallet,
   Layers,
-  MapPin,
   RefreshCw,
   AlertTriangle,
   ImageOff,
@@ -94,7 +93,7 @@ import {
   getSupplierInventoryUpdateMissingFields,
   getSupplierInventoryCompletionMissingFields,
   formatInventoryRequiredForProductCovMessage,
-  INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE,
+  PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE,
   getSupplierProductCreateErrorMessage,
   getSupplierProductUpdateErrorMessage,
   getSupplierSpecificationTemplateMissingFields,
@@ -331,13 +330,8 @@ const ProductManagement = ({ user }) => {
     navigate(`${location.pathname}${location.search}`, { replace: true, state: {} });
   }, [location.state?.productCovBlockedMessage]);
 
-  const blockProductCovUntilInventoryComplete = () => {
-    const message = INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE;
-    setProductCovGateMessage(message);
-    window.alert(message);
-    if (!isInventoryView) {
-      navigate('/manage-inventory');
-    }
+  const notifyProductCovOpenFromProduct = () => {
+    navigate('/supplier-bcov');
   };
 
   const handleProductWorkflowStep = (stepNumber) => {
@@ -349,7 +343,7 @@ const ProductManagement = ({ user }) => {
       navigate('/manage-inventory');
       return;
     }
-    blockProductCovUntilInventoryComplete();
+    notifyProductCovOpenFromProduct();
   };
 
   // Guard against browser restoring the search field after a hard refresh.
@@ -606,7 +600,6 @@ const ProductManagement = ({ user }) => {
     const payload = {
       stock,
       price,
-      location: data.location,
       unit: data.unit,
       igst_rate: data.igst_rate,
       cgst_rate: data.cgst_rate,
@@ -929,7 +922,7 @@ const ProductManagement = ({ user }) => {
           <h1>{isInventoryView ? 'Manage Inventory' : 'Manage Products'}</h1>
           <p className="pm-page-header__lead">
             {isInventoryView
-              ? `Update ${SUPPLIER_MRP_LABEL}, ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()}, and location for each variant.`
+              ? `Update ${SUPPLIER_MRP_LABEL} and ${SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} for each variant.`
               : 'Add and maintain product catalog entries — specifications, images, and brand details.'}
           </p>
         </div>
@@ -974,9 +967,8 @@ const ProductManagement = ({ user }) => {
           <button
             type="button"
             className="pm-tab"
-            onClick={blockProductCovUntilInventoryComplete}
-            aria-disabled="true"
-            title={INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE}
+            onClick={notifyProductCovOpenFromProduct}
+            title={PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE}
           >
             <Table2 size={15} />
             Product COV
@@ -986,12 +978,11 @@ const ProductManagement = ({ user }) => {
         <SupplierProductAdditionSteps
           compact
           variant={isInventoryView ? 'inventory' : 'add-product'}
-          lockedSteps={[3]}
           onStepSelect={handleProductWorkflowStep}
           hint={
             isInventoryView
-              ? `Complete ${SUPPLIER_MRP_LABEL}, stock, location, and GST before Product COV.`
-              : 'After catalog setup, complete Inventory (step 2) before Product COV (step 3).'
+              ? `Complete ${SUPPLIER_MRP_LABEL}, stock, and GST, then open Product COV from a product.`
+              : 'After catalog setup, complete Inventory (step 2). Open Product COV from a product on Manage Products or Manage Inventory.'
           }
         />
       </div>
@@ -1257,13 +1248,6 @@ const ProductManagement = ({ user }) => {
                               </>
                             ) : null}
                           </div>
-
-                          {product.location ? (
-                            <div className="pd-card__location">
-                              <MapPin size={13} />
-                              <span>{product.location}</span>
-                            </div>
-                          ) : null}
 
                           {product.asin || variantCode ? (
                             <div className="pm-card__codes">
@@ -1965,12 +1949,6 @@ const ProductDetailsModal = ({
                 <span className="pm-details-field__value">{product.lsa}</span>
               </div>
             ) : null}
-            {product.location ? (
-              <div className="pm-details-field">
-                <span className="pm-details-field__label">Location</span>
-                <span className="pm-details-field__value">{product.location}</span>
-              </div>
-            ) : null}
             {product.asin ? (
               <div className="pm-details-field">
                 <span className="pm-details-field__label">TSIN</span>
@@ -2196,7 +2174,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     igst_rate: product?.igst_rate != null ? String(product.igst_rate) : '',
     cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
     sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
-    location: product?.location || '',
     description: product?.supplierDescription || product?.description || '',
     images: getSupplierOfferImagesForForm(product)
   });
@@ -2222,9 +2199,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [showUnitSuggestions, setShowUnitSuggestions] = useState(false);
   const unitInputRef = useRef(null);
   const unitSuggestionsRef = useRef(null);
-  
-  // Locations from supplier profile branches
-  const [locations, setLocations] = useState([]);
 
   useEffect(() => {
     const fixedMrp = getCanonicalVariantMrp(product);
@@ -3202,16 +3176,17 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     // When adding a new product (Manage Products), include all fields including inventory
     // When editing in Manage Inventory, include inventory fields
-    // Inventory edit: stock, price, tax, location only — never specifications
+    // Inventory edit: stock, price, tax only — never specifications
     if (showInventoryFields && product) {
       delete productData.specifications;
+      delete productData.location;
       if (mrpLocked) {
         productData.price = parseSupplierOfferPrice(product.price);
       }
     }
 
     // Catalog view (Manage Products): never persist inventory fields here.
-    // Stock/MRP/location are completed in Manage Inventory (step 2).
+    // Stock/MRP are completed in Manage Inventory (step 2).
     if (!showInventoryFields) {
       delete productData.price;
       delete productData.stock;
@@ -3239,43 +3214,11 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     }
   };
 
-  // Fetch categories, units, and locations on mount
+  // Fetch categories and units on mount
   useEffect(() => {
     fetchCategories();
     fetchUnits();
-    fetchLocations();
   }, []);
-
-  const fetchLocations = async () => {
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl('/api/supplier/locations'), {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      const data = await response.json();
-      if (data.status === 'success') {
-        setLocations(data.locations || []);
-        // If editing and location exists, try to match it to a profile location
-        if (product?.location && data.locations.length > 0) {
-          const matchedLocation = data.locations.find(loc => 
-            loc.fullText === product.location || 
-            loc.displayText === product.location ||
-            loc.address === product.location
-          );
-          if (matchedLocation) {
-            setFormData(prev => ({
-              ...prev,
-              location: matchedLocation.fullText || matchedLocation.displayText
-            }));
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to fetch locations:', error);
-    }
-  };
 
   // Initialize category and unit suggestions when data is loaded
   useEffect(() => {

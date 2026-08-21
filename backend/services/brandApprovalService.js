@@ -75,7 +75,7 @@ export async function resolveBrandApprovalStatus({ supabase, brandName }) {
       if (fallback.error) throw fallback.error;
       brandRow = fallback.data;
     }
-    // Exact approved catalog match only. Misspellings are a new brand request.
+    // Exact approved catalog match only. Misspellings such as "safarii" stay a new brand request.
     if (!brandRow || String(brandRow.status || '').toLowerCase() !== 'approved') {
       const closeMatch = await findApprovedCatalogBrandCloseMatch(name, supabase);
       if (
@@ -83,7 +83,7 @@ export async function resolveBrandApprovalStatus({ supabase, brandName }) {
         String(closeMatch.data.status || '').toLowerCase() === 'approved'
       ) {
         brandRow = closeMatch.data;
-        matchType = closeMatch.matchType || 'typo';
+        matchType = closeMatch.matchType || 'exact';
       }
     }
   } catch (_e) {
@@ -257,8 +257,8 @@ export async function ensureBrandApprovedOrRequest({ supabase, brandName, reques
     }
   }
 
-  // If lookup found a non-approved row but an approved catalog identity/typo match exists,
-  // use the approved brand (do not open another pending request).
+  // Exact approved catalog spelling only. Near-typos (safarii vs Safari) stay a new
+  // Path B request — the supplier must click the suggestion to use the approved brand.
   const catalogMatchExisting = await findApprovedCatalogBrandCloseMatch(name, supabase);
   if (
     catalogMatchExisting.data &&

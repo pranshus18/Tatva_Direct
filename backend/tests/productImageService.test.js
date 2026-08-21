@@ -204,3 +204,43 @@ test('resolveSellerOwnedListingImages keeps this seller photos and drops a copie
     []
   );
 });
+
+test('resolveSellerOwnedListingImages hides a catalog dump when other sellers stored no photos', () => {
+  const catalog = [
+    'https://cdn.example.com/a.jpg',
+    'https://cdn.example.com/b.jpg',
+    'https://cdn.example.com/c.jpg'
+  ];
+  const dumpOffer = {
+    id: 'dump',
+    supplier_id: 's-dump',
+    attributes: { images: catalog }
+  };
+  const emptyOffer = {
+    id: 'empty',
+    supplier_id: 's-empty',
+    attributes: {}
+  };
+  const ownOffer = {
+    id: 'own',
+    supplier_id: 's-own',
+    attributes: { images: ['https://cdn.example.com/a.jpg'] }
+  };
+
+  assert.deepEqual(
+    resolveSellerOwnedListingImages({
+      offer: dumpOffer,
+      catalogProductOffers: [dumpOffer, emptyOffer],
+      catalogImages: catalog
+    }),
+    []
+  );
+  assert.deepEqual(
+    resolveSellerOwnedListingImages({
+      offer: ownOffer,
+      catalogProductOffers: [ownOffer, emptyOffer],
+      catalogImages: catalog
+    }),
+    ['https://cdn.example.com/a.jpg']
+  );
+});
