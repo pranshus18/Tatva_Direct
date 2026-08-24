@@ -2,24 +2,24 @@ import {
   getAdminBuyerFacingCatalogDescription,
   getAdminSupplierSubmittedDescription
 } from './productDisplay';
-import {
-  catalogSpecificationTemplateForVariantMerge,
-  mergeCatalogAndOfferSpecificationsForDisplay,
-  parseSpecificationsObject
-} from './specifications';
+import { parseSpecificationsObject } from './specifications';
 
-/** Admin view: merge catalog template keys with supplier-filled offer values. */
+/** Admin view/edit: show only the supplier's filled specs, never another product's catalog values. */
 export function resolveAdminDisplaySpecifications(product = {}) {
-  if (product?.catalogSpecifications || product?.supplierOfferSpecifications) {
-    const catalogTemplate = catalogSpecificationTemplateForVariantMerge(
-      product.catalogSpecifications || {}
-    );
-    return mergeCatalogAndOfferSpecificationsForDisplay(
-      catalogTemplate,
-      product.supplierOfferSpecifications || {}
-    );
-  }
+  const offerSpecs = parseSpecificationsObject(product?.supplierOfferSpecifications) || {};
+  if (Object.keys(offerSpecs).length > 0) return offerSpecs;
   return parseSpecificationsObject(product?.specifications) || {};
+}
+
+/** Admin list/card title: supplier listing name, never a mis-linked catalog title. */
+export function getAdminRowDisplayName(product = {}) {
+  const baseName =
+    String(product?.name || '').trim() ||
+    String(product?.catalogName || '').trim() ||
+    'Product';
+  const variantLabel = String(product?.variantLabel || '').trim();
+  if (variantLabel) return `${baseName} — ${variantLabel}`;
+  return baseName;
 }
 
 /** Text sent to Polish with AI: current edit box, then supplier draft, then saved copy. */

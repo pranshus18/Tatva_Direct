@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveAdminDisplaySpecifications,
-  getAdminPolishSourceText
+  getAdminPolishSourceText,
+  getAdminRowDisplayName
 } from './adminProductDisplay.js';
 
 describe('resolveAdminDisplaySpecifications', () => {
-  it('merges catalog template keys with supplier offer values', () => {
+  it('uses supplier offer specs only and ignores catalog values', () => {
     const specs = resolveAdminDisplaySpecifications({
-      catalogSpecifications: { COLOR: 'Red', CAPACITY: '600 ml' },
-      supplierOfferSpecifications: { COLOR: 'Blue', CAPACITY: '' }
+      catalogSpecifications: { COLOR: 'Red', HEEL: '2 cm' },
+      supplierOfferSpecifications: { COLOR: 'Blue', CAPACITY: '600 ml' }
     });
     expect(specs.COLOR).toBe('Blue');
-    expect(specs.CAPACITY).toBe('');
+    expect(specs.CAPACITY).toBe('600 ml');
+    expect(specs.HEEL).toBeUndefined();
   });
 
   it('falls back to parsed specifications when no split fields exist', () => {
@@ -58,5 +60,28 @@ describe('getAdminPolishSourceText', () => {
         isEditing: false
       })
     ).toBe('Catalog copy only.');
+  });
+});
+
+describe('getAdminRowDisplayName', () => {
+  it('prefers the supplier listing name over a mis-linked catalog title', () => {
+    expect(
+      getAdminRowDisplayName({
+        name: 'Milton Thermosteel Flask',
+        catalogName: 'Stella Suede Ballet Flat with Iridescent Accent.',
+        variantLabel: 'Color: Silver · Material: Stainless Steel · Height: 28 cm'
+      })
+    ).toBe(
+      'Milton Thermosteel Flask — Color: Silver · Material: Stainless Steel · Height: 28 cm'
+    );
+  });
+
+  it('does not fall back to catalogName when the offer already has a title', () => {
+    expect(
+      getAdminRowDisplayName({
+        name: 'Milton Thermosteel Flask',
+        catalogName: 'Stella Suede Ballet Flat with Iridescent Accent.'
+      })
+    ).toBe('Milton Thermosteel Flask');
   });
 });

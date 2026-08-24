@@ -4,10 +4,8 @@ import { getContractErrorMessage, parseWithSchema } from '../../utils/contractVa
 import {
   normalizeModelIdentifier,
   sanitizeSpecifications,
-  mergeCatalogAndOfferSpecificationsForDisplay,
   mergeAdminEditedSpecificationsOntoOffer,
   parseSpecificationsObject,
-  resolveSupplierOfferDisplaySpecifications,
   isMeaningfullyFilledSpecValue
 } from '../../services/supplierCatalogHelpersService.js';
 import { syncOfferAttributesWithSpecifications } from '../../services/productIdentityService.js';
@@ -15,7 +13,8 @@ import { buildProductIdentification, firstNonEmpty } from '../../services/procur
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
 import { buildAdminPublishedDescriptionAttributes } from '../../utils/supplierProductDescriptions.js';
 import { propagateVariantMrpToAllOffers } from '../../services/variantMrpService.js';
-import { resolveSupplierOfferDisplayName } from '../../services/supplierProductWriteService.js';
+import { catalogListingIdentityConflicts } from '../../utils/catalogProductAttach.js';
+import { resolveSupplierOfferDisplayName, resolveSupplierOfferDisplayCategory } from '../../services/supplierProductWriteService.js';
 
 function scoreSupplierOfferRow(row) {
   const rowStatus = row.status;
@@ -61,26 +60,35 @@ function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true,
   }
   const catalogSpecs = parseSpecificationsObject(product.specifications) || {};
   const offerSpecs = parseSpecificationsObject(offerRow?.attributes?.specifications) || {};
-  const mergedSpecifications = resolveSupplierOfferDisplaySpecifications(
-    catalogSpecs,
-    offerRow?.attributes || {}
-  );
   const catalogApproved = String(product.status || '').toLowerCase() === 'approved';
   const offerPending = String(offerRow?.status || '').toLowerCase() === 'pending';
   const listingName = resolveSupplierOfferDisplayName({
     attributes: offerRow?.attributes || {},
     catalogName: product.name
   });
+  const listingCategory = resolveSupplierOfferDisplayCategory({
+    attributes: offerRow?.attributes || {},
+    catalogCategory: product.category
+  });
   const offerBrand = String(
     offerRow?.attributes?.brand || offerRow?.attributes?.brandModel || ''
   ).trim();
+  const offerUnit = String(offerRow?.attributes?.unit || '').trim();
+  const offerGtin = String(offerRow?.attributes?.gtin || '').trim();
+  const offerImages = Array.isArray(offerRow?.attributes?.images) ? offerRow.attributes.images : null;
 
   return {
     ...product,
     name: listingName || product.name,
+    category: listingCategory || product.category || '',
     brand: offerBrand || product.brand || '',
+    unit: offerUnit || product.unit || '',
+    gtin: offerGtin || product.gtin || '',
+    images:
+      offerImages && offerImages.length > 0 ? offerImages : product.images,
     catalogName: product.name,
     catalogBrand: product.brand || '',
+    catalogCategory: product.category || '',
     hasSupplierOffer,
     hasPendingSupplierOffer,
     adminReviewPending: hasPendingSupplierOffer || String(product.status || 'pending').toLowerCase() === 'pending',
@@ -108,7 +116,7 @@ function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true,
     brandModel: offerRow?.attributes?.brandModel ?? product.brandModel ?? null,
     catalogSpecifications: catalogSpecs,
     supplierOfferSpecifications: offerSpecs,
-    specifications: mergedSpecifications,
+    specifications: offerSpecs,
     offerStatus: offerRow.status || null,
     variantKey: offerRow.variant_key || null,
     variantAsin: offerRow.variant_asin || null,
@@ -121,6 +129,30 @@ function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true,
       ''
   };
 }
+
+export function shouldPreserveSharedCatalogIdentity(catalogProduct, offerRow) {
+  if (!catalogProduct || !offerRow) return false;
+  const attrs =
+    offerRow.attributes && typeof offerRow.attributes === 'object' ? offerRow.attributes : {};
+  return catalogListingIdentityConflicts({
+    catalogName: catalogProduct.name,
+    catalogCategory: catalogProduct.category,
+    listingName: attrs.listingName || attrs.name,
+    listingCategory: attrs.category
+  });
+}
+
+const SHARED_CATALOG_IDENTITY_KEYS = [
+  'name',
+  'category',
+  'brand',
+  'description',
+  'specifications',
+  'images',
+  'gtin',
+  'mpn',
+  'barcode'
+];
 
 /** Resolve which supplier_products row admin inventory edits should target. */
 export function resolveAdminTargetOfferRow(rows = [], { validatedBody = {}, catalogStatus = '', primarySupplierId = null } = {}) {
@@ -164,9 +196,8 @@ const VARIANT_LABEL_SKIP_KEYS = new Set([
   'pack_size'
 ]);
 
-function buildAdminVariantLabel(offerSpecs = {}, catalogSpecs = {}) {
-  const merged = mergeCatalogAndOfferSpecificationsForDisplay(catalogSpecs, offerSpecs);
-  const parts = Object.entries(merged)
+function buildAdminVariantLabel(offerSpecs = {}) {
+  const parts = Object.entries(offerSpecs || {})
     .filter(([key, value]) => {
       const normalized = String(key || '')
         .trim()
@@ -186,8 +217,6 @@ export function expandCatalogProductIntoAdminReviewRows(
   offerRows = [],
   suppliersById = {}
 ) {
-  const catalogSpecs = parseSpecificationsObject(product.specifications) || {};
-
   if (!offerRows.length) {
     return [
       {
@@ -213,7 +242,7 @@ export function expandCatalogProductIntoAdminReviewRows(
         hasSupplierOffer: true,
         hasPendingSupplierOffer: offerPending
       });
-      const variantLabel = buildAdminVariantLabel(offerSpecs, catalogSpecs);
+      const variantLabel = buildAdminVariantLabel(offerSpecs);
       const offerSupplier = suppliersById[offerRow.supplier_id] || product.supplier || null;
 
       return {
@@ -225,6 +254,7 @@ export function expandCatalogProductIntoAdminReviewRows(
         variantLabel,
         catalogName: product.name,
         catalogBrand: product.brand || '',
+        catalogCategory: product.category || '',
         supplier: offerSupplier,
         supplier_id: offerRow.supplier_id || product.supplier_id || null
       };
@@ -753,6 +783,39 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
     console.log('[ADMIN UPDATE] After cleanup - updateData.category:', updateData.category);
     console.log('[ADMIN UPDATE] After cleanup - updateData.min_order_quantity:', updateData.min_order_quantity);
     console.log('[ADMIN UPDATE] After cleanup - updateData.specifications keys:', updateData.specifications ? Object.keys(updateData.specifications) : 'none');
+
+    const { data: existingCatalogProduct } = await supabase
+      .from('products')
+      .select('id, name, category, brand, description, specifications, supplier_id, status')
+      .eq('id', req.params.id)
+      .maybeSingle();
+
+    const { data: offerRowsForUpdate } = await supabase
+      .from('supplier_products')
+      .select(
+        'id, product_id, supplier_id, price, stock, min_order_quantity, location, status, is_active, attributes, igst_rate, cgst_rate, sgst_rate, variant_key'
+      )
+      .eq('product_id', req.params.id);
+
+    const earlyPrimarySupplierId =
+      validatedBody?.supplier_id ||
+      validatedBody?.supplier?.id ||
+      existingCatalogProduct?.supplier_id ||
+      null;
+    const earlyTargetOfferRow = resolveAdminTargetOfferRow(offerRowsForUpdate || [], {
+      validatedBody,
+      catalogStatus: existingCatalogProduct?.status,
+      primarySupplierId: earlyPrimarySupplierId
+    });
+    const preserveSharedCatalogIdentity = shouldPreserveSharedCatalogIdentity(
+      existingCatalogProduct,
+      earlyTargetOfferRow
+    );
+    if (preserveSharedCatalogIdentity) {
+      SHARED_CATALOG_IDENTITY_KEYS.forEach((key) => {
+        delete updateData[key];
+      });
+    }
     
     // Update product in Supabase
     const { data: product, error: updateError } = await supabase
@@ -883,19 +946,14 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
           productResponse?.supplier_id ||
           null;
 
-        const { data: allOfferRows } = await supabase
-          .from('supplier_products')
-          .select(
-            'id, product_id, supplier_id, price, stock, min_order_quantity, location, status, is_active, attributes, igst_rate, cgst_rate, sgst_rate, variant_key'
-          )
-          .eq('product_id', req.params.id);
-
-        const offerRows = allOfferRows || [];
-        const targetOfferRow = resolveAdminTargetOfferRow(offerRows, {
-          validatedBody,
-          catalogStatus: productResponse?.status,
-          primarySupplierId
-        });
+        const offerRows = offerRowsForUpdate || [];
+        const targetOfferRow =
+          earlyTargetOfferRow ||
+          resolveAdminTargetOfferRow(offerRows, {
+            validatedBody,
+            catalogStatus: productResponse?.status,
+            primarySupplierId
+          });
 
         const inventoryPatchKeys = new Set([
           'updated_at',
@@ -912,22 +970,9 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
         );
         const hasInventoryPatch = Object.keys(inventoryPatch).length > 1;
 
-        // Shared catalog fields must update every offer attribute override, otherwise
-        // Manage Products keeps showing create-time category/unit/images/name/brand.
-        // Inventory/tax/LSA remain targeted to one offer/variant (handled separately).
-        const rowsForAttributeSync =
-          requestedSpecsUpdate ||
-          requestedNameUpdate ||
-          requestedDescriptionUpdate ||
-          requestedCatalogIdentityUpdate
-            ? offerRows.length
-              ? offerRows
-              : targetOfferRow
-                ? [targetOfferRow]
-                : []
-            : targetOfferRow
-              ? [targetOfferRow]
-              : [];
+        // Admin edits apply only to the targeted supplier offer. Broadcasting
+        // name/category/specs to sibling offers overwrites other suppliers' listings.
+        const rowsForAttributeSync = targetOfferRow ? [targetOfferRow] : [];
         spUpdateResult = rowsForAttributeSync;
 
         if (hasInventoryPatch && targetOfferRow?.id) {
@@ -952,7 +997,7 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
 
         if (spUpdateResult && spUpdateResult.length > 0) {
           const safeAdminSpecs = requestedSpecsUpdate
-            ? sanitizeSpecifications(productResponse.specifications || {})
+            ? sanitizeSpecifications(validatedBody.specifications || {})
             : null;
 
           for (const row of spUpdateResult) {
@@ -1070,6 +1115,18 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
             productResponse.description = publishedText;
             productResponse.publishedDescription = publishedText;
           }
+          if (preserveSharedCatalogIdentity) {
+            if (requestedNameUpdate) productResponse.name = String(validatedBody.name || '').trim();
+            if (requestedCategoryUpdate) {
+              productResponse.category = String(validatedBody.category || '').trim();
+            }
+            if (requestedBrandUpdate) {
+              productResponse.brand = String(validatedBody.brand || productResponse.brand || '').trim();
+            }
+            if (requestedUnitUpdate) {
+              productResponse.unit = String(validatedBody.unit || productResponse.unit || '').trim();
+            }
+          }
 
           void syncCatalogProductSnapshotFromOffers(supabase, req.params.id).catch((syncError) => {
             console.error('❌ [ADMIN UPDATE] Failed to refresh catalog snapshot from offers:', syncError);
@@ -1099,7 +1156,7 @@ router.put('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
       console.log('🔄 [ADMIN SYNC] - Has specs object?', hasSpecs);
       console.log('🔄 [ADMIN SYNC] - Has spec keys?', hasSpecKeys);
       
-      if (hasCategory && hasSpecs && hasSpecKeys) {
+      if (!preserveSharedCatalogIdentity && hasCategory && hasSpecs && hasSpecKeys) {
         const categoryName = String(productResponse.category).trim().toLowerCase();
         console.log(`🔄 [ADMIN SYNC] Syncing specs to category: "${categoryName}"`);
         console.log(`📦 [ADMIN SYNC] Product specs:`, productResponse.specifications);

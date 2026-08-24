@@ -78,8 +78,24 @@ describe('admin product descriptions', () => {
       publishedDescription: 'Polished buyer-facing copy saved by admin.',
       supplierDescription: 'Raw supplier submission.'
     };
-    expect(getAdminReviewProductDescription(product)    ).toBe(
+    expect(getAdminReviewProductDescription(product)).toBe(
       'Polished buyer-facing copy saved by admin.'
+    );
+  });
+
+  it('shows the supplier listing copy when catalog identity does not match this offer', () => {
+    const product = {
+      status: 'approved',
+      name: 'Milton Thermosteel Flask',
+      catalogName: 'Stella Suede Ballet Flat with Iridescent Accent.',
+      category: 'flasks & bottles',
+      catalogCategory: 'footwear',
+      description: 'A suede ballet flat for evening wear.',
+      supplierDescription: 'Stainless steel flask keeps drinks hot and cold.'
+    };
+    expect(getAdminBuyerFacingCatalogDescription(product)).toBe('');
+    expect(getAdminReviewProductDescription(product)).toBe(
+      'Stainless steel flask keeps drinks hot and cold.'
     );
   });
 });

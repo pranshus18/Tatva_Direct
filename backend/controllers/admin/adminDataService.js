@@ -260,7 +260,7 @@ export async function generateAdminData({ supabase, console, isRevenueRecognized
           product_id: offer.product_id,
           name: (attrs.listingName && String(attrs.listingName).trim()) || base.name || 'Unnamed Product',
           brand: attrs.brand || base.brand || attrs.brandModel || specs.brandModel || specs.brand || '',
-          category: base.category || '',
+          category: (attrs.category && String(attrs.category).trim()) || base.category || '',
           unit: attrs.unit || base.unit || 'nos',
           price: Number.isFinite(parseFloat(offer.price)) ? parseFloat(offer.price) : 0,
           stock: Number.isFinite(parseInt(offer.stock, 10)) ? parseInt(offer.stock, 10) : 0,

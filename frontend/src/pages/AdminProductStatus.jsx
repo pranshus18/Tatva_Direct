@@ -43,7 +43,8 @@ import {
 } from '../utils/adminProductApprovalFeedback';
 import {
   resolveAdminDisplaySpecifications,
-  getAdminPolishSourceText
+  getAdminPolishSourceText,
+  getAdminRowDisplayName
 } from '../utils/adminProductDisplay';
 import { IGST_OPTIONS, CGST_SGST_OPTIONS } from '../utils/gstRates';
 
@@ -69,12 +70,6 @@ const getDisplayDescription = (product) => getAdminBuyerFacingCatalogDescription
 
 const getAdminRowEffectiveStatus = (product = {}) =>
   String(product.displayStatus || product.offerStatus || product.status || 'pending').toLowerCase();
-
-const getAdminRowDisplayName = (product = {}) => {
-  const baseName = product.catalogName || product.name || 'Product';
-  if (product.variantLabel) return `${baseName} — ${product.variantLabel}`;
-  return baseName;
-};
 
 const AdminProductStatus = ({ user }) => {
   const [products, setProducts] = useState([]);
@@ -218,6 +213,7 @@ const AdminProductStatus = ({ user }) => {
       const searchLower = searchTerm.toLowerCase();
       filtered = filtered.filter(product => 
         product.name?.toLowerCase().includes(searchLower) ||
+        product.brand?.toLowerCase().includes(searchLower) ||
         product.category?.toLowerCase().includes(searchLower) ||
         product.supplier?.name?.toLowerCase().includes(searchLower) ||
         product.supplier?.company?.toLowerCase().includes(searchLower) ||

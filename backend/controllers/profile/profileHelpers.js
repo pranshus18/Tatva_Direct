@@ -630,6 +630,7 @@ export async function createProfileResponse(user) {
     const chainProfileLastRejection =
       !pending && latestReq?.status === 'rejected'
         ? {
+            id: latestReq.id || null,
             reason: latestReq.rejection_reason || null,
             reviewedAt: latestReq.reviewed_at || null
           }
@@ -662,6 +663,21 @@ export async function createProfileResponse(user) {
       supplierPortalTheme = { themeId: 'default', customImageDataUrl: '' };
     }
 
+    const hasApprovedBaseline =
+      Boolean(String(approvedChain.supplierRole || '').trim()) ||
+      Boolean(String(approvedChain.brands || '').trim()) ||
+      (Array.isArray(approvedChain.companyInfoEntries) &&
+        approvedChain.companyInfoEntries.some(
+          (entry) => String(entry?.brands || entry?.role || '').trim()
+        ));
+    const chainProfileApprovalStatus = pending
+      ? 'pending'
+      : draftHasValues
+        ? 'draft'
+        : latestReq?.status === 'rejected' && !hasApprovedBaseline
+          ? 'rejected'
+          : 'approved';
+
     return {
       ...baseProfile,
       businessType: base.businessType || '',
@@ -674,7 +690,7 @@ export async function createProfileResponse(user) {
       brands: displayChain.brands || (firstEntry?.brands || ''),
       authorizationCertificateUrl: base.authorizationCertificateUrl || '',
       companyInfoEntries: entries,
-      chainProfileApprovalStatus: pending ? 'pending' : draftHasValues ? 'draft' : 'approved',
+      chainProfileApprovalStatus,
       chainProfilePendingSubmittedAt: pending?.created_at || null,
       chainProfilePendingId: pending?.id || null,
       chainProfileDraftSavedAt: base.chainProfileDraftUpdatedAt || null,

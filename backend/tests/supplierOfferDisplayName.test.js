@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveSupplierOfferDisplayName } from '../services/supplierProductWriteService.js';
+import { resolveSupplierOfferDisplayName, resolveSupplierOfferDisplayCategory } from '../services/supplierProductWriteService.js';
 
 test('resolveSupplierOfferDisplayName prefers listingName over shared catalog name', () => {
   assert.equal(
@@ -29,5 +29,25 @@ test('resolveSupplierOfferDisplayName uses catalog when offer has no title', () 
       catalogName: 'oneplus'
     }),
     'oneplus'
+  );
+});
+
+test('resolveSupplierOfferDisplayCategory prefers offer category over shared catalog category', () => {
+  assert.equal(
+    resolveSupplierOfferDisplayCategory({
+      attributes: { category: 'flasks & bottles' },
+      catalogCategory: 'footwear'
+    }),
+    'flasks & bottles'
+  );
+});
+
+test('resolveSupplierOfferDisplayCategory falls back to catalog category', () => {
+  assert.equal(
+    resolveSupplierOfferDisplayCategory({
+      attributes: {},
+      catalogCategory: 'footwear'
+    }),
+    'footwear'
   );
 });

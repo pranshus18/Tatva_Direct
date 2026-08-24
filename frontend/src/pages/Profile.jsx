@@ -18,6 +18,7 @@ import { formatShippingAddressLabel, getShippingAddressFields } from '../utils/s
 import { formatDateTimeIST } from '../utils/dateTime';
 import { sanitizeSignupPlaceholderAddress } from '../utils/addressPlaceholders';
 import { mergeParsedShippingAddress } from '../utils/parseStructuredShippingAddress';
+import { shouldShowChainProfileRejectionBanner } from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
 
 const formatSavedAddressLabel = (entry, index, options = {}) => {
@@ -919,7 +920,10 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
           </p>
         </div>
       ) : null}
-      {profile?.chainProfileLastRejection?.reason && profile?.chainProfileApprovalStatus !== 'pending' ? (
+      {shouldShowChainProfileRejectionBanner({
+        rejection: profile?.chainProfileLastRejection,
+        approvalStatus: profile?.chainProfileApprovalStatus
+      }) ? (
         <div
           className="profile-section"
           style={{

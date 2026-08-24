@@ -48,7 +48,10 @@ import {
   reconcileBrandSubmissionNotice,
   reconcilePendingSupplierBrandRequests,
   isBrandAlreadyApprovedForSaveBrand,
-  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
+  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE,
+  readAcknowledgedChainProfileRejectionKey,
+  acknowledgeChainProfileRejection,
+  shouldShowChainProfileRejectionBanner
 } from '../utils/supplierSelectYourselfProfile';
 import { resolveActiveBrandPath, shouldShowApprovedBrandPathBAlert, shouldShowMixedApprovedBrandPathBAlert } from '../utils/supplierSelectYourselfPaths';
 import { formatDateTimeIST } from '../utils/dateTime';
@@ -81,6 +84,9 @@ export default function SupplierSelectYourself() {
   const [brandApprovalSubmittedSignature, setBrandApprovalSubmittedSignature] = useState('');
   const [chainConfigNotice, setChainConfigNotice] = useState(null);
   const [requestingChainConfigBrand, setRequestingChainConfigBrand] = useState('');
+  const [acknowledgedRejectionKey, setAcknowledgedRejectionKey] = useState(() =>
+    readAcknowledgedChainProfileRejectionKey()
+  );
   /** null = choose path; pathA / pathB = mutually exclusive supplier scenarios */
   const [brandPathMode, setBrandPathMode] = useState(null);
   const supplyChainSectionRef = useRef(null);
@@ -100,6 +106,18 @@ export default function SupplierSelectYourself() {
   useEffect(() => {
     hasUnsavedChangesRef.current = hasUnsavedChanges;
   }, [hasUnsavedChanges]);
+
+  const lastChainRejection = profile?.chainProfileLastRejection || null;
+  const showLastRejectionBanner = shouldShowChainProfileRejectionBanner({
+    rejection: lastChainRejection,
+    approvalStatus: profile?.chainProfileApprovalStatus,
+    acknowledgedKey: acknowledgedRejectionKey
+  });
+
+  useEffect(() => {
+    if (!showLastRejectionBanner || !lastChainRejection?.reason) return;
+    acknowledgeChainProfileRejection(lastChainRejection);
+  }, [showLastRejectionBanner, lastChainRejection]);
 
   const markLocalDraftEdit = useCallback((options = {}) => {
     // `dirty: false` protects a structural draft (e.g. the empty Path B row) from background
@@ -1841,10 +1859,20 @@ export default function SupplierSelectYourself() {
             </p>
           </div>
         ) : null}
-        {profile?.chainProfileLastRejection?.reason && profile?.chainProfileApprovalStatus !== 'pending' ? (
+        {showLastRejectionBanner ? (
           <div className="supplier-select-alert supplier-select-alert--rejected">
             <strong>Previous submission was not approved</strong>
-            <p>{profile.chainProfileLastRejection.reason}</p>
+            <p>{lastChainRejection.reason}</p>
+            <button
+              type="button"
+              className="supplier-select-alert__dismiss"
+              onClick={() => {
+                const key = acknowledgeChainProfileRejection(lastChainRejection);
+                setAcknowledgedRejectionKey(key);
+              }}
+            >
+              Dismiss
+            </button>
           </div>
         ) : null}
 

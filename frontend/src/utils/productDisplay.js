@@ -52,6 +52,17 @@ export function resolveCustomerProductDescription(...candidates) {
   return '';
 }
 
+/** True when this admin row is a different listing than the shared catalog product. */
+export function adminListingConflictsWithCatalog(product = {}) {
+  const listingName = String(product?.name || '').trim().toLowerCase();
+  const catalogName = String(product?.catalogName || '').trim().toLowerCase();
+  const listingCategory = String(product?.category || '').trim().toLowerCase();
+  const catalogCategory = String(product?.catalogCategory || '').trim().toLowerCase();
+  if (catalogName && listingName && catalogName !== listingName) return true;
+  if (catalogCategory && listingCategory && catalogCategory !== listingCategory) return true;
+  return false;
+}
+
 /** Raw supplier submission for admin review — never the admin-published catalog copy. */
 export function getAdminSupplierSubmittedDescription(product = {}) {
   return String(product?.supplierDescription || '').trim();
@@ -67,6 +78,13 @@ export function getAdminBuyerFacingCatalogDescription(product = {}) {
   const status = String(product?.status || 'pending').trim().toLowerCase();
   const publishedFromOffer = String(product?.publishedDescription || '').trim();
   const catalog = String(product?.description || '').trim();
+  const listingConflicts = adminListingConflictsWithCatalog(product);
+
+  if (listingConflicts) {
+    return isMeaningfulProductDescription(publishedFromOffer, { allowInlineSpecs: true })
+      ? publishedFromOffer
+      : '';
+  }
 
   if (status === 'approved') {
     return isMeaningfulProductDescription(catalog, { allowInlineSpecs: true }) ? catalog : '';
@@ -96,6 +114,12 @@ export function getAdminBuyerFacingEditSeed(product = {}) {
 
 /** Admin list cards: prefer saved buyer-facing copy; else supplier draft while pending. */
 export function getAdminReviewProductDescription(product = {}) {
+  if (adminListingConflictsWithCatalog(product)) {
+    const published = String(product?.publishedDescription || '').trim();
+    if (isMeaningfulProductDescription(published, { allowInlineSpecs: true })) return published;
+    return getAdminSupplierSubmittedDescription(product);
+  }
+
   const buyerFacing = getAdminBuyerFacingCatalogDescription(product);
   if (buyerFacing) return buyerFacing;
 

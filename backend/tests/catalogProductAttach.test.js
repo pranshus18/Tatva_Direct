@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {
   catalogBrandsCompatible,
   catalogBrandsConflict,
+  catalogCategoriesCompatible,
+  catalogCategoriesConflict,
+  catalogListingIdentityConflicts,
   pickExactCatalogLookupProduct
 } from '../utils/catalogProductAttach.js';
 
@@ -12,6 +15,34 @@ test('catalogBrandsConflict is true for Nothing vs JBL', () => {
   assert.equal(catalogBrandsConflict('Philips', 'Phillips'), true);
   assert.equal(catalogBrandsCompatible('Philips', 'Phillips'), false);
   assert.equal(catalogBrandsConflict('Nothing', ''), false);
+});
+
+test('catalogCategoriesConflict treats flasks and footwear as different products', () => {
+  assert.equal(catalogCategoriesConflict('flasks & bottles', 'footwear'), true);
+  assert.equal(catalogCategoriesCompatible('flasks & bottles', 'footwear'), false);
+  assert.equal(catalogCategoriesCompatible('Footwear', 'footwear'), true);
+  assert.equal(catalogCategoriesConflict('flasks & bottles', ''), false);
+});
+
+test('catalogListingIdentityConflicts detects name or category mismatch', () => {
+  assert.equal(
+    catalogListingIdentityConflicts({
+      catalogName: 'Stella Suede Ballet Flat with Iridescent Accent.',
+      catalogCategory: 'footwear',
+      listingName: 'Milton Thermosteel Flask',
+      listingCategory: 'flasks & bottles'
+    }),
+    true
+  );
+  assert.equal(
+    catalogListingIdentityConflicts({
+      catalogName: 'Milton Thermosteel Flask',
+      catalogCategory: 'flasks & bottles',
+      listingName: 'Milton Thermosteel Flask',
+      listingCategory: 'flasks & bottles'
+    }),
+    false
+  );
 });
 
 test('pickExactCatalogLookupProduct requires exact name and matching brand', () => {

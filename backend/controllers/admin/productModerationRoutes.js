@@ -22,6 +22,7 @@ import {
 import { syncOfferAttributesWithSpecifications } from '../../services/productIdentityService.js';
 import { areSupplierOfferSpecificationValuesLocked } from '../../services/supplierProductUpdateValidation.js';
 import { deleteCatalogOffer, deleteCatalogProduct } from '../../services/adminProductDeleteService.js';
+import { catalogListingIdentityConflicts } from '../../utils/catalogProductAttach.js';
 
 /** Sync admin spec keys onto supplier offers without wiping values the supplier already saved. */
 async function syncApprovedProductSpecificationOffers(supabase, product, nowIso) {
@@ -41,6 +42,17 @@ async function syncApprovedProductSpecificationOffers(supabase, product, nowIso)
   const offerNeedsFillBySupplierId = new Map();
 
   for (const row of offerRowsForSpecs || []) {
+    const attrs = row?.attributes && typeof row.attributes === 'object' ? row.attributes : {};
+    if (
+      catalogListingIdentityConflicts({
+        catalogName: product.name,
+        catalogCategory: product.category,
+        listingName: attrs.listingName || attrs.name,
+        listingCategory: attrs.category
+      })
+    ) {
+      continue;
+    }
     const existingOfferSpecs =
       parseSpecificationsObject(row?.attributes?.specifications) || {};
     const mergedSpecs = mergeVariantSpecificationTemplate(adminSpecKeys, existingOfferSpecs);
@@ -213,11 +225,21 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         });
       }
 
+      const identityOfferAttrs =
+        offerRow?.attributes && typeof offerRow.attributes === 'object' ? offerRow.attributes : {};
+      const preserveSharedCatalogIdentity = catalogListingIdentityConflicts({
+        catalogName: existingProduct.name,
+        catalogCategory: existingProduct.category,
+        listingName: identityOfferAttrs.listingName || identityOfferAttrs.name,
+        listingCategory: identityOfferAttrs.category
+      });
+
       // If admin never polished/re-saved, promote supplier description to catalog + offer publish.
       const approvedBuyerFacingDescription = getAdminBuyerFacingDescriptionForApproval(productForApproval);
       const catalogDescription = String(existingProduct?.description || '').trim();
       const publishedFromOffer = String(productForApproval?.publishedDescription || '').trim();
       const shouldPromoteDescription =
+        !preserveSharedCatalogIdentity &&
         Boolean(approvedBuyerFacingDescription) &&
         (!catalogDescription || catalogDescription !== approvedBuyerFacingDescription || !publishedFromOffer);
 

@@ -23,6 +23,7 @@ import {
   listApprovedBrandNamesBlockingSave,
   profileHasBrandsNeedingApprovalRequest,
   isSelectYourselfBrandAlreadyApproved,
+  shouldShowChainProfileRejectionBanner,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
 } from './supplierSelectYourselfProfile';
@@ -1079,5 +1080,43 @@ describe('matchCompanyInfoEntry', () => {
     const draft = { id: 'path-b-draft', brands: 'safari' };
     expect(matchCompanyInfoEntry(approved, { entryId: draft.id, brand: draft.brands })).toBe(false);
     expect(matchCompanyInfoEntry(draft, { entryId: draft.id, brand: draft.brands })).toBe(true);
+  });
+});
+
+describe('shouldShowChainProfileRejectionBanner', () => {
+  const rejection = {
+    id: 'req-1',
+    reason: 'no need',
+    reviewedAt: '2026-08-21T12:00:00.000Z'
+  };
+
+  it('hides the banner on an approved profile after admin rejection', () => {
+    expect(
+      shouldShowChainProfileRejectionBanner({
+        rejection,
+        approvalStatus: 'approved',
+        acknowledgedKey: ''
+      })
+    ).toBe(false);
+  });
+
+  it('hides the banner after it was already seen this session', () => {
+    expect(
+      shouldShowChainProfileRejectionBanner({
+        rejection,
+        approvalStatus: 'draft',
+        acknowledgedKey: 'req-1'
+      })
+    ).toBe(false);
+  });
+
+  it('shows the banner for a new rejection while a draft is in progress', () => {
+    expect(
+      shouldShowChainProfileRejectionBanner({
+        rejection,
+        approvalStatus: 'draft',
+        acknowledgedKey: ''
+      })
+    ).toBe(true);
   });
 });

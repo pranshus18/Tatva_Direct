@@ -246,6 +246,14 @@ export function buildAsinLikeId(catalog = {}) {
   return `TS${toShortAlphaNum(seed, CATALOG_TSIN_BODY_LENGTH)}`;
 }
 
+/** New 5-char TSIN when the deterministic catalog code collides with an unrelated row. */
+export function buildDisambiguatedAsinLikeId(baseAsin, salt = '') {
+  return `TS${toShortAlphaNum(
+    `asin-retry:${String(baseAsin || '').trim()}:${String(salt || '').trim()}`,
+    CATALOG_TSIN_BODY_LENGTH
+  )}`;
+}
+
 /**
  * Variant TSIN deterministic ID format: exactly 7 characters total.
  * - Legacy parent (4 chars): TS + product(2) + variant(3) => 7 chars (e.g. TSA7K3M)
@@ -791,6 +799,7 @@ export default {
   isPersistableProductBarcode,
   isVariantIdentityExcludedSpecKey,
   buildAsinLikeId,
+  buildDisambiguatedAsinLikeId,
   buildVariantAsinLikeId,
   isLegacyCatalogTsin,
   CATALOG_TSIN_TOTAL_LENGTH,

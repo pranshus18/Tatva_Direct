@@ -1490,3 +1490,49 @@ export function buildSupplierChainSavePayload(profile, entries = null, options =
     ...chainFields
   };
 }
+
+export const CHAIN_PROFILE_REJECTION_ACK_STORAGE_KEY = 'tatva.selectYourself.chainProfileRejectionAck';
+
+export function getChainProfileRejectionAckKey(rejection = {}) {
+  const id = String(rejection?.id || '').trim();
+  if (id) return id;
+  const reviewedAt = String(rejection?.reviewedAt || '').trim();
+  const reason = String(rejection?.reason || '').trim();
+  if (reviewedAt || reason) return `${reviewedAt}::${reason}`;
+  return '';
+}
+
+export function readAcknowledgedChainProfileRejectionKey(storage = globalThis.sessionStorage) {
+  try {
+    return String(storage?.getItem?.(CHAIN_PROFILE_REJECTION_ACK_STORAGE_KEY) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function acknowledgeChainProfileRejection(rejection, storage = globalThis.sessionStorage) {
+  const key = getChainProfileRejectionAckKey(rejection);
+  if (!key) return '';
+  try {
+    storage?.setItem?.(CHAIN_PROFILE_REJECTION_ACK_STORAGE_KEY, key);
+  } catch {
+    // Ignore private-mode / disabled storage.
+  }
+  return key;
+}
+
+export function shouldShowChainProfileRejectionBanner({
+  rejection = null,
+  approvalStatus = '',
+  acknowledgedKey = ''
+} = {}) {
+  const reason = String(rejection?.reason || '').trim();
+  if (!reason) return false;
+  const status = String(approvalStatus || '').trim().toLowerCase();
+  // After reject, Select yourself falls back to the previously approved assignment.
+  // Do not keep a historical rejection banner on that live approved profile.
+  if (!status || status === 'pending' || status === 'approved') return false;
+  const currentKey = getChainProfileRejectionAckKey(rejection);
+  if (currentKey && currentKey === String(acknowledgedKey || '').trim()) return false;
+  return true;
+}

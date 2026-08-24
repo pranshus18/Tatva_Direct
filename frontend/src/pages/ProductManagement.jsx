@@ -3614,7 +3614,14 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     // Update form data first - this will trigger the useEffect
     // Store the actual category name (lowercase) in formData.
-    setFormData({ ...formData, category: updatedCategory });
+    setFormData({
+      ...formData,
+      category: updatedCategory,
+      ...(!product ? { catalogProductId: '' } : {})
+    });
+    if (!product) {
+      selectedCatalogAttachIdRef.current = '';
+    }
     setShowCategorySuggestions(false);
 
     // ALWAYS load admin-defined specs for selected category + current model hint.

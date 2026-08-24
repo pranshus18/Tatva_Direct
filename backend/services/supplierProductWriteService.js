@@ -6,7 +6,13 @@ import {
   parsePgUniqueViolationIdentity,
   toCatalogProductWriteErrorResponse
 } from '../utils/supplierOfferUniqueness.js';
-import { catalogBrandsCompatible, catalogBrandsConflict } from '../utils/catalogProductAttach.js';
+import {
+  catalogBrandsCompatible,
+  catalogBrandsConflict,
+  catalogCategoriesConflict,
+  normalizeCatalogLookupName
+} from '../utils/catalogProductAttach.js';
+import { buildDisambiguatedAsinLikeId } from './productIdentityService.js';
 
 function normalizeOfferPrice(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === '') return null;
@@ -159,9 +165,23 @@ export async function findExistingProductCandidate(
   }
 ) {
   const candidateBrand = normalizeText?.(identityBundle?.catalog?.brand) || '';
+  const candidateGtin = String(identityBundle?.catalog?.gtin || '').trim();
+  const submittedCategory = categoryName || identityBundle?.catalog?.category || '';
 
   const brandsCompatible = (product) =>
     catalogBrandsCompatible(candidateBrand, product?.brand);
+
+  const acceptCandidate = (product, matchStrength) => {
+    if (!product) return { product: null, matchStrength: 'none' };
+    const existingGtin = String(product.gtin || '').trim();
+    const gtinExact = Boolean(candidateGtin && existingGtin && candidateGtin === existingGtin);
+    // GTIN is true product identity. Everything else must stay in the same category
+    // so a flask/bottle listing cannot reuse a footwear catalog row.
+    if (!gtinExact && catalogCategoriesConflict(submittedCategory, product.category)) {
+      return { product: null, matchStrength: 'none' };
+    }
+    return { product, matchStrength };
+  };
 
   if (selectedCatalogProductId) {
     const { data: bySelectedId } = await supabase
@@ -170,7 +190,7 @@ export async function findExistingProductCandidate(
       .eq('id', selectedCatalogProductId)
       .maybeSingle();
     if (bySelectedId && !catalogBrandsConflict(candidateBrand, bySelectedId.brand)) {
-      return { product: bySelectedId, matchStrength: 'explicit' };
+      return acceptCandidate(bySelectedId, 'explicit');
     }
   }
 
@@ -178,7 +198,7 @@ export async function findExistingProductCandidate(
     canonicalProductFromIdentifier &&
     !catalogBrandsConflict(candidateBrand, canonicalProductFromIdentifier.brand)
   ) {
-    return { product: canonicalProductFromIdentifier, matchStrength: 'strong' };
+    return acceptCandidate(canonicalProductFromIdentifier, 'strong');
   }
 
   if (identityBundle?.catalog?.gtin) {
@@ -188,7 +208,7 @@ export async function findExistingProductCandidate(
       .eq('gtin', identityBundle.catalog.gtin)
       .maybeSingle();
     if (byGtin && !catalogBrandsConflict(candidateBrand, byGtin.brand)) {
-      return { product: byGtin, matchStrength: 'strong' };
+      return acceptCandidate(byGtin, 'strong');
     }
   }
 
@@ -200,7 +220,7 @@ export async function findExistingProductCandidate(
       .eq('mpn', identityBundle.catalog.mpn)
       .maybeSingle();
     if (byBrandMpn) {
-      return { product: byBrandMpn, matchStrength: 'strong' };
+      return acceptCandidate(byBrandMpn, 'strong');
     }
   }
 
@@ -213,7 +233,7 @@ export async function findExistingProductCandidate(
     if (byCatalogKey) {
       // catalog_key includes name/category/brand/unit — treat as strong when brands agree.
       if (brandsCompatible(byCatalogKey)) {
-        return { product: byCatalogKey, matchStrength: 'strong' };
+        return acceptCandidate(byCatalogKey, 'strong');
       }
     }
   }
@@ -236,7 +256,7 @@ export async function findExistingProductCandidate(
           brandsCompatible(p)
       );
       if (exactMatch) {
-        return { product: exactMatch, matchStrength: 'weak' };
+        return acceptCandidate(exactMatch, 'weak');
       }
     }
   }
@@ -262,6 +282,41 @@ export function resolveSupplierOfferDisplayName({ attributes = {}, catalogName =
   if (offerName) return offerName;
   const catalog = catalogName != null && String(catalogName).trim() !== '' ? String(catalogName).trim() : '';
   return catalog || 'Product';
+}
+
+/** Supplier-submitted category wins over a mis-linked shared catalog row. */
+export function resolveSupplierOfferDisplayCategory({ attributes = {}, catalogCategory = '' } = {}) {
+  const offerCategory =
+    attributes?.category != null && String(attributes.category).trim() !== ''
+      ? String(attributes.category).trim()
+      : '';
+  if (offerCategory) return offerCategory;
+  return catalogCategory != null && String(catalogCategory).trim() !== ''
+    ? String(catalogCategory).trim()
+    : '';
+}
+
+/**
+ * Unique-constraint recovery may find a row that only shares a short TSIN/ASIN.
+ * Reuse that row only when it is actually the same catalog product.
+ */
+export function isSameCatalogProductForRecovery(recovered, identityBundle = {}) {
+  if (!recovered?.id) return false;
+  const catalog = identityBundle.catalog || {};
+  const recoveredGtin = String(recovered.gtin || '').trim();
+  const candidateGtin = String(catalog.gtin || '').trim();
+  if (candidateGtin && recoveredGtin && candidateGtin === recoveredGtin) return true;
+
+  const recoveredKey = String(recovered.catalog_key || '').trim();
+  const candidateKey = String(identityBundle.catalogKey || '').trim();
+  if (candidateKey && recoveredKey && candidateKey === recoveredKey) return true;
+
+  const recoveredName = normalizeCatalogLookupName(recovered.name);
+  const candidateName = normalizeCatalogLookupName(catalog.name);
+  const namesMatch = Boolean(recoveredName && candidateName && recoveredName === candidateName);
+  const categoriesMatch = !catalogCategoriesConflict(catalog.category, recovered.category);
+  const brandsOk = !catalogBrandsConflict(catalog.brand, recovered.brand);
+  return namesMatch && categoriesMatch && brandsOk;
 }
 
 /** Move a rejected shared catalog product back to pending when a supplier resubmits it. */
@@ -410,7 +465,7 @@ export async function createBaseProductIfNeeded(
         resolvedBarcodeForPos,
         uniqueError: createError
       });
-      if (recovered?.id) {
+      if (recovered?.id && isSameCatalogProductForRecovery(recovered, identityBundle)) {
         return {
           productId: recovered.id,
           catalogAsin: recovered.asin || identityBundle.asinLikeId,
@@ -418,9 +473,13 @@ export async function createBaseProductIfNeeded(
         };
       }
       const conflict = parsePgUniqueViolationIdentity(createError);
+      const errorHaystack = `${createError?.message || ''} ${createError?.details || ''} ${createError?.constraint || ''}`;
       const barcodeConflict =
         conflict?.column === 'barcode' ||
-        /idx_products_barcode|products_.*barcode/i.test(String(createError?.message || ''));
+        /idx_products_barcode|products_.*barcode/i.test(errorHaystack);
+      const asinConflict =
+        conflict?.column === 'asin' ||
+        /uq_products_asin|products_.*asin/i.test(errorHaystack);
       if (barcodeConflict && productData.barcode) {
         const retryPayload = { ...productData };
         delete retryPayload.barcode;
@@ -442,7 +501,49 @@ export async function createBaseProductIfNeeded(
             resolvedBarcodeForPos: null,
             uniqueError: retryError
           });
-          if (retryRecovered?.id) {
+          if (retryRecovered?.id && isSameCatalogProductForRecovery(retryRecovered, identityBundle)) {
+            return {
+              productId: retryRecovered.id,
+              catalogAsin: retryRecovered.asin || identityBundle.asinLikeId,
+              isNewProduct: false
+            };
+          }
+        }
+      }
+      if (asinConflict) {
+        const baseAsin = String(productData.asin || identityBundle?.asinLikeId || '').trim();
+        for (let attempt = 1; attempt <= 8; attempt += 1) {
+          const retryPayload = {
+            ...productData,
+            asin: buildDisambiguatedAsinLikeId(
+              baseAsin,
+              `${identityBundle?.catalogKey || ''}:${attempt}`
+            )
+          };
+          const { data: retriedProduct, error: retryError } = await supabase
+            .from('products')
+            .insert(retryPayload)
+            .select()
+            .single();
+          if (!retryError && retriedProduct?.id) {
+            return {
+              productId: retriedProduct.id,
+              catalogAsin: retriedProduct.asin || retryPayload.asin,
+              isNewProduct: true
+            };
+          }
+          if (!retryError || !isPgUniqueViolation(retryError)) {
+            return {
+              error: retryError || createError,
+              publicError: toCatalogProductWriteErrorResponse(retryError || createError)
+            };
+          }
+          const retryRecovered = await recoverExistingCatalogProduct(supabase, {
+            identityBundle,
+            resolvedBarcodeForPos,
+            uniqueError: retryError
+          });
+          if (retryRecovered?.id && isSameCatalogProductForRecovery(retryRecovered, identityBundle)) {
             return {
               productId: retryRecovered.id,
               catalogAsin: retryRecovered.asin || identityBundle.asinLikeId,
