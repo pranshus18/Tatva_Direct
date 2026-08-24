@@ -18,6 +18,12 @@ import {
   mergeSupplierBrandRequestsIntoProfile,
   resolveSelectYourselfBrandStepStatus,
   reconcileBrandSubmissionNotice,
+  listPendingChainRoleSubmissions,
+  hasPendingChainRoleSubmissionForBrand,
+  resolveChainProfileApprovalStatusForBrand,
+  entryNeedsChainRoleAdminReview,
+  clearSubmittedPathBBrandDrafts,
+  dedupeSupplierBrandRequestsByLatest,
   reconcilePendingSupplierBrandRequests,
   listPendingBrandNamesBlockingSave,
   listApprovedBrandNamesBlockingSave,
@@ -174,6 +180,7 @@ describe('findSupplierBrandRequest', () => {
       requestedAt: '2026-07-28T10:15:00.000Z',
       submittedAt: '2026-07-28T10:15:00.000Z',
       createdAt: null,
+      updatedAt: null,
       rejectionReason: ''
     });
   });
@@ -192,6 +199,20 @@ describe('findSupplierBrandRequest', () => {
     ]);
     expect(request?.submittedAt).toBe('2026-07-28T09:00:00.000Z');
     expect(request?.requestedAt).toBe('2026-07-28T09:00:00.000Z');
+  });
+
+  it('prefers the latest row when stale pending and newer rejected both exist', () => {
+    const match = findSupplierBrandRequest('APPI', [
+      { name: 'APPI', status: 'pending', updatedAt: '2026-08-24T10:00:00.000Z' },
+      {
+        name: 'APPI',
+        status: 'rejected',
+        rejectionReason: 'Invalid brand',
+        updatedAt: '2026-08-24T11:00:00.000Z'
+      }
+    ]);
+    expect(match?.status).toBe('rejected');
+    expect(match?.rejectionReason).toBe('Invalid brand');
   });
 });
 
@@ -355,6 +376,30 @@ describe('reconcileBrandSubmissionNotice', () => {
       supplierApprovedBrands: []
     });
     expect(next).toBe(notice);
+  });
+
+  it('drops the pending banner when admin rejected the request', () => {
+    const notice = {
+      tone: 'pending',
+      title: 'Brand request submitted for "APPI"',
+      brands: [{ name: 'APPI', status: 'pending', submittedAt: '2026-08-24T10:00:00.000Z' }],
+      message: 'waiting'
+    };
+    const next = reconcileBrandSubmissionNotice(notice, {
+      profile: {
+        supplierBrandRequests: [
+          {
+            name: 'APPI',
+            status: 'rejected',
+            rejectionReason: 'Not a valid brand',
+            updatedAt: '2026-08-24T11:00:00.000Z'
+          }
+        ]
+      },
+      catalogBrands: [],
+      supplierApprovedBrands: []
+    });
+    expect(next).toBeNull();
   });
 });
 
@@ -1018,6 +1063,86 @@ describe('buildSupplyChainSummaryRows', () => {
   });
 });
 
+describe('listPendingChainRoleSubmissions', () => {
+  it('returns empty when profile is not pending', () => {
+    expect(listPendingChainRoleSubmissions({ chainProfileApprovalStatus: 'approved' })).toEqual([]);
+  });
+
+  it('returns only brands with a submitted role awaiting review', () => {
+    const profile = {
+      chainProfileApprovalStatus: 'pending',
+      chainProfilePendingSubmittedAt: '2026-08-24T09:14:26.000Z',
+      approvedChainProfile: {
+        companyInfoEntries: [{ id: '1', brands: 'acc', role: '' }]
+      },
+      companyInfoEntries: [
+        { id: '1', brands: 'acc', role: '' },
+        { id: '2', brands: 'samsung', role: 'dealer' }
+      ]
+    };
+
+    expect(listPendingChainRoleSubmissions(profile)).toEqual([
+      {
+        brand: 'samsung',
+        role: 'dealer',
+        roleLabel: 'Dealer',
+        submittedAt: '2026-08-24T09:14:26.000Z'
+      }
+    ]);
+  });
+
+  it('scopes pending status to brands that actually submitted a role', () => {
+    const profile = {
+      chainProfileApprovalStatus: 'pending',
+      approvedChainProfile: {
+        companyInfoEntries: [{ id: '1', brands: 'acc', role: '' }]
+      },
+      companyInfoEntries: [
+        { id: '1', brands: 'acc', role: '' },
+        { id: '2', brands: 'samsung', role: 'dealer' }
+      ]
+    };
+
+    expect(hasPendingChainRoleSubmissionForBrand(profile, 'acc')).toBe(false);
+    expect(hasPendingChainRoleSubmissionForBrand(profile, 'samsung')).toBe(true);
+    expect(resolveChainProfileApprovalStatusForBrand(profile, 'acc')).toBe('');
+    expect(resolveChainProfileApprovalStatusForBrand(profile, 'samsung')).toBe('pending');
+  });
+});
+
+describe('entryNeedsChainRoleAdminReview', () => {
+  it('requires a pending role and brand', () => {
+    expect(entryNeedsChainRoleAdminReview(null, { brands: 'acc', role: '' })).toBe(false);
+    expect(entryNeedsChainRoleAdminReview(null, { brands: 'acc', role: 'dealer' })).toBe(true);
+  });
+});
+
+describe('dedupeSupplierBrandRequestsByLatest', () => {
+  it('keeps the newest status per brand key', () => {
+    const rows = dedupeSupplierBrandRequestsByLatest([
+      { name: 'APPI', status: 'pending', updatedAt: '2026-08-24T10:00:00.000Z' },
+      { name: 'APPI', status: 'rejected', updatedAt: '2026-08-24T11:00:00.000Z' }
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe('rejected');
+  });
+});
+
+describe('clearSubmittedPathBBrandDrafts', () => {
+  it('removes submitted Path B brand drafts and leaves an empty row', () => {
+    const profile = {
+      companyInfoEntries: [
+        { id: '1', brands: 'acc', role: 'dealer' },
+        { id: '2', brands: 'APPI', role: '' }
+      ]
+    };
+    const cleared = clearSubmittedPathBBrandDrafts(profile, ['APPI']);
+    expect(cleared.companyInfoEntries.some((entry) => entry.brands === 'APPI')).toBe(false);
+    expect(cleared.companyInfoEntries.some((entry) => entry.brands === 'acc')).toBe(true);
+    expect(cleared.companyInfoEntries.some((entry) => !String(entry?.brands || '').trim())).toBe(true);
+  });
+});
+
 describe('mergeCompanyInfoEntriesById', () => {
   it('lets later lists overwrite earlier lists for the same id', () => {
     const merged = mergeCompanyInfoEntriesById(
@@ -1071,6 +1196,20 @@ describe('buildSupplierChainSavePayload', () => {
 
     const saved = buildSupplierChainSavePayload(profile);
     expect(saved.companyInfoEntries).toHaveLength(1);
+  });
+
+  it('does not send legacy top-level brands when entries have no configured brand', () => {
+    const profile = {
+      brands: 'StaleLegacyBrand',
+      supplierRole: 'dealer',
+      companyInfoEntries: [{ id: 'e1', role: '', brands: '' }]
+    };
+    const payload = buildSupplierChainSavePayload(profile, null, {
+      forApi: true,
+      saveBrandApprovalOnly: true
+    });
+    expect(payload.brands).toBe('');
+    expect(payload.saveBrandApprovalOnly).toBe(true);
   });
 });
 

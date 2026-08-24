@@ -167,6 +167,28 @@ export function validateSupplierChainProfileData(profileData) {
   return validateCompanyInfoEntriesList(entries);
 }
 
+/** Unique brand names configured on company-info entries (ignores legacy top-level brands). */
+export function collectConfiguredBrandsFromEntries(chainOrEntries = {}) {
+  const entries = Array.isArray(chainOrEntries)
+    ? chainOrEntries
+    : Array.isArray(chainOrEntries?.companyInfoEntries)
+      ? chainOrEntries.companyInfoEntries
+      : [];
+  const brandStrings = [];
+  for (const entry of entries) {
+    const brandsStr = String(entry?.brands || '').trim();
+    if (brandsStr) brandStrings.push(brandsStr);
+  }
+  return [
+    ...new Set(
+      brandStrings
+        .flatMap((value) => parseBrandsListForValidation(value))
+        .map((brand) => brand.trim())
+        .filter(Boolean)
+    )
+  ];
+}
+
 /** True when an entry has started supply-chain registration (Select yourself). */
 export function hasSupplyChainRegistrationData(entry = {}) {
   if (entry?.supplyChainRegistrationStarted === true) return true;

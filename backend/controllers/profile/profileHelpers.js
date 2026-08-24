@@ -16,6 +16,7 @@ import {
   normalizeCompanyInfoEntries,
   syncApprovedBrandsIntoUserProfile
 } from '../../services/supplierChainProfileService.js';
+import { resolveReviewPayloadForRequest } from '../../services/supplierChainAdminService.js';
 import {
   SUPPLY_CHAIN_ROLES_IN_ORDER,
   catalogBrandDedupKey,
@@ -600,17 +601,27 @@ export async function createProfileResponse(user) {
           companyInfoEntries: normalizeCompanyInfoEntries(pending.payload.companyInfoEntries || [])
         }
       : null;
+    const pendingReviewPayload = pending?.payload
+      ? resolveReviewPayloadForRequest(base, pending.payload)
+      : null;
+    const pendingRoleSubmissionCount = Array.isArray(pendingReviewPayload?.companyInfoEntries)
+      ? pendingReviewPayload.companyInfoEntries.filter(
+          (entry) => String(entry?.role || '').trim() && String(entry?.brands || '').trim()
+        ).length
+      : 0;
+    const hasPendingRoleSubmission = pendingRoleSubmissionCount > 0;
+    const activePendingChain = hasPendingRoleSubmission ? pendingChain : null;
 
     const mergedEntries = mergeChainEntriesForDisplay(
       approvedChain.companyInfoEntries,
-      pendingChain?.companyInfoEntries,
+      activePendingChain?.companyInfoEntries,
       draftHasValues ? draftChain.companyInfoEntries : []
     );
 
-    const displayChain = pendingChain
+    const displayChain = activePendingChain
       ? {
-          supplierRole: pendingChain.supplierRole || approvedChain.supplierRole,
-          brands: pendingChain.brands || approvedChain.brands,
+          supplierRole: activePendingChain.supplierRole || approvedChain.supplierRole,
+          brands: activePendingChain.brands || approvedChain.brands,
           companyInfoEntries: mergedEntries
         }
       : draftHasValues
@@ -628,7 +639,7 @@ export async function createProfileResponse(user) {
     const firstEntry = entries[0];
 
     const chainProfileLastRejection =
-      !pending && latestReq?.status === 'rejected'
+      !hasPendingRoleSubmission && latestReq?.status === 'rejected'
         ? {
             id: latestReq.id || null,
             reason: latestReq.rejection_reason || null,
@@ -670,7 +681,7 @@ export async function createProfileResponse(user) {
         approvedChain.companyInfoEntries.some(
           (entry) => String(entry?.brands || entry?.role || '').trim()
         ));
-    const chainProfileApprovalStatus = pending
+    const chainProfileApprovalStatus = hasPendingRoleSubmission
       ? 'pending'
       : draftHasValues
         ? 'draft'
@@ -691,8 +702,8 @@ export async function createProfileResponse(user) {
       authorizationCertificateUrl: base.authorizationCertificateUrl || '',
       companyInfoEntries: entries,
       chainProfileApprovalStatus,
-      chainProfilePendingSubmittedAt: pending?.created_at || null,
-      chainProfilePendingId: pending?.id || null,
+      chainProfilePendingSubmittedAt: hasPendingRoleSubmission ? pending?.created_at || null : null,
+      chainProfilePendingId: hasPendingRoleSubmission ? pending?.id || null : null,
       chainProfileDraftSavedAt: base.chainProfileDraftUpdatedAt || null,
       totalOrdersPlaced: purchaseSummary.totalOrdersPlaced,
       totalAmountPlaced: purchaseSummary.totalAmountPlaced,
@@ -701,7 +712,7 @@ export async function createProfileResponse(user) {
       totalOrdersReceived,
       totalRevenueReceived,
       approvedChainProfile:
-        pending || draftHasValues
+        hasPendingRoleSubmission || draftHasValues
           ? {
               supplierRole: approvedChain.supplierRole,
               brands: approvedChain.brands,
@@ -724,7 +735,8 @@ export async function createProfileResponse(user) {
           rejectionReason: row.rejectionReason || '',
           requestedAt: submittedAt,
           submittedAt,
-          createdAt: row.createdAt || null
+          createdAt: row.createdAt || null,
+          updatedAt: row.updatedAt || row.updated_at || null
         };
       })
     };

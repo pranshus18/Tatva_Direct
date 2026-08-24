@@ -91,6 +91,52 @@ export function normalizeCompanyInfoEntries(rawEntries) {
   return normalized;
 }
 
+function createEmptyCompanyInfoEntry() {
+  return normalizeEntryDocumentFields({
+    id: uuidv4(),
+    role: '',
+    brands: '',
+    gstin: '',
+    companyName: '',
+    ownershipDetails: '',
+    brandApprovalDocumentUrls: [],
+    brandApprovalDocumentUrl: '',
+    authorizationCertificateUrls: [],
+    authorizationCertificateUrl: ''
+  });
+}
+
+/** Drop Path B brand drafts after a successful brand-approval submit; keep role-setup rows. */
+export function stripSubmittedPathBBrandDraftEntries(entries = [], submittedBrandKeys = new Set()) {
+  const keys =
+    submittedBrandKeys instanceof Set
+      ? submittedBrandKeys
+      : new Set(
+          (Array.isArray(submittedBrandKeys) ? submittedBrandKeys : [])
+            .map((name) => catalogBrandDedupKey(name))
+            .filter(Boolean)
+        );
+  if (keys.size === 0) {
+    return normalizeCompanyInfoEntries(entries);
+  }
+
+  const normalized = normalizeCompanyInfoEntries(entries);
+  const kept = normalized.filter((entry) => {
+    const brand = String(entry?.brands || '').trim();
+    if (!brand) return true;
+    const brandKey = catalogBrandDedupKey(brand);
+    if (!brandKey || !keys.has(brandKey)) return true;
+    if (String(entry?.role || '').trim()) return true;
+    return false;
+  });
+
+  if (!kept.some((entry) => !String(entry?.brands || '').trim())) {
+    kept.push(createEmptyCompanyInfoEntry());
+  }
+
+  return kept;
+}
+
 function mergeChainEntryDocuments(existing = {}, incoming = {}) {
   const roleUrls = [
     ...new Set([
@@ -271,6 +317,39 @@ export function collectDeclaredBrandNamesFromProfiles(...profiles) {
  * row for the same identity is already approved — even if another supplier owns it.
  * Pure helper so Select yourself stays in sync without requiring declared profile brands.
  */
+function brandRequestRowTimestamp(row = {}) {
+  return String(
+    row?.updated_at ||
+      row?.updatedAt ||
+      row?.requested_at ||
+      row?.requestedAt ||
+      row?.created_at ||
+      row?.createdAt ||
+      ''
+  );
+}
+
+function normalizeMergedBrandRequestRow(row = {}) {
+  const name = String(row?.name || '').trim();
+  const key = brandIdentityKey(row?.normalized_name || row?.normalizedName || name);
+  if (!name || !key) return null;
+  return {
+    name,
+    normalized_name: key,
+    status: String(row?.status || 'pending').trim().toLowerCase(),
+    rejectionReason: String(row?.rejection_reason || row?.rejectionReason || '').trim(),
+    requestedAt:
+      row?.requested_at ||
+      row?.requestedAt ||
+      row?.updated_at ||
+      row?.created_at ||
+      row?.createdAt ||
+      null,
+    createdAt: row?.created_at || row?.createdAt || null,
+    updatedAt: row?.updated_at || row?.updatedAt || null
+  };
+}
+
 export function mergeSupplierBrandRequestsWithApprovedCatalog({
   ownRows = [],
   catalogRows = [],
@@ -281,31 +360,32 @@ export function mergeSupplierBrandRequestsWithApprovedCatalog({
   const uid = String(userId || '').trim();
 
   const upsert = (row, { force = false } = {}) => {
-    const name = String(row?.name || '').trim();
-    const key = brandIdentityKey(row?.normalized_name || row?.normalizedName || name);
-    if (!name || !key) return;
-    const status = String(row?.status || 'pending').trim().toLowerCase();
+    const incoming = normalizeMergedBrandRequestRow(row);
+    if (!incoming) return;
+    const { status } = incoming;
+    const key = incoming.normalized_name;
     const existing = byKey.get(key);
     const existingStatus = String(existing?.status || '').toLowerCase();
-    // Prefer approved over pending/rejected for the same brand identity.
     const rank = { approved: 0, pending: 1, rejected: 2 };
-    if (!force && existing && (rank[existingStatus] ?? 9) < (rank[status] ?? 9)) {
-      return;
+
+    if (!force && existing) {
+      const existingRank = rank[existingStatus] ?? 9;
+      const incomingRank = rank[status] ?? 9;
+      // Approved catalog/request rows always beat pending/rejected for the same identity.
+      if (existingRank === 0 && incomingRank > 0) return;
+      if (existingRank > 0 && incomingRank === 0) {
+        // fall through — incoming approved replaces non-approved
+      } else if (existingRank > 0 && incomingRank > 0) {
+        // Admin reject/resubmit must not leave stale pending when a newer row exists.
+        const existingTs = brandRequestRowTimestamp(existing);
+        const incomingTs = brandRequestRowTimestamp(incoming);
+        if (incomingTs <= existingTs) return;
+      } else if (existingRank < incomingRank) {
+        return;
+      }
     }
-    byKey.set(key, {
-      name,
-      normalized_name: key,
-      status,
-      rejectionReason: String(row?.rejection_reason || row?.rejectionReason || '').trim(),
-      requestedAt:
-        row?.requested_at ||
-        row?.requestedAt ||
-        row?.updated_at ||
-        row?.created_at ||
-        row?.createdAt ||
-        null,
-      createdAt: row?.created_at || row?.createdAt || null
-    });
+
+    byKey.set(key, incoming);
   };
 
   for (const row of ownRows || []) {

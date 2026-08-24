@@ -56,6 +56,7 @@ import {
 } from '../utils/currentLocationAddress';
 import {
   formatShippingAddressLabel,
+  formatShippingAddressOptionLabel,
   formatShippingAddressPreview,
   normalizeShippingAddressBookEntry
 } from '../utils/shippingAddressLabel';
@@ -2578,11 +2579,21 @@ const SupplierUpstream = ({ user }) => {
                 <option value="">No shipping address</option>
                 {shippingAddressBook.map((entry, index) => (
                   <option key={entry.id} value={entry.id}>
-                    {formatShippingAddressLabel(entry, index)}
+                    {formatShippingAddressOptionLabel(entry, index)}
                   </option>
                 ))}
                 <option value="__new__">+ Add new address</option>
               </select>
+
+              {selectedShippingAddressId &&
+              selectedShippingAddressId !== '__new__' ? (
+                <p className="text-xs text-muted-foreground">
+                  {formatShippingAddressPreview(
+                    shippingAddressBook.find((entry) => entry.id === selectedShippingAddressId) ||
+                      {}
+                  )}
+                </p>
+              ) : null}
 
               {selectedShippingAddressId === '__new__' ? (
                 <div className="space-y-3">

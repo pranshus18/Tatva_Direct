@@ -51,7 +51,12 @@ import {
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE,
   readAcknowledgedChainProfileRejectionKey,
   acknowledgeChainProfileRejection,
-  shouldShowChainProfileRejectionBanner
+  shouldShowChainProfileRejectionBanner,
+  listPendingChainRoleSubmissions,
+  resolveChainProfileApprovalStatusForBrand,
+  hasPendingChainRoleSubmissionForBrand,
+  clearSubmittedPathBBrandDrafts,
+  normalizeSupplierBrandRequestsOnProfile
 } from '../utils/supplierSelectYourselfProfile';
 import { resolveActiveBrandPath, shouldShowApprovedBrandPathBAlert, shouldShowMixedApprovedBrandPathBAlert } from '../utils/supplierSelectYourselfPaths';
 import { formatDateTimeIST } from '../utils/dateTime';
@@ -368,7 +373,10 @@ export default function SupplierSelectYourself() {
   });
 
   const showBrandApprovalRequestButton =
-    activeBrandPath !== 'pathA' && hasBrandsNeedingApprovalRequest;
+    activeBrandPath !== 'pathA' &&
+    (hasBrandsNeedingApprovalRequest || activeBrandPath === 'pathB' || activeBrandPath === null);
+
+  const brandSaveRequiresSelection = !hasSavedBrandEntries;
 
   const pendingRequestStatusBrand =
     pendingBrandsBlockingSave[0] ||
@@ -377,11 +385,27 @@ export default function SupplierSelectYourself() {
     pendingBrandRequests[0]?.name ||
     '';
 
+  const showConsolidatedPendingBrandAlert =
+    visibleBrandSubmissionNotice?.tone === 'pending' ||
+    (!visibleBrandSubmissionNotice && pendingBrandRequests.length > 0 && activeBrandPath !== 'pathA');
+
+  const pendingBrandRequestSections = useMemo(() => {
+    const currentKeys = new Set(
+      pendingBrandsBlockingSave.map((name) => brandKeyForDuplicateCheck(name)).filter(Boolean)
+    );
+    const current = pendingBrandRequests.filter((row) =>
+      currentKeys.has(brandKeyForDuplicateCheck(row.name))
+    );
+    const other = pendingBrandRequests.filter(
+      (row) => !currentKeys.has(brandKeyForDuplicateCheck(row.name))
+    );
+    return { current, other };
+  }, [pendingBrandRequests, pendingBrandsBlockingSave]);
+
   const showPendingRequestStatusLine =
     activeBrandPath !== 'pathA' &&
-    (brandSaveBlockedByPendingRequest ||
-      visibleBrandSubmissionNotice?.tone === 'pending' ||
-      pendingBrandRequests.length > 0);
+    !showConsolidatedPendingBrandAlert &&
+    brandSaveBlockedByPendingRequest;
 
   const brandSaveButtonLabel = useMemo(() => {
     if (savingBrandApproval) return 'Submitting…';
@@ -396,7 +420,9 @@ export default function SupplierSelectYourself() {
     brandSaveBlockedByApprovedBrand
   ]);
 
-  const brandSaveButtonTitle = brandSaveBlockedForPending
+  const brandSaveButtonTitle = brandSaveRequiresSelection
+    ? BRAND_REQUIRED_BEFORE_SAVE_MESSAGE
+    : brandSaveBlockedForPending
     ? brandSaveBlockedByPendingRequest
       ? BRAND_REQUEST_ALREADY_PENDING_MESSAGE
       : brandSaveBlockedByApprovedBrand
@@ -414,6 +440,19 @@ export default function SupplierSelectYourself() {
     () => supplyChainSummaryRows.find((row) => row.id === selectedAssignmentId) || null,
     [supplyChainSummaryRows, selectedAssignmentId]
   );
+  const pendingChainRoleSubmissions = useMemo(
+    () => listPendingChainRoleSubmissions(profile || {}),
+    [profile]
+  );
+  const selectedBrandChainApprovalStatus = useMemo(
+    () => resolveChainProfileApprovalStatusForBrand(profile || {}, selectedAssignment?.brand || ''),
+    [profile, selectedAssignment?.brand]
+  );
+  const showPendingChainRoleBanner = useMemo(() => {
+    if (pendingChainRoleSubmissions.length === 0) return false;
+    if (!selectedAssignment?.brand) return true;
+    return hasPendingChainRoleSubmissionForBrand(profile || {}, selectedAssignment.brand);
+  }, [profile, pendingChainRoleSubmissions.length, selectedAssignment?.brand]);
   useEffect(() => {
     if (supplyChainSummaryRows.length === 0) {
       if (selectedAssignmentId) setSelectedAssignmentId('');
@@ -551,7 +590,7 @@ export default function SupplierSelectYourself() {
   );
 
   const applyProfileSnapshot = (profileData) => {
-    const snapshot = normalizeProfileForEditor(profileData);
+    const snapshot = normalizeProfileForEditor(normalizeSupplierBrandRequestsOnProfile(profileData));
     if (!snapshot) return false;
     setProfile(snapshot);
     // Discard must compare against the last saved editor state, not an approved-only
@@ -620,7 +659,8 @@ export default function SupplierSelectYourself() {
     if (!profile) return;
     setProfile((prev) => {
       if (!prev) return prev;
-      const next = reconcilePendingSupplierBrandRequests(prev, {
+      const normalized = normalizeSupplierBrandRequestsOnProfile(prev);
+      const next = reconcilePendingSupplierBrandRequests(normalized, {
         catalogBrands,
         supplierApprovedBrands: effectiveApprovedBrands
       });
@@ -637,6 +677,9 @@ export default function SupplierSelectYourself() {
     });
     if (next !== brandSubmissionNotice) {
       setBrandSubmissionNotice(next);
+      if (next === null) {
+        setBrandApprovalSubmittedSignature(buildBrandApprovalDetailsSignature(profile || {}, catalogBrands));
+      }
     }
   }, [brandSubmissionNotice, profile, catalogBrands, effectiveApprovedBrands]);
 
@@ -1218,9 +1261,15 @@ export default function SupplierSelectYourself() {
 
   const handleSaveBrandApproval = async () => {
     if (!profile || savingBrandApproval || discarding || !!savingEntryId) return;
+    const allEntries = getCompanyInfoEntriesForSave(profile);
     // Path A uses an already-approved brand — brand-request save is Path B only.
     if (activeBrandPath === 'pathA') {
       alert(BRAND_ALREADY_APPROVED_SAVE_MESSAGE);
+      return;
+    }
+    if (!profileHasConfiguredBrand(allEntries)) {
+      alert(BRAND_REQUIRED_BEFORE_SAVE_MESSAGE);
+      setBrandSectionExpanded(true);
       return;
     }
     if (!hasBrandsNeedingApprovalRequest) {
@@ -1228,6 +1277,9 @@ export default function SupplierSelectYourself() {
         alert(BRAND_REQUEST_ALREADY_PENDING_MESSAGE);
       } else if (brandSaveBlockedByApprovedBrand) {
         alert(BRAND_ALREADY_APPROVED_SAVE_MESSAGE);
+      } else {
+        alert(BRAND_REQUIRED_BEFORE_SAVE_MESSAGE);
+        setBrandSectionExpanded(true);
       }
       return;
     }
@@ -1279,16 +1331,9 @@ export default function SupplierSelectYourself() {
       return;
     }
 
-    const allEntries = getCompanyInfoEntriesForSave(profile);
     const uniqueBrandsCheck = validateUniqueBrandsAcrossEntries(allEntries);
     if (!uniqueBrandsCheck.ok) {
       alert(uniqueBrandsCheck.message);
-      return;
-    }
-
-    if (!profileHasConfiguredBrand(allEntries)) {
-      alert(BRAND_REQUIRED_BEFORE_SAVE_MESSAGE);
-      setBrandSectionExpanded(true);
       return;
     }
 
@@ -1340,6 +1385,16 @@ export default function SupplierSelectYourself() {
       const data = await response.json().catch(() => ({}));
       if (!response.ok || data.status !== 'success') {
         alert(data.message || 'Failed to save brand request. Please try again.');
+        return;
+      }
+      const genericSuccessWithoutBrandAction =
+        !data.brandApprovalRequested &&
+        !data.brandAlreadyPending &&
+        !data.brandAlreadyApproved &&
+        String(data.message || '').trim() === 'Profile updated successfully';
+      if (genericSuccessWithoutBrandAction) {
+        alert(BRAND_REQUIRED_BEFORE_SAVE_MESSAGE);
+        setBrandSectionExpanded(true);
         return;
       }
 
@@ -1420,52 +1475,14 @@ export default function SupplierSelectYourself() {
         { allowPendingToReplaceApproved: pendingRows.length > 0 }
       );
 
-      if (!applyProfileFromResponse(profileWithRequests)) {
-        const fetched = await fetchProfile({ force: true });
-        if (fetched && (pendingRows.length > 0 || approvedRows.length > 0 || approvalFailureRows.length > 0)) {
-          setProfile((prev) =>
-            mergeSupplierBrandRequestsIntoProfile(
-              prev,
-              [
-                ...approvalFailureRows,
-                ...pendingRows,
-                ...approvedRows.map((row) => ({
-                  name: row.name,
-                  status: 'approved',
-                  submittedAt: row.submittedAt || null,
-                  requestedAt: row.submittedAt || null
-                }))
-              ],
-              { allowPendingToReplaceApproved: pendingRows.length > 0 }
-            )
-          );
-        }
-      } else if (pendingRows.length > 0 || approvedRows.length > 0 || approvalFailureRows.length > 0) {
-        // Ensure Brand status flips even if API profile omitted the request row.
-        setProfile((prev) =>
-          mergeSupplierBrandRequestsIntoProfile(
-            prev,
-            [
-              ...approvalFailureRows,
-              ...pendingRows,
-              ...approvedRows.map((row) => ({
-                name: row.name,
-                status: 'approved',
-                submittedAt: row.submittedAt || null,
-                requestedAt: row.submittedAt || null
-              }))
-            ],
-            { allowPendingToReplaceApproved: pendingRows.length > 0 }
-          )
-        );
-      }
+      const submittedBrandNames = [
+        ...new Set([
+          ...brandsBeingSaved,
+          ...pendingRows.map((row) => row.name),
+          ...approvalFailureRows.map((row) => row.name)
+        ])
+      ].filter(Boolean);
 
-      // Prefer pending for any Path B save that created/kept a request.
-      // "Already approved" only when the server confirmed admin-approved catalog status.
-      const savedBrandSignature = buildBrandApprovalDetailsSignature(
-        profileWithRequests || nextProfile || profile,
-        catalogBrands
-      );
       const showPendingNotice =
         data.brandAlreadyPending === true ||
         data.brandApprovalRequested === true ||
@@ -1476,6 +1493,43 @@ export default function SupplierSelectYourself() {
         !showPendingNotice &&
         data.brandAlreadyApproved === true &&
         approvedRows.length > 0;
+      const shouldClearBrandDraft = showPendingNotice || data.brandAlreadyPending === true;
+
+      let finalProfile = profileWithRequests;
+      if (shouldClearBrandDraft && submittedBrandNames.length > 0) {
+        finalProfile = clearSubmittedPathBBrandDrafts(profileWithRequests, submittedBrandNames);
+      }
+
+      const mergeRequestRows = [
+        ...approvalFailureRows,
+        ...pendingRows,
+        ...approvedRows.map((row) => ({
+          name: row.name,
+          status: 'approved',
+          submittedAt: row.submittedAt || null,
+          requestedAt: row.submittedAt || null
+        }))
+      ];
+
+      if (!applyProfileFromResponse(finalProfile)) {
+        const fetched = await fetchProfile({ force: true });
+        if (!fetched && mergeRequestRows.length > 0) {
+          setProfile((prev) =>
+            clearSubmittedPathBBrandDrafts(
+              mergeSupplierBrandRequestsIntoProfile(prev, mergeRequestRows, {
+                allowPendingToReplaceApproved: pendingRows.length > 0
+              }),
+              shouldClearBrandDraft ? submittedBrandNames : []
+            )
+          );
+        }
+      }
+
+      if (shouldClearBrandDraft) {
+        setEditorResetKey((key) => key + 1);
+      }
+
+      const savedBrandSignature = buildBrandApprovalDetailsSignature(finalProfile, catalogBrands);
 
       if (data.brandAlreadyPending) {
         setBrandPathMode('pathB');
@@ -1530,7 +1584,7 @@ export default function SupplierSelectYourself() {
         setBrandApprovalSubmittedSignature(
           buildBrandApprovalDetailsSignature(
             mergeSupplierBrandRequestsIntoProfile(
-              profileWithRequests || profile,
+              finalProfile || profile,
               [...approvalFailureRows, ...rowsForNotice],
               { allowPendingToReplaceApproved: true }
             ),
@@ -1835,9 +1889,13 @@ export default function SupplierSelectYourself() {
           </div>
         ) : null}
 
-        {profile?.chainProfileApprovalStatus === 'pending' ? (
+        {showPendingChainRoleBanner ? (
           <div className="supplier-select-alert supplier-select-alert--pending">
-            <strong>Supply-chain profile pending admin approval</strong>
+            <strong>
+              {pendingChainRoleSubmissions.length === 1
+                ? `Supply-chain role pending admin approval — "${pendingChainRoleSubmissions[0].brand}"`
+                : `${pendingChainRoleSubmissions.length} supply-chain roles pending admin approval`}
+            </strong>
             <p>
               You submitted supply-chain role details for admin review. Until an admin approves them, the platform
               continues to use your previously approved assignment.
@@ -1845,6 +1903,17 @@ export default function SupplierSelectYourself() {
                 ? ` Submitted: ${formatDateTimeIST(profile.chainProfilePendingSubmittedAt, '—')}.`
                 : ''}
             </p>
+            {pendingChainRoleSubmissions.length > 1 ? (
+              <ul className="supplier-select-alert__list">
+                {pendingChainRoleSubmissions.map((row) => (
+                  <li key={row.brand}>
+                    {row.brand}
+                    {row.roleLabel ? ` — ${row.roleLabel}` : ''}
+                    {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
           </div>
         ) : null}
         {profile?.chainProfileApprovalStatus === 'draft' ? (
@@ -1899,7 +1968,14 @@ export default function SupplierSelectYourself() {
                   type="button"
                   className="btn-primary supplier-select-section__save-btn"
                   onClick={handleSaveBrandApproval}
-                  disabled={savingBrandApproval || !!savingEntryId || discarding}
+                  disabled={
+                    savingBrandApproval ||
+                    !!savingEntryId ||
+                    discarding ||
+                    (brandSaveBlockedForPending &&
+                      !brandSaveBlockedByPendingRequest &&
+                      !brandSaveBlockedByApprovedBrand)
+                  }
                   title={brandSaveButtonTitle}
                 >
                   {brandSaveButtonLabel}
@@ -2044,14 +2120,43 @@ export default function SupplierSelectYourself() {
                 Your request{pendingBrandRequests.length === 1 ? '' : 's'} will stay pending until an admin
                 approves or rejects {pendingBrandRequests.length === 1 ? 'it' : 'them'}.
               </p>
-              <ul className="supplier-select-alert__list">
-                {pendingBrandRequests.map((row) => (
-                  <li key={row.name}>
-                    {row.name}
-                    {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
-                  </li>
-                ))}
-              </ul>
+              {pendingBrandRequestSections.current.length > 0 &&
+              pendingBrandRequestSections.other.length > 0 ? (
+                <>
+                  <p className="supplier-select-alert__meta">
+                    Already submitted request
+                    {pendingBrandRequestSections.current.length === 1 ? '' : 's'}:
+                  </p>
+                  <ul className="supplier-select-alert__list">
+                    {pendingBrandRequestSections.current.map((row) => (
+                      <li key={row.name}>
+                        {row.name}
+                        {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="supplier-select-alert__meta">
+                    Other pending request{pendingBrandRequestSections.other.length === 1 ? '' : 's'}:
+                  </p>
+                  <ul className="supplier-select-alert__list">
+                    {pendingBrandRequestSections.other.map((row) => (
+                      <li key={row.name}>
+                        {row.name}
+                        {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <ul className="supplier-select-alert__list">
+                  {pendingBrandRequests.map((row) => (
+                    <li key={row.name}>
+                      {row.name}
+                      {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
           ) : null}
 
@@ -2184,7 +2289,7 @@ export default function SupplierSelectYourself() {
               onReloadCatalogBrands={reloadCatalogBrands}
               onRequestChainConfiguration={requestChainConfigurationForBrand}
               onProtectLocalDraft={markLocalDraftEdit}
-              chainProfileApprovalStatus={profile?.chainProfileApprovalStatus || ''}
+              chainProfileApprovalStatus={selectedBrandChainApprovalStatus}
             />
           ) : null}
         </div>

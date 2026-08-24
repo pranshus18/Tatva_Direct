@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  collectConfiguredBrandsFromEntries,
   hasSupplyChainRegistrationData,
   resolveCompanyInfoEntriesForValidation,
   supplierProfileIncludesChainDraft,
@@ -80,6 +81,23 @@ test('supplierProfileIncludesChainDraft detects legacy supply-chain fields', () 
       brands: 'Cement'
     }),
     true
+  );
+});
+
+test('collectConfiguredBrandsFromEntries ignores legacy top-level brands', () => {
+  assert.deepEqual(
+    collectConfiguredBrandsFromEntries({
+      brands: 'LegacyOnly',
+      companyInfoEntries: [{ id: 'e1', brands: '' }]
+    }),
+    []
+  );
+  assert.deepEqual(
+    collectConfiguredBrandsFromEntries({
+      brands: 'LegacyOnly',
+      companyInfoEntries: [{ id: 'e1', brands: 'Cement' }]
+    }),
+    ['Cement']
   );
 });
 

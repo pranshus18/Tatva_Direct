@@ -175,17 +175,24 @@ function stableHash(input) {
 
 /** Total catalog TSIN length including `TS` prefix (e.g. TSA7K = 5 chars). */
 export const CATALOG_TSIN_TOTAL_LENGTH = 5;
-/** Total variant TSIN length including `TS` prefix (e.g. TSA7K3M = 7 chars). */
-export const VARIANT_TSIN_TOTAL_LENGTH = 7;
 /** Legacy catalog TSINs are `TS` + 2 base36 chars (4 chars total). */
 export const LEGACY_CATALOG_TSIN_BODY_LENGTH = 2;
 /** New catalog body after `TS` — 3 chars so total catalog TSIN is 5. */
 export const CATALOG_TSIN_BODY_LENGTH = CATALOG_TSIN_TOTAL_LENGTH - 2;
-/** Variant suffix for new 5-char catalog parents (7 total − TS − 3 product). */
-export const VARIANT_TSIN_BODY_LENGTH = VARIANT_TSIN_TOTAL_LENGTH - 2 - CATALOG_TSIN_BODY_LENGTH;
-/** Variant suffix for legacy 4-char catalog parents (7 total − TS − 2 product). */
-export const LEGACY_VARIANT_TSIN_BODY_LENGTH =
-  VARIANT_TSIN_TOTAL_LENGTH - 2 - LEGACY_CATALOG_TSIN_BODY_LENGTH;
+/** Variant suffix length — last N chars of a variant TSIN identify the variant. */
+export const VARIANT_TSIN_SUFFIX_LENGTH = 5;
+/** Legacy variant TSIN total: TS(2) + product(2) + variant(5) = 9 (e.g. TSA73M9K2P). */
+export const LEGACY_VARIANT_TSIN_TOTAL_LENGTH =
+  2 + LEGACY_CATALOG_TSIN_BODY_LENGTH + VARIANT_TSIN_SUFFIX_LENGTH;
+/** New-catalog variant TSIN total: TS(2) + product(3) + variant(5) = 10 (e.g. TSA7K3M9K2P). */
+export const NEW_VARIANT_TSIN_TOTAL_LENGTH =
+  2 + CATALOG_TSIN_BODY_LENGTH + VARIANT_TSIN_SUFFIX_LENGTH;
+/** @deprecated Prefer LEGACY/NEW totals; kept for callers expecting a single legacy length (9). */
+export const VARIANT_TSIN_TOTAL_LENGTH = LEGACY_VARIANT_TSIN_TOTAL_LENGTH;
+/** Variant suffix for new 5-char catalog parents. */
+export const VARIANT_TSIN_BODY_LENGTH = VARIANT_TSIN_SUFFIX_LENGTH;
+/** Variant suffix for legacy 4-char catalog parents. */
+export const LEGACY_VARIANT_TSIN_BODY_LENGTH = VARIANT_TSIN_SUFFIX_LENGTH;
 
 const TSIN_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
@@ -255,9 +262,10 @@ export function buildDisambiguatedAsinLikeId(baseAsin, salt = '') {
 }
 
 /**
- * Variant TSIN deterministic ID format: exactly 7 characters total.
- * - Legacy parent (4 chars): TS + product(2) + variant(3) => 7 chars (e.g. TSA7K3M)
- * - New parent (5 chars):    TS + product(3) + variant(2) => 7 chars (e.g. TSA7K3M)
+ * Variant TSIN deterministic ID format:
+ * - Legacy parent (4 chars): TS + product(2) + variant(5) => 9 chars total
+ * - New parent (5 chars):    TS + product(3) + variant(5) => 10 chars total
+ * The last 5 characters always identify the variant; prefix matches parent catalog TSIN.
  * Same parent TSIN + same variant key => same variant TSIN within each format generation.
  */
 export function buildVariantAsinLikeId(parentAsin, variantKey) {
@@ -266,14 +274,19 @@ export function buildVariantAsinLikeId(parentAsin, variantKey) {
   const catalogBodyLength = legacyParent
     ? LEGACY_CATALOG_TSIN_BODY_LENGTH
     : CATALOG_TSIN_BODY_LENGTH;
-  const variantBodyLength = legacyParent
-    ? LEGACY_VARIANT_TSIN_BODY_LENGTH
-    : VARIANT_TSIN_BODY_LENGTH;
+  const variantBodyLength = VARIANT_TSIN_SUFFIX_LENGTH;
 
   const productCode = extractCatalogBodyFromParent(normalizedParent, catalogBodyLength);
   const seed = `${normalizedParent}|${normalizeIdentifierField(variantKey)}`;
   const variantCode = toShortAlphaNum(seed, variantBodyLength);
   return `TS${productCode}${variantCode}`;
+}
+
+export function getVariantTsinTotalLength(parentAsin) {
+  const normalizedParent = normalizeIdentifierField(parentAsin).toUpperCase();
+  return isLegacyCatalogTsin(normalizedParent)
+    ? LEGACY_VARIANT_TSIN_TOTAL_LENGTH
+    : NEW_VARIANT_TSIN_TOTAL_LENGTH;
 }
 
 /**
@@ -804,10 +817,14 @@ export default {
   isLegacyCatalogTsin,
   CATALOG_TSIN_TOTAL_LENGTH,
   VARIANT_TSIN_TOTAL_LENGTH,
+  LEGACY_VARIANT_TSIN_TOTAL_LENGTH,
+  NEW_VARIANT_TSIN_TOTAL_LENGTH,
+  VARIANT_TSIN_SUFFIX_LENGTH,
   CATALOG_TSIN_BODY_LENGTH,
   LEGACY_CATALOG_TSIN_BODY_LENGTH,
   VARIANT_TSIN_BODY_LENGTH,
   LEGACY_VARIANT_TSIN_BODY_LENGTH,
+  getVariantTsinTotalLength,
   buildCatalogKey,
   buildVariantKey,
   buildIdentityBundle,

@@ -2,17 +2,11 @@ import { requireAuthentication as authenticateToken } from '../../../middleware/
 import { supabase } from '../../../config/supabase.js';
 import {
   createProfileResponse,
-  formatShippingAddressDisplayName,
-  normalizeShippingAddressEntry,
   parseBrandTokens,
   resolveChainRoleOptionsForBrands
 } from '../profileHelpers.js';
 import { syncPmCustomerProfileForUser } from '../../../services/pmUserService.js';
-import {
-  listPmShippingAddresses,
-  mergeLocalAndPmShippingAddresses,
-  resolvePmAddressAuth
-} from '../../../services/pmAddressService.js';
+import { syncPmShippingAddressesOnProfile } from '../../../services/pmAddressService.js';
 import { readPmCredentialsFromRequest } from '../../../services/pmVaultService.js';
 
 export function registerProfileReadRoutes(router) {
@@ -32,43 +26,14 @@ export function registerProfileReadRoutes(router) {
       }
 
       delete user.password;
-      const profile = await createProfileResponse(user);
-      const userType = String(user.user_type || profile.userType || '').toLowerCase();
-      if (userType === 'service_provider' || userType === 'supplier') {
-        try {
-          const credentials = readPmCredentialsFromRequest(req);
-          const auth = await resolvePmAddressAuth(user, credentials);
-          const pmList = await listPmShippingAddresses(auth);
-          if (pmList.length > 0) {
-            const merged = mergeLocalAndPmShippingAddresses(
-              profile.shippingAddresses || [],
-              pmList.map((entry) => normalizeShippingAddressEntry(entry))
-            ).map((entry, index) => {
-              const normalized = normalizeShippingAddressEntry(entry);
-              return {
-                ...normalized,
-                displayName: formatShippingAddressDisplayName(normalized, index)
-              };
-            });
-            profile.shippingAddresses = merged;
 
-            const localJson = JSON.stringify(user.profile?.shippingAddresses || []);
-            const mergedJson = JSON.stringify(merged);
-            if (localJson !== mergedJson) {
-              const nextProfile = {
-                ...(user.profile || {}),
-                shippingAddresses: merged
-              };
-              if (userType === 'supplier') {
-                nextProfile.branches = [];
-              }
-              await supabase.from('users').update({ profile: nextProfile }).eq('id', user.id);
-            }
-          }
-        } catch (pmError) {
-          console.warn('[PM address] list skipped:', pmError?.message || pmError);
-        }
+      const credentials = readPmCredentialsFromRequest(req);
+      const userType = String(user.user_type || '').toLowerCase();
+      if (userType === 'service_provider' || userType === 'supplier') {
+        user = await syncPmShippingAddressesOnProfile(user, credentials);
       }
+
+      const profile = await createProfileResponse(user);
       return res.json({
         status: 'success',
         profile

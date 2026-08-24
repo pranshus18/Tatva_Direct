@@ -10,6 +10,7 @@ import {
   hasAnySupplyChainRole,
   mergeSupplierEditableEntrySave,
   replacePendingChainRequest,
+  stripSubmittedPathBBrandDraftEntries,
   syncLegacyMinimumOrderValue
 } from '../../../services/supplierChainProfileService.js';
 import { buildAdminReviewChainPayload } from '../../../services/supplierChainAdminService.js';
@@ -18,6 +19,7 @@ import { findAdmins } from '../../../repositories/usersRepository.js';
 import { profileUpdateSchema, profileShippingAddressCreateSchema } from '../../../contracts/profileContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../../utils/contractValidation.js';
 import {
+  collectConfiguredBrandsFromEntries,
   resolveCompanyInfoEntriesForValidation,
   supplierProfileIncludesChainDraft,
   validateCompanyInfoEntriesList,
@@ -43,6 +45,7 @@ import {
   resolvePmAddressAuth
 } from '../../../services/pmAddressService.js';
 import { readPmCredentialsFromRequest } from '../../../services/pmVaultService.js';
+import { catalogBrandDedupKey } from '../../../services/supplyChainSharedService.js';
 
 export function registerProfileUpdateRoutes(router) {
   router.put('/', authenticateToken, async (req, res) => {
@@ -366,6 +369,9 @@ export function registerProfileUpdateRoutes(router) {
 
         const collectBrandStringsForSupplyChainGate = (chain, options = {}) => {
           const forceAll = options?.force === true;
+          if (forceAll && options?.entryBrandsOnly === true) {
+            return collectConfiguredBrandsFromEntries(chain);
+          }
           if (forceAll) return collectBrandStringsFromChain(chain);
 
           const saveEntryId = String(options?.saveSupplyChainEntryId || '').trim();
@@ -394,11 +400,24 @@ export function registerProfileUpdateRoutes(router) {
           return brandStrings;
         };
 
+        const rejectWhenNoConfiguredEntryBrands = () => {
+          const configuredBrands = collectConfiguredBrandsFromEntries(incomingChain);
+          if (configuredBrands.length === 0) {
+            return res.status(400).json({
+              status: 'error',
+              code: 'brand_required_for_chain_save',
+              message: 'Select at least one brand before saving.'
+            });
+          }
+          return null;
+        };
+
         const runGlobalBrandGate = async (chain, options = {}) => {
           const force = options?.force === true;
           if (!force && !hasAnySupplyChainRole(chain)) return null;
           const brandStrings = collectBrandStringsForSupplyChainGate(chain, {
             force,
+            entryBrandsOnly: options?.entryBrandsOnly === true,
             saveSupplyChainEntryId: options?.saveSupplyChainEntryId || saveSupplyChainEntryId
           });
           const uniqueBrands = [
@@ -438,15 +457,7 @@ export function registerProfileUpdateRoutes(router) {
 
         if (includesChainUpdateIntent()) {
           if (wantsBrandApprovalSave || wantsDraftSave) {
-            const brandStrings = collectBrandStringsFromChain(incomingChain);
-            const uniqueBrands = [
-              ...new Set(
-                brandStrings
-                  .flatMap((s) => parseBrandTokens(s))
-                  .map((b) => b.trim())
-                  .filter(Boolean)
-              )
-            ];
+            const uniqueBrands = collectConfiguredBrandsFromEntries(incomingChain);
             if (uniqueBrands.length === 0) {
               return res.status(400).json({
                 status: 'error',
@@ -459,7 +470,10 @@ export function registerProfileUpdateRoutes(router) {
           if (wantsBrandApprovalSave) {
           profileUpdate.chainProfileDraft = null;
           profileUpdate.chainProfileDraftUpdatedAt = null;
-          const brandFailures = await runGlobalBrandGate(incomingChain, { force: true });
+          const brandFailures = await runGlobalBrandGate(incomingChain, {
+            force: true,
+            entryBrandsOnly: true
+          });
           if (brandFailures) {
             const catalogExistsErrors = brandFailures.filter(
               (f) => String(f?.code || '') === 'brand_already_in_approved_catalog'
@@ -507,16 +521,44 @@ export function registerProfileUpdateRoutes(router) {
           } catch (e) {
             console.warn('[Profile] clearPendingChainRequest (brand approval save):', e?.message || e);
           }
-          profileUpdate.supplierRole = incomingChain.supplierRole;
-          profileUpdate.brands = incomingChain.brands;
-          profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
-          syncLegacyMinimumOrderValue(profileUpdate, incomingChain, { saveSupplyChainEntryId });
+          let entriesForProfile = incomingEntries;
+          if (brandApprovalRequested || brandAlreadyPending) {
+            const submittedBrandKeys = new Set();
+            for (const entry of incomingEntries) {
+              const brand = String(entry?.brands || '').trim();
+              if (!brand || String(entry?.role || '').trim()) continue;
+              const brandKey = catalogBrandDedupKey(brand);
+              if (brandKey) submittedBrandKeys.add(brandKey);
+            }
+            if (submittedBrandKeys.size > 0) {
+              entriesForProfile = stripSubmittedPathBBrandDraftEntries(
+                incomingEntries,
+                submittedBrandKeys
+              );
+            }
+          }
+          const firstSavedEntry =
+            entriesForProfile.find((entry) => String(entry?.brands || '').trim()) ||
+            entriesForProfile[0] ||
+            null;
+          profileUpdate.supplierRole =
+            firstSavedEntry?.role || baselineChain.supplierRole || incomingChain.supplierRole;
+          profileUpdate.brands =
+            firstSavedEntry?.brands || baselineChain.brands || incomingChain.brands;
+          profileUpdate.companyInfoEntries = entriesForProfile;
+          syncLegacyMinimumOrderValue(
+            profileUpdate,
+            { companyInfoEntries: entriesForProfile },
+            { saveSupplyChainEntryId }
+          );
         } else if (isIncompleteChainDraft) {
           // Keep approved profile active; store incomplete edits as draft only.
           profileUpdate.supplierRole = baselineChain.supplierRole;
           profileUpdate.brands = baselineChain.brands;
           profileUpdate.companyInfoEntries = baselineChain.companyInfoEntries;
         } else if (!hasRole) {
+          const brandRequiredResponse = rejectWhenNoConfiguredEntryBrands();
+          if (brandRequiredResponse) return brandRequiredResponse;
           profileUpdate.chainProfileDraft = null;
           profileUpdate.chainProfileDraftUpdatedAt = null;
           try {
@@ -524,8 +566,14 @@ export function registerProfileUpdateRoutes(router) {
           } catch (e) {
             console.warn('[Profile] clearPendingChainRequest:', e?.message || e);
           }
+          const configuredBrands = collectConfiguredBrandsFromEntries(incomingChain);
+          const firstBrandedEntry =
+            incomingEntries.find((entry) => String(entry?.brands || '').trim()) ||
+            incomingEntries[0] ||
+            null;
           profileUpdate.supplierRole = incomingChain.supplierRole;
-          profileUpdate.brands = incomingChain.brands;
+          profileUpdate.brands =
+            firstBrandedEntry?.brands || configuredBrands[0] || baselineChain.brands || '';
           profileUpdate.companyInfoEntries = incomingChain.companyInfoEntries;
           syncLegacyMinimumOrderValue(profileUpdate, incomingChain, { saveSupplyChainEntryId });
         } else {
@@ -1014,7 +1062,7 @@ export function registerProfileUpdateRoutes(router) {
       let pmSaved = null;
       try {
         const credentials = readPmCredentialsFromRequest(req);
-        const auth = await resolvePmAddressAuth(currentUser, credentials);
+        const auth = await resolvePmAddressAuth(currentUser, credentials, { requireToken: true });
         pmSaved = await createPmShippingAddress({
           pmUserId: auth.pmUserId,
           accessToken: auth.accessToken,

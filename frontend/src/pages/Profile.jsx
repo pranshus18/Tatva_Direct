@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { toast } from 'sonner';
 import { buildAuthHeaders, getApiUrl } from '../config/api';
+import { restorePmVaultSession } from '../services/pmAuthService';
 import { User, Building, MapPin, Phone, Mail, FileText, Plus, Edit, Save, X, Users, CheckCircle2 } from 'lucide-react';
 import SpPageLayout from '../components/sp/SpPageLayout';
 import SpPageHeader from '../components/sp/SpPageHeader';
@@ -18,7 +19,7 @@ import { formatShippingAddressLabel, getShippingAddressFields } from '../utils/s
 import { formatDateTimeIST } from '../utils/dateTime';
 import { sanitizeSignupPlaceholderAddress } from '../utils/addressPlaceholders';
 import { mergeParsedShippingAddress } from '../utils/parseStructuredShippingAddress';
-import { shouldShowChainProfileRejectionBanner } from '../utils/supplierSelectYourselfProfile';
+import { shouldShowChainProfileRejectionBanner, listPendingChainRoleSubmissions } from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
 
 const formatSavedAddressLabel = (entry, index, options = {}) => {
@@ -251,6 +252,7 @@ const Profile = ({ user }) => {
 
   const fetchProfile = async () => {
     try {
+      await restorePmVaultSession();
       const response = await fetch(getApiUrl('/api/profile'), {
         headers: buildAuthHeaders()
       });
@@ -831,6 +833,11 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
     return parts.sort().join(';;');
   }, [profileForChainPartners?.supplierRole, profileForChainPartners?.brands, profileForChainPartners?.companyInfoEntries]);
 
+  const pendingChainRoleSubmissions = useMemo(
+    () => listPendingChainRoleSubmissions(profile || {}),
+    [profile]
+  );
+
   useEffect(() => {
     let cancelled = false;
     const loadPartners = async () => {
@@ -899,7 +906,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
 
   return (
     <div className="profile-content">
-      {profile?.chainProfileApprovalStatus === 'pending' ? (
+      {pendingChainRoleSubmissions.length > 0 ? (
         <div
           className="profile-section"
           style={{
@@ -909,9 +916,13 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
             padding: '1rem 1.1rem'
           }}
         >
-          <strong style={{ color: '#92400e' }}>Supply-chain profile pending admin approval</strong>
+          <strong style={{ color: '#92400e' }}>
+            {pendingChainRoleSubmissions.length === 1
+              ? `Supply-chain role pending admin approval — "${pendingChainRoleSubmissions[0].brand}"`
+              : `${pendingChainRoleSubmissions.length} supply-chain roles pending admin approval`}
+          </strong>
           <p style={{ margin: '0.45rem 0 0', color: '#78350f', fontSize: '0.95rem', lineHeight: 1.45 }}>
-            You submitted changes to your role and/or brands. Until an admin approves them on the{' '}
+            You submitted supply-chain role details for admin review. Until an admin approves them on the{' '}
             <strong>Profile brand assignment</strong> page, the platform continues to use your previously approved
             assignment for upstream matching and orders.
             {profile.chainProfilePendingSubmittedAt

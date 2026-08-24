@@ -3,13 +3,38 @@ import {
   PM_ADDRESS_URL,
   withPmPlatformFlagQuery
 } from '../config/pmApi.js';
-import { getPmAuthFromUser } from './pmUserService.js';
-import { ensurePmVaultAuth } from './pmVaultService.js';
+import { supabase } from '../config/supabase.js';
+import {
+  fetchPmCurrentUser,
+  fetchPmUserByPhone,
+  getPmAuthFromUser,
+  persistPmAuthCredentials
+} from './pmUserService.js';
 
 const PRESET_SUBTYPES = new Set(['HOME', 'WORK', 'OTHER']);
 
 function clean(value) {
   return String(value || '').trim();
+}
+
+function normalizeIndianMobile(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length >= 10) return digits.slice(-10);
+  return digits;
+}
+
+function addressFingerprint(entry = {}) {
+  return [
+    clean(entry.building),
+    clean(entry.zip || entry.pincode),
+    clean(entry.state),
+    clean(entry.locality || entry.city),
+    clean(entry.street),
+    clean(entry.line1),
+    clean(entry.formatted_address)
+  ]
+    .join('|')
+    .toLowerCase();
 }
 
 function pickFirst(...values) {
@@ -221,34 +246,79 @@ export async function createPmShippingAddress({ pmUserId, accessToken, input = {
   return pmAddressToLocalShippingEntry(created, payload);
 }
 
-export async function listPmShippingAddresses({ pmUserId, accessToken }) {
-  const userId = clean(pmUserId);
+async function fetchPmAddressRowsFromUrl(url, accessToken, { usePlatformFlag = true } = {}) {
   const token = clean(accessToken);
+  const headers = usePlatformFlag
+    ? buildPmPlatformHeaders({ accessToken: token || undefined, json: false })
+    : {
+        Accept: 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      };
+
+  const response = await fetch(
+    usePlatformFlag ? withPmPlatformFlagQuery(url) : url,
+    { headers }
+  );
+  const body = await parsePmJson(response);
+
+  if (!response.ok || body.success === false) {
+    if (response.status === 401) {
+      throw pmRequestError(response, body, 'PM session expired. Sign in again with phone OTP.');
+    }
+    return [];
+  }
+
+  return extractPmAddressList(body)
+    .filter((row) => !clean(row?.type) || clean(row.type).toUpperCase() === 'SHIPPING')
+    .map((row) => pmAddressToLocalShippingEntry(row))
+    .filter((row) => row.building || row.line1 || row.formatted_address);
+}
+
+function buildPmAddressListUrls(userId, phoneNumber) {
+  const urls = [
+    `${PM_ADDRESS_URL}?userId=${encodeURIComponent(userId)}&type=SHIPPING`,
+    `${PM_ADDRESS_URL}?userId=${encodeURIComponent(userId)}`
+  ];
+  const phone = normalizeIndianMobile(phoneNumber);
+  if (phone.length === 10) {
+    urls.push(`${PM_ADDRESS_URL}?phoneNumber=${encodeURIComponent(phone)}&type=SHIPPING`);
+    urls.push(`${PM_ADDRESS_URL}?phoneNumber=${encodeURIComponent(phone)}`);
+  }
+  return urls;
+}
+
+export async function listPmShippingAddresses({ pmUserId, accessToken, phoneNumber } = {}) {
+  let userId = clean(pmUserId);
+  const token = clean(accessToken);
+  const phone = normalizeIndianMobile(phoneNumber);
+
+  if (!userId && phone.length === 10) {
+    const pmUser = await fetchPmUserByPhone(phone);
+    userId = clean(pmUser?._id || pmUser?.id);
+  }
   if (!userId) return [];
 
-  const urls = [
-    withPmPlatformFlagQuery(`${PM_ADDRESS_URL}?userId=${encodeURIComponent(userId)}&type=SHIPPING`),
-    withPmPlatformFlagQuery(`${PM_ADDRESS_URL}?userId=${encodeURIComponent(userId)}`)
-  ];
+  const urls = buildPmAddressListUrls(userId, phone);
+  const attempts = [];
 
   for (const url of urls) {
-    const response = await fetch(url, {
-      headers: buildPmPlatformHeaders({ accessToken: token, json: false })
-    });
-    const body = await parsePmJson(response);
-    if (!response.ok || body.success === false) {
-      if (response.status === 404) continue;
-      if (response.status >= 500) continue;
-      if (response.status === 401) {
-        throw pmRequestError(response, body, 'PM session expired. Sign in again with phone OTP.');
-      }
-      continue;
+    if (token) {
+      attempts.push({ url, token, usePlatformFlag: true });
+      attempts.push({ url, token, usePlatformFlag: false });
     }
-    const rows = extractPmAddressList(body)
-      .filter((row) => !clean(row?.type) || clean(row.type).toUpperCase() === 'SHIPPING')
-      .map((row) => pmAddressToLocalShippingEntry(row));
-    if (rows.length > 0 || response.ok) {
-      return rows.filter((row) => row.building || row.line1 || row.formatted_address);
+    attempts.push({ url, token: null, usePlatformFlag: true });
+    attempts.push({ url, token: null, usePlatformFlag: false });
+  }
+
+  for (const attempt of attempts) {
+    try {
+      const rows = await fetchPmAddressRowsFromUrl(attempt.url, attempt.token, {
+        usePlatformFlag: attempt.usePlatformFlag
+      });
+      if (rows.length > 0) return rows;
+    } catch (error) {
+      if (error.code === 'PM_AUTH_REQUIRED') continue;
+      throw error;
     }
   }
 
@@ -262,8 +332,11 @@ export function mergeLocalAndPmShippingAddresses(localAddresses = [], pmAddresse
   const remember = (entry) => {
     if (!entry) return;
     const keys = [clean(entry.pmAddressId), clean(entry.id)].filter(Boolean);
+    const fingerprint = addressFingerprint(entry);
     if (keys.some((key) => seen.has(key))) return;
+    if (fingerprint && seen.has(`fp:${fingerprint}`)) return;
     keys.forEach((key) => seen.add(key));
+    if (fingerprint) seen.add(`fp:${fingerprint}`);
     merged.push(entry);
   };
 
@@ -272,16 +345,133 @@ export function mergeLocalAndPmShippingAddresses(localAddresses = [], pmAddresse
   return merged;
 }
 
-export async function resolvePmAddressAuth(user, credentials = {}) {
-  const stored = getPmAuthFromUser(user);
-  const pmUserId = clean(
-    stored?.pmUserId || user?.profile?.pmCustomerProfile?.pmUserId || credentials?.pmUserId
+export async function resolvePmAddressAuth(user, credentials = {}, options = {}) {
+  const requireToken = options.requireToken === true;
+  const stored = getPmAuthFromUser(user) || {};
+  let accessToken = clean(
+    credentials?.pmAccessToken || credentials?.accessToken || stored.accessToken
   );
-  const accessToken = clean(credentials?.pmAccessToken || credentials?.accessToken || stored?.accessToken);
+  let pmUserId = clean(
+    stored.pmUserId ||
+      user?.profile?.pmCustomerProfile?.pmUserId ||
+      credentials?.pmUserId
+  );
 
-  if (pmUserId && accessToken) {
-    return { pmUserId, accessToken };
+  if (accessToken) {
+    const pmUserFromToken = await fetchPmCurrentUser(accessToken);
+    if (pmUserFromToken) {
+      pmUserId = clean(pmUserFromToken._id || pmUserFromToken.id) || pmUserId;
+    } else if (requireToken) {
+      const error = new Error('PM session expired. Sign in again with phone OTP.');
+      error.code = 'PM_AUTH_REQUIRED';
+      throw error;
+    } else {
+      accessToken = '';
+    }
   }
 
-  return ensurePmVaultAuth(user, credentials);
+  if (!pmUserId) {
+    const phone = normalizeIndianMobile(
+      user?.phone || user?.profile?.pmCustomerProfile?.phoneNumber
+    );
+    if (phone.length === 10) {
+      const pmUser = await fetchPmUserByPhone(phone);
+      pmUserId = clean(pmUser?._id || pmUser?.id);
+    }
+  }
+
+  if (!pmUserId) {
+    const error = new Error(
+      requireToken
+        ? 'Could not resolve your PM account. Sign in again with phone OTP.'
+        : 'No PM account found for this phone number.'
+    );
+    error.code = 'PM_AUTH_REQUIRED';
+    throw error;
+  }
+
+  const refreshToken = clean(
+    credentials?.pmRefreshToken || credentials?.refreshToken || stored.refreshToken
+  );
+
+  if (
+    user?.id &&
+    (pmUserId !== stored.pmUserId ||
+      (accessToken && accessToken !== stored.accessToken) ||
+      (!stored.pmUserId && pmUserId))
+  ) {
+    await persistPmAuthCredentials(user, {
+      pmUserId,
+      ...(accessToken ? { accessToken } : {}),
+      ...(refreshToken ? { refreshToken } : {})
+    });
+  }
+
+  if (requireToken && !accessToken) {
+    const error = new Error(
+      'Sign in with phone OTP to sync shipping addresses with the PM platform.'
+    );
+    error.code = 'PM_AUTH_REQUIRED';
+    throw error;
+  }
+
+  return { pmUserId, accessToken: accessToken || null };
+}
+
+/** Pull PM shipping addresses for a phone-linked account and persist merged profile rows. */
+export async function syncPmShippingAddressesOnProfile(user, credentials = {}) {
+  const userType = String(user?.user_type || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (userType !== 'service_provider' && userType !== 'supplier') {
+    return user;
+  }
+
+  const phone = normalizeIndianMobile(user?.phone || user?.profile?.pmCustomerProfile?.phoneNumber);
+  if (phone.length !== 10) return user;
+
+  try {
+    const auth = await resolvePmAddressAuth(user, credentials);
+    const localAddresses = Array.isArray(user?.profile?.shippingAddresses)
+      ? user.profile.shippingAddresses
+      : [];
+    const pmList = await listPmShippingAddresses({
+      pmUserId: auth.pmUserId,
+      accessToken: auth.accessToken,
+      phoneNumber: phone
+    });
+
+    if (pmList.length === 0) return user;
+
+    const merged = mergeLocalAndPmShippingAddresses(localAddresses, pmList);
+    const localJson = JSON.stringify(localAddresses);
+    const mergedJson = JSON.stringify(merged);
+    if (localJson === mergedJson) return user;
+
+    const nextProfile = {
+      ...(user.profile || {}),
+      shippingAddresses: merged
+    };
+    if (userType === 'supplier') {
+      nextProfile.branches = [];
+    }
+
+    const { data: updatedUser, error } = await supabase
+      .from('users')
+      .update({ profile: nextProfile })
+      .eq('id', user.id)
+      .select()
+      .single();
+
+    if (error || !updatedUser) {
+      console.warn('[PM address] profile persist failed:', error?.message || error);
+      return user;
+    }
+
+    return updatedUser;
+  } catch (pmError) {
+    console.warn('[PM address] sync skipped:', pmError?.message || pmError);
+    return user;
+  }
 }

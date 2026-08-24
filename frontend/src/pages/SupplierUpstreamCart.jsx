@@ -29,6 +29,7 @@ import {
 import { hasUpstreamProjectCartLines } from '../utils/cartBadge';
 import {
   formatShippingAddressLabel,
+  formatShippingAddressOptionLabel,
   formatShippingAddressPreview,
   normalizeShippingAddressBookEntry
 } from '../utils/shippingAddressLabel';
@@ -978,11 +979,22 @@ const SupplierUpstreamCart = () => {
                                 <option value="">No shipping address</option>
                                 {shippingAddressBook.map((entry, index) => (
                                   <option key={entry.id} value={entry.id}>
-                                    {formatShippingAddressLabel(entry, index)}
+                                    {formatShippingAddressOptionLabel(entry, index)}
                                   </option>
                                 ))}
                                 <option value="__new__">+ Add new address</option>
                               </select>
+                              {shippingDraft.selectedShippingAddressId &&
+                              shippingDraft.selectedShippingAddressId !== '__new__' ? (
+                                <p className="supplier-project-shipping-preview">
+                                  {formatShippingAddressPreview(
+                                    shippingAddressBook.find(
+                                      (entry) =>
+                                        entry.id === shippingDraft.selectedShippingAddressId
+                                    ) || {}
+                                  )}
+                                </p>
+                              ) : null}
                               {shippingDraft.selectedShippingAddressId === '__new__' ? (
                                 <div className="supplier-project-shipping-form">
                                   <button

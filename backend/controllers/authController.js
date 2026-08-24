@@ -32,6 +32,7 @@ import {
   persistPmAuthAndSyncCustomerProfile,
   syncPmCustomerProfileForUser
 } from '../services/pmUserService.js';
+import { syncPmShippingAddressesOnProfile } from '../services/pmAddressService.js';
 import {
   PM_PLATFORM_FLAG,
   PM_SEND_OTP_URL,
@@ -695,6 +696,11 @@ router.post('/pm-otp-login', async (req, res) => {
       payload.pmAccessToken || null,
       payload.pmRefreshToken || null
     );
+
+    user = await syncPmShippingAddressesOnProfile(user, {
+      pmAccessToken: payload.pmAccessToken || null,
+      pmRefreshToken: payload.pmRefreshToken || null
+    });
 
     if (!user.is_active) {
       return res.status(401).json({

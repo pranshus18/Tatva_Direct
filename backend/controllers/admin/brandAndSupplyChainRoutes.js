@@ -263,6 +263,12 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         }
       }
 
+      try {
+        await consolidateDuplicateBrands(supabase);
+      } catch (consolidateError) {
+        console.error('Consolidate brands after reject:', consolidateError);
+      }
+
       res.json({ status: 'success', message: 'Brand rejected', brand });
     } catch (error) {
       handleRouteError(error, res, 'Reject brand error:');

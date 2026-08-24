@@ -8,6 +8,7 @@ import {
   mergeSupplierBrandRequestsWithApprovedCatalog,
   mergeSupplierEditableEntrySave,
   normalizeCompanyInfoEntries,
+  stripSubmittedPathBBrandDraftEntries,
   syncLegacyMinimumOrderValue
 } from '../services/supplierChainProfileService.js';
 
@@ -99,6 +100,19 @@ test('mergeApprovedBrandsIntoChainEntries keeps Philips and Phillips as separate
 
   const brandNames = merged.companyInfoEntries.map((entry) => entry.brands).sort();
   assert.deepEqual(brandNames, ['Philips', 'Phillips']);
+});
+
+test('stripSubmittedPathBBrandDraftEntries removes Path B drafts but keeps role-setup rows', () => {
+  const stripped = stripSubmittedPathBBrandDraftEntries(
+    [
+      { id: 'e1', brands: 'acc', role: 'dealer' },
+      { id: 'e2', brands: 'APPI', role: '' }
+    ],
+    new Set(['appi'])
+  );
+  assert.equal(stripped.some((entry) => entry.brands === 'APPI'), false);
+  assert.equal(stripped.some((entry) => entry.brands === 'acc'), true);
+  assert.equal(stripped.some((entry) => !String(entry?.brands || '').trim()), true);
 });
 
 test('mergeChainEntriesForDisplay keeps separate brands and merges by id', async () => {
@@ -265,6 +279,37 @@ test('mergeSupplierBrandRequestsWithApprovedCatalog collapses own pending to app
   assert.equal(byName.Philips, 'approved');
   assert.equal(byName.Prestige, 'pending');
   assert.equal(byName.Safari, undefined);
+});
+
+test('mergeSupplierBrandRequestsWithApprovedCatalog prefers newer rejected over stale pending own row', () => {
+  const merged = mergeSupplierBrandRequestsWithApprovedCatalog({
+    userId: 'supplier-1',
+    ownRows: [
+      {
+        name: 'APPI',
+        normalized_name: 'appi',
+        status: 'pending',
+        requested_by: 'supplier-1',
+        requested_at: '2026-08-24T10:00:00.000Z',
+        updated_at: '2026-08-24T10:00:00.000Z'
+      },
+      {
+        name: 'APPI',
+        normalized_name: 'appi',
+        status: 'rejected',
+        rejection_reason: 'Invalid brand',
+        requested_by: 'supplier-1',
+        requested_at: '2026-08-24T10:00:00.000Z',
+        updated_at: '2026-08-24T11:00:00.000Z'
+      }
+    ],
+    catalogRows: [],
+    declaredNames: []
+  });
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].status, 'rejected');
+  assert.equal(merged[0].rejectionReason, 'Invalid brand');
 });
 
 test('mergeSupplierBrandRequestsWithApprovedCatalog still merges declared catalog brands without own request', () => {

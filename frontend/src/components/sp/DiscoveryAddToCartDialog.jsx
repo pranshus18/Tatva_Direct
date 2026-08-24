@@ -18,7 +18,8 @@ import {
   resolveAddressFromCurrentLocation
 } from '../../utils/currentLocationAddress';
 import {
-  formatShippingAddressLabel,
+  formatShippingAddressOptionLabel,
+  formatShippingAddressPreview,
   normalizeShippingAddressBookEntry
 } from '../../utils/shippingAddressLabel';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../../utils/dateTime';
@@ -440,11 +441,21 @@ export default function DiscoveryAddToCartDialog({
               <option value="">No shipping address</option>
               {shippingAddressBook.map((entry, index) => (
                 <option key={entry.id} value={entry.id}>
-                  {entry.displayName || formatShippingAddressLabel(entry, index)}
+                  {formatShippingAddressOptionLabel(entry, index)}
                 </option>
               ))}
               <option value="__new__">+ Add new address</option>
             </select>
+
+            {selectedShippingAddressId &&
+            selectedShippingAddressId !== '__new__' ? (
+              <p className="text-xs text-muted-foreground">
+                {formatShippingAddressPreview(
+                  shippingAddressBook.find((entry) => entry.id === selectedShippingAddressId) ||
+                    {}
+                )}
+              </p>
+            ) : null}
 
             {selectedShippingAddressId === '__new__' ? (
               <div className="pd-modal-address-form space-y-3">

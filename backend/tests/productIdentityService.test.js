@@ -6,8 +6,12 @@ import {
   buildIdentityBundle,
   isLegacyCatalogTsin,
   isPersistableProductBarcode,
+  getVariantTsinTotalLength,
   CATALOG_TSIN_TOTAL_LENGTH,
   VARIANT_TSIN_TOTAL_LENGTH,
+  LEGACY_VARIANT_TSIN_TOTAL_LENGTH,
+  NEW_VARIANT_TSIN_TOTAL_LENGTH,
+  VARIANT_TSIN_SUFFIX_LENGTH,
   CATALOG_TSIN_BODY_LENGTH,
   VARIANT_TSIN_BODY_LENGTH,
   LEGACY_VARIANT_TSIN_BODY_LENGTH
@@ -45,22 +49,25 @@ test('isLegacyCatalogTsin recognizes legacy 4-char parent codes only', () => {
   assert.equal(isLegacyCatalogTsin('TS22'), true);
   assert.equal(isLegacyCatalogTsin('TSA7'), true);
   assert.equal(isLegacyCatalogTsin('TSA7K'), false);
-  assert.equal(isLegacyCatalogTsin('TSA7K3M'), false);
+  assert.equal(isLegacyCatalogTsin('TSA7K3M9K2P'), false);
   assert.equal(isLegacyCatalogTsin(''), false);
 });
 
-test('buildVariantAsinLikeId produces 7-char TSINs for legacy 4-char parents', () => {
+test('buildVariantAsinLikeId produces 9-char TSINs for legacy 4-char parents', () => {
   const parent = 'TSA7';
   const variantKey = '069d7926b78243e48b2325c0792e7fb577e6dc559b9212a3756f7532d62507a9';
   const variantTsin = buildVariantAsinLikeId(parent, variantKey);
-  assert.match(variantTsin, /^TS[A-Z0-9]{5}$/);
+  assert.match(variantTsin, /^TS[A-Z0-9]{7}$/);
+  assert.equal(variantTsin.length, LEGACY_VARIANT_TSIN_TOTAL_LENGTH);
   assert.equal(variantTsin.length, VARIANT_TSIN_TOTAL_LENGTH);
   assert.equal(variantTsin.slice(0, parent.length), parent);
-  assert.equal(LEGACY_VARIANT_TSIN_BODY_LENGTH, 3);
+  assert.equal(LEGACY_VARIANT_TSIN_BODY_LENGTH, VARIANT_TSIN_SUFFIX_LENGTH);
+  assert.equal(variantTsin.slice(-VARIANT_TSIN_SUFFIX_LENGTH).length, 5);
   assert.equal(buildVariantAsinLikeId(parent, variantKey), variantTsin);
+  assert.equal(getVariantTsinTotalLength(parent), 9);
 });
 
-test('buildVariantAsinLikeId produces 7-char TSINs for new 5-char parents', () => {
+test('buildVariantAsinLikeId produces 10-char TSINs for new 5-char parents', () => {
   const parent = buildAsinLikeId({
     name: 'Steel Bottle',
     category: 'Kitchen',
@@ -71,11 +78,13 @@ test('buildVariantAsinLikeId produces 7-char TSINs for new 5-char parents', () =
 
   const variantKey = 'variant-key-black-500ml';
   const variantTsin = buildVariantAsinLikeId(parent, variantKey);
-  assert.match(variantTsin, /^TS[A-Z0-9]{5}$/);
-  assert.equal(variantTsin.length, VARIANT_TSIN_TOTAL_LENGTH);
+  assert.match(variantTsin, /^TS[A-Z0-9]{8}$/);
+  assert.equal(variantTsin.length, NEW_VARIANT_TSIN_TOTAL_LENGTH);
   assert.equal(variantTsin.slice(0, parent.length), parent);
-  assert.equal(VARIANT_TSIN_BODY_LENGTH, 2);
+  assert.equal(VARIANT_TSIN_BODY_LENGTH, VARIANT_TSIN_SUFFIX_LENGTH);
+  assert.equal(variantTsin.slice(-VARIANT_TSIN_SUFFIX_LENGTH).length, 5);
   assert.equal(buildVariantAsinLikeId(parent, variantKey), variantTsin);
+  assert.equal(getVariantTsinTotalLength(parent), 10);
 });
 
 test('buildVariantAsinLikeId separates variants on the same new parent', () => {
@@ -83,13 +92,14 @@ test('buildVariantAsinLikeId separates variants on the same new parent', () => {
   const variantA = buildVariantAsinLikeId(parent, 'variant-a');
   const variantB = buildVariantAsinLikeId(parent, 'variant-b');
   assert.notEqual(variantA, variantB);
-  assert.equal(variantA.length, 7);
-  assert.equal(variantB.length, 7);
+  assert.equal(variantA.length, NEW_VARIANT_TSIN_TOTAL_LENGTH);
+  assert.equal(variantB.length, NEW_VARIANT_TSIN_TOTAL_LENGTH);
   assert.equal(variantA.slice(0, parent.length), parent);
   assert.equal(variantB.slice(0, parent.length), parent);
+  assert.notEqual(variantA.slice(-5), variantB.slice(-5));
 });
 
-test('buildIdentityBundle wires 5-char catalog and 7-char variant TSINs', () => {
+test('buildIdentityBundle wires 5-char catalog and 10-char variant TSINs', () => {
   const bundle = buildIdentityBundle({
     name: 'Drill Machine',
     category: 'Tools',
@@ -99,7 +109,8 @@ test('buildIdentityBundle wires 5-char catalog and 7-char variant TSINs', () => 
   assert.match(bundle.asinLikeId, /^TS[A-Z0-9]{3}$/);
   assert.equal(bundle.asinLikeId.length, 5);
   assert.equal(bundle.variantAsinLikeId, buildVariantAsinLikeId(bundle.asinLikeId, bundle.variantKey));
-  assert.equal(bundle.variantAsinLikeId.length, 7);
+  assert.equal(bundle.variantAsinLikeId.length, NEW_VARIANT_TSIN_TOTAL_LENGTH);
+  assert.equal(bundle.variantAsinLikeId.slice(-5).length, 5);
 });
 
 test('buildAsinLikeId stays mostly unique across moderate catalog volume', () => {

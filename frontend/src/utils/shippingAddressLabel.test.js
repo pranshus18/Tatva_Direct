@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatShippingAddressLabel,
+  formatShippingAddressOptionLabel,
   formatShippingAddressPreview,
   normalizeShippingAddressBookEntry
 } from './shippingAddressLabel.js';
@@ -35,6 +36,22 @@ describe('shippingAddressLabel', () => {
     };
     expect(formatShippingAddressLabel(entry)).toBe(
       'Warehouse — Plot 9 Industrial Area, Pune, Maharashtra, 411001, India'
+    );
+  });
+
+  it('uses compact option labels for dropdowns', () => {
+    const entry = {
+      id: '2',
+      label: 'Main Branch',
+      line1: 'Plot 9 Industrial Area',
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '411001',
+      country: 'India'
+    };
+    expect(formatShippingAddressOptionLabel(entry)).toBe('Main Branch — Pune, Maharashtra');
+    expect(formatShippingAddressLabel(entry)).toBe(
+      'Main Branch — Plot 9 Industrial Area, Pune, Maharashtra, 411001, India'
     );
   });
 

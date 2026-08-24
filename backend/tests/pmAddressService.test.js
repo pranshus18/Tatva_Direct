@@ -92,6 +92,16 @@ test('mergeLocalAndPmShippingAddresses prefers PM ids and keeps extras', () => {
   assert.equal(merged.some((entry) => entry.id === 'local-only'), true);
 });
 
+test('mergeLocalAndPmShippingAddresses dedupes by address fingerprint', () => {
+  const merged = mergeLocalAndPmShippingAddresses(
+    [{ id: 'local-1', building: '12', zip: '560001', state: 'Karnataka', locality: 'Bengaluru' }],
+    [{ id: 'pm-99', pmAddressId: 'pm-99', building: '12', zip: '560001', state: 'Karnataka', locality: 'Bengaluru' }]
+  );
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].pmAddressId, 'pm-99');
+});
+
 test('inferPmAddressSubType and formatted address helpers', () => {
   assert.equal(inferPmAddressSubType({ subType: 'home' }), 'HOME');
   assert.equal(inferPmAddressSubType({ label: 'Work' }), 'WORK');

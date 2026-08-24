@@ -119,6 +119,57 @@ export function getApprovedBaselineEntries(profile) {
   return getCompanyInfoEntriesForSave(profile);
 }
 
+/** True when this brand entry needs admin review (new role assignment or role change). */
+export function entryNeedsChainRoleAdminReview(baselineEntry, pendingEntry) {
+  const pendingRole = String(pendingEntry?.role || '').trim();
+  const brand = String(pendingEntry?.brands || '').trim();
+  if (!pendingRole || !brand) return false;
+
+  const baselineRole = String(baselineEntry?.role || '').trim();
+  if (!baselineRole) return true;
+  return pendingRole !== baselineRole;
+}
+
+/** Pending supply-chain role submissions awaiting admin approval (role must be assigned). */
+export function listPendingChainRoleSubmissions(profile) {
+  const status = String(profile?.chainProfileApprovalStatus || '').trim().toLowerCase();
+  if (status !== 'pending') return [];
+
+  const baselineEntries = getApprovedBaselineEntries(profile);
+  const displayEntries = getCompanyInfoEntriesForSave(profile);
+  const submissions = [];
+
+  for (const entry of displayEntries) {
+    const baselineEntry = matchBaselineEntry(baselineEntries, entry);
+    if (!entryNeedsChainRoleAdminReview(baselineEntry, entry)) continue;
+    const brand = String(entry?.brands || '').trim();
+    if (!brand) continue;
+    submissions.push({
+      brand,
+      role: String(entry?.role || '').trim(),
+      roleLabel: formatSupplyChainRoleLabel(entry?.role),
+      submittedAt: profile?.chainProfilePendingSubmittedAt || null
+    });
+  }
+
+  return submissions.sort((a, b) => a.brand.localeCompare(b.brand));
+}
+
+export function hasPendingChainRoleSubmissionForBrand(profile, brandName) {
+  const brandKey = brandKeyForDuplicateCheck(brandName);
+  if (!brandKey) return false;
+  return listPendingChainRoleSubmissions(profile).some(
+    (row) => brandKeyForDuplicateCheck(row.brand) === brandKey
+  );
+}
+
+/** Scope chain-profile pending status to brands that actually submitted a role. */
+export function resolveChainProfileApprovalStatusForBrand(profile, brandName) {
+  const status = String(profile?.chainProfileApprovalStatus || '').trim().toLowerCase();
+  if (status !== 'pending') return String(profile?.chainProfileApprovalStatus || '').trim();
+  return hasPendingChainRoleSubmissionForBrand(profile, brandName) ? 'pending' : '';
+}
+
 export function getApprovedRoleForEntry(baselineEntries, entry) {
   const baselineEntry = matchBaselineEntry(baselineEntries, entry);
   return String(baselineEntry?.role || '').trim();
@@ -260,31 +311,69 @@ function buildSupplierRejectedBrandKeys(supplierBrandRequests = []) {
   return keys;
 }
 
+/** Timestamp used to pick the latest supplier brand-request row for a brand identity. */
+function supplierBrandRequestRowTimestamp(row = {}) {
+  return String(
+    row?.updatedAt ||
+      row?.updated_at ||
+      row?.submittedAt ||
+      row?.requestedAt ||
+      row?.createdAt ||
+      ''
+  );
+}
+
+function normalizeSupplierBrandRequestRow(item, fallbackName = '') {
+  if (typeof item === 'string') {
+    const name = String(item || '').trim();
+    return name
+      ? {
+          name,
+          status: 'pending',
+          requestedAt: null,
+          submittedAt: null,
+          createdAt: null,
+          updatedAt: null,
+          rejectionReason: ''
+        }
+      : null;
+  }
+  const name = String(item?.name || item?.normalizedName || fallbackName || '').trim();
+  if (!name) return null;
+  const submittedAt = item?.submittedAt || item?.requestedAt || item?.createdAt || null;
+  return {
+    name,
+    status: String(item?.status || 'pending').trim().toLowerCase() || 'pending',
+    requestedAt: item?.requestedAt || submittedAt,
+    submittedAt,
+    createdAt: item?.createdAt || null,
+    updatedAt: item?.updatedAt || item?.updated_at || null,
+    rejectionReason: String(item?.rejectionReason || '').trim()
+  };
+}
+
 /** Find this supplier's brand-approval request row for a brand name (any status). */
 export function findSupplierBrandRequest(brandName, supplierBrandRequests = []) {
   const brandKey = brandKeyForDuplicateCheck(brandName);
   if (!brandKey) return null;
+
+  let best = null;
   for (const item of Array.isArray(supplierBrandRequests) ? supplierBrandRequests : []) {
-    if (typeof item === 'string') {
-      if (brandKeyForDuplicateCheck(item) === brandKey) {
-        return { name: item, status: 'pending', requestedAt: null, submittedAt: null, rejectionReason: '' };
-      }
-      continue;
-    }
-    const name = String(item?.name || item?.normalizedName || '').trim();
-    const itemKey = brandKeyForDuplicateCheck(item?.normalizedName || name);
-    if (itemKey === brandKey) {
-      return {
-        name: name || brandName,
-        status: String(item?.status || 'pending').trim().toLowerCase() || 'pending',
-        requestedAt: item?.requestedAt || item?.submittedAt || item?.createdAt || null,
-        submittedAt: item?.submittedAt || item?.requestedAt || item?.createdAt || null,
-        createdAt: item?.createdAt || null,
-        rejectionReason: String(item?.rejectionReason || '').trim()
-      };
+    const name = typeof item === 'string' ? item : item?.name || item?.normalizedName;
+    const itemKey = brandKeyForDuplicateCheck(
+      typeof item === 'object' ? item?.normalizedName || name : name
+    );
+    if (itemKey !== brandKey) continue;
+    const candidate = normalizeSupplierBrandRequestRow(item, brandName);
+    if (!candidate) continue;
+    if (
+      !best ||
+      supplierBrandRequestRowTimestamp(candidate) > supplierBrandRequestRowTimestamp(best)
+    ) {
+      best = candidate;
     }
   }
-  return null;
+  return best;
 }
 
 /**
@@ -353,6 +442,19 @@ export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [],
     ) {
       continue;
     }
+    const existingTs = supplierBrandRequestRowTimestamp(existing);
+    const incomingTs = supplierBrandRequestRowTimestamp(row);
+    if (
+      existingStatus &&
+      incomingStatus !== existingStatus &&
+      existingStatus !== 'approved' &&
+      incomingStatus !== 'approved' &&
+      incomingTs &&
+      existingTs &&
+      incomingTs <= existingTs
+    ) {
+      continue;
+    }
     byKey.set(key, {
       ...existing,
       ...row,
@@ -374,7 +476,8 @@ export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [],
         existing.createdAt ||
         row.createdAt ||
         null,
-      createdAt: row.createdAt || existing.createdAt || null
+      createdAt: row.createdAt || existing.createdAt || null,
+      updatedAt: row.updatedAt || existing.updatedAt || row.submittedAt || existing.submittedAt || null
     });
   }
 
@@ -384,6 +487,50 @@ export function mergeSupplierBrandRequestsIntoProfile(profile, requestRows = [],
       String(a.name || '').localeCompare(String(b.name || ''))
     )
   };
+}
+
+/** Collapse duplicate request rows per brand key, keeping the latest server status. */
+export function dedupeSupplierBrandRequestsByLatest(requestRows = []) {
+  const byKey = new Map();
+  for (const item of Array.isArray(requestRows) ? requestRows : []) {
+    const normalized =
+      typeof item === 'string'
+        ? normalizeSupplierBrandRequestRow(item)
+        : normalizeSupplierBrandRequestRow(item, item?.name);
+    if (!normalized) continue;
+    const key = brandKeyForDuplicateCheck(normalized.name);
+    if (!key) continue;
+    const existing = byKey.get(key);
+    if (
+      !existing ||
+      supplierBrandRequestRowTimestamp(normalized) >= supplierBrandRequestRowTimestamp(existing)
+    ) {
+      byKey.set(key, {
+        ...normalized,
+        normalizedName: brandKeyForDuplicateCheck(normalized.name)
+      });
+    }
+  }
+  return [...byKey.values()].sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+}
+
+/** Normalize profile request rows and drop stale pending duplicates after admin acts. */
+export function normalizeSupplierBrandRequestsOnProfile(profile) {
+  if (!profile || typeof profile !== 'object') return profile;
+  const requests = dedupeSupplierBrandRequestsByLatest(profile.supplierBrandRequests || []);
+  const prev = profile.supplierBrandRequests || [];
+  const unchanged =
+    prev.length === requests.length &&
+    prev.every((row, index) => {
+      const next = requests[index];
+      return (
+        brandKeyForDuplicateCheck(row?.name || row?.normalizedName) ===
+          brandKeyForDuplicateCheck(next?.name || next?.normalizedName) &&
+        String(row?.status || '').toLowerCase() === String(next?.status || '').toLowerCase()
+      );
+    });
+  if (unchanged) return profile;
+  return { ...profile, supplierBrandRequests: requests };
 }
 
 /**
@@ -1342,6 +1489,39 @@ export function syncBrandEntriesForSupplyChainStep(entries = []) {
   });
 }
 
+/** Clear Path B brand drafts after a successful brand-approval submit; keep role-setup rows. */
+export function clearSubmittedPathBBrandDrafts(profile, submittedBrandNames = []) {
+  if (!profile) return profile;
+  const submittedKeys = new Set(
+    (Array.isArray(submittedBrandNames) ? submittedBrandNames : [])
+      .map((name) => brandKeyForDuplicateCheck(name))
+      .filter(Boolean)
+  );
+  if (submittedKeys.size === 0) return profile;
+
+  const entries = getCompanyInfoEntriesForSave(profile).filter((entry) => {
+    const brand = String(entry?.brands || '').trim();
+    const brandKey = brandKeyForDuplicateCheck(brand);
+    if (!brandKey || !submittedKeys.has(brandKey)) return true;
+    if (String(entry?.role || '').trim()) return true;
+    return false;
+  });
+
+  let nextEntries = ensureAtLeastOneCompanyInfoEntry({
+    ...profile,
+    companyInfoEntries: entries
+  });
+  if (!nextEntries.some((entry) => !String(entry?.brands || '').trim())) {
+    nextEntries = [...nextEntries, ...ensureAtLeastOneCompanyInfoEntry({ companyInfoEntries: [] })];
+  }
+
+  return buildSupplierChainSavePayload(
+    { ...profile, companyInfoEntries: nextEntries },
+    nextEntries,
+    { dedupeByBrand: false }
+  );
+}
+
 export function buildSupplyChainFormProfile(profile, baselineEntries = []) {
   if (!profile) return null;
   // Merge approved baseline first, then current profile so Step 2 draft edits (role, docs, MOV)
@@ -1449,14 +1629,19 @@ export function buildSupplierChainSavePayload(profile, entries = null, options =
     (saveEntryId && nextEntries.find((entry) => String(entry?.id || '').trim() === saveEntryId)) ||
     first;
   const preserveTopLevelFields = Boolean(saveEntryId);
+  const brandsFromEntries = nextEntries
+    .map((entry) => String(entry?.brands || '').trim())
+    .filter(Boolean);
+  const primaryEntryBrand =
+    String(savedEntry?.brands || '').trim() || brandsFromEntries[0] || '';
   const chainFields = {
     companyInfoEntries: nextEntries,
     supplierRole: preserveTopLevelFields
       ? profile?.supplierRole || savedEntry.role || ''
       : savedEntry.role || profile?.supplierRole || '',
     brands: preserveTopLevelFields
-      ? profile?.brands || savedEntry.brands || ''
-      : savedEntry.brands || profile?.brands || '',
+      ? profile?.brands || primaryEntryBrand || ''
+      : primaryEntryBrand,
     gstin: preserveTopLevelFields
       ? profile?.gstin || savedEntry.gstin || ''
       : savedEntry.gstin || profile?.gstin || '',

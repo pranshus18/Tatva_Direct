@@ -48,6 +48,17 @@ export function formatShippingAddressLabel(entry, index = 0) {
   return `Address ${index + 1}`;
 }
 
+/** Compact label for address dropdowns — full address belongs in the preview line below. */
+export function formatShippingAddressOptionLabel(entry, index = 0) {
+  const fields = getShippingAddressFields(entry);
+  const location = [fields.city, fields.state].filter(Boolean).join(', ');
+  if (fields.label && location) return `${fields.label} — ${location}`;
+  if (fields.label) return fields.label;
+  const preview = formatShippingAddressPreview(entry);
+  if (preview) return preview;
+  return `Address ${index + 1}`;
+}
+
 /** Single-line address for banners and geocoding hints. */
 export function formatShippingAddressPreview(entry = {}) {
   const nested = entry?.address && typeof entry.address === 'object' ? entry.address : {};
