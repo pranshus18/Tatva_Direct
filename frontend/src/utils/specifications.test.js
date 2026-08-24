@@ -6,6 +6,47 @@ import {
   specificationEntriesForCustomerDisplay
 } from './specifications.js';
 
+describe('specificationsWithMeaningfulValuesOnly', () => {
+  it('removes empty and whitespace-only specification values', async () => {
+    const { specificationsWithMeaningfulValuesOnly } = await import('./specifications.js');
+    expect(
+      specificationsWithMeaningfulValuesOnly({
+        'DISHWASHER SAFE': 'No',
+        'INSULATION TYPE': 'Double Wall Vacuum Insulation',
+        SIZE: '',
+        STYLE: '   ',
+        GENDER: null
+      })
+    ).toEqual({
+      'DISHWASHER SAFE': 'No',
+      'INSULATION TYPE': 'Double Wall Vacuum Insulation'
+    });
+  });
+});
+
+describe('resolveSavedSpecificationsForSupplierEdit', () => {
+  it('prefers filled supplier offer specs over merged display placeholders', async () => {
+    const { resolveSavedSpecificationsForSupplierEdit } = await import('./specifications.js');
+    expect(
+      resolveSavedSpecificationsForSupplierEdit({
+        specifications: {
+          'DISHWASHER SAFE': 'No',
+          'INSULATION TYPE': 'Double Wall Vacuum Insulation',
+          SIZE: '',
+          STYLE: ''
+        },
+        supplierOfferSpecifications: {
+          'DISHWASHER SAFE': 'No',
+          'INSULATION TYPE': 'Double Wall Vacuum Insulation'
+        }
+      })
+    ).toEqual({
+      'DISHWASHER SAFE': 'No',
+      'INSULATION TYPE': 'Double Wall Vacuum Insulation'
+    });
+  });
+});
+
 describe('mergeExtractedValuesOntoSpecificationTemplate', () => {
   it('maps extracted values onto admin template keys case-insensitively', async () => {
     const { mergeExtractedValuesOntoSpecificationTemplate } = await import('./specifications.js');

@@ -7,7 +7,7 @@ import {
   buildSpecExtractionSourceKey,
   extractSpecificationsFromDescription
 } from '../utils/extractSpecificationsApi';
-import { parseSpecInputToValue, specValueToInput } from '../utils/specifications';
+import { parseSpecInputToValue, specValueToInput, specificationsWithMeaningfulValuesOnly } from '../utils/specifications';
 import tatvaLogo from '../images/tatva_d.png';
 import SupplierProductAdditionSteps from '../components/SupplierProductAdditionSteps';
 import {
@@ -336,6 +336,11 @@ const SupplierProductSetup = ({ user }) => {
           const prevObj = prev && typeof prev === 'object' && !Array.isArray(prev) ? prev : {};
           const keys = Object.keys(specsObj || {});
           if (keys.length === 0) return { ...prevObj };
+          const hasSavedSpecs = Object.values(prevObj).some(
+            (value) => value !== null && value !== undefined && String(value).trim() !== ''
+          );
+          // Keep saved specs intact when revisiting — do not scaffold empty category keys.
+          if (hasSavedSpecs) return { ...prevObj };
           const next = { ...prevObj };
           keys.forEach((k) => {
             if (!Object.prototype.hasOwnProperty.call(next, k)) {
@@ -407,7 +412,7 @@ const SupplierProductSetup = ({ user }) => {
           sgst_rate: parseFloat(formData.sgst_rate),
           description: formData.description || ''
           ,
-          specifications
+          specifications: specificationsWithMeaningfulValuesOnly(specifications)
         })
       });
 

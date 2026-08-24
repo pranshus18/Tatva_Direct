@@ -90,6 +90,34 @@ const isMeaningfullyFilled = (value) => {
 
 export const isMeaningfullyFilledSpecValue = isMeaningfullyFilled;
 
+/** Drop keys with empty / placeholder values — only persist specs the supplier actually filled. */
+export const specificationsWithMeaningfulValuesOnly = (specifications) => {
+  const parsed = parseSpecificationsObject(specifications) || {};
+  const result = {};
+  Object.entries(parsed).forEach(([key, value]) => {
+    if (isMeaningfullyFilled(value)) {
+      result[key] = value;
+    }
+  });
+  return result;
+};
+
+/** Supplier edit form: show saved offer values, not category template placeholders. */
+export const resolveSavedSpecificationsForSupplierEdit = (product = {}) => {
+  const offer =
+    parseSpecificationsObject(product.supplierOfferSpecifications) ||
+    parseSpecificationsObject(product.attributes?.specifications);
+  const fromOffer = specificationsWithMeaningfulValuesOnly(offer);
+  if (Object.keys(fromOffer).length > 0) {
+    return fromOffer;
+  }
+  const fromCatalog = specificationsWithMeaningfulValuesOnly(product.catalogSpecifications);
+  if (Object.keys(fromCatalog).length > 0) {
+    return fromCatalog;
+  }
+  return specificationsWithMeaningfulValuesOnly(product.specifications);
+};
+
 /** Normalize specification keys for case/spacing/punctuation-insensitive matching. */
 export const normalizeSpecificationKeyForMatch = (key) =>
   String(key || '')

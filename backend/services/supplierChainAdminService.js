@@ -76,6 +76,27 @@ function reviewableEntries(payload) {
   );
 }
 
+/** Approved supply-chain rows saved on the supplier profile (includes legacy single-field profiles). */
+export function collectApprovedChainEntriesFromProfile(profile) {
+  const baseline = baselineChainFromProfile(profile || {});
+  return reviewableEntries({ companyInfoEntries: baseline.companyInfoEntries || [] });
+}
+
+function buildLatestApprovedRequestIdByUser(requestRows = []) {
+  const latestByUser = new Map();
+  for (const row of requestRows || []) {
+    if (String(row?.status || '') !== 'approved') continue;
+    const userId = String(row?.user_id || '').trim();
+    if (!userId) continue;
+    const ts = String(row?.reviewed_at || row?.created_at || '');
+    const prev = latestByUser.get(userId);
+    if (!prev || ts > String(prev.ts || '')) {
+      latestByUser.set(userId, { id: row?.id || null, ts });
+    }
+  }
+  return latestByUser;
+}
+
 export async function syncPendingRequestPayloads(requestRows = [], userMap = {}) {
   const updates = [];
 
@@ -170,10 +191,44 @@ function removePayloadEntry(payload, targetEntry) {
 
   const first = remaining[0] || {};
   return {
+    ...(payload || {}),
     supplierRole: String(first?.role || '').trim(),
     brands: String(first?.brands || '').trim(),
     companyInfoEntries: remaining
   };
+}
+
+function listResolvedPayloadEntries(payload = {}) {
+  return normalizeCompanyInfoEntries(payload?.resolvedEntries || []).filter(
+    (entry) => String(entry?.role || '').trim() && String(entry?.brands || '').trim()
+  );
+}
+
+/** Move a pending brand into request history so admin still sees it after approve/reject. */
+export function appendResolvedPayloadEntry(payload, entry, decision = {}) {
+  const resolved = listResolvedPayloadEntries(payload).map((row) => ({ ...row }));
+  resolved.push({
+    ...entry,
+    reviewStatus: decision.status || 'approved',
+    reviewedAt: decision.reviewedAt || null,
+    rejectionReason: String(decision.rejectionReason || '').trim()
+  });
+  const next = removePayloadEntry(payload, entry);
+  return { ...next, resolvedEntries: resolved };
+}
+
+export function snapshotPayloadEntriesAsResolved(payload, entries = [], decision = {}) {
+  const resolved = listResolvedPayloadEntries(payload).map((row) => ({ ...row }));
+  for (const entry of entries || []) {
+    if (!String(entry?.role || '').trim() || !String(entry?.brands || '').trim()) continue;
+    resolved.push({
+      ...entry,
+      reviewStatus: decision.status || 'approved',
+      reviewedAt: decision.reviewedAt || null,
+      rejectionReason: String(decision.rejectionReason || '').trim()
+    });
+  }
+  return { ...(payload || {}), resolvedEntries: resolved };
 }
 
 function mergeEntryIntoProfile(profile, approvedEntry) {
@@ -207,15 +262,17 @@ function mergeEntryIntoProfile(profile, approvedEntry) {
   };
 }
 
-function buildReviewItem({ row = null, entry, user, roleChange = null }) {
+function buildReviewItem({ row = null, entry, user, roleChange = null, source = 'request' }) {
   const brand = String(entry?.brands || '').trim();
   const role = String(entry?.role || '').trim();
   const entryId = String(entry?.id || '').trim();
-  const rowStatus = String(row?.status || 'approved');
+  const rowStatus = String(entry?.reviewStatus || row?.status || 'approved');
   const userId = row?.user_id || user?.id || null;
+  const submittedAt = entry?.submittedAt || row?.created_at || null;
+  const reviewedAt = entry?.reviewedAt || row?.reviewed_at || null;
 
   return {
-    id: `${row?.id || userId}:${entryId || brand}:${role}`,
+    id: `${source}:${row?.id || userId}:${entryId || brand}:${role}:${rowStatus}:${submittedAt || reviewedAt || 'na'}`,
     requestId: row?.id || null,
     entryId,
     userId,
@@ -232,8 +289,9 @@ function buildReviewItem({ row = null, entry, user, roleChange = null }) {
       : null,
     documents: documentsFromChainEntry(entry),
     status: rowStatus,
-    submittedAt: row?.created_at || null,
-    rejectionReason: row?.rejection_reason || '',
+    submittedAt,
+    reviewedAt,
+    rejectionReason: String(entry?.rejectionReason || row?.rejection_reason || '').trim(),
     user: user
       ? {
           id: user.id,
@@ -246,23 +304,41 @@ function buildReviewItem({ row = null, entry, user, roleChange = null }) {
   };
 }
 
-function reviewItemDedupeKey(item) {
+function assignmentKey(item) {
   return `${item.userId}:${catalogBrandDedupKey(item.brand)}:${item.role}`;
 }
 
+function reviewItemDedupeKey(item) {
+  if (item?.requestId) {
+    return `${item.requestId}:${assignmentKey(item)}:${item.status}:${item.submittedAt || ''}`;
+  }
+  return `live:${assignmentKey(item)}`;
+}
+
 /** Saved supplier profile entries — source of truth for approved assignments. */
-export function buildApprovedProfileItems(userMap = {}) {
+export function buildApprovedProfileItems(userMap = {}, options = {}) {
   const items = [];
+  const requestRows = Array.isArray(options.requestRows) ? options.requestRows : [];
 
   for (const user of Object.values(userMap)) {
     if (String(user?.user_type || '') !== 'supplier') continue;
-    const baseline = baselineChainFromProfile(user?.profile || {});
-    for (const entry of reviewableEntries({ companyInfoEntries: baseline.companyInfoEntries || [] })) {
+    for (const entry of collectApprovedChainEntriesFromProfile(user?.profile || {})) {
+      const reviewMeta = reviewMetaForLiveAssignment(requestRows, user.id, entry?.brands);
       items.push(
         buildReviewItem({
-          row: { status: 'approved', user_id: user.id },
-          entry,
-          user
+          row: {
+            status: 'approved',
+            user_id: user.id,
+            created_at: reviewMeta.submittedAt,
+            reviewed_at: reviewMeta.reviewedAt
+          },
+          entry: {
+            ...entry,
+            reviewedAt: reviewMeta.reviewedAt || entry?.reviewedAt || null,
+            submittedAt: reviewMeta.submittedAt || entry?.submittedAt || null
+          },
+          user,
+          source: 'live'
         })
       );
     }
@@ -271,31 +347,85 @@ export function buildApprovedProfileItems(userMap = {}) {
   return items;
 }
 
+function reviewMetaForLiveAssignment(requestRows, userId, brand) {
+  const brandKey = catalogBrandDedupKey(brand);
+  let submittedAt = null;
+  let reviewedAt = null;
+  for (const row of requestRows || []) {
+    if (String(row?.user_id || '') !== String(userId || '')) continue;
+    const resolved = listResolvedPayloadEntries(row?.payload || {});
+    const pending = reviewableEntries(row?.payload || {});
+    const matchesBrand = [...resolved, ...pending].some(
+      (entry) => catalogBrandDedupKey(entry?.brands) === brandKey
+    );
+    const emptyClosedApproved =
+      String(row?.status || '') === 'approved' && resolved.length === 0 && pending.length === 0;
+    if (!matchesBrand && !emptyClosedApproved) continue;
+
+    const created = row?.created_at || null;
+    const reviewed = row?.reviewed_at || null;
+    if (created && (!submittedAt || String(created) > String(submittedAt))) submittedAt = created;
+    if (reviewed && (!reviewedAt || String(reviewed) > String(reviewedAt))) reviewedAt = reviewed;
+  }
+  return { submittedAt, reviewedAt };
+}
+
+function historyEntriesFromRequest(row, { user = null, isLatestApprovedForUser = false } = {}) {
+  const resolved = listResolvedPayloadEntries(row?.payload || {});
+  if (resolved.length > 0) return resolved;
+
+  const payloadEntries = reviewableEntries(row?.payload || {});
+  const rowStatus = String(row?.status || '');
+
+  if (payloadEntries.length > 0 && (rowStatus === 'approved' || rowStatus === 'rejected')) {
+    return payloadEntries.map((entry) => ({
+      ...entry,
+      reviewStatus: rowStatus,
+      reviewedAt: row?.reviewed_at || null,
+      rejectionReason: row?.rejection_reason || ''
+    }));
+  }
+
+  // Legacy rows: approve flow cleared payload before resolvedEntries existed.
+  if (rowStatus === 'approved' && isLatestApprovedForUser && user) {
+    return collectApprovedChainEntriesFromProfile(user?.profile || {}).map((entry) => ({
+      ...entry,
+      reviewStatus: 'approved',
+      reviewedAt: row?.reviewed_at || null,
+      submittedAt: row?.created_at || null
+    }));
+  }
+
+  return [];
+}
+
 export function buildBrandReviewItems(requestRows = [], userMap = {}, options = {}) {
   const statusFilter = String(options.statusFilter || 'pending').trim().toLowerCase();
   const items = [];
   const seen = new Set();
+  const approvedAssignmentKeys = new Set();
+  const latestApprovedRequestByUser = buildLatestApprovedRequestIdByUser(requestRows);
 
   const pushItem = (item) => {
     const key = reviewItemDedupeKey(item);
     if (seen.has(key)) return;
     seen.add(key);
     items.push(item);
+    if (item.status === 'approved') {
+      approvedAssignmentKeys.add(assignmentKey(item));
+    }
   };
 
-  if (statusFilter === 'approved') {
-    for (const item of buildApprovedProfileItems(userMap)) {
-      pushItem(item);
-    }
-    return items;
-  }
+  const includePending = statusFilter === 'pending' || statusFilter === 'all';
+  const includeApproved = statusFilter === 'approved' || statusFilter === 'all';
+  const includeRejected = statusFilter === 'rejected' || statusFilter === 'all';
 
   for (const row of requestRows) {
     const rowStatus = String(row?.status || 'pending');
     const user = userMap[row.user_id] || null;
     const baseline = baselineChainFromProfile(user?.profile || {});
 
-    if (rowStatus === 'pending' && (statusFilter === 'pending' || statusFilter === 'all')) {
+    if (includePending && rowStatus === 'pending') {
       const reviewPayload = resolveReviewPayloadForRequest(user?.profile || {}, row?.payload || {});
       const roleChanges = detectSupplyChainRoleChanges(baseline, reviewPayload);
 
@@ -308,22 +438,47 @@ export function buildBrandReviewItems(requestRows = [], userMap = {}, options = 
           roleChanges.find((change) => catalogBrandDedupKey(change.brand) === catalogBrandDedupKey(brand)) ||
           null;
 
-        pushItem(buildReviewItem({ row, entry, user, roleChange }));
+        pushItem(buildReviewItem({ row, entry, user, roleChange, source: 'request' }));
       }
     }
 
-    if (rowStatus === 'rejected' && (statusFilter === 'rejected' || statusFilter === 'all')) {
-      for (const entry of reviewableEntries(row?.payload || {})) {
-        pushItem(buildReviewItem({ row, entry, user }));
+    if (includeApproved || includeRejected) {
+      const userId = String(row?.user_id || '').trim();
+      const latestApproved = latestApprovedRequestByUser.get(userId);
+      const isLatestApprovedForUser =
+        rowStatus === 'approved' && latestApproved?.id && String(latestApproved.id) === String(row?.id || '');
+      for (const entry of historyEntriesFromRequest(row, {
+        user,
+        isLatestApprovedForUser
+      })) {
+        const historyStatus = String(entry?.reviewStatus || rowStatus || '').toLowerCase();
+        if (historyStatus === 'approved' && includeApproved) {
+          pushItem(buildReviewItem({ row, entry, user, source: 'history' }));
+        }
+        if (historyStatus === 'rejected' && includeRejected) {
+          pushItem(buildReviewItem({ row, entry, user, source: 'history' }));
+        }
       }
     }
   }
 
-  if (statusFilter === 'all') {
-    for (const item of buildApprovedProfileItems(userMap)) {
+  if (includeApproved) {
+    for (const item of buildApprovedProfileItems(userMap, { requestRows })) {
+      if (approvedAssignmentKeys.has(assignmentKey(item))) continue;
       pushItem(item);
     }
   }
+
+  const statusRank = (status) => {
+    if (status === 'pending') return 0;
+    if (status === 'rejected') return 1;
+    return 2;
+  };
+  items.sort((a, b) => {
+    const rankDiff = statusRank(a.status) - statusRank(b.status);
+    if (rankDiff !== 0) return rankDiff;
+    return String(b.submittedAt || b.reviewedAt || '').localeCompare(String(a.submittedAt || a.reviewedAt || ''));
+  });
 
   return items;
 }
@@ -379,12 +534,17 @@ export async function approveBrandReviewItem({ requestId, entryId, brand, adminU
 
   if (upUserErr) throw upUserErr;
 
+  const nowIso = new Date().toISOString();
+  const historyPayload = appendResolvedPayloadEntry(reqRow.payload || {}, targetEntry, {
+    status: 'approved',
+    reviewedAt: nowIso
+  });
   const nextPayload = resolveReviewPayloadForRequest(
     mergedProfile,
-    removePayloadEntry(reqRow.payload || {}, targetEntry)
+    historyPayload
   );
   const remaining = reviewableEntries(nextPayload);
-  const nowIso = new Date().toISOString();
+  nextPayload.resolvedEntries = listResolvedPayloadEntries(historyPayload);
 
   if (remaining.length === 0) {
     const { error: upReqErr } = await supabase
@@ -454,13 +614,16 @@ export async function rejectBrandReviewItem({ requestId, entryId, brand, reason,
     };
   }
 
-  const nextPayload = resolveReviewPayloadForRequest(
-    userRow.profile || {},
-    removePayloadEntry(reqRow.payload || {}, targetEntry)
-  );
-  const remaining = reviewableEntries(nextPayload);
   const nowIso = new Date().toISOString();
   const rejectionReason = String(reason || '').trim() || 'Rejected by admin';
+  const historyPayload = appendResolvedPayloadEntry(reqRow.payload || {}, targetEntry, {
+    status: 'rejected',
+    reviewedAt: nowIso,
+    rejectionReason
+  });
+  const nextPayload = resolveReviewPayloadForRequest(userRow.profile || {}, historyPayload);
+  nextPayload.resolvedEntries = listResolvedPayloadEntries(historyPayload);
+  const remaining = reviewableEntries(nextPayload);
 
   if (remaining.length === 0) {
     const { error: upReqErr } = await supabase

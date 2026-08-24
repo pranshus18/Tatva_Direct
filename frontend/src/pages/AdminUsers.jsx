@@ -1,9 +1,7 @@
 import { useState, useEffect } from 'react';
 import { authFetch } from '../config/api';
 import { 
-  Users, 
   Search, 
-  Eye,
   CheckCircle,
   Clock,
   RefreshCw
@@ -166,7 +164,6 @@ const AdminUsers = ({ user }) => {
                   <th>Company</th>
                   <th>Joined</th>
                   <th>Status</th>
-                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -197,11 +194,6 @@ const AdminUsers = ({ user }) => {
                         {user.status === 'active' ? <CheckCircle size={14} /> : <Clock size={14} />}
                         {user.status}
                       </span>
-                    </td>
-                    <td>
-                      <button className="btn-icon" title="View Details">
-                        <Eye size={16} />
-                      </button>
                     </td>
                   </tr>
                 ))}

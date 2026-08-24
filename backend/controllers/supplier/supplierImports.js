@@ -93,6 +93,7 @@ export {
   mergeOrderItemSpecificationsForDisplay,
   parseSpecificationsObject,
   sanitizeSpecifications,
+  specificationsWithMeaningfulValuesOnly,
   toFiniteNumber
 } from '../../services/supplierCatalogHelpersService.js';
 export { notifyAdminsForPortalAction } from '../../services/portalActivityService.js';

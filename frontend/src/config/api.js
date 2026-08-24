@@ -175,3 +175,50 @@ export const authFetch = async (endpoint, options = {}) => {
     clearTimeout(timer);
   }
 };
+
+/**
+ * Auth-aware fetch for admin pages:
+ * - Adds bearer token automatically.
+ * - Applies a timeout so loaders don't spin forever on stuck requests.
+ * - Redirects to /admin-login on 401 (expired/invalid admin session).
+ */
+export const adminFetch = async (endpoint, options = {}) => {
+  const timeoutMs = Number(options.timeoutMs || 15000);
+  const externalSignal = options.signal;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = externalSignal || controller.signal;
+
+  const headers = buildAuthHeaders({
+    'Content-Type': 'application/json',
+    ...(options.headers || {})
+  });
+
+  const targetUrl = /^https?:\/\//i.test(String(endpoint || ''))
+    ? String(endpoint)
+    : resolveApiPath(endpoint);
+
+  try {
+    const response = await fetch(targetUrl, {
+      ...options,
+      headers,
+      signal,
+      cache: options.cache || 'no-store'
+    });
+
+    if (response.status === 401) {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      if (typeof window !== 'undefined') {
+        window.location.replace('/admin-login');
+      }
+      const authError = new Error('Session expired. Please log in again.');
+      authError.status = response.status;
+      throw authError;
+    }
+
+    return response;
+  } finally {
+    clearTimeout(timer);
+  }
+};

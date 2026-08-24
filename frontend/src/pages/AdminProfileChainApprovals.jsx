@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { getApiUrl } from '../config/api';
+import { useCallback, useEffect, useState } from 'react';
+import { adminFetch } from '../config/api';
 import { CheckCircle, Clock, ExternalLink, FileText, RefreshCw, User, XCircle } from 'lucide-react';
 import { certificateLabelFromUrl } from '../utils/authorizationCertificateUrls';
 import { formatDateTimeIST } from '../utils/dateTime';
@@ -53,22 +53,16 @@ function BrandDocuments({ documents = [] }) {
 const AdminProfileChainApprovals = () => {
   const [brandItems, setBrandItems] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [actionLoading, setActionLoading] = useState(false);
+  const [actingOnId, setActingOnId] = useState(null);
+  const [error, setError] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  const fetchRequests = async () => {
+  const fetchRequests = useCallback(async () => {
     setLoading(true);
+    setError('');
     try {
-      const token = localStorage.getItem('token');
       const q = statusFilter === 'all' ? 'all' : statusFilter;
-      const res = await fetch(getApiUrl(`/api/admin/supplier-chain-requests?status=${encodeURIComponent(q)}`), {
-        headers: { Authorization: `Bearer ${token}` },
-        cache: 'no-store'
-      });
-      if (res.status === 401) {
-        window.location.href = '/admin-login';
-        return;
-      }
+      const res = await adminFetch(`/api/admin/supplier-chain-requests?status=${encodeURIComponent(q)}`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok || data.status !== 'success') {
         throw new Error(data.message || res.statusText);
@@ -77,15 +71,15 @@ const AdminProfileChainApprovals = () => {
     } catch (e) {
       console.error(e);
       setBrandItems([]);
+      setError(e.message || 'Failed to load profile assignments');
     } finally {
       setLoading(false);
     }
-  };
+  }, [statusFilter]);
 
   useEffect(() => {
     fetchRequests();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter]);
+  }, [fetchRequests]);
 
   const approve = async (item) => {
     const supplierName = item.user?.name || item.user?.email || 'this supplier';
@@ -95,12 +89,10 @@ const AdminProfileChainApprovals = () => {
       return;
     }
 
-    setActionLoading(true);
+    setActingOnId(item.id);
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl(`/api/admin/supplier-chain-requests/${item.requestId}/approve`), {
+      const res = await adminFetch(`/api/admin/supplier-chain-requests/${item.requestId}/approve`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           entryId: item.entryId || undefined,
           brand: item.brand || undefined
@@ -112,7 +104,7 @@ const AdminProfileChainApprovals = () => {
     } catch (e) {
       alert(e.message || 'Failed to approve');
     } finally {
-      setActionLoading(false);
+      setActingOnId(null);
     }
   };
 
@@ -123,12 +115,10 @@ const AdminProfileChainApprovals = () => {
     );
     if (reason == null || !String(reason).trim()) return;
 
-    setActionLoading(true);
+    setActingOnId(item.id);
     try {
-      const token = localStorage.getItem('token');
-      const res = await fetch(getApiUrl(`/api/admin/supplier-chain-requests/${item.requestId}/reject`), {
+      const res = await adminFetch(`/api/admin/supplier-chain-requests/${item.requestId}/reject`, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           reason: String(reason).trim(),
           entryId: item.entryId || undefined,
@@ -141,7 +131,7 @@ const AdminProfileChainApprovals = () => {
     } catch (e) {
       alert(e.message || 'Failed to reject');
     } finally {
-      setActionLoading(false);
+      setActingOnId(null);
     }
   };
 
@@ -159,10 +149,13 @@ const AdminProfileChainApprovals = () => {
       <div className="admin-header">
         <div>
           <h1>Profile brand assignment</h1>
-          <p>One review box per brand — approve or reject each supply-chain role independently</p>
+          <p>
+            Full history of supplier profile assignments sent for review — pending, approved, and rejected
+            {!loading && brandItems.length > 0 ? ` (${brandItems.length} record${brandItems.length === 1 ? '' : 's'})` : ''}
+          </p>
         </div>
         <div className="admin-actions">
-          <button className="btn-refresh" type="button" onClick={fetchRequests} disabled={loading || actionLoading}>
+          <button className="btn-refresh" type="button" onClick={fetchRequests} disabled={loading || actingOnId}>
             <RefreshCw size={16} className={loading ? 'spinning' : ''} />
             Refresh
           </button>
@@ -170,7 +163,7 @@ const AdminProfileChainApprovals = () => {
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
             className="admin-chain-filter-select"
-            disabled={actionLoading}
+            disabled={Boolean(actingOnId)}
           >
             <option value="all">All profiles</option>
             <option value="pending">Pending</option>
@@ -181,7 +174,14 @@ const AdminProfileChainApprovals = () => {
       </div>
 
       <div className="admin-content">
-        {brandItems.length === 0 ? (
+        {error ? (
+          <div className="empty-state">
+            <p>{error}</p>
+            <button className="btn-refresh" type="button" onClick={fetchRequests}>
+              Try again
+            </button>
+          </div>
+        ) : brandItems.length === 0 ? (
           <div className="empty-state">
             <User size={48} color="#94a3b8" />
             <p>No profile assignments found</p>
@@ -192,7 +192,7 @@ const AdminProfileChainApprovals = () => {
                   ? 'No approved supplier profile assignments yet.'
                   : statusFilter === 'rejected'
                     ? 'No rejected profile assignments.'
-                    : 'Try another filter or refresh.'}
+                    : 'No supplier profile submissions yet. Refresh after a supplier sends Select yourself for review.'}
             </p>
           </div>
         ) : (
@@ -203,6 +203,7 @@ const AdminProfileChainApprovals = () => {
               <span>Document</span>
               <span>Status</span>
               <span>Submitted</span>
+              <span>Reviewed</span>
               <span>Actions</span>
             </div>
 
@@ -210,6 +211,7 @@ const AdminProfileChainApprovals = () => {
               {brandItems.map((item) => {
                 const u = item.user;
                 const isPending = item.status === 'pending' && item.canAct;
+                const isActing = actingOnId === item.id;
                 return (
                   <article key={item.id} className="admin-chain-brand-card">
                     <div className="admin-chain-brand-card__grid">
@@ -248,6 +250,12 @@ const AdminProfileChainApprovals = () => {
                         </span>
                       </section>
 
+                      <section className="admin-chain-brand-card__cell" data-label="Reviewed">
+                        <span className="admin-chain-submitted-cell">
+                          {item.reviewedAt ? formatDateTimeIST(item.reviewedAt, '—') : '—'}
+                        </span>
+                      </section>
+
                       <section
                         className="admin-chain-brand-card__cell admin-chain-brand-card__cell--actions"
                         data-label="Actions"
@@ -257,18 +265,18 @@ const AdminProfileChainApprovals = () => {
                             <button
                               type="button"
                               className="btn-primary"
-                              disabled={actionLoading}
+                              disabled={Boolean(actingOnId)}
                               onClick={() => approve(item)}
                             >
-                              Approve
+                              {isActing ? 'Approving…' : 'Approve'}
                             </button>
                             <button
                               type="button"
                               className="btn-secondary"
-                              disabled={actionLoading}
+                              disabled={Boolean(actingOnId)}
                               onClick={() => reject(item)}
                             >
-                              Reject
+                              {isActing ? 'Rejecting…' : 'Reject'}
                             </button>
                           </div>
                         ) : (

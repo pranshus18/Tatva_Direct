@@ -13,6 +13,7 @@ import {
   normalizeCatalogLookupName
 } from '../utils/catalogProductAttach.js';
 import { buildDisambiguatedAsinLikeId } from './productIdentityService.js';
+import { specificationsWithMeaningfulValuesOnly } from './supplierCatalogHelpersService.js';
 
 function normalizeOfferPrice(rawValue) {
   if (rawValue === null || rawValue === undefined || rawValue === '') return null;
@@ -644,9 +645,12 @@ export function buildSupplierProductUpdatePayload({
   }
   if (reqBody.mpn !== undefined) updatedAttributes.mpn = (reqBody.mpn || '').toString().trim();
   if (reqBody.specifications !== undefined) {
+    const nextSpecs = specificationsWithMeaningfulValuesOnly(
+      reqBody.specifications || existingAttributes.specifications || {}
+    );
     updatedAttributes = syncOfferAttributesWithSpecifications({
       ...updatedAttributes,
-      specifications: reqBody.specifications || existingAttributes.specifications || {}
+      specifications: nextSpecs
     });
   }
   if (reqBody.brandModel !== undefined) {
@@ -675,7 +679,9 @@ export function buildSupplierProductUpdatePayload({
   if (reqBody.images !== undefined) updatedAttributes.images = sanitizeImageUrls(reqBody.images);
 
   const nextSpecifications =
-    reqBody.specifications !== undefined ? reqBody.specifications || {} : existingAttributes.specifications || {};
+    reqBody.specifications !== undefined
+      ? specificationsWithMeaningfulValuesOnly(reqBody.specifications || {})
+      : existingAttributes.specifications || {};
   const specificationsChanged = shouldMoveToPendingForSpecChange({
     specificationsProvided: reqBody.specifications !== undefined,
     currentSpecs: existingAttributes.specifications || {},

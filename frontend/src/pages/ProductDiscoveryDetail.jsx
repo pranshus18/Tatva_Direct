@@ -539,6 +539,12 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     (isUpstreamPortal ? viewerListing?.name : null) ||
     productSummary.name ||
     'Product';
+  const displayBrand = isUpstreamPortal
+    ? viewerListing?.brand || activeListing?.brand || productSummary.brand
+    : productSummary.brand;
+  const displayCategory = isUpstreamPortal
+    ? viewerListing?.category || activeListing?.category || productSummary.category
+    : productSummary.category;
   const images = getSelectedListingImages(activeListing);
   const safeImageIndex = images.length ? Math.min(activeImageIndex, images.length - 1) : 0;
   const productDescription = resolveDiscoveryProductDescription(productSummary, activeListing);
@@ -927,7 +933,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   ) : null;
 
   return (
-    <SpPageLayout showStepper={!isUpstreamPortal}>
+    <SpPageLayout>
       <SpPageHeader
         title="Product Details"
         description=""
@@ -1065,15 +1071,15 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
 
             <section className="pdd-detail-col">
               <div className="pdd-info__badges">
-                {productSummary.category ? <Badge variant="secondary">{productSummary.category}</Badge> : null}
+                {displayCategory ? <Badge variant="secondary">{displayCategory}</Badge> : null}
                 {detail.hasVariants ? <Badge>{detail.variantCount} variants available</Badge> : null}
                 {inStock ? <Badge className="pdd-badge--stock">In stock</Badge> : null}
               </div>
 
               <h1 className="pdd-info__title">{displayProductName}</h1>
-              {productSummary.brand ? (
+              {displayBrand ? (
                 <p className="pdd-info__brand">
-                  Brand: <strong>{productSummary.brand}</strong>
+                  Brand: <strong>{displayBrand}</strong>
                 </p>
               ) : null}
 

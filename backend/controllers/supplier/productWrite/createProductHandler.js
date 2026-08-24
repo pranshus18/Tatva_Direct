@@ -24,7 +24,8 @@ import {
   hasSupplierSpecificationChangesFromCatalog,
   findBestMatchingApprovedOfferForSpecs,
   retainCatalogCompatibleSpecifications,
-  validateSpecValues
+  validateSpecValues,
+  specificationsWithMeaningfulValuesOnly
 } from '../supplierImports.js';
 import { sanitizeImageUrls, validateAndNormalizeTaxRates } from '../shared/productHelpers.js';
 import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
@@ -350,6 +351,9 @@ export function buildSupplierProductCreateHandler(ctx) {
           errors: categoryTemplateValidation.errors || []
         });
       }
+
+      normalizedSpecs = specificationsWithMeaningfulValuesOnly(normalizedSpecs);
+      if (posLookupGsku) normalizedSpecs = { ...normalizedSpecs, gsku: posLookupGsku };
 
       const baseProductResult = await createBaseProductIfNeeded(supabase, {
         existingProduct,

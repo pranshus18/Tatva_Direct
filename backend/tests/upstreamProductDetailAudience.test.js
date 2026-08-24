@@ -115,6 +115,59 @@ function makeSupabaseStub({
   return { supabase: { from }, tablesQueried };
 }
 
+test('upstream detail prefers viewer offer brand/category over mismatched catalog attach', async () => {
+  const mismatchedCatalog = {
+    ...APPROVED_PRODUCT,
+    name: 'Legacy footwear shell',
+    brand: 'stella',
+    category: 'footwear',
+    family_id: 'family-mixed',
+    specifications: { color: 'Dark Grey Marl' }
+  };
+  const footwearSibling = {
+    ...mismatchedCatalog,
+    id: 'prod-footwear',
+    name: 'Stella Sneaker',
+    specifications: { color: 'Dark Grey Marl', style: 'Running' }
+  };
+  const viewerOffer = {
+    ...UPSTREAM_OFFER,
+    id: 'sp-mine',
+    supplier_id: 'supplier-1',
+    attributes: {
+      brand: 'Milton',
+      category: 'Flasks & Bottles',
+      listingName: 'Milton Thermosteel Water Bottle',
+      specifications: { color: 'Silver' }
+    }
+  };
+
+  const { supabase } = makeSupabaseStub({
+    product: mismatchedCatalog,
+    familyProducts: [mismatchedCatalog, footwearSibling],
+    ownershipRows: [viewerOffer],
+    offerRows: [viewerOffer]
+  });
+
+  const result = await getProductDiscoveryDetail(supabase, {
+    productId: 'prod-1',
+    audience: DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM,
+    viewerSupplierId: 'supplier-1'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.product.brand, 'Milton');
+  assert.equal(result.product.category, 'Flasks & Bottles');
+  assert.equal(result.variants.length, 1);
+  assert.equal(result.variants[0].name, 'Milton Thermosteel Water Bottle');
+  assert.equal(
+    result.variantOptions.some((option) =>
+      (option.values || []).some((value) => /dark grey marl/i.test(String(value)))
+    ),
+    false
+  );
+});
+
 test('upstream detail counts offers from tiers above the buyer, not only the terminal tier', async () => {
   // The stub throws on any table it does not know, so reaching a result also proves the
   // admin terminal-role lookup is skipped for suppliers.

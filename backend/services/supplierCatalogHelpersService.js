@@ -44,6 +44,18 @@ export const isMeaningfullyFilledSpecValue = (value) => {
 export const countMeaningfulSpecValues = (specsObj) =>
   Object.values(specsObj || {}).filter(isMeaningfullyFilledSpecValue).length;
 
+/** Drop empty spec keys before persisting supplier/catalog specification maps. */
+export const specificationsWithMeaningfulValuesOnly = (specifications) => {
+  const parsed = parseSpecificationsObject(specifications) || {};
+  const result = {};
+  Object.entries(parsed).forEach(([key, value]) => {
+    if (isMeaningfullyFilledSpecValue(value)) {
+      result[key] = value;
+    }
+  });
+  return result;
+};
+
 /** Normalize specifications stored as object, JSON string, or legacy array rows. */
 export const parseSpecificationsObject = (value) => {
   if (!value) return null;

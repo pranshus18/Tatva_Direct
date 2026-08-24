@@ -7,7 +7,7 @@ export default function SpWorkflowPage({
   description,
   icon,
   actions,
-  showStepper = true,
+  showStepper = false,
   children
 }) {
   return (

@@ -2,6 +2,7 @@ import {
   approveBrandReviewItem,
   buildBrandReviewItems,
   rejectBrandReviewItem,
+  snapshotPayloadEntriesAsResolved,
   syncPendingRequestPayloads
 } from '../../services/supplierChainAdminService.js';
 import {
@@ -24,6 +25,30 @@ import {
   adminSupplierChainRejectSchema
 } from '../../contracts/adminContracts.js';
 import { getContractErrorMessage, parseWithSchema } from '../../utils/contractValidation.js';
+
+function handleRouteError(error, res, logLabel) {
+  if (String(error?.name || '') === 'ZodError') {
+    return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
+  }
+  console.error(logLabel, error);
+  return res.status(500).json({ status: 'error', message: 'Internal server error' });
+}
+
+async function syncApprovedBrandForRequester(supabase, requestedBy) {
+  if (!requestedBy) return;
+  try {
+    const { data: requester, error: requesterError } = await supabase
+      .from('users')
+      .select('profile')
+      .eq('id', requestedBy)
+      .maybeSingle();
+    if (!requesterError && requester) {
+      await syncApprovedBrandsIntoUserProfile(requestedBy, requester.profile || {});
+    }
+  } catch (syncError) {
+    console.error('Sync approved brand into supplier profile:', syncError);
+  }
+}
 
 export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateToken, isAdmin, supabase }) {
   // ==========================
@@ -129,18 +154,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         if (mergeError) throw mergeError;
 
         if (mergedBrand?.requested_by) {
-          try {
-            const { data: requester, error: requesterError } = await supabase
-              .from('users')
-              .select('profile')
-              .eq('id', mergedBrand.requested_by)
-              .maybeSingle();
-            if (!requesterError && requester) {
-              await syncApprovedBrandsIntoUserProfile(mergedBrand.requested_by, requester.profile || {});
-            }
-          } catch (syncError) {
-            console.error('Sync merged approved brand into supplier profile:', syncError);
-          }
+          await syncApprovedBrandForRequester(supabase, mergedBrand.requested_by);
 
           try {
             await insertNotification(
@@ -201,18 +215,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
       }
 
       if (brand.requested_by) {
-        try {
-          const { data: requester, error: requesterError } = await supabase
-            .from('users')
-            .select('profile')
-            .eq('id', brand.requested_by)
-            .maybeSingle();
-          if (!requesterError && requester) {
-            await syncApprovedBrandsIntoUserProfile(brand.requested_by, requester.profile || {});
-          }
-        } catch (syncError) {
-          console.error('Sync approved brand into supplier profile:', syncError);
-        }
+        await syncApprovedBrandForRequester(supabase, brand.requested_by);
       }
 
       // Close sibling pending/rejected twins so other suppliers stop seeing stale pending.
@@ -224,11 +227,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       res.json({ status: 'success', message: 'Brand approved', brand });
     } catch (error) {
-      if (String(error?.name || '') === 'ZodError') {
-        return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
-      }
-      console.error('Approve brand error:', error);
-      res.status(500).json({ status: 'error', message: 'Internal server error' });
+      handleRouteError(error, res, 'Approve brand error:');
     }
   });
 
@@ -266,11 +265,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       res.json({ status: 'success', message: 'Brand rejected', brand });
     } catch (error) {
-      if (String(error?.name || '') === 'ZodError') {
-        return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
-      }
-      console.error('Reject brand error:', error);
-      res.status(500).json({ status: 'error', message: 'Internal server error' });
+      handleRouteError(error, res, 'Reject brand error:');
     }
   });
 
@@ -316,11 +311,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
       if (error) throw error;
       res.json({ status: 'success', message: 'Brand request created', brand: created });
     } catch (error) {
-      if (String(error?.name || '') === 'ZodError') {
-        return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
-      }
-      console.error('Create brand request error:', error);
-      res.status(500).json({ status: 'error', message: 'Internal server error' });
+      handleRouteError(error, res, 'Create brand request error:');
     }
   });
 
@@ -348,7 +339,9 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         const { data: suppliers, error: suppliersError } = await supabase
           .from('users')
           .select('id, name, email, company, user_type, profile')
-          .eq('user_type', 'supplier');
+          .eq('user_type', 'supplier')
+          .order('name', { ascending: true })
+          .limit(5000);
         if (suppliersError) throw suppliersError;
         (suppliers || []).forEach((u) => {
           userMap[u.id] = u;
@@ -381,14 +374,12 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       res.json({ status: 'success', requests, brandItems });
     } catch (error) {
-      console.error('List supplier-chain-requests error:', error);
-      res.status(500).json({ status: 'error', message: error.message || 'Internal server error' });
+      handleRouteError(error, res, 'List supplier-chain-requests error:');
     }
   });
 
   router.post('/supplier-chain-requests/:id/approve', authenticateToken, isAdmin, async (req, res) => {
     const requestId = req.params.id;
-    const nowIso = new Date().toISOString();
     try {
       const body = parseWithSchema(adminSupplierChainApproveSchema, req.body || {});
       const entryId = String(body.entryId || '').trim();
@@ -514,10 +505,21 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       if (upUserErr) throw upUserErr;
 
+      const nowIso = new Date().toISOString();
+      const resolvedPayload = snapshotPayloadEntriesAsResolved(
+        payload,
+        payloadEntries,
+        { status: 'approved', reviewedAt: nowIso }
+      );
+      resolvedPayload.companyInfoEntries = [];
+      resolvedPayload.supplierRole = '';
+      resolvedPayload.brands = '';
+
       const { error: upReqErr } = await supabase
         .from('supplier_chain_profile_requests')
         .update({
           status: 'approved',
+          payload: resolvedPayload,
           reviewed_by: req.userId,
           reviewed_at: nowIso,
           updated_at: nowIso,
@@ -544,11 +546,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       res.json({ status: 'success', message: 'Profile assignment approved and applied' });
     } catch (error) {
-      if (String(error?.name || '') === 'ZodError') {
-        return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
-      }
-      console.error('Approve supplier-chain-request error:', error);
-      res.status(500).json({ status: 'error', message: error.message || 'Internal server error' });
+      handleRouteError(error, res, 'Approve supplier-chain-request error:');
     }
   });
 
@@ -609,7 +607,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       const { data: reqRow, error: rErr } = await supabase
         .from('supplier_chain_profile_requests')
-        .select('id, user_id')
+        .select('id, user_id, payload')
         .eq('id', requestId)
         .eq('status', 'pending')
         .maybeSingle();
@@ -619,10 +617,20 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
         return res.status(404).json({ status: 'error', message: 'Pending request not found' });
       }
 
+      const resolvedPayload = snapshotPayloadEntriesAsResolved(
+        reqRow.payload || {},
+        normalizeCompanyInfoEntries(reqRow.payload?.companyInfoEntries || []),
+        { status: 'rejected', reviewedAt: nowIso, rejectionReason: reason }
+      );
+      resolvedPayload.companyInfoEntries = [];
+      resolvedPayload.supplierRole = '';
+      resolvedPayload.brands = '';
+
       const { error: upErr } = await supabase
         .from('supplier_chain_profile_requests')
         .update({
           status: 'rejected',
+          payload: resolvedPayload,
           rejection_reason: reason,
           reviewed_by: req.userId,
           reviewed_at: nowIso,
@@ -648,11 +656,7 @@ export function registerAdminBrandAndSupplyChainRoutes({ router, authenticateTok
 
       res.json({ status: 'success', message: 'Request rejected' });
     } catch (error) {
-      if (String(error?.name || '') === 'ZodError') {
-        return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
-      }
-      console.error('Reject supplier-chain-request error:', error);
-      res.status(500).json({ status: 'error', message: error.message || 'Internal server error' });
+      handleRouteError(error, res, 'Reject supplier-chain-request error:');
     }
   });
 }

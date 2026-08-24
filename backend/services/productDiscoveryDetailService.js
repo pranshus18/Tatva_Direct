@@ -159,6 +159,17 @@ export {
   indexListedOffersByCatalogProduct
 };
 
+/** Supplier offer identity — preferred over shared catalog rows on upstream detail. */
+function extractOfferListingIdentity(attrs = {}, product = null) {
+  const parsed = parseCanonicalAttributes(attrs);
+  const brand = String(parsed.brand || parsed.brandModel || product?.brand || '').trim();
+  const category = String(parsed.category || product?.category || '').trim();
+  return {
+    brand: brand || null,
+    category: category || null
+  };
+}
+
 function extractIdentityFields(product, specs = {}, offer = null) {
   const attrs = offer?.attributes && typeof offer.attributes === 'object' ? offer.attributes : {};
   return {
@@ -335,10 +346,13 @@ async function buildVariantRecord({
     resolvedPrice > 0 &&
     resolvedPrice < resolvedMrp;
   const resolvedUnit = resolveVariantDisplayUnit(product, offer, mergedSpecs);
+  const listingIdentity = extractOfferListingIdentity(attrs, product);
 
   return {
     productId: product.id,
     name: displayName,
+    brand: listingIdentity.brand,
+    category: listingIdentity.category,
     description: displayDescription || null,
     supplierDescription: supplierDescription || null,
     publishedDescription: publishedDescription || null,
@@ -416,6 +430,7 @@ function buildViewerListingSnapshot(row, productById) {
   const product = productById.get(productId) || null;
   const attrs = row?.attributes && typeof row.attributes === 'object' ? row.attributes : {};
   const mergedSpecs = mergeOfferSpecifications(product?.specifications, row, null);
+  const listingIdentity = extractOfferListingIdentity(attrs, product);
   return {
     id: row?.id || null,
     productId: productId || null,
@@ -429,7 +444,9 @@ function buildViewerListingSnapshot(row, productById) {
     name: resolveSupplierOfferDisplayName({
       attributes: attrs,
       catalogName: product?.name || ''
-    })
+    }),
+    brand: listingIdentity.brand,
+    category: listingIdentity.category
   };
 }
 
@@ -699,7 +716,10 @@ export async function getProductDiscoveryDetail(
   }
 
   let siblingProducts = [baseProduct];
-  if (baseProduct.family_id) {
+  const expandProductFamily =
+    Boolean(baseProduct.family_id) &&
+    audienceRules.audience !== DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM;
+  if (expandProductFamily) {
     const { data: familyProducts, error: familyProductsError } = await supabase
       .from('products')
       .select(
@@ -823,7 +843,7 @@ export async function getProductDiscoveryDetail(
       if (row?.variant_asin) variantMetaByKey.set(`asin:${String(row.variant_asin)}`, row);
     }
   }
-  if (baseProduct.family_id) {
+  if (expandProductFamily) {
     const { data: familyVariantRows } = await supabase
       .from('product_variants')
       .select('id, product_id, variant_name, variant_key, variant_asin, canonical_attributes')
@@ -1013,6 +1033,25 @@ export async function getProductDiscoveryDetail(
     parseSpecificationsObject(summaryProduct.specifications)
   );
 
+  let summaryBrand =
+    summaryProduct.brand || family?.brand || summaryIdentity.brandModel || null;
+  let summaryCategory = summaryProduct.category;
+  if (
+    audienceRules.audience === DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM &&
+    viewerListings.length > 0
+  ) {
+    const viewerListingForProduct =
+      viewerListings.find(
+        (listing) => String(listing?.productId || '').trim() === String(baseProduct.id)
+      ) || viewerListings[0];
+    if (viewerListingForProduct?.brand) {
+      summaryBrand = viewerListingForProduct.brand;
+    }
+    if (viewerListingForProduct?.category) {
+      summaryCategory = viewerListingForProduct.category;
+    }
+  }
+
   return {
     ok: true,
     audience: audienceRules.audience,
@@ -1023,8 +1062,8 @@ export async function getProductDiscoveryDetail(
       name: summaryProduct.name,
       description: getPublishedCatalogDescription(summaryProduct) || null,
       publishedDescription: getPublishedCatalogDescription(summaryProduct) || null,
-      category: summaryProduct.category,
-      brand: family?.brand || summaryProduct.brand || summaryIdentity.brandModel || null,
+      category: summaryCategory,
+      brand: summaryBrand,
       unit: summaryProduct.unit,
       average_rating: summaryProduct.average_rating,
       total_reviews: summaryProduct.total_reviews,
