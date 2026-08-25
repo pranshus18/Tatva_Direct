@@ -84,6 +84,8 @@ test('expandCatalogProductIntoAdminReviewRows creates one admin row per supplier
   assert.equal(rows[0].displayStatus, 'pending');
   assert.equal(rows[0].name, 'Nothing Power (45W)');
   assert.equal(rows[0].brand, 'Nothing');
+  assert.equal(rows[0].pendingReviewType, 'catalog');
+  assert.equal(rows[0].identityConflictsWithCatalog, true);
   assert.equal(rows[0].category, 'chargers');
   assert.equal(rows[0].catalogName, 'JBL Wireless Over-Ear Headphones');
   assert.equal(rows[0].catalogCategory, 'electronics');

@@ -31,6 +31,31 @@ test('isSameCatalogProductForRecovery rejects an ASIN-only collision with anothe
   );
 });
 
+test('isSameCatalogProductForRecovery rejects a GTIN collision across conflicting brands', () => {
+  assert.equal(
+    isSameCatalogProductForRecovery(
+      {
+        id: 'jbl-1',
+        name: 'JBL Wireless Over-Ear Headphones',
+        category: 'audio',
+        brand: 'JBL',
+        gtin: '8901234567890',
+        catalog_key: 'jbl-key'
+      },
+      {
+        catalog: {
+          gtin: '8901234567890',
+          brand: 'Nothing',
+          name: 'Nothing Power (45W)',
+          category: 'chargers'
+        },
+        catalogKey: 'nothing-key'
+      }
+    ),
+    false
+  );
+});
+
 test('isSameCatalogProductForRecovery accepts the same catalog key', () => {
   assert.equal(
     isSameCatalogProductForRecovery(
@@ -126,6 +151,50 @@ test('findExistingProductCandidate ignores a stale catalog id from a different c
     productName: 'milton thermosteel flask',
     productNameRaw: 'Milton Thermosteel Flask',
     categoryName: 'flasks & bottles',
+    normalizeText: (value) => String(value || '').trim().toLowerCase()
+  });
+
+  assert.equal(result.product, null);
+  assert.equal(result.matchStrength, 'none');
+});
+
+test('findExistingProductCandidate ignores a leftover JBL catalog id for Nothing Power', async () => {
+  const query = {
+    select() {
+      return query;
+    },
+    eq() {
+      return query;
+    },
+    ilike() {
+      return Promise.resolve({ data: [], error: null });
+    },
+    async maybeSingle() {
+      return {
+        data: {
+          id: 'jbl-1',
+          name: 'JBL Wireless Over-Ear Headphones with 57H Playtime',
+          category: 'electronics',
+          brand: 'JBL'
+        },
+        error: null
+      };
+    }
+  };
+  const supabase = {
+    from() {
+      return query;
+    }
+  };
+
+  const result = await findExistingProductCandidate(supabase, {
+    selectedCatalogProductId: 'jbl-1',
+    identityBundle: {
+      catalog: { brand: 'Nothing', category: 'electronics', name: 'Nothing Power (45W)' }
+    },
+    productName: 'nothing power (45w)',
+    productNameRaw: 'Nothing Power (45W)',
+    categoryName: 'electronics',
     normalizeText: (value) => String(value || '').trim().toLowerCase()
   });
 

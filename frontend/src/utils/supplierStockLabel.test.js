@@ -7,6 +7,9 @@ import {
   isSupplierMrpLocked,
   isVariantMrpEnforced,
   isSupplierMrpInputDisabled,
+  isSupplierHsnLocked,
+  isSupplierGstLocked,
+  isSupplierGtinLocked,
   getCanonicalVariantMrp,
   formatVariantMrpFixedMessage,
   parseSupplierLsaThreshold
@@ -51,6 +54,36 @@ describe('variant MRP enforcement', () => {
   it('formats fixed variant MRP message', () => {
     expect(formatVariantMrpFixedMessage(250)).toMatch(/250\.00/);
     expect(getCanonicalVariantMrp({ canonicalMrp: '120.5' })).toBe(120.5);
+  });
+});
+
+describe('approved identity field locks', () => {
+  const approved = {
+    status: 'approved',
+    hsnCode: '8518',
+    igst_rate: 18,
+    cgst_rate: 9,
+    sgst_rate: 9,
+    gtin: '00048011628233'
+  };
+
+  it('locks HSN, GST, and GTIN after approval when values are set', () => {
+    expect(isSupplierHsnLocked(approved)).toBe(true);
+    expect(isSupplierGstLocked(approved)).toBe(true);
+    expect(isSupplierGtinLocked(approved)).toBe(true);
+  });
+
+  it('allows edits while the offer is still pending', () => {
+    const pending = { ...approved, status: 'pending' };
+    expect(isSupplierHsnLocked(pending)).toBe(false);
+    expect(isSupplierGstLocked(pending)).toBe(false);
+    expect(isSupplierGtinLocked(pending)).toBe(false);
+  });
+
+  it('allows the first fill when an approved offer is still missing the value', () => {
+    expect(isSupplierHsnLocked({ status: 'approved', hsnCode: '' })).toBe(false);
+    expect(isSupplierGstLocked({ status: 'approved', igst_rate: null })).toBe(false);
+    expect(isSupplierGtinLocked({ status: 'approved', gtin: '' })).toBe(false);
   });
 });
 

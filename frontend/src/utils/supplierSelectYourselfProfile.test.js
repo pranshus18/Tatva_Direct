@@ -18,6 +18,8 @@ import {
   mergeSupplierBrandRequestsIntoProfile,
   resolveSelectYourselfBrandStepStatus,
   reconcileBrandSubmissionNotice,
+  buildPendingBrandRequestStatusView,
+  shouldListBrandsInStatusAlert,
   listPendingChainRoleSubmissions,
   hasPendingChainRoleSubmissionForBrand,
   resolveChainProfileApprovalStatusForBrand,
@@ -25,6 +27,7 @@ import {
   clearSubmittedPathBBrandDrafts,
   dedupeSupplierBrandRequestsByLatest,
   reconcilePendingSupplierBrandRequests,
+  preserveLocalPendingBrandRequests,
   listPendingBrandNamesBlockingSave,
   listApprovedBrandNamesBlockingSave,
   profileHasBrandsNeedingApprovalRequest,
@@ -216,6 +219,35 @@ describe('findSupplierBrandRequest', () => {
   });
 });
 
+describe('preserveLocalPendingBrandRequests', () => {
+  it('keeps a pending request that a profile refresh omitted', () => {
+    const previous = {
+      supplierBrandRequests: [
+        { name: 'samsung', status: 'pending', submittedAt: '2026-07-28T11:29:53.000Z' }
+      ]
+    };
+    const next = preserveLocalPendingBrandRequests({ supplierBrandRequests: [] }, previous);
+    expect(findSupplierBrandRequest('samsung', next.supplierBrandRequests)?.status).toBe('pending');
+  });
+
+  it('does not restore pending when the refresh already has approved or rejected', () => {
+    const previous = {
+      supplierBrandRequests: [{ name: 'samsung', status: 'pending' }]
+    };
+    const approved = preserveLocalPendingBrandRequests(
+      { supplierBrandRequests: [{ name: 'samsung', status: 'approved' }] },
+      previous
+    );
+    expect(findSupplierBrandRequest('samsung', approved.supplierBrandRequests)?.status).toBe('approved');
+
+    const rejected = preserveLocalPendingBrandRequests(
+      { supplierBrandRequests: [{ name: 'samsung', status: 'rejected' }] },
+      previous
+    );
+    expect(findSupplierBrandRequest('samsung', rejected.supplierBrandRequests)?.status).toBe('rejected');
+  });
+});
+
 describe('mergeSupplierBrandRequestsIntoProfile', () => {
   it('adds pending requests so Brand status can show submitted state', () => {
     const next = mergeSupplierBrandRequestsIntoProfile(
@@ -267,6 +299,19 @@ describe('resolveSelectYourselfBrandStepStatus', () => {
     expect(status.detailLines.some((line) => /Submitted:/i.test(line))).toBe(true);
     expect(status.label).not.toBe('Ready to submit for approval');
     expect(status.label).not.toBe('Approved by admin');
+  });
+
+  it('treats a just-submitted notice as pending even if profile requests are still empty', () => {
+    const status = resolveSelectYourselfBrandStepStatus({
+      brandName: 'samsung',
+      catalogBrandNames: [],
+      supplierBrandRequests: [],
+      supplierApprovedBrands: [],
+      extraPendingBrandNames: ['samsung']
+    });
+    expect(status.label).toBe('Pending Admin Approval');
+    expect(status.tone).toBe('warning');
+    expect(status.label).not.toBe('Ready to submit for approval');
   });
 
   it('already-approved save outcome never stays on Ready to submit', () => {
@@ -403,6 +448,61 @@ describe('reconcileBrandSubmissionNotice', () => {
   });
 });
 
+describe('buildPendingBrandRequestStatusView', () => {
+  it('shows a single pending request once as Pending Admin Approval', () => {
+    const view = buildPendingBrandRequestStatusView({
+      pendingBrandRequests: [
+        { name: 'AISHU', submittedAt: '2026-08-24T10:37:00.000Z' }
+      ],
+      currentPendingBrandNames: ['AISHU']
+    });
+
+    expect(view.showAlert).toBe(true);
+    expect(view.showSeparateStatusLine).toBe(false);
+    expect(view.title).toBe('Pending Admin Approval — "AISHU"');
+    expect(view.submittedAt).toBe('2026-08-24T10:37:00.000Z');
+    expect(view.groups).toEqual([]);
+    expect(view.title).not.toMatch(/Request already submitted/i);
+  });
+
+  it('collapses duplicate rows for the same brand into one pending status', () => {
+    const view = buildPendingBrandRequestStatusView({
+      pendingBrandRequests: [
+        { name: 'AISHU', submittedAt: '2026-08-24T10:37:00.000Z' },
+        { name: 'aishu', submittedAt: '2026-08-24T10:37:00.000Z' }
+      ]
+    });
+
+    expect(view.title).toBe('Pending Admin Approval — "AISHU"');
+    expect(view.groups).toEqual([]);
+    expect(view.showSeparateStatusLine).toBe(false);
+  });
+
+  it('groups other pending requests without repeating a separate already-submitted line', () => {
+    const view = buildPendingBrandRequestStatusView({
+      pendingBrandRequests: [
+        { name: 'AISHU', submittedAt: '2026-08-19T00:00:00.000Z' },
+        { name: 'Aishwarya', submittedAt: '2026-08-10T00:00:00.000Z' },
+        { name: 'H', submittedAt: '2026-08-03T00:00:00.000Z' }
+      ],
+      currentPendingBrandNames: ['H']
+    });
+
+    expect(view.showSeparateStatusLine).toBe(false);
+    expect(view.title).toBe('3 brand requests pending admin approval');
+    expect(view.groups).toHaveLength(2);
+    expect(view.groups[0].heading).toBe('Already submitted request');
+    expect(view.groups[0].rows.map((row) => row.name)).toEqual(['H']);
+    expect(view.groups[1].heading).toBe('Other pending requests');
+    expect(view.groups[1].rows.map((row) => row.name)).toEqual(['AISHU', 'Aishwarya']);
+  });
+
+  it('does not list brands again when the alert title already names the only request', () => {
+    expect(shouldListBrandsInStatusAlert([{ name: 'AISHU' }])).toBe(false);
+    expect(shouldListBrandsInStatusAlert([{ name: 'AISHU' }, { name: 'H' }])).toBe(true);
+  });
+});
+
 describe('reconcilePendingSupplierBrandRequests', () => {
   it('flips pending request rows to approved when the brand is in the approved catalog', () => {
     const profile = {
@@ -515,6 +615,27 @@ describe('isBrandApprovalSaveBlockedForPendingRequests', () => {
         submittedSignature: ''
       })
     ).toBe(true);
+  });
+
+  it('blocks duplicate Save brand from a pending notice even when request rows are missing', () => {
+    const profile = {
+      companyInfoEntries: [{ id: '1', brands: 'samsung', brandApprovalDocumentUrls: [] }],
+      supplierBrandRequests: []
+    };
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile,
+        catalogBrands: [],
+        extraPendingBrandNames: ['samsung'],
+        submittedSignature: ''
+      })
+    ).toBe(true);
+    expect(
+      listPendingBrandNamesBlockingSave({
+        profile,
+        extraPendingBrandNames: ['samsung']
+      })
+    ).toEqual(['samsung']);
   });
 
   it('blocks Save brand after a successful Path A save with no further edits', () => {

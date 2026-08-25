@@ -6,7 +6,10 @@ import {
   catalogCategoriesCompatible,
   catalogCategoriesConflict,
   catalogListingIdentityConflicts,
-  pickExactCatalogLookupProduct
+  catalogOfferIdentityConflicts,
+  inferDeclaredBrandFromProductName,
+  pickExactCatalogLookupProduct,
+  resolveListingBrandIdentity
 } from '../utils/catalogProductAttach.js';
 
 test('catalogBrandsConflict is true for Nothing vs JBL', () => {
@@ -42,6 +45,24 @@ test('catalogListingIdentityConflicts detects name or category mismatch', () => 
       listingCategory: 'flasks & bottles'
     }),
     false
+  );
+});
+
+test('catalogOfferIdentityConflicts is true for Nothing Power on a JBL catalog row', () => {
+  assert.equal(
+    catalogOfferIdentityConflicts(
+      {
+        name: 'JBL Wireless Over-Ear Headphones',
+        brand: 'JBL',
+        category: 'electronics'
+      },
+      {
+        listingName: 'Nothing Power (45W)',
+        brand: 'Nothing',
+        category: 'electronics'
+      }
+    ),
+    true
   );
 });
 
@@ -94,5 +115,19 @@ test('pickExactCatalogLookupProduct requires exact name and matching brand', () 
       name: 'Nothing Power (45W)'
     }),
     null
+  );
+});
+
+test('inferDeclaredBrandFromProductName maps Nothing Power to Nothing not JBL', () => {
+  const declared = ['JBL', 'Nothing'];
+  assert.equal(inferDeclaredBrandFromProductName('Nothing Power (45W)', declared), 'Nothing');
+  assert.equal(
+    resolveListingBrandIdentity({
+      selectedBrand: 'JBL',
+      catalogBrand: 'JBL',
+      productName: 'Nothing Power (45W)',
+      declaredLabels: declared
+    }),
+    'Nothing'
   );
 });

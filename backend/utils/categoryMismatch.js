@@ -12,6 +12,32 @@ const CATEGORY_KEYWORDS = {
   aggregate: ['aggregate', 'aggregates', 'gravel', 'stone', 'crushed stone'],
   tiles: ['tile', 'tiles', 'ceramic', 'vitrified', 'porcelain'],
   paint: ['paint', 'coating', 'primer', 'enamel', 'sheen', 'emulsion', 'latex'],
+  waterproofing: [
+    'waterproof',
+    'waterproofing',
+    'sealant',
+    'sealants',
+    'sealer',
+    'coating',
+    'coatings',
+    'membrane',
+    'caulk',
+    'mastic',
+    'bitumen',
+    'polyurethane'
+  ],
+  coatings: [
+    'coating',
+    'coatings',
+    'sealant',
+    'sealants',
+    'sealer',
+    'paint',
+    'primer',
+    'membrane',
+    'waterproof',
+    'waterproofing'
+  ],
   electrical: ['electrical', 'electric', 'wire', 'cable', 'switch', 'socket'],
   plumbing: ['plumbing', 'pipe', 'pipes', 'faucet', 'tap', 'fitting', 'fittings'],
   printers: [
@@ -30,6 +56,34 @@ const CATEGORY_KEYWORDS = {
   hardware: ['hardware', 'fastener', 'screw', 'bolt', 'nut'],
   tools: ['tool', 'tools', 'drill', 'hammer', 'wrench']
 };
+
+/**
+ * Substrate / material words that appear in many product descriptions
+ * ("bonds to concrete, wood, metal") must not count as a different category.
+ */
+const WEAK_COMPETING_TOKENS = new Set([
+  'metal',
+  'metals',
+  'iron',
+  'alloy',
+  'concrete',
+  'wood',
+  'wooden',
+  'plastic',
+  'plastics',
+  'stone',
+  'clay',
+  'sand',
+  'device',
+  'gadget',
+  'tool',
+  'tools',
+  'fitting',
+  'fittings',
+  'hardware',
+  'coating',
+  'coatings'
+]);
 
 function escapeRegex(value) {
   return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -110,17 +164,24 @@ export function expandCategoryMatchTokens(category) {
     }
   }
 
-  // Multi-word categories: also try each significant word.
+  // Multi-word categories: also try each significant word and its domain aliases.
   for (const part of categoryName.split(/[^a-z0-9]+/).filter((p) => p.length >= 3)) {
     for (const form of singularPluralForms(part)) {
       tokens.add(form);
+      const aliases = CATEGORY_KEYWORDS[form] || CATEGORY_KEYWORDS[part] || [];
+      for (const alias of aliases) {
+        tokens.add(String(alias).toLowerCase());
+        for (const aliasForm of singularPluralForms(alias)) {
+          tokens.add(aliasForm);
+        }
+      }
     }
   }
 
   return [...tokens].filter(Boolean);
 }
 
-function categoryMentionsInText(categoryKey, haystack) {
+function categoryKeywordForms(categoryKey, { forCompeting = false } = {}) {
   const keys = new Set([
     categoryKey,
     ...singularPluralForms(categoryKey),
@@ -131,7 +192,27 @@ function categoryMentionsInText(categoryKey, haystack) {
       keys.add(form);
     }
   }
-  return [...keys].some((token) => textContainsMatchToken(haystack, token));
+  if (!forCompeting) return [...keys];
+  return [...keys].filter((token) => !WEAK_COMPETING_TOKENS.has(normalizeHaystack(token)));
+}
+
+function categoryMentionsInText(categoryKey, haystack, { forCompeting = false } = {}) {
+  return categoryKeywordForms(categoryKey, { forCompeting }).some((token) =>
+    textContainsMatchToken(haystack, token)
+  );
+}
+
+function otherCategoryKeys(categoryName, categoryTokens) {
+  const selected = new Set(
+    (categoryTokens || []).map((token) => normalizeHaystack(token)).filter(Boolean)
+  );
+  return Object.keys(CATEGORY_KEYWORDS).filter((cat) => {
+    const forms = categoryKeywordForms(cat);
+    if (forms.some((form) => form === categoryName)) return false;
+    // Overlapping domains (coatings vs paint) are not a competing category.
+    if (forms.some((form) => selected.has(normalizeHaystack(form)))) return false;
+    return true;
+  });
 }
 
 /**
@@ -147,12 +228,9 @@ export function detectCategoryMismatch(category, description, productName = '') 
 
   if (hasCategoryMatch) return null;
 
-  const otherCategories = Object.keys(CATEGORY_KEYWORDS).filter((cat) => {
-    const forms = new Set([cat, ...singularPluralForms(cat)]);
-    return !forms.has(categoryName) && ![...forms].some((f) => categoryTokens.includes(f));
-  });
-
-  const competing = otherCategories.filter((cat) => categoryMentionsInText(cat, haystack));
+  const competing = otherCategoryKeys(categoryName, categoryTokens).filter((cat) =>
+    categoryMentionsInText(cat, haystack, { forCompeting: true })
+  );
   if (competing.length > 0) {
     return `Warning: The category "${category}" does not match the description. The description seems to be about a different category. Please verify that the category and description are aligned.`;
   }

@@ -30,3 +30,22 @@ test('filterCatalogAutocompleteNameMatches keeps real catalog / variant name hit
   assert.equal(cementHits.length, 1);
   assert.equal(cementHits[0].id, '2');
 });
+
+test('Nothing Power query does not return JBL catalog rows', () => {
+  const catalog = [
+    { id: 'jbl-1', name: 'JBL Wireless Over-Ear Headphones', brand: 'JBL' },
+    { id: 'nothing-1', name: 'Nothing Power (45W)', brand: 'Nothing' }
+  ];
+  const hits = filterCatalogAutocompleteNameMatches('Nothing Power (45W)', catalog);
+  assert.equal(hits.length, 1);
+  assert.equal(hits[0].id, 'nothing-1');
+  assert.equal(hits[0].brand, 'Nothing');
+});
+
+test('Nothing Power query does not attach to JBL when Nothing is not in the catalog yet', () => {
+  const catalog = [
+    { id: 'jbl-1', name: 'JBL Charge Powerbank', brand: 'JBL' },
+    { id: 'jbl-2', name: 'JBL Wireless Over-Ear Headphones', brand: 'JBL' }
+  ];
+  assert.deepEqual(filterCatalogAutocompleteNameMatches('Nothing Power (45W)', catalog), []);
+});

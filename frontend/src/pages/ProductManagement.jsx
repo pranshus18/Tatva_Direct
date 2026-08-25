@@ -63,10 +63,16 @@ import {
   SUPPLIER_MRP_INCLUSIVE_HINT,
   SUPPLIER_MRP_LABEL,
   SUPPLIER_MRP_LOCKED_MESSAGE,
+  SUPPLIER_HSN_LOCKED_MESSAGE,
+  SUPPLIER_GST_LOCKED_MESSAGE,
+  SUPPLIER_GTIN_LOCKED_MESSAGE,
   formatSupplierStockAvailability,
   getSupplierStockHealth,
   isSupplierInventoryConfigured,
   isSupplierMrpLocked,
+  isSupplierHsnLocked,
+  isSupplierGstLocked,
+  isSupplierGtinLocked,
   formatVariantMrpFixedMessage,
   getCanonicalVariantMrp,
   parseSupplierOfferPrice
@@ -78,6 +84,15 @@ import {
 } from '../utils/productDisplay';
 import RupeeInput from '../components/RupeeInput';
 import BrandSelect from '../components/BrandSelect';
+import { useSupplierBrands } from '../hooks/useSupplierBrands';
+import {
+  buildManageInventorySearchParams,
+  inferDeclaredBrandFromProductName,
+  isListingBrandLocked,
+  listingBrandsConflict,
+  pickInventoryDeepLinkMatch,
+  resolveListingBrandIdentity
+} from '../utils/productBrandIdentity';
 import {
   getSupplierOfferRowId,
   findSupplierOfferRow,
@@ -267,6 +282,7 @@ const ProductManagement = ({ user }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const isInventoryView = location.pathname === '/manage-inventory';
+  const { brandNames: supplierDeclaredBrandNames } = useSupplierBrands({ source: 'profile' });
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
@@ -283,6 +299,7 @@ const ProductManagement = ({ user }) => {
   const [catalogStats, setCatalogStats] = useState(null);
   const [catalogViewEpoch, setCatalogViewEpoch] = useState(0);
   const searchInputRef = useRef(null);
+  const inventoryDeepLinkRef = useRef('');
 
   const resetCatalogViewToDefault = () => {
     setSearchTerm('');
@@ -326,6 +343,28 @@ const ProductManagement = ({ user }) => {
       cancelled = true;
     };
   }, [location.pathname]);
+
+  useEffect(() => {
+    if (!isInventoryView) return;
+    const params = new URLSearchParams(location.search || '');
+    if (String(params.get('from') || '') !== 'product-management') return;
+    const key = location.search;
+    if (inventoryDeepLinkRef.current === key) return;
+    const productName = String(params.get('productName') || '').trim();
+    const brand = String(params.get('brand') || '').trim();
+    const offerId = String(params.get('supplierProductId') || '').trim();
+    if (!productName && !offerId) return;
+    if (!Array.isArray(products) || products.length === 0) return;
+    if (productName) setSearchTerm(productName);
+    const match = pickInventoryDeepLinkMatch(
+      products,
+      { productName, brand, supplierProductId: offerId },
+      matchSupplierOfferRow
+    );
+    if (!match) return;
+    inventoryDeepLinkRef.current = key;
+    setEditingItem(match);
+  }, [isInventoryView, location.search, products]);
 
   useEffect(() => {
     const fromNav = String(location.state?.productCovBlockedMessage || '').trim();
@@ -558,16 +597,29 @@ const ProductManagement = ({ user }) => {
         // Prefer server list so status/offer id match DB; merge create response if fetch lags.
         await fetchProducts({ silent: true });
         mergeNewlyAddedProduct(addedProduct);
-        const nextBrand = String(
-          data?.nextStep?.brand || productData?.brand || data?.product?.brand || ''
-        ).trim();
         const nextProductName = String(
-          data?.nextStep?.productName || productData?.name || data?.product?.name || ''
+          data?.nextStep?.productName || productData?.name || data?.product?.name || addedProduct?.name || ''
         ).trim();
-        const params = new URLSearchParams();
-        if (nextBrand) params.set('brand', nextBrand);
-        if (nextProductName) params.set('productName', nextProductName);
-        params.set('from', 'product-management');
+        const nextBrand = resolveListingBrandIdentity({
+          selectedBrand: data?.nextStep?.brand || productData?.brand || addedProduct?.brand || '',
+          catalogBrand: '',
+          productName: nextProductName,
+          declaredLabels: [
+            ...(Array.isArray(supplierDeclaredBrandNames) ? supplierDeclaredBrandNames : []),
+            data?.nextStep?.brand,
+            productData?.brand,
+            addedProduct?.brand
+          ].filter(Boolean)
+        });
+        const params = buildManageInventorySearchParams({
+          brand: nextBrand,
+          productName: nextProductName,
+          supplierProductId:
+            data?.nextStep?.supplierProductId ||
+            addedProduct?.supplier_product_id ||
+            addedProduct?.supplierProductId ||
+            ''
+        });
         const addMessage =
           data.message ||
           (data.requiresAdminApproval
@@ -619,12 +671,17 @@ const ProductManagement = ({ user }) => {
     // Only send brand fields when we have a real value. Sending "" triggers
     // "Brand is required because you have selected brands in your profile."
     const brandValue = String(
-      data.brand ||
-        item?.brand ||
-        item?.brandModel ||
-        item?.attributes?.brand ||
-        item?.attributes?.brandModel ||
-        ''
+      resolveListingBrandIdentity({
+        selectedBrand:
+          data.brand ||
+          item?.brand ||
+          item?.brandModel ||
+          item?.attributes?.brand ||
+          item?.attributes?.brandModel ||
+          '',
+        productName: data.name || item?.name || '',
+        declaredLabels: supplierDeclaredBrandNames
+      })
     ).trim();
     if (brandValue) {
       payload.brand = brandValue;
@@ -1409,6 +1466,7 @@ const ProductManagement = ({ user }) => {
         <ProductModal
           showInventoryFields={false}
           showAdditionSteps
+          declaredBrandNames={supplierDeclaredBrandNames}
           onClose={() => setShowAddModal(false)}
           onSave={handleAddProduct}
         />
@@ -1420,6 +1478,7 @@ const ProductManagement = ({ user }) => {
           key={getSupplierOfferRowId(editingItem) || 'edit-product'}
           product={editingItem}
           showInventoryFields={isInventoryView}
+          declaredBrandNames={supplierDeclaredBrandNames}
           onClose={() => setEditingItem(null)}
           onSave={async (data) => {
             const productId = getSupplierOfferRowId(editingItem);
@@ -1443,12 +1502,18 @@ const ProductManagement = ({ user }) => {
               return;
             }
             // Catalog edit: identity + images/specs. Brand is mandatory.
+            // Title-leading declared brand wins over a leftover catalog brand (JBL vs Nothing Power).
             const brandValue = String(
-              data.brand ||
-                editingItem?.brand ||
-                editingItem?.brandModel ||
-                editingItem?.attributes?.brand ||
-                ''
+              resolveListingBrandIdentity({
+                selectedBrand:
+                  data.brand ||
+                  editingItem?.brand ||
+                  editingItem?.brandModel ||
+                  editingItem?.attributes?.brand ||
+                  '',
+                productName: data.name || editingItem?.name || '',
+                declaredLabels: supplierDeclaredBrandNames
+              })
             ).trim();
             const catalogPayload = {
               name: data.name,
@@ -2153,8 +2218,18 @@ const ProductDetailsModal = ({
   return createPortal(modalNode, document.body);
 };
 
-const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, showAdditionSteps = false }) => {
+const ProductModal = ({
+  product,
+  onClose,
+  onSave,
+  showInventoryFields = true,
+  showAdditionSteps = false,
+  declaredBrandNames = null
+}) => {
   const mrpLocked = Boolean(product && isSupplierMrpLocked(product));
+  const hsnLocked = Boolean(product && isSupplierHsnLocked(product));
+  const gstLocked = Boolean(product && isSupplierGstLocked(product));
+  const gtinLocked = Boolean(product && isSupplierGtinLocked(product));
   const [recommendedPrice, setRecommendedPrice] = useState(
     getCanonicalVariantMrp(product) ?? null
   );
@@ -2165,6 +2240,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     (typeof recommendedPrice === 'number' ? recommendedPrice : null);
   const variantMrpEnforced = Boolean(canonicalMrp != null && canonicalMrp > 0 && !mrpLocked);
   const mrpInputDisabled = mrpLocked || variantMrpEnforced;
+  const { brandNames: fetchedSupplierBrandNames } = useSupplierBrands({
+    source: 'profile',
+    enabled: !Array.isArray(declaredBrandNames)
+  });
+  const supplierBrandNames = Array.isArray(declaredBrandNames)
+    ? declaredBrandNames
+    : fetchedSupplierBrandNames;
   const [formData, setFormData] = useState({
     catalogProductId: product?.catalogProductId || product?.id || '',
     name: product?.name || '',
@@ -2188,6 +2270,20 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
   const [hoveredSuggestionId, setHoveredSuggestionId] = useState(null);
   const suggestionsRef = useRef(null);
   const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!Array.isArray(supplierBrandNames) || supplierBrandNames.length === 0) return;
+    const name = String(formData.name || '').trim();
+    if (!name) return;
+    const inferred = inferDeclaredBrandFromProductName(name, supplierBrandNames);
+    if (!inferred) return;
+    setFormData((prev) => {
+      const current = String(prev.brand || '').trim();
+      if (current === inferred) return prev;
+      if (current && !listingBrandsConflict(inferred, current)) return prev;
+      return { ...prev, brand: inferred };
+    });
+  }, [supplierBrandNames, formData.name]);
   
   // Product type selection state
   const [productType, setProductType] = useState(product ? null : 'existing_category');
@@ -2623,13 +2719,15 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
     selectedCatalogAttachIdRef.current = '';
     selectedSuggestionSpecsRef.current = null;
     preserveSpecsOnNextCategoryLoadRef.current = false;
-    setFormData({ ...formData, name: value, catalogProductId: '' });
-    setCatalogBaselineSpecs({});
-    if (wasCatalogAttach) {
-      setSpecifications({});
-      setHasAdminSpecTemplate(false);
-      setAdminSpecTemplateKeys([]);
-    }
+    const inferredBrand = inferDeclaredBrandFromProductName(value, supplierBrandNames);
+    setFormData((prev) => ({
+      ...prev,
+      name: value,
+      catalogProductId: '',
+      ...(inferredBrand && String(prev.brand || '').trim() !== inferredBrand
+        ? { brand: inferredBrand }
+        : {})
+    }));
     
     // Clear previous timeout
     if (searchTimeout) {
@@ -2662,7 +2760,10 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       ...formData,
       catalogProductId: selectedProductId,
       name: suggestion.name,
-      brand: suggestion.brand || formData.brand || '',
+      brand:
+        inferDeclaredBrandFromProductName(suggestion.name, supplierBrandNames) ||
+        suggestion.brand ||
+        '',
       gtin: suggestion.gtin || formData.gtin,
       hsnCode: suggestion.hsnCode || suggestion.hsn_code || formData.hsnCode,
       description: suggestion.description || formData.description,
@@ -3163,6 +3264,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
 
     const productData = {
       ...formData,
+      brand: resolveListingBrandIdentity({
+        selectedBrand: formData.brand,
+        catalogBrand: product?.brand || '',
+        productName: formData.name,
+        declaredLabels: supplierBrandNames
+      }),
       // Add flow: photos attached for listing, or staged uploads if supplier skipped the attach button.
       // Edit flow: only images currently in the form (offer photos, not catalog history).
       images: !product ? resolvedCreateImages : Array.isArray(formData.images) ? formData.images : [],
@@ -4932,7 +5039,12 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                         selectedCatalogAttachIdRef.current = '';
                       }
                     }}
-                    disabled={!!product && Boolean(String(formData.brand || '').trim())}
+                    disabled={isListingBrandLocked({
+                      product,
+                      selectedBrand: formData.brand,
+                      productName: formData.name,
+                      declaredLabels: supplierBrandNames
+                    })}
                     required
                     searchable
                     allowOther={false}
@@ -4979,12 +5091,21 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   <input
                     type="text"
                     value={formData.gtin}
-                    onChange={(e) => setFormData({ ...formData, gtin: e.target.value.replace(/\s+/g, '') })}
+                    onChange={(e) => {
+                      if (gtinLocked) return;
+                      setFormData({ ...formData, gtin: e.target.value.replace(/\s+/g, '') });
+                    }}
                     placeholder='8/12/13/14 digit code'
                     inputMode="numeric"
                     autoComplete="off"
+                    disabled={gtinLocked}
                     style={{ width: '100%' }}
                   />
+                  {gtinLocked ? (
+                    <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
+                      {SUPPLIER_GTIN_LOCKED_MESSAGE}
+                    </p>
+                  ) : null}
                 </div>
               </div>
             )}
@@ -5254,9 +5375,18 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   <input
                     type="text"
                     value={formData.hsnCode}
-                    onChange={(e) => setFormData({ ...formData, hsnCode: e.target.value })}
+                    onChange={(e) => {
+                      if (hsnLocked) return;
+                      setFormData({ ...formData, hsnCode: e.target.value });
+                    }}
                     placeholder="e.g. 7214, 2523, 2505"
+                    disabled={hsnLocked}
                   />
+                  {hsnLocked ? (
+                    <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
+                      {SUPPLIER_HSN_LOCKED_MESSAGE}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="form-group" style={{
@@ -5269,6 +5399,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     value={formData.sgst_rate}
                     onChange={(e) => setFormData({ ...formData, sgst_rate: e.target.value })}
                     required
+                    disabled={gstLocked}
                   >
                     <option value="">Select SGST rate</option>
                     {CGST_SGST_OPTIONS.map((rate) => (
@@ -5287,6 +5418,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                     value={formData.cgst_rate}
                     onChange={(e) => setFormData({ ...formData, cgst_rate: e.target.value })}
                     required
+                    disabled={gstLocked}
                   >
                     <option value="">Select CGST rate</option>
                     {CGST_SGST_OPTIONS.map((rate) => (
@@ -5303,16 +5435,23 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   <label>IGST</label>
                   <select
                     value={formData.igst_rate}
-                    onChange={(e) =>
-                      setFormData((prev) => applyIgstToTaxFields(prev, e.target.value))
-                    }
+                    onChange={(e) => {
+                      if (gstLocked) return;
+                      setFormData((prev) => applyIgstToTaxFields(prev, e.target.value));
+                    }}
                     required
+                    disabled={gstLocked}
                   >
                     <option value="">Select IGST rate</option>
                     {IGST_OPTIONS.map((rate) => (
                       <option key={rate} value={rate}>{rate}%</option>
                     ))}
                   </select>
+                  {gstLocked ? (
+                    <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
+                      {SUPPLIER_GST_LOCKED_MESSAGE}
+                    </p>
+                  ) : null}
                 </div>
                 
               </>

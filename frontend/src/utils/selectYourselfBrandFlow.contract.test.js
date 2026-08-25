@@ -7,6 +7,7 @@ import {
 } from './supplierChainEntryValidation';
 import {
   buildBrandApprovalDetailsSignature,
+  buildPendingBrandRequestStatusView,
   buildSupplyChainSummaryRows,
   isBrandApprovalSaveBlockedForPendingRequests,
   resolveSelectYourselfBrandStepStatus
@@ -199,5 +200,35 @@ describe('Select Yourself brand flow contract', () => {
         supplierApprovedBrands: [{ name: 'Haier', status: 'approved' }]
       }).label
     ).toBe('Approved by admin');
+  });
+
+  it('8) a single pending brand request is shown once as Pending Admin Approval', () => {
+    const view = buildPendingBrandRequestStatusView({
+      pendingBrandRequests: [{ name: 'AISHU', submittedAt: '2026-08-24T10:37:00.000Z' }],
+      currentPendingBrandNames: ['AISHU']
+    });
+    expect(view.showSeparateStatusLine).toBe(false);
+    expect(view.title).toBe('Pending Admin Approval — "AISHU"');
+    expect(view.groups).toEqual([]);
+    expect(`${view.title} ${view.message}`).not.toMatch(/Request already submitted/i);
+  });
+
+  it('9) a submitted brand cannot look Ready to submit or be saved again while pending', () => {
+    const status = resolveSelectYourselfBrandStepStatus({
+      brandName: 'samsung',
+      supplierBrandRequests: [],
+      extraPendingBrandNames: ['samsung']
+    });
+    expect(status.label).toBe('Pending Admin Approval');
+    expect(
+      isBrandApprovalSaveBlockedForPendingRequests({
+        profile: {
+          companyInfoEntries: [{ id: '1', brands: 'samsung' }],
+          supplierBrandRequests: []
+        },
+        extraPendingBrandNames: ['samsung'],
+        submittedSignature: ''
+      })
+    ).toBe(true);
   });
 });

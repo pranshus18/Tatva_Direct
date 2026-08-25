@@ -6,6 +6,7 @@ import {
   sanitizeSpecifications,
   mergeAdminEditedSpecificationsOntoOffer,
   parseSpecificationsObject,
+  parseSupplierOfferAttributes,
   isMeaningfullyFilledSpecValue
 } from '../../services/supplierCatalogHelpersService.js';
 import { syncOfferAttributesWithSpecifications } from '../../services/productIdentityService.js';
@@ -13,8 +14,8 @@ import { buildProductIdentification, firstNonEmpty } from '../../services/procur
 import { syncCatalogProductSnapshotFromOffers } from '../../services/catalogOfferSnapshotService.js';
 import { buildAdminPublishedDescriptionAttributes } from '../../utils/supplierProductDescriptions.js';
 import { propagateVariantMrpToAllOffers } from '../../services/variantMrpService.js';
-import { catalogListingIdentityConflicts } from '../../utils/catalogProductAttach.js';
-import { resolveSupplierOfferDisplayName, resolveSupplierOfferDisplayCategory } from '../../services/supplierProductWriteService.js';
+import { catalogOfferIdentityConflicts } from '../../utils/catalogProductAttach.js';
+import { resolveSupplierOfferDisplayCategory } from '../../services/supplierProductWriteService.js';
 
 function scoreSupplierOfferRow(row) {
   const rowStatus = row.status;
@@ -59,33 +60,36 @@ function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true,
     return { ...product, hasSupplierOffer, hasPendingSupplierOffer };
   }
   const catalogSpecs = parseSpecificationsObject(product.specifications) || {};
-  const offerSpecs = parseSpecificationsObject(offerRow?.attributes?.specifications) || {};
+  const attrs = parseSupplierOfferAttributes(offerRow?.attributes);
+  const offerSpecs = parseSpecificationsObject(attrs.specifications) || {};
   const catalogApproved = String(product.status || '').toLowerCase() === 'approved';
   const offerPending = String(offerRow?.status || '').toLowerCase() === 'pending';
-  const listingName = resolveSupplierOfferDisplayName({
-    attributes: offerRow?.attributes || {},
-    catalogName: product.name
-  });
+  const identityConflicts = catalogOfferIdentityConflicts(product, attrs);
+  const ownName = String(attrs.listingName || attrs.name || '').trim();
+  const listingName = ownName || (identityConflicts ? '' : product.name);
   const listingCategory = resolveSupplierOfferDisplayCategory({
-    attributes: offerRow?.attributes || {},
-    catalogCategory: product.category
+    attributes: attrs,
+    catalogCategory: identityConflicts ? '' : product.category
   });
-  const offerBrand = String(
-    offerRow?.attributes?.brand || offerRow?.attributes?.brandModel || ''
-  ).trim();
-  const offerUnit = String(offerRow?.attributes?.unit || '').trim();
-  const offerGtin = String(offerRow?.attributes?.gtin || '').trim();
-  const offerImages = Array.isArray(offerRow?.attributes?.images) ? offerRow.attributes.images : null;
+  const offerBrand = String(attrs.brand || attrs.brandModel || '').trim();
+  const offerUnit = String(attrs.unit || '').trim();
+  const offerGtin = String(attrs.gtin || '').trim();
+  const offerImages = Array.isArray(attrs.images) ? attrs.images : null;
 
   return {
     ...product,
     name: listingName || product.name,
-    category: listingCategory || product.category || '',
-    brand: offerBrand || product.brand || '',
+    listingName: ownName || listingName || product.name,
+    category: listingCategory || (identityConflicts ? '' : product.category || ''),
+    brand: offerBrand || (identityConflicts ? '' : product.brand || ''),
     unit: offerUnit || product.unit || '',
-    gtin: offerGtin || product.gtin || '',
+    gtin: offerGtin || (identityConflicts ? '' : product.gtin || ''),
     images:
-      offerImages && offerImages.length > 0 ? offerImages : product.images,
+      offerImages && offerImages.length > 0
+        ? offerImages
+        : identityConflicts
+          ? []
+          : product.images,
     catalogName: product.name,
     catalogBrand: product.brand || '',
     catalogCategory: product.category || '',
@@ -93,7 +97,8 @@ function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true,
     hasPendingSupplierOffer,
     adminReviewPending: hasPendingSupplierOffer || String(product.status || 'pending').toLowerCase() === 'pending',
     pendingReviewType:
-      catalogApproved && offerPending ? 'variant_spec' : 'catalog',
+      catalogApproved && offerPending && !identityConflicts ? 'variant_spec' : 'catalog',
+    identityConflictsWithCatalog: identityConflicts,
     supplier_product_id: offerRow.id,
     supplierProductId: offerRow.id,
     price: offerRow.price,
@@ -101,45 +106,34 @@ function attachSupplierOfferFields(product, offerRow, { hasSupplierOffer = true,
     min_order_quantity: offerRow.min_order_quantity ?? product.min_order_quantity,
     location: offerRow.location ?? product.location,
     lsa:
-      offerRow?.attributes?.lsa != null && String(offerRow.attributes.lsa).trim() !== ''
-        ? String(offerRow.attributes.lsa).trim()
+      attrs.lsa != null && String(attrs.lsa).trim() !== ''
+        ? String(attrs.lsa).trim()
         : product?.lsa != null && String(product.lsa).trim() !== ''
           ? String(product.lsa).trim()
           : product?.attributes?.lsa != null
             ? String(product.attributes.lsa).trim()
             : '',
     supplier_id: product.supplier_id || offerRow.supplier_id || null,
-    igst_rate: offerRow.igst_rate ?? offerRow?.attributes?.igstRate ?? product.igst_rate ?? null,
-    cgst_rate: offerRow.cgst_rate ?? offerRow?.attributes?.cgstRate ?? product.cgst_rate ?? null,
-    sgst_rate: offerRow.sgst_rate ?? offerRow?.attributes?.sgstRate ?? product.sgst_rate ?? null,
-    hsnCode: offerRow?.attributes?.hsnCode ?? product.hsnCode ?? product.hsn_code ?? null,
-    brandModel: offerRow?.attributes?.brandModel ?? product.brandModel ?? null,
+    igst_rate: offerRow.igst_rate ?? attrs.igstRate ?? product.igst_rate ?? null,
+    cgst_rate: offerRow.cgst_rate ?? attrs.cgstRate ?? product.cgst_rate ?? null,
+    sgst_rate: offerRow.sgst_rate ?? attrs.sgstRate ?? product.sgst_rate ?? null,
+    hsnCode: attrs.hsnCode ?? product.hsnCode ?? product.hsn_code ?? null,
+    brandModel: attrs.brandModel ?? product.brandModel ?? null,
     catalogSpecifications: catalogSpecs,
     supplierOfferSpecifications: offerSpecs,
     specifications: offerSpecs,
     offerStatus: offerRow.status || null,
     variantKey: offerRow.variant_key || null,
     variantAsin: offerRow.variant_asin || null,
-    publishedDescription:
-      offerRow?.attributes?.publishedDescription ||
-      '',
-    supplierDescription:
-      offerRow?.attributes?.supplierDescription ||
-      offerRow?.attributes?.description ||
-      ''
+    publishedDescription: attrs.publishedDescription || '',
+    supplierDescription: attrs.supplierDescription || attrs.description || ''
   };
 }
 
 export function shouldPreserveSharedCatalogIdentity(catalogProduct, offerRow) {
   if (!catalogProduct || !offerRow) return false;
-  const attrs =
-    offerRow.attributes && typeof offerRow.attributes === 'object' ? offerRow.attributes : {};
-  return catalogListingIdentityConflicts({
-    catalogName: catalogProduct.name,
-    catalogCategory: catalogProduct.category,
-    listingName: attrs.listingName || attrs.name,
-    listingCategory: attrs.category
-  });
+  const attrs = parseSupplierOfferAttributes(offerRow.attributes);
+  return catalogOfferIdentityConflicts(catalogProduct, attrs);
 }
 
 const SHARED_CATALOG_IDENTITY_KEYS = [

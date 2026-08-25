@@ -46,7 +46,10 @@ import {
   buildSelectYourselfChainFormSignature,
   buildSelectYourselfChainEntryRowsSignature,
   reconcileBrandSubmissionNotice,
+  buildPendingBrandRequestStatusView,
+  shouldListBrandsInStatusAlert,
   reconcilePendingSupplierBrandRequests,
+  preserveLocalPendingBrandRequests,
   isBrandAlreadyApprovedForSaveBrand,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE,
   readAcknowledgedChainProfileRejectionKey,
@@ -378,34 +381,20 @@ export default function SupplierSelectYourself() {
 
   const brandSaveRequiresSelection = !hasSavedBrandEntries;
 
-  const pendingRequestStatusBrand =
-    pendingBrandsBlockingSave[0] ||
-    (visibleBrandSubmissionNotice?.tone === 'pending' &&
-      visibleBrandSubmissionNotice.brands?.[0]?.name) ||
-    pendingBrandRequests[0]?.name ||
-    '';
+  const extraPendingBrandNamesForUi = useMemo(() => {
+    if (visibleBrandSubmissionNotice?.tone !== 'pending') return [];
+    if (!Array.isArray(visibleBrandSubmissionNotice.brands)) return [];
+    return visibleBrandSubmissionNotice.brands.map((row) => row?.name).filter(Boolean);
+  }, [visibleBrandSubmissionNotice]);
 
-  const showConsolidatedPendingBrandAlert =
-    visibleBrandSubmissionNotice?.tone === 'pending' ||
-    (!visibleBrandSubmissionNotice && pendingBrandRequests.length > 0 && activeBrandPath !== 'pathA');
-
-  const pendingBrandRequestSections = useMemo(() => {
-    const currentKeys = new Set(
-      pendingBrandsBlockingSave.map((name) => brandKeyForDuplicateCheck(name)).filter(Boolean)
-    );
-    const current = pendingBrandRequests.filter((row) =>
-      currentKeys.has(brandKeyForDuplicateCheck(row.name))
-    );
-    const other = pendingBrandRequests.filter(
-      (row) => !currentKeys.has(brandKeyForDuplicateCheck(row.name))
-    );
-    return { current, other };
-  }, [pendingBrandRequests, pendingBrandsBlockingSave]);
-
-  const showPendingRequestStatusLine =
-    activeBrandPath !== 'pathA' &&
-    !showConsolidatedPendingBrandAlert &&
-    brandSaveBlockedByPendingRequest;
+  const pendingBrandStatusView = useMemo(
+    () =>
+      buildPendingBrandRequestStatusView({
+        pendingBrandRequests,
+        currentPendingBrandNames: pendingBrandsBlockingSave
+      }),
+    [pendingBrandRequests, pendingBrandsBlockingSave]
+  );
 
   const brandSaveButtonLabel = useMemo(() => {
     if (savingBrandApproval) return 'Submitting…';
@@ -592,7 +581,7 @@ export default function SupplierSelectYourself() {
   const applyProfileSnapshot = (profileData) => {
     const snapshot = normalizeProfileForEditor(normalizeSupplierBrandRequestsOnProfile(profileData));
     if (!snapshot) return false;
-    setProfile(snapshot);
+    setProfile((prev) => preserveLocalPendingBrandRequests(snapshot, prev));
     // Discard must compare against the last saved editor state, not an approved-only
     // subset — otherwise the button stays active with no local edits.
     setBaseline(cloneProfileSnapshot(snapshot));
@@ -1972,9 +1961,7 @@ export default function SupplierSelectYourself() {
                     savingBrandApproval ||
                     !!savingEntryId ||
                     discarding ||
-                    (brandSaveBlockedForPending &&
-                      !brandSaveBlockedByPendingRequest &&
-                      !brandSaveBlockedByApprovedBrand)
+                    brandSaveBlockedForPending
                   }
                   title={brandSaveButtonTitle}
                 >
@@ -2032,13 +2019,6 @@ export default function SupplierSelectYourself() {
             </div>
           ) : null}
 
-          {showPendingRequestStatusLine ? (
-            <p className="supplier-select-status-line supplier-select-status-line--pending" role="status">
-              Request already submitted
-              {pendingRequestStatusBrand ? ` — ${pendingRequestStatusBrand}` : ''}
-            </p>
-          ) : null}
-
           {showApprovedBrandPathBAlert ? (
             <div className="supplier-select-alert supplier-select-alert--draft" role="status">
               <strong>
@@ -2077,22 +2057,24 @@ export default function SupplierSelectYourself() {
                   : visibleBrandSubmissionNotice.title}
               </strong>
               <p>{visibleBrandSubmissionNotice.message}</p>
-              {visibleBrandSubmissionNotice.submittedAt ? (
+              {(visibleBrandSubmissionNotice.submittedAt ||
+                (visibleBrandSubmissionNotice.brands?.length === 1 &&
+                  visibleBrandSubmissionNotice.brands[0]?.submittedAt)) ? (
                 <p className="supplier-select-alert__meta">
-                  Submitted: {formatDateTimeIST(visibleBrandSubmissionNotice.submittedAt, '—')}
+                  Submitted:{' '}
+                  {formatDateTimeIST(
+                    visibleBrandSubmissionNotice.submittedAt ||
+                      visibleBrandSubmissionNotice.brands[0].submittedAt,
+                    '—'
+                  )}
                 </p>
               ) : null}
-              {Array.isArray(visibleBrandSubmissionNotice.brands) &&
-              visibleBrandSubmissionNotice.brands.length > 0 ? (
+              {shouldListBrandsInStatusAlert(visibleBrandSubmissionNotice.brands) ? (
                 <ul className="supplier-select-alert__list">
                   {visibleBrandSubmissionNotice.brands.map((row) => (
                     <li key={row.name}>
                       {row.name}
-                      {visibleBrandSubmissionNotice.tone === 'pending'
-                        ? ' — Pending Admin Approval'
-                        : row.submittedAt
-                          ? ` — ${formatDateTimeIST(row.submittedAt, '—')}`
-                          : ''}
+                      {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
                     </li>
                   ))}
                 </ul>
@@ -2108,55 +2090,31 @@ export default function SupplierSelectYourself() {
           ) : null}
 
           {!visibleBrandSubmissionNotice &&
-          pendingBrandRequests.length > 0 &&
+          pendingBrandStatusView.showAlert &&
           activeBrandPath !== 'pathA' ? (
             <div className="supplier-select-alert supplier-select-alert--pending" role="status">
-              <strong>
-                {pendingBrandRequests.length === 1
-                  ? `Pending Admin Approval — "${pendingBrandRequests[0].name}"`
-                  : `${pendingBrandRequests.length} brand requests pending admin approval`}
-              </strong>
-              <p>
-                Your request{pendingBrandRequests.length === 1 ? '' : 's'} will stay pending until an admin
-                approves or rejects {pendingBrandRequests.length === 1 ? 'it' : 'them'}.
-              </p>
-              {pendingBrandRequestSections.current.length > 0 &&
-              pendingBrandRequestSections.other.length > 0 ? (
-                <>
-                  <p className="supplier-select-alert__meta">
-                    Already submitted request
-                    {pendingBrandRequestSections.current.length === 1 ? '' : 's'}:
-                  </p>
+              <strong>{pendingBrandStatusView.title}</strong>
+              <p>{pendingBrandStatusView.message}</p>
+              {pendingBrandStatusView.submittedAt ? (
+                <p className="supplier-select-alert__meta">
+                  Submitted: {formatDateTimeIST(pendingBrandStatusView.submittedAt, '—')}
+                </p>
+              ) : null}
+              {pendingBrandStatusView.groups.map((group, index) => (
+                <React.Fragment key={group.heading || `pending-group-${index}`}>
+                  {group.heading ? (
+                    <p className="supplier-select-alert__meta">{group.heading}:</p>
+                  ) : null}
                   <ul className="supplier-select-alert__list">
-                    {pendingBrandRequestSections.current.map((row) => (
+                    {group.rows.map((row) => (
                       <li key={row.name}>
                         {row.name}
                         {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
                       </li>
                     ))}
                   </ul>
-                  <p className="supplier-select-alert__meta">
-                    Other pending request{pendingBrandRequestSections.other.length === 1 ? '' : 's'}:
-                  </p>
-                  <ul className="supplier-select-alert__list">
-                    {pendingBrandRequestSections.other.map((row) => (
-                      <li key={row.name}>
-                        {row.name}
-                        {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                </>
-              ) : (
-                <ul className="supplier-select-alert__list">
-                  {pendingBrandRequests.map((row) => (
-                    <li key={row.name}>
-                      {row.name}
-                      {row.submittedAt ? ` — submitted ${formatDateTimeIST(row.submittedAt, '—')}` : ''}
-                    </li>
-                  ))}
-                </ul>
-              )}
+                </React.Fragment>
+              ))}
             </div>
           ) : null}
 
@@ -2180,6 +2138,7 @@ export default function SupplierSelectYourself() {
               hasUnsavedChanges={hasUnsavedChanges}
               supplierApprovedBrands={effectiveApprovedBrands}
               supplierBrandRequests={profile?.supplierBrandRequests || []}
+              extraPendingBrandNames={extraPendingBrandNamesForUi}
               catalogBrands={catalogBrands}
               catalogBrandsLoading={catalogBrandsLoading}
               catalogBrandsError={catalogBrandsError}

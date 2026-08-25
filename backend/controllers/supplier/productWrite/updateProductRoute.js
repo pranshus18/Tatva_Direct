@@ -52,11 +52,15 @@ import {
   validateSupplierProductUpdateRequest,
   validateSupplierMrpUpdateAllowed,
   validateSupplierSpecificationUpdateAllowed,
+  validateSupplierApprovedIdentityUpdateAllowed,
   validateSupplierOfferSpecificationFillComplete,
   validateSupplierCategorySpecificationFillComplete,
   areSupplierOfferSpecificationValuesLocked,
   SUPPLIER_MRP_LOCKED_MESSAGE,
-  SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE
+  SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE,
+  SUPPLIER_HSN_LOCKED_MESSAGE,
+  SUPPLIER_GST_LOCKED_MESSAGE,
+  SUPPLIER_GTIN_LOCKED_MESSAGE
 } from '../../../services/supplierProductUpdateValidation.js';
 import { validateProductUnitCompatibility } from '../../../utils/productUnitCompatibility.js';
 import {
@@ -147,6 +151,31 @@ export function registerSupplierProductUpdateRoute(ctx) {
             code: specValidation.code || 'spec_values_locked',
             message: specValidation.message || SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE,
             missingFields: specValidation.missingFields || ['specifications']
+          });
+        }
+
+        const { data: catalogIdentity } = await supabase
+          .from('products')
+          .select('gtin, status')
+          .eq('id', supplierProduct.product_id)
+          .maybeSingle();
+        const identityValidation = validateSupplierApprovedIdentityUpdateAllowed(
+          supplierProduct,
+          req.body || {},
+          { catalogProduct: catalogIdentity || {} }
+        );
+        if (!identityValidation.ok) {
+          const fallbackMessage =
+            identityValidation.code === 'hsn_locked'
+              ? SUPPLIER_HSN_LOCKED_MESSAGE
+              : identityValidation.code === 'gst_locked'
+                ? SUPPLIER_GST_LOCKED_MESSAGE
+                : SUPPLIER_GTIN_LOCKED_MESSAGE;
+          return res.status(403).json({
+            status: 'error',
+            code: identityValidation.code || 'identity_locked',
+            message: identityValidation.message || fallbackMessage,
+            missingFields: identityValidation.missingFields || []
           });
         }
 

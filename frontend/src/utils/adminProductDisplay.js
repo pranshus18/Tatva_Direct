@@ -14,11 +14,12 @@ export function resolveAdminDisplaySpecifications(product = {}) {
 /** Admin list/card title: supplier listing name, never a mis-linked catalog title. */
 export function getAdminRowDisplayName(product = {}) {
   const baseName =
+    String(product?.listingName || '').trim() ||
     String(product?.name || '').trim() ||
     String(product?.catalogName || '').trim() ||
     'Product';
   const variantLabel = String(product?.variantLabel || '').trim();
-  if (variantLabel) return `${baseName} — ${variantLabel}`;
+  if (variantLabel && !product?.identityConflictsWithCatalog) return `${baseName} — ${variantLabel}`;
   return baseName;
 }
 

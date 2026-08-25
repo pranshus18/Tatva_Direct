@@ -9,6 +9,10 @@ import {
   getMissingSupplierSpecificationTemplateFields,
   areSupplierOfferSpecificationValuesLocked,
   isSupplierMrpLocked,
+  isSupplierHsnLocked,
+  isSupplierGstLocked,
+  isSupplierGtinLocked,
+  validateSupplierApprovedIdentityUpdateAllowed,
   SUPPLIER_MRP_LOCKED_MESSAGE,
   SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE
 } from '../services/supplierProductUpdateValidation.js';
@@ -87,6 +91,57 @@ test('validateSupplierMrpUpdateAllowed blocks supplier MRP changes after first s
   assert.equal(validateSupplierMrpUpdateAllowed(offer, { price: 120 }).ok, true);
   assert.equal(validateSupplierMrpUpdateAllowed({ price: 0 }, { price: 99 }).ok, true);
   assert.equal(SUPPLIER_MRP_LOCKED_MESSAGE.includes('admin'), true);
+});
+
+test('approved HSN, GST, and GTIN cannot be changed by the supplier', () => {
+  const offer = {
+    status: 'approved',
+    igst_rate: 18,
+    cgst_rate: 9,
+    sgst_rate: 9,
+    attributes: { hsnCode: '8518', gtin: '00048011628233' }
+  };
+  assert.equal(isSupplierHsnLocked(offer), true);
+  assert.equal(isSupplierGstLocked(offer), true);
+  assert.equal(isSupplierGtinLocked(offer), true);
+  assert.equal(
+    validateSupplierApprovedIdentityUpdateAllowed(offer, { hsnCode: '8519' }).ok,
+    false
+  );
+  assert.equal(
+    validateSupplierApprovedIdentityUpdateAllowed(offer, { igst_rate: 12, cgst_rate: 6, sgst_rate: 6 }).ok,
+    false
+  );
+  assert.equal(
+    validateSupplierApprovedIdentityUpdateAllowed(offer, { gtin: '12345678' }).ok,
+    false
+  );
+  assert.equal(
+    validateSupplierApprovedIdentityUpdateAllowed(offer, {
+      hsnCode: '8518',
+      igst_rate: 18,
+      cgst_rate: 9,
+      sgst_rate: 9,
+      gtin: '00048011628233'
+    }).ok,
+    true
+  );
+});
+
+test('pending offers can still set HSN, GST, and GTIN', () => {
+  const offer = {
+    status: 'pending',
+    igst_rate: 18,
+    cgst_rate: 9,
+    sgst_rate: 9,
+    attributes: { hsnCode: '8518', gtin: '00048011628233' }
+  };
+  assert.equal(isSupplierHsnLocked(offer), false);
+  assert.equal(
+    validateSupplierApprovedIdentityUpdateAllowed(offer, { hsnCode: '8519', igst_rate: 12, gtin: '12345678' })
+      .ok,
+    true
+  );
 });
 
 test('validateSupplierSpecificationUpdateAllowed allows first-time value fill', () => {

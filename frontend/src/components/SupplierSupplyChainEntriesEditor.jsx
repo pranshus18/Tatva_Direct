@@ -261,6 +261,7 @@ const CompanyInfoEntryCard = ({
   activeApprovedRole = '',
   supplierApprovedBrands = [],
   supplierBrandRequests = [],
+  extraPendingBrandNames = [],
   highlighted = false,
   onRequestChainConfiguration = null,
   chainProfileApprovalStatus = '',
@@ -275,8 +276,6 @@ const CompanyInfoEntryCard = ({
   // Path B must keep the text field editable even when the typed value momentarily equals
   // an approved brand (e.g. typing "pransh" passes through "pran").
   const pathBTypingMode = !!showBrandStepCustomInput;
-  const brandNameEditable =
-    editing && (!useBrandNameTextInput || !catalogBrandSelected || pathBTypingMode);
   const hasBrandValue = !!selectedBrand;
   const approvedCatalogMatch =
     useBrandNameTextInput && hasBrandValue && (!catalogBrandSelected || pathBTypingMode)
@@ -293,9 +292,20 @@ const CompanyInfoEntryCard = ({
       supplierApprovedBrands,
       supplierBrandRequests
     });
+  const extraPendingKey = brandKeyForDuplicateCheck(selectedBrand);
+  const extraPendingRequest =
+    !!extraPendingKey &&
+    (Array.isArray(extraPendingBrandNames) ? extraPendingBrandNames : []).some(
+      (name) => brandKeyForDuplicateCheck(name) === extraPendingKey
+    );
   // Stale pending request rows must not win after Admin approval / catalog access.
-  const isPendingBrandRequest = brandRequestStatus === 'pending' && !brandAlreadyApproved;
+  const isPendingBrandRequest =
+    (brandRequestStatus === 'pending' || extraPendingRequest) && !brandAlreadyApproved;
   const isRejectedBrandRequest = brandRequestStatus === 'rejected' && !brandAlreadyApproved;
+  const brandNameEditable =
+    editing &&
+    !isPendingBrandRequest &&
+    (!useBrandNameTextInput || !catalogBrandSelected || pathBTypingMode);
   const approvedCatalogSuggestions =
     useBrandNameTextInput &&
     hasBrandValue &&
@@ -416,7 +426,8 @@ const CompanyInfoEntryCard = ({
           supplierBrandRequests,
           supplierApprovedBrands,
           approvedCatalogMatchMessage,
-          approvedCatalogSuggestionMessage
+          approvedCatalogSuggestionMessage,
+          extraPendingBrandNames
         })
     : null;
   const statusTone = isBrandOnlyStep
@@ -1306,6 +1317,7 @@ export default function SupplierSupplyChainEntriesEditor({
   filterBrandName = '',
   supplierApprovedBrands = [],
   supplierBrandRequests = [],
+  extraPendingBrandNames = [],
   startInNewBrandMode = false,
   catalogBrands: catalogBrandsProp = null,
   catalogBrandsLoading = null,
@@ -2577,6 +2589,7 @@ export default function SupplierSupplyChainEntriesEditor({
             )}
             supplierApprovedBrands={supplierApprovedBrands}
             supplierBrandRequests={supplierBrandRequests}
+            extraPendingBrandNames={extraPendingBrandNames}
             highlighted={highlightedEntryId === entry.id}
             onRequestChainConfiguration={onRequestChainConfiguration}
             chainProfileApprovalStatus={chainProfileApprovalStatus}

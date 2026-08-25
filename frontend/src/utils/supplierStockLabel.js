@@ -113,3 +113,67 @@ export function formatVariantMrpFixedMessage(canonicalMrp) {
 export function isSupplierMrpInputDisabled(product) {
   return isSupplierMrpLocked(product) || isVariantMrpEnforced(product);
 }
+
+function isSupplierOfferApproved(product) {
+  const status = String(product?.status || product?.offerStatus || '').trim().toLowerCase();
+  return status === 'approved' || status === 'active';
+}
+
+function parseStoredHsnCode(product) {
+  const attrs =
+    product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+      ? product.attributes
+      : {};
+  return String(product?.hsnCode || product?.hsn_code || attrs.hsnCode || attrs.hsn_code || '').replace(
+    /\D/g,
+    ''
+  );
+}
+
+function parseStoredGtin(product) {
+  const attrs =
+    product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+      ? product.attributes
+      : {};
+  return String(product?.gtin || attrs.gtin || '').replace(/\s+/g, '').trim();
+}
+
+function parseStoredTaxRate(rawValue) {
+  if (rawValue === undefined || rawValue === null || rawValue === '') return null;
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return null;
+  return Number(parsed.toFixed(2));
+}
+
+function hasStoredGstRates(product) {
+  const attrs =
+    product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+      ? product.attributes
+      : {};
+  const igst = parseStoredTaxRate(product?.igst_rate ?? product?.igstRate ?? attrs.igstRate);
+  const cgst = parseStoredTaxRate(product?.cgst_rate ?? product?.cgstRate ?? attrs.cgstRate);
+  const sgst = parseStoredTaxRate(product?.sgst_rate ?? product?.sgstRate ?? attrs.sgstRate);
+  return igst !== null && cgst !== null && sgst !== null;
+}
+
+/** True after an approved offer already has an HSN code. */
+export function isSupplierHsnLocked(product) {
+  return Boolean(product) && isSupplierOfferApproved(product) && Boolean(parseStoredHsnCode(product));
+}
+
+/** True after an approved offer already has GST rates. */
+export function isSupplierGstLocked(product) {
+  return Boolean(product) && isSupplierOfferApproved(product) && hasStoredGstRates(product);
+}
+
+/** True after an approved offer already has a GTIN / UPC / EAN. */
+export function isSupplierGtinLocked(product) {
+  return Boolean(product) && isSupplierOfferApproved(product) && Boolean(parseStoredGtin(product));
+}
+
+export const SUPPLIER_HSN_LOCKED_MESSAGE =
+  'HSN code is locked after approval. Contact admin if you need to change it.';
+export const SUPPLIER_GST_LOCKED_MESSAGE =
+  'GST rates are locked after approval. Contact admin if you need to change them.';
+export const SUPPLIER_GTIN_LOCKED_MESSAGE =
+  'GTIN / UPC / EAN is locked after approval. Contact admin if you need to change it.';

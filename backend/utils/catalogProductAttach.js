@@ -39,6 +39,56 @@ export function catalogCategoriesCompatible(candidateCategory, existingCategory)
   return left === right;
 }
 
+function tokenizeCatalogIdentity(value) {
+  return normalizeCatalogLookupName(value)
+    .replace(/[()[\]]/g, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+/**
+ * When a product title starts with a declared brand ("Nothing Power (45W)"),
+ * return that brand label. Longest match wins (Nothing Audio before Nothing).
+ */
+export function inferDeclaredBrandFromProductName(productName, declaredLabels = []) {
+  const nameTokens = tokenizeCatalogIdentity(productName);
+  if (nameTokens.length === 0) return null;
+  let best = null;
+  let bestTokenCount = 0;
+  for (const label of Array.isArray(declaredLabels) ? declaredLabels : []) {
+    const brandTokens = tokenizeCatalogIdentity(label);
+    if (brandTokens.length === 0) continue;
+    if (brandTokens.some((token) => token.length < 2)) continue;
+    const matches = brandTokens.every((token, index) => nameTokens[index] === token);
+    if (!matches) continue;
+    if (brandTokens.length >= bestTokenCount) {
+      best = String(label).trim();
+      bestTokenCount = brandTokens.length;
+    }
+  }
+  return best;
+}
+
+/**
+ * Listing brand for create/navigation. A title that names a declared brand
+ * (Nothing Power) must not stay mapped to a leftover catalog brand (JBL).
+ */
+export function resolveListingBrandIdentity({
+  selectedBrand = '',
+  catalogBrand = '',
+  productName = '',
+  declaredLabels = []
+} = {}) {
+  const inferred = inferDeclaredBrandFromProductName(productName, declaredLabels);
+  const selected = String(selectedBrand || '').trim();
+  const catalog = String(catalogBrand || '').trim();
+  if (inferred) {
+    if (!selected || catalogBrandsConflict(inferred, selected)) return inferred;
+    return selected;
+  }
+  return selected || catalog || '';
+}
+
 /**
  * Catalog reuse must be the same product name (and brand when provided).
  * Never return the first fuzzy ILIKE hit — that attached Nothing chargers to JBL headphones.
@@ -76,4 +126,23 @@ export function catalogListingIdentityConflicts({
   if (cName && lName && cName !== lName) return true;
   if (cCat && lCat && cCat !== lCat) return true;
   return false;
+}
+
+/**
+ * True when a supplier offer is not the same product as the shared catalog row
+ * (Nothing Power must not stay a variant of JBL headphones).
+ */
+export function catalogOfferIdentityConflicts(catalogProduct = {}, offerAttributes = {}) {
+  const attrs = offerAttributes && typeof offerAttributes === 'object' ? offerAttributes : {};
+  const listingName = attrs.listingName || attrs.name || '';
+  const listingCategory = attrs.category || '';
+  const listingBrand = attrs.brand || attrs.brandModel || '';
+  return (
+    catalogListingIdentityConflicts({
+      catalogName: catalogProduct?.name,
+      catalogCategory: catalogProduct?.category,
+      listingName,
+      listingCategory
+    }) || catalogBrandsConflict(listingBrand, catalogProduct?.brand)
+  );
 }

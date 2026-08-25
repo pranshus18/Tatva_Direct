@@ -28,6 +28,8 @@ import {
   specificationsWithMeaningfulValuesOnly
 } from '../supplierImports.js';
 import { sanitizeImageUrls, validateAndNormalizeTaxRates } from '../shared/productHelpers.js';
+import { catalogBrandsConflict, catalogOfferIdentityConflicts, resolveListingBrandIdentity } from '../../../utils/catalogProductAttach.js';
+import { getDeclaredBrandLabels } from '../../../services/supplierBrandGuardService.js';
 import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
 import { clearOrphanedSupplierBcovLevelsBeforeNewOffer } from '../../../services/supplierBcovService.js';
@@ -174,9 +176,16 @@ export function buildSupplierProductCreateHandler(ctx) {
           : '';
 
       const effectiveProfile = await loadEffectiveSupplierChainProfile(req.userId, req.user?.profile || {});
-      const brandResolution = resolveSupplierProductBrandGuard(effectiveProfile, {
+      const declaredLabels = getDeclaredBrandLabels(effectiveProfile);
+      const listingBrand = resolveListingBrandIdentity({
         selectedBrand: brandInput,
-        catalogBrand
+        catalogBrand,
+        productName: otherData.name,
+        declaredLabels
+      });
+      const brandResolution = resolveSupplierProductBrandGuard(effectiveProfile, {
+        selectedBrand: listingBrand,
+        catalogBrand: catalogBrandsConflict(listingBrand, catalogBrand) ? '' : catalogBrand
       });
       if (!brandResolution.allowed) {
         const guard = brandResolution.guard || {};
@@ -195,7 +204,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         });
       }
 
-      const effectiveBrandInput = brandResolution.brand || brandInput || catalogBrand;
+      const effectiveBrandInput = brandResolution.brand || listingBrand || brandInput || '';
 
       const brandApproval = await ensureBrandApprovedOrRequest({
         supabase,
@@ -301,12 +310,24 @@ export function buildSupplierProductCreateHandler(ctx) {
         categoryName,
         normalizeText
       });
-      const existingProduct = existingMatch?.product || null;
-      const matchStrength = existingMatch?.matchStrength || 'none';
+      let existingProduct = existingMatch?.product || null;
+      let matchStrength = existingMatch?.matchStrength || 'none';
+      if (
+        existingProduct &&
+        catalogOfferIdentityConflicts(existingProduct, {
+          listingName: otherData.name,
+          name: otherData.name,
+          category: categoryName || category,
+          brand: effectiveBrandInput
+        })
+      ) {
+        existingProduct = null;
+        matchStrength = 'none';
+      }
       const isConfirmedCatalogAttach =
-        Boolean(selectedCatalogProductId) ||
-        String(matchStrength || '').toLowerCase() === 'explicit' ||
-        String(matchStrength || '').toLowerCase() === 'strong';
+        Boolean(existingProduct) &&
+        (String(matchStrength || '').toLowerCase() === 'explicit' ||
+          String(matchStrength || '').toLowerCase() === 'strong');
 
       // Strip unrelated category defaults before variant identity / approval checks.
       if (isConfirmedCatalogAttach && existingProduct) {
@@ -899,7 +920,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         previousLsaThreshold: null
       });
 
-      if (normalizedImageUrls.length > 0) {
+      if (normalizedImageUrls.length > 0 && (isNewProduct || isConfirmedCatalogAttach)) {
         await syncCatalogProductImages(supabase, productId, normalizedImageUrls);
       }
 

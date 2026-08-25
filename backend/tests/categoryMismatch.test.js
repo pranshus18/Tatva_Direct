@@ -66,3 +66,20 @@ test('detectCategoryMismatch: no competing signal does not soft-warn', () => {
   );
   assert.equal(warning, null);
 });
+
+test('detectCategoryMismatch: construction sealant matches Waterproofing & Coatings', () => {
+  const warning = detectCategoryMismatch(
+    'Waterproofing & Coatings',
+    '3M Polyurethane Construction Sealant 525 is a construction sealant used for sealing joints and bonding materials. It provides a flexible, durable seal and can bond to materials including concrete, wood, metal, and certain plastics.',
+    '3M Polyurethane Construction Sealant 525 - Gray'
+  );
+  assert.equal(warning, null);
+});
+
+test('detectCategoryMismatch: substrate materials are not a competing category', () => {
+  const warning = detectCategoryMismatch(
+    'Waterproofing & Coatings',
+    'Bonds to concrete, wood, metal, and certain plastics for joint sealing.'
+  );
+  assert.equal(warning, null);
+});

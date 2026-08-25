@@ -84,4 +84,16 @@ describe('getAdminRowDisplayName', () => {
       })
     ).toBe('Milton Thermosteel Flask');
   });
+
+  it('uses listingName for a Nothing offer mis-linked to a JBL catalog row', () => {
+    expect(
+      getAdminRowDisplayName({
+        name: 'JBL Wireless Over-Ear Headphones',
+        listingName: 'Nothing Power (45W)',
+        catalogName: 'JBL Wireless Over-Ear Headphones',
+        identityConflictsWithCatalog: true,
+        variantLabel: 'Color: Black'
+      })
+    ).toBe('Nothing Power (45W)');
+  });
 });

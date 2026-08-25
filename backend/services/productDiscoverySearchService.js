@@ -137,7 +137,7 @@ export function filterCatalogAutocompleteNameMatches(query, suggestions = []) {
   if (!qNorm) return [];
   const qTokens = extractTokens(qNorm).filter((t) => t.length >= 2);
 
-  return (suggestions || []).filter((row) => {
+  const matched = (suggestions || []).filter((row) => {
     const nameNorm = normalizeText(row?.name || '');
     const brandNorm = normalizeText(row?.brand || '');
     const haystack = [nameNorm, brandNorm, `${brandNorm} ${nameNorm}`].filter(Boolean).join(' ');
@@ -149,6 +149,21 @@ export function filterCatalogAutocompleteNameMatches(query, suggestions = []) {
     if (qTokens.length === 0) return false;
     // Require every meaningful token to appear in name or brand (not description).
     return qTokens.every((token) => nameNorm.includes(token) || brandNorm.includes(token));
+  });
+
+  const qFirst = qTokens[0] || '';
+  if (qFirst.length < 3) return matched;
+  const queryNamesAListedBrand = (suggestions || []).some((row) => {
+    const brandFirst =
+      extractTokens(normalizeText(row?.brand || '')).filter((token) => token.length >= 2)[0] || '';
+    return brandFirst === qFirst;
+  });
+  if (!queryNamesAListedBrand) return matched;
+  return matched.filter((row) => {
+    const brandFirst =
+      extractTokens(normalizeText(row?.brand || '')).filter((token) => token.length >= 2)[0] || '';
+    const nameNorm = normalizeText(row?.name || '');
+    return brandFirst === qFirst || nameNorm === qFirst || nameNorm.startsWith(`${qFirst} `);
   });
 }
 

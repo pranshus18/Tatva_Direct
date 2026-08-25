@@ -10,6 +10,7 @@ import {
   catalogBrandsCompatible,
   catalogBrandsConflict,
   catalogCategoriesConflict,
+  catalogListingIdentityConflicts,
   normalizeCatalogLookupName
 } from '../utils/catalogProductAttach.js';
 import { buildDisambiguatedAsinLikeId } from './productIdentityService.js';
@@ -172,10 +173,24 @@ export async function findExistingProductCandidate(
   const brandsCompatible = (product) =>
     catalogBrandsCompatible(candidateBrand, product?.brand);
 
+  const listingNameRaw = String(productNameRaw || productName || '').trim();
+  const identityConflicts = (product) =>
+    catalogListingIdentityConflicts({
+      catalogName: product?.name,
+      catalogCategory: product?.category,
+      listingName: listingNameRaw,
+      listingCategory: submittedCategory
+    }) || catalogBrandsConflict(candidateBrand, product?.brand);
+
   const acceptCandidate = (product, matchStrength) => {
     if (!product) return { product: null, matchStrength: 'none' };
     const existingGtin = String(product.gtin || '').trim();
     const gtinExact = Boolean(candidateGtin && existingGtin && candidateGtin === existingGtin);
+    // Never reuse another product's catalog row — including leftover BrandSelect
+    // / suggestion IDs (Nothing Power must not attach to JBL headphones).
+    if (identityConflicts(product)) {
+      return { product: null, matchStrength: 'none' };
+    }
     // GTIN is true product identity. Everything else must stay in the same category
     // so a flask/bottle listing cannot reuse a footwear catalog row.
     if (!gtinExact && catalogCategoriesConflict(submittedCategory, product.category)) {
@@ -190,7 +205,7 @@ export async function findExistingProductCandidate(
       .select('id, status, brand, gtin, barcode, name, category, asin, catalog_key, specifications')
       .eq('id', selectedCatalogProductId)
       .maybeSingle();
-    if (bySelectedId && !catalogBrandsConflict(candidateBrand, bySelectedId.brand)) {
+    if (bySelectedId && !identityConflicts(bySelectedId)) {
       return acceptCandidate(bySelectedId, 'explicit');
     }
   }
@@ -306,17 +321,21 @@ export function isSameCatalogProductForRecovery(recovered, identityBundle = {}) 
   const catalog = identityBundle.catalog || {};
   const recoveredGtin = String(recovered.gtin || '').trim();
   const candidateGtin = String(catalog.gtin || '').trim();
-  if (candidateGtin && recoveredGtin && candidateGtin === recoveredGtin) return true;
+  const brandsOk = !catalogBrandsConflict(catalog.brand, recovered.brand);
+  if (candidateGtin && recoveredGtin && candidateGtin === recoveredGtin) {
+    return brandsOk;
+  }
 
   const recoveredKey = String(recovered.catalog_key || '').trim();
   const candidateKey = String(identityBundle.catalogKey || '').trim();
-  if (candidateKey && recoveredKey && candidateKey === recoveredKey) return true;
+  if (candidateKey && recoveredKey && candidateKey === recoveredKey) {
+    return brandsOk;
+  }
 
   const recoveredName = normalizeCatalogLookupName(recovered.name);
   const candidateName = normalizeCatalogLookupName(catalog.name);
   const namesMatch = Boolean(recoveredName && candidateName && recoveredName === candidateName);
   const categoriesMatch = !catalogCategoriesConflict(catalog.category, recovered.category);
-  const brandsOk = !catalogBrandsConflict(catalog.brand, recovered.brand);
   return namesMatch && categoriesMatch && brandsOk;
 }
 

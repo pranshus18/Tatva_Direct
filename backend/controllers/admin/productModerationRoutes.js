@@ -23,6 +23,7 @@ import { syncOfferAttributesWithSpecifications } from '../../services/productIde
 import { areSupplierOfferSpecificationValuesLocked } from '../../services/supplierProductUpdateValidation.js';
 import { deleteCatalogOffer, deleteCatalogProduct } from '../../services/adminProductDeleteService.js';
 import { catalogListingIdentityConflicts } from '../../utils/catalogProductAttach.js';
+import { relinkConflictingOfferToOwnCatalog } from '../../services/catalogOfferRelinkService.js';
 
 /** Sync admin spec keys onto supplier offers without wiping values the supplier already saved. */
 async function syncApprovedProductSpecificationOffers(supabase, product, nowIso) {
@@ -110,18 +111,20 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         approveBody?.supplier_product_id || approveBody?.supplierProductId || ''
       ).trim();
 
-      const { data: existingProduct, error: fetchError } = await supabase
+      const { data: existingProductRow, error: fetchError } = await supabase
         .from('products')
         .select('*')
         .eq('id', req.params.id)
         .maybeSingle();
 
-      if (fetchError || !existingProduct) {
+      if (fetchError || !existingProductRow) {
         return res.status(404).json({
           status: 'error',
           message: 'Product not found'
         });
       }
+
+      let existingProduct = existingProductRow;
 
       const catalogAlreadyApproved =
         String(existingProduct.status || '').toLowerCase() === 'approved';
@@ -145,6 +148,14 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
           });
         }
 
+        const relink = await relinkConflictingOfferToOwnCatalog(supabase, {
+          catalogProduct: existingProduct,
+          offerRow: pendingOffer,
+          reqUserId: pendingOffer.supplier_id
+        });
+        if (relink.relinked && relink.catalogProduct?.id) {
+          existingProduct = relink.catalogProduct;
+        } else {
         if (String(pendingOffer.status || '').toLowerCase() !== 'pending') {
           return res.status(400).json({
             status: 'error',
@@ -204,12 +215,15 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
           product: existingProduct,
           supplierProduct: approvedOffer
         });
+        }
       }
+
+      const catalogId = existingProduct.id;
 
       const { data: offerRow } = await supabase
         .from('supplier_products')
         .select('igst_rate, cgst_rate, sgst_rate, attributes, updated_at')
-        .eq('product_id', req.params.id)
+        .eq('product_id', catalogId)
         .order('updated_at', { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -259,7 +273,7 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
       const { data: product, error: updateError } = await supabase
         .from('products')
         .update(productUpdatePayload)
-        .eq('id', req.params.id)
+        .eq('id', catalogId)
         .select(`
         *,
         supplier:users!products_supplier_id_fkey (id, name, email, user_type)

@@ -231,7 +231,8 @@ const AdminProductStatus = ({ user }) => {
 
   const handleApprove = async (product) => {
     const isVariantReview =
-      product?.pendingReviewType === 'variant_spec' || product?.hasPendingSupplierOffer === true;
+      product?.pendingReviewType === 'variant_spec' &&
+      !product?.identityConflictsWithCatalog;
     const readiness = getAdminProductApprovalReadiness({
       ...product,
       status: getAdminRowEffectiveStatus(product)
@@ -618,6 +619,12 @@ const AdminProductStatus = ({ user }) => {
                       </div>
 
                       <div className="product-meta" style={{ marginBottom: '0.35rem' }}>
+                        {product.brand ? (
+                          <span className="meta-item">
+                            <Tag size={14} />
+                            {product.brand}
+                          </span>
+                        ) : null}
                         <span className="meta-item">
                           <Tag size={14} />
                           {product.category || 'N/A'}
@@ -882,7 +889,8 @@ const ProductDetailModal = ({
   const status = statusInfo[effectiveStatus] || statusInfo.pending;
   const isVariantReview =
     product?.pendingReviewType === 'variant_spec' &&
-    effectiveStatus === 'pending';
+    effectiveStatus === 'pending' &&
+    !product?.identityConflictsWithCatalog;
   // Per-variant admin rows carry offer displayStatus; readiness must use that status
   // so buyer-facing description gates match pending vs approved offer copy rules.
   const approvalReadiness = getAdminProductApprovalReadiness({
@@ -1289,7 +1297,7 @@ const ProductDetailModal = ({
           <div className="modal-header-content">
             <div className="modal-title-section">
               <Package size={28} color="#4f46e5" />
-              <h2 className="modal-title">{product.name}</h2>
+              <h2 className="modal-title">{getAdminRowDisplayName(product)}</h2>
             </div>
             <span 
               className="status-badge-modal"
@@ -1323,6 +1331,10 @@ const ProductDetailModal = ({
               ) : (
                 <span>{product.category || 'N/A'}</span>
               )}
+            </div>
+            <div className="detail-item">
+              <label>Brand</label>
+              <span>{product.brand || 'N/A'}</span>
             </div>
             <div className="detail-item">
               <label>GTIN / UPC / EAN</label>
@@ -1488,7 +1500,7 @@ const ProductDetailModal = ({
                 style={{ padding: '0.5rem', border: '1px solid #e5e7eb', borderRadius: '6px', width: '100%' }}
               />
             ) : (
-              <span style={{ fontSize: '1.1rem', fontWeight: '600' }}>{product.name}</span>
+              <span style={{ fontSize: '1.1rem', fontWeight: '600' }}>{getAdminRowDisplayName(product)}</span>
             )}
           </div>
 

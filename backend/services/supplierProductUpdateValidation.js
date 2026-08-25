@@ -405,6 +405,126 @@ export function validateSupplierMrpUpdateAllowed(supplierProduct = {}, body = {}
   return { ok: true, message: '', code: null };
 }
 
+function isSupplierOfferApproved(product = {}) {
+  const status = String(product?.status || product?.offerStatus || '').trim().toLowerCase();
+  return status === 'approved' || status === 'active';
+}
+
+function parseStoredHsnCode(product = {}) {
+  const attrs =
+    product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+      ? product.attributes
+      : {};
+  return String(product?.hsnCode || product?.hsn_code || attrs.hsnCode || attrs.hsn_code || '').replace(
+    /\D/g,
+    ''
+  );
+}
+
+function parseStoredGtin(product = {}, catalogProduct = {}) {
+  const attrs =
+    product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+      ? product.attributes
+      : {};
+  return String(product?.gtin || attrs.gtin || catalogProduct?.gtin || '')
+    .replace(/\s+/g, '')
+    .trim();
+}
+
+function parseStoredGstRates(product = {}) {
+  const attrs =
+    product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+      ? product.attributes
+      : {};
+  return {
+    igst: parseTaxRate(product?.igst_rate ?? product?.igstRate ?? attrs.igstRate ?? attrs.igst_rate),
+    cgst: parseTaxRate(product?.cgst_rate ?? product?.cgstRate ?? attrs.cgstRate ?? attrs.cgst_rate),
+    sgst: parseTaxRate(product?.sgst_rate ?? product?.sgstRate ?? attrs.sgstRate ?? attrs.sgst_rate)
+  };
+}
+
+export function isSupplierHsnLocked(product = {}) {
+  return isSupplierOfferApproved(product) && Boolean(parseStoredHsnCode(product));
+}
+
+export function isSupplierGstLocked(product = {}) {
+  if (!isSupplierOfferApproved(product)) return false;
+  const { igst, cgst, sgst } = parseStoredGstRates(product);
+  return [igst, cgst, sgst].every((rate) => rate !== null && !Number.isNaN(rate));
+}
+
+export function isSupplierGtinLocked(product = {}, catalogProduct = {}) {
+  return isSupplierOfferApproved(product) && Boolean(parseStoredGtin(product, catalogProduct));
+}
+
+export const SUPPLIER_HSN_LOCKED_MESSAGE =
+  'HSN code cannot be changed after the product is approved. Contact admin to update it.';
+export const SUPPLIER_GST_LOCKED_MESSAGE =
+  'GST rates cannot be changed after the product is approved. Contact admin to update them.';
+export const SUPPLIER_GTIN_LOCKED_MESSAGE =
+  'GTIN / UPC / EAN cannot be changed after the product is approved. Contact admin to update it.';
+
+function bodyHasGstFields(body = {}) {
+  return ['igst_rate', 'igstRate', 'cgst_rate', 'cgstRate', 'sgst_rate', 'sgstRate'].some(
+    (key) => body?.[key] !== undefined
+  );
+}
+
+/** Block supplier edits to approved HSN, GST, and GTIN values. */
+export function validateSupplierApprovedIdentityUpdateAllowed(
+  supplierProduct = {},
+  body = {},
+  { catalogProduct = {} } = {}
+) {
+  if (isSupplierHsnLocked(supplierProduct) && (body.hsnCode !== undefined || body.hsn_code !== undefined)) {
+    const nextHsn = String(body.hsnCode !== undefined ? body.hsnCode : body.hsn_code || '').replace(
+      /\D/g,
+      ''
+    );
+    if (nextHsn !== parseStoredHsnCode(supplierProduct)) {
+      return {
+        ok: false,
+        message: SUPPLIER_HSN_LOCKED_MESSAGE,
+        code: 'hsn_locked',
+        missingFields: ['hsnCode']
+      };
+    }
+  }
+
+  if (isSupplierGstLocked(supplierProduct) && bodyHasGstFields(body)) {
+    const current = parseStoredGstRates(supplierProduct);
+    const next = {
+      igst: parseTaxRate(body.igst_rate ?? body.igstRate ?? current.igst),
+      cgst: parseTaxRate(body.cgst_rate ?? body.cgstRate ?? current.cgst),
+      sgst: parseTaxRate(body.sgst_rate ?? body.sgstRate ?? current.sgst)
+    };
+    if (next.igst !== current.igst || next.cgst !== current.cgst || next.sgst !== current.sgst) {
+      return {
+        ok: false,
+        message: SUPPLIER_GST_LOCKED_MESSAGE,
+        code: 'gst_locked',
+        missingFields: ['igst_rate']
+      };
+    }
+  }
+
+  if (isSupplierGtinLocked(supplierProduct, catalogProduct) && body.gtin !== undefined) {
+    const nextGtin = String(body.gtin || '')
+      .replace(/\s+/g, '')
+      .trim();
+    if (nextGtin !== parseStoredGtin(supplierProduct, catalogProduct)) {
+      return {
+        ok: false,
+        message: SUPPLIER_GTIN_LOCKED_MESSAGE,
+        code: 'gtin_locked',
+        missingFields: ['gtin']
+      };
+    }
+  }
+
+  return { ok: true, message: '', code: null };
+}
+
 function normalizeSpecValueForCompare(value) {
   if (value === null || value === undefined) return '';
   if (Array.isArray(value)) return value.map(String).join(', ').trim();

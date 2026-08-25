@@ -639,6 +639,99 @@ export function reconcileBrandSubmissionNotice(
   };
 }
 
+function uniquePendingBrandRequestRows(pendingBrandRequests = []) {
+  const byKey = new Map();
+  for (const row of Array.isArray(pendingBrandRequests) ? pendingBrandRequests : []) {
+    const name = String(row?.name || '').trim();
+    if (!name) continue;
+    const key = brandKeyForDuplicateCheck(name);
+    if (!key) continue;
+    const submittedAt = row?.submittedAt || row?.requestedAt || row?.createdAt || null;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { name, submittedAt });
+      continue;
+    }
+    const existingTs = String(existing.submittedAt || '');
+    const nextTs = String(submittedAt || '');
+    if (nextTs && nextTs >= existingTs) {
+      byKey.set(key, { name: existing.name, submittedAt });
+    }
+  }
+  return [...byKey.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+/**
+ * Single pending-brand status surface for Select Yourself.
+ * A given request is shown once as Pending Admin Approval — never also as a
+ * separate "Request already submitted" line or a repeated brand list item.
+ */
+export function buildPendingBrandRequestStatusView({
+  pendingBrandRequests = [],
+  currentPendingBrandNames = []
+} = {}) {
+  const unique = uniquePendingBrandRequestRows(pendingBrandRequests);
+  if (unique.length === 0) {
+    return {
+      showAlert: false,
+      showSeparateStatusLine: false,
+      title: '',
+      message: '',
+      submittedAt: null,
+      groups: []
+    };
+  }
+
+  const currentKeys = new Set(
+    (Array.isArray(currentPendingBrandNames) ? currentPendingBrandNames : [])
+      .map((name) => brandKeyForDuplicateCheck(name))
+      .filter(Boolean)
+  );
+  const current = unique.filter((row) => currentKeys.has(brandKeyForDuplicateCheck(row.name)));
+  const other = unique.filter((row) => !currentKeys.has(brandKeyForDuplicateCheck(row.name)));
+
+  if (unique.length === 1) {
+    const row = unique[0];
+    return {
+      showAlert: true,
+      showSeparateStatusLine: false,
+      title: `Pending Admin Approval — "${row.name}"`,
+      message: 'Your request will stay pending until an admin approves or rejects it.',
+      submittedAt: row.submittedAt || null,
+      groups: []
+    };
+  }
+
+  const groups =
+    current.length > 0 && other.length > 0
+      ? [
+          {
+            heading:
+              current.length === 1 ? 'Already submitted request' : 'Already submitted requests',
+            rows: current
+          },
+          {
+            heading: other.length === 1 ? 'Other pending request' : 'Other pending requests',
+            rows: other
+          }
+        ]
+      : [{ heading: null, rows: unique }];
+
+  return {
+    showAlert: true,
+    showSeparateStatusLine: false,
+    title: `${unique.length} brand requests pending admin approval`,
+    message: 'Your requests will stay pending until an admin approves or rejects them.',
+    submittedAt: null,
+    groups
+  };
+}
+
+/** Brand names already appear in a single-request title — do not list them again. */
+export function shouldListBrandsInStatusAlert(brands = []) {
+  return Array.isArray(brands) && brands.length > 1;
+}
+
 /**
  * Flip stale pending request rows to approved when Layer 2 access is already true
  * (catalog / adminApprovedBrands / supplierApprovedBrands). Keeps Supplier UI in sync
@@ -699,7 +792,8 @@ export function resolveSelectYourselfBrandStepStatus({
   supplierBrandRequests = [],
   supplierApprovedBrands = [],
   approvedCatalogMatchMessage = '',
-  approvedCatalogSuggestionMessage = ''
+  approvedCatalogSuggestionMessage = '',
+  extraPendingBrandNames = []
 } = {}) {
   const selectedBrand = String(brandName || '').trim();
   const detailLines = [];
@@ -710,7 +804,10 @@ export function resolveSelectYourselfBrandStepStatus({
   detailLines.push(selectedBrand);
 
   const brandRequest = findSupplierBrandRequest(selectedBrand, supplierBrandRequests);
-  const requestStatus = String(brandRequest?.status || '').toLowerCase();
+  const extraPending = isBrandListedAsExtraPending(selectedBrand, extraPendingBrandNames);
+  const requestStatus = extraPending
+    ? 'pending'
+    : String(brandRequest?.status || '').toLowerCase();
   const submittedAt =
     brandRequest?.submittedAt || brandRequest?.requestedAt || brandRequest?.createdAt || null;
   const namesForExact =
@@ -788,6 +885,45 @@ export function resolveSelectYourselfBrandStepStatus({
     label: 'Ready to submit for approval',
     detailLines
   };
+}
+
+function isBrandListedAsExtraPending(brandName, extraPendingBrandNames = []) {
+  const brandKey = brandKeyForDuplicateCheck(brandName);
+  if (!brandKey) return false;
+  return (Array.isArray(extraPendingBrandNames) ? extraPendingBrandNames : []).some(
+    (name) => brandKeyForDuplicateCheck(name) === brandKey
+  );
+}
+
+/**
+ * Keep pending Path B rows that a profile refresh omitted so Brand status cannot
+ * fall back to "Ready to submit" after a successful submit.
+ */
+export function preserveLocalPendingBrandRequests(nextProfile, previousProfile) {
+  if (!nextProfile || typeof nextProfile !== 'object') return nextProfile;
+  const nextRows = Array.isArray(nextProfile.supplierBrandRequests)
+    ? nextProfile.supplierBrandRequests
+    : [];
+  const nextKeys = new Set(
+    nextRows
+      .map((row) =>
+        brandKeyForDuplicateCheck(
+          typeof row === 'string' ? row : row?.normalizedName || row?.name
+        )
+      )
+      .filter(Boolean)
+  );
+  const missingPending = (
+    Array.isArray(previousProfile?.supplierBrandRequests) ? previousProfile.supplierBrandRequests : []
+  ).filter((row) => {
+    if (String(row?.status || '').toLowerCase() !== 'pending') return false;
+    const key = brandKeyForDuplicateCheck(
+      typeof row === 'string' ? row : row?.normalizedName || row?.name
+    );
+    return !!key && !nextKeys.has(key);
+  });
+  if (missingPending.length === 0) return nextProfile;
+  return mergeSupplierBrandRequestsIntoProfile(nextProfile, missingPending);
 }
 
 function isLiteralApprovedCatalogBrand(brandName, catalogBrands = []) {
