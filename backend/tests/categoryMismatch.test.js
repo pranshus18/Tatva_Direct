@@ -83,3 +83,20 @@ test('detectCategoryMismatch: substrate materials are not a competing category',
   );
   assert.equal(warning, null);
 });
+
+test('detectCategoryMismatch: electric kettle matches Kitchen Appliances', () => {
+  const warning = detectCategoryMismatch(
+    'Kitchen Appliances',
+    'Prestige PKOSS 1.5L Electric Kettle features a stainless steel body with a 1500W heating element for fast boiling. It includes automatic shut-off, boil-dry protection, a 360° swivel base, ergonomic handle, and a concealed heating element. Suitable for boiling water, tea, coffee, and instant meals.',
+    'Prestige PKOSS 1.5L Electric Kettle'
+  );
+  assert.equal(warning, null);
+});
+
+test('detectCategoryMismatch: electric / stainless steel do not count as another category', () => {
+  const warning = detectCategoryMismatch(
+    'Kitchen Appliances',
+    'Stainless steel electric body with a concealed heating element.'
+  );
+  assert.equal(warning, null);
+});

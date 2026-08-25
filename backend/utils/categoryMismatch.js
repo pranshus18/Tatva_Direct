@@ -38,6 +38,41 @@ const CATEGORY_KEYWORDS = {
     'waterproof',
     'waterproofing'
   ],
+  kitchen: [
+    'kitchen',
+    'appliance',
+    'appliances',
+    'kettle',
+    'cooker',
+    'mixer',
+    'blender',
+    'toaster',
+    'oven',
+    'fridge',
+    'refrigerator',
+    'microwave',
+    'stove',
+    'juicer',
+    'grinder',
+    'hob',
+    'chimney'
+  ],
+  appliances: [
+    'appliance',
+    'appliances',
+    'kettle',
+    'cooker',
+    'mixer',
+    'blender',
+    'toaster',
+    'oven',
+    'fridge',
+    'refrigerator',
+    'microwave',
+    'stove',
+    'juicer',
+    'grinder'
+  ],
   electrical: ['electrical', 'electric', 'wire', 'cable', 'switch', 'socket'],
   plumbing: ['plumbing', 'pipe', 'pipes', 'faucet', 'tap', 'fitting', 'fittings'],
   printers: [
@@ -58,13 +93,31 @@ const CATEGORY_KEYWORDS = {
 };
 
 /**
- * Substrate / material words that appear in many product descriptions
- * ("bonds to concrete, wood, metal") must not count as a different category.
+ * Only distinctive product-type nouns may count as a *different* category.
+ * Material / adjective words ("stainless steel body", "electric kettle") must not.
+ */
+const COMPETING_KEYWORDS = {
+  cement: ['cement', 'portland', 'opc', 'ppc'],
+  steel: ['tmt', 'rebar', 'steel bar', 'structural steel', 'steel rod'],
+  iron: ['pig iron', 'wrought iron'],
+  bricks: ['brick', 'bricks'],
+  sand: ['m-sand', 'river sand'],
+  aggregate: ['aggregate', 'aggregates'],
+  tiles: ['tile', 'tiles', 'vitrified'],
+  paint: ['paint', 'emulsion', 'enamel', 'latex'],
+  printers: ['printer', 'printers', 'laserjet', 'inkjet', 'mfp', 'copier', 'scanner'],
+  plumbing: ['plumbing', 'faucet']
+};
+
+/**
+ * Substrate / material / generic adjectives that appear in many product descriptions.
  */
 const WEAK_COMPETING_TOKENS = new Set([
   'metal',
   'metals',
   'iron',
+  'steel',
+  'stainless',
   'alloy',
   'concrete',
   'wood',
@@ -74,6 +127,8 @@ const WEAK_COMPETING_TOKENS = new Set([
   'stone',
   'clay',
   'sand',
+  'electric',
+  'electrical',
   'device',
   'gadget',
   'tool',
@@ -82,7 +137,9 @@ const WEAK_COMPETING_TOKENS = new Set([
   'fittings',
   'hardware',
   'coating',
-  'coatings'
+  'coatings',
+  'pipe',
+  'pipes'
 ]);
 
 function escapeRegex(value) {
@@ -182,11 +239,13 @@ export function expandCategoryMatchTokens(category) {
 }
 
 function categoryKeywordForms(categoryKey, { forCompeting = false } = {}) {
-  const keys = new Set([
-    categoryKey,
-    ...singularPluralForms(categoryKey),
-    ...(CATEGORY_KEYWORDS[categoryKey] || [])
-  ]);
+  const listed = forCompeting
+    ? COMPETING_KEYWORDS[categoryKey] || []
+    : [categoryKey, ...(CATEGORY_KEYWORDS[categoryKey] || [])];
+  const keys = new Set(listed.map((token) => String(token || '').toLowerCase()).filter(Boolean));
+  if (!forCompeting) {
+    for (const form of singularPluralForms(categoryKey)) keys.add(form);
+  }
   for (const key of [...keys]) {
     for (const form of singularPluralForms(key)) {
       keys.add(form);
@@ -206,10 +265,10 @@ function otherCategoryKeys(categoryName, categoryTokens) {
   const selected = new Set(
     (categoryTokens || []).map((token) => normalizeHaystack(token)).filter(Boolean)
   );
-  return Object.keys(CATEGORY_KEYWORDS).filter((cat) => {
-    const forms = categoryKeywordForms(cat);
+  return Object.keys(COMPETING_KEYWORDS).filter((cat) => {
+    const forms = categoryKeywordForms(cat, { forCompeting: true });
+    if (!forms.length) return false;
     if (forms.some((form) => form === categoryName)) return false;
-    // Overlapping domains (coatings vs paint) are not a competing category.
     if (forms.some((form) => selected.has(normalizeHaystack(form)))) return false;
     return true;
   });
