@@ -102,7 +102,7 @@ export const poCreateRequestSchema = z.object({
   shippingAddress: addressSchema.optional(),
   billingAddress: addressSchema.optional(),
   gstin: z.string().optional().nullable(),
-  /** Sum of selected logistics quotes (INR) — charged from logistics vault at carrier booking, not SP vault. */
+  /** Sum of selected logistics quotes (INR) — included in the buyer vault debit with products. */
   quotedTransportTotal: z.union([z.number(), z.string()]).optional().nullable()
 });
 

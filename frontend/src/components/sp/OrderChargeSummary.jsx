@@ -82,7 +82,7 @@ export default function OrderChargeSummary({ order, compact = false }) {
           </p>
         ) : null}
         <p style={{ margin: '0.35rem 0 0', fontWeight: 700, color: '#0f172a' }}>
-          <strong>Combined total:</strong> {formatInr(breakdown.combinedTotal)}
+          <strong>Vault debit (combined total):</strong> {formatInr(breakdown.buyerVaultDebit)}
         </p>
       </div>
     );
@@ -120,7 +120,7 @@ export default function OrderChargeSummary({ order, compact = false }) {
         ) : null}
         <tr>
           <td colSpan="3">
-            <strong>Combined total</strong>
+            <strong>Vault debit (combined total)</strong>
           </td>
           <td>
             <strong>{formatInr(breakdown.combinedTotal)}</strong>

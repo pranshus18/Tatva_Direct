@@ -952,6 +952,8 @@ const AdminSupplyChain = ({ user }) => {
             </h2>
             <p>
               Configure platform commission by supply chain level for each brand.
+              The saved rate is deducted from every product and variant of that brand
+              at payment time — percentage of each line, or the fixed INR amount per line.
             </p>
           </div>
           <div className="sc-card__body">

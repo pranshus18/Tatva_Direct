@@ -53,4 +53,31 @@ describe('productUnitCompatibility', () => {
     });
     expect(result.ok).toBe(true);
   });
+
+  it('allows bag for ACC-branded cement (does not treat ACC as air conditioner)', () => {
+    expect(
+      inferProductMeasureClass({
+        productName: 'Adani ACC Suraksha Power PPC Cement, 50 Kg Bag',
+        category: 'Building Materials'
+      })
+    ).toBe('bulk');
+
+    const result = validateProductUnitCompatibility({
+      unit: 'bag',
+      productName: 'Adani ACC Suraksha Power PPC Cement, 50 Kg Bag',
+      category: 'Building Materials'
+    });
+    expect(result.ok).toBe(true);
+    expect(result.severity).toBe('none');
+    expect(result.unitKey).toBe('bag');
+  });
+
+  it('still treats a split AC as discrete', () => {
+    expect(
+      inferProductMeasureClass({
+        productName: 'Voltas Split AC 1.5 Ton',
+        category: 'Appliances'
+      })
+    ).toBe('discrete');
+  });
 });

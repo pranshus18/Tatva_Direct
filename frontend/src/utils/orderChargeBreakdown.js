@@ -97,7 +97,7 @@ export function resolveOrderChargeBreakdown(order = {}) {
     combinedTotal = derivedTotal;
   }
 
-  const buyerVaultDebit = productsInclGst;
+  const buyerVaultDebit = combinedTotal;
   const logisticsVaultDebit = transportAmount;
 
   return {

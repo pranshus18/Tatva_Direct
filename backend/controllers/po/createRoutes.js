@@ -59,6 +59,7 @@ import {
 } from '../../utils/orderChargeBreakdown.js';
 import { resolveSupplierOfferDisplayImages } from '../../services/productImageService.js';
 import { BUYER_OWN_LISTING_PURCHASE_MESSAGE } from '../../services/catalogOfferSnapshotService.js';
+import { snapshotPlatformFeeOnPlacedOrder } from '../../services/platformFeeService.js';
 
 export function registerPoCreateRoutes(ctx) {
   const {
@@ -237,6 +238,8 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
     let walletRemainingBalance = null;
     if (isVaultCheckout) {
       const productsTotal = toMoney(sumPoGroupsProductsInclGst(poGroups));
+      const quotedTransportTotal = toMoney(payload?.quotedTransportTotal);
+      const vaultRequiredTotal = toMoney(productsTotal + quotedTransportTotal);
 
       let currentVaultBalance = 0;
       try {
@@ -251,7 +254,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         const pmCredentials = readPmCredentialsFromRequest(req);
         const pmWallet = await assertPmVaultBalanceSufficient(
           req.user,
-          productsTotal,
+          vaultRequiredTotal,
           pmCredentials
         );
         currentVaultBalance = toMoney(pmWallet?.balance || 0);
@@ -266,21 +269,21 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         if (vaultError?.code === 'INSUFFICIENT_WALLET_BALANCE' || vaultError?.code === 'INSUFFICIENT_VAULT_BALANCE') {
           const availableMatch = String(vaultError.message || '').match(/Available INR\s+([0-9.]+)/i);
           const available = toMoney(availableMatch?.[1] || 0);
-          const shortage = toMoney(Math.max(0, productsTotal - available));
+          const shortage = toMoney(Math.max(0, vaultRequiredTotal - available));
           return res.status(400).json({
             status: 'error',
             code: 'INSUFFICIENT_VAULT_BALANCE',
             message: `Insufficient vault balance. Available ₹${available.toLocaleString(
               'en-IN'
-            )}, required ₹${productsTotal.toLocaleString(
+            )}, required ₹${vaultRequiredTotal.toLocaleString(
               'en-IN'
-            )} (products incl. GST). Transport is charged separately from the logistics vault. Please credit vault before placing this order.`,
+            )} (full order total). Please credit vault before placing this order.`,
             vault: {
               balance: available,
-              required: productsTotal,
+              required: vaultRequiredTotal,
               productsTotal,
+              transportTotal: quotedTransportTotal,
               gstIncluded: true,
-              transportPaidVia: 'logistics_vault',
               shortage
             }
           });
@@ -288,7 +291,7 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         throw vaultError;
       }
 
-      // Track remaining PM vault headroom across sequential PO creates (products only).
+      // Track remaining PM vault headroom across sequential PO creates (combined order totals).
       walletRemainingBalance = currentVaultBalance;
     }
     const resolveBcov = buildBcovResolver(supabase);
@@ -765,6 +768,17 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         throw err;
       }
 
+      let feeApplied = null;
+      try {
+        feeApplied = await snapshotPlatformFeeOnPlacedOrder({ order });
+        order = feeApplied.order || order;
+      } catch (feeErr) {
+        logger.error('[PO] platform fee snapshot error:', feeErr);
+        await supabase.from('order_items').delete().eq('order_id', order.id);
+        await supabase.from('orders').delete().eq('id', order.id);
+        throw feeErr;
+      }
+
       // Inventory: consume checkout hold (deducts seller stock once).
       try {
         const orderItemBySupplierProductId = {};
@@ -864,7 +878,9 @@ router.post('/create', authenticateToken, isServiceProvider, async (req, res) =>
         shippingAddress: mapToDeliveryAddress(shippingAddress),
         billingAddress: mapToDeliveryAddress(billingAddress),
         gstin: hasGstin ? profileGstin : null,
-        items: groupItemDetails
+        items: groupItemDetails,
+        platformFeeAmount: feeApplied?.platformFeeAmount ?? order.platform_fee_amount ?? 0,
+        supplierPayoutAmount: feeApplied?.supplierPayoutAmount ?? order.supplier_payout_amount ?? null
       };
 
       if (poPaymentMethod === 'credit') {

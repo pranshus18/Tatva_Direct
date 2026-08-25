@@ -46,9 +46,10 @@ export function sumPoGroupsProductSubtotal(poGroups = []) {
 
 /**
  * Order charge split:
- * - buyerVaultDebit: products (MRP incl. GST) — debited from the SP PM vault
- * - logisticsVaultDebit: transport — debited from the logistics vault at carrier booking
- * - combinedTotal: full order total (products + transport) for invoices and display
+ * - buyerVaultDebit: full order total (all product/variant lines incl. GST + transport)
+ *   taken from the buyer PM vault in one deduction at place-order
+ * - logisticsVaultDebit: transport amount booked with the carrier (operational)
+ * - combinedTotal: same full order total for invoices and display
  */
 export function resolveOrderChargeBreakdown(order = {}) {
   const delivery = order?.delivery_address || order?.deliveryAddress || {};
@@ -112,7 +113,7 @@ export function resolveOrderChargeBreakdown(order = {}) {
     combinedTotal = derivedTotal;
   }
 
-  const buyerVaultDebit = productsInclGst;
+  const buyerVaultDebit = combinedTotal;
   const logisticsVaultDebit = transportAmount;
 
   return {

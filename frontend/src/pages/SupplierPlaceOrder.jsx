@@ -733,7 +733,23 @@ const SupplierPlaceOrder = () => {
     if (!poGroups.length) return 0;
     return roundMoney(poGroups.reduce((s, g) => s + (Number(g.total) || 0), 0));
   }, [poGroups]);
-  const vaultShortage = Math.max(0, Number(grandTotalAllPos || 0) - Number(vaultBalance || 0));
+  const transportTotalAllPos = useMemo(() => {
+    const details = selectedTransport?.byVendorCourierDetail;
+    const byVendor = selectedTransport?.byVendorId;
+    if (!details || !byVendor || typeof details !== 'object') return 0;
+    let sum = 0;
+    for (const key of Object.keys(byVendor)) {
+      if (!String(byVendor[key] || '').trim()) continue;
+      const det = details[key];
+      const providerName = byVendor[key];
+      if (isSelfShipTransport(det, providerName)) continue;
+      const quoted = Number(det?.fareValue ?? det?.rate);
+      if (Number.isFinite(quoted) && quoted > 0) sum += quoted;
+    }
+    return roundMoney(sum);
+  }, [selectedTransport]);
+  const vaultOrderDebit = roundMoney(Number(grandTotalAllPos || 0) + Number(transportTotalAllPos || 0));
+  const vaultShortage = Math.max(0, Number(vaultOrderDebit || 0) - Number(vaultBalance || 0));
   const hasSufficientVaultBalance = vaultShortage <= 0;
 
   useEffect(() => {
@@ -1284,7 +1300,7 @@ const SupplierPlaceOrder = () => {
                 </select>
                 {isVaultPaymentMethod(paymentMethod) ? (
                   <p className="spo-hint">
-                    On confirm, vault is debited for the order total. Credit your shared vault first if needed.
+                    On confirm, vault is debited once for the combined order total. Credit your shared vault first if needed.
                   </p>
                 ) : (
                   <p className="spo-hint">
@@ -1296,7 +1312,7 @@ const SupplierPlaceOrder = () => {
             </div>
             {isVaultPaymentMethod(paymentMethod) ? (
               <div className="spo-alert" style={{ marginTop: '0.75rem' }}>
-                <strong>Vault readiness:</strong> Order total {formatRupee(grandTotalAllPos)} | Vault balance{' '}
+                <strong>Vault readiness:</strong> Order total {formatRupee(vaultOrderDebit)} | Vault balance{' '}
                 {loadingVaultBalance ? 'Loading…' : formatRupee(vaultBalance)}.
                 {!loadingVaultBalance && !hasSufficientVaultBalance ? (
                   <>

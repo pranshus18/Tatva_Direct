@@ -4,7 +4,7 @@ import { createInvoiceForOrder } from './invoiceService.js';
 import { createReceiptAndDeliver } from './paymentReceiptService.js';
 import { ensurePaymentTransactionForPaidOrder } from './paymentTransactionService.js';
 import { writeAuditLog } from './auditService.js';
-import { calculateOrderPlatformFee } from './platformFeeService.js';
+import { calculateOrderPlatformFee, loadOrderItemsForFee, orderHasPlatformFeeSnapshot, resolveStoredOrComputedPlatformFee } from './platformFeeService.js';
 import { resolveOrderChargeBreakdown } from '../utils/orderChargeBreakdown.js';
 
 const PLATFORM_ESCROW_WALLET = 'platform_escrow';
@@ -728,24 +728,6 @@ async function loadOrderForWalletPay(orderId) {
   return order;
 }
 
-async function loadOrderItemsForFee(orderId) {
-  const { data: rows, error } = await supabase
-    .from('order_items')
-    .select(`
-      id,
-      quantity,
-      unit_price,
-      total_price,
-      product:products (
-        id,
-        brand
-      )
-    `)
-    .eq('order_id', orderId);
-  if (error) throw error;
-  return rows || [];
-}
-
 async function resolveOrderBuyerWalletType(order) {
   const channel = String(order?.channel || '').toLowerCase();
   if (channel === 'b2b_po') return 'supplier';
@@ -1028,17 +1010,26 @@ export async function payOrderFromWallet({
     }
 
     if (String(order.wallet_payment_status || '').toLowerCase() !== 'released') {
-      const orderItems = await loadOrderItemsForFee(order.id);
-      const feeResult = await calculateOrderPlatformFee({
-        order,
-        orderItems,
-        supplierId: order.supplier_id
-      });
+      let feeResult;
+      if (orderHasPlatformFeeSnapshot(order)) {
+        feeResult = {
+          feeAmount: roundMoney(order.platform_fee_amount),
+          breakdown: order.platform_fee_breakdown
+        };
+      } else {
+        const orderItems = await loadOrderItemsForFee(order.id);
+        feeResult = await calculateOrderPlatformFee({
+          order,
+          orderItems,
+          supplierId: order.supplier_id
+        });
+      }
       const grossAmount = roundMoney(order.total_amount);
-      const platformFeeAmount = Math.min(
-        grossAmount,
-        roundMoney(order.platform_fee_amount ?? feeResult.feeAmount)
-      );
+      const platformFeeAmount = resolveStoredOrComputedPlatformFee({
+        order,
+        feeResult,
+        capAmount: grossAmount
+      });
       const supplierPayoutAmount = roundMoney(
         order.supplier_payout_amount ?? grossAmount - platformFeeAmount
       );
@@ -1099,18 +1090,29 @@ export async function payOrderFromWallet({
 
   order = await loadOrderForWalletPay(orderId);
 
-  const orderItems = await loadOrderItemsForFee(order.id);
-  const feeResult = await calculateOrderPlatformFee({
-    order,
-    orderItems,
-    supplierId: order.supplier_id
-  });
+  let feeResult;
+  if (orderHasPlatformFeeSnapshot(order)) {
+    feeResult = {
+      feeAmount: roundMoney(order.platform_fee_amount),
+      breakdown: order.platform_fee_breakdown
+    };
+  } else {
+    const orderItems = await loadOrderItemsForFee(order.id);
+    feeResult = await calculateOrderPlatformFee({
+      order,
+      orderItems,
+      supplierId: order.supplier_id
+    });
+  }
   const chargeBreakdown = resolveOrderChargeBreakdown(order);
   const orderTotalAmount = roundMoney(chargeBreakdown.combinedTotal);
-  const buyerVaultDebit = roundMoney(chargeBreakdown.buyerVaultDebit ?? chargeBreakdown.productsInclGst);
+  const productsInclGst = roundMoney(chargeBreakdown.productsInclGst);
+  const buyerVaultDebit = roundMoney(
+    chargeBreakdown.buyerVaultDebit ?? chargeBreakdown.combinedTotal ?? orderTotalAmount
+  );
   if (!Number.isFinite(buyerVaultDebit) || buyerVaultDebit <= 0) {
     const err = new Error(
-      `Product charge total is invalid (₹${buyerVaultDebit}). Retry vault payment.`
+      `Order total is invalid (₹${buyerVaultDebit}). Retry vault payment.`
     );
     err.code = 'ORDER_CHARGE_INVALID';
     throw err;
@@ -1131,8 +1133,14 @@ export async function payOrderFromWallet({
       order.total_amount = orderTotalAmount;
     }
   }
-  const platformFeeAmount = Math.min(buyerVaultDebit, roundMoney(feeResult.feeAmount));
-  const supplierPayoutAmount = roundMoney(buyerVaultDebit - platformFeeAmount);
+  const platformFeeAmount = resolveStoredOrComputedPlatformFee({
+    order,
+    feeResult,
+    capAmount: productsInclGst || buyerVaultDebit
+  });
+  const supplierPayoutAmount = roundMoney(
+    Math.max(0, (productsInclGst || buyerVaultDebit) - platformFeeAmount)
+  );
 
   const { data: actorUser, error: actorUserError } = await supabase
     .from('users')
@@ -1151,7 +1159,7 @@ export async function payOrderFromWallet({
       orderId: order.id,
       orderNumber: order.order_number || null,
       amountInRupees: buyerVaultDebit,
-      description: `Order payment for ${order.order_number || order.id}`,
+      description: `Order payment for ${order.order_number || order.id} (combined order total)`,
       credentials: pmCredentials || {},
       // Place-order UI already verified vault readiness; skip a second PM balance GET.
       skipBalanceCheck: true

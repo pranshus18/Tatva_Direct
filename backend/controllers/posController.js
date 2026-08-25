@@ -15,6 +15,7 @@ import {
   maybeNotifySupplierCreditAlert,
   normalizeCustomerPhone
 } from '../services/creditAccountService.js';
+import { snapshotPlatformFeeOnPlacedOrder } from '../services/platformFeeService.js';
 
 const router = express.Router();
 const ORDER_INSERT_MAX_RETRIES = 3;
@@ -494,6 +495,19 @@ router.post('/offline-order', authenticateToken, async (req, res) => {
       console.error('Offline order items error:', itemsError);
       await supabase.from('orders').delete().eq('id', order.id);
       return res.status(500).json({ status: 'error', message: 'Failed to create offline order items' });
+    }
+
+    try {
+      const feeApplied = await snapshotPlatformFeeOnPlacedOrder({ order });
+      order = feeApplied.order || order;
+    } catch (feeErr) {
+      console.error('Offline order platform fee error:', feeErr);
+      await supabase.from('order_items').delete().eq('order_id', order.id);
+      await supabase.from('orders').delete().eq('id', order.id);
+      return res.status(feeErr.statusCode || 400).json({
+        status: 'error',
+        message: feeErr.message || 'Failed to apply platform fee for this order'
+      });
     }
 
     let invoiceNumber = null;

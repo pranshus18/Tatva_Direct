@@ -32,4 +32,22 @@ describe('productUnitCompatibility', () => {
       'bulk'
     );
   });
+
+  it('allows bag for ACC-branded cement instead of treating ACC as an air conditioner', () => {
+    assert.equal(
+      inferProductMeasureClass({
+        productName: 'Adani ACC Suraksha Power PPC Cement, 50 Kg Bag',
+        category: 'Building Materials'
+      }),
+      'bulk'
+    );
+    const result = validateProductUnitCompatibility({
+      unit: 'bag',
+      productName: 'Adani ACC Suraksha Power PPC Cement, 50 Kg Bag',
+      category: 'Building Materials'
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.severity, 'none');
+    assert.equal(result.unitKey, 'bag');
+  });
 });

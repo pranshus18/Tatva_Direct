@@ -242,7 +242,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     Boolean(initialRequiredDateFromContext)
   );
   const [creatingOrders, setCreatingOrders] = useState(false);
-  /** Vault checkout: SP vault debits products only; transport uses logistics vault at booking. */
+  /** Vault checkout: one debit of the combined order total from the buyer vault. */
   const [poPaymentMethod, setPoPaymentMethod] = useState(VAULT_PAYMENT_METHOD);
   /** Payment details collected based on selected method (card number, UTR, etc.) */
   const [paymentDetails, setPaymentDetails] = useState({});
@@ -438,13 +438,13 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
     () => Math.round((Number(grandTotalAllPos || 0) + Number(transportTotalAllPos || 0)) * 100) / 100,
     [grandTotalAllPos, transportTotalAllPos]
   );
-  const vaultProductDebit = useMemo(
-    () => Math.round(Number(grandTotalAllPos || 0) * 100) / 100,
-    [grandTotalAllPos]
+  const vaultOrderDebit = useMemo(
+    () => Math.round(Number(checkoutTotalDue || 0) * 100) / 100,
+    [checkoutTotalDue]
   );
   const vaultShortage = useMemo(
-    () => Math.max(0, Number(vaultProductDebit || 0) - Number(vaultBalance || 0)),
-    [vaultProductDebit, vaultBalance]
+    () => Math.max(0, Number(vaultOrderDebit || 0) - Number(vaultBalance || 0)),
+    [vaultOrderDebit, vaultBalance]
   );
   const hasSufficientVaultBalance = vaultShortage <= 0;
 
@@ -1646,7 +1646,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
             </button>
             <span style={{ fontSize: '0.76rem', color: '#64748b' }}>
               {isVaultPaymentMethod(poPaymentMethod)
-                ? 'Tip: Keep enough vault balance for the product total before confirming. Transport is billed via logistics vault.'
+                ? 'Tip: Keep enough vault balance for the full order total. Products and transport are combined into one vault debit.'
                 : 'Tip: Configure credit limit with supplier to use pay later without failures.'}
             </span>
           </div>
@@ -1670,7 +1670,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                 <strong>₹{Number(grandTotalAllPos || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
-                Transport (logistics vault):{' '}
+                Transport:{' '}
                 <strong>₹{Number(transportTotalAllPos || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
@@ -1678,8 +1678,8 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
                 <strong>₹{Number(checkoutTotalDue || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
-                Your vault debit (products):{' '}
-                <strong>₹{Number(vaultProductDebit || 0).toLocaleString('en-IN')}</strong>
+                Your vault debit (one combined amount):{' '}
+                <strong>₹{Number(vaultOrderDebit || 0).toLocaleString('en-IN')}</strong>
               </p>
               <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: '#475569' }}>
                 Vault balance:{' '}

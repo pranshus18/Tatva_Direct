@@ -25,9 +25,10 @@ test('resolveOrderChargeBreakdown adds GST when total_amount stored as subtotal 
   assert.equal(breakdown.gstAmount, 56.25);
   assert.equal(breakdown.productsInclGst, 1181.25);
   assert.equal(breakdown.combinedTotal, 1181.25);
+  assert.equal(breakdown.buyerVaultDebit, 1181.25);
 });
 
-test('resolveOrderChargeBreakdown includes transport in combined total but not buyer vault debit', () => {
+test('resolveOrderChargeBreakdown debits buyer vault for the combined order total', () => {
   const breakdown = resolveOrderChargeBreakdown({
     total_amount: 1125,
     delivery_address: {
@@ -42,7 +43,8 @@ test('resolveOrderChargeBreakdown includes transport in combined total but not b
 
   assert.equal(breakdown.transportAmount, 200);
   assert.equal(breakdown.combinedTotal, 1381.25);
-  assert.equal(breakdown.buyerVaultDebit, 1181.25);
+  assert.equal(breakdown.buyerVaultDebit, 1381.25);
+  assert.equal(breakdown.productsInclGst, 1181.25);
   assert.equal(breakdown.logisticsVaultDebit, 200);
 });
 

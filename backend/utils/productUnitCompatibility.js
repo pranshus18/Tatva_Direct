@@ -265,23 +265,28 @@ export function normalizeProductUnitKey(unit) {
 function textHasHint(text, hints) {
   const normalized = clean(text);
   if (!normalized) return false;
+  const tokens = new Set(tokenize(normalized));
   return hints.some((hint) => {
     const h = clean(hint);
     if (!h) return false;
+    const hintTokens = tokenize(h);
+    if (hintTokens.length === 0) return false;
+    // Single-word hints must be whole tokens so "ac" does not match brand "ACC" in cement names.
+    if (hintTokens.length === 1) return tokens.has(hintTokens[0]);
     if (normalized.includes(h)) return true;
-    const tokens = new Set(tokenize(normalized));
-    return tokenize(h).every((t) => tokens.has(t));
+    return hintTokens.every((t) => tokens.has(t));
   });
 }
 
 export function inferProductMeasureClass({ productName = '', category = '' } = {}) {
   const name = String(productName || '');
   const cat = String(category || '');
-  if (textHasHint(name, DISCRETE_NAME_HINTS) || textHasHint(cat, DISCRETE_CATEGORY_HINTS)) {
-    return 'discrete';
-  }
+  // Bagged bulk (cement, sand, grain) before electronics so "ACC Cement" is not treated as an AC.
   if (textHasHint(name, BULK_CATEGORY_HINTS) || textHasHint(cat, BULK_CATEGORY_HINTS)) {
     return 'bulk';
+  }
+  if (textHasHint(name, DISCRETE_NAME_HINTS) || textHasHint(cat, DISCRETE_CATEGORY_HINTS)) {
+    return 'discrete';
   }
   if (textHasHint(name, LIQUID_CATEGORY_HINTS) || textHasHint(cat, LIQUID_CATEGORY_HINTS)) {
     return 'liquid';

@@ -109,6 +109,7 @@ import {
   reserveUpstreamCheckoutLines,
   validateCheckoutReservationsForLines
 } from '../../services/upstreamInventoryReservationService.js';
+import { snapshotPlatformFeeOnPlacedOrder } from '../../services/platformFeeService.js';
 
 export function registerSupplierUpstreamRoutes(ctx) {
   const {
@@ -2052,6 +2053,17 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         throw new Error('Failed to create upstream order items');
       }
 
+      let feeApplied = null;
+      try {
+        feeApplied = await snapshotPlatformFeeOnPlacedOrder({ order });
+        order = feeApplied.order || order;
+      } catch (feeErr) {
+        console.error('[Upstream Orders] platform fee snapshot error:', feeErr);
+        await supabase.from('order_items').delete().eq('order_id', order.id);
+        await supabase.from('orders').delete().eq('id', order.id);
+        throw feeErr;
+      }
+
       // Inventory: consume the checkout hold (deducts upstream seller stock once).
       try {
         const orderItemBySupplierProductId = {};
@@ -2119,7 +2131,9 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
         status: order.status,
         paymentStatus: order.payment_status,
         paymentMethod: order.payment_method,
-        expectedDeliveryDate: order.expected_delivery_date
+        expectedDeliveryDate: order.expected_delivery_date,
+        platformFeeAmount: feeApplied?.platformFeeAmount ?? order.platform_fee_amount ?? 0,
+        supplierPayoutAmount: feeApplied?.supplierPayoutAmount ?? order.supplier_payout_amount ?? null
       });
     }
 
@@ -2152,7 +2166,12 @@ router.post('/upstream/orders', authenticateToken, async (req, res) => {
     if (String(error?.name || '') === 'ZodError') {
       return res.status(400).json({ status: 'error', message: getContractErrorMessage(error) });
     }
-    return res.status(500).json({ status: 'error', message: 'Failed to create upstream orders', error: error.message });
+    const statusCode = Number(error?.statusCode) || 500;
+    return res.status(statusCode).json({
+      status: 'error',
+      message: statusCode >= 500 ? 'Failed to create upstream orders' : (error.message || 'Failed to create upstream orders'),
+      ...(statusCode >= 500 ? { error: error.message } : {})
+    });
   }
 });
 
