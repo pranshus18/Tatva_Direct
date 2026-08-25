@@ -21,16 +21,15 @@ describe('productUnitCompatibility', () => {
     expect(normalizeProductUnitKey('Nos')).toBe('count');
   });
 
-  it('blocks bags for a wireless mouse', () => {
+  it('does not block bags for a wireless mouse — seller can still save the unit', () => {
     const result = validateProductUnitCompatibility({
       unit: 'bags',
       productName: 'Logitech M185 Wireless Mouse',
       category: 'Electronics / Computer Accessories'
     });
-    expect(result.ok).toBe(false);
-    expect(result.severity).toBe('error');
-    expect(result.code).toBe('unit_incompatible');
-    expect(result.message).toMatch(/Piece|Unit|Nos/i);
+    expect(result.ok).toBe(true);
+    expect(result.severity).toBe('warning');
+    expect(result.code).toBe('unit_unusual');
   });
 
   it('allows Piece / Unit / Nos for discrete electronics', () => {
@@ -79,5 +78,22 @@ describe('productUnitCompatibility', () => {
         category: 'Appliances'
       })
     ).toBe('discrete');
+  });
+
+  it('classifies truncated ACC PPC cement names as bulk and allows bag', () => {
+    expect(
+      inferProductMeasureClass({
+        productName: 'Adani ACC Suraksha Power PPC Cer',
+        category: ''
+      })
+    ).toBe('bulk');
+
+    const result = validateProductUnitCompatibility({
+      unit: 'bag',
+      productName: 'Adani ACC Suraksha Power PPC Cer',
+      category: ''
+    });
+    expect(result.ok).toBe(true);
+    expect(result.severity).toBe('none');
   });
 });

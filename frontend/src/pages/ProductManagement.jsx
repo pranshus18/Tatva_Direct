@@ -2945,13 +2945,9 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
       }),
     [formData.unit, formData.name, formData.category]
   );
-  const unitCompatibilityBlocksSubmit =
-    !showInventoryFields && unitCompatibility.severity === 'error';
 
   const isAddOrInventorySubmitBlocked =
-    missingMandatoryFields.length > 0 ||
-    brandApprovalBlocksSubmit ||
-    unitCompatibilityBlocksSubmit;
+    missingMandatoryFields.length > 0 || brandApprovalBlocksSubmit;
 
   useEffect(() => {
     if (!isAddOrInventorySubmitBlocked) {
@@ -3113,14 +3109,6 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
           : 'Brand approval and a selected supplier role are required before submitting this product.'
       );
       brandFieldRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
-
-    if (unitCompatibilityBlocksSubmit) {
-      setShowMissingHints(true);
-      setFormValidationError(unitCompatibility.message);
-      unitInputRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      unitInputRef.current?.focus?.();
       return;
     }
 
@@ -5141,7 +5129,7 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
                   </p>
                 ) : (
                   <p style={{ margin: '0.35rem 0 0', fontSize: '0.75rem', color: '#6b7280' }}>
-                    Choose a sell unit that matches the product (for electronics use Piece / Unit / Nos, not bags).
+                    Type any sell unit (Bag, Kg, Piece, …). Quick picks appear if a more common unit exists.
                   </p>
                 )}
               </div>
@@ -5802,16 +5790,13 @@ const ProductModal = ({ product, onClose, onSave, showInventoryFields = true, sh
               role={formValidationError || showMissingHints ? 'alert' : 'status'}
             >
               {formValidationError ||
-                (unitCompatibilityBlocksSubmit
-                  ? unitCompatibility.message
-                  : brandApprovalBlocksSubmit && brandApprovalWarning
+                (brandApprovalBlocksSubmit && brandApprovalWarning
                   ? `${brandApprovalWarning.title}. ${brandApprovalWarning.message}`
                   : photosMissingFromMandatory && missingMandatoryFields.length === 1
                   ? formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)
                   : `Complete required fields to enable ${product ? 'Update Product' : 'Add Product'}: ${[
                       ...missingMandatoryFields,
-                      ...(brandApprovalBlocksSubmit ? brandPrerequisiteLabels : []),
-                      ...(unitCompatibilityBlocksSubmit ? ['Compatible unit'] : [])
+                      ...(brandApprovalBlocksSubmit ? brandPrerequisiteLabels : [])
                     ].join(', ')}.`)}
             </div>
           ) : null}

@@ -1,6 +1,6 @@
 /**
- * Validate selling unit against product name / category.
- * Blocks clear mismatches (e.g. "bags" for a wireless mouse).
+ * Classify products and hint preferred sell units.
+ * Never blocks save — the seller can keep any unit they type.
  */
 
 function clean(value) {
@@ -196,6 +196,8 @@ const DISCRETE_NAME_HINTS = [
 
 const BULK_CATEGORY_HINTS = [
   'cement',
+  'ppc',
+  'opc',
   'sand',
   'aggregate',
   'aggregates',
@@ -282,11 +284,35 @@ function textHasHint(text, hints) {
 /**
  * @returns {'discrete'|'bulk'|'liquid'|'linear'|'generic'}
  */
+function looksLikeBaggedBulk(productName = '') {
+  const normalized = clean(productName);
+  if (!normalized) return false;
+  if (/\d+\s*(kg|kgs|kilogram|kilograms|ton|tons|tonne|tonnes|quintal|quintals)\s*(bag|bags|sack|sacks)\b/.test(normalized)) {
+    return true;
+  }
+  const tokens = new Set(tokenize(normalized));
+  const hasBag = tokens.has('bag') || tokens.has('bags') || tokens.has('sack') || tokens.has('sacks');
+  const hasBulk =
+    tokens.has('cement') ||
+    tokens.has('ppc') ||
+    tokens.has('opc') ||
+    tokens.has('sand') ||
+    tokens.has('fertilizer') ||
+    tokens.has('fertiliser');
+  return hasBag && hasBulk;
+}
+
+/**
+ * @returns {'discrete'|'bulk'|'liquid'|'linear'|'generic'}
+ */
 export function inferProductMeasureClass({ productName = '', category = '' } = {}) {
   const name = String(productName || '');
   const cat = String(category || '');
-  // Bagged bulk (cement, sand, grain) before electronics so "ACC Cement" is not treated as an AC.
-  if (textHasHint(name, BULK_CATEGORY_HINTS) || textHasHint(cat, BULK_CATEGORY_HINTS)) {
+  if (
+    looksLikeBaggedBulk(name) ||
+    textHasHint(name, BULK_CATEGORY_HINTS) ||
+    textHasHint(cat, BULK_CATEGORY_HINTS)
+  ) {
     return 'bulk';
   }
   if (textHasHint(name, DISCRETE_NAME_HINTS) || textHasHint(cat, DISCRETE_CATEGORY_HINTS)) {
@@ -379,28 +405,12 @@ export function validateProductUnitCompatibility({
     String(productName || '').trim() || String(category || '').trim() || 'this product';
   const suggestionText = suggestedUnits.slice(0, 3).join(' / ');
 
-  // Hard errors for obviously wrong sell units on discrete goods (bags/kg/litre for a mouse).
-  const hardMismatch =
-    measureClass === 'discrete' &&
-    (unitKey === 'bag' || unitKey === 'weight' || unitKey === 'volume' || unitKey === 'area');
-
-  if (hardMismatch) {
-    return {
-      ok: false,
-      severity: 'error',
-      code: 'unit_incompatible',
-      message: `"${unitRaw}" is not a suitable unit for ${productLabel}. Use ${suggestionText}.`,
-      measureClass,
-      unitKey,
-      suggestedUnits
-    };
-  }
-
+  // Never block save. The seller can keep the unit they chose; we only hint.
   return {
-    ok: false,
+    ok: true,
     severity: 'warning',
     code: 'unit_unusual',
-    message: `"${unitRaw}" looks unusual for ${productLabel}. Preferred units: ${suggestionText}.`,
+    message: `"${unitRaw}" can still be used for ${productLabel}. Common units: ${suggestionText}.`,
     measureClass,
     unitKey,
     suggestedUnits

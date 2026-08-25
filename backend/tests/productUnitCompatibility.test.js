@@ -6,15 +6,15 @@ import {
 } from '../utils/productUnitCompatibility.js';
 
 describe('productUnitCompatibility', () => {
-  it('blocks bags for wireless mouse', () => {
+  it('does not block bags for wireless mouse', () => {
     const result = validateProductUnitCompatibility({
       unit: 'bags',
       productName: 'Logitech M185 Wireless Mouse',
       category: 'Electronics / Computer Accessories'
     });
-    assert.equal(result.ok, false);
-    assert.equal(result.severity, 'error');
-    assert.equal(result.code, 'unit_incompatible');
+    assert.equal(result.ok, true);
+    assert.equal(result.severity, 'warning');
+    assert.equal(result.code, 'unit_unusual');
   });
 
   it('allows piece for discrete electronics', () => {
@@ -49,5 +49,22 @@ describe('productUnitCompatibility', () => {
     assert.equal(result.ok, true);
     assert.equal(result.severity, 'none');
     assert.equal(result.unitKey, 'bag');
+  });
+
+  it('classifies truncated ACC PPC cement names as bulk and allows bag', () => {
+    assert.equal(
+      inferProductMeasureClass({
+        productName: 'Adani ACC Suraksha Power PPC Cer',
+        category: ''
+      }),
+      'bulk'
+    );
+    const result = validateProductUnitCompatibility({
+      unit: 'bag',
+      productName: 'Adani ACC Suraksha Power PPC Cer',
+      category: ''
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.severity, 'none');
   });
 });
