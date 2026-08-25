@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import { clearSupplierSelectScopeSession } from '../constants/supplierSelectSession';
+import { persistSupplierSelectBackOrigin } from '../utils/supplierSelectBack';
 import {
   formatResolvedAddressLine,
   getGeolocationErrorMessage,
@@ -385,9 +386,12 @@ const BOQNormalize = ({ onComplete }) => {
       }
     }
     clearSupplierSelectScopeSession();
+    persistSupplierSelectBackOrigin('boq');
     navigate('/supplier-select', {
       replace: false,
       state: {
+        supplierSelectOrigin: 'boq',
+        supplierSelectReturnTo: '/boq-normalize',
         supplierSelectItems: items,
         supplierSelectBoqProject:
           savedProjectMeta ||

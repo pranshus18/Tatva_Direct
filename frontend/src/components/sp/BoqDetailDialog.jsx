@@ -4,6 +4,7 @@ import { authFetch } from '../../config/api';
 import { formatDateIST } from '../../utils/dateTime';
 import { replaceSpWorkflowForSelectedBoq } from '../../utils/spWorkflow';
 import { clearSupplierSelectScopeSession } from '../../constants/supplierSelectSession';
+import { persistSupplierSelectBackOrigin } from '../../utils/supplierSelectBack';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -17,7 +18,15 @@ import {
 } from '@/components/ui/dialog';
 import { AlertCircle, CheckCircle, Users } from 'lucide-react';
 
-export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, boqStatus }) {
+export default function BoqDetailDialog({
+  open,
+  onOpenChange,
+  boqId,
+  boqName,
+  boqStatus,
+  supplierSelectOrigin = 'dashboard',
+  supplierSelectReturnTo = '/dashboard'
+}) {
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [items, setItems] = useState([]);
@@ -115,10 +124,13 @@ export default function BoqDetailDialog({ open, onOpenChange, boqId, boqName, bo
     clearSupplierSelectScopeSession();
 
     onOpenChange?.(false);
+    persistSupplierSelectBackOrigin(supplierSelectOrigin);
     navigate('/supplier-select', {
       replace: false,
       state: {
         fromBoqDetail: true,
+        supplierSelectOrigin,
+        supplierSelectReturnTo,
         supplierSelectBoqId: selectedBoqId,
         supplierSelectItems: selectedItems,
         supplierSelectBoqProject: project

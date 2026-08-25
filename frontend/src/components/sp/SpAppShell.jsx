@@ -13,6 +13,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 import SpSidebar from './SpSidebar';
 import SpTopBar from './SpTopBar';
+import { rememberSpPathForSupplierSelectBack } from '@/utils/supplierSelectBack';
 
 const routePrefetchers = {
   '/dashboard': () => import('@/pages/ServiceProviderDashboard'),
@@ -75,6 +76,10 @@ export default function SpAppShell({ user, onLogout, onPortalChange, children })
     paths.forEach((path, idx) => {
       window.setTimeout(() => prefetchRoute(path), idx * 120);
     });
+  }, [location.pathname]);
+
+  useEffect(() => {
+    rememberSpPathForSupplierSelectBack(location.pathname);
   }, [location.pathname]);
 
   useEffect(() => {

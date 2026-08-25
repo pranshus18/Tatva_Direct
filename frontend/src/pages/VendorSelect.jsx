@@ -4,6 +4,12 @@ import { ArrowLeft, Clock, RefreshCw, MapPin, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { resolveApiPath, authFetch, getApiUrl } from '../config/api';
 import { readSpWorkflow } from '../utils/spWorkflow';
+import {
+  persistSupplierSelectBackOrigin,
+  readLastSpPathBeforeSupplierSelect,
+  readPersistedSupplierSelectBackOrigin,
+  resolveSupplierSelectBack
+} from '../utils/supplierSelectBack';
 import ProductImageCarousel from '../components/ProductImageCarousel';
 import SupplierTsinLine from '../components/SupplierTsinLine';
 import {
@@ -323,8 +329,22 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     return hasFreshCartSupplierSelectSession();
   }, [location.search, location.state]);
 
-  const previousStepPath = cartSupplierHandoff ? '/cart' : '/boq-normalize';
-  const previousStepLabel = cartSupplierHandoff ? 'Back to cart' : 'Back to BOQ';
+  const previousStep = useMemo(
+    () =>
+      resolveSupplierSelectBack({
+        cartSupplierHandoff,
+        location,
+        lastPath: readLastSpPathBeforeSupplierSelect(),
+        persistedOrigin: readPersistedSupplierSelectBackOrigin()
+      }),
+    [cartSupplierHandoff, location]
+  );
+  const previousStepPath = previousStep.path;
+  const previousStepLabel = previousStep.label;
+
+  useEffect(() => {
+    persistSupplierSelectBackOrigin(previousStep.origin);
+  }, [previousStep.origin]);
 
   const handleBackToPreviousStep = useCallback(() => {
     navigateToPreviousStep(navigate, previousStepPath);

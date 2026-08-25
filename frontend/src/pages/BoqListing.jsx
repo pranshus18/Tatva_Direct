@@ -241,6 +241,8 @@ const BoqListing = () => {
         boqId={selectedBoq?.id}
         boqName={selectedBoq?.name}
         boqStatus={selectedBoq?.status}
+        supplierSelectOrigin="boqs"
+        supplierSelectReturnTo="/boqs"
       />
     </SpPageLayout>
   );

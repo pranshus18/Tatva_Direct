@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildFormattedPmAddress,
+  buildPmAddressListUrls,
   inferPmAddressSubType,
   isPmShippingAddressPayloadComplete,
   mergeLocalAndPmShippingAddresses,
   pmAddressToLocalShippingEntry,
   toPmShippingAddressPayload
 } from '../services/pmAddressService.js';
+import { PM_ADDRESS_URL } from '../config/pmApi.js';
 
 test('toPmShippingAddressPayload uses the PM shipping contract', () => {
   const payload = toPmShippingAddressPayload(
@@ -100,6 +102,13 @@ test('mergeLocalAndPmShippingAddresses dedupes by address fingerprint', () => {
 
   assert.equal(merged.length, 1);
   assert.equal(merged[0].pmAddressId, 'pm-99');
+});
+
+test('buildPmAddressListUrls uses PM user path routes', () => {
+  const urls = buildPmAddressListUrls('pm-user-1');
+  assert.equal(urls.length, 2);
+  assert.equal(urls[0], `${PM_ADDRESS_URL}/user/pm-user-1?type=SHIPPING`);
+  assert.equal(urls[1], `${PM_ADDRESS_URL}/user/pm-user-1`);
 });
 
 test('inferPmAddressSubType and formatted address helpers', () => {

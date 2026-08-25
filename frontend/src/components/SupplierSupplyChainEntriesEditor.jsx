@@ -515,24 +515,33 @@ const CompanyInfoEntryCard = ({
     editing &&
     (!hasChosenRole || roleSelectUnlocked || roleChangeRequestActive) &&
     !roleLocked;
-  const roleSelectionEnabled =
-    editing &&
-    brandApprovalReadyForRole &&
-    !roleOptionsLoading &&
-    hasResolvedChainRoles &&
-    (!roleLocked || roleChangeRequestActive);
-  const roleDocumentsEnabled =
-    editing && brandApprovalReadyForRole && (!roleLocked || roleChangeRequestActive);
-  const movOnlySavePending = roleLocked && !roleChangeRequestActive && movChanged;
   const showBrandNotApprovedStep2Message =
     isSupplyChainOnlyStep && hasBrandValue && !brandApprovedForSupplyChain;
+  const catalogLoading = Boolean(catalogBrandsLoading);
+  const supplyChainRolesLoading =
+    roleOptionsLoading || (isSupplyChainOnlyStep && hasBrandValue && catalogLoading);
+  const showSupplyChainRolesLoading =
+    isSupplyChainOnlyStep &&
+    hasBrandValue &&
+    brandApprovedForSupplyChain &&
+    supplyChainRolesLoading &&
+    !hasResolvedChainRoles;
   const showChainNotDefinedStep2Message =
     isSupplyChainOnlyStep &&
     hasBrandValue &&
     brandApprovedForSupplyChain &&
     !chainDefined &&
     !hasResolvedChainRoles &&
-    !roleOptionsLoading;
+    !supplyChainRolesLoading;
+  const roleSelectionEnabled =
+    editing &&
+    brandApprovalReadyForRole &&
+    !supplyChainRolesLoading &&
+    hasResolvedChainRoles &&
+    (!roleLocked || roleChangeRequestActive);
+  const roleDocumentsEnabled =
+    editing && brandApprovalReadyForRole && (!roleLocked || roleChangeRequestActive);
+  const movOnlySavePending = roleLocked && !roleChangeRequestActive && movChanged;
   const showCustomBrandNameField =
     useBrandNameTextInput &&
     editing &&
@@ -1010,7 +1019,11 @@ const CompanyInfoEntryCard = ({
                 ))}
               </div>
               ) : null}
-              {showBrandNotApprovedStep2Message ? (
+              {showSupplyChainRolesLoading ? (
+                <div className="chain-callout chain-callout--info" role="status" aria-live="polite">
+                  <p>Loading supply-chain roles for this brand…</p>
+                </div>
+              ) : showBrandNotApprovedStep2Message ? (
                 <p className="chain-callout chain-callout--warning" role="alert">
                   {BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE}
                 </p>
@@ -1031,7 +1044,7 @@ const CompanyInfoEntryCard = ({
                     <p className="chain-field__sublabel">{chainConfigRequestFeedback}</p>
                   ) : null}
                 </div>
-              ) : roleOptionsMessage && !approvedRole && !hasResolvedChainRoles ? (
+              ) : roleOptionsMessage && !approvedRole && !hasResolvedChainRoles && !supplyChainRolesLoading ? (
                 <div className="chain-callout chain-callout--warning">
                   <p>{roleOptionsMessage}</p>
                   {roleOptionsMessage === SUPPLY_CHAIN_NOT_DEFINED_MESSAGE &&
@@ -1149,17 +1162,20 @@ const CompanyInfoEntryCard = ({
                       onUpdate('role', nextRole);
                       if (nextRole) setRoleSelectUnlocked(false);
                     }}
-                    disabled={!roleSelectionEnabled}
+                    disabled={!roleSelectionEnabled || supplyChainRolesLoading}
                     required={editing && brandApprovalReadyForRole}
                     aria-required={editing && brandApprovalReadyForRole ? 'true' : 'false'}
+                    aria-busy={supplyChainRolesLoading ? 'true' : 'false'}
                   >
                     <option value="">
-                      {showChainNotDefinedStep2Message ||
-                      (!roleOptionsLoading &&
-                        !hasResolvedChainRoles &&
-                        roleOptionsMessage === SUPPLY_CHAIN_NOT_DEFINED_MESSAGE)
-                        ? 'No roles configured by admin'
-                        : 'Select your role'}
+                      {supplyChainRolesLoading
+                        ? 'Loading supply-chain roles…'
+                        : showChainNotDefinedStep2Message ||
+                          (!supplyChainRolesLoading &&
+                            !hasResolvedChainRoles &&
+                            roleOptionsMessage === SUPPLY_CHAIN_NOT_DEFINED_MESSAGE)
+                          ? 'No roles configured by admin'
+                          : 'Select your role'}
                     </option>
                     {roleSelectOptions.map((o) => (
                       <option key={o.value} value={o.value}>
@@ -2479,6 +2495,14 @@ export default function SupplierSupplyChainEntriesEditor({
 
         {visibleEntriesToRender.map(({ entry, index }) => {
           const roleUiState = entryRoleOptions[entry.id] || {};
+          const entryBrandKey = brandKeyForDuplicateCheck(String(entry?.brands || '').trim());
+          const roleOptionsFetchSettled =
+            !!entryBrandKey &&
+            roleUiState.brandKey === entryBrandKey &&
+            roleUiState.loading === false;
+          const roleOptionsPending =
+            sectionView === 'form' && !!entryBrandKey && !roleOptionsFetchSettled;
+          const roleOptionsLoadingEffective = !!roleUiState.loading || roleOptionsPending;
           const expanded = expandedEntryIds.includes(entry.id);
           return (
           <CompanyInfoEntryCard
@@ -2514,7 +2538,7 @@ export default function SupplierSupplyChainEntriesEditor({
             editing={editing}
             canRemove={displayEntries.length > 1 && (sectionView === 'all' || allowEntryManagement)}
             availableRoleOptions={roleUiState.options || []}
-            roleOptionsLoading={!!roleUiState.loading}
+            roleOptionsLoading={roleOptionsLoadingEffective}
             roleOptionsMessage={roleUiState.message || ''}
             adminChainReady={!!roleUiState.adminChainReady}
             adminChainStatusText={roleUiState.adminChainStatusText || ''}

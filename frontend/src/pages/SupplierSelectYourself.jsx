@@ -1804,7 +1804,7 @@ export default function SupplierSelectYourself() {
                   </div>
                   <div className="supplier-select-assignments__detail-row">
                     <span className="supplier-select-assignments__detail-label">Admin supply chain</span>
-                    {assignmentChainInfo.loading ? (
+                    {assignmentChainInfo.loading || catalogBrandsLoading ? (
                       <span className="supplier-select-assignments__chain-hint">Loading…</span>
                     ) : selectedAssignmentHasAdminChain ? (
                       <span className="supplier-select-assignments__chain-value">
@@ -1824,7 +1824,7 @@ export default function SupplierSelectYourself() {
                       <span className="supplier-select-assignments__status supplier-select-assignments__status--ready">
                         Complete
                       </span>
-                    ) : !selectedAssignmentHasAdminChain && !assignmentChainInfo.loading ? (
+                    ) : !selectedAssignmentHasAdminChain && !assignmentChainInfo.loading && !catalogBrandsLoading ? (
                       <span className="supplier-select-assignments__status supplier-select-assignments__status--pending">
                         Waiting for admin
                       </span>
@@ -1838,7 +1838,7 @@ export default function SupplierSelectYourself() {
                       </span>
                     )}
                   </div>
-                  {!assignmentChainInfo.loading && !selectedAssignmentHasAdminChain ? (
+                  {!assignmentChainInfo.loading && !catalogBrandsLoading && !selectedAssignmentHasAdminChain ? (
                     <div className="supplier-select-alert supplier-select-alert--pending" role="status">
                       <strong>No supply-chain roles configured</strong>
                       <p>{SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}</p>
@@ -2254,13 +2254,20 @@ export default function SupplierSelectYourself() {
           ) : null}
 
           {!supplyChainFormProfile?.companyInfoEntries?.length && selectedAssignmentId ? (
-            <div className="supplier-select-alert supplier-select-alert--draft">
-              <strong>No supply-chain forms yet</strong>
-              <p>
-                Select an approved brand in Path A above. A matching supply-chain role form will appear here with that
-                brand filled in.
-              </p>
-            </div>
+            catalogBrandsLoading ? (
+              <div className="supplier-select-alert supplier-select-alert--draft" role="status" aria-live="polite">
+                <strong>Loading supply-chain role form…</strong>
+                <p>Preparing role options for your selected brand.</p>
+              </div>
+            ) : (
+              <div className="supplier-select-alert supplier-select-alert--draft">
+                <strong>No supply-chain forms yet</strong>
+                <p>
+                  Select an approved brand in Path A above. A matching supply-chain role form will appear here with that
+                  brand filled in.
+                </p>
+              </div>
+            )
           ) : null}
 
           {supplyChainFormProfile && selectedAssignmentId ? (

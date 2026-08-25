@@ -274,18 +274,17 @@ async function fetchPmAddressRowsFromUrl(url, accessToken, { usePlatformFlag = t
     .filter((row) => row.building || row.line1 || row.formatted_address);
 }
 
-function buildPmAddressListUrls(userId, phoneNumber) {
-  const urls = [
-    `${PM_ADDRESS_URL}?userId=${encodeURIComponent(userId)}&type=SHIPPING`,
-    `${PM_ADDRESS_URL}?userId=${encodeURIComponent(userId)}`
+function buildPmAddressListUrls(userId) {
+  const id = clean(userId);
+  if (!id) return [];
+  // PM list route is GET /api/address/user/:userId (not ?userId= query params).
+  return [
+    `${PM_ADDRESS_URL}/user/${encodeURIComponent(id)}?type=SHIPPING`,
+    `${PM_ADDRESS_URL}/user/${encodeURIComponent(id)}`
   ];
-  const phone = normalizeIndianMobile(phoneNumber);
-  if (phone.length === 10) {
-    urls.push(`${PM_ADDRESS_URL}?phoneNumber=${encodeURIComponent(phone)}&type=SHIPPING`);
-    urls.push(`${PM_ADDRESS_URL}?phoneNumber=${encodeURIComponent(phone)}`);
-  }
-  return urls;
 }
+
+export { buildPmAddressListUrls };
 
 export async function listPmShippingAddresses({ pmUserId, accessToken, phoneNumber } = {}) {
   let userId = clean(pmUserId);
@@ -298,31 +297,78 @@ export async function listPmShippingAddresses({ pmUserId, accessToken, phoneNumb
   }
   if (!userId) return [];
 
-  const urls = buildPmAddressListUrls(userId, phone);
+  const urls = buildPmAddressListUrls(userId);
   const attempts = [];
 
   for (const url of urls) {
     if (token) {
       attempts.push({ url, token, usePlatformFlag: true });
-      attempts.push({ url, token, usePlatformFlag: false });
     }
-    attempts.push({ url, token: null, usePlatformFlag: true });
-    attempts.push({ url, token: null, usePlatformFlag: false });
+    attempts.push({ url, token: token || null, usePlatformFlag: true });
   }
 
+  let lastRows = [];
   for (const attempt of attempts) {
     try {
       const rows = await fetchPmAddressRowsFromUrl(attempt.url, attempt.token, {
         usePlatformFlag: attempt.usePlatformFlag
       });
       if (rows.length > 0) return rows;
+      lastRows = rows;
     } catch (error) {
       if (error.code === 'PM_AUTH_REQUIRED') continue;
       throw error;
     }
   }
 
-  return [];
+  return lastRows;
+}
+
+function localAddressExistsOnPm(localEntry = {}, pmAddresses = []) {
+  const pmIds = new Set(
+    pmAddresses
+      .flatMap((entry) => [clean(entry.pmAddressId), clean(entry.id)])
+      .filter(Boolean)
+  );
+  const localPmId = clean(localEntry.pmAddressId || localEntry.id);
+  if (localPmId && pmIds.has(localPmId)) return true;
+
+  const fingerprint = addressFingerprint(localEntry);
+  if (!fingerprint) return false;
+  return pmAddresses.some((entry) => addressFingerprint(entry) === fingerprint);
+}
+
+async function pushMissingLocalAddressesToPm(localAddresses = [], pmAddresses = [], auth = {}) {
+  const token = clean(auth.accessToken);
+  const pmUserId = clean(auth.pmUserId);
+  if (!token || !pmUserId) return localAddresses;
+
+  const nextLocal = [];
+  for (const entry of localAddresses) {
+    if (localAddressExistsOnPm(entry, pmAddresses)) {
+      nextLocal.push(entry);
+      continue;
+    }
+
+    try {
+      const pmSaved = await createPmShippingAddress({
+        pmUserId,
+        accessToken: token,
+        input: entry
+      });
+      nextLocal.push({
+        ...entry,
+        ...pmSaved,
+        id: String(pmSaved.pmAddressId || pmSaved.id || entry.id || '').trim() || entry.id,
+        pmAddressId: pmSaved.pmAddressId || pmSaved.id || entry.pmAddressId
+      });
+    } catch (pushError) {
+      console.warn('[PM address] push local failed:', pushError?.message || pushError);
+      nextLocal.push(entry);
+    }
+  }
+
+  return nextLocal;
 }
 
 export function mergeLocalAndPmShippingAddresses(localAddresses = [], pmAddresses = []) {
@@ -432,17 +478,41 @@ export async function syncPmShippingAddressesOnProfile(user, credentials = {}) {
   if (phone.length !== 10) return user;
 
   try {
-    const auth = await resolvePmAddressAuth(user, credentials);
-    const localAddresses = Array.isArray(user?.profile?.shippingAddresses)
+    let auth = null;
+    try {
+      auth = await resolvePmAddressAuth(user, credentials);
+    } catch (authError) {
+      const pmUser = await fetchPmUserByPhone(phone);
+      const pmUserId = clean(pmUser?._id || pmUser?.id);
+      if (!pmUserId) {
+        console.warn('[PM address] sync skipped:', authError?.message || authError);
+        return user;
+      }
+      const stored = getPmAuthFromUser(user) || {};
+      auth = {
+        pmUserId,
+        accessToken:
+          clean(credentials?.pmAccessToken || credentials?.accessToken || stored.accessToken) || null
+      };
+    }
+
+    let localAddresses = Array.isArray(user?.profile?.shippingAddresses)
       ? user.profile.shippingAddresses
       : [];
-    const pmList = await listPmShippingAddresses({
+    let pmList = await listPmShippingAddresses({
       pmUserId: auth.pmUserId,
       accessToken: auth.accessToken,
       phoneNumber: phone
     });
 
-    if (pmList.length === 0) return user;
+    if (auth.accessToken) {
+      localAddresses = await pushMissingLocalAddressesToPm(localAddresses, pmList, auth);
+      pmList = await listPmShippingAddresses({
+        pmUserId: auth.pmUserId,
+        accessToken: auth.accessToken,
+        phoneNumber: phone
+      });
+    }
 
     const merged = mergeLocalAndPmShippingAddresses(localAddresses, pmList);
     const localJson = JSON.stringify(localAddresses);

@@ -588,6 +588,89 @@ describe('Select yourself — role setup step', () => {
     );
   }
 
+  it('shows loading instead of no-supply-chain while role options fetch is pending', async () => {
+    let resolveFetch;
+    const fetchPromise = new Promise((resolve) => {
+      resolveFetch = resolve;
+    });
+    global.fetch = vi.fn(() => fetchPromise);
+
+    const catalogWithChain = [{ name: 'acc', status: 'approved', hasAdminSupplyChain: true }];
+
+    render(
+      <SupplierSupplyChainEntriesEditor
+        profile={makeProfile([{ ...APPROVED_ROW, brands: 'acc' }])}
+        setProfile={vi.fn()}
+        editing
+        sectionView="form"
+        selectionMode="all"
+        allowEntryManagement={false}
+        showAddEntry={false}
+        catalogBrands={catalogWithChain}
+        catalogBrandsLoading={false}
+        catalogBrandsError=""
+        onReloadCatalogBrands={vi.fn()}
+        supplierApprovedBrands={['acc']}
+        supplierBrandRequests={[]}
+        savedBaselineEntries={[]}
+        filterBrandName="acc"
+      />
+    );
+
+    expect(
+      screen.queryByText(/No supply-chain roles are currently configured/i)
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Loading supply-chain roles for this brand/i)).toBeInTheDocument();
+
+    resolveFetch({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        roles: ['dealer', 'retailer'],
+        brands: [
+          {
+            brand: 'acc',
+            supplierHasAccess: true,
+            hasSupplyChainDefinition: true,
+            canSelectRoles: true,
+            approvalStatus: 'approved'
+          }
+        ]
+      })
+    });
+
+    const roleSelect = await screen.findByLabelText(/Select your position/i);
+    await waitFor(() => expect(roleSelect).not.toBeDisabled());
+    expect(screen.queryByText(/No supply-chain roles are currently configured/i)).not.toBeInTheDocument();
+  });
+
+  it('shows loading instead of no-supply-chain while catalog brands are loading', () => {
+    render(
+      <SupplierSupplyChainEntriesEditor
+        profile={makeProfile([{ ...APPROVED_ROW, brands: 'acc' }])}
+        setProfile={vi.fn()}
+        editing
+        sectionView="form"
+        selectionMode="all"
+        allowEntryManagement={false}
+        showAddEntry={false}
+        catalogBrands={[]}
+        catalogBrandsLoading
+        catalogBrandsError=""
+        onReloadCatalogBrands={vi.fn()}
+        supplierApprovedBrands={['acc']}
+        supplierBrandRequests={[]}
+        savedBaselineEntries={[]}
+        filterBrandName="acc"
+      />
+    );
+
+    expect(
+      screen.queryByText(/No supply-chain roles are currently configured/i)
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/Loading supply-chain roles for this brand/i)).toBeInTheDocument();
+  });
+
   it('enables the admin-defined roles for an approved brand and keeps the pick', async () => {
     render(<FormStepHarness />);
 

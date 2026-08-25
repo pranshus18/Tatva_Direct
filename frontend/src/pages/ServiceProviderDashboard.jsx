@@ -1583,6 +1583,8 @@ const ServiceProviderDashboard = ({ user }) => {
         boqId={selectedBoq?.id}
         boqName={selectedBoq?.name}
         boqStatus={selectedBoq?.status}
+        supplierSelectOrigin="dashboard"
+        supplierSelectReturnTo="/dashboard"
       />
     </SpPageLayout>
   );
