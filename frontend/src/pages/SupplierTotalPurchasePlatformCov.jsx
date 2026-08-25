@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { formatDateTimeIST } from '../utils/dateTime';
+import { formatPaymentStatusLabel, isOrderPaid } from '../utils/orderStatusUi';
 import './Profile.css';
 
 export default function SupplierTotalPurchasePlatformCov() {
@@ -60,7 +61,7 @@ export default function SupplierTotalPurchasePlatformCov() {
     for (const order of filteredOrders) {
       const amount = Number(order.totalAmount || 0);
       totalOrderValue += amount;
-      if (String(order.paymentStatus || '').toLowerCase() === 'paid') {
+      if (isOrderPaid(order)) {
         paidOrderValue += amount;
       }
       if (String(order.status || '').toLowerCase() === 'delivered') {
@@ -168,7 +169,7 @@ export default function SupplierTotalPurchasePlatformCov() {
                       <td style={td}>{Number(order.itemCount || 0).toLocaleString()}</td>
                       <td style={td}>₹{Number(order.totalAmount || 0).toLocaleString()}</td>
                       <td style={td}>{order.status || '—'}</td>
-                      <td style={td}>{order.paymentStatus || 'pending'}</td>
+                      <td style={td}>{formatPaymentStatusLabel(order)}</td>
                       <td style={td}>{order.createdAt ? formatDateTimeIST(order.createdAt, '—') : '—'}</td>
                       <td style={td}>{order.updatedAt ? formatDateTimeIST(order.updatedAt, '—') : '—'}</td>
                     </tr>

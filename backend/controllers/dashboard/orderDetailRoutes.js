@@ -6,6 +6,10 @@ import {
 } from './dashboardImports.js';
 import { resolveOrderChargeBreakdown } from '../../utils/orderChargeBreakdown.js';
 import { enrichOrderItemsWithVariantImages } from '../../services/productImageService.js';
+import {
+  healOrderPaymentStatusIfPaid,
+  resolveEffectivePaymentStatus
+} from '../../utils/effectivePaymentStatus.js';
 export * from './shared/dashboardHelpers.js';
 
 export function registerDashboardOrderDetailRoutes(ctx) {
@@ -203,6 +207,7 @@ router.get('/service-provider/orders/:id', authenticateToken, async (req, res) =
         });
         receipt = backfilled?.receipt || receipt;
       }
+      order = await healOrderPaymentStatusIfPaid(supabase, order, receipt);
     } catch (e) {
       console.error('[Order Details] Failed to fetch receipt:', e);
     }
@@ -228,7 +233,7 @@ router.get('/service-provider/orders/:id', authenticateToken, async (req, res) =
       orderNumber: order.order_number || order.id,
       totalAmount: chargeBreakdown.combinedTotal,
       chargeBreakdown,
-      paymentStatus: order.payment_status || 'pending',
+      paymentStatus: resolveEffectivePaymentStatus({ order, receipt }),
       paymentMethod: order.payment_method,
       status: order.status || 'pending',
       createdAt: order.created_at,

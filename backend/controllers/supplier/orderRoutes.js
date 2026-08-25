@@ -26,6 +26,10 @@ import { isValidSupplierReturnTransition } from '../../utils/orderReturnRules.js
 import { listSupplierIncomingReturns } from '../../services/returnListService.js';
 import { enrichOrderItemsWithVariantImages } from '../../services/productImageService.js';
 import { sumOrderItemQuantities } from '../../utils/orderItemQuantity.js';
+import {
+  healOrderPaymentStatusIfPaid,
+  resolveEffectivePaymentStatus
+} from '../../utils/effectivePaymentStatus.js';
 
 export function registerSupplierOrderRoutes(ctx) {
   const {
@@ -111,7 +115,7 @@ router.get('/orders', authenticateToken, async (req, res) => {
         amount: parseFloat(o.total_amount || 0),
         totalAmount: parseFloat(o.total_amount || 0),
         status: o.status,
-        paymentStatus: o.payment_status || 'pending',
+        paymentStatus: resolveEffectivePaymentStatus({ order: o }),
         paymentMethod: o.payment_method || null,
         createdAt: o.created_at,
         updatedAt: o.updated_at || o.created_at,
@@ -321,6 +325,7 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
         });
         receipt = backfilled?.receipt || receipt;
       }
+      order = await healOrderPaymentStatusIfPaid(supabase, order, receipt);
     } catch (e) {
       console.error('[Supplier Order Details] Failed to fetch receipt:', e);
     }
@@ -342,7 +347,7 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
       ...order,
       orderNumber: order.order_number || order.id,
       totalAmount: parseFloat(order.total_amount || 0),
-      paymentStatus: order.payment_status || 'pending',
+      paymentStatus: resolveEffectivePaymentStatus({ order, receipt }),
       paymentMethod: order.payment_method,
       status: order.status || 'pending',
       createdAt: order.created_at,

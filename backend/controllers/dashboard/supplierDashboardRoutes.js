@@ -6,6 +6,7 @@ import {
   isRevenueRecognizedOrder
 } from './dashboardImports.js';
 import { sumOrderItemQuantities } from '../../utils/orderItemQuantity.js';
+import { resolveEffectivePaymentStatus } from '../../utils/effectivePaymentStatus.js';
 
 export function registerDashboardSupplierDashboardRoutes(ctx) {
   const {
@@ -159,7 +160,7 @@ router.get('/supplier', authenticateToken, async (req, res) => {
           company: serviceProvider?.company || '',
           amount: parseFloat(order.total_amount || 0),
           status: order.status,
-          paymentStatus: order.payment_status || 'pending',
+          paymentStatus: resolveEffectivePaymentStatus({ order }),
           createdAt: formatDate(order.created_at),
           itemCount: sumOrderItemQuantities(order.order_items),
           channel,

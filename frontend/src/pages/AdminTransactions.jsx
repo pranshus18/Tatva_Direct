@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import AdminNotifications from '../components/AdminNotifications';
 import { formatDateTimeIST } from '../utils/dateTime';
+import { formatPaymentStatusLabel, resolveEffectivePaymentStatus } from '../utils/orderStatusUi';
 import './AdminDashboard.css';
 
 const ADMIN_DASHBOARD_CACHE_KEY = 'admin_dashboard_cache_v1';
@@ -204,8 +205,8 @@ const AdminTransactions = ({ user }) => {
                       </span>
                     </td>
                     <td>
-                      <span className={`status-badge ${transaction.paymentStatus || 'pending'}`}>
-                        {transaction.paymentStatus || 'pending'}
+                      <span className={`status-badge ${resolveEffectivePaymentStatus(transaction)}`}>
+                        {formatPaymentStatusLabel(transaction)}
                       </span>
                     </td>
                     <td>
@@ -341,7 +342,7 @@ const AdminTransactions = ({ user }) => {
                   <div className="order-info-section">
                     <h3>Order Status & Dates</h3>
                     <p><strong>Current Status:</strong> {selectedTransaction.status || 'pending'}</p>
-                    <p><strong>Payment Status:</strong> {selectedTransaction.paymentStatus || 'pending'}</p>
+                    <p><strong>Payment Status:</strong> {formatPaymentStatusLabel(selectedTransaction)}</p>
                     <p><strong>Order Date:</strong> {selectedTransaction.date || selectedTransaction.createdAt || 'N/A'}</p>
                     {selectedTransaction.createdAt && selectedTransaction.date !== selectedTransaction.createdAt && (
                       <p><strong>Created At:</strong> {formatDateTimeIST(selectedTransaction.createdAt, '—')}</p>

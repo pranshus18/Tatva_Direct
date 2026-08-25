@@ -4,6 +4,7 @@ import { getApiUrl, resolveApiPath, authFetch } from '../config/api';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
 import { formatPaymentMethodLabel, isVaultPaymentMethod } from '../utils/vaultPaymentMethod';
 import { canDeleteOrder, getOrderDeleteBlockReason } from '../utils/orderDeleteRules';
+import { formatPaymentStatusLabel, isOrderPaid, resolveEffectivePaymentStatus } from '../utils/orderStatusUi';
 import { 
   FileText,
   BarChart3,
@@ -435,13 +436,13 @@ const ServiceProviderDashboard = ({ user }) => {
 
     if (
       !canDeleteOrder({
-        paymentStatus: orderDetails.paymentStatus,
+        paymentStatus: resolveEffectivePaymentStatus(orderDetails),
         status: orderDetails.status
       })
     ) {
       alert(
         getOrderDeleteBlockReason({
-          paymentStatus: orderDetails.paymentStatus,
+          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
           status: orderDetails.status
         }) || 'This order cannot be deleted.'
       );
@@ -516,7 +517,7 @@ const ServiceProviderDashboard = ({ user }) => {
 
   const canRateCurrentOrder = () => {
     if (!orderDetails) return false;
-    return orderDetails.status === 'delivered' && orderDetails.paymentStatus === 'paid';
+    return orderDetails.status === 'delivered' && isOrderPaid(orderDetails);
   };
 
   const handleSubmitRating = async () => {
@@ -917,7 +918,7 @@ const ServiceProviderDashboard = ({ user }) => {
                     </span>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                    {po.invoicePdfUrl && String(po.paymentStatus || '').toLowerCase() === 'paid' && (
+                    {po.invoicePdfUrl && isOrderPaid(po) && (
                       <a
                         href={po.invoicePdfUrl}
                         target="_blank"
@@ -1245,7 +1246,15 @@ const ServiceProviderDashboard = ({ user }) => {
                 <div className="order-info-section">
                   <h3>Order Status & Dates</h3>
                   <p><strong>Status:</strong> {orderDetails.status || 'pending'}</p>
-                  <p><strong>Payment Status:</strong> {orderDetails.paymentStatus || 'pending'}</p>
+                  <p><strong>Payment Status:</strong> {formatPaymentStatusLabel(orderDetails)}</p>
+                  {isOrderPaid(orderDetails) ? (
+                    <p>
+                      <strong>Amount paid:</strong> ₹
+                      {Number(
+                        orderDetails.receipt?.amount || orderDetails.totalAmount || 0
+                      ).toLocaleString('en-IN')}
+                    </p>
+                  ) : null}
                   {orderDetails.paymentMethod && (
                     <p>
                       <strong>Payment Method:</strong>{' '}
@@ -1283,7 +1292,7 @@ const ServiceProviderDashboard = ({ user }) => {
                 </div>
 
                 {/* Vault payment card */}
-                {orderDetails.paymentStatus !== 'paid' && (
+                {isOrderPaid(orderDetails) ? null : (
                   <div className="order-info-section" style={{
                     textAlign: 'center',
                     padding: '2rem',
@@ -1367,9 +1376,15 @@ const ServiceProviderDashboard = ({ user }) => {
                   </div>
                 )}
 
-                {orderDetails.paymentStatus === 'paid' ? (
+                {isOrderPaid(orderDetails) ? (
                   <div className="order-info-section">
                     <p style={{ color: '#166534', fontWeight: 600, margin: 0 }}>✓ Paid from vault</p>
+                    <p style={{ color: '#166534', margin: '0.35rem 0 0' }}>
+                      Amount paid: ₹
+                      {Number(
+                        orderDetails.receipt?.amount || orderDetails.totalAmount || 0
+                      ).toLocaleString('en-IN')}
+                    </p>
                   </div>
                 ) : null}
 
@@ -1495,13 +1510,13 @@ const ServiceProviderDashboard = ({ user }) => {
                   <p style={{ color: '#64748b', marginBottom: '1rem', fontSize: '0.875rem' }}>
                     Deleting an order will permanently remove it from the system. This action cannot be undone.
                     {getOrderDeleteBlockReason({
-                      paymentStatus: orderDetails.paymentStatus,
+                      paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                       status: orderDetails.status
                     }) ? (
                       <span style={{ display: 'block', color: '#dc2626', marginTop: '0.5rem', fontWeight: '600' }}>
                         ⚠️{' '}
                         {getOrderDeleteBlockReason({
-                          paymentStatus: orderDetails.paymentStatus,
+                          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                           status: orderDetails.status
                         })}
                       </span>
@@ -1526,13 +1541,13 @@ const ServiceProviderDashboard = ({ user }) => {
                       disabled={
                         deletingOrder ||
                         !canDeleteOrder({
-                          paymentStatus: orderDetails.paymentStatus,
+                          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                           status: orderDetails.status
                         })
                       }
                       title={
                         getOrderDeleteBlockReason({
-                          paymentStatus: orderDetails.paymentStatus,
+                          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                           status: orderDetails.status
                         }) || 'Delete order'
                       }
@@ -1543,7 +1558,7 @@ const ServiceProviderDashboard = ({ user }) => {
                         cursor:
                           deletingOrder ||
                           !canDeleteOrder({
-                            paymentStatus: orderDetails.paymentStatus,
+                            paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                             status: orderDetails.status
                           })
                             ? 'not-allowed'
@@ -1554,7 +1569,7 @@ const ServiceProviderDashboard = ({ user }) => {
                         opacity:
                           deletingOrder ||
                           !canDeleteOrder({
-                            paymentStatus: orderDetails.paymentStatus,
+                            paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                             status: orderDetails.status
                           })
                             ? 0.6

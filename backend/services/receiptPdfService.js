@@ -15,6 +15,7 @@ import {
 } from './gstService.js';
 import { lineMoneyTotal } from '../utils/money.js';
 import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
+import { formatEffectivePaymentStatusLabel } from '../utils/effectivePaymentStatus.js';
 
 const PDFDocument = PDFKit?.default || PDFKit;
 const BRAND_BLUE = '#5b4fe5';
@@ -25,7 +26,7 @@ const MUTED = '#6b7280';
 const GRID = '#e5e7eb';
 const PAID_GREEN = '#059669';
 /** Bump when receipt layout fixes need re-upload for existing orders. */
-export const RECEIPT_PDF_LAYOUT_VERSION = 3;
+export const RECEIPT_PDF_LAYOUT_VERSION = 4;
 
 function safeString(v) {
   if (v === null || v === undefined) return '';
@@ -36,22 +37,11 @@ function normalizeStatusToken(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-/**
- * A payment receipt exists because money was recorded. Never print "pending"
- * when the vault was already debited or a receipt/paid_at/reference exists.
- */
+/** A payment receipt exists because money was recorded — never print pending for vault debit. */
 export function resolveReceiptPaymentStatusLabel({ order, receipt } = {}) {
-  const orderStatus = normalizeStatusToken(order?.payment_status || order?.paymentStatus);
-  if (['paid', 'captured', 'success', 'completed'].includes(orderStatus)) return 'Paid';
-  if (orderStatus === 'partial') return 'Partially paid';
-  if (orderStatus === 'refunded') return 'Refunded';
-  if (receipt?.paid_at || String(receipt?.payment_reference || '').trim()) return 'Paid';
-  if (String(order?.payment_verified_at || '').trim()) return 'Paid';
-  const walletStatus = normalizeStatusToken(order?.wallet_payment_status);
-  if (['held', 'released', 'paid'].includes(walletStatus)) return 'Paid';
-  if (receipt?.id || receipt?.receipt_number) return 'Paid';
-  if (orderStatus) return orderStatus.charAt(0).toUpperCase() + orderStatus.slice(1);
-  return 'Paid';
+  const label = formatEffectivePaymentStatusLabel({ order, receipt });
+  if (receipt && label === 'Pending') return 'Paid';
+  return label;
 }
 
 export function resolveReceiptPaymentMethodLabel({ order, receipt } = {}) {
@@ -570,7 +560,7 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
         ['Products total', formatINR(productsInclGst)],
         ...(transportBillRow ? [['Transport', formatINR(transportAmt)]] : [])
       ];
-      const totalsHeight = 24 + totalsRows.length * 16 + 28;
+      const totalsHeight = 24 + totalsRows.length * 16 + 46;
       doc.save();
       doc.roundedRect(totalsX, totalsTop, totalsW, totalsHeight, 4).lineWidth(0.6).strokeColor(GRID).stroke();
       doc.restore();
@@ -597,6 +587,13 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
         width: totalsW * 0.45,
         align: 'right'
       });
+      ty += 16;
+      doc.fontSize(8).font('Helvetica-Bold').fillColor(PAID_GREEN).text(
+        `Amount paid · ${resolveReceiptPaymentStatusLabel({ order, receipt })}`,
+        totalsX + 10,
+        ty,
+        { width: totalsW - 20 }
+      );
 
       doc.y = Math.max(gstBoxTop + gstBoxHeight, totalsTop + totalsHeight) + 16;
       doc.x = pageLeft;
@@ -613,9 +610,10 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       const infoY = doc.y;
       const infoCol = contentWidth / 2;
       const infoPairs = [
-        ['Order status', safeString(order?.status || '-')],
+        ['Fulfillment status', safeString(order?.status || '-')],
         ['Payment status', resolveReceiptPaymentStatusLabel({ order, receipt })],
         ['Payment method', resolveReceiptPaymentMethodLabel({ order, receipt })],
+        ['Amount paid', formatINR(Number(receipt?.amount || order?.total_amount || 0))],
         ['Order date', order?.created_at ? formatPlatformDateTime(order.created_at, '-') : '-'],
         [
           'Expected dispatch',
@@ -632,7 +630,13 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
         const x = pageLeft + col * infoCol;
         const y = infoY + row * 28;
         doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED).text(label.toUpperCase(), x, y);
-        doc.fontSize(9.5).font('Helvetica').fillColor(BODY).text(value, x, y + 11, { width: infoCol - 12 });
+        const isPaidStatus = label === 'Payment status' && String(value).toLowerCase() === 'paid';
+        const isAmountPaid = label === 'Amount paid';
+        doc
+          .fontSize(9.5)
+          .font(isPaidStatus || isAmountPaid ? 'Helvetica-Bold' : 'Helvetica')
+          .fillColor(isPaidStatus || isAmountPaid ? PAID_GREEN : BODY)
+          .text(value, x, y + 11, { width: infoCol - 12 });
       });
       doc.y = infoY + Math.ceil(infoPairs.length / 2) * 28 + 8;
 

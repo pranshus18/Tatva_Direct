@@ -18,6 +18,7 @@ import { formatDateIST, formatDateTimeIST, parseServerDate } from '../utils/date
 import {
   formatOrderStatusLabel,
   formatPaymentStatusLabel,
+  isOrderPaid,
   spStatusBadgeClass,
   spPaymentBadgeClass
 } from '../utils/orderStatusUi';
@@ -97,15 +98,13 @@ const statusBadgeVariant = (status) => {
   return 'yo-badge--confirmed';
 };
 
-const paymentBadgeVariant = (paymentStatus) => {
-  const s = String(paymentStatus || '').toLowerCase();
-  return s === 'paid' ? 'yo-badge--paid' : 'yo-badge--payment-pending';
+const paymentBadgeVariant = (orderOrStatus) => {
+  return isOrderPaid(orderOrStatus) ? 'yo-badge--paid' : 'yo-badge--payment-pending';
 };
 
 const getSelfServeLockReason = (order) => {
-  const paymentStatus = String(order?.paymentStatus || '').toLowerCase();
   const status = String(order?.status || '').toLowerCase();
-  if (paymentStatus === 'paid') return 'Locked: order is already paid.';
+  if (isOrderPaid(order)) return 'Locked: order is already paid.';
   if (!['pending', 'confirmed'].includes(status)) return 'Locked: order is already in fulfillment.';
   return '';
 };
@@ -593,12 +592,11 @@ const YourOrders = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orderDetails]);
 
-  const orderPaymentPending =
-    orderDetails && String(orderDetails.paymentStatus || '').toLowerCase() !== 'paid';
+  const orderPaymentPending = orderDetails && !isOrderPaid(orderDetails);
   const orderStatus = String(orderDetails?.status || '').toLowerCase();
-  const selfServeEditable = ['pending', 'confirmed'].includes(orderStatus) && !['paid'].includes(String(orderDetails?.paymentStatus || '').toLowerCase());
+  const selfServeEditable = ['pending', 'confirmed'].includes(orderStatus) && !isOrderPaid(orderDetails);
   const selfServeLockReason = orderDetails ? getSelfServeLockReason(orderDetails) : '';
-  const canRateOrder = orderStatus === 'delivered' && String(orderDetails?.paymentStatus || '').toLowerCase() === 'paid';
+  const canRateOrder = orderStatus === 'delivered' && isOrderPaid(orderDetails);
   const orderPm = String(orderDetails?.paymentMethod || orderDetails?.payment_method || '').toLowerCase();
   const orderIsPayLater = orderPm === 'credit';
   const payLaterMeta =
@@ -755,8 +753,8 @@ const YourOrders = () => {
                           {statusIcon(po.status)}
                           {formatOrderStatusLabel(po.status)}
                       </span>
-                      <span className={cn('yo-badge', paymentBadgeVariant(po.paymentStatus))}>
-                          {formatPaymentStatusLabel(po.paymentStatus)}
+                      <span className={cn('yo-badge', paymentBadgeVariant(po))}>
+                          {formatPaymentStatusLabel(po)}
                       </span>
                     </div>
 
@@ -797,7 +795,7 @@ const YourOrders = () => {
                           </div>
                         )}
 
-                  {String(po.paymentStatus || '').toLowerCase() === 'paid' && (
+                  {isOrderPaid(po) && (
                       <div className="mt-1 flex flex-wrap gap-2" onClick={(e) => e.stopPropagation()}>
                       {po.invoicePdfUrl && (
                             <a
@@ -810,26 +808,14 @@ const YourOrders = () => {
                               Invoice
                             </a>
                           )}
-                          {po.receiptPdfUrl ? (
-                            <a
-                              href={po.receiptPdfUrl}
-                              className="yo-doc-link yo-doc-link--receipt"
-                              target="_blank"
-                              rel="noopener noreferrer"
-                            >
-                              <FileText size={16} />
-                              Receipt
-                            </a>
-                          ) : (
-                            <button
-                              type="button"
-                              className="yo-doc-link yo-doc-link--receipt"
-                              onClick={(e) => downloadReceiptFallback(po.orderNumber || po.id, e)}
-                            >
-                              <FileText size={16} />
-                              Receipt
-                            </button>
-                      )}
+                          <button
+                            type="button"
+                            className="yo-doc-link yo-doc-link--receipt"
+                            onClick={(e) => downloadReceiptFallback(po.orderNumber || po.id, e)}
+                          >
+                            <FileText size={16} />
+                            Receipt
+                          </button>
                     </div>
                   )}
 
@@ -892,8 +878,8 @@ const YourOrders = () => {
                   <span className={spStatusBadgeClass(orderDetails.status)}>
                     {formatOrderStatusLabel(orderDetails.status)}
                   </span>
-                  <span className={spPaymentBadgeClass(orderDetails.paymentStatus)}>
-                    {formatPaymentStatusLabel(orderDetails.paymentStatus)}
+                  <span className={spPaymentBadgeClass(orderDetails)}>
+                    {formatPaymentStatusLabel(orderDetails)}
                   </span>
                   {orderDetails ? (
                     <span className="ml-auto text-lg font-bold text-[#0f172a]">
@@ -1018,6 +1004,18 @@ const YourOrders = () => {
                 ) : (
                   <OrderDialogSection title="Payment">
                     <p className="text-sm text-[#166534]">✓ Paid from vault</p>
+                    <p className="mt-1 text-sm text-[#166534]">
+                      Amount paid: ₹
+                      {Number(
+                        orderDetails.receipt?.amount ||
+                          resolveOrderChargeBreakdown(orderDetails).combinedTotal ||
+                          orderDetails.totalAmount ||
+                          0
+                      ).toLocaleString('en-IN')}
+                    </p>
+                    <p className="mt-1 text-sm font-semibold text-[#166534]">
+                      Status: {formatPaymentStatusLabel(orderDetails)}
+                    </p>
                   </OrderDialogSection>
                 )}
 
@@ -1035,28 +1033,16 @@ const YourOrders = () => {
                           Invoice PDF
                         </a>
                       ) : null}
-                      {orderDetails.receiptPdfUrl ? (
-                        <a
-                          href={orderDetails.receiptPdfUrl}
-                          className="yo-doc-link yo-doc-link--receipt"
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          <FileText size={16} />
-                          Payment receipt
-                        </a>
-                      ) : (
-                        <button
-                          type="button"
-                          className="yo-doc-link yo-doc-link--receipt"
-                          onClick={(e) =>
-                            downloadReceiptFallback(orderDetails.orderNumber || orderDetails.id, e)
-                          }
-                        >
-                          <FileText size={16} />
-                          Payment receipt
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="yo-doc-link yo-doc-link--receipt"
+                        onClick={(e) =>
+                          downloadReceiptFallback(orderDetails.orderNumber || orderDetails.id, e)
+                        }
+                      >
+                        <FileText size={16} />
+                        Payment receipt
+                      </button>
                     </div>
                   </OrderDialogSection>
                 )}

@@ -76,6 +76,7 @@ import {
   normalizeCartVariantKey,
   MAX_CART_ITEM_QUANTITY
 } from '../po/shared/poHelpers.js';
+import { resolveEffectivePaymentStatus } from '../../utils/effectivePaymentStatus.js';
 import {
   normalizeRequiredDateForUpstream,
   resolvePrimarySupplierShippingAddress,
@@ -3068,7 +3069,7 @@ router.get('/upstream/orders', authenticateToken, async (req, res) => {
         supplierName: o.supplier?.name || o.supplier?.company || 'Supplier',
         totalAmount: parseFloat(o.total_amount || 0),
         status: o.status,
-        paymentStatus: o.payment_status || 'pending',
+        paymentStatus: resolveEffectivePaymentStatus({ order: o }),
         paymentMethod: o.payment_method || null,
         channel: o.channel || null,
         createdAt: o.created_at,

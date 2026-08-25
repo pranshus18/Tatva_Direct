@@ -1,5 +1,6 @@
 import { fetchClosedReturnQuantityByOrderItem, getNetItemMetrics } from '../../utils/netRevenue.js';
 import { formatPlatformDate } from '../../utils/dateTime.js';
+import { resolveEffectivePaymentStatus } from '../../utils/effectivePaymentStatus.js';
 
 export { fetchClosedReturnQuantityByOrderItem, getNetItemMetrics };
 
@@ -446,7 +447,7 @@ export async function generateAdminData({ supabase, console, isRevenueRecognized
         date: order.created_at ? new Date(order.created_at).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
         createdAt: order.created_at || new Date().toISOString(),
         status: order.status || 'pending',
-        paymentStatus: order.payment_status || 'pending',
+        paymentStatus: resolveEffectivePaymentStatus({ order }),
         products: productNames,
         productCount: itemCount,
         items: order.items?.map(item => ({

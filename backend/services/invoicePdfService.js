@@ -2,7 +2,7 @@ import PDFKit from 'pdfkit';
 import { supabase } from '../config/supabase.js';
 import { ORDER_ATTACHMENTS_BUCKET, uploadFile } from './storage.js';
 import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
-import { resolveReceiptPaymentStatusLabel } from './receiptPdfService.js';
+import { resolveReceiptPaymentStatusLabel, resolveReceiptPaymentMethodLabel } from './receiptPdfService.js';
 
 // pdfkit is CommonJS; in ESM builds the default import might be the module namespace.
 const PDFDocument = PDFKit?.default || PDFKit;
@@ -378,11 +378,12 @@ function createInvoicePdfBuffer({ order, invoice, items, receiptNumber = null })
 
       section('Order Status & Dates');
       doc.fontSize(10).font('Helvetica');
-      doc.text(`Status: ${safeString(order?.status || '-')}`);
+      doc.text(`Fulfillment status: ${safeString(order?.status || '-')}`);
       doc.text(
         `Payment Status: ${resolveReceiptPaymentStatusLabel({ order, receipt: receiptNumber ? { receipt_number: receiptNumber } : null })}`
       );
-      doc.text(`Payment Method: ${safeString(order?.payment_method || '-')}`);
+      doc.text(`Amount paid: ${formatINR(order?.total_amount ?? order?.totalAmount)}`);
+      doc.text(`Payment Method: ${resolveReceiptPaymentMethodLabel({ order })}`);
       doc.text(`Order Date: ${order?.created_at ? formatPlatformDateTime(order.created_at, '-') : '-'}`);
       doc.text(
         `Expected Dispatch: ${

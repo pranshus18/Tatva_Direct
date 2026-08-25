@@ -3,6 +3,7 @@ import { formatDate } from './dashboardImports.js';
 import { buildCreditStatus } from '../../services/creditAccountService.js';
 import { insertNotification } from '../../repositories/notificationsRepository.js';
 import { sumOrderItemQuantities } from '../../utils/orderItemQuantity.js';
+import { resolveEffectivePaymentStatus } from '../../utils/effectivePaymentStatus.js';
 
 function diffCalendarDays(fromDate, toDate) {
   const start = new Date(fromDate.getFullYear(), fromDate.getMonth(), fromDate.getDate()).getTime();
@@ -291,7 +292,7 @@ router.get('/service-provider', authenticateToken, async (req, res) => {
           vendorCompany: supplier?.company || '',
           amount: parseFloat(order.total_amount || 0),
           status: order.status,
-          paymentStatus: order.payment_status || 'pending',
+          paymentStatus: resolveEffectivePaymentStatus({ order, receipt: rcpt }),
           paymentMethod: order.payment_method || null,
           itemCount: sumOrderItemQuantities(order.order_items),
           createdAt: order.created_at,

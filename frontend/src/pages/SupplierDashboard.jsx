@@ -44,6 +44,7 @@ import SupplierOrderScopeNav from '../components/supplier/SupplierOrderScopeNav'
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { formatPaymentMethodLabel } from '../utils/vaultPaymentMethod';
+import { formatPaymentStatusLabel, isOrderPaid, resolveEffectivePaymentStatus } from '../utils/orderStatusUi';
 import { canDeleteOrder, getOrderDeleteBlockReason } from '../utils/orderDeleteRules';
 import {
   canAdvanceOrderStatus,
@@ -339,13 +340,13 @@ const SupplierDashboard = ({ user }) => {
 
     if (
       !canDeleteOrder({
-        paymentStatus: orderDetails.paymentStatus,
+        paymentStatus: resolveEffectivePaymentStatus(orderDetails),
         status: orderDetails.status
       })
     ) {
       alert(
         getOrderDeleteBlockReason({
-          paymentStatus: orderDetails.paymentStatus,
+          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
           status: orderDetails.status
         }) || 'This order cannot be deleted.'
       );
@@ -985,7 +986,7 @@ const SupplierDashboard = ({ user }) => {
                     </span>
                   </div>
                   <div className="supplier-dashboard-live-order-actions">
-                    {order.invoicePdfUrl && String(order.paymentStatus || '').toLowerCase() === 'paid' && (
+                    {order.invoicePdfUrl && isOrderPaid(order) && (
                       <a
                         href={order.invoicePdfUrl}
                         target="_blank"
@@ -1276,7 +1277,15 @@ const SupplierDashboard = ({ user }) => {
                       </>
                     )}
                   </div>
-                  <p><strong>Payment Status:</strong> {orderDetails.paymentStatus || 'pending'}</p>
+                  <p><strong>Payment Status:</strong> {formatPaymentStatusLabel(orderDetails)}</p>
+                  {isOrderPaid(orderDetails) ? (
+                    <p>
+                      <strong>Amount paid:</strong> ₹
+                      {Number(
+                        orderDetails.receipt?.amount || orderDetails.totalAmount || 0
+                      ).toLocaleString('en-IN')}
+                    </p>
+                  ) : null}
                   {orderDetails.paymentMethod && (
                     <p>
                       <strong>Payment Method:</strong>{' '}
@@ -1403,13 +1412,13 @@ const SupplierDashboard = ({ user }) => {
                   <p className="supplier-dashboard-danger-text">
                     Deleting an order will permanently remove it from the system. This action cannot be undone.
                     {getOrderDeleteBlockReason({
-                      paymentStatus: orderDetails.paymentStatus,
+                      paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                       status: orderDetails.status
                     }) ? (
                       <span className="supplier-dashboard-danger-warning">
                         ⚠️{' '}
                         {getOrderDeleteBlockReason({
-                          paymentStatus: orderDetails.paymentStatus,
+                          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                           status: orderDetails.status
                         })}
                       </span>
@@ -1431,7 +1440,7 @@ const SupplierDashboard = ({ user }) => {
                       className={`btn-secondary supplier-dashboard-danger-delete ${
                         deletingOrder ||
                         !canDeleteOrder({
-                          paymentStatus: orderDetails.paymentStatus,
+                          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                           status: orderDetails.status
                         })
                           ? 'supplier-dashboard-danger-delete-disabled'
@@ -1441,13 +1450,13 @@ const SupplierDashboard = ({ user }) => {
                       disabled={
                         deletingOrder ||
                         !canDeleteOrder({
-                          paymentStatus: orderDetails.paymentStatus,
+                          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                           status: orderDetails.status
                         })
                       }
                       title={
                         getOrderDeleteBlockReason({
-                          paymentStatus: orderDetails.paymentStatus,
+                          paymentStatus: resolveEffectivePaymentStatus(orderDetails),
                           status: orderDetails.status
                         }) || 'Delete order'
                       }

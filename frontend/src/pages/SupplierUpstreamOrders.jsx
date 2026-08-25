@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getApiUrl, authFetch, buildAuthHeaders } from '../config/api';
 import { getVaultBalanceForUi, payOrderFromVault } from '../services/vaultService';
 import { formatPaymentMethodLabel, isVaultPaymentMethod } from '../utils/vaultPaymentMethod';
+import { formatPaymentStatusLabel, isOrderPaid, resolveEffectivePaymentStatus } from '../utils/orderStatusUi';
 import { canDeleteOrder, getOrderDeleteBlockReason } from '../utils/orderDeleteRules';
 import './Dashboard.css';
 import './SupplierUpstream.css';
@@ -245,7 +246,7 @@ export default function SupplierUpstreamOrders() {
     const q = String(query || '').trim().toLowerCase();
     return (orders || []).filter((order) => {
       const status = String(order.status || '').toLowerCase();
-      const payment = String(order.paymentStatus || '').toLowerCase();
+      const payment = resolveEffectivePaymentStatus(order);
       if (statusFilter !== 'all' && status !== statusFilter) return false;
       if (paymentFilter !== 'all' && payment !== paymentFilter) return false;
       if (!q) return true;
@@ -261,9 +262,7 @@ export default function SupplierUpstreamOrders() {
     const inTransit = orders.filter((o) =>
       ['shipped', 'processing'].includes(String(o.status || '').toLowerCase())
     );
-    const pendingPayment = orders.filter(
-      (o) => String(o.paymentStatus || '').toLowerCase() !== 'paid'
-    );
+    const pendingPayment = orders.filter((o) => !isOrderPaid(o));
     const chain = orders.filter((o) => o.chainUpstreamOrder);
     const retail = orders.filter((o) => !o.chainUpstreamOrder);
     const totalValue = orders.reduce(
@@ -284,9 +283,7 @@ export default function SupplierUpstreamOrders() {
   const orderPaymentMethod = String(orderDetails?.paymentMethod || orderDetails?.payment_method || '').toLowerCase();
   const orderIsPayLater = orderPaymentMethod === 'credit';
   const orderVaultPaymentPending =
-    !isDownstream &&
-    orderDetails &&
-    String(orderDetails.paymentStatus || '').toLowerCase() !== 'paid';
+    !isDownstream && orderDetails && !isOrderPaid(orderDetails);
   const canPayFromVaultNow = orderVaultPaymentPending;
 
   const handleUpdateDownstreamStatus = async () => {
@@ -396,7 +393,7 @@ export default function SupplierUpstreamOrders() {
 
   useEffect(() => {
     let cancelled = false;
-    if (isDownstream || !orderDetails || String(orderDetails.paymentStatus || '').toLowerCase() === 'paid') {
+    if (isDownstream || !orderDetails || isOrderPaid(orderDetails)) {
       return undefined;
     }
     const loadVaultBalance = async () => {
@@ -420,8 +417,7 @@ export default function SupplierUpstreamOrders() {
 
   const canCancelUpstreamOrder = (order) => {
     const status = String(order?.status || '').toLowerCase();
-    const payment = String(order?.paymentStatus || order?.payment_status || '').toLowerCase();
-    return ['pending', 'confirmed'].includes(status) && payment !== 'paid';
+    return ['pending', 'confirmed'].includes(status) && !isOrderPaid(order);
   };
 
   const handleCancelOrder = async () => {
@@ -747,7 +743,7 @@ export default function SupplierUpstreamOrders() {
                       </td>
                       <td>
                         <span className="supplier-upstream-orders-payment">
-                          {String(o.paymentStatus || 'pending')}
+                          {formatPaymentStatusLabel(o)}
                         </span>
                         {!isDownstream ? (
                           <span className="supplier-upstream-orders-payment-method">
@@ -946,8 +942,14 @@ export default function SupplierUpstreamOrders() {
                         </>
                       )}
                       <p style={{ marginTop: '0.75rem' }}>
-                        <strong>Payment:</strong> {orderDetails.paymentStatus || 'pending'}
+                        <strong>Payment:</strong> {formatPaymentStatusLabel(orderDetails)}
                       </p>
+                      {isOrderPaid(orderDetails) ? (
+                        <p>
+                          <strong>Amount paid:</strong> ₹
+                          {Number(orderDetails.totalAmount || 0).toLocaleString('en-IN')}
+                        </p>
+                      ) : null}
                       {orderDetails.invoicePdfUrl ? (
                         <a
                           href={orderDetails.invoicePdfUrl}
@@ -1013,7 +1015,7 @@ export default function SupplierUpstreamOrders() {
                     <strong>Status:</strong> {orderDetails?.status}
                   </p>
                   <p>
-                    <strong>Payment:</strong> {orderDetails?.paymentStatus || 'pending'} •{' '}
+                    <strong>Payment:</strong> {formatPaymentStatusLabel(orderDetails)} •{' '}
                     {paymentMethodLabel(orderDetails?.paymentMethod)}
                   </p>
                   <p>
@@ -1087,9 +1089,15 @@ export default function SupplierUpstreamOrders() {
                       </button>
                     </div>
                   </div>
-                ) : orderDetails.paymentStatus === 'paid' ? (
+                ) : isOrderPaid(orderDetails) ? (
                   <div className="order-info-section">
                     <div className="upstream-paid-badge">✓ Payment completed from vault</div>
+                    <p style={{ margin: '0.4rem 0 0', color: '#166534' }}>
+                      Amount paid: ₹{Number(orderDetails.totalAmount || 0).toLocaleString('en-IN')}
+                    </p>
+                    <p style={{ margin: '0.2rem 0 0', color: '#166534', fontWeight: 600 }}>
+                      Status: {formatPaymentStatusLabel(orderDetails)}
+                    </p>
                   </div>
                 ) : null}
 
