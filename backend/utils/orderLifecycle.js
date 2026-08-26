@@ -152,3 +152,21 @@ export function getInvalidPrimaryStatusTransitionMessage(fromStatus, toStatus) {
   }.`;
 }
 
+const PRIMARY_STATUS_LABELS = {
+  pending: 'Pending',
+  confirmed: 'Confirmed',
+  processing: 'Processing',
+  shipped: 'Shipped',
+  delivered: 'Delivered',
+  cancelled: 'Cancelled',
+  returned: 'Returned'
+};
+
+/** Human label for receipts, invoices, and APIs — always the live fulfillment status. */
+export function formatOrderStatusLabel(status) {
+  const canonical = toCanonicalPrimaryStatus(status);
+  if (PRIMARY_STATUS_LABELS[canonical]) return PRIMARY_STATUS_LABELS[canonical];
+  if (!canonical) return 'Pending';
+  return canonical.charAt(0).toUpperCase() + canonical.slice(1);
+}
+

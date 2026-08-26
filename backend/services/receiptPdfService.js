@@ -16,6 +16,7 @@ import {
 import { lineMoneyTotal } from '../utils/money.js';
 import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
 import { formatEffectivePaymentStatusLabel } from '../utils/effectivePaymentStatus.js';
+import { formatOrderStatusLabel, toCanonicalPrimaryStatus } from '../utils/orderLifecycle.js';
 
 const PDFDocument = PDFKit?.default || PDFKit;
 const BRAND_BLUE = '#5b4fe5';
@@ -26,7 +27,7 @@ const MUTED = '#6b7280';
 const GRID = '#e5e7eb';
 const PAID_GREEN = '#059669';
 /** Bump when receipt layout fixes need re-upload for existing orders. */
-export const RECEIPT_PDF_LAYOUT_VERSION = 4;
+export const RECEIPT_PDF_LAYOUT_VERSION = 5;
 
 function safeString(v) {
   if (v === null || v === undefined) return '';
@@ -42,6 +43,23 @@ export function resolveReceiptPaymentStatusLabel({ order, receipt } = {}) {
   const label = formatEffectivePaymentStatusLabel({ order, receipt });
   if (receipt && label === 'Pending') return 'Paid';
   return label;
+}
+
+export function resolveReceiptSupplierStatusLabel(order = {}) {
+  return formatOrderStatusLabel(order?.status || order?.lifecycle_state);
+}
+
+export function receiptPdfNeedsRefresh(receipt, order = {}) {
+  if (!receipt) return false;
+  if (!receipt?.metadata?.pdfUrl) return true;
+  if (Number(receipt?.metadata?.pdfLayoutVersion || 0) < RECEIPT_PDF_LAYOUT_VERSION) return true;
+  const storedRaw = String(
+    receipt?.metadata?.pdfSupplierStatus || receipt?.metadata?.pdfFulfillmentStatus || ''
+  ).trim();
+  if (!storedRaw) return true;
+  const stored = toCanonicalPrimaryStatus(storedRaw);
+  const current = toCanonicalPrimaryStatus(order?.status || order?.lifecycle_state);
+  return stored !== current;
 }
 
 export function resolveReceiptPaymentMethodLabel({ order, receipt } = {}) {
@@ -610,7 +628,7 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
       const infoY = doc.y;
       const infoCol = contentWidth / 2;
       const infoPairs = [
-        ['Fulfillment status', safeString(order?.status || '-')],
+        ['Supplier status', resolveReceiptSupplierStatusLabel(order)],
         ['Payment status', resolveReceiptPaymentStatusLabel({ order, receipt })],
         ['Payment method', resolveReceiptPaymentMethodLabel({ order, receipt })],
         ['Amount paid', formatINR(Number(receipt?.amount || order?.total_amount || 0))],
@@ -632,10 +650,11 @@ export function createReceiptPdfBuffer({ receipt, order, supplier, serviceProvid
         doc.fontSize(8).font('Helvetica-Bold').fillColor(MUTED).text(label.toUpperCase(), x, y);
         const isPaidStatus = label === 'Payment status' && String(value).toLowerCase() === 'paid';
         const isAmountPaid = label === 'Amount paid';
+        const isDeliveredStatus = label === 'Supplier status' && String(value).toLowerCase() === 'delivered';
         doc
           .fontSize(9.5)
-          .font(isPaidStatus || isAmountPaid ? 'Helvetica-Bold' : 'Helvetica')
-          .fillColor(isPaidStatus || isAmountPaid ? PAID_GREEN : BODY)
+          .font(isPaidStatus || isAmountPaid || isDeliveredStatus ? 'Helvetica-Bold' : 'Helvetica')
+          .fillColor(isPaidStatus || isAmountPaid || isDeliveredStatus ? PAID_GREEN : BODY)
           .text(value, x, y + 11, { width: infoCol - 12 });
       });
       doc.y = infoY + Math.ceil(infoPairs.length / 2) * 28 + 8;
@@ -711,13 +730,16 @@ export async function generateAndAttachReceiptPdf({ receipt, order, supplier, se
     return { pdfUrl: null, pdfPath: null, receipt };
   }
 
+  const cacheBust = Date.now();
+  const publicPdfUrl = url ? `${url}${url.includes('?') ? '&' : '?'}v=${cacheBust}` : url;
   const metadata = {
     ...(receipt.metadata || {}),
-    pdfUrl: url,
+    pdfUrl: publicPdfUrl,
     pdfPath: storedPath,
     pdfGeneratedAt: new Date().toISOString(),
     pdfLayoutVersion: RECEIPT_PDF_LAYOUT_VERSION,
-    pdfPaymentStatus: resolveReceiptPaymentStatusLabel({ order: workingOrder, receipt })
+    pdfPaymentStatus: resolveReceiptPaymentStatusLabel({ order: workingOrder, receipt }),
+    pdfSupplierStatus: toCanonicalPrimaryStatus(workingOrder?.status || workingOrder?.lifecycle_state)
   };
 
   const { data: updatedReceipt } = await supabase
@@ -728,9 +750,54 @@ export async function generateAndAttachReceiptPdf({ receipt, order, supplier, se
     .maybeSingle();
 
   return {
-    pdfUrl: url,
+    pdfUrl: publicPdfUrl,
     pdfPath: storedPath,
     receipt: updatedReceipt || receipt
   };
+}
+
+async function loadReceiptPartyUsers(order) {
+  const [{ data: supplier }, { data: serviceProvider }] = await Promise.all([
+    order?.supplier_id
+      ? supabase
+          .from('users')
+          .select('id, name, company, email, phone, address, profile, user_type')
+          .eq('id', order.supplier_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
+    order?.service_provider_id
+      ? supabase
+          .from('users')
+          .select('id, name, company, email, phone, address, profile, user_type')
+          .eq('id', order.service_provider_id)
+          .maybeSingle()
+      : Promise.resolve({ data: null })
+  ]);
+  return { supplier: supplier || null, serviceProvider: serviceProvider || null };
+}
+
+/**
+ * Rebuild the stored receipt PDF from the live order (fulfillment + payment).
+ * Call after supplier marks delivered so cached receipt URLs stop showing Pending.
+ */
+export async function refreshPaymentReceiptPdfForOrder(order, { force = false } = {}) {
+  if (!order?.id) return null;
+  const { data: receipt } = await supabase
+    .from('payment_receipts')
+    .select('*')
+    .eq('order_id', order.id)
+    .maybeSingle();
+  if (!receipt) return null;
+  if (!force && !receiptPdfNeedsRefresh(receipt, order)) {
+    return { receipt, skipped: true };
+  }
+  const { supplier, serviceProvider } = await loadReceiptPartyUsers(order);
+  const result = await generateAndAttachReceiptPdf({
+    receipt,
+    order,
+    supplier,
+    serviceProvider
+  });
+  return { ...result, skipped: false };
 }
 

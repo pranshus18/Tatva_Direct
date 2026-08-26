@@ -2,7 +2,8 @@
 import {
   applyRestockForClosedReturn,
   generateAndAttachReceiptPdf,
-  RECEIPT_PDF_LAYOUT_VERSION,
+  receiptPdfNeedsRefresh,
+  refreshPaymentReceiptPdfForOrder,
   getContractErrorMessage,
   insertNotification,
   getInvalidPrimaryStatusTransitionMessage,
@@ -307,11 +308,7 @@ router.get('/orders/:id', authenticateToken, async (req, res) => {
         .eq('order_id', order.id)
         .maybeSingle();
       receipt = receiptRow || null;
-      if (
-        receipt &&
-        (!receipt?.metadata?.pdfUrl ||
-          Number(receipt?.metadata?.pdfLayoutVersion || 0) < RECEIPT_PDF_LAYOUT_VERSION)
-      ) {
+      if (receipt && receiptPdfNeedsRefresh(receipt, order)) {
         const { data: supplierData } = await supabase
           .from('users')
           .select('id, name, company, email, phone, address, profile, user_type')
@@ -711,6 +708,12 @@ router.patch('/orders/:id/status', authenticateToken, async (req, res) => {
     }
     
     logger.info(`Order status updated successfully: ${updatedOrder.order_number} to ${normalizedStatus}`);
+
+    try {
+      await refreshPaymentReceiptPdfForOrder(updatedOrder, { force: true });
+    } catch (receiptErr) {
+      logger.error('[Supplier Order Status] receipt PDF refresh failed:', receiptErr);
+    }
 
     // Notify the buyer (service_provider / chain partner) so upstream orders are trackable from their portal.
     const buyerId = updatedOrder.service_provider_id;

@@ -2,7 +2,11 @@ import PDFKit from 'pdfkit';
 import { supabase } from '../config/supabase.js';
 import { ORDER_ATTACHMENTS_BUCKET, uploadFile } from './storage.js';
 import { formatPlatformDate, formatPlatformDateTime } from '../utils/dateTime.js';
-import { resolveReceiptPaymentStatusLabel, resolveReceiptPaymentMethodLabel } from './receiptPdfService.js';
+import {
+  resolveReceiptPaymentStatusLabel,
+  resolveReceiptPaymentMethodLabel,
+  resolveReceiptSupplierStatusLabel
+} from './receiptPdfService.js';
 
 // pdfkit is CommonJS; in ESM builds the default import might be the module namespace.
 const PDFDocument = PDFKit?.default || PDFKit;
@@ -378,7 +382,7 @@ function createInvoicePdfBuffer({ order, invoice, items, receiptNumber = null })
 
       section('Order Status & Dates');
       doc.fontSize(10).font('Helvetica');
-      doc.text(`Fulfillment status: ${safeString(order?.status || '-')}`);
+      doc.text(`Supplier status: ${resolveReceiptSupplierStatusLabel(order)}`);
       doc.text(
         `Payment Status: ${resolveReceiptPaymentStatusLabel({ order, receipt: receiptNumber ? { receipt_number: receiptNumber } : null })}`
       );

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   getAllowedPrimaryStatusTransitions,
   getInvalidPrimaryStatusTransitionMessage,
+  formatOrderStatusLabel,
   isValidPrimaryOrderStatus,
   isValidPrimaryStatusTransition,
   toLifecycleStateFromStatus,
@@ -59,5 +60,12 @@ test('rejects every status change once an order is cancelled', () => {
     getInvalidPrimaryStatusTransitionMessage('cancelled', 'confirmed'),
     /cancelled and the status cannot be changed/i
   );
+});
+
+test('formats live fulfillment labels for receipts', () => {
+  assert.equal(formatOrderStatusLabel('pending'), 'Pending');
+  assert.equal(formatOrderStatusLabel('delivered'), 'Delivered');
+  assert.equal(formatOrderStatusLabel('settled'), 'Delivered');
+  assert.equal(formatOrderStatusLabel('shipped'), 'Shipped');
 });
 

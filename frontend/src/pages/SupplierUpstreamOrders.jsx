@@ -336,6 +336,33 @@ export default function SupplierUpstreamOrders() {
     }
   };
 
+  const handleDownloadReceipt = async () => {
+    try {
+      const orderRef = orderDetails?.orderNumber || orderDetails?.id || orderModalId;
+      if (!orderRef) return;
+      const token = localStorage.getItem('token');
+      if (!token) return;
+      const response = await fetch(getApiUrl(`/api/receipts/order/${encodeURIComponent(orderRef)}/download`), {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.message || 'Failed to download receipt');
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${orderRef}-receipt.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      alert(error.message || 'Failed to download receipt');
+    }
+  };
+
   const handleUpdateReturnStatus = async (returnId, nextStatus) => {
     const supplierNotes = window.prompt(`Optional notes for status "${nextStatus}":`, '');
     try {
@@ -1101,17 +1128,16 @@ export default function SupplierUpstreamOrders() {
                   </div>
                 ) : null}
 
-                {orderDetails?.receiptPdfUrl && (
+                {(orderDetails?.receiptPdfUrl || orderDetails?.receipt) && (
                   <div className="order-info-section">
                     <h3>Receipt</h3>
-                    <a
-                      href={orderDetails.receiptPdfUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
+                      onClick={handleDownloadReceipt}
                       className="btn-primary"
                     >
                       Download payment receipt
-                    </a>
+                    </button>
                   </div>
                 )}
 

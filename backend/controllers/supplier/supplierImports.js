@@ -43,7 +43,7 @@ export {
 } from '../../utils/platformListedSupplierProductsFilter.js';
 export { searchProductDiscoveryForUser } from '../../services/productDiscoverySearchService.js';
 export { getProductDiscoveryDetail } from '../../services/productDiscoveryDetailService.js';
-export { generateAndAttachReceiptPdf, RECEIPT_PDF_LAYOUT_VERSION } from '../../services/receiptPdfService.js';
+export { generateAndAttachReceiptPdf, refreshPaymentReceiptPdfForOrder, receiptPdfNeedsRefresh, RECEIPT_PDF_LAYOUT_VERSION } from '../../services/receiptPdfService.js';
 export {
   buildIdentityBundle,
   buildSupplierVariantIdentity,

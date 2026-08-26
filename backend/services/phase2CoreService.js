@@ -536,6 +536,14 @@ export async function transitionOrderState({
     .select('*')
     .single();
   if (updateError) throw updateError;
+
+  try {
+    const { refreshPaymentReceiptPdfForOrder } = await import('./receiptPdfService.js');
+    await refreshPaymentReceiptPdfForOrder(updated, { force: true });
+  } catch (receiptErr) {
+    console.error('[Phase2] receipt PDF refresh after transition failed:', receiptErr);
+  }
+
   return updated;
 }
 
