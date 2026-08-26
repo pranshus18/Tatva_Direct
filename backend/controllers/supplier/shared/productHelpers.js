@@ -1,4 +1,7 @@
-import { buildVariantAsinLikeId } from '../../../services/productIdentityService.js';
+import {
+  buildVariantAsinLikeId,
+  isCurrentVariantTsin
+} from '../../../services/productIdentityService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 
 const IGST_ALLOWED_RATES = new Set([0, 5, 12, 18, 28]);
@@ -9,6 +12,21 @@ export const ORDER_INSERT_MAX_RETRIES = 3;
 export function resolveParentTsin(parentAsin) {
   const stored = String(parentAsin || '').trim().toUpperCase();
   return stored || null;
+}
+
+/**
+ * Variant TSIN for a supplier offer.
+ * Keep a stored value only when it already matches TS + 5 product chars + 2 variant chars.
+ * Otherwise derive from the current parent TSIN + variant key.
+ */
+export function resolveVariantTsin(parentAsin, variantKey, currentVariantAsin) {
+  const stored = String(currentVariantAsin || '').trim().toUpperCase();
+  const parent = resolveParentTsin(parentAsin);
+  if (isCurrentVariantTsin(parent, stored)) return stored;
+  if (parent && String(variantKey || '').trim()) {
+    return buildVariantAsinLikeId(parent, variantKey);
+  }
+  return stored || buildVariantAsinLikeId(parent || '', variantKey || '');
 }
 
 export function sanitizeImageUrls(input) {
@@ -40,16 +58,6 @@ export function sanitizeImageUrls(input) {
     out.push(url);
   }
   return out.slice(0, 12);
-}
-
-/**
- * Variant TSIN for a supplier offer: always prefer supplier_products.variant_asin when set.
- * Only derive from parent + variant_key when the column is blank (legacy rows).
- */
-export function resolveVariantTsin(parentAsin, variantKey, currentVariantAsin) {
-  const stored = String(currentVariantAsin || '').trim().toUpperCase();
-  if (stored) return stored;
-  return buildVariantAsinLikeId(parentAsin || '', variantKey || '');
 }
 
 /** TSIN fields for API responses — matches supplier inventory listing. */

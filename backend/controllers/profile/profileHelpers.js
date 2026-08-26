@@ -519,9 +519,11 @@ export function supplierHasCompleteShippingAddress(profile = {}) {
 
 export async function createProfileResponse(user) {
   const registeredBillingAddress = resolveRegisteredBillingAddress(user);
-  const displayBillingAddress = sanitizeSignupPlaceholderAddress(registeredBillingAddress, {
-    companyName: user.company || ''
-  });
+  const displayBillingAddress = mergeParsedShippingAddress(
+    sanitizeSignupPlaceholderAddress(registeredBillingAddress, {
+      companyName: user.company || ''
+    })
+  );
   const baseProfile = {
     userId: user.id,
     companyName: user.company || '',

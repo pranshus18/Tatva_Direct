@@ -9,11 +9,16 @@ import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
-import { Upload, CheckCircle, AlertCircle, Users, Package, PlusCircle, MapPin, Calendar, FileText, XCircle, RefreshCw } from 'lucide-react';
+import { Upload, CheckCircle, AlertCircle, Users, Package, PlusCircle, MapPin, Calendar, FileText, XCircle, RefreshCw, RotateCcw } from 'lucide-react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import SpWorkflowPage from '../components/sp/SpWorkflowPage';
 import { Button } from '@/components/ui/button';
+import {
+  clearCancelledBoqItemIds,
+  readCancelledBoqItemIds,
+  writeCancelledBoqItemIds
+} from '../utils/boqCancelledItems';
 import './BOQNormalize.css';
 
 // Ask the user to confirm ANY match that is not nearly exact.
@@ -45,6 +50,7 @@ const BOQNormalize = ({ onComplete }) => {
   const [siteLng, setSiteLng] = useState('');
   const [file, setFile] = useState(null);
   const [items, setItems] = useState([]);
+  const [cancelledItemIds, setCancelledItemIds] = useState(() => new Set());
   const [boqId, setBoqId] = useState(null);
   const [loading, setLoading] = useState(false);
   const [savingCart, setSavingCart] = useState(false);
@@ -113,6 +119,8 @@ const BOQNormalize = ({ onComplete }) => {
 
     setFile(null);
     setItems([]);
+    setCancelledItemIds(new Set());
+    if (boqId) clearCancelledBoqItemIds(boqId);
     setBoqId(null);
     setSubmittedProductRequestKeys(new Set());
     setSavedProjectMeta(null);
@@ -130,6 +138,7 @@ const BOQNormalize = ({ onComplete }) => {
     file,
     items.length,
     loading,
+    boqId,
     searchParams,
     setSearchParams
   ]);
@@ -172,6 +181,7 @@ const BOQNormalize = ({ onComplete }) => {
 
     setFile(uploadedFile);
     setLoading(true);
+    setCancelledItemIds(new Set());
     const uploadGeneration = ++uploadGenerationRef.current;
 
     const formData = new FormData();
@@ -222,7 +232,9 @@ const BOQNormalize = ({ onComplete }) => {
       if (data.items && data.items.length > 0) {
         setItems(data.items);
         setSubmittedProductRequestKeys(new Set());
+        setCancelledItemIds(new Set());
         if (data.boqId) {
+          clearCancelledBoqItemIds(data.boqId);
           setBoqId(data.boqId);
           try {
             localStorage.setItem('lastBoqId', data.boqId);
@@ -328,14 +340,59 @@ const BOQNormalize = ({ onComplete }) => {
     }
   };
 
+  const itemIdentity = (item) =>
+    item?.id != null && String(item.id).trim() !== '' ? String(item.id).trim() : '';
+
+  const activeItems = useMemo(
+    () => items.filter((item) => !cancelledItemIds.has(itemIdentity(item))),
+    [items, cancelledItemIds]
+  );
+
+  const persistCancelledIds = useCallback(
+    (nextIds) => {
+      writeCancelledBoqItemIds(boqId, nextIds);
+    },
+    [boqId]
+  );
+
+  const handleCancelItem = (item) => {
+    const key = itemIdentity(item);
+    if (!key || cancelledItemIds.has(key)) return;
+    const label = item.normalizedName || item.rawName || 'this product';
+    const remaining = items.length - cancelledItemIds.size - 1;
+    const confirmed = window.confirm(
+      `Remove "${label}" from this order?\n\nYou can still order the remaining ${Math.max(remaining, 0)} BOQ item${remaining === 1 ? '' : 's'}. You can restore this product if you change your mind.`
+    );
+    if (!confirmed) return;
+    const next = new Set(cancelledItemIds);
+    next.add(key);
+    setCancelledItemIds(next);
+    persistCancelledIds(next);
+    toast.success(`Removed "${label}" from this order.`);
+  };
+
+  const handleRestoreItem = (item) => {
+    const key = itemIdentity(item);
+    if (!key || !cancelledItemIds.has(key)) return;
+    const next = new Set(cancelledItemIds);
+    next.delete(key);
+    setCancelledItemIds(next);
+    persistCancelledIds(next);
+    toast.success(`Restored "${item.normalizedName || item.rawName || 'product'}" to this order.`);
+  };
+
   const handleProceed = () => {
-    if (items.length === 0) {
-      toast.error('Please upload and process a BOQ file first');
+    if (activeItems.length === 0) {
+      toast.error(
+        items.length > 0
+          ? 'All BOQ products were cancelled. Restore at least one product, or upload a different BOQ.'
+          : 'Please upload and process a BOQ file first'
+      );
       return;
     }
 
     // Find items where the automatic match is not very strong
-    const ambiguousItems = items.filter(item => 
+    const ambiguousItems = activeItems.filter(item => 
       typeof item.confidence === 'number' && 
       item.productId && 
       item.confidence < CONFIRM_MATCH_THRESHOLD
@@ -362,9 +419,9 @@ const BOQNormalize = ({ onComplete }) => {
       }
     }
     
-    console.log('Proceeding to vendor selection with items:', items);
+    console.log('Proceeding to vendor selection with items:', activeItems);
     onComplete(
-      items,
+      activeItems,
       boqId,
       savedProjectMeta ||
         (siteLocation.trim() && requiredDate
@@ -392,7 +449,7 @@ const BOQNormalize = ({ onComplete }) => {
       state: {
         supplierSelectOrigin: 'boq',
         supplierSelectReturnTo: '/boq-normalize',
-        supplierSelectItems: items,
+        supplierSelectItems: activeItems,
         supplierSelectBoqProject:
           savedProjectMeta ||
           (siteLocation.trim() && requiredDate
@@ -410,17 +467,21 @@ const BOQNormalize = ({ onComplete }) => {
   };
 
   const handleAddToCart = async () => {
-    if (items.length === 0) {
-      toast.error('Please upload and process a BOQ file first.');
+    if (activeItems.length === 0) {
+      toast.error(
+        items.length > 0
+          ? 'All BOQ products were cancelled. Restore at least one product, or upload a different BOQ.'
+          : 'Please upload and process a BOQ file first.'
+      );
       return;
     }
 
-    const inStockItems = items.filter((item) => {
+    const inStockItems = activeItems.filter((item) => {
       const hasSuppliers = (item.availableSuppliers || 0) > 0;
       const isAvailable = item.isAvailable ?? hasSuppliers;
       return Boolean(isAvailable);
     });
-    const outOfStockCount = items.length - inStockItems.length;
+    const outOfStockCount = activeItems.length - inStockItems.length;
 
     if (inStockItems.length === 0) {
       toast.error('Product is out of stock');
@@ -547,25 +608,26 @@ const BOQNormalize = ({ onComplete }) => {
 
   // Calculate summary statistics
   const summaryStats = useMemo(() => {
-    const totalItems = items.length;
     const availableSupplierCountForItem = (item) => {
       const suppliers = Number(item.availableSuppliers || 0);
       const inStock = item.isAvailable ?? suppliers > 0;
       return inStock ? suppliers : 0;
     };
-    const totalSuppliers = items.reduce((sum, item) => sum + availableSupplierCountForItem(item), 0);
-    const itemsWithSuppliers = items.filter((item) => availableSupplierCountForItem(item) > 0).length;
-    const itemsWithoutSuppliers = items.filter((item) => availableSupplierCountForItem(item) === 0).length;
-    const totalQuantity = items.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0);
+    const totalItems = activeItems.length;
+    const totalSuppliers = activeItems.reduce((sum, item) => sum + availableSupplierCountForItem(item), 0);
+    const itemsWithSuppliers = activeItems.filter((item) => availableSupplierCountForItem(item) > 0).length;
+    const itemsWithoutSuppliers = activeItems.filter((item) => availableSupplierCountForItem(item) === 0).length;
+    const totalQuantity = activeItems.reduce((sum, item) => sum + (parseFloat(item.quantity) || 0), 0);
     
     return {
       totalItems,
+      cancelledItems: cancelledItemIds.size,
       totalSuppliers,
       itemsWithSuppliers,
       itemsWithoutSuppliers,
       totalQuantity
     };
-  }, [items]);
+  }, [activeItems, cancelledItemIds]);
 
   return (
     <>
@@ -573,7 +635,7 @@ const BOQNormalize = ({ onComplete }) => {
       title="BOQ Normalize"
       description={
         file
-          ? 'Review matched items, or replace the BOQ file if this upload is incorrect.'
+          ? 'Review matched items. Cancel any product you do not want to order, or replace the BOQ file if this upload is incorrect.'
           : 'Set the dispatch location and date, then upload your BOQ file.'
       }
       icon={FileText}
@@ -729,14 +791,18 @@ const BOQNormalize = ({ onComplete }) => {
                   const isListedOutOfStock = hasListedSupplier && !isAvailable;
                   const productRequestKey = buildProductRequestKey(item, boqId);
                   const alreadyRequestedProduct = submittedProductRequestKeys.has(productRequestKey);
+                  const itemKey = itemIdentity(item);
+                  const isCancelled = cancelledItemIds.has(itemKey);
 
                   return (
-                  <div key={item.id} className="item-card">
+                  <div key={item.id} className={`item-card${isCancelled ? ' item-card--cancelled' : ''}`}>
                     <div className="item-card__body">
                       <div className="item-card__content">
                         <div className="item-header">
                           <span className="item-raw">{item.rawName}</span>
-                          {item.confidence >= 0.8 ? (
+                          {isCancelled ? (
+                            <XCircle size={18} className="icon-cancelled" aria-hidden />
+                          ) : item.confidence >= 0.8 ? (
                             <CheckCircle size={18} className="icon-success" aria-hidden />
                           ) : (
                             <AlertCircle size={18} className="icon-warning" aria-hidden />
@@ -747,12 +813,18 @@ const BOQNormalize = ({ onComplete }) => {
                           <strong>{item.normalizedName}</strong>
                         </div>
 
+                        {isCancelled ? (
+                          <div className="item-cancelled-banner">
+                            Removed from this order. Restore it to include it again.
+                          </div>
+                        ) : null}
+
                         <div className="item-meta">
                           <span className="item-qty">
                             Qty: <strong>{item.quantity}</strong>
                             {item.unit ? ` ${item.unit}` : ''}
                           </span>
-                          {hasSuppliers && isAvailable ? (
+                          {!isCancelled && hasSuppliers && isAvailable ? (
                             <div className="item-badges">
                               <span className={`confidence ${item.confidence >= 0.8 ? 'high' : 'medium'}`}>
                                 {Math.round((item.confidence || 0) * 100)}% match
@@ -764,7 +836,7 @@ const BOQNormalize = ({ onComplete }) => {
                           ) : null}
                         </div>
 
-                        {hasListedSupplier ? (
+                        {hasListedSupplier && !isCancelled ? (
                           <div className="item-supplier-info">
                             {item.supplierInfo ? (
                               <div className="item-supplier-line">
@@ -816,31 +888,60 @@ const BOQNormalize = ({ onComplete }) => {
                         ) : null}
                       </div>
 
-                      {(!hasSuppliers || !isAvailable) ? (
-                        <div className="item-card__actions">
-                          <div className="item-action-panel">
-                            <div className="item-action-status">
-                              <AlertCircle size={14} aria-hidden />
-                              <span>
-                                {isListedOutOfStock
-                                  ? 'Currently out of stock'
-                                  : 'No matching suppliers available'}
-                              </span>
+                      <div className="item-card__actions">
+                        {isCancelled ? (
+                          <div className="item-action-panel item-action-panel--restore">
+                            <div className="item-action-status item-action-status--muted">
+                              <XCircle size={14} aria-hidden />
+                              <span>Not included in this order</span>
                             </div>
                             <button
                               type="button"
-                              className="item-action-btn"
-                              onClick={() => openRequestProductModal(item)}
-                              disabled={alreadyRequestedProduct}
+                              className="item-action-btn item-action-btn--restore"
+                              onClick={() => handleRestoreItem(item)}
+                              disabled={savingCart || requestSubmitting}
                             >
-                              <PlusCircle size={14} aria-hidden />
-                              <span>
-                                {alreadyRequestedProduct ? 'Request sent' : 'Request New Product'}
-                              </span>
+                              <RotateCcw size={14} aria-hidden />
+                              <span>Restore product</span>
                             </button>
                           </div>
-                        </div>
-                      ) : null}
+                        ) : (
+                          <>
+                            {(!hasSuppliers || !isAvailable) ? (
+                              <div className="item-action-panel">
+                                <div className="item-action-status">
+                                  <AlertCircle size={14} aria-hidden />
+                                  <span>
+                                    {isListedOutOfStock
+                                      ? 'Currently out of stock'
+                                      : 'No matching suppliers available'}
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="item-action-btn"
+                                  onClick={() => openRequestProductModal(item)}
+                                  disabled={alreadyRequestedProduct}
+                                >
+                                  <PlusCircle size={14} aria-hidden />
+                                  <span>
+                                    {alreadyRequestedProduct ? 'Request sent' : 'Request New Product'}
+                                  </span>
+                                </button>
+                              </div>
+                            ) : null}
+                            <button
+                              type="button"
+                              className="item-cancel-btn"
+                              onClick={() => handleCancelItem(item)}
+                              disabled={savingCart || requestSubmitting}
+                            >
+                              <XCircle size={14} aria-hidden />
+                              <span>Cancel product</span>
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
                   );
@@ -850,7 +951,7 @@ const BOQNormalize = ({ onComplete }) => {
                   <button
                     className="btn-primary btn-large"
                     onClick={handleProceed}
-                    disabled={items.length === 0 || savingCart}
+                    disabled={activeItems.length === 0 || savingCart}
                     style={{ flex: 1 }}
                   >
                     Proceed to Vendor Selection
@@ -859,7 +960,7 @@ const BOQNormalize = ({ onComplete }) => {
                     className="btn-secondary btn-large"
                     onClick={handleAddToCart}
                     disabled={
-                      items.length === 0 ||
+                      activeItems.length === 0 ||
                       savingCart ||
                       loading ||
                       summaryStats.itemsWithSuppliers === 0
@@ -892,7 +993,7 @@ const BOQNormalize = ({ onComplete }) => {
                         <Package size={18} aria-hidden />
                       </div>
                       <div>
-                        <div className="boq-summary-stat-label">Total items</div>
+                        <div className="boq-summary-stat-label">Items to order</div>
                         <div className="boq-summary-stat-value">{summaryStats.totalItems}</div>
                       </div>
                     </div>
@@ -902,6 +1003,14 @@ const BOQNormalize = ({ onComplete }) => {
                         {summaryStats.totalQuantity}
                       </div>
                     </div>
+                    {summaryStats.cancelledItems > 0 ? (
+                      <div className="boq-summary-stat boq-summary-stat--muted">
+                        <div className="boq-summary-stat-label">Cancelled</div>
+                        <div className="boq-summary-stat-value boq-summary-stat-value--sm">
+                          {summaryStats.cancelledItems}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
 
                   <div className="boq-summary-section">

@@ -1,5 +1,7 @@
 /**
- * Backfill TSIN / Variant TSIN for existing rows.
+ * Backfill TSIN / Variant TSIN to current format:
+ *   Product: TS + 5 alphanumeric chars
+ *   Variant: product TSIN + 2 alphanumeric chars
  *
  * Usage (from backend/):
  *   node scripts/backfillTsinCodes.js
@@ -8,11 +10,12 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { createClient } from '@supabase/supabase-js';
+import { buildSupplierVariantIdentity } from '../services/productIdentityService.js';
 import {
-  buildIdentityBundle,
-  buildSupplierVariantIdentity,
-  buildVariantAsinLikeId
-} from '../services/productIdentityService.js';
+  persistCurrentCatalogTsin,
+  persistCurrentProductVariantTsin,
+  persistCurrentVariantTsin
+} from '../services/tsinUpgradeService.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '..', '.env') });
@@ -30,10 +33,6 @@ const PAGE_SIZE = 1000;
 
 function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-
-function cleanIdentifier(value) {
-  return String(value || '').replace(/\s+/g, '').trim();
 }
 
 async function fetchAll(table, selectColumns) {
@@ -58,21 +57,6 @@ async function fetchAll(table, selectColumns) {
   return rows;
 }
 
-function buildProductIdentityInput(row) {
-  const specs = normalizeObject(row.specifications);
-  return {
-    name: row.name || '',
-    category: row.category || '',
-    unit: row.unit || '',
-    brand: row.brand || specs.brand || specs.brandModel || '',
-    gtin: cleanIdentifier(row.gtin || specs.gtin || specs.upc || specs.ean || ''),
-    mpn: row.mpn || specs.mpn || specs.modelNumber || specs.model_no || '',
-    packSize: specs.packSize || specs.pack_size || '',
-    brandModel: specs.brandModel || '',
-    specifications: specs
-  };
-}
-
 function buildVariantIdentityInput(row, parentProduct = null) {
   const attrs = normalizeObject(row.attributes || row.canonical_attributes);
   const specs = normalizeObject(attrs.specifications || attrs.variantAttributes || {});
@@ -94,39 +78,22 @@ async function main() {
     'id, name, category, unit, specifications, brand, gtin, mpn, asin'
   );
 
-  console.log(`Found ${products.length} product(s). Backfilling TSIN...`);
+  console.log(`Found ${products.length} product(s). Upgrading product TSINs to TS + 5 chars...`);
 
   const productById = new Map();
-  for (const product of products) {
-    productById.set(product.id, product);
-  }
-
+  const usedAsins = new Set();
   let productUpdated = 0;
-  let productFailed = 0;
+  let productUnchanged = 0;
 
   for (const product of products) {
-    const identity = buildIdentityBundle(buildProductIdentityInput(product));
-    const tsin = identity.asinLikeId;
-
-    const patch = { asin: tsin };
-    if (identity.catalog.gtin) patch.gtin = identity.catalog.gtin;
-    if (identity.catalog.mpn) patch.mpn = identity.catalog.mpn;
-    if (identity.catalog.brand) patch.brand = identity.catalog.brand;
-    if (identity.catalogKey) patch.catalog_key = identity.catalogKey;
-
-    const { error } = await supabase.from('products').update(patch).eq('id', product.id);
-    if (error) {
-      productFailed += 1;
-      console.error(`❌ products ${product.id}: ${error.message}`);
-      continue;
-    }
-
-    product.asin = tsin;
+    const previous = String(product.asin || '').trim().toUpperCase();
+    const next = await persistCurrentCatalogTsin(supabase, product, usedAsins);
     productById.set(product.id, product);
-    productUpdated += 1;
+    if (next && next !== previous) productUpdated += 1;
+    else productUnchanged += 1;
   }
 
-  console.log(`Products done. updated=${productUpdated}, failed=${productFailed}`);
+  console.log(`Products done. updated=${productUpdated}, unchanged=${productUnchanged}`);
 
   console.log('Loading supplier_products...');
   const supplierProducts = await fetchAll(
@@ -135,36 +102,32 @@ async function main() {
   );
 
   let supplierVariantUpdated = 0;
-  let supplierVariantFailed = 0;
+  let supplierVariantUnchanged = 0;
 
   for (const sp of supplierProducts) {
     const parent = productById.get(sp.product_id) || null;
     if (!parent) continue;
 
-    const variantIdentity = buildSupplierVariantIdentity(
-      buildVariantIdentityInput(sp, parent),
-      parent
-    );
-    const variantKey = variantIdentity.variantKey;
-    const variantTsin = buildVariantAsinLikeId(parent.asin || '', variantKey);
-
-    const patch = {
-      variant_asin: variantTsin,
-      variant_key: variantKey
-    };
-
-    const { error } = await supabase.from('supplier_products').update(patch).eq('id', sp.id);
-    if (error) {
-      supplierVariantFailed += 1;
-      console.error(`❌ supplier_products ${sp.id}: ${error.message}`);
-      continue;
+    if (!String(sp.variant_key || '').trim()) {
+      const variantIdentity = buildSupplierVariantIdentity(
+        buildVariantIdentityInput(sp, parent),
+        parent
+      );
+      sp.variant_key = variantIdentity.variantKey;
+      await supabase
+        .from('supplier_products')
+        .update({ variant_key: sp.variant_key })
+        .eq('id', sp.id);
     }
 
-    supplierVariantUpdated += 1;
+    const previous = String(sp.variant_asin || '').trim().toUpperCase();
+    const next = await persistCurrentVariantTsin(supabase, sp, parent.asin || '');
+    if (next && next !== previous) supplierVariantUpdated += 1;
+    else supplierVariantUnchanged += 1;
   }
 
   console.log(
-    `Supplier variants done. updated=${supplierVariantUpdated}, failed=${supplierVariantFailed}`
+    `Supplier variants done. updated=${supplierVariantUpdated}, unchanged=${supplierVariantUnchanged}`
   );
 
   console.log('Loading product_variants...');
@@ -174,54 +137,44 @@ async function main() {
   );
 
   let productVariantUpdated = 0;
-  let productVariantFailed = 0;
+  let productVariantUnchanged = 0;
 
   for (const pv of productVariants) {
     const parent = productById.get(pv.product_id) || null;
     if (!parent) continue;
 
-    const variantInput = buildVariantIdentityInput(
-      {
-        ...pv,
-        attributes: {
-          ...normalizeObject(pv.canonical_attributes),
-          gtin: pv.gtin,
-          mpn: pv.mpn,
-          unit: pv.unit,
-          packSize: pv.pack_size
-        }
-      },
-      parent
-    );
-
-    const variantIdentity = buildSupplierVariantIdentity(variantInput, parent);
-    const variantKey = variantIdentity.variantKey;
-    const variantTsin = buildVariantAsinLikeId(parent.asin || '', variantKey);
-
-    const patch = {
-      variant_asin: variantTsin,
-      variant_key: variantKey
-    };
-
-    const { error } = await supabase.from('product_variants').update(patch).eq('id', pv.id);
-    if (error) {
-      productVariantFailed += 1;
-      console.error(`❌ product_variants ${pv.id}: ${error.message}`);
-      continue;
+    if (!String(pv.variant_key || '').trim()) {
+      const variantInput = buildVariantIdentityInput(
+        {
+          ...pv,
+          attributes: {
+            ...normalizeObject(pv.canonical_attributes),
+            gtin: pv.gtin,
+            mpn: pv.mpn,
+            unit: pv.unit,
+            packSize: pv.pack_size
+          }
+        },
+        parent
+      );
+      pv.variant_key = buildSupplierVariantIdentity(variantInput, parent).variantKey;
+      await supabase.from('product_variants').update({ variant_key: pv.variant_key }).eq('id', pv.id);
     }
 
-    productVariantUpdated += 1;
+    const previous = String(pv.variant_asin || '').trim().toUpperCase();
+    const next = await persistCurrentProductVariantTsin(supabase, pv, parent.asin || '');
+    if (next && next !== previous) productVariantUpdated += 1;
+    else productVariantUnchanged += 1;
   }
 
   console.log(
-    `Product variants done. updated=${productVariantUpdated}, failed=${productVariantFailed}`
+    `Product variants done. updated=${productVariantUpdated}, unchanged=${productVariantUnchanged}`
   );
 
-  console.log('TSIN backfill completed.');
+  console.log('TSIN upgrade completed. Format is now TS + 5 product chars + 2 variant chars.');
 }
 
 main().catch((err) => {
   console.error('Backfill failed:', err?.message || err);
   process.exit(1);
 });
-

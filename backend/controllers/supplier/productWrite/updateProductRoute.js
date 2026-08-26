@@ -31,6 +31,7 @@ import {
   ensureCategoryAndUnit,
   fetchAndValidateSupplierProductForUpdate
 } from '../../../services/supplierProductWriteService.js';
+import { persistCurrentCatalogTsin } from '../../../services/tsinUpgradeService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
@@ -41,7 +42,7 @@ import {
   resolveSupplierOfferDisplaySpecifications,
   specificationTemplateKeysOnly
 } from '../../../services/supplierCatalogHelpersService.js';
-import { syncOfferAttributesWithSpecifications } from '../../../services/productIdentityService.js';
+import { syncOfferAttributesWithSpecifications, isCurrentVariantTsin } from '../../../services/productIdentityService.js';
 import {
   deleteSupplierBcovLevelsForVariant,
   deleteSupplierBcovLevelsIfNoRemainingOffer
@@ -321,9 +322,12 @@ export function registerSupplierProductUpdateRoute(ctx) {
           : supplierProduct.location;
         const { data: parentProduct } = await supabase
           .from('products')
-          .select('asin, specifications, status')
+          .select('id, asin, specifications, status, name, category, unit, brand, gtin, mpn')
           .eq('id', supplierProduct.product_id)
           .maybeSingle();
+        if (parentProduct?.id) {
+          parentProduct.asin = await persistCurrentCatalogTsin(supabase, parentProduct);
+        }
         const variantIdentity = buildSupplierVariantIdentity(
           {
             unit: req.body.unit !== undefined ? req.body.unit : updatedAttributes.unit,
@@ -367,9 +371,21 @@ export function registerSupplierProductUpdateRoute(ctx) {
             });
           }
         } else {
-          // Explicitly preserve identity on inventory / unchanged-spec updates.
+          // Explicitly preserve identity on inventory / unchanged-spec updates,
+          // but rewrite outdated Variant TSINs to TS + 5 product chars + 2 variant chars.
           delete updateSupplierProductData.variant_key;
-          delete updateSupplierProductData.variant_asin;
+          const parentAsin = parentProduct?.asin || '';
+          if (
+            !isCurrentVariantTsin(parentAsin, supplierProduct.variant_asin) &&
+            String(supplierProduct.variant_key || '').trim()
+          ) {
+            updateSupplierProductData.variant_asin = buildVariantAsinLikeId(
+              parentAsin,
+              supplierProduct.variant_key
+            );
+          } else {
+            delete updateSupplierProductData.variant_asin;
+          }
         }
 
         let movedToPendingForSpecReview = false;

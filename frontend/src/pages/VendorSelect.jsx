@@ -19,6 +19,7 @@ import {
   readSupplierSelectBoqProjectSessionIfFresh,
   dedupeSupplierSelectItems
 } from '../constants/supplierSelectSession';
+import { excludeCancelledBoqItems } from '../utils/boqCancelledItems';
 import {
   buildVendorRankCacheKey,
   getVendorRankCache,
@@ -449,7 +450,11 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
 
     if (!Array.isArray(scoped) || scoped.length === 0) return;
 
-    const deduped = dedupeSupplierSelectItems(scoped);
+    const scopedBoqId =
+      location?.state?.supplierSelectBoqId ||
+      location?.state?.supplierSelectBoqProject?.boqId ||
+      boqId;
+    const deduped = excludeCancelledBoqItems(dedupeSupplierSelectItems(scoped), scopedBoqId);
     const ids = new Set(deduped.map((it) => String(it?.id ?? '').trim()).filter(Boolean));
     lockedLineIdsRef.current = ids.size > 0 ? ids : null;
 
@@ -641,10 +646,13 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
         if (itemsPropRef.current?.length > 0) return;
 
         if (res.ok && data.status === 'success' && Array.isArray(data.items)) {
-          const withBoq = data.items.map((it) => ({
-            ...it,
-            boqId: data.boqId || id
-          }));
+          const withBoq = excludeCancelledBoqItems(
+            data.items.map((it) => ({
+              ...it,
+              boqId: data.boqId || id
+            })),
+            data.boqId || id
+          );
           setEffectiveItems(withBoq);
           if (data.project && (data.project.location || data.project.requiredDate)) {
             setBoqMeta(data.project);

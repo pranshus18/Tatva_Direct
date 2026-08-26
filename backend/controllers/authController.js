@@ -33,6 +33,7 @@ import {
   syncPmCustomerProfileForUser
 } from '../services/pmUserService.js';
 import { syncPmShippingAddressesOnProfile } from '../services/pmAddressService.js';
+import { mergeParsedShippingAddress } from '../utils/parseStructuredShippingAddress.js';
 import {
   PM_PLATFORM_FLAG,
   PM_SEND_OTP_URL,
@@ -400,12 +401,15 @@ async function finalizeSupplierRegistration(user, registration, pmResponse, res)
   }
 
   const nextProfile = buildSupplierProfileFromRegistration(user, registration, pmResponse);
+  const parsedBusinessAddress = mergeParsedShippingAddress({
+    line1: String(registration.businessAddress || '').slice(0, 500)
+  });
   const nextAddress = {
-    line1: registration.businessAddress.slice(0, 500),
-    city: 'Pending',
-    state: 'Pending',
-    pincode: '000000',
-    country: 'India'
+    line1: parsedBusinessAddress.line1 || String(registration.businessAddress || '').slice(0, 500),
+    city: parsedBusinessAddress.city || 'Pending',
+    state: parsedBusinessAddress.state || 'Pending',
+    pincode: parsedBusinessAddress.pincode || '000000',
+    country: parsedBusinessAddress.country || 'India'
   };
 
   const { data: updatedUser, error: updateError } = await supabase

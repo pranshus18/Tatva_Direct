@@ -1,5 +1,6 @@
 import { PM_PLATFORM_FLAG } from '../config/pmAuth';
 import { resolveApiPath } from '../config/api';
+import { parseStructuredShippingAddress } from '../utils/parseStructuredShippingAddress';
 
 async function parseJsonResponse(response) {
   try {
@@ -7,6 +8,10 @@ async function parseJsonResponse(response) {
   } catch {
     return {};
   }
+}
+
+function cleanPart(value) {
+  return String(value || '').trim();
 }
 
 function formatPmAddress(address) {
@@ -25,6 +30,36 @@ function formatPmAddress(address) {
     .join(', ');
 }
 
+/** Map a GST/PM address object into street / city / state / PIN — never dump the whole string into line1. */
+export function mapPmGstAddress(address) {
+  if (!address || typeof address !== 'object') {
+    return parseStructuredShippingAddress({});
+  }
+
+  const locality = cleanPart(address.locality);
+  const district = cleanPart(address.district);
+  const city = district || locality || cleanPart(address.city);
+  const streetLine = [
+    address.building,
+    address.buildingName,
+    address.floor,
+    address.street,
+    locality && locality !== city ? locality : ''
+  ]
+    .map(cleanPart)
+    .filter(Boolean)
+    .join(', ');
+  const concatenated = streetLine || formatPmAddress(address) || cleanPart(address.formatted_address || address.line1);
+
+  return parseStructuredShippingAddress({
+    line1: concatenated,
+    city,
+    state: address.state,
+    pincode: address.zip || address.pincode || address.postalCode,
+    country: address.country || 'India'
+  });
+}
+
 export function mapPmGstVerification(payload = {}) {
   const companyData = payload.companyData || {};
   const addresses = Array.isArray(companyData.addresses) ? companyData.addresses : [];
@@ -32,6 +67,7 @@ export function mapPmGstVerification(payload = {}) {
     addresses.find((entry) => String(entry?.type || '').toUpperCase() === 'PRIMARY') ||
     addresses[0] ||
     null;
+  const structuredAddress = mapPmGstAddress(primaryAddress);
 
   return {
     gstNo: String(payload.gstNo || '').trim().toUpperCase(),
@@ -41,7 +77,8 @@ export function mapPmGstVerification(payload = {}) {
       String(payload.legalName || companyData.legalName || payload.companyName || '').trim(),
     companyType: String(payload.constitution || companyData.constitution || '').trim(),
     panNo: String(payload.pan || companyData.pan || '').trim().toUpperCase(),
-    businessAddress: formatPmAddress(primaryAddress)
+    businessAddress: formatPmAddress(primaryAddress) || structuredAddress.line1,
+    address: structuredAddress
   };
 }
 

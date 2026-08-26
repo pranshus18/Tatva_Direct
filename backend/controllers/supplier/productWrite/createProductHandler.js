@@ -45,7 +45,8 @@ import {
   resolveStableVariantIdentityFromExistingOffers,
   syncOfferAttributesWithSpecifications,
   isPersistableProductBarcode,
-  buildVariantAsinLikeId
+  buildVariantAsinLikeId,
+  isCurrentVariantTsin
 } from '../../../services/productIdentityService.js';
 import {
   fetchCanonicalVariantMrp,
@@ -515,9 +516,11 @@ export function buildSupplierProductCreateHandler(ctx) {
       ) {
         // Force stable identity onto the already-live variant before duplicate detection.
         resolvedVariantKey = String(sameVariantApprovedOffer.variant_key || '').trim();
-        if (String(sameVariantApprovedOffer.variant_asin || '').trim()) {
-          variantAsin = String(sameVariantApprovedOffer.variant_asin || '').trim();
-        }
+        const parentAsin = catalogAsin || identityBundle.asinLikeId || parentProductForVariant?.asin || '';
+        const storedVariantAsin = String(sameVariantApprovedOffer.variant_asin || '').trim();
+        variantAsin = isCurrentVariantTsin(parentAsin, storedVariantAsin)
+          ? storedVariantAsin.toUpperCase()
+          : buildVariantAsinLikeId(parentAsin, resolvedVariantKey);
       }
 
       const currentLocation = canonicalSupplierOfferLocation(otherData.location);

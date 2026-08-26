@@ -14,6 +14,7 @@ import {
   normalizeCatalogLookupName
 } from '../utils/catalogProductAttach.js';
 import { buildDisambiguatedAsinLikeId } from './productIdentityService.js';
+import { persistCurrentCatalogTsin } from './tsinUpgradeService.js';
 import { specificationsWithMeaningfulValuesOnly } from './supplierCatalogHelpersService.js';
 
 function normalizeOfferPrice(rawValue) {
@@ -440,7 +441,7 @@ export async function createBaseProductIfNeeded(
 
   if (existingProduct) {
     productId = existingProduct.id;
-    catalogAsin = existingProduct.asin || identityBundle.asinLikeId;
+    catalogAsin = await persistCurrentCatalogTsin(supabase, existingProduct);
     return { productId, catalogAsin, isNewProduct };
   }
 

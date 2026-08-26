@@ -173,27 +173,27 @@ function stableHash(input) {
   return crypto.createHash('sha256').update(input).digest('hex');
 }
 
-/** Total catalog TSIN length including `TS` prefix (e.g. TSA7K = 5 chars). */
-export const CATALOG_TSIN_TOTAL_LENGTH = 5;
-/** Legacy catalog TSINs are `TS` + 2 base36 chars (4 chars total). */
+/** Product body after `TS` — 5 alphanumeric chars (e.g. TS + A7K3M). */
+export const CATALOG_TSIN_BODY_LENGTH = 5;
+/** Product TSIN total: `TS` + 5 alphanumeric chars = 7 (e.g. TSA7K3M). */
+export const CATALOG_TSIN_TOTAL_LENGTH = 2 + CATALOG_TSIN_BODY_LENGTH;
+/** Legacy catalog TSINs are `TS` + 2 alphanumeric chars (4 chars total). */
 export const LEGACY_CATALOG_TSIN_BODY_LENGTH = 2;
-/** New catalog body after `TS` — 3 chars so total catalog TSIN is 5. */
-export const CATALOG_TSIN_BODY_LENGTH = CATALOG_TSIN_TOTAL_LENGTH - 2;
-/** Variant suffix length — last N chars of a variant TSIN identify the variant. */
-export const VARIANT_TSIN_SUFFIX_LENGTH = 5;
-/** Legacy variant TSIN total: TS(2) + product(2) + variant(5) = 9 (e.g. TSA73M9K2P). */
+/** Variant suffix: last 2 alphanumeric chars identify the variant. */
+export const VARIANT_TSIN_SUFFIX_LENGTH = 2;
+/** Legacy variant TSIN total: product(4) + variant(2) = 6. */
 export const LEGACY_VARIANT_TSIN_TOTAL_LENGTH =
   2 + LEGACY_CATALOG_TSIN_BODY_LENGTH + VARIANT_TSIN_SUFFIX_LENGTH;
-/** New-catalog variant TSIN total: TS(2) + product(3) + variant(5) = 10 (e.g. TSA7K3M9K2P). */
+/** Current variant TSIN total: TS + product(5) + variant(2) = 9. */
 export const NEW_VARIANT_TSIN_TOTAL_LENGTH =
-  2 + CATALOG_TSIN_BODY_LENGTH + VARIANT_TSIN_SUFFIX_LENGTH;
-/** @deprecated Prefer LEGACY/NEW totals; kept for callers expecting a single legacy length (9). */
-export const VARIANT_TSIN_TOTAL_LENGTH = LEGACY_VARIANT_TSIN_TOTAL_LENGTH;
-/** Variant suffix for new 5-char catalog parents. */
+  CATALOG_TSIN_TOTAL_LENGTH + VARIANT_TSIN_SUFFIX_LENGTH;
+export const VARIANT_TSIN_TOTAL_LENGTH = NEW_VARIANT_TSIN_TOTAL_LENGTH;
+/** Variant suffix for current product TSINs. */
 export const VARIANT_TSIN_BODY_LENGTH = VARIANT_TSIN_SUFFIX_LENGTH;
-/** Variant suffix for legacy 4-char catalog parents. */
+/** Variant suffix for legacy product TSINs. */
 export const LEGACY_VARIANT_TSIN_BODY_LENGTH = VARIANT_TSIN_SUFFIX_LENGTH;
 
+/** Alphanumeric alphabet for product and variant codes (0-9, A-Z). */
 const TSIN_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
 /**
@@ -222,23 +222,27 @@ export function isLegacyCatalogTsin(value) {
   );
 }
 
-function extractCatalogBodyFromParent(parentAsin, bodyLength) {
-  const normalizedParent = normalizeIdentifierField(parentAsin).toUpperCase();
-  if (normalizedParent.startsWith('TS')) {
-    const body = normalizedParent.slice(2);
-    if (body.length >= bodyLength) {
-      return body.slice(0, bodyLength);
-    }
-    if (body.length > 0) {
-      return toShortAlphaNum(normalizedParent, bodyLength);
-    }
-  }
-  return toShortAlphaNum(normalizedParent || 'TS', bodyLength);
+/** Current product TSIN: `TS` + 5 alphanumeric chars. */
+export function isCurrentCatalogTsin(value) {
+  const normalized = normalizeIdentifierField(value).toUpperCase();
+  return normalized.length === CATALOG_TSIN_TOTAL_LENGTH && /^TS[A-Z0-9]{5}$/.test(normalized);
+}
+
+/** Current variant TSIN: current product TSIN + 2 alphanumeric chars. */
+export function isCurrentVariantTsin(parentAsin, variantAsin) {
+  const parent = normalizeIdentifierField(parentAsin).toUpperCase();
+  const variant = normalizeIdentifierField(variantAsin).toUpperCase();
+  if (!isCurrentCatalogTsin(parent) || !variant) return false;
+  return (
+    variant.length === parent.length + VARIANT_TSIN_SUFFIX_LENGTH &&
+    variant.startsWith(parent) &&
+    /^[A-Z0-9]{2}$/.test(variant.slice(-VARIANT_TSIN_SUFFIX_LENGTH))
+  );
 }
 
 /**
- * TSIN deterministic ID format: exactly 5 characters — `TS` + 3 base36 (e.g. TSA7K).
- * Legacy rows may still store 4-char `TS` + 2 codes (e.g. TS22).
+ * Product TSIN: `TS` + 5 alphanumeric characters (e.g. TSA7K3M).
+ * Legacy rows may still store shorter codes (e.g. TS22, TSA7K).
  */
 export function buildAsinLikeId(catalog = {}) {
   const seed = JSON.stringify({
@@ -253,7 +257,7 @@ export function buildAsinLikeId(catalog = {}) {
   return `TS${toShortAlphaNum(seed, CATALOG_TSIN_BODY_LENGTH)}`;
 }
 
-/** New 5-char TSIN when the deterministic catalog code collides with an unrelated row. */
+/** New 7-char product TSIN when the deterministic catalog code collides with an unrelated row. */
 export function buildDisambiguatedAsinLikeId(baseAsin, salt = '') {
   return `TS${toShortAlphaNum(
     `asin-retry:${String(baseAsin || '').trim()}:${String(salt || '').trim()}`,
@@ -262,31 +266,22 @@ export function buildDisambiguatedAsinLikeId(baseAsin, salt = '') {
 }
 
 /**
- * Variant TSIN deterministic ID format:
- * - Legacy parent (4 chars): TS + product(2) + variant(5) => 9 chars total
- * - New parent (5 chars):    TS + product(3) + variant(5) => 10 chars total
- * The last 5 characters always identify the variant; prefix matches parent catalog TSIN.
- * Same parent TSIN + same variant key => same variant TSIN within each format generation.
+ * Variant TSIN: product TSIN + 2 alphanumeric variant chars.
+ * Current format: TS + product(5) + variant(2) => 9 chars (e.g. TSA7K3M9K).
+ * Older parents keep their prefix and still append 2 variant chars.
+ * Codes are A-Z0-9 only. Same parent + same variant key => same variant TSIN.
  */
 export function buildVariantAsinLikeId(parentAsin, variantKey) {
   const normalizedParent = normalizeIdentifierField(parentAsin).toUpperCase();
-  const legacyParent = isLegacyCatalogTsin(normalizedParent);
-  const catalogBodyLength = legacyParent
-    ? LEGACY_CATALOG_TSIN_BODY_LENGTH
-    : CATALOG_TSIN_BODY_LENGTH;
-  const variantBodyLength = VARIANT_TSIN_SUFFIX_LENGTH;
-
-  const productCode = extractCatalogBodyFromParent(normalizedParent, catalogBodyLength);
   const seed = `${normalizedParent}|${normalizeIdentifierField(variantKey)}`;
-  const variantCode = toShortAlphaNum(seed, variantBodyLength);
-  return `TS${productCode}${variantCode}`;
+  const variantCode = toShortAlphaNum(seed, VARIANT_TSIN_SUFFIX_LENGTH);
+  return `${normalizedParent}${variantCode}`;
 }
 
 export function getVariantTsinTotalLength(parentAsin) {
   const normalizedParent = normalizeIdentifierField(parentAsin).toUpperCase();
-  return isLegacyCatalogTsin(normalizedParent)
-    ? LEGACY_VARIANT_TSIN_TOTAL_LENGTH
-    : NEW_VARIANT_TSIN_TOTAL_LENGTH;
+  if (!normalizedParent) return NEW_VARIANT_TSIN_TOTAL_LENGTH;
+  return normalizedParent.length + VARIANT_TSIN_SUFFIX_LENGTH;
 }
 
 /**
@@ -520,12 +515,11 @@ function rankOfferForVariantReuse(row = {}) {
 function pickStableIdentityFromRow(row = {}, reason = 'reuse', parentAsin = '') {
   const variantKey = String(row?.variant_key || '').trim();
   if (!variantKey) return null;
-  // Older offers may have variant_key without variant_asin — still reuse the key.
   const storedAsin = String(row?.variant_asin || '').trim();
-  const variantAsin =
-    storedAsin ||
-    (parentAsin ? buildVariantAsinLikeId(parentAsin, variantKey) : '') ||
-    variantKey;
+  const rebuiltAsin = parentAsin ? buildVariantAsinLikeId(parentAsin, variantKey) : '';
+  const variantAsin = isCurrentVariantTsin(parentAsin, storedAsin)
+    ? storedAsin.toUpperCase()
+    : rebuiltAsin || storedAsin || variantKey;
   return {
     variantKey,
     variantAsin,
@@ -815,6 +809,8 @@ export default {
   buildDisambiguatedAsinLikeId,
   buildVariantAsinLikeId,
   isLegacyCatalogTsin,
+  isCurrentCatalogTsin,
+  isCurrentVariantTsin,
   CATALOG_TSIN_TOTAL_LENGTH,
   VARIANT_TSIN_TOTAL_LENGTH,
   LEGACY_VARIANT_TSIN_TOTAL_LENGTH,

@@ -38,6 +38,7 @@ import {
   validateShippingAddressEntries
 } from '../profileHelpers.js';
 import { syncPmCustomerProfileForUser, resolvePmPortalFlag } from '../../../services/pmUserService.js';
+import { mergeParsedShippingAddress } from '../../../utils/parseStructuredShippingAddress.js';
 import { isAddressComplete } from '../../po/shared/poHelpers.js';
 import {
   createPmShippingAddress,
@@ -248,10 +249,10 @@ export function registerProfileUpdateRoutes(router) {
         }
 
         if (updatingBillingAddress) {
-          const mergedBillingAddress = {
+          const mergedBillingAddress = mergeParsedShippingAddress({
             ...(currentUser.address || {}),
             ...(profileData.address || {})
-          };
+          });
           const requiredBillingFields = ['line1', 'city', 'state', 'pincode', 'country'];
           const missingBillingField = requiredBillingFields.find(
             (field) => !String(mergedBillingAddress?.[field] || '').trim()

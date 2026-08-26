@@ -19,6 +19,7 @@ import { formatShippingAddressLabel, getShippingAddressFields } from '../utils/s
 import { formatDateTimeIST } from '../utils/dateTime';
 import { sanitizeSignupPlaceholderAddress } from '../utils/addressPlaceholders';
 import { mergeParsedShippingAddress } from '../utils/parseStructuredShippingAddress';
+import { verifyPmGst } from '../services/pmGstService';
 import { shouldShowChainProfileRejectionBanner, listPendingChainRoleSubmissions } from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
 
@@ -237,6 +238,7 @@ const Profile = ({ user }) => {
   const [profile, setProfile] = useState(null);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [gstAddressLoading, setGstAddressLoading] = useState(false);
   const [photoDraft, setPhotoDraft] = useState(EMPTY_PROFILE_PHOTO_DRAFT);
 
   const resetPhotoDraft = () => {
@@ -260,9 +262,11 @@ const Profile = ({ user }) => {
       const profileData = data.profile
         ? {
             ...data.profile,
-            address: sanitizeSignupPlaceholderAddress(data.profile.address || {}, {
-              companyName: data.profile.companyName || ''
-            }),
+            address: mergeParsedShippingAddress(
+              sanitizeSignupPlaceholderAddress(data.profile.address || {}, {
+                companyName: data.profile.companyName || ''
+              })
+            ),
             shippingAddresses: (Array.isArray(data.profile.shippingAddresses)
               ? data.profile.shippingAddresses
               : []
@@ -339,9 +343,11 @@ const Profile = ({ user }) => {
           }
         }
 
-        const billingAddr = sanitizeSignupPlaceholderAddress(profile?.address || {}, {
-          companyName: profile?.companyName || ''
-        });
+        const billingAddr = mergeParsedShippingAddress(
+          sanitizeSignupPlaceholderAddress(profile?.address || {}, {
+            companyName: profile?.companyName || ''
+          })
+        );
         const requiredBillingFields = [
           { key: 'line1', label: 'Address' },
           { key: 'city', label: 'City' },
@@ -356,7 +362,18 @@ const Profile = ({ user }) => {
         }
       }
 
-      const payload = buildProfileSavePayload(profile);
+      const payload = buildProfileSavePayload(
+        profile?.userType === 'supplier'
+          ? {
+              ...profile,
+              address: mergeParsedShippingAddress(
+                sanitizeSignupPlaceholderAddress(profile?.address || {}, {
+                  companyName: profile?.companyName || ''
+                })
+              )
+            }
+          : profile
+      );
 
       const photoResult = await commitProfilePhotoDraft(photoDraft);
       if (photoResult.changed) {
@@ -904,6 +921,42 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
     });
   };
 
+  const splitRegisteredAddressLine = () => {
+    setProfile((prev) => ({
+      ...prev,
+      address: mergeParsedShippingAddress(prev?.address || {})
+    }));
+  };
+
+  const fetchBillingAddressFromGst = async () => {
+    const gstin = String(profile?.gstin || profile?.mainGstin || '').trim().toUpperCase().replace(/\s/g, '');
+    if (gstin.length !== 15) {
+      toast.error('Enter a valid 15-character GSTIN first.');
+      return;
+    }
+    setGstAddressLoading(true);
+    try {
+      const result = await verifyPmGst(gstin);
+      const nextAddress = mergeParsedShippingAddress(result.address || { line1: result.businessAddress || '' });
+      setProfile((prev) => ({
+        ...prev,
+        gstin,
+        mainGstin: gstin,
+        companyName: result.companyName || prev?.companyName,
+        address: {
+          ...(prev?.address || {}),
+          ...nextAddress
+        }
+      }));
+      if (!editing) setEditing(true);
+      toast.success('Billing address filled from GST.');
+    } catch (error) {
+      toast.error(error.message || 'Could not fetch address from GST.');
+    } finally {
+      setGstAddressLoading(false);
+    }
+  };
+
   return (
     <div className="profile-content">
       {pendingChainRoleSubmissions.length > 0 ? (
@@ -1022,6 +1075,14 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
             <FileText size={20} />
             Billing / Registered Company Address
           </h2>
+          <button
+            type="button"
+            className="btn-add"
+            onClick={fetchBillingAddressFromGst}
+            disabled={gstAddressLoading}
+          >
+            {gstAddressLoading ? 'Fetching…' : 'Fetch address from GST'}
+          </button>
         </div>
         <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
           Single GST-registered company address used for billing on upstream orders and invoices.
@@ -1033,6 +1094,7 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
               rows="2"
               value={profile?.address?.line1 || ''}
               onChange={(e) => updateRegisteredAddress('line1', e.target.value)}
+              onBlur={splitRegisteredAddressLine}
               disabled={!editing}
               placeholder="Registered office address"
             />

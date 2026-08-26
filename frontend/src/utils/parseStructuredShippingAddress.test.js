@@ -37,6 +37,40 @@ describe('parseStructuredShippingAddress', () => {
     expect(parseStructuredShippingAddress(input)).toEqual(input);
   });
 
+  it('splits GST-fetched line even when signup placeholders filled city/state/PIN', () => {
+    const parsed = parseStructuredShippingAddress({
+      line1:
+        'ALL INDIA FOOTBALL FEDERATION, FOOTBALL HOUSE, SECTOR 19, PHASE-1, DWARKA, South West Delhi, Delhi, 110075',
+      city: 'Pending',
+      state: 'Pending',
+      pincode: '000000',
+      country: 'India'
+    });
+    expect(parsed.line1).toBe(
+      'ALL INDIA FOOTBALL FEDERATION, FOOTBALL HOUSE, SECTOR 19, PHASE-1, DWARKA'
+    );
+    expect(parsed.city).toBe('South West Delhi');
+    expect(parsed.state).toBe('Delhi');
+    expect(parsed.pincode).toBe('110075');
+  });
+
+  it('strips city/state/PIN from line1 when those fields were also provided', () => {
+    const parsed = parseStructuredShippingAddress({
+      line1:
+        'ALL INDIA FOOTBALL FEDERATION, FOOTBALL HOUSE, SECTOR 19, PHASE-1, DWARKA, South West Delhi, Delhi, 110075',
+      city: 'South West Delhi',
+      state: 'Delhi',
+      pincode: '110075',
+      country: 'India'
+    });
+    expect(parsed.line1).toBe(
+      'ALL INDIA FOOTBALL FEDERATION, FOOTBALL HOUSE, SECTOR 19, PHASE-1, DWARKA'
+    );
+    expect(parsed.city).toBe('South West Delhi');
+    expect(parsed.state).toBe('Delhi');
+    expect(parsed.pincode).toBe('110075');
+  });
+
   it('extracts trailing country when present', () => {
     const parsed = parseStructuredShippingAddress({
       line1: 'Plot 9, Bengaluru, Karnataka, 560001, India'

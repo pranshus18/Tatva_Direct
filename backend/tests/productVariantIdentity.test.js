@@ -123,7 +123,7 @@ test('resolveStableVariantIdentityFromExistingOffers reuses legacy key when offe
   assert.equal(stable.reused, true);
   assert.equal(stable.reason, 'same_offer_specs');
   assert.equal(stable.variantKey, legacyKey);
-  assert.equal(stable.variantAsin, legacyAsin);
+  assert.equal(stable.variantAsin, buildVariantAsinLikeId('TSA7K', legacyKey));
 });
 
 test('resolveStableVariantIdentityFromExistingOffers reuses key when variant_asin is missing on legacy offer', () => {
@@ -181,7 +181,7 @@ test('resolveStableVariantIdentityFromExistingOffers reuses key when submitted o
 
   assert.equal(stable.reused, true);
   assert.equal(stable.variantKey, 'stored-black-500');
-  assert.equal(stable.variantAsin, 'TSBLK500');
+  assert.equal(stable.variantAsin, buildVariantAsinLikeId('TSA7K', 'stored-black-500'));
 });
 
 test('resolveStableVariantIdentityFromExistingOffers reuses DB variant when catalog specs are unchanged', () => {
@@ -215,7 +215,7 @@ test('resolveStableVariantIdentityFromExistingOffers reuses DB variant when cata
 
   assert.equal(stable.reused, true);
   assert.equal(stable.variantKey, 'stored-db-key');
-  assert.equal(stable.variantAsin, 'TSSTORED');
+  assert.equal(stable.variantAsin, buildVariantAsinLikeId('TSA7K', 'stored-db-key'));
 });
 
 test('resolveStableVariantIdentityFromExistingOffers reuses product_variants row for unchanged catalog add', () => {
@@ -243,7 +243,7 @@ test('resolveStableVariantIdentityFromExistingOffers reuses product_variants row
 
   assert.equal(stable.reused, true);
   assert.equal(stable.variantKey, 'pv-key-1');
-  assert.equal(stable.variantAsin, 'TSPV0001');
+  assert.equal(stable.variantAsin, buildVariantAsinLikeId('TSA7K', 'pv-key-1'));
 });
 
 test('resolveStableVariantIdentityFromExistingOffers keeps computed identity for a new variant', () => {
@@ -320,10 +320,16 @@ test('hasSupplierVariantSignals: true when only variantAttributes differ', () =>
   assert.equal(hasSupplierVariantSignals({ specifications: { weight: '1.5 kg' } }, identity), true);
 });
 
-test('resolveVariantTsin: returns stored supplier variant_asin even when not TSxxxx format', () => {
-  const legacy = 'A1B2C3D4E5F6';
-  assert.equal(resolveVariantTsin('TS22', 'some-key', legacy), legacy);
-  assert.equal(resolveParentTsin('ts22'), 'TS22');
+test('resolveVariantTsin rebuilds outdated stored TSINs onto current parent + 2 chars', () => {
+  const parent = 'TSA7K3M';
+  const rebuilt = resolveVariantTsin(parent, 'some-key', 'TSCYE7HNUN');
+  assert.equal(rebuilt, buildVariantAsinLikeId(parent, 'some-key'));
+  assert.match(rebuilt, /^TS[A-Z0-9]{7}$/);
+  assert.equal(rebuilt.slice(0, parent.length), parent);
+
+  const current = `${parent}9K`;
+  assert.equal(resolveVariantTsin(parent, 'some-key', current), current);
+  assert.equal(resolveParentTsin('tsa7k3m'), 'TSA7K3M');
 });
 
 test('mergeOrderItemSpecificationsForDisplay: keeps snapshot identity, not live catalog drift', () => {

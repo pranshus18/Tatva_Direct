@@ -12,6 +12,7 @@ import {
 } from './shared/productHelpers.js';
 import { resolveSellerOwnedListingImages } from '../../services/productImageService.js';
 import { resolveSupplierOfferDisplayName } from '../../services/supplierProductWriteService.js';
+import { upgradeSupplierInventoryTsins } from '../../services/tsinUpgradeService.js';
 import { catalogBrandDedupKey, normalizeBrandKey } from '../../services/supplyChainSharedService.js';
 import {
   indexPreferredBrandRowsByCatalogKey,
@@ -111,6 +112,8 @@ router.get('/products', authenticateToken, async (req, res) => {
         }
       }
     }
+
+    await upgradeSupplierInventoryTsins(supabase, supplierProducts || []);
 
     const catalogIds = [
       ...new Set((supplierProducts || []).map((sp) => sp.product_id).filter(Boolean))
@@ -235,7 +238,6 @@ router.get('/products', authenticateToken, async (req, res) => {
           hsnCode: attributes?.hsnCode,
           supplier_product_id: sp.id,
           variantKey: sp.variant_key || null,
-          variantAsin: sp.variant_asin || null,
           attributes: { ...attributes, images: listingImages },
           catalogMissing: !baseProduct
         };
