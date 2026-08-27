@@ -1,13 +1,7 @@
 import {
-  PM_PAYMENT_API_BASE_URL,
+  getResolvedCatalog,
+  pmUrl,
   PM_PLATFORM_FLAG,
-  PM_VAULT_ADD_MONEY_FALLBACK_URL,
-  PM_VAULT_ADD_MONEY_URL,
-  PM_VAULT_PAY_ORDER_URL,
-  PM_VAULT_TOPUP_COMPLETE_URL,
-  PM_VAULT_TOPUP_INITIATE_URL,
-  PM_VAULT_TRANSACTIONS_URL,
-  PM_VAULT_URL,
   buildPmPlatformHeaders,
   withPmPlatformFlagBody,
   withPmPlatformFlagQuery
@@ -25,7 +19,9 @@ import {
 } from './pmVaultPlatformAttribution.js';
 import logger from '../utils/logger.js';
 
-const PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL = `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/vault/topup/complete`;
+function vaultTopupCompleteFallbackUrl() {
+  return `${pmUrl('paymentBase')}/api/v1/payments/vault/topup/complete`;
+}
 
 const PM_VAULT_BALANCE_IN_PAISE =
   String(process.env.PM_VAULT_BALANCE_IN_PAISE || 'true').trim().toLowerCase() === 'true';
@@ -768,7 +764,8 @@ export async function fetchPmVault({ accessToken, flag = null } = {}) {
   // Balance reads are user-scoped via Bearer token. Do not filter by platform flag
   // so the shared vault balance includes activity from every Tatva app.
   const resolvedFlag = flag == null ? '' : String(flag).trim();
-  const url = resolvedFlag ? withPmPlatformFlagQuery(PM_VAULT_URL, resolvedFlag) : PM_VAULT_URL;
+  const vaultUrl = pmUrl('vault');
+  const url = resolvedFlag ? withPmPlatformFlagQuery(vaultUrl, resolvedFlag) : vaultUrl;
   logger.info('[PM vault] GET balance', { url });
 
   const response = await fetch(url, {
@@ -788,7 +785,7 @@ export async function fetchPmVault({ accessToken, flag = null } = {}) {
 
 /**
  * GET PM vault reconciliation ledger:
- * https://devopsapi.withtatva.ai/users/api/vault/transactions
+ * GET PM vault transactions on the active env users host.
  *
  * Reads return ALL platforms' transactions for the signed-in user (Bearer-scoped).
  * Do not pass ?flag=… on this GET — that filters the ledger down to one tenant and
@@ -817,9 +814,10 @@ export async function fetchPmVaultTransactions({
     params.set(key, String(value));
   }
 
+  const transactionsUrl = pmUrl('vaultTransactions');
   const url = params.toString()
-    ? `${PM_VAULT_TRANSACTIONS_URL}?${params.toString()}`
-    : PM_VAULT_TRANSACTIONS_URL;
+    ? `${transactionsUrl}?${params.toString()}`
+    : transactionsUrl;
 
   logger.info('[PM vault transactions] GET', { url, flag: resolvedFlag || null });
 
@@ -1011,7 +1009,7 @@ export async function getPmVaultTransactions(user, credentials = {}, options = {
       ? { hasMore: false, nextCursor: null, totalCount: pageInfo.totalCount ?? transactions.length }
       : pageInfo,
     source: 'pm_vault_transactions',
-    upstream: PM_VAULT_TRANSACTIONS_URL,
+    upstream: pmUrl('vaultTransactions'),
     flag
   };
 }
@@ -1045,7 +1043,7 @@ export async function initiatePmVaultTopup({ pmUserId, amountInRupees, descripti
     amount: pmAmount,
     description: taggedDescription
   });
-  const topupUrl = withPmPlatformFlagQuery(PM_VAULT_TOPUP_INITIATE_URL);
+  const topupUrl = withPmPlatformFlagQuery(pmUrl('vaultTopupInitiate'));
 
   logger.info('[PM vault topup initiate] requesting', {
     url: topupUrl,
@@ -1175,16 +1173,18 @@ export async function completePmVaultTopup({
   });
 
   let result;
+  const completeUrl = pmUrl('vaultTopupComplete');
+  const completeFallbackUrl = vaultTopupCompleteFallbackUrl();
   try {
-    result = await postPmVaultTopupComplete(PM_VAULT_TOPUP_COMPLETE_URL, token, body);
+    result = await postPmVaultTopupComplete(completeUrl, token, body);
   } catch (primaryError) {
-    result = await postPmVaultTopupComplete(PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL, token, body);
+    result = await postPmVaultTopupComplete(completeFallbackUrl, token, body);
   }
 
   const { response, payload } = result;
   if (!response.ok || payload.success === false) {
-    if (PM_VAULT_TOPUP_COMPLETE_URL !== PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL) {
-      const fallback = await postPmVaultTopupComplete(PM_VAULT_TOPUP_COMPLETE_FALLBACK_URL, token, body);
+    if (completeUrl !== completeFallbackUrl) {
+      const fallback = await postPmVaultTopupComplete(completeFallbackUrl, token, body);
       if (fallback.response.ok && fallback.payload.success !== false) {
         const completed = unwrapPmPayload(fallback.payload) || fallback.payload;
         rememberPmVaultPlatformAttribution({
@@ -1265,7 +1265,7 @@ export async function payOrderFromPmVault({
     }
   }
 
-  if (!PM_VAULT_PAY_ORDER_URL) {
+  if (!pmUrl('vaultPayOrder')) {
     const err = new Error(
       'PM vault pay URL is not configured. Set PM_VAULT_PAY_ORDER_URL to the PM order-payment vault-pay endpoint.'
     );
@@ -1323,7 +1323,7 @@ export async function payOrderFromPmVault({
   );
 
   async function postVaultPay(body) {
-    const payUrl = withPmPlatformFlagQuery(PM_VAULT_PAY_ORDER_URL);
+    const payUrl = withPmPlatformFlagQuery(pmUrl('vaultPayOrder'));
     logger.info('[PM vault-pay] requesting debit', {
       url: payUrl,
       orderId: tatvaOrderId,
@@ -1488,7 +1488,8 @@ async function postPmVaultOfflineAddMoney(addMoneyUrl, token, form) {
 
 /**
  * POST PM offline vault credit (cash on hand / cheque / bank transfer).
- * Proxied server-side to avoid browser CORS. Uses devopsapi users host by default;
+ * Proxied server-side to avoid browser CORS. Uses the active PM users host
+ * (devopsapi in development, opsapi in production);
  * falls back to PM_API_BASE_URL if a custom offline host fails DNS/network.
  */
 export async function addPmVaultOfflineMoney({
@@ -1542,8 +1543,8 @@ export async function addPmVaultOfflineMoney({
     documents
   };
 
-  const primaryUrl = withPmPlatformFlagQuery(PM_VAULT_ADD_MONEY_URL);
-  const fallbackUrl = withPmPlatformFlagQuery(PM_VAULT_ADD_MONEY_FALLBACK_URL);
+  const primaryUrl = withPmPlatformFlagQuery(pmUrl('vaultAddMoney'));
+  const fallbackUrl = withPmPlatformFlagQuery(getResolvedCatalog().vaultAddMoney);
 
   logger.info('[PM vault offline add-money] requesting', {
     url: primaryUrl,

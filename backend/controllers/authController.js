@@ -36,10 +36,8 @@ import { syncPmShippingAddressesOnProfile } from '../services/pmAddressService.j
 import { mergeParsedShippingAddress } from '../utils/parseStructuredShippingAddress.js';
 import {
   PM_PLATFORM_FLAG,
-  PM_SEND_OTP_URL,
-  PM_VERIFY_GST_URL,
-  PM_VERIFY_OTP_URL,
   buildPmPlatformHeaders,
+  pmUrl,
   withPmPlatformFlagBody,
   withPmPlatformFlagQuery
 } from '../config/pmApi.js';
@@ -466,7 +464,7 @@ router.post('/signup', async (_req, res) => {
 });
 
 /**
- * Proxy PM send-otp through Tatva to avoid browser CORS against devopsapi.withtatva.ai.
+ * Proxy PM send-otp through Tatva to avoid browser CORS against the PM users host.
  * Frontend should call POST /api/auth/pm-send-otp (not PM directly).
  */
 router.post('/pm-send-otp', async (req, res) => {
@@ -479,7 +477,7 @@ router.post('/pm-send-otp', async (req, res) => {
       });
     }
 
-    const url = withPmPlatformFlagQuery(PM_SEND_OTP_URL);
+    const url = withPmPlatformFlagQuery(pmUrl('sendOtp'));
     const response = await fetch(url, {
       method: 'POST',
       headers: buildPmPlatformHeaders({ json: true }),
@@ -546,7 +544,7 @@ router.post('/pm-verify-otp', async (req, res) => {
       });
     }
 
-    const url = withPmPlatformFlagQuery(PM_VERIFY_OTP_URL);
+    const url = withPmPlatformFlagQuery(pmUrl('verifyOtp'));
     const response = await fetch(url, {
       method: 'POST',
       headers: buildPmPlatformHeaders({ json: true }),
@@ -593,7 +591,7 @@ router.post('/pm-verify-otp', async (req, res) => {
 });
 
 /**
- * Proxy PM verify-gst through Tatva to avoid browser CORS against devopsapi.withtatva.ai.
+ * Proxy PM verify-gst through Tatva to avoid browser CORS against the PM users host.
  * Frontend should call POST /api/auth/pm-verify-gst (not PM directly).
  */
 router.post('/pm-verify-gst', async (req, res) => {
@@ -611,7 +609,7 @@ router.post('/pm-verify-gst', async (req, res) => {
       });
     }
 
-    const url = withPmPlatformFlagQuery(PM_VERIFY_GST_URL);
+    const url = withPmPlatformFlagQuery(pmUrl('verifyGst'));
     const response = await fetch(url, {
       method: 'POST',
       headers: buildPmPlatformHeaders({ json: true }),

@@ -38,7 +38,7 @@ import {
   usesPlatformVault
 } from '../services/pmVaultService.js';
 import { rememberPmVaultPlatformAttribution } from '../services/pmVaultPlatformAttribution.js';
-import { PM_PLATFORM_FLAG, PM_VAULT_URL } from '../config/pmApi.js';
+import { PM_PLATFORM_FLAG, pmUrl } from '../config/pmApi.js';
 function normalizeUserType(value) {
   return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 }
@@ -215,7 +215,7 @@ walletRouter.get('/balance', authenticateToken, requirePlatformVaultUser, async 
       balance: pmWallet.balance,
       holdingAmount: pmWallet.holdingAmount ?? 0,
       source: 'pm_vault',
-      upstream: PM_VAULT_URL
+      upstream: pmUrl('vault')
     });
   } catch (e) {
     console.error('[Vault] balance error:', e);

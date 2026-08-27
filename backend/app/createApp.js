@@ -4,6 +4,7 @@ import { paymentsWebhookRouter } from '../routes/payments.js';
 import { apiRouter } from '../routes/api.js';
 import { paymentsWebhookRateLimiter } from '../middleware/rateLimits.js';
 import { requestContext } from '../middleware/requestContext.js';
+import { pmRequestEnvMiddleware } from '../middleware/pmRequestEnv.js';
 import { requestLogger } from '../middleware/requestLogger.js';
 import { noApiCache } from '../middleware/cacheControl.js';
 import { globalErrorHandler } from '../middleware/errorHandler.js';
@@ -26,6 +27,7 @@ export function createApp() {
   app.use(cors(createCorsOptions()));
 
   app.use(requestContext);
+  app.use(pmRequestEnvMiddleware);
   app.use(requestLogger);
 
   app.use(

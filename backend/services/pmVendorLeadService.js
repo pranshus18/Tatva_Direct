@@ -1,8 +1,8 @@
 import {
-  PM_VENDOR_LEADS_URL,
   PM_VENDOR_LEAD_FLAG,
   PM_VENDOR_LEAD_VENDOR_FLAG,
   buildPmPlatformHeaders,
+  pmUrl,
   withPmPlatformFlagQuery
 } from '../config/pmApi.js';
 
@@ -148,7 +148,7 @@ export async function submitPmVendorLead({ fields, files, accessToken = null }) 
   appendFile(form, 'cancelledChequeFile', files?.cancelledChequeFile?.[0]);
 
   const token = String(accessToken || '').trim();
-  const response = await fetch(withPmPlatformFlagQuery(PM_VENDOR_LEADS_URL), {
+  const response = await fetch(withPmPlatformFlagQuery(pmUrl('vendorLeads')), {
     method: 'POST',
     headers: buildPmPlatformHeaders({ accessToken: token }),
     body: form

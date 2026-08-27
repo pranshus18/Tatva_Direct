@@ -1,6 +1,6 @@
 import { supabase } from '../config/supabase.js';
 import { geocodeAddressNominatim, getDrivingDistanceMatrixKm } from '../utils/geoUtils.js';
-import { PM_API_ENV, PM_API_BASE_URL, PM_PAYMENT_API_BASE_URL } from '../config/pmApi.js';
+import { getActivePmApiSnapshot } from '../config/pmApi.js';
 
 function maskEmail(email) {
   const value = String(email || '').trim();
@@ -53,11 +53,7 @@ export async function getHealth(req, res) {
       message: 'Server is running',
       timestamp: new Date().toISOString(),
       database,
-      pmApi: {
-        env: PM_API_ENV,
-        usersHost: PM_API_BASE_URL,
-        paymentHost: PM_PAYMENT_API_BASE_URL
-      },
+      pmApi: getActivePmApiSnapshot(),
       uptime: process.uptime()
     });
   } catch (error) {
@@ -70,11 +66,7 @@ export async function getHealth(req, res) {
         status: 'error',
         connected: false
       },
-      pmApi: {
-        env: PM_API_ENV,
-        usersHost: PM_API_BASE_URL,
-        paymentHost: PM_PAYMENT_API_BASE_URL
-      },
+      pmApi: getActivePmApiSnapshot(),
       uptime: process.uptime()
     });
   }

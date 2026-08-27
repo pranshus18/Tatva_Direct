@@ -1,6 +1,6 @@
 import {
   buildPmPlatformHeaders,
-  PM_ADDRESS_URL,
+  pmUrl,
   withPmPlatformFlagQuery
 } from '../config/pmApi.js';
 import { supabase } from '../config/supabase.js';
@@ -232,7 +232,7 @@ export async function createPmShippingAddress({ pmUserId, accessToken, input = {
   }
 
   const token = clean(accessToken);
-  const response = await fetch(withPmPlatformFlagQuery(PM_ADDRESS_URL), {
+  const response = await fetch(withPmPlatformFlagQuery(pmUrl('address')), {
     method: 'POST',
     headers: buildPmPlatformHeaders({ accessToken: token, json: true }),
     body: JSON.stringify(payload)
@@ -279,8 +279,8 @@ function buildPmAddressListUrls(userId) {
   if (!id) return [];
   // PM list route is GET /api/address/user/:userId (not ?userId= query params).
   return [
-    `${PM_ADDRESS_URL}/user/${encodeURIComponent(id)}?type=SHIPPING`,
-    `${PM_ADDRESS_URL}/user/${encodeURIComponent(id)}`
+    `${pmUrl('address')}/user/${encodeURIComponent(id)}?type=SHIPPING`,
+    `${pmUrl('address')}/user/${encodeURIComponent(id)}`
   ];
 }
 

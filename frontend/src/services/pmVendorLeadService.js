@@ -1,7 +1,9 @@
 import {
   PM_VENDOR_LEADS_URL,
   PM_VENDOR_LEAD_FLAG,
-  PM_VENDOR_LEAD_VENDOR_FLAG
+  PM_VENDOR_LEAD_VENDOR_FLAG,
+  buildPmPlatformHeaders,
+  withPmPlatformFlagQuery
 } from '../config/pmAuth';
 import { getPmCustomerCredentials } from '../utils/pmAuthSession';
 
@@ -76,17 +78,14 @@ export async function submitPmVendorLead(formData, options = {}) {
 
   appendIfMissing(pmFormData, 'vendorFlag', PM_VENDOR_LEAD_VENDOR_FLAG);
   appendIfMissing(pmFormData, 'flag', PM_VENDOR_LEAD_FLAG);
+  appendIfMissing(pmFormData, 'platformFlag', PM_VENDOR_LEAD_FLAG);
 
   const credentials = getPmCustomerCredentials();
   const pmAccessToken = options.pmAccessToken || credentials.accessToken;
-  const headers = {};
-  if (pmAccessToken) {
-    headers.Authorization = `Bearer ${pmAccessToken}`;
-  }
 
-  const response = await fetch(PM_VENDOR_LEADS_URL, {
+  const response = await fetch(withPmPlatformFlagQuery(PM_VENDOR_LEADS_URL), {
     method: 'POST',
-    headers,
+    headers: buildPmPlatformHeaders({ accessToken: pmAccessToken }),
     body: pmFormData
   });
 

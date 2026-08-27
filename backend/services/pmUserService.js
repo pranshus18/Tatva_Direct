@@ -1,10 +1,10 @@
 import { supabase } from '../config/supabase.js';
 import {
   buildPmUserUrl,
+  buildPmPlatformHeaders,
   PM_USER_FLAG_SERVICE_PROVIDER,
   PM_USER_FLAG_SUPPLIER,
-  PM_USERS_ME_URL,
-  PM_USERS_URL,
+  pmUrl,
   withPmPlatformFlagQuery
 } from '../config/pmApi.js';
 
@@ -142,11 +142,8 @@ export async function fetchPmCurrentUser(accessToken, options = {}) {
   const token = String(accessToken || '').trim();
   if (!token) return null;
 
-  const response = await fetch(withPmPlatformFlagQuery(PM_USERS_ME_URL), {
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${token}`
-    }
+  const response = await fetch(withPmPlatformFlagQuery(pmUrl('usersMe')), {
+    headers: buildPmPlatformHeaders({ accessToken: token })
   });
 
   let payload = {};
@@ -172,13 +169,10 @@ export async function fetchPmUserById(pmUserId, accessToken = null) {
   const url = withPmPlatformFlagQuery(buildPmUserUrl(pmUserId));
   if (!url) return null;
 
-  const headers = { Accept: 'application/json' };
   const token = String(accessToken || '').trim();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  const response = await fetch(url, { headers });
+  const response = await fetch(url, {
+    headers: buildPmPlatformHeaders({ accessToken: token })
+  });
 
   let payload = {};
   try {
@@ -205,9 +199,9 @@ export async function fetchPmUserByPhone(phoneNumber) {
   const limit = 100;
 
   while (page <= totalPages) {
-    const url = withPmPlatformFlagQuery(`${PM_USERS_URL}?page=${page}&limit=${limit}`);
+    const url = withPmPlatformFlagQuery(`${pmUrl('users')}?page=${page}&limit=${limit}`);
     const response = await fetch(url, {
-      headers: { Accept: 'application/json' }
+      headers: buildPmPlatformHeaders()
     });
 
     let payload = {};

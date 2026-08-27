@@ -17,9 +17,10 @@ const PM_PAYMENT_HOST_BY_ENV = {
 
 function resolvePmApiEnv(raw, mode) {
   const explicit = String(raw || '').trim().toLowerCase();
+  if (explicit === 'production' || explicit === 'prod') return 'production';
+  if (explicit === 'dev' || explicit === 'development') return 'development';
   const viteMode = String(mode || '').trim().toLowerCase();
   if (viteMode === 'production' || viteMode === 'prod') return 'production';
-  if (explicit === 'production' || explicit === 'prod') return 'production';
   return 'development';
 }
 

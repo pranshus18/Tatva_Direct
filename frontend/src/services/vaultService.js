@@ -1,6 +1,6 @@
 /**
  * Vault UI service — calls Tatva backend (/api/vault/*), which proxies to PM server-side.
- * Avoids browser CORS against devopsapi.withtatva.ai / api.withtatva.ai.
+ * Avoids browser CORS against the PM users/payment hosts.
  */
 import { getApiUrl, buildAuthHeaders, authFetch } from '../config/api';
 import { PM_PLATFORM_FLAG } from '../config/pmAuth';

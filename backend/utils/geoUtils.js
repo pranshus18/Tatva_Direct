@@ -1,6 +1,6 @@
 import {
   buildPmPlatformHeaders,
-  PM_STATE_BY_PINCODE_URL,
+  pmUrl,
   withPmPlatformFlagQuery
 } from '../config/pmApi.js';
 
@@ -933,7 +933,7 @@ export function parsePmPincodeLookupPayload(payload = {}, pincode = '') {
 }
 
 async function fetchPmStateByPincode(zip) {
-  const url = withPmPlatformFlagQuery(`${PM_STATE_BY_PINCODE_URL}?pincode=${encodeURIComponent(zip)}`);
+  const url = withPmPlatformFlagQuery(`${pmUrl('stateByPincode')}?pincode=${encodeURIComponent(zip)}`);
   const response = await fetch(url, {
     headers: buildPmPlatformHeaders({ json: false }),
     signal: AbortSignal.timeout(8000)

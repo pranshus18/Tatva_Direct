@@ -3,7 +3,10 @@ import {
   PM_VAULT_ADD_MONEY_URL,
   PM_VAULT_TOPUP_COMPLETE_URL,
   PM_VAULT_TOPUP_INITIATE_URL,
-  PM_VAULT_URL
+  PM_VAULT_URL,
+  buildPmPlatformHeaders,
+  withPmPlatformFlagBody,
+  withPmPlatformFlagQuery
 } from '../config/pmAuth';
 import { getPmCustomerCredentials } from '../utils/pmAuthSession';
 import { restorePmVaultSession } from './pmAuthService';
@@ -17,14 +20,6 @@ async function parseJsonResponse(response) {
   }
 }
 
-function pmAuthHeaders(accessToken, withJson = false) {
-  return {
-    Accept: 'application/json',
-    ...(withJson ? { 'Content-Type': 'application/json' } : {}),
-    Authorization: `Bearer ${accessToken}`
-  };
-}
-
 export async function ensurePmVaultCredentials() {
   await restorePmVaultSession();
   const { accessToken, pmUserId } = getPmCustomerCredentials();
@@ -36,11 +31,11 @@ export async function ensurePmVaultCredentials() {
   return { accessToken, pmUserId };
 }
 
-/** GET https://devopsapi.withtatva.ai/users/api/vault */
+/** GET PM vault balance on the active env host (devopsapi locally, opsapi in production). */
 export async function fetchPmVaultRaw() {
   const { accessToken } = await ensurePmVaultCredentials();
-  const response = await fetch(PM_VAULT_URL, {
-    headers: pmAuthHeaders(accessToken)
+  const response = await fetch(withPmPlatformFlagQuery(PM_VAULT_URL), {
+    headers: buildPmPlatformHeaders({ accessToken })
   });
   const data = await parseJsonResponse(response);
   if (!response.ok || data.success === false) {
@@ -57,7 +52,7 @@ export async function fetchPmVaultView() {
   return mapPmVaultPayload(raw);
 }
 
-/** POST devopsapi.../payment/api/v1/payments/vault/topup/initiate */
+/** POST PM payment vault top-up initiate on the active env host. */
 export async function initiatePmVaultTopup({ amountInRupees, description = 'Vault top-up' }) {
   const { accessToken, pmUserId } = await ensurePmVaultCredentials();
   if (!pmUserId) {
@@ -71,15 +66,17 @@ export async function initiatePmVaultTopup({ amountInRupees, description = 'Vaul
     throw new Error('Enter a valid amount in Indian rupees');
   }
 
-  const response = await fetch(PM_VAULT_TOPUP_INITIATE_URL, {
+  const response = await fetch(withPmPlatformFlagQuery(PM_VAULT_TOPUP_INITIATE_URL), {
     method: 'POST',
-    headers: pmAuthHeaders(accessToken, true),
-    body: JSON.stringify({
-      userId: pmUserId,
-      // PM initiate expects paise; UI/app always uses INR rupees.
-      amount: Math.round(amountInr * 100),
-      description
-    })
+    headers: buildPmPlatformHeaders({ accessToken, json: true }),
+    body: JSON.stringify(
+      withPmPlatformFlagBody({
+        userId: pmUserId,
+        // PM initiate expects paise; UI/app always uses INR rupees.
+        amount: Math.round(amountInr * 100),
+        description
+      })
+    )
   });
   const data = await parseJsonResponse(response);
   if (!response.ok || data.success === false) {
@@ -88,23 +85,23 @@ export async function initiatePmVaultTopup({ amountInRupees, description = 'Vaul
   return mapPmTopupInitiatePayload(data, amountInr);
 }
 
-/** POST api.withtatva.ai/payment/api/v1/payments/vault/topup/complete */
+/** POST PM payment vault top-up complete on the active env host. */
 export async function completePmVaultTopup({
   razorpayOrderId,
   razorpayPaymentId,
   razorpaySignature
 }) {
   const { accessToken } = await ensurePmVaultCredentials();
-  const response = await fetch(PM_VAULT_TOPUP_COMPLETE_URL, {
+  const response = await fetch(withPmPlatformFlagQuery(PM_VAULT_TOPUP_COMPLETE_URL), {
     method: 'POST',
-    headers: pmAuthHeaders(accessToken, true),
-    body: JSON.stringify({
-      razorpay_order_id: String(razorpayOrderId || '').trim(),
-      razorpay_payment_id: String(razorpayPaymentId || '').trim(),
-      razorpay_signature: String(razorpaySignature || '').trim(),
-      flag: PM_PLATFORM_FLAG,
-      platformFlag: PM_PLATFORM_FLAG
-    })
+    headers: buildPmPlatformHeaders({ accessToken, json: true }),
+    body: JSON.stringify(
+      withPmPlatformFlagBody({
+        razorpay_order_id: String(razorpayOrderId || '').trim(),
+        razorpay_payment_id: String(razorpayPaymentId || '').trim(),
+        razorpay_signature: String(razorpaySignature || '').trim()
+      })
+    )
   });
   const data = await parseJsonResponse(response);
   if (!response.ok || data.success === false) {
@@ -114,7 +111,7 @@ export async function completePmVaultTopup({
 }
 
 /**
- * POST …/api/vault/add-money (PM users host — devopsapi by default).
+ * POST PM vault add-money on the active env users host.
  * Offline vault credit — multipart form-data.
  * Prefer Tatva proxy: POST /api/vault/offline/add-money (vaultService).
  * subPaymentMethod: cash_on_hand | cheque | bank_to_bank
@@ -151,6 +148,8 @@ export async function addPmVaultOfflineMoney({
   form.append('amount', String(amount));
   form.append('paymentMode', 'offline');
   form.append('subPaymentMethod', method);
+  form.append('flag', PM_PLATFORM_FLAG);
+  form.append('platformFlag', PM_PLATFORM_FLAG);
 
   if (method === 'cash_on_hand') {
     const receipt = String(receiptNumber || '').trim();
@@ -182,12 +181,9 @@ export async function addPmVaultOfflineMoney({
     }
   });
 
-  const response = await fetch(PM_VAULT_ADD_MONEY_URL, {
+  const response = await fetch(withPmPlatformFlagQuery(PM_VAULT_ADD_MONEY_URL), {
     method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${accessToken}`
-    },
+    headers: buildPmPlatformHeaders({ accessToken }),
     body: form
   });
   const data = await parseJsonResponse(response);

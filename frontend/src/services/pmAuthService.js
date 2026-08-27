@@ -17,7 +17,7 @@ async function parseJsonResponse(response) {
 
 /**
  * Browser → Tatva `/api/auth/pm-send-otp` → PM send-otp.
- * Avoids CORS / Failed to fetch against devopsapi.withtatva.ai from the browser.
+ * Avoids CORS / Failed to fetch against the PM users host from the browser.
  */
 export async function sendPmOtp(phoneNumber) {
   const normalizedPhone = normalizePhone(phoneNumber);
