@@ -2,22 +2,79 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   resolvePmApiEnv,
+  remapPmUrlToEnv,
+  resolvePmBaseUrl,
   PM_USERS_HOST_BY_ENV,
   PM_PAYMENT_HOST_BY_ENV,
   PM_API_CATALOG
 } from '../config/pmApi.js';
 
 test('resolvePmApiEnv maps prod aliases to production', () => {
-  assert.equal(resolvePmApiEnv('production'), 'production');
-  assert.equal(resolvePmApiEnv('prod'), 'production');
-  assert.equal(resolvePmApiEnv('PRODUCTION'), 'production');
+  assert.equal(resolvePmApiEnv('production', 'development'), 'production');
+  assert.equal(resolvePmApiEnv('prod', 'development'), 'production');
+  assert.equal(resolvePmApiEnv('PRODUCTION', 'development'), 'production');
 });
 
-test('resolvePmApiEnv maps everything else to development', () => {
-  assert.equal(resolvePmApiEnv('dev'), 'development');
-  assert.equal(resolvePmApiEnv('development'), 'development');
-  assert.equal(resolvePmApiEnv('test'), 'development');
-  assert.equal(resolvePmApiEnv(''), 'development');
+test('resolvePmApiEnv maps local non-prod values to development', () => {
+  assert.equal(resolvePmApiEnv('dev', 'development'), 'development');
+  assert.equal(resolvePmApiEnv('development', 'development'), 'development');
+  assert.equal(resolvePmApiEnv('test', 'test'), 'development');
+  assert.equal(resolvePmApiEnv('', 'development'), 'development');
+});
+
+test('NODE_ENV=production always uses opsapi even if PM_API_ENV=dev is leftover', () => {
+  assert.equal(resolvePmApiEnv('dev', 'production'), 'production');
+  assert.equal(resolvePmApiEnv('development', 'production'), 'production');
+  assert.equal(resolvePmApiEnv('', 'production'), 'production');
+  assert.equal(resolvePmApiEnv('prod', 'production'), 'production');
+});
+
+test('local development can still opt into production PM APIs', () => {
+  assert.equal(resolvePmApiEnv('production', 'development'), 'production');
+});
+
+test('remapPmUrlToEnv swaps leftover devopsapi URLs in production', () => {
+  assert.equal(
+    remapPmUrlToEnv('https://devopsapi.withtatva.ai/users', 'production'),
+    'https://opsapi.withtatva.ai/users'
+  );
+  assert.equal(
+    remapPmUrlToEnv(
+      'https://devopsapi.withtatva.ai/payment/api/v1/payments/vault/topup/initiate',
+      'production'
+    ),
+    'https://opsapi.withtatva.ai/payment/api/v1/payments/vault/topup/initiate'
+  );
+});
+
+test('remapPmUrlToEnv swaps leftover opsapi URLs in development', () => {
+  assert.equal(
+    remapPmUrlToEnv('https://opsapi.withtatva.ai/users', 'development'),
+    'https://devopsapi.withtatva.ai/users'
+  );
+});
+
+test('resolvePmBaseUrl ignores stale env overrides and keeps matching ones', () => {
+  assert.equal(
+    resolvePmBaseUrl(
+      'https://devopsapi.withtatva.ai/users',
+      PM_USERS_HOST_BY_ENV.production,
+      'production'
+    ),
+    PM_USERS_HOST_BY_ENV.production
+  );
+  assert.equal(
+    resolvePmBaseUrl(
+      'https://opsapi.withtatva.ai/users',
+      PM_USERS_HOST_BY_ENV.production,
+      'production'
+    ),
+    PM_USERS_HOST_BY_ENV.production
+  );
+  assert.equal(
+    resolvePmBaseUrl('', PM_USERS_HOST_BY_ENV.development, 'development'),
+    PM_USERS_HOST_BY_ENV.development
+  );
 });
 
 test('PM hosts keep identical paths on devopsapi (dev) and opsapi (prod)', () => {

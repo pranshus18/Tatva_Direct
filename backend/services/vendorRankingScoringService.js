@@ -1,3 +1,56 @@
+export function requestedQtyFromItem(item) {
+  const qty = Number(item?.quantity);
+  return Number.isFinite(qty) && qty > 0 ? qty : 1;
+}
+
+/** True only when the offer is available and on-hand stock covers the requested quantity. */
+export function vendorOfferCanFulfill(vendor, requestedQty = 1) {
+  if (!vendor) return false;
+  const flag = vendor.isAvailable;
+  if (flag === false || flag === 0 || flag === 'false' || flag === '0') return false;
+  const stock = Number(vendor.availableStock ?? vendor.stock ?? 0);
+  const qty = Number(requestedQty);
+  const need = Number.isFinite(qty) && qty > 0 ? qty : 1;
+  return Number.isFinite(stock) && stock >= need;
+}
+
+/**
+ * Mark at most one fulfillable offer as nearest/recommended.
+ * Out-of-stock and insufficient-stock offers must never receive this flag.
+ */
+export function assignNearestRecommendedFlags(
+  vendors,
+  { preferredSupplierId = '', requestedQty = 1, enabled = true } = {}
+) {
+  const list = Array.isArray(vendors) ? vendors : [];
+  for (const vendor of list) {
+    if (vendor && Object.prototype.hasOwnProperty.call(vendor, 'isNearestRecommended')) {
+      delete vendor.isNearestRecommended;
+    }
+  }
+  if (!enabled || list.length === 0) return list;
+
+  const fulfillable = list.filter((vendor) => vendorOfferCanFulfill(vendor, requestedQty));
+  const withDistance = fulfillable.filter((vendor) => typeof vendor?.distanceKm === 'number');
+  const preferredId = String(preferredSupplierId || '').trim();
+  const preferredWithDistance = preferredId
+    ? withDistance.filter((vendor) => String(vendor?.id || '') === preferredId)
+    : [];
+
+  const pickNearestFrom = (candidates) =>
+    candidates.reduce((best, vendor) =>
+      (Number(vendor.distanceKm) || Infinity) < (Number(best.distanceKm) || Infinity) ? vendor : best
+    );
+
+  const nearest =
+    (preferredWithDistance.length > 0 && pickNearestFrom(preferredWithDistance)) ||
+    (withDistance.length > 0 && pickNearestFrom(withDistance)) ||
+    null;
+
+  if (nearest) nearest.isNearestRecommended = true;
+  return list;
+}
+
 export function computeUrgencyBonus(requiredDateFromBoq) {
   if (!requiredDateFromBoq) return 0;
   const deadline = new Date(requiredDateFromBoq);
@@ -31,8 +84,12 @@ export function computeLocationScore({
   return 0;
 }
 
-export function sortVendorsByGeoThenRankScore(vendors, siteGeoFromBoq) {
+export function sortVendorsByGeoThenRankScore(vendors, siteGeoFromBoq, requestedQty = 1) {
   vendors.sort((a, b) => {
+    const aOk = vendorOfferCanFulfill(a, requestedQty) ? 0 : 1;
+    const bOk = vendorOfferCanFulfill(b, requestedQty) ? 0 : 1;
+    if (aOk !== bOk) return aOk - bOk;
+
     const hasGeo = !!siteGeoFromBoq;
     const aHasDist = hasGeo && typeof a.distanceKm === 'number';
     const bHasDist = hasGeo && typeof b.distanceKm === 'number';

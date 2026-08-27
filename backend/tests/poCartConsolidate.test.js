@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   appendDiscoveryItemAsNewProject,
   consolidateDuplicateProductLines,
+  DUPLICATE_PROJECT_NAME_MESSAGE,
+  hasDuplicateProjectName,
   mergeOrAppendCartGroupItem,
   applyUpstreamSelectedMineQuantitiesToItems,
   mergeOrAppendUpstreamCartItem,
@@ -500,4 +502,16 @@ test('re-add after pruning a deleted offer keeps a single live line with the new
   assert.equal(nextItems.length, 1);
   assert.equal(nextItems[0].mineSupplierProductId, 'recreated-offer');
   assert.equal(nextItems[0].quantity, 3);
+});
+
+test('hasDuplicateProjectName matches names case-insensitively and ignores dates', () => {
+  const groups = [
+    { groupId: 'g1', boqName: 'Cement', boqProject: { requiredDate: '2026-09-01' } },
+    { groupId: 'g2', boqName: 'Site A', boqProject: { requiredDate: '2026-09-02' } }
+  ];
+  assert.equal(hasDuplicateProjectName(groups, 'cement'), true);
+  assert.equal(hasDuplicateProjectName(groups, '  CEMENT  '), true);
+  assert.equal(hasDuplicateProjectName(groups, 'Steel'), false);
+  assert.equal(hasDuplicateProjectName(groups, 'Cement', { excludeId: 'g1' }), false);
+  assert.equal(DUPLICATE_PROJECT_NAME_MESSAGE, 'Project name already exists. Please enter a different name.');
 });

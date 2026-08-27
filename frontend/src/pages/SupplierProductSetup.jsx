@@ -872,7 +872,7 @@ const SupplierProductSetup = ({ user }) => {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
                 <span style={{ fontSize: '0.85rem', color: '#334155' }}>
                   {hasAdminSpecTemplate
-                    ? 'Admin-defined specification keys are loaded for this category. Fill your values below.'
+                    ? 'Admin-defined specification keys are loaded for this category. Fill in the values you know — empty fields can stay blank.'
                     : 'Admin/product template keys are auto-loaded when available.'}
                 </span>
                 <div style={{ display: 'flex', gap: '0.45rem' }}>
@@ -913,7 +913,7 @@ const SupplierProductSetup = ({ user }) => {
                         type="text"
                         value={specValueToInput(specifications[key])}
                         onChange={(e) => updateSpecificationValue(key, e.target.value)}
-                        placeholder="Specification value"
+                        placeholder="Specification value (optional)"
                         style={{
                           flex: 1,
                           minHeight: '36px',

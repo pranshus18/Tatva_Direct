@@ -40,6 +40,10 @@ import {
 import './CreatePO.css';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import {
+  DUPLICATE_PROJECT_NAME_MESSAGE,
+  projectNameAlreadyExists
+} from '../utils/projectNameUniqueness';
+import {
   buildCheckoutHoldExpiredMessage,
   clearCheckoutHoldExpired,
   SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY
@@ -666,6 +670,10 @@ const SupplierUpstreamCart = () => {
     const requiredDate = String(projectDateDraft || '').trim();
     if (!cartName) {
       setError('Project name cannot be empty.');
+      return;
+    }
+    if (projectNameAlreadyExists(projects, cartName, { excludeId: projectId })) {
+      setError(DUPLICATE_PROJECT_NAME_MESSAGE);
       return;
     }
     if (requiredDate && isDateBeforeToday(requiredDate)) {

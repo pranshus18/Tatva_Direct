@@ -4,8 +4,7 @@ import {
   countMeaningfulSpecValues,
   isMeaningfullyFilledSpecValue,
   normalizeSpecKeyForDedup,
-  parseSpecificationsObject,
-  specificationTemplateKeysOnly
+  parseSpecificationsObject
 } from './supplierCatalogHelpersService.js';
 
 const INVENTORY_FIELD_KEYS = [
@@ -165,8 +164,8 @@ export function validateSupplierInventoryUpdateFields(body = {}) {
 }
 
 /**
- * When admin has defined specification keys for a category, every key must have a value
- * before the supplier can submit the product.
+ * List empty admin-template specification keys. Empty keys are optional on add/save —
+ * suppliers may submit a product with only some values filled.
  */
 export function getMissingSupplierSpecificationTemplateFields(templateKeys = [], specifications = {}) {
   const specs = parseSpecificationsObject(specifications) || {};
@@ -187,12 +186,12 @@ export function getMissingSupplierSpecificationTemplateFields(templateKeys = [],
 
     if (!isMeaningfullyFilledSpecValue(value)) {
       missingFields.push(`specifications.${key}`);
-      errors.push(`Specification "${key}" is required for this category.`);
+      errors.push(`Specification "${key}" is empty.`);
     }
   }
 
   return {
-    ok: missingFields.length === 0,
+    ok: true,
     missingFields,
     errors,
     message: errors.join(' ')
@@ -234,61 +233,14 @@ export function areSupplierOfferSpecificationValuesLocked(
   return countMeaningfulSpecValues(offerSpecs) > 0;
 }
 
-/** Require every category template key when that category already has admin-defined specifications. */
-export async function validateSupplierCategorySpecificationFillComplete(
-  resolveAdminSpecificationTemplate,
-  {
-    categoryName = '',
-    modelRaw = '',
-    brandRaw = '',
-    specifications = {}
-  } = {}
-) {
-  const normalizedCategory = String(categoryName || '').trim().toLowerCase();
-  if (!normalizedCategory) {
-    return { ok: true, missingFields: [], errors: [], message: '' };
-  }
-
-  const template =
-    typeof resolveAdminSpecificationTemplate === 'function'
-      ? await resolveAdminSpecificationTemplate({
-          categoryName: normalizedCategory,
-          modelRaw,
-          brandRaw,
-          keysOnly: true
-        })
-      : {};
-  const templateKeys = Object.keys(template || {});
-  if (templateKeys.length === 0) {
-    return { ok: true, missingFields: [], errors: [], message: '' };
-  }
-
-  return getMissingSupplierSpecificationTemplateFields(templateKeys, specifications);
+/** Category template keys are optional — suppliers may save with a partial fill. */
+export async function validateSupplierCategorySpecificationFillComplete() {
+  return { ok: true, missingFields: [], errors: [], message: '' };
 }
 
-/** Require every admin catalog specification key when the supplier is filling values post-approval. */
-export async function validateSupplierOfferSpecificationFillComplete(
-  supabase,
-  { productId, specifications = {} } = {}
-) {
-  if (!productId || !supabase) {
-    return { ok: true, missingFields: [], errors: [], message: '' };
-  }
-
-  const { data: catalogRow } = await supabase
-    .from('products')
-    .select('specifications')
-    .eq('id', productId)
-    .maybeSingle();
-
-  const templateKeys = Object.keys(
-    specificationTemplateKeysOnly(parseSpecificationsObject(catalogRow?.specifications) || {})
-  );
-  if (templateKeys.length === 0) {
-    return { ok: true, missingFields: [], errors: [], message: '' };
-  }
-
-  return getMissingSupplierSpecificationTemplateFields(templateKeys, specifications);
+/** Catalog specification keys are optional — suppliers may save with a partial fill. */
+export async function validateSupplierOfferSpecificationFillComplete() {
+  return { ok: true, missingFields: [], errors: [], message: '' };
 }
 
 export function validateSupplierCatalogUpdateFields(body = {}) {

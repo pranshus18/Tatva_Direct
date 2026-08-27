@@ -831,6 +831,32 @@ export function isDiscoveryBoqGroup(group) {
   return /^discovery\b/i.test(String(group.boqName || '').trim());
 }
 
+export const DUPLICATE_PROJECT_NAME_MESSAGE =
+  'Project name already exists. Please enter a different name.';
+
+export function normalizeProjectNameKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+/**
+ * True when another cart/upstream project already uses this name (case-insensitive).
+ * Date is intentionally ignored — names must be unique on their own.
+ */
+export function hasDuplicateProjectName(records, nextName, options = {}) {
+  const nameKey = normalizeProjectNameKey(nextName);
+  if (!nameKey) return false;
+  const excludeId = String(options.excludeId || '').trim();
+  const getName =
+    options.getName || ((record) => record?.boqName || record?.cartName || '');
+  const getId =
+    options.getId || ((record) => record?.groupId || record?.projectId || '');
+  return (Array.isArray(records) ? records : []).some((record) => {
+    if (!record) return false;
+    if (excludeId && String(getId(record) || '').trim() === excludeId) return false;
+    return normalizeProjectNameKey(getName(record)) === nameKey;
+  });
+}
+
 /**
  * Voice / discovery add: always a new cart project (group), even for the same product.
  * Quantity is exactly what the user asked on this add — not merged into prior lines.

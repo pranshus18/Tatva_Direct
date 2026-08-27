@@ -24,6 +24,10 @@ import {
 } from '../../utils/shippingAddressLabel';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../../utils/dateTime';
 import { resolveUpstreamProjectCartName } from '../../utils/supplierUpstreamCartSession';
+import {
+  DUPLICATE_PROJECT_NAME_MESSAGE,
+  projectNameAlreadyExists
+} from '../../utils/projectNameUniqueness';
 import { cn } from '@/lib/utils';
 
 const blankShippingAddress = {
@@ -238,6 +242,8 @@ export default function DiscoveryAddToCartDialog({
       const nextFieldErrors = { ...emptyProjectFieldErrors };
       if (!newProjectName.trim()) {
         nextFieldErrors.projectName = 'Please enter a project name.';
+      } else if (projectNameAlreadyExists(cartProjects, newProjectName)) {
+        nextFieldErrors.projectName = DUPLICATE_PROJECT_NAME_MESSAGE;
       }
       if (!expectedDeliveryDate) {
         nextFieldErrors.expectedDispatchDate = 'Expected dispatch date is required.';
@@ -288,7 +294,15 @@ export default function DiscoveryAddToCartDialog({
       });
       const saveData = await saveRes.json();
       if (!saveRes.ok || saveData.status !== 'success') {
-        throw new Error(saveData.message || 'Failed to save cart');
+        const message = saveData.message || 'Failed to save cart';
+        if (isNewProject && /already exists/i.test(message)) {
+          setProjectFieldErrors((prev) => ({
+            ...prev,
+            projectName: DUPLICATE_PROJECT_NAME_MESSAGE
+          }));
+          return;
+        }
+        throw new Error(message);
       }
       onOpenChange(false);
       await refreshServiceProviderCartCount({ immediate: true });

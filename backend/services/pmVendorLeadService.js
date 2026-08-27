@@ -1,8 +1,44 @@
 import {
   PM_VENDOR_LEADS_URL,
   PM_VENDOR_LEAD_FLAG,
-  PM_VENDOR_LEAD_VENDOR_FLAG
+  PM_VENDOR_LEAD_VENDOR_FLAG,
+  buildPmPlatformHeaders,
+  withPmPlatformFlagQuery
 } from '../config/pmApi.js';
+
+function formatPmFieldError(item) {
+  if (item == null) return '';
+  if (typeof item === 'string') return item;
+  if (typeof item !== 'object') return String(item);
+  const path = Array.isArray(item.path)
+    ? item.path.join('.')
+    : item.param || item.field || item.path || '';
+  const msg = item.message || item.msg || '';
+  if (path && msg) return `${path}: ${msg}`;
+  return msg || '';
+}
+
+/** Prefer PM field-level errors over a generic "Validation failed". */
+export function formatPmVendorLeadError(data, fallback = 'PM vendor registration failed') {
+  const buckets = [data?.errors, data?.data?.errors, data?.details?.errors, data?.data?.details?.errors];
+  const fieldErrors = [];
+  for (const bucket of buckets) {
+    if (!Array.isArray(bucket)) continue;
+    for (const item of bucket) {
+      const text = formatPmFieldError(item);
+      if (text) fieldErrors.push(text);
+    }
+  }
+
+  const topMessage =
+    data?.message || (typeof data?.error === 'string' ? data.error : '') || '';
+  const fieldSummary = fieldErrors.join('; ');
+  if (fieldSummary && (!topMessage || /^validation failed$/i.test(topMessage.trim()))) {
+    return fieldSummary;
+  }
+  if (topMessage && fieldSummary) return `${topMessage} — ${fieldSummary}`;
+  return topMessage || fieldSummary || fallback;
+}
 
 function appendIfPresent(form, key, value) {
   if (value === undefined || value === null) return;
@@ -97,6 +133,7 @@ export async function submitPmVendorLead({ fields, files, accessToken = null }) 
   // vendorFlag=supplier marks ecommerce supplier upgrade; PM "vendor" phone is already the SP login.
   appendIfPresent(form, 'vendorFlag', fields.vendorFlag || PM_VENDOR_LEAD_VENDOR_FLAG);
   appendIfPresent(form, 'flag', fields.flag || PM_VENDOR_LEAD_FLAG);
+  appendIfPresent(form, 'platformFlag', fields.flag || PM_VENDOR_LEAD_FLAG);
 
   const additionalGstNumbers = Array.isArray(fields.additionalGstNumbers)
     ? fields.additionalGstNumbers
@@ -110,15 +147,10 @@ export async function submitPmVendorLead({ fields, files, accessToken = null }) 
   appendFile(form, 'panCardFile', files?.panCardFile?.[0]);
   appendFile(form, 'cancelledChequeFile', files?.cancelledChequeFile?.[0]);
 
-  const headers = {};
   const token = String(accessToken || '').trim();
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  const response = await fetch(PM_VENDOR_LEADS_URL, {
+  const response = await fetch(withPmPlatformFlagQuery(PM_VENDOR_LEADS_URL), {
     method: 'POST',
-    headers,
+    headers: buildPmPlatformHeaders({ accessToken: token }),
     body: form
   });
 
@@ -130,10 +162,7 @@ export async function submitPmVendorLead({ fields, files, accessToken = null }) 
   }
 
   if (!response.ok || data.success === false) {
-    const message =
-      data.message ||
-      (Array.isArray(data.errors) && data.errors.map((e) => e.message).filter(Boolean).join(', ')) ||
-      'PM vendor registration failed';
+    const message = formatPmVendorLeadError(data);
     const error = new Error(message);
     error.status = response.status;
     error.details = data;

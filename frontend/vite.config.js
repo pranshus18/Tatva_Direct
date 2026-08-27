@@ -15,19 +15,38 @@ const PM_PAYMENT_HOST_BY_ENV = {
   production: 'https://opsapi.withtatva.ai/payment'
 };
 
-function resolvePmApiEnv(raw) {
-  const value = String(raw || '').trim().toLowerCase();
-  if (value === 'production' || value === 'prod') return 'production';
+function resolvePmApiEnv(raw, mode) {
+  const explicit = String(raw || '').trim().toLowerCase();
+  const viteMode = String(mode || '').trim().toLowerCase();
+  if (viteMode === 'production' || viteMode === 'prod') return 'production';
+  if (explicit === 'production' || explicit === 'prod') return 'production';
   return 'development';
+}
+
+function remapPmUrlToEnv(url, pmEnv) {
+  const value = String(url || '').trim().replace(/\/$/, '');
+  if (!value) return value;
+  const targetHost = pmEnv === 'production' ? 'opsapi.withtatva.ai' : 'devopsapi.withtatva.ai';
+  const otherHost = pmEnv === 'production' ? 'devopsapi.withtatva.ai' : 'opsapi.withtatva.ai';
+  if (!value.includes(otherHost)) return value;
+  return value.split(otherHost).join(targetHost);
 }
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, '');
-  const pmEnv = resolvePmApiEnv(env.VITE_PM_API_ENV || env.PM_API_ENV || mode);
-  const pmUsersHost = env.VITE_PM_AUTH_BASE_URL || PM_USERS_HOST_BY_ENV[pmEnv];
-  const pmPaymentHost = env.VITE_PM_PAYMENT_BASE_URL || PM_PAYMENT_HOST_BY_ENV[pmEnv];
-  const pmPaymentCompleteHost =
-    env.VITE_PM_PAYMENT_COMPLETE_BASE_URL || pmPaymentHost;
+  const pmEnv = resolvePmApiEnv(env.VITE_PM_API_ENV || env.PM_API_ENV, mode);
+  const pmUsersHost = remapPmUrlToEnv(
+    env.VITE_PM_AUTH_BASE_URL || PM_USERS_HOST_BY_ENV[pmEnv],
+    pmEnv
+  );
+  const pmPaymentHost = remapPmUrlToEnv(
+    env.VITE_PM_PAYMENT_BASE_URL || PM_PAYMENT_HOST_BY_ENV[pmEnv],
+    pmEnv
+  );
+  const pmPaymentCompleteHost = remapPmUrlToEnv(
+    env.VITE_PM_PAYMENT_COMPLETE_BASE_URL || pmPaymentHost,
+    pmEnv
+  );
 
   return {
     plugins: [react()],

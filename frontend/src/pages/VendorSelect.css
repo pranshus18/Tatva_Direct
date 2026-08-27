@@ -21,10 +21,23 @@
 .vendor-options {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-auto-rows: 1fr;
   gap: 1rem;
+  align-items: stretch;
+}
+
+.vendor-options > .no-vendors {
+  grid-column: 1 / -1;
+  height: auto;
+  align-self: start;
 }
 
 .vendor-card {
+  display: flex;
+  flex-direction: column;
+  align-self: stretch;
+  height: 100%;
+  min-height: 0;
   border: 2px solid #e2e8f0;
   border-radius: 8px;
   padding: 1rem;
@@ -37,6 +50,11 @@
   -moz-user-select: none;
   -ms-user-select: none;
   outline: none;
+}
+
+.vendor-card-image {
+  flex-shrink: 0;
+  margin-bottom: 0.75rem;
 }
 
 /* Focus ring only for keyboard — do not reuse the selected indigo border. */
@@ -104,14 +122,74 @@
   gap: 1rem;
   flex-wrap: wrap;
   pointer-events: none;
+  margin-top: auto;
+  padding-top: 0.75rem;
+  flex-shrink: 0;
 }
 
 .vendor-header {
   pointer-events: none;
+  flex-shrink: 0;
 }
 
 .vendor-product-info {
   pointer-events: none;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.vendor-specifications {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  margin-top: 0.45rem;
+  padding: 0.55rem;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  min-height: 0;
+}
+
+.vendor-specifications-title {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #334155;
+  margin-bottom: 0.3rem;
+  flex-shrink: 0;
+}
+
+.vendor-specifications-entries {
+  display: grid;
+  gap: 0.2rem;
+  flex: 1 1 auto;
+  align-content: start;
+  min-height: 0;
+}
+
+.vendor-specifications-entries.is-expanded {
+  overflow-y: auto;
+  max-height: 12.5rem;
+}
+
+.vendor-specifications-entry {
+  font-size: 0.74rem;
+  color: #475569;
+}
+
+.vendor-specifications-toggle {
+  margin-top: 0.2rem;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: #2563eb;
+  font-size: 0.72rem;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  pointer-events: auto;
+  flex-shrink: 0;
 }
 
 .detail {

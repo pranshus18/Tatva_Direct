@@ -7,6 +7,8 @@ import {
   validateSupplierMrpUpdateAllowed,
   validateSupplierSpecificationUpdateAllowed,
   getMissingSupplierSpecificationTemplateFields,
+  validateSupplierCategorySpecificationFillComplete,
+  validateSupplierOfferSpecificationFillComplete,
   areSupplierOfferSpecificationValuesLocked,
   isSupplierMrpLocked,
   isSupplierHsnLocked,
@@ -163,14 +165,30 @@ test('validateSupplierSpecificationUpdateAllowed blocks changing saved values', 
   assert.equal(SUPPLIER_SPEC_VALUES_LOCKED_MESSAGE.includes('admin'), true);
 });
 
-test('getMissingSupplierSpecificationTemplateFields requires every admin template key', () => {
+test('getMissingSupplierSpecificationTemplateFields lists empty keys but does not block save', () => {
   const result = getMissingSupplierSpecificationTemplateFields(
     ['Material', 'Size'],
     { Material: 'Steel', Size: '' }
   );
-  assert.equal(result.ok, false);
+  assert.equal(result.ok, true);
   assert.ok(result.missingFields.includes('specifications.Size'));
-  assert.match(result.message, /Size/i);
+});
+
+test('category and catalog spec validators allow a partial fill', async () => {
+  const categoryResult = await validateSupplierCategorySpecificationFillComplete(
+    async () => ({ Material: '', Size: '' }),
+    {
+      categoryName: 'Tools',
+      specifications: { Material: 'Steel', Size: '' }
+    }
+  );
+  assert.equal(categoryResult.ok, true);
+
+  const offerResult = await validateSupplierOfferSpecificationFillComplete(
+    { from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null }) }) }) }) },
+    { productId: 'p1', specifications: { Material: 'Steel' } }
+  );
+  assert.equal(offerResult.ok, true);
 });
 
 test('areSupplierOfferSpecificationValuesLocked detects completed post-approval fill', () => {

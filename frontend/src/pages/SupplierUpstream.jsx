@@ -33,6 +33,10 @@ import { parseSupplierStockQuantity } from '../utils/parseSupplierStockQuantity'
 import { dedupeCategoryStrings } from '../utils/categoryNormalize';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import {
+  DUPLICATE_PROJECT_NAME_MESSAGE,
+  projectNameAlreadyExists
+} from '../utils/projectNameUniqueness';
+import {
   createUpstreamCheckoutSessionId,
   clearCheckoutHoldExpired,
   reserveUpstreamCheckoutInventory,
@@ -1610,6 +1614,8 @@ const SupplierUpstream = ({ user }) => {
       const nextFieldErrors = { ...emptyProjectFieldErrors };
       if (!newCartProjectName.trim()) {
         nextFieldErrors.projectName = 'Please enter a project name.';
+      } else if (projectNameAlreadyExists(cartProjects, newCartProjectName)) {
+        nextFieldErrors.projectName = DUPLICATE_PROJECT_NAME_MESSAGE;
       }
       if (!newCartRequiredDate) {
         nextFieldErrors.expectedDispatchDate = 'Expected dispatch date is required.';
@@ -1685,6 +1691,13 @@ const SupplierUpstream = ({ user }) => {
       return rest;
     });
     if (!ok) {
+      if (isNewProject && /already exists/i.test(responseMessage)) {
+        setProjectFieldErrors((prev) => ({
+          ...prev,
+          projectName: DUPLICATE_PROJECT_NAME_MESSAGE
+        }));
+        return;
+      }
       setDialogError(responseMessage || 'Failed to add this product to cart.');
       return;
     }

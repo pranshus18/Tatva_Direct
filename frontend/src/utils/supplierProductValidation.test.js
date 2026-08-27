@@ -10,6 +10,7 @@ import {
   getSupplierInventoryUpdateMissingFields,
   getSupplierProductCreateErrorMessage,
   getSupplierProductUpdateErrorMessage,
+  getSupplierSpecificationTemplateMissingFields,
   INVENTORY_REQUIRED_FOR_PRODUCT_COV_MESSAGE,
   PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE,
   isSupplierInventoryCompleteForProductCov,
@@ -140,7 +141,7 @@ describe('supplierProductValidation', () => {
     ).toBe(1);
   });
 
-  it('requires every admin specification key when a category template is loaded', () => {
+  it('allows adding a product when some specification values are still empty', () => {
     expect(
       getSupplierCatalogMandatoryMissingFields(
         {
@@ -155,6 +156,12 @@ describe('supplierProductValidation', () => {
           specTemplateKeys: ['Material', 'Size'],
           specifications: { Material: 'Steel', Size: '' }
         }
+      )
+    ).toEqual([]);
+    expect(
+      getSupplierSpecificationTemplateMissingFields(
+        ['Material', 'Size'],
+        { Material: 'Steel', Size: '' }
       )
     ).toEqual(['Specification: Size']);
   });

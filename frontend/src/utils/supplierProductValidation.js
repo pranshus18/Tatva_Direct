@@ -36,7 +36,7 @@ export function isMeaningfullyFilledSpecValue(value) {
   return String(value).trim() !== '';
 }
 
-/** Require every admin-defined specification key when a category template is loaded. */
+/** List empty admin-defined specification keys. Empty keys are optional on add/save. */
 export function getSupplierSpecificationTemplateMissingFields(
   specTemplateKeys = [],
   specifications = {}
@@ -143,9 +143,7 @@ export function getSupplierCatalogMandatoryMissingFields(formData = {}, options 
   const {
     requirePhotos = false,
     minPhotos = MIN_SUPPLIER_PRODUCT_PHOTOS,
-    photoCount,
-    specTemplateKeys = [],
-    specifications = null
+    photoCount
   } = options;
   const missing = [];
 
@@ -168,16 +166,6 @@ export function getSupplierCatalogMandatoryMissingFields(formData = {}, options 
   if (requirePhotos && resolvedPhotoCount < minPhotos) {
     missing.push(`At least ${minPhotos} product photos`);
   }
-
-  const specsSource =
-    specifications != null
-      ? specifications
-      : formData.specifications && typeof formData.specifications === 'object'
-        ? formData.specifications
-        : {};
-  missing.push(
-    ...getSupplierSpecificationTemplateMissingFields(specTemplateKeys, specsSource)
-  );
 
   return missing;
 }

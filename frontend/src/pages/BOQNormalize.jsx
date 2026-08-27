@@ -855,7 +855,7 @@ const BOQNormalize = ({ onComplete }) => {
 
                             {item.nearestSupplier && isAvailable ? (
                               <div className="item-supplier-line item-supplier-line--nearest">
-                                <strong>Nearest to site:</strong>{' '}
+                                <strong>Nearest supplier:</strong>{' '}
                                 {item.nearestSupplier.supplierName}
                                 {item.nearestSupplier.roleLabel ? (
                                   <span> ({item.nearestSupplier.roleLabel})</span>
@@ -872,7 +872,7 @@ const BOQNormalize = ({ onComplete }) => {
                                 {item.nearestSupplier.supplierName}
                                 {typeof item.nearestSupplier.distanceKm === 'number' ? (
                                   <span className="item-supplier-location">
-                                    · {item.nearestSupplier.distanceKm} km from site
+                                    · {item.nearestSupplier.distanceKm} km away
                                   </span>
                                 ) : null}
                               </div>

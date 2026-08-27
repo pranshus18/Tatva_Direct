@@ -113,7 +113,6 @@ import {
   PRODUCT_COV_OPEN_FROM_PRODUCT_MESSAGE,
   getSupplierProductCreateErrorMessage,
   getSupplierProductUpdateErrorMessage,
-  getSupplierSpecificationTemplateMissingFields,
   isMeaningfullyFilledSpecValue,
   MIN_SUPPLIER_PRODUCT_PHOTOS
 } from '../utils/supplierProductValidation';
@@ -861,14 +860,6 @@ const ProductManagement = ({ user }) => {
       return { ok: false, message: 'Missing product id. Refresh and try again.' };
     }
 
-    const templateKeys = getSupplierCatalogSpecificationKeys(item);
-    const specMissing = getSupplierSpecificationTemplateMissingFields(templateKeys, nextSpecs);
-    if (specMissing.length > 0) {
-      const message = formatSupplierProductValidationMessage(specMissing);
-      alert(message);
-      return { ok: false, message };
-    }
-
     return handleUpdateProduct(
       productId,
       {
@@ -1548,27 +1539,6 @@ const ProductManagement = ({ user }) => {
               alert(formatSupplierProductValidationMessage(catalogMissing));
               return;
             }
-            if (isApprovedSpecFill) {
-              const specMissing = getSupplierSpecificationTemplateMissingFields(
-                editingItem.catalogSpecificationKeys ||
-                  Object.keys(editingItem.specifications || {}),
-                data.specifications
-              );
-              if (specMissing.length > 0) {
-                alert(formatSupplierProductValidationMessage(specMissing));
-                return;
-              }
-            }
-            if (isPendingCategorySpecFill) {
-              const specMissing = getSupplierSpecificationTemplateMissingFields(
-                Object.keys(data.specifications || {}),
-                data.specifications
-              );
-              if (specMissing.length > 0) {
-                alert(formatSupplierProductValidationMessage(specMissing));
-                return;
-              }
-            }
             await handleUpdateProduct(productId, catalogPayload, {
               refreshProducts: isApprovedSpecFill || isPendingCategorySpecFill
             });
@@ -2107,7 +2077,7 @@ const ProductDetailsModal = ({
                 </p>
               ) : (
                 <p className="pm-details-spec-readonly-hint" style={{ color: '#475569' }}>
-                  Admin assigned these specification keys. Fill every value once — they lock after you save.
+                  Admin assigned these specification keys. Fill in the values you know — empty fields can stay blank. Saved values cannot be changed later.
                 </p>
               )}
               {isEditingSpecs ? (
@@ -3170,7 +3140,6 @@ const ProductModal = ({
     if (missing.length > 0) {
       setShowMissingHints(true);
       const photosMissing = missing.some((field) => /product photos/i.test(String(field || '')));
-      const specsMissing = missing.some((field) => /^Specification:/i.test(String(field || '')));
       setFormValidationError(
         photosMissing && missing.length === 1
           ? formatMissingProductPhotosMessage(uploadedPhotoCount, MIN_AI_PRODUCT_IMAGES)
@@ -3180,8 +3149,6 @@ const ProductModal = ({
       const scrollEl = formScrollRef.current;
       if (photosMissing && productPhotosSectionRef.current) {
         productPhotosSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      } else if (specsMissing && specificationsSectionRef.current) {
-        specificationsSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } else if (formEl) {
         const firstInvalid = formEl.querySelector(':invalid');
         if (firstInvalid && typeof firstInvalid.reportValidity === 'function') {
@@ -3211,24 +3178,6 @@ const ProductModal = ({
       );
       brandFieldRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
-    }
-
-    if (approvedNeedsSpecFill || categorySpecFillRequired) {
-      const templateKeys = categorySpecFillRequired
-        ? adminSpecTemplateKeys
-        : product?.catalogSpecificationKeys ||
-          adminSpecTemplateKeys ||
-          Object.keys(product?.specifications || {});
-      const specMissing = getSupplierSpecificationTemplateMissingFields(
-        templateKeys,
-        specifications
-      );
-      if (specMissing.length > 0) {
-        setShowMissingHints(true);
-        setFormValidationError(formatSupplierProductValidationMessage(specMissing));
-        specificationsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        return;
-      }
     }
 
     // Final guard: never submit create with fewer than the required uploaded photos.
@@ -5687,12 +5636,12 @@ const ProductModal = ({
                       </div>
                       {hasAdminSpecTemplate && canEditSpecificationValues ? (
                         <p style={{ margin: '0 0 0.75rem', fontSize: '0.82rem', color: '#475569' }}>
-                          This category already has admin-defined specification keys. Fill in every value below before submitting.
+                          This category already has admin-defined specification keys. Fill in the values you know — empty fields can stay blank.
                         </p>
                       ) : null}
                       {!hasAdminSpecTemplate && approvedNeedsSpecFill && canEditSpecificationValues ? (
                         <p style={{ margin: '0 0 0.75rem', fontSize: '0.82rem', color: '#475569' }}>
-                          Admin assigned specification keys after approval. Fill in every value below once — they cannot be changed after save.
+                          Admin assigned specification keys after approval. Fill in the values you know. Saved values cannot be changed later.
                         </p>
                       ) : null}
                       {supplierSpecValuesLocked ? (
@@ -5713,20 +5662,6 @@ const ProductModal = ({
                           </div>
                         )}
                         {specKeys.map((key, index) => {
-                          const validationKeys = categorySpecFillRequired
-                            ? adminSpecTemplateKeys
-                            : approvedNeedsSpecFill
-                              ? product?.catalogSpecificationKeys || adminSpecTemplateKeys
-                              : [];
-                          const specValueMissing =
-                            showMissingHints &&
-                            validationKeys.some(
-                              (templateKey) =>
-                                String(templateKey || '').trim().toLowerCase() ===
-                                String(key || '').trim().toLowerCase()
-                            ) &&
-                            !isMeaningfullyFilledSpecValue(specifications[key]);
-
                           return (
                           <div key={key} style={{
                             display: 'flex',
@@ -5735,7 +5670,7 @@ const ProductModal = ({
                             padding: '0.75rem',
                             background: index % 2 === 0 ? '#ffffff' : '#f9fafb',
                             borderRadius: '6px',
-                            borderLeft: specValueMissing ? '3px solid #dc2626' : '3px solid #4f46e5'
+                            borderLeft: '3px solid #4f46e5'
                           }}>
                             {canEditSpecificationKeys ? (
                             <input
@@ -5774,13 +5709,11 @@ const ProductModal = ({
                                 type="text"
                                 value={specValueToInput(specifications[key])}
                                 onChange={(e) => updateSpecificationValue(key, e.target.value)}
-                                placeholder="Specification value"
-                                required={hasAdminSpecTemplate || approvedNeedsSpecFill}
-                                aria-invalid={specValueMissing}
+                                placeholder="Specification value (optional)"
                                 style={{
                                   flex: '1',
                                   padding: '0.5rem 0.75rem',
-                                  border: specValueMissing ? '1px solid #dc2626' : '1px solid #d1d5db',
+                                  border: '1px solid #d1d5db',
                                   borderRadius: '6px',
                                   fontSize: '0.875rem',
                                   color: '#1e293b',

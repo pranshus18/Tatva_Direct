@@ -40,6 +40,10 @@ import SupplierTsinLine from '../components/SupplierTsinLine';
 import { cn } from '@/lib/utils';
 import { formatDateIST, getTodayDateInputValue, isDateBeforeToday } from '../utils/dateTime';
 import {
+  DUPLICATE_PROJECT_NAME_MESSAGE,
+  projectNameAlreadyExists
+} from '../utils/projectNameUniqueness';
+import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
 } from '../utils/currentLocationAddress';
@@ -490,6 +494,14 @@ const Cart = ({ onLoadCart }) => {
     if (!normalizedGroupId) return;
     if (!nextName) {
       setError('Project name cannot be empty.');
+      return;
+    }
+    if (
+      projectNameAlreadyExists(getGroups(cart?.draft), nextName, {
+        excludeId: normalizedGroupId
+      })
+    ) {
+      setError(DUPLICATE_PROJECT_NAME_MESSAGE);
       return;
     }
     if (nextDate && isDateBeforeToday(nextDate)) {

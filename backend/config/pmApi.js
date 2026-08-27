@@ -1,14 +1,17 @@
 const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
 
+export const PM_DEV_HOST = 'devopsapi.withtatva.ai';
+export const PM_PROD_HOST = 'opsapi.withtatva.ai';
+
 /** PM users + payment hosts. Paths are identical; only the subdomain changes. */
 export const PM_USERS_HOST_BY_ENV = {
-  development: 'https://devopsapi.withtatva.ai/users',
-  production: 'https://opsapi.withtatva.ai/users'
+  development: `https://${PM_DEV_HOST}/users`,
+  production: `https://${PM_PROD_HOST}/users`
 };
 
 export const PM_PAYMENT_HOST_BY_ENV = {
-  development: 'https://devopsapi.withtatva.ai/payment',
-  production: 'https://opsapi.withtatva.ai/payment'
+  development: `https://${PM_DEV_HOST}/payment`,
+  production: `https://${PM_PROD_HOST}/payment`
 };
 
 /**
@@ -51,19 +54,54 @@ export const PM_API_CATALOG = {
 
 /**
  * Resolve PM environment.
- * PM_API_ENV=dev | production  (preferred switch)
- * Falls back to NODE_ENV so production deploys use opsapi automatically.
+ * NODE_ENV=production always uses opsapi — leftover PM_API_ENV=dev from local .env
+ * must not pin a Render/production process onto devopsapi.
+ * Local/dev can still opt into opsapi with PM_API_ENV=production.
  */
-export function resolvePmApiEnv(raw = process.env.PM_API_ENV || process.env.NODE_ENV) {
-  const value = String(raw || '').trim().toLowerCase();
-  if (value === 'production' || value === 'prod') return 'production';
+export function resolvePmApiEnv(
+  raw = process.env.PM_API_ENV,
+  nodeEnv = process.env.NODE_ENV
+) {
+  const explicit = String(raw || '').trim().toLowerCase();
+  const node = String(nodeEnv || '').trim().toLowerCase();
+  if (node === 'production' || node === 'prod') return 'production';
+  if (explicit === 'production' || explicit === 'prod') return 'production';
   return 'development';
+}
+
+/** Rewrite a PM URL onto the host that matches pmEnv (devopsapi vs opsapi). */
+export function remapPmUrlToEnv(url, pmEnv) {
+  const value = normalizeUrl(url);
+  if (!value) return value;
+  const targetHost = pmEnv === 'production' ? PM_PROD_HOST : PM_DEV_HOST;
+  const otherHost = pmEnv === 'production' ? PM_DEV_HOST : PM_PROD_HOST;
+  if (!value.includes(otherHost)) return value;
+  return value.split(otherHost).join(targetHost);
+}
+
+/**
+ * Prefer catalog host for the active env. Env URL overrides are kept only when
+ * they already match that env; leftover devopsapi URLs on production are remapped.
+ */
+export function resolvePmBaseUrl(envValue, catalogValue, pmEnv) {
+  const catalog = normalizeUrl(catalogValue);
+  const override = normalizeUrl(envValue);
+  if (!override) return catalog;
+  const remapped = remapPmUrlToEnv(override, pmEnv);
+  if (remapped !== override) {
+    console.warn(`[PM API] Remapping stale ${override} → ${remapped} (${pmEnv})`);
+  }
+  return remapped;
 }
 
 export const PM_API_ENV = resolvePmApiEnv();
 const activePmApis = PM_API_CATALOG[PM_API_ENV];
 
-export const PM_API_BASE_URL = normalizeUrl(process.env.PM_API_BASE_URL || activePmApis.usersBase);
+export const PM_API_BASE_URL = resolvePmBaseUrl(
+  process.env.PM_API_BASE_URL,
+  activePmApis.usersBase,
+  PM_API_ENV
+);
 
 export const PM_VENDOR_LEADS_URL = `${PM_API_BASE_URL}/api/users/vendor-leads`;
 export const PM_VERIFY_GST_URL = `${PM_API_BASE_URL}/api/users/verify-gst`;
@@ -143,12 +181,16 @@ export function buildPmUserUrl(pmUserId) {
   return `${PM_API_BASE_URL}/api/users/${id}`;
 }
 
-export const PM_PAYMENT_API_BASE_URL = normalizeUrl(
-  process.env.PM_PAYMENT_API_BASE_URL || activePmApis.paymentBase
+export const PM_PAYMENT_API_BASE_URL = resolvePmBaseUrl(
+  process.env.PM_PAYMENT_API_BASE_URL,
+  activePmApis.paymentBase,
+  PM_API_ENV
 );
 
-export const PM_PAYMENT_COMPLETE_API_BASE_URL = normalizeUrl(
-  process.env.PM_PAYMENT_COMPLETE_API_BASE_URL || PM_PAYMENT_API_BASE_URL
+export const PM_PAYMENT_COMPLETE_API_BASE_URL = resolvePmBaseUrl(
+  process.env.PM_PAYMENT_COMPLETE_API_BASE_URL,
+  PM_PAYMENT_API_BASE_URL,
+  PM_API_ENV
 );
 
 export const PM_VAULT_URL = `${PM_API_BASE_URL}/api/vault`;
@@ -162,9 +204,10 @@ export const PM_VAULT_TOPUP_COMPLETE_URL = `${PM_PAYMENT_COMPLETE_API_BASE_URL}/
  * POST body: { orderId, userId } — userId is the PM platform user id.
  * Remaps a stale guessed debit URL if still set in env from an earlier draft.
  */
-const rawPmVaultPayOrderUrl = normalizeUrl(
-  process.env.PM_VAULT_PAY_ORDER_URL ||
-    `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay`
+const rawPmVaultPayOrderUrl = resolvePmBaseUrl(
+  process.env.PM_VAULT_PAY_ORDER_URL,
+  `${PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay`,
+  PM_API_ENV
 );
 export const PM_VAULT_PAY_ORDER_URL = /\/api\/vault\/debit\/?$/i.test(rawPmVaultPayOrderUrl)
   ? normalizeUrl(`${PM_PAYMENT_API_BASE_URL}/api/v1/payments/order-payment/vault-pay`)
@@ -174,8 +217,10 @@ export const PM_VAULT_PAY_ORDER_URL = /\/api\/vault\/debit\/?$/i.test(rawPmVault
  * Offline vault credit (cash / cheque / bank).
  * Defaults to the same PM users host as vault balance.
  */
-export const PM_VAULT_OFFLINE_API_BASE_URL = normalizeUrl(
-  process.env.PM_VAULT_OFFLINE_API_BASE_URL || PM_API_BASE_URL
+export const PM_VAULT_OFFLINE_API_BASE_URL = resolvePmBaseUrl(
+  process.env.PM_VAULT_OFFLINE_API_BASE_URL,
+  PM_API_BASE_URL,
+  PM_API_ENV
 );
 export const PM_VAULT_ADD_MONEY_URL = `${PM_VAULT_OFFLINE_API_BASE_URL}/api/vault/add-money`;
 /** Fallback when a custom offline host fails DNS / network. */

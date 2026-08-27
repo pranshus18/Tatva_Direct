@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Bell } from 'lucide-react';
+import { Bell, X } from 'lucide-react';
 import { authFetch, getApiUrl } from '@/config/api';
 import { formatDateIST } from '@/utils/dateTime';
 import {
@@ -215,7 +215,7 @@ export default function SpNotificationsBell() {
       {!isDashboard && showDropdown ? (
         <div
           className="absolute right-0 top-full z-50 mt-2 flex max-h-[min(80vh,440px)] w-[min(100vw-2rem,22rem)] flex-col overflow-hidden rounded-lg border bg-popover text-popover-foreground shadow-lg"
-          role="dialog"
+          role="region"
           aria-label="Notifications"
         >
           <div className="flex shrink-0 items-center justify-between border-b px-4 py-3">
@@ -235,6 +235,16 @@ export default function SpNotificationsBell() {
                 onClick={markAllNotificationsAsRead}
               >
                 {markingAllRead ? 'Marking…' : 'Mark all read'}
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                aria-label="Close notifications"
+                onClick={() => setShowDropdown(false)}
+              >
+                <X className="h-4 w-4" />
               </Button>
             </div>
           </div>

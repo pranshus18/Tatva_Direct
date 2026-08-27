@@ -6,6 +6,8 @@ import {
   mergeTransportSelection,
   mergeOrAppendCartGroupItem,
   appendDiscoveryItemAsNewProject,
+  DUPLICATE_PROJECT_NAME_MESSAGE,
+  hasDuplicateProjectName,
   normalizePoCartDraft,
   poCartDraftNeedsPersistAfterPrune,
   parseWithSchema,
@@ -39,9 +41,6 @@ export function registerPoCartRoutes(ctx) {
     isServiceProvider,
     supabase
   } = ctx;
-
-const normalizeProjectNameKey = (value) => String(value || '').trim().toLowerCase();
-const normalizeProjectDateKey = (value) => String(value || '').trim().slice(0, 10);
 
 async function resolveDiscoveryProjectShipping(supabaseClient, userId, body = {}) {
   const shippingAddressId = String(body?.shippingAddressId || '').trim();
@@ -99,20 +98,6 @@ async function enrichDiscoveryShippingMeta(shippingMeta) {
   };
 }
 
-const hasDuplicateProjectKey = (groups, nextName, nextDate, excludeGroupId = '') => {
-  const nameKey = normalizeProjectNameKey(nextName);
-  const dateKey = normalizeProjectDateKey(nextDate);
-  return (Array.isArray(groups) ? groups : []).some((group) => {
-    const gid = String(group?.groupId || '').trim();
-    if (excludeGroupId && gid === excludeGroupId) return false;
-    const existingNameKey = normalizeProjectNameKey(group?.boqName || '');
-    const existingDateKey = normalizeProjectDateKey(
-      group?.boqProject?.requiredDate || group?.requiredDate || ''
-    );
-    return existingNameKey === nameKey && existingDateKey === dateKey;
-  });
-};
-
 router.get('/cart', authenticateToken, isServiceProvider, async (req, res) => {
   try {
     const { data: cart, error } = await supabase
@@ -157,13 +142,12 @@ router.put('/cart', authenticateToken, isServiceProvider, async (req, res) => {
     const groups = Array.isArray(draftPayload?.boqGroups) ? draftPayload.boqGroups : [];
     const seen = new Set();
     for (const group of groups) {
-      const key = `${normalizeProjectNameKey(group?.boqName || '')}::${normalizeProjectDateKey(
-        group?.boqProject?.requiredDate || group?.requiredDate || ''
-      )}`;
+      const key = String(group?.boqName || '').trim().toLowerCase();
+      if (!key) continue;
       if (seen.has(key)) {
         return res.status(400).json({
           status: 'error',
-          message: 'Duplicate projects are not allowed with the same name and expected dispatch date'
+          message: DUPLICATE_PROJECT_NAME_MESSAGE
         });
       }
       seen.add(key);
@@ -363,11 +347,10 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
       resultGroupId = targetGroupId;
     } else {
       const proposedProjectName = providedProjectName || product.name;
-      const proposedProjectDate = expectedDeliveryDate || '';
-      if (hasDuplicateProjectKey(currentDraft.boqGroups, proposedProjectName, proposedProjectDate)) {
+      if (hasDuplicateProjectName(currentDraft.boqGroups, proposedProjectName)) {
         return res.status(400).json({
           status: 'error',
-          message: 'A project with the same name and expected dispatch date already exists'
+          message: DUPLICATE_PROJECT_NAME_MESSAGE
         });
       }
       const appended = appendDiscoveryItemAsNewProject(currentDraft.boqGroups, discoveryItem, product.name, {
@@ -682,13 +665,10 @@ router.patch('/cart/groups/:groupId/name', authenticateToken, isServiceProvider,
     if (!targetGroup) {
       return res.status(404).json({ status: 'error', message: 'Cart group not found' });
     }
-    const effectiveDate = hasExpectedDeliveryDateField
-      ? expectedDeliveryDate || ''
-      : String(targetGroup?.boqProject?.requiredDate || targetGroup?.requiredDate || '').trim();
-    if (hasDuplicateProjectKey(groups, nextName, effectiveDate, groupId)) {
+    if (hasDuplicateProjectName(groups, nextName, { excludeId: groupId })) {
       return res.status(400).json({
         status: 'error',
-        message: 'A project with the same name and expected dispatch date already exists'
+        message: DUPLICATE_PROJECT_NAME_MESSAGE
       });
     }
     let found = false;

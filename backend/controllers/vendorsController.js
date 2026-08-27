@@ -18,10 +18,12 @@ import {
 } from '../services/vendorRankingHelpersService.js';
 import { inferMaterialCategory } from '../services/materialClassificationService.js';
 import {
+  assignNearestRecommendedFlags,
   assignSequentialRank,
   computeUrgencyBonus,
   filterTopValidVendors,
   prioritizeApprovedThenRankScore,
+  requestedQtyFromItem,
   sortVendorsByGeoThenRankScore
 } from '../services/vendorRankingScoringService.js';
 import { enrichItemVendorsWithLatestScorecards } from '../services/vendorScorecardService.js';
@@ -310,8 +312,10 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
         includeAllVariants
       });
 
-      // Sort primarily by proximity when site geo is known, then by overall rank score.
-      sortVendorsByGeoThenRankScore(vendors, siteGeoFromBoq);
+      const requestedQty = requestedQtyFromItem(item);
+
+      // Fulfillable offers first, then proximity when site geo is known, then rank score.
+      sortVendorsByGeoThenRankScore(vendors, siteGeoFromBoq, requestedQty);
 
       // Without delivery coordinates, keep legacy approved-first + stock-weighted ordering.
       if (!siteGeoFromBoq) {
@@ -324,48 +328,14 @@ router.post('/rank', authenticateToken, isServiceProvider, async (req, res) => {
       });
 
       assignSequentialRank(validVendors);
-      if (siteGeoFromBoq && validVendors.length > 0) {
-        const preferredSupplierId =
+      assignNearestRecommendedFlags(validVendors, {
+        preferredSupplierId:
           String(item?.nearestSupplier?.supplierId || '').trim() ||
           String(item?.supplyChainLastSupplier?.supplierId || '').trim() ||
-          '';
-        const withDistance = validVendors.filter((vendor) => typeof vendor?.distanceKm === 'number');
-        const vendorHasStock = (vendor) =>
-          vendor?.isAvailable !== false && Number(vendor?.availableStock ?? vendor?.stock ?? 0) > 0;
-        const inStockWithDistance = withDistance.filter(vendorHasStock);
-        const preferredWithDistance = preferredSupplierId
-          ? withDistance.filter((vendor) => String(vendor?.id || '') === preferredSupplierId)
-          : [];
-        const preferredInStockWithDistance = preferredWithDistance.filter(vendorHasStock);
-
-        const pickNearestFrom = (list) =>
-          list.reduce((best, vendor) =>
-            (vendor.distanceKm || Infinity) < (best.distanceKm || Infinity) ? vendor : best
-          );
-
-        // Only in-stock offers may be recommended. Never fall back to OOS/unavailable
-        // suppliers — that produces contradictory "Nearest · Recommended" + "Out of stock".
-        const nearestRecommended =
-          (preferredInStockWithDistance.length > 0 &&
-            pickNearestFrom(preferredInStockWithDistance)) ||
-          (inStockWithDistance.length > 0 && pickNearestFrom(inStockWithDistance)) ||
-          null;
-
-        validVendors.forEach((vendor) => {
-          delete vendor.isNearestRecommended;
-        });
-        if (nearestRecommended) {
-          nearestRecommended.isNearestRecommended = true;
-        }
-
-        // Final safety: never leave recommendation flags on zero-stock / unavailable offers.
-        validVendors.forEach((vendor) => {
-          const stock = Number(vendor?.availableStock ?? vendor?.stock ?? 0);
-          if (vendor?.isAvailable === false || !(stock > 0)) {
-            delete vendor.isNearestRecommended;
-          }
-        });
-      }
+          '',
+        requestedQty,
+        enabled: Boolean(siteGeoFromBoq) && validVendors.length > 0
+      });
       
       // Only synthesize a vendor when the reference catalog row still has at least one
       // approved, active supplier_products offer. Deleted/deactivated listings must not

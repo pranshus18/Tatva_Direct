@@ -1,14 +1,17 @@
 const normalizeUrl = (value) => String(value || '').trim().replace(/\/$/, '');
 
+export const PM_DEV_HOST = 'devopsapi.withtatva.ai';
+export const PM_PROD_HOST = 'opsapi.withtatva.ai';
+
 /** PM users + payment hosts. Paths are identical; only the subdomain changes. */
 export const PM_USERS_HOST_BY_ENV = {
-  development: 'https://devopsapi.withtatva.ai/users',
-  production: 'https://opsapi.withtatva.ai/users'
+  development: `https://${PM_DEV_HOST}/users`,
+  production: `https://${PM_PROD_HOST}/users`
 };
 
 export const PM_PAYMENT_HOST_BY_ENV = {
-  development: 'https://devopsapi.withtatva.ai/payment',
-  production: 'https://opsapi.withtatva.ai/payment'
+  development: `https://${PM_DEV_HOST}/payment`,
+  production: `https://${PM_PROD_HOST}/payment`
 };
 
 /** Every PM path used by Tatva. Same on devopsapi (dev) and opsapi (prod). */
@@ -48,13 +51,35 @@ export const PM_API_CATALOG = {
 };
 
 /**
- * VITE_PM_API_ENV=dev | production  (preferred switch)
- * Falls back to Vite mode so production builds use opsapi automatically.
+ * Vite production builds always use opsapi. Leftover VITE_PM_API_ENV=dev from
+ * a copied .env must not pin direct.withtatva.ai onto devopsapi.
+ * Local `npm run dev` can still opt into opsapi with VITE_PM_API_ENV=production.
  */
-export function resolvePmApiEnv(raw = import.meta.env.VITE_PM_API_ENV || import.meta.env.MODE) {
-  const value = String(raw || '').trim().toLowerCase();
-  if (value === 'production' || value === 'prod') return 'production';
+export function resolvePmApiEnv(
+  raw = import.meta.env.VITE_PM_API_ENV,
+  mode = import.meta.env.MODE
+) {
+  const explicit = String(raw || '').trim().toLowerCase();
+  const viteMode = String(mode || '').trim().toLowerCase();
+  if (viteMode === 'production' || viteMode === 'prod') return 'production';
+  if (explicit === 'production' || explicit === 'prod') return 'production';
   return 'development';
+}
+
+export function remapPmUrlToEnv(url, pmEnv) {
+  const value = normalizeUrl(url);
+  if (!value) return value;
+  const targetHost = pmEnv === 'production' ? PM_PROD_HOST : PM_DEV_HOST;
+  const otherHost = pmEnv === 'production' ? PM_DEV_HOST : PM_PROD_HOST;
+  if (!value.includes(otherHost)) return value;
+  return value.split(otherHost).join(targetHost);
+}
+
+export function resolvePmBaseUrl(envValue, catalogValue, pmEnv) {
+  const catalog = normalizeUrl(catalogValue);
+  const override = normalizeUrl(envValue);
+  if (!override) return catalog;
+  return remapPmUrlToEnv(override, pmEnv);
 }
 
 export const PM_API_ENV = resolvePmApiEnv();
@@ -69,7 +94,7 @@ const isDevProxy =
 /** PM users API base — vault lives here. */
 export const PM_AUTH_BASE_URL = isDevProxy
   ? '/pm-users'
-  : normalizeUrl(import.meta.env.VITE_PM_AUTH_BASE_URL || PM_USERS_HOST);
+  : resolvePmBaseUrl(import.meta.env.VITE_PM_AUTH_BASE_URL, PM_USERS_HOST, PM_API_ENV);
 
 export const PM_SEND_OTP_URL = `${PM_AUTH_BASE_URL}/api/auth/send-otp`;
 export const PM_VERIFY_OTP_URL = `${PM_AUTH_BASE_URL}/api/auth/verify-otp`;
@@ -96,15 +121,15 @@ export const PM_AUTH_SESSION_KEY = 'pmAuthSession';
 /** PM payment API — top-up initiate. */
 export const PM_PAYMENT_BASE_URL = isDevProxy
   ? '/pm-payment-initiate'
-  : normalizeUrl(import.meta.env.VITE_PM_PAYMENT_BASE_URL || PM_PAYMENT_HOST);
+  : resolvePmBaseUrl(import.meta.env.VITE_PM_PAYMENT_BASE_URL, PM_PAYMENT_HOST, PM_API_ENV);
 
 /** PM payment API — top-up complete (same payment host by default). */
 export const PM_PAYMENT_COMPLETE_BASE_URL = isDevProxy
   ? '/pm-payment-complete'
-  : normalizeUrl(
-      import.meta.env.VITE_PM_PAYMENT_COMPLETE_BASE_URL ||
-        import.meta.env.VITE_PM_PAYMENT_BASE_URL ||
-        PM_PAYMENT_HOST
+  : resolvePmBaseUrl(
+      import.meta.env.VITE_PM_PAYMENT_COMPLETE_BASE_URL || import.meta.env.VITE_PM_PAYMENT_BASE_URL,
+      PM_PAYMENT_HOST,
+      PM_API_ENV
     );
 
 /** GET vault balance + ledger — PM platform. */
@@ -130,10 +155,10 @@ export const PM_VAULT_PAY_ORDER_URL = `${PM_PAYMENT_HOST}/api/v1/payments/order-
 /** PM users API — offline vault add-money (same host as vault balance). */
 export const PM_VAULT_OFFLINE_BASE_URL = isDevProxy
   ? '/pm-users'
-  : normalizeUrl(
-      import.meta.env.VITE_PM_VAULT_OFFLINE_BASE_URL ||
-        import.meta.env.VITE_PM_AUTH_BASE_URL ||
-        PM_USERS_HOST
+  : resolvePmBaseUrl(
+      import.meta.env.VITE_PM_VAULT_OFFLINE_BASE_URL || import.meta.env.VITE_PM_AUTH_BASE_URL,
+      PM_USERS_HOST,
+      PM_API_ENV
     );
 
 /** POST offline vault credit (cash on hand) — form-data. Creates a PM credit-request (approved on PM). */

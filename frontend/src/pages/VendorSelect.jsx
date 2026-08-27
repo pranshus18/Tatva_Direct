@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Clock, RefreshCw, MapPin, Users } from 'lucide-react';
+import { ArrowLeft, RefreshCw, MapPin, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { resolveApiPath, authFetch, getApiUrl } from '../config/api';
 import { readSpWorkflow } from '../utils/spWorkflow';
@@ -33,6 +33,16 @@ import { formatRupee } from '../utils/formatRupee';
 import { formatShippingAddressPreview } from '../utils/shippingAddressLabel';
 import { formatDateIST } from '../utils/dateTime';
 import { specificationEntriesForCustomerDisplay } from '../utils/specifications';
+import {
+  getItemRequestedQty,
+  getVendorAvailableStock,
+  pickRecommendedVendor,
+  sanitizeVendorOffers,
+  sortVendorsForDisplay,
+  vendorCanFulfill,
+  vendorHasSufficientStock,
+  vendorIsUnavailable
+} from '../utils/vendorFulfillment';
 import './VendorSelect.css';
 
 /** Prefer in-app history so Back matches the browser back button; otherwise go to the prior workflow step. */
@@ -65,34 +75,6 @@ function resolveRankBoqId({ boqId, effectiveItems, boqMeta, cartSupplierHandoff 
   return typeof window !== 'undefined' ? localStorage.getItem('lastBoqId') : null;
 }
 
-function getItemRequestedQty(item) {
-  const qty = Number(item?.quantity);
-  return Number.isFinite(qty) && qty > 0 ? qty : 1;
-}
-
-function getVendorAvailableStock(vendor) {
-  const stock = Number(vendor?.availableStock ?? vendor?.stock ?? 0);
-  return Number.isFinite(stock) ? Math.max(0, stock) : 0;
-}
-
-function vendorHasSufficientStock(vendor, item) {
-  return getVendorAvailableStock(vendor) >= getItemRequestedQty(item);
-}
-
-/** True when the offer is explicitly unavailable or has no stock. */
-function vendorIsUnavailable(vendor) {
-  if (!vendor) return true;
-  const flag = vendor.isAvailable;
-  if (flag === false || flag === 0 || flag === 'false' || flag === '0') return true;
-  return getVendorAvailableStock(vendor) <= 0;
-}
-
-/** Supplier can fulfill only when stock covers qty and the offer is marked available. */
-function vendorCanFulfill(vendor, item) {
-  if (!vendor || vendorIsUnavailable(vendor)) return false;
-  return vendorHasSufficientStock(vendor, item);
-}
-
 function getVendorSelectionId(vendor) {
   return String(vendor?.selectionId || vendor?.supplierProductId || vendor?.id || '');
 }
@@ -107,53 +89,6 @@ function getStoredBuyerUserId() {
   }
 }
 
-/**
- * Normalize rank API / cache payloads so OOS offers cannot keep recommendation flags
- * or inconsistent stock/availability fields that confuse auto-select + badges.
- * Dual-role buyers must not see their own supplier listing.
- */
-function sanitizeVendorOffers(itemVendors, itemsList = [], excludeSupplierId = '') {
-  const itemsById = new Map(
-    (itemsList || []).map((item) => [String(item?.id ?? ''), item])
-  );
-  const buyerId = String(excludeSupplierId || '').trim();
-  const cleaned = {};
-  Object.keys(itemVendors || {}).forEach((itemId) => {
-    const item = itemsById.get(String(itemId)) || null;
-    const vendors = Array.isArray(itemVendors[itemId]) ? itemVendors[itemId] : [];
-    cleaned[itemId] = vendors
-      .filter((v) => {
-        if (!v || !v.id || !v.name) return false;
-        if (buyerId && String(v.id) === buyerId) return false;
-        if (!v.supplierProductId) return false;
-        if (String(v.status || '').toLowerCase() !== 'approved') return false;
-        return true;
-      })
-      .map((v) => {
-        const availableStock = getVendorAvailableStock(v);
-        const isAvailable = !(
-          v.isAvailable === false ||
-          v.isAvailable === 0 ||
-          v.isAvailable === 'false' ||
-          v.isAvailable === '0' ||
-          availableStock <= 0
-        );
-        const canFulfill = item
-          ? isAvailable && availableStock >= getItemRequestedQty(item)
-          : isAvailable;
-        return {
-          ...v,
-          stock: availableStock,
-          availableStock,
-          isAvailable,
-          // Never keep a recommendation flag on an unfulfillable offer.
-          isNearestRecommended: Boolean(v.isNearestRecommended) && canFulfill
-        };
-      });
-  });
-  return cleaned;
-}
-
 function formatInsufficientStockMessage(item, vendor) {
   const name = item?.normalizedName || item?.rawName || item?.name || 'this item';
   const supplierName = vendor?.name ? ` from ${vendor.name}` : '';
@@ -164,74 +99,6 @@ function formatInsufficientStockMessage(item, vendor) {
     return `"${name}"${supplierName} is out of stock or not available. Please choose another supplier, request this product, or pick a substitute.`;
   }
   return `Insufficient stock for "${name}"${supplierName}. Available: ${available} ${unit}, requested: ${requested}.`;
-}
-
-/** Sort fulfillable offers first, then by existing rank/distance order. */
-function sortVendorsForDisplay(vendors, item) {
-  return [...vendors].sort((a, b) => {
-    const aOk = vendorCanFulfill(a, item) ? 0 : 1;
-    const bOk = vendorCanFulfill(b, item) ? 0 : 1;
-    if (aOk !== bOk) return aOk - bOk;
-    const aRank = Number(a?.rank);
-    const bRank = Number(b?.rank);
-    if (Number.isFinite(aRank) && Number.isFinite(bRank) && aRank !== bRank) {
-      return aRank - bRank;
-    }
-    const aDist = typeof a?.distanceKm === 'number' ? a.distanceKm : Infinity;
-    const bDist = typeof b?.distanceKm === 'number' ? b.distanceKm : Infinity;
-    return aDist - bDist;
-  });
-}
-
-/** Pick nearest supplier when distance is known; otherwise first ranked approved option. */
-function pickRecommendedVendor(vendors, item = null) {
-  if (!Array.isArray(vendors) || vendors.length === 0) return null;
-  const eligible = vendors.filter((v) => v && (v.selectionId || v.supplierProductId || v.id));
-  if (!eligible.length) return null;
-
-  // Never recommend / auto-select a supplier that cannot fulfill the request.
-  const inStock = eligible.filter((v) => vendorCanFulfill(v, item));
-  if (!inStock.length) return null;
-
-  const preferredSupplierId =
-    String(item?.nearestSupplier?.supplierId || '').trim() ||
-    String(item?.supplyChainLastSupplier?.supplierId || '').trim() ||
-    '';
-  if (preferredSupplierId) {
-    const preferred = inStock.filter((v) => String(v.id || '').trim() === preferredSupplierId);
-    const preferredDistance = preferred.filter((v) => typeof v.distanceKm === 'number');
-    if (preferredDistance.length) {
-      return preferredDistance.reduce((best, vendor) =>
-        vendor.distanceKm < best.distanceKm ? vendor : best
-      );
-    }
-    if (preferred.length) {
-      return preferred[0];
-    }
-  }
-
-  const nearestFlagged = inStock.filter((v) => v.isNearestRecommended);
-  if (nearestFlagged.length) {
-    return nearestFlagged.reduce((best, vendor) => {
-      const bestDist = typeof best.distanceKm === 'number' ? best.distanceKm : Infinity;
-      const vendorDist = typeof vendor.distanceKm === 'number' ? vendor.distanceKm : Infinity;
-      if (vendorDist !== bestDist) return vendorDist < bestDist ? vendor : best;
-      return (Number(vendor.rank) || Infinity) < (Number(best.rank) || Infinity) ? vendor : best;
-    });
-  }
-
-  const withDistance = inStock.filter(
-    (v) => typeof v.distanceKm === 'number' && !Number.isNaN(v.distanceKm)
-  );
-  if (withDistance.length) {
-    return withDistance.reduce((best, vendor) =>
-      vendor.distanceKm < best.distanceKm ? vendor : best
-    );
-  }
-
-  const approved = inStock.filter((v) => v.status === 'approved');
-  const pool = approved.length ? approved : inStock;
-  return pool.find((v) => v.rank === 1 || v.isNearestRecommended) || pool[0];
 }
 
 function hydrateItemsFromWorkflow() {
@@ -902,6 +769,26 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
     return vendors.find((v) => getVendorSelectionId(v) === normalizedVendorId) || null;
   };
 
+  useEffect(() => {
+    setSelections((prev) => {
+      let changed = false;
+      const next = { ...(prev || {}) };
+      (effectiveItems || []).forEach((item) => {
+        const selectionKey = getSelectionKey(item);
+        const selectedId = next[selectionKey];
+        if (!selectedId) return;
+        const vendor = findVendorForItem(item, selectedId);
+        if (!vendor || !vendorCanFulfill(vendor, item)) {
+          delete next[selectionKey];
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+    // findVendorForItem closes over itemVendors; re-run when offers or lines change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemVendors, effectiveItems]);
+
   const handleSelect = (item, vendorId) => {
     const selectionKey = getSelectionKey(item);
     const normalizedVendorId = String(vendorId || '');
@@ -999,6 +886,16 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
       ...prev,
       [compositeKey]: !prev[compositeKey]
     }));
+  };
+
+  const handleGoToSubstitutions = (allowEmptySelection = false) => {
+    if (!allowEmptySelection) {
+      handleProceed();
+      return;
+    }
+    onComplete({ ...selections }, [...effectiveItems]);
+    clearSupplierSelectScopeSession();
+    navigate('/substitution');
   };
 
   const handleProceed = () => {
@@ -1303,7 +1200,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     </p>
                     <p style={{ color: '#c2410c', fontSize: '0.85rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
                       Listed suppliers are out of stock or unavailable, so none can be recommended or selected.
-                      Request this product so suppliers can add it.
+                      Request this product so suppliers can add it, or choose a substitute.
                     </p>
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                       <Button
@@ -1317,6 +1214,13 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                           : requestingProductKey === itemId
                             ? 'Submitting…'
                             : 'Request new product'}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => handleGoToSubstitutions(true)}
+                      >
+                        Choose a substitute
                       </Button>
                     </div>
                   </div>
@@ -1341,11 +1245,16 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     // Recommendation badge only for fulfillable auto-pick — never for OOS/unavailable.
                     const isRecommended =
                       canFulfill &&
+                      !isOutOfStock &&
+                      hasEnoughStock &&
                       Boolean(recommendedVendorId) &&
                       recommendedVendorId === vendorIdStr;
-                    // Only fulfillable offers may appear selected.
                     const isSelected =
-                      canFulfill && Boolean(currentSelection) && currentSelection === vendorIdStr;
+                      canFulfill &&
+                      !isOutOfStock &&
+                      hasEnoughStock &&
+                      Boolean(currentSelection) &&
+                      currentSelection === vendorIdStr;
                     return (
                   <div 
                     key={`${vendorIdStr}-${vendorIndex}`}
@@ -1378,7 +1287,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     }}
                   >
                     {(vendor.productImage || (Array.isArray(vendor.images) && vendor.images[0])) && (
-                      <div style={{ marginBottom: '0.75rem' }}>
+                      <div className="vendor-card-image">
                         <ProductImageCarousel
                           images={[vendor.productImage, ...(Array.isArray(vendor.images) ? vendor.images : [])]}
                           alt={vendor.supplierProductName || item.normalizedName || item.rawName || 'Product'}
@@ -1461,50 +1370,37 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                       )}
                       <SupplierTsinLine asin={vendor.asin || vendor.parentAsin} variantAsin={vendor.variantAsin} />
                       {specificationEntries.length > 0 && (
-                        <div
-                          style={{
-                            marginTop: '0.45rem',
-                            padding: '0.55rem',
-                            borderRadius: '8px',
-                            background: '#f8fafc',
-                            border: '1px solid #e2e8f0'
-                          }}
-                        >
-                          <div style={{ fontSize: '0.75rem', fontWeight: 700, color: '#334155', marginBottom: '0.3rem' }}>
+                        <div className="vendor-specifications">
+                          <div className="vendor-specifications-title">
                             Specifications
                           </div>
-                          <div style={{ display: 'grid', gap: '0.2rem' }}>
+                          <div
+                            className={`vendor-specifications-entries${isSpecsExpanded ? ' is-expanded' : ''}`}
+                          >
                             {visibleSpecificationEntries.map((entry) => (
-                              <div key={`${vendorIdStr}-${entry.key}`} style={{ fontSize: '0.74rem', color: '#475569' }}>
+                              <div
+                                key={`${vendorIdStr}-${entry.key}`}
+                                className="vendor-specifications-entry"
+                              >
                                 <strong>{entry.label}:</strong> {entry.displayValue}
                               </div>
                             ))}
-                            {hasMoreSpecifications && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.preventDefault();
-                                  e.stopPropagation();
-                                  toggleSpecifications(item, vendorIdStr);
-                                }}
-                                style={{
-                                  marginTop: '0.2rem',
-                                  textAlign: 'left',
-                                  background: 'transparent',
-                                  border: 'none',
-                                  color: '#2563eb',
-                                  fontSize: '0.72rem',
-                                  fontWeight: 600,
-                                  cursor: 'pointer',
-                                  padding: 0
-                                }}
-                              >
-                                {isSpecsExpanded
-                                  ? 'Show less'
-                                  : `View all specs (+${specificationEntries.length - 6} more)`}
-                              </button>
-                            )}
                           </div>
+                          {hasMoreSpecifications && (
+                            <button
+                              type="button"
+                              className="vendor-specifications-toggle"
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                toggleSpecifications(item, vendorIdStr);
+                              }}
+                            >
+                              {isSpecsExpanded
+                                ? 'Show less'
+                                : `View all specs (+${specificationEntries.length - 6} more)`}
+                            </button>
+                          )}
                         </div>
                       )}
                     </div>
@@ -1515,10 +1411,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                             ? `${formatRupee(vendor.price)} / ${vendor.unit || 'unit'}`
                             : `Price on request / ${vendor.unit || 'unit'}`}
                         </span>
-                      </div>
-                      <div className="detail">
-                        <Clock size={16} />
-                        <span>{vendor.leadTime} days delivery</span>
                       </div>
                       {hasEnoughStock && !isOutOfStock ? (
                         <div className="detail" style={{ color: '#059669' }}>
@@ -1605,7 +1497,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     No supplier is available for this requirement
                   </p>
                   <p style={{ color: '#c2410c', fontSize: '0.85rem', margin: '0 0 1rem', lineHeight: 1.45 }}>
-                    Your own supplier listing is not shown here. You must buy from another supplier of the same product or variant, or request this product so other suppliers can add it.
+                    Your own supplier listing is not shown here. You must buy from another supplier of the same product or variant, request this product so other suppliers can add it, or choose a substitute.
                   </p>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem' }}>
                     <Button
@@ -1619,6 +1511,13 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                         : requestingProductKey === itemId
                           ? 'Submitting…'
                           : 'Request new product'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => handleGoToSubstitutions(true)}
+                    >
+                      Choose a substitute
                     </Button>
                   </div>
                 </div>
