@@ -33,7 +33,7 @@ import {
   syncPmCustomerProfileForUser
 } from '../services/pmUserService.js';
 import { syncPmShippingAddressesOnProfile } from '../services/pmAddressService.js';
-import { mergeParsedShippingAddress } from '../utils/parseStructuredShippingAddress.js';
+import { buildRegisteredBillingAddress } from '../utils/parseStructuredShippingAddress.js';
 import {
   PM_PLATFORM_FLAG,
   buildPmPlatformHeaders,
@@ -283,17 +283,18 @@ async function cleanupIncompleteSupplierRole(user) {
 
 function buildSupplierProfileFromRegistration(user, registration, pmResponse = null) {
   const currentProfile = user.profile || {};
-  const businessAddress = String(registration.businessAddress || '').trim();
+  const billing = buildRegisteredBillingAddress(registration);
+  const businessAddress = String(registration.businessAddress || billing.line1 || '').trim();
 
   const branch = {
     id: crypto.randomUUID(),
     name: 'Main Branch',
     address: businessAddress,
-    city: '',
-    state: '',
-    zipCode: '',
-    pincode: '',
-    country: 'India'
+    city: billing.city && !/^pending$/i.test(billing.city) ? billing.city : '',
+    state: billing.state && !/^pending$/i.test(billing.state) ? billing.state : '',
+    zipCode: billing.pincode && billing.pincode !== '000000' ? billing.pincode : '',
+    pincode: billing.pincode && billing.pincode !== '000000' ? billing.pincode : '',
+    country: billing.country || 'India'
   };
 
   return {
@@ -399,16 +400,7 @@ async function finalizeSupplierRegistration(user, registration, pmResponse, res)
   }
 
   const nextProfile = buildSupplierProfileFromRegistration(user, registration, pmResponse);
-  const parsedBusinessAddress = mergeParsedShippingAddress({
-    line1: String(registration.businessAddress || '').slice(0, 500)
-  });
-  const nextAddress = {
-    line1: parsedBusinessAddress.line1 || String(registration.businessAddress || '').slice(0, 500),
-    city: parsedBusinessAddress.city || 'Pending',
-    state: parsedBusinessAddress.state || 'Pending',
-    pincode: parsedBusinessAddress.pincode || '000000',
-    country: parsedBusinessAddress.country || 'India'
-  };
+  const nextAddress = buildRegisteredBillingAddress(registration);
 
   const { data: updatedUser, error: updateError } = await supabase
     .from('users')
@@ -962,6 +954,11 @@ router.post(
       accountNumber: String(req.body.accountNumber || '').trim(),
       ifscCode: String(req.body.ifscCode || '').trim().toUpperCase(),
       businessAddress: String(req.body.businessAddress || '').trim(),
+      addressLine1: String(req.body.addressLine1 || '').trim() || undefined,
+      city: String(req.body.city || '').trim() || undefined,
+      state: String(req.body.state || '').trim() || undefined,
+      pincode: String(req.body.pincode || '').trim() || undefined,
+      country: String(req.body.country || '').trim() || undefined,
       additionalGstNumbers: additionalGstNumbers
         .map((gst) => String(gst || '').trim().toUpperCase())
         .filter(Boolean),

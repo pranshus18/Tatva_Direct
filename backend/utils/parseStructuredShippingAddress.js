@@ -118,3 +118,22 @@ export function mergeParsedShippingAddress(address = {}) {
     country: parsed.country
   };
 }
+
+/** Persist GST-verified street/city/state/PIN instead of signup Pending placeholders. */
+export function buildRegisteredBillingAddress(registration = {}) {
+  const businessAddress = String(registration.businessAddress || '').trim();
+  const parsed = mergeParsedShippingAddress({
+    line1: String(registration.addressLine1 || registration.line1 || businessAddress || '').slice(0, 500),
+    city: registration.city,
+    state: registration.state,
+    pincode: registration.pincode || registration.zip,
+    country: registration.country || 'India'
+  });
+  return {
+    line1: parsed.line1 || businessAddress.slice(0, 500),
+    city: parsed.city || 'Pending',
+    state: parsed.state || 'Pending',
+    pincode: parsed.pincode || '000000',
+    country: parsed.country || 'India'
+  };
+}

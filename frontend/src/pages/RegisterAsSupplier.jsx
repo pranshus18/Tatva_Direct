@@ -41,6 +41,7 @@ const RegisterAsSupplier = ({ user, onPortalChange }) => {
   const [gstVerifying, setGstVerifying] = useState(false);
   const [gstVerified, setGstVerified] = useState(false);
   const [gstVerifyMessage, setGstVerifyMessage] = useState('');
+  const [gstAddress, setGstAddress] = useState(null);
   const [error, setError] = useState('');
   const gstVerifyTimerRef = useRef(null);
   const lastVerifiedGstRef = useRef('');
@@ -55,6 +56,7 @@ const RegisterAsSupplier = ({ user, onPortalChange }) => {
       panNo: result.panNo || prev.panNo,
       businessAddress: result.businessAddress || prev.businessAddress
     }));
+    setGstAddress(result.address || null);
     setGstVerified(true);
     setGstVerifyMessage('GST verified. Company details auto-filled.');
   };
@@ -68,6 +70,7 @@ const RegisterAsSupplier = ({ user, onPortalChange }) => {
     if (normalizedGst.length !== 15) {
       setGstVerified(false);
       setGstVerifyMessage('');
+      setGstAddress(null);
       lastVerifiedGstRef.current = '';
       return;
     }
@@ -87,6 +90,7 @@ const RegisterAsSupplier = ({ user, onPortalChange }) => {
     } catch (verifyError) {
       lastVerifiedGstRef.current = '';
       setGstVerified(false);
+      setGstAddress(null);
       setGstVerifyMessage(verifyError.message || 'Could not verify GST number');
     } finally {
       setGstVerifying(false);
@@ -106,6 +110,7 @@ const RegisterAsSupplier = ({ user, onPortalChange }) => {
     if (normalizedGst.length !== 15) {
       setGstVerified(false);
       setGstVerifyMessage('');
+      setGstAddress(null);
       lastVerifiedGstRef.current = '';
       return;
     }
@@ -254,6 +259,11 @@ const RegisterAsSupplier = ({ user, onPortalChange }) => {
       payload.append('accountNumber', formData.accountNumber.trim());
       payload.append('ifscCode', formData.ifscCode.trim().toUpperCase());
       payload.append('businessAddress', formData.businessAddress.trim());
+      if (gstAddress?.line1) payload.append('addressLine1', gstAddress.line1);
+      if (gstAddress?.city) payload.append('city', gstAddress.city);
+      if (gstAddress?.state) payload.append('state', gstAddress.state);
+      if (gstAddress?.pincode) payload.append('pincode', gstAddress.pincode);
+      if (gstAddress?.country) payload.append('country', gstAddress.country);
       payload.append(
         'additionalGstNumbers',
         JSON.stringify(additionalGstNumbers.map((g) => g.trim().toUpperCase()).filter(Boolean))

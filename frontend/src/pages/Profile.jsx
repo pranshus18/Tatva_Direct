@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { buildAuthHeaders, getApiUrl } from '../config/api';
 import { restorePmVaultSession } from '../services/pmAuthService';
@@ -58,6 +58,10 @@ const SHIPPING_REQUIRED_FIELDS = [
   { key: 'pincode', label: 'PIN code' },
   { key: 'country', label: 'Country' }
 ];
+
+function isRegisteredBillingIncomplete(address = {}) {
+  return ['line1', 'city', 'state', 'pincode'].some((key) => !String(address?.[key] || '').trim());
+}
 
 function readShippingField(entry, key) {
   return String(getShippingAddressFields(entry)?.[key] || entry?.[key] || '').trim();
@@ -238,7 +242,6 @@ const Profile = ({ user }) => {
   const [profile, setProfile] = useState(null);
   const [editing, setEditing] = useState(false);
   const [loading, setLoading] = useState(true);
-  const [gstAddressLoading, setGstAddressLoading] = useState(false);
   const [photoDraft, setPhotoDraft] = useState(EMPTY_PROFILE_PHOTO_DRAFT);
 
   const resetPhotoDraft = () => {
@@ -492,6 +495,7 @@ const Profile = ({ user }) => {
           profile={profile}
           setProfile={setProfile}
           editing={editing}
+          setEditing={setEditing}
         />
       ) : (
         <ServiceProviderProfile
@@ -828,7 +832,9 @@ const SupplyChainPartnerCard = ({ partner }) => {
   );
 };
 
-const SupplierProfile = ({ profile, setProfile, editing }) => {
+const SupplierProfile = ({ profile, setProfile, editing, setEditing }) => {
+  const [gstAddressLoading, setGstAddressLoading] = useState(false);
+  const gstAutoFillRef = useRef('');
   const [supplyChainState, setSupplyChainState] = useState({
     loading: true,
     partnerGroups: [],
@@ -904,6 +910,59 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
     };
   }, [supplyChainRoleKey]);
 
+  useEffect(() => {
+    const gstin = String(profile?.gstin || profile?.mainGstin || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s/g, '');
+    if (gstin.length !== 15 || !isRegisteredBillingIncomplete(profile?.address)) {
+      return undefined;
+    }
+    if (gstAutoFillRef.current === gstin) {
+      return undefined;
+    }
+    gstAutoFillRef.current = gstin;
+    let cancelled = false;
+
+    const hydrateFromGst = async () => {
+      setGstAddressLoading(true);
+      try {
+        const result = await verifyPmGst(gstin);
+        if (cancelled) return;
+        const nextAddress = mergeParsedShippingAddress(
+          result.address || { line1: result.businessAddress || '' }
+        );
+        setProfile((prev) => ({
+          ...prev,
+          gstin,
+          mainGstin: gstin,
+          companyName: result.companyName || prev?.companyName,
+          address: {
+            ...(prev?.address || {}),
+            ...nextAddress
+          }
+        }));
+      } catch {
+        gstAutoFillRef.current = '';
+      } finally {
+        if (!cancelled) setGstAddressLoading(false);
+      }
+    };
+
+    hydrateFromGst();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    profile?.gstin,
+    profile?.mainGstin,
+    profile?.address?.line1,
+    profile?.address?.city,
+    profile?.address?.state,
+    profile?.address?.pincode,
+    setProfile
+  ]);
+
   const handleComplianceFieldChange = (field, value) => {
     setProfile({
       ...profile,
@@ -948,7 +1007,8 @@ const SupplierProfile = ({ profile, setProfile, editing }) => {
           ...nextAddress
         }
       }));
-      if (!editing) setEditing(true);
+      gstAutoFillRef.current = gstin;
+      if (!editing && typeof setEditing === 'function') setEditing(true);
       toast.success('Billing address filled from GST.');
     } catch (error) {
       toast.error(error.message || 'Could not fetch address from GST.');
