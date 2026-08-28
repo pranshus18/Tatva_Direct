@@ -5,10 +5,13 @@ import {
   baselineChainFromProfile,
   buildChainPayloadFromProfileData,
   chainRequiresAdminApproval,
+  CHAIN_PROFILE_PENDING_LOCK_MESSAGE,
   clearPendingChainRequest,
   detectSupplyChainRoleChanges,
+  fetchPendingChainRequest,
   hasAnySupplyChainRole,
   mergeSupplierEditableEntrySave,
+  pendingChainProfileLocksEntry,
   replacePendingChainRequest,
   stripSubmittedPathBBrandDraftEntries,
   syncLegacyMinimumOrderValue
@@ -741,6 +744,27 @@ export function registerProfileUpdateRoutes(router) {
               syncLegacyMinimumOrderValue(profileUpdate, chainToSave, { saveSupplyChainEntryId });
             } else {
             try {
+              const existingPending = await fetchPendingChainRequest(req.userId);
+              const savingEntry =
+                (Array.isArray(incomingChain.companyInfoEntries)
+                  ? incomingChain.companyInfoEntries
+                  : []
+                ).find(
+                  (entry) =>
+                    String(entry?.id || '').trim() === String(saveSupplyChainEntryId || '').trim()
+                ) || null;
+              if (
+                pendingChainProfileLocksEntry(existingPending, {
+                  entryId: saveSupplyChainEntryId || savingEntry?.id,
+                  brandName: savingEntry?.brands
+                })
+              ) {
+                return res.status(409).json({
+                  status: 'error',
+                  code: 'chain_profile_pending_locked',
+                  message: CHAIN_PROFILE_PENDING_LOCK_MESSAGE
+                });
+              }
               await replacePendingChainRequest(req.userId, reviewPayload);
             } catch (e) {
               console.error('[Profile] replacePendingChainRequest:', e);
@@ -969,7 +993,7 @@ export function registerProfileUpdateRoutes(router) {
           : brandAlreadyApproved
             ? 'This brand is already approved by admin. Select it from Path A, then continue with supply-chain role setup.'
           : chainApprovalPending
-            ? 'Your supply-chain role and brand assignment was submitted for admin approval. Until it is approved, your previous approved assignment stays active.'
+            ? 'Request submitted successfully and sent for approval'
             : chainDraftSaved
               ? 'Draft saved. You can return later to complete remaining fields and submit.'
               : pmSyncWarning

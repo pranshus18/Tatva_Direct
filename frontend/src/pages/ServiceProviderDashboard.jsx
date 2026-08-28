@@ -761,7 +761,7 @@ const ServiceProviderDashboard = ({ user }) => {
         <div className="min-w-0">
       <SpPageHeader
         title={`Welcome back, ${user?.name || 'there'}`}
-        description="Here's what's happening with your procurement activities"
+        description="Find products, compare suppliers, and manage procurement in one place."
         icon={BarChart3}
         actions={
           <>

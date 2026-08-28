@@ -7,6 +7,56 @@ import {
   stripBrandDocumentsFromRoleFields,
   normalizeEntryDocumentFields
 } from './authorizationCertificateUrls';
+import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
+import {
+  resolveSupplierBrandSetupLayers,
+  supplierHasBrandAccess
+} from './supplierBrandLayerContract';
+import { formatDateTimeIST } from './dateTime';
+
+export const ROLE_DOCS_UPDATED_AT_KEY = 'roleDocsUpdatedAt';
+export const BRAND_DOCS_UPDATED_AT_KEY = 'brandDocsUpdatedAt';
+
+let documentUpdateClock = 0;
+
+export function stampEntryDocumentUpdate(entry, documentType, now = Date.now()) {
+  const key =
+    documentType === 'brand_approval' ? BRAND_DOCS_UPDATED_AT_KEY : ROLE_DOCS_UPDATED_AT_KEY;
+  const tick = Number(now) || Date.now();
+  documentUpdateClock = Math.max(documentUpdateClock + 1, tick);
+  return { ...(entry || {}), [key]: documentUpdateClock };
+}
+
+export function stripEntryDocumentUpdateStamps(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  const next = { ...entry };
+  delete next[ROLE_DOCS_UPDATED_AT_KEY];
+  delete next[BRAND_DOCS_UPDATED_AT_KEY];
+  return next;
+}
+
+function mergeDocumentFields(existingEntry, incomingEntry, documentType) {
+  const resolve =
+    documentType === 'brand_approval'
+      ? resolveBrandApprovalDocumentUrls
+      : resolveAuthorizationCertificateUrls;
+  const setUrls =
+    documentType === 'brand_approval' ? setBrandApprovalDocumentUrls : setAuthorizationCertificateUrls;
+  const updatedAtKey =
+    documentType === 'brand_approval' ? BRAND_DOCS_UPDATED_AT_KEY : ROLE_DOCS_UPDATED_AT_KEY;
+  const existingUrls = resolve(existingEntry);
+  const incomingUrls = resolve(incomingEntry);
+  const existingAt = Number(existingEntry?.[updatedAtKey]) || 0;
+  const incomingAt = Number(incomingEntry?.[updatedAtKey]) || 0;
+  const withStamp = (urls, at) => ({
+    ...setUrls({}, urls),
+    ...(at > 0 ? { [updatedAtKey]: at } : {})
+  });
+
+  if (incomingAt > existingAt) return withStamp(incomingUrls, incomingAt);
+  if (existingAt > incomingAt) return withStamp(existingUrls, existingAt);
+  return withStamp([...new Set([...existingUrls, ...incomingUrls])], existingAt);
+}
 
 /** Skip background profile reloads while local role/document drafts are in progress. */
 export function shouldBlockProfileSnapshotRefresh({
@@ -68,13 +118,6 @@ export function buildSelectYourselfChainEntryRowsSignature(profile) {
   );
 }
 
-import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
-import {
-  resolveSupplierBrandSetupLayers,
-  supplierHasBrandAccess
-} from './supplierBrandLayerContract';
-import { formatDateTimeIST } from './dateTime';
-
 export const BRAND_REQUIRED_BEFORE_SAVE_MESSAGE = 'Select at least one brand before saving.';
 
 export const SUPPLY_CHAIN_ROLE_LABELS = {
@@ -119,7 +162,7 @@ export function getApprovedBaselineEntries(profile) {
   return getCompanyInfoEntriesForSave(profile);
 }
 
-/** True when this brand entry needs admin review (new role assignment or role change). */
+/** True when this brand entry needs admin review (new role assignment, role change, or new docs). */
 export function entryNeedsChainRoleAdminReview(baselineEntry, pendingEntry) {
   const pendingRole = String(pendingEntry?.role || '').trim();
   const brand = String(pendingEntry?.brands || '').trim();
@@ -127,7 +170,13 @@ export function entryNeedsChainRoleAdminReview(baselineEntry, pendingEntry) {
 
   const baselineRole = String(baselineEntry?.role || '').trim();
   if (!baselineRole) return true;
-  return pendingRole !== baselineRole;
+  if (pendingRole !== baselineRole) return true;
+
+  const baselineDocs = resolveRoleVerificationDocumentUrls(baselineEntry || {});
+  const pendingDocs = resolveRoleVerificationDocumentUrls(pendingEntry || {});
+  if (baselineDocs.length !== pendingDocs.length) return true;
+  const baselineSet = new Set(baselineDocs);
+  return pendingDocs.some((url) => !baselineSet.has(url));
 }
 
 /** Pending supply-chain role submissions awaiting admin approval (role must be assigned). */
@@ -1516,24 +1565,41 @@ export function deduplicateCompanyInfoEntriesByBrand(entries = []) {
     if (indexByBrandKey.has(brandKey)) {
       const idx = indexByBrandKey.get(brandKey);
       const existing = merged[idx] || {};
+      const laterHasRoleDocs =
+        Array.isArray(rawEntry.authorizationCertificateUrls) ||
+        rawEntry.authorizationCertificateUrl != null;
+      const laterHasBrandDocs =
+        Array.isArray(rawEntry.brandApprovalDocumentUrls) || rawEntry.brandApprovalDocumentUrl != null;
+      const laterRoleStamp = Number(rawEntry?.[ROLE_DOCS_UPDATED_AT_KEY]) || 0;
+      const laterBrandStamp = Number(rawEntry?.[BRAND_DOCS_UPDATED_AT_KEY]) || 0;
       merged[idx] = normalizeEntryDocumentFields({
         ...existing,
         ...rawEntry,
         id: existing.id || rawEntry.id,
         brands: pickBrandLabel(existing.brands, rawEntry.brands),
         role: String(rawEntry?.role || '').trim() || String(existing?.role || '').trim(),
-        brandApprovalDocumentUrls: [
-          ...new Set([
-            ...(Array.isArray(existing.brandApprovalDocumentUrls) ? existing.brandApprovalDocumentUrls : []),
-            ...(Array.isArray(rawEntry.brandApprovalDocumentUrls) ? rawEntry.brandApprovalDocumentUrls : [])
-          ])
-        ],
-        authorizationCertificateUrls: [
-          ...new Set([
-            ...(Array.isArray(existing.authorizationCertificateUrls) ? existing.authorizationCertificateUrls : []),
-            ...(Array.isArray(rawEntry.authorizationCertificateUrls) ? rawEntry.authorizationCertificateUrls : [])
-          ])
-        ]
+        ...setAuthorizationCertificateUrls(
+          {},
+          laterHasRoleDocs
+            ? resolveAuthorizationCertificateUrls(rawEntry)
+            : resolveAuthorizationCertificateUrls(existing)
+        ),
+        ...setBrandApprovalDocumentUrls(
+          {},
+          laterHasBrandDocs
+            ? resolveBrandApprovalDocumentUrls(rawEntry)
+            : resolveBrandApprovalDocumentUrls(existing)
+        ),
+        ...(laterRoleStamp > 0
+          ? { [ROLE_DOCS_UPDATED_AT_KEY]: laterRoleStamp }
+          : existing?.[ROLE_DOCS_UPDATED_AT_KEY]
+            ? { [ROLE_DOCS_UPDATED_AT_KEY]: existing[ROLE_DOCS_UPDATED_AT_KEY] }
+            : {}),
+        ...(laterBrandStamp > 0
+          ? { [BRAND_DOCS_UPDATED_AT_KEY]: laterBrandStamp }
+          : existing?.[BRAND_DOCS_UPDATED_AT_KEY]
+            ? { [BRAND_DOCS_UPDATED_AT_KEY]: existing[BRAND_DOCS_UPDATED_AT_KEY] }
+            : {})
       });
       continue;
     }
@@ -1676,8 +1742,9 @@ export function buildSupplyChainFormProfile(profile, baselineEntries = []) {
 
 /**
  * Merge Step 2 form edits back into the full profile without dropping other brand entries.
- * Empty role/docs from a stale form snapshot must not wipe a newer draft on the full profile
- * (e.g. role selected, then document upload applies against a briefly stale form prop).
+ * Empty role from a stale form snapshot must not wipe a newer draft on the full profile.
+ * Document lists use per-type timestamps: a newer form (including an empty list after
+ * remove) wins; unstamped snapshots still union so a stale form cannot drop a just-uploaded file.
  */
 export function mergeFormStepProfile(fullProfile, formProfile) {
   const formEntries = ensureCompanyInfoEntryIds(
@@ -1707,10 +1774,6 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
     const formId = String(formEntry?.id || '').trim();
     if (formId) matchedFormIds.add(formId);
     if (brandKey) matchedBrandKeys.add(brandKey);
-    const existingRoleDocs = resolveAuthorizationCertificateUrls(entry || {});
-    const formRoleDocs = resolveAuthorizationCertificateUrls(formEntry || {});
-    const existingBrandDocs = resolveBrandApprovalDocumentUrls(entry || {});
-    const formBrandDocs = resolveBrandApprovalDocumentUrls(formEntry || {});
     merged.push(
       normalizeEntryDocumentFields({
         ...(entry || {}),
@@ -1727,8 +1790,8 @@ export function mergeFormStepProfile(fullProfile, formProfile) {
           formEntry?.supplyChainRegistrationStarted === true ||
           entry?.supplyChainRegistrationStarted === true ||
           !!String(formEntry?.role || entry?.role || '').trim(),
-        ...setAuthorizationCertificateUrls({}, [...new Set([...existingRoleDocs, ...formRoleDocs])]),
-        ...setBrandApprovalDocumentUrls({}, [...new Set([...existingBrandDocs, ...formBrandDocs])])
+        ...mergeDocumentFields(entry, formEntry, 'role_authorization'),
+        ...mergeDocumentFields(entry, formEntry, 'brand_approval')
       })
     );
   }
@@ -1790,7 +1853,7 @@ export function buildSupplierChainSavePayload(profile, entries = null, options =
   if (options.forApi) {
     const payload = {
       userType: profile?.userType || 'supplier',
-      companyInfoEntries: nextEntries,
+      companyInfoEntries: nextEntries.map(stripEntryDocumentUpdateStamps),
       supplierRole: chainFields.supplierRole,
       brands: chainFields.brands
     };

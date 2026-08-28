@@ -12,7 +12,11 @@ import {
 } from '../utils/supplierChainEntryValidation';
 import {
   validateSelectYourselfChainEntries,
-  isEntrySupplyChainOnboardingComplete
+  isEntrySupplyChainOnboardingComplete,
+  getActiveApprovedRoleForEntry,
+  SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE,
+  SELECT_YOURSELF_REQUEST_SUBMITTED_TITLE,
+  SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE
 } from '../utils/supplierSelectYourselfValidation';
 import {
   buildSupplierChainSavePayload,
@@ -63,7 +67,7 @@ import {
 } from '../utils/supplierSelectYourselfProfile';
 import { resolveActiveBrandPath, shouldShowApprovedBrandPathBAlert, shouldShowMixedApprovedBrandPathBAlert } from '../utils/supplierSelectYourselfPaths';
 import { formatDateTimeIST } from '../utils/dateTime';
-import { resolveRoleVerificationDocumentUrls } from '../utils/authorizationCertificateUrls';
+import { resolveRoleVerificationDocumentUrls, setAuthorizationCertificateUrls } from '../utils/authorizationCertificateUrls';
 import './Profile.css';
 import './Dashboard.css';
 import './SupplierSelectYourself.css';
@@ -1077,7 +1081,7 @@ export default function SupplierSelectYourself() {
     setFocusSupplyChainEntryId('');
   }, []);
 
-  const handleSaveEntry = async (entryId, entryIndexHint = -1) => {
+  const handleSaveEntry = async (entryId, entryIndexHint = -1, saveOptions = {}) => {
     if (!profile || savingBrandApproval || discarding) return;
     const entries = getCompanyInfoEntriesForSave(profile);
     const formEntries = getCompanyInfoEntriesForSave(supplyChainFormProfile || profile);
@@ -1106,20 +1110,19 @@ export default function SupplierSelectYourself() {
           ...(profileEntry || {}),
           ...formEntry,
           role: String(formEntry?.role || profileEntry?.role || '').trim(),
-          authorizationCertificateUrls: [
-            ...new Set([
-              ...(Array.isArray(profileEntry?.authorizationCertificateUrls)
-                ? profileEntry.authorizationCertificateUrls
-                : []),
-              ...(Array.isArray(formEntry?.authorizationCertificateUrls)
-                ? formEntry.authorizationCertificateUrls
-                : [])
-            ])
-          ],
-          authorizationCertificateUrl:
-            formEntry?.authorizationCertificateUrl ||
-            profileEntry?.authorizationCertificateUrl ||
-            '',
+          ...setAuthorizationCertificateUrls(
+            {},
+            saveOptions.roleChangeRequest || Number(formEntry?.roleDocsUpdatedAt) > 0
+              ? resolveRoleVerificationDocumentUrls(formEntry)
+              : Number(profileEntry?.roleDocsUpdatedAt) > Number(formEntry?.roleDocsUpdatedAt)
+                ? resolveRoleVerificationDocumentUrls(profileEntry)
+                : resolveRoleVerificationDocumentUrls({
+                    authorizationCertificateUrls: [
+                      ...resolveRoleVerificationDocumentUrls(profileEntry),
+                      ...resolveRoleVerificationDocumentUrls(formEntry)
+                    ]
+                  })
+          ),
           minimumOrderValue:
             formEntry?.minimumOrderValue !== '' &&
             formEntry?.minimumOrderValue !== null &&
@@ -1138,6 +1141,23 @@ export default function SupplierSelectYourself() {
     if (!selectedBrand) {
       alert(BRAND_REQUIRED_BEFORE_SAVE_MESSAGE);
       setBrandSectionExpanded(true);
+      return;
+    }
+    if (saveOptions.roleChangeRequest) {
+      const approvedRole = getActiveApprovedRoleForEntry(
+        selectedEntry,
+        profile,
+        approvedBaselineEntries,
+        savedBaselineEntries
+      );
+      const currentRole = String(selectedEntry.role || '').trim();
+      if (approvedRole && currentRole === approvedRole) {
+        alert(SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE);
+        return;
+      }
+    }
+    if (hasPendingChainRoleSubmissionForBrand(profile, selectedBrand)) {
+      alert(SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE);
       return;
     }
     const selectedBrandState = assignmentChainInfo.data?.brands?.find(
@@ -1233,7 +1253,7 @@ export default function SupplierSelectYourself() {
         return;
       }
       if (data.chainApprovalPending) {
-        alert(data.message || 'Submitted for admin approval.');
+        alert(SELECT_YOURSELF_REQUEST_SUBMITTED_TITLE);
       } else {
         alert(`Brand registration ${entryIndex + 1} saved.`);
       }
@@ -1886,8 +1906,8 @@ export default function SupplierSelectYourself() {
                 : `${pendingChainRoleSubmissions.length} supply-chain roles pending admin approval`}
             </strong>
             <p>
-              You submitted supply-chain role details for admin review. Until an admin approves them, the platform
-              continues to use your previously approved assignment.
+              Request submitted successfully and sent for approval. Status is pending verification until an admin
+              reviews it. You do not need to save or upload the same onboarding details again.
               {profile.chainProfilePendingSubmittedAt
                 ? ` Submitted: ${formatDateTimeIST(profile.chainProfilePendingSubmittedAt, '—')}.`
                 : ''}

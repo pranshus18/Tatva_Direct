@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -10,7 +11,9 @@ import {
   Package,
   ShoppingCart,
   Star,
-  Tag
+  Tag,
+  X,
+  ZoomIn
 } from 'lucide-react';
 import { getApiUrl } from '../config/api';
 import { getSelectedListingImages } from '../utils/productImages';
@@ -266,6 +269,7 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
   const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [cartAdded, setCartAdded] = useState(false);
   const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
   const [procurementQty, setProcurementQty] = useState(1);
   const [upstreamCartBusy, setUpstreamCartBusy] = useState(false);
   const [upstreamCartQty, setUpstreamCartQty] = useState(null);
@@ -547,6 +551,32 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
     : productSummary.category;
   const images = getSelectedListingImages(activeListing);
   const safeImageIndex = images.length ? Math.min(activeImageIndex, images.length - 1) : 0;
+
+  useEffect(() => {
+    if (!lightboxOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setLightboxOpen(false);
+        return;
+      }
+      if (images.length < 2) return;
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        setActiveImageIndex((prev) => (prev - 1 + images.length) % images.length);
+      }
+      if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        setActiveImageIndex((prev) => (prev + 1) % images.length);
+      }
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [lightboxOpen, images.length]);
   const productDescription = resolveDiscoveryProductDescription(productSummary, activeListing);
   const detailSections = useMemo(
     () =>
@@ -1001,11 +1031,22 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
                 <div className="pdd-main-image-wrap">
                   {images.length > 0 ? (
                     <>
-                      <img
-                        src={images[safeImageIndex]}
-                        alt={displayProductName}
-                        className="pdd-main-image"
-                      />
+                      <button
+                        type="button"
+                        className="pdd-main-image-btn"
+                        onClick={() => setLightboxOpen(true)}
+                        aria-label={`View larger image of ${displayProductName}`}
+                      >
+                        <img
+                          src={images[safeImageIndex]}
+                          alt={displayProductName}
+                          className="pdd-main-image"
+                        />
+                        <span className="pdd-zoom-hint">
+                          <ZoomIn size={16} />
+                          Click to enlarge
+                        </span>
+                      </button>
                       {images.length > 1 ? (
                         <>
                           <button
@@ -1312,6 +1353,64 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
           }}
         />
       )}
+      {lightboxOpen && images.length > 0
+        ? createPortal(
+            <div
+              className="pdd-lightbox"
+              role="dialog"
+              aria-modal="true"
+              aria-label={`${displayProductName} image ${safeImageIndex + 1} of ${images.length}`}
+              onClick={() => setLightboxOpen(false)}
+            >
+              <button
+                type="button"
+                className="pdd-lightbox__close"
+                onClick={() => setLightboxOpen(false)}
+                aria-label="Close enlarged image"
+              >
+                <X size={22} />
+              </button>
+              {images.length > 1 ? (
+                <button
+                  type="button"
+                  className="pdd-lightbox__nav pdd-lightbox__nav--prev"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setActiveImageIndex((prev) => (prev - 1 + images.length) % images.length);
+                  }}
+                  aria-label="Previous image"
+                >
+                  <ChevronLeft size={28} />
+                </button>
+              ) : null}
+              <img
+                src={images[safeImageIndex]}
+                alt={displayProductName}
+                className="pdd-lightbox__image"
+                onClick={(event) => event.stopPropagation()}
+              />
+              {images.length > 1 ? (
+                <button
+                  type="button"
+                  className="pdd-lightbox__nav pdd-lightbox__nav--next"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setActiveImageIndex((prev) => (prev + 1) % images.length);
+                  }}
+                  aria-label="Next image"
+                >
+                  <ChevronRight size={28} />
+                </button>
+              ) : null}
+              {images.length > 1 ? (
+                <span className="pdd-lightbox__counter">
+                  {safeImageIndex + 1} / {images.length}
+                </span>
+              ) : null}
+            </div>,
+            document.body
+          )
+        : null}
     </SpPageLayout>
   );
 }

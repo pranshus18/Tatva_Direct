@@ -5,6 +5,7 @@ import {
   resolveBrandApprovalDocumentUrls,
   setBrandApprovalDocumentUrls,
   resolveAuthorizationCertificateUrls,
+  resolveRoleVerificationDocumentUrls,
   setAuthorizationCertificateUrls,
   normalizeEntryDocumentFields
 } from '../utils/authorizationCertificateUrls.js';
@@ -636,7 +637,8 @@ export function chainApprovalSignature(payload) {
     brands: String(e?.brands || '').trim(),
     gstin: String(e?.gstin || '').trim(),
     companyName: String(e?.companyName || '').trim(),
-    ownershipDetails: String(e?.ownershipDetails || '').trim()
+    ownershipDetails: String(e?.ownershipDetails || '').trim(),
+    roleDocs: resolveRoleVerificationDocumentUrls(e).slice().sort()
   }));
   return JSON.stringify({
     supplierRole: String(p.supplierRole || '').trim(),
@@ -751,6 +753,31 @@ export function hasAnySupplyChainRole(payload) {
   return (p.companyInfoEntries || []).some((e) => {
     const r = String(e?.role || '').trim();
     return r && ROLE_SET.has(r);
+  });
+}
+
+export const CHAIN_PROFILE_PENDING_LOCK_MESSAGE =
+  'Profile changes are not allowed while your onboarding request is under processing. Wait for admin approval before making changes.';
+
+function pendingRoleSubmissionEntries(pending) {
+  return normalizeCompanyInfoEntries(pending?.payload?.companyInfoEntries || []).filter(
+    (entry) => String(entry?.role || '').trim() && String(entry?.brands || '').trim()
+  );
+}
+
+/** True when a pending onboarding/role request already covers this entry or brand. */
+export function pendingChainProfileLocksEntry(pending, { entryId = '', brandName = '' } = {}) {
+  const lockedEntries = pendingRoleSubmissionEntries(pending);
+  if (lockedEntries.length === 0) return false;
+
+  const wantedId = String(entryId || '').trim();
+  const wantedBrand = catalogBrandDedupKey(brandName);
+  if (!wantedId && !wantedBrand) return true;
+
+  return lockedEntries.some((entry) => {
+    if (wantedId && String(entry?.id || '').trim() === wantedId) return true;
+    if (wantedBrand && catalogBrandDedupKey(entry?.brands) === wantedBrand) return true;
+    return false;
   });
 }
 

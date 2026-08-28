@@ -4,7 +4,10 @@ import { supabase } from '../../../config/supabase.js';
 import { uploadFile, SUPPLIER_DOCUMENTS_BUCKET } from '../../../services/storage.js';
 import {
   fetchPendingChainRequest,
-  normalizeCompanyInfoEntries
+  normalizeCompanyInfoEntries,
+  pendingChainProfileLocksEntry,
+  CHAIN_PROFILE_PENDING_LOCK_MESSAGE,
+  fetchLatestChainRequest
 } from '../../../services/supplierChainProfileService.js';
 import { resolveChainRoleOptionsForBrands } from '../profileHelpers.js';
 import { profileUploadCertificateBodySchema } from '../../../contracts/profileContracts.js';
@@ -114,6 +117,49 @@ export function upsertEntryDocument(entries, entryId, url, documentType) {
   );
 }
 
+export function findCertificateEntryIndex(entries, entryId, urlToRemove = null, documentType) {
+  const list = Array.isArray(entries) ? entries : [];
+  const id = String(entryId || '').trim();
+  const url = String(urlToRemove || '').trim();
+  const entryHasUrl = (entry) => {
+    if (!url) return false;
+    const urls =
+      documentType === 'brand_approval'
+        ? resolveBrandApprovalDocumentUrls(entry)
+        : resolveAuthorizationCertificateUrls(entry);
+    return urls.includes(url);
+  };
+  const idxById = id ? list.findIndex((entry) => String(entry?.id || '').trim() === id) : -1;
+  if (idxById !== -1 && (!url || entryHasUrl(list[idxById]))) return idxById;
+  if (url) {
+    const idxByUrl = list.findIndex(entryHasUrl);
+    if (idxByUrl !== -1) return idxByUrl;
+  }
+  return idxById;
+}
+
+export function removeCertificateFromEntries(entries, entryId, urlToRemove, documentType) {
+  const normalized = normalizeCompanyInfoEntries(entries || []);
+  const idx = findCertificateEntryIndex(normalized, entryId, urlToRemove, documentType);
+  if (idx === -1) return { entries: normalized, removed: false };
+  return {
+    entries: normalized.map((entry, index) =>
+      index === idx ? removeEntryDocument(entry, urlToRemove, documentType) : entry
+    ),
+    removed: true
+  };
+}
+
+export function liveEntryHasApprovedRoleDocuments(profile, entryId) {
+  const entries = normalizeCompanyInfoEntries(profile?.companyInfoEntries || []);
+  const idx = findCertificateEntryIndex(entries, entryId, null, 'role_authorization');
+  const entry = idx >= 0 ? entries[idx] : null;
+  if (!entry) return false;
+  return (
+    Boolean(String(entry.role || '').trim()) && resolveAuthorizationCertificateUrls(entry).length > 0
+  );
+}
+
 async function attachCertificateToPending(userId, entryId, url, documentType) {
   const pending = await fetchPendingChainRequest(userId);
   if (!pending?.payload) return false;
@@ -159,12 +205,13 @@ async function clearCertificateFromPending(userId, entryId, urlToRemove = null, 
   if (!pending?.payload) return false;
 
   const p = pending.payload;
-  const entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);
-  if (!entries.some((e) => e.id === entryId)) return false;
-
-  const updatedEntries = entries.map((e) =>
-    e.id === entryId ? removeEntryDocument(e, urlToRemove, documentType) : e
+  const { entries: updatedEntries, removed } = removeCertificateFromEntries(
+    p.companyInfoEntries || [],
+    entryId,
+    urlToRemove,
+    documentType
   );
+  if (!removed) return false;
   const { error: prErr } = await supabase
     .from('supplier_chain_profile_requests')
     .update({
@@ -182,12 +229,13 @@ async function clearCertificateFromPending(userId, entryId, urlToRemove = null, 
 }
 
 async function clearCertificateFromProfile(userId, currentProfile, entryId, urlToRemove = null, documentType) {
-  const entries = normalizeCompanyInfoEntries(currentProfile?.companyInfoEntries || []);
-  if (!entries.some((e) => e.id === entryId)) return false;
-
-  const updatedEntries = entries.map((e) =>
-    e.id === entryId ? removeEntryDocument(e, urlToRemove, documentType) : e
+  const { entries: updatedEntries, removed } = removeCertificateFromEntries(
+    currentProfile?.companyInfoEntries || [],
+    entryId,
+    urlToRemove,
+    documentType
   );
+  if (!removed) return false;
   const updatedProfile = {
     ...(currentProfile || {}),
     companyInfoEntries: updatedEntries
@@ -217,6 +265,27 @@ function parseCertificateRequestBody(req) {
 function resolveDocumentType(rawType) {
   const type = String(rawType || 'role_authorization').trim().toLowerCase();
   return type === 'brand_approval' ? 'brand_approval' : 'role_authorization';
+}
+
+function brandNameForCertificateEntry(profile, entryId) {
+  const wantedId = String(entryId || '').trim();
+  if (!wantedId) return '';
+  const entry = normalizeCompanyInfoEntries(profile?.companyInfoEntries || []).find(
+    (row) => String(row?.id || '').trim() === wantedId
+  );
+  return String(entry?.brands || '').trim();
+}
+
+async function pendingChainProfileLockResponse(res, userId, { entryId = '', brandName = '', documentType } = {}) {
+  if (documentType && documentType !== 'role_authorization') return false;
+  const pending = await fetchPendingChainRequest(userId);
+  if (!pendingChainProfileLocksEntry(pending, { entryId, brandName })) return false;
+  res.status(409).json({
+    status: 'error',
+    code: 'chain_profile_pending_locked',
+    message: CHAIN_PROFILE_PENDING_LOCK_MESSAGE
+  });
+  return true;
 }
 
 function appendEntryDocument(entry, url, documentType) {
@@ -338,6 +407,15 @@ export function registerProfileCertificateRoutes(router) {
               message: approvalCheck.message
             });
           }
+          if (
+            await pendingChainProfileLockResponse(res, req.userId, {
+              entryId,
+              brandName: brandNameForCertificateEntry(currentUser.profile, entryId),
+              documentType
+            })
+          ) {
+            return;
+          }
         }
 
         const { url, path } = await uploadFile(
@@ -373,6 +451,25 @@ export function registerProfileCertificateRoutes(router) {
           }
 
           if (!savedToProfile) {
+            const latestChainRequest =
+              documentType === 'role_authorization' ? await fetchLatestChainRequest(req.userId) : null;
+            const keepOffLiveApprovedRole =
+              documentType === 'role_authorization' &&
+              String(latestChainRequest?.status || '').toLowerCase() === 'approved' &&
+              liveEntryHasApprovedRoleDocuments(currentUser.profile, entryId);
+
+            if (keepOffLiveApprovedRole) {
+              return res.status(200).json({
+                status: 'success',
+                message:
+                  'Document uploaded for this role change. Submit the new supply-chain role to send it for admin approval. Extra documents are not added to the current approved role.',
+                url,
+                entryId,
+                documentType,
+                savedToProfile: false
+              });
+            }
+
             try {
               savedToProfile = await attachCertificateToProfile(
                 req.userId,
@@ -485,6 +582,17 @@ export function registerProfileCertificateRoutes(router) {
 
       const entryId = deleteBody.entryId ? String(deleteBody.entryId).trim() : null;
       const urlToRemove = deleteBody.url ? String(deleteBody.url).trim() : null;
+
+      if (
+        documentType === 'role_authorization' &&
+        (await pendingChainProfileLockResponse(res, req.userId, {
+          entryId,
+          brandName: brandNameForCertificateEntry(currentUser.profile, entryId),
+          documentType
+        }))
+      ) {
+        return;
+      }
 
       if (entryId) {
         let savedToProfile = false;

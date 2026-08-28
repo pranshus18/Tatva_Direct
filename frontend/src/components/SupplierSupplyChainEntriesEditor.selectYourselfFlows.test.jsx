@@ -6,7 +6,9 @@ import {
   buildSelectYourselfChainEntryRowsSignature,
   buildSelectYourselfChainFormSignature,
   buildSupplierChainSavePayload,
+  buildSupplyChainFormProfile,
   ensureAtLeastOneCompanyInfoEntry,
+  mergeFormStepProfile,
   shouldBlockProfileSnapshotRefresh,
   syncBrandEntriesForSupplyChainStep
 } from '../utils/supplierSelectYourselfProfile';
@@ -588,6 +590,61 @@ describe('Select yourself — role setup step', () => {
     );
   }
 
+  it('removes a role document from the registration list after confirm', async () => {
+    const roleDoc = 'https://cdn.example.com/role-doc.pdf';
+    const entry = {
+      id: 'entry-approved',
+      brands: 'acc',
+      role: 'dealer',
+      authorizationCertificateUrls: [roleDoc],
+      supplyChainRegistrationStarted: true
+    };
+
+    function MergingFormHarness() {
+      const [profile, setProfile] = useState(() => makeProfile([entry]));
+      const applyFormStepProfile = (next) => {
+        setProfile((prev) => mergeFormStepProfile(prev, next));
+      };
+      const formProfile = buildSupplyChainFormProfile(profile, [entry]);
+      return (
+        <SupplierSupplyChainEntriesEditor
+          profile={formProfile}
+          setProfile={applyFormStepProfile}
+          editing
+          sectionView="form"
+          selectionMode="all"
+          allowEntryManagement={false}
+          showAddEntry={false}
+          catalogBrands={CATALOG}
+          catalogBrandsLoading={false}
+          catalogBrandsError=""
+          onReloadCatalogBrands={vi.fn()}
+          supplierApprovedBrands={['acc']}
+          supplierBrandRequests={[]}
+          savedBaselineEntries={[]}
+          onSaveEntry={vi.fn()}
+          filterBrandName="acc"
+        />
+      );
+    }
+
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<MergingFormHarness />);
+    expect(await screen.findByTestId('doc-url')).toHaveTextContent(roleDoc);
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ status: 'success', savedToProfile: true })
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Remove document/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+    });
+  });
+
   it('shows loading instead of no-supply-chain while role options fetch is pending', async () => {
     let resolveFetch;
     const fetchPromise = new Promise((resolve) => {
@@ -824,5 +881,260 @@ describe('Select yourself — role setup step', () => {
     expect(await screen.findByText(/Role change request/i)).toBeInTheDocument();
     expect(screen.getByRole('combobox', { name: /Select your position/i })).toBeInTheDocument();
     expect(screen.queryByLabelText(/Assigned supply-chain role/i)).not.toBeInTheDocument();
+  });
+
+  it('blocks submitting a role-change request when the role is unchanged', async () => {
+    const completeEntry = {
+      id: 'entry-approved',
+      brands: 'acc',
+      role: 'retailer',
+      authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf'],
+      supplyChainRegistrationStarted: true
+    };
+    const onSaveEntry = vi.fn();
+
+    function RoleChangeHarness() {
+      const [profile, setProfile] = useState(() => makeProfile([completeEntry]));
+      return (
+        <SupplierSupplyChainEntriesEditor
+          profile={profile}
+          setProfile={setProfile}
+          editing
+          sectionView="form"
+          selectionMode="all"
+          allowEntryManagement={false}
+          showAddEntry={false}
+          catalogBrands={CATALOG}
+          catalogBrandsLoading={false}
+          catalogBrandsError=""
+          onReloadCatalogBrands={vi.fn()}
+          supplierApprovedBrands={['acc']}
+          supplierBrandRequests={[]}
+          savedBaselineEntries={[completeEntry]}
+          approvedBaselineEntries={[completeEntry]}
+          filterBrandName="acc"
+          chainProfileApprovalStatus="approved"
+          onSaveEntry={onSaveEntry}
+        />
+      );
+    }
+
+    render(<RoleChangeHarness />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Request Role Change/i }));
+    expect(await screen.findByText(/Role change request/i)).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /Select your position/i })).toHaveValue('retailer');
+    expect(
+      screen.getByText(/Select a different supply-chain role before submitting this change request/i)
+    ).toBeInTheDocument();
+
+    const submitBtn = screen.getByRole('button', { name: /Submit role change/i });
+    expect(submitBtn).toBeDisabled();
+    fireEvent.click(submitBtn);
+    expect(onSaveEntry).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /Select your position/i }), {
+      target: { value: 'dealer' }
+    });
+    expect(await screen.findByRole('button', { name: /Submit role change/i })).not.toBeDisabled();
+  });
+
+  it('does not allow extra documents to be added for the same approved role', async () => {
+    const completeEntry = {
+      id: 'entry-approved',
+      brands: 'acc',
+      role: 'retailer',
+      authorizationCertificateUrls: ['https://cdn.example.com/doc.pdf'],
+      supplyChainRegistrationStarted: true
+    };
+
+    function RoleChangeHarness() {
+      const [profile, setProfile] = useState(() => makeProfile([completeEntry]));
+      return (
+        <SupplierSupplyChainEntriesEditor
+          profile={profile}
+          setProfile={setProfile}
+          editing
+          sectionView="form"
+          selectionMode="all"
+          allowEntryManagement={false}
+          showAddEntry={false}
+          catalogBrands={CATALOG}
+          catalogBrandsLoading={false}
+          catalogBrandsError=""
+          onReloadCatalogBrands={vi.fn()}
+          supplierApprovedBrands={['acc']}
+          supplierBrandRequests={[]}
+          savedBaselineEntries={[completeEntry]}
+          approvedBaselineEntries={[completeEntry]}
+          filterBrandName="acc"
+          chainProfileApprovalStatus="approved"
+          onSaveEntry={vi.fn()}
+        />
+      );
+    }
+
+    render(<RoleChangeHarness />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Request Role Change/i }));
+    expect(await screen.findByText(/Role change request/i)).toBeInTheDocument();
+    expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+    expect(screen.getByText(/New role verification documents/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Documents from the current role are not carried over/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Upload document/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Remove document/i })).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Extra documents cannot be saved for your current approved role/i)
+    ).toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /Select your position/i }), {
+      target: { value: 'dealer' }
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: /Upload document/i })).toBeInTheDocument();
+  });
+
+  it('starts Change role with a fresh document section and restores docs if cancelled', async () => {
+    const draftEntry = {
+      id: 'entry-draft',
+      brands: 'acc',
+      role: 'dealer',
+      authorizationCertificateUrls: ['https://cdn.example.com/dealer-doc.pdf'],
+      supplyChainRegistrationStarted: true
+    };
+
+    function ChangeRoleHarness() {
+      const [profile, setProfile] = useState(() => makeProfile([draftEntry]));
+      return (
+        <SupplierSupplyChainEntriesEditor
+          profile={profile}
+          setProfile={setProfile}
+          editing
+          sectionView="form"
+          selectionMode="all"
+          allowEntryManagement={false}
+          showAddEntry={false}
+          catalogBrands={CATALOG}
+          catalogBrandsLoading={false}
+          catalogBrandsError=""
+          onReloadCatalogBrands={vi.fn()}
+          supplierApprovedBrands={['acc']}
+          supplierBrandRequests={[]}
+          savedBaselineEntries={[]}
+          onSaveEntry={vi.fn()}
+          filterBrandName="acc"
+        />
+      );
+    }
+
+    render(<ChangeRoleHarness />);
+    expect(await screen.findByTestId('doc-url')).toHaveTextContent(
+      'https://cdn.example.com/dealer-doc.pdf'
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Change role/i }));
+    expect(await screen.findByRole('combobox', { name: /Select your position/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+    expect(screen.getByText(/New role verification documents/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Upload document/i })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByRole('combobox', { name: /Select your position/i }), {
+      target: { value: 'retailer' }
+    });
+    expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Upload document/i })).toBeInTheDocument();
+  });
+
+  it('restores the previous role documents when Keep current role is clicked', async () => {
+    const draftEntry = {
+      id: 'entry-draft',
+      brands: 'acc',
+      role: 'dealer',
+      authorizationCertificateUrls: ['https://cdn.example.com/dealer-doc.pdf'],
+      supplyChainRegistrationStarted: true
+    };
+
+    function ChangeRoleHarness() {
+      const [profile, setProfile] = useState(() => makeProfile([draftEntry]));
+      return (
+        <SupplierSupplyChainEntriesEditor
+          profile={profile}
+          setProfile={setProfile}
+          editing
+          sectionView="form"
+          selectionMode="all"
+          allowEntryManagement={false}
+          showAddEntry={false}
+          catalogBrands={CATALOG}
+          catalogBrandsLoading={false}
+          catalogBrandsError=""
+          onReloadCatalogBrands={vi.fn()}
+          supplierApprovedBrands={['acc']}
+          supplierBrandRequests={[]}
+          savedBaselineEntries={[]}
+          onSaveEntry={vi.fn()}
+          filterBrandName="acc"
+        />
+      );
+    }
+
+    render(<ChangeRoleHarness />);
+    fireEvent.click(await screen.findByRole('button', { name: /Change role/i }));
+    expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Keep current role/i }));
+    expect(await screen.findByTestId('doc-url')).toHaveTextContent(
+      'https://cdn.example.com/dealer-doc.pdf'
+    );
+  });
+
+  it('locks role, documents, and save while the onboarding request is pending', async () => {
+    const pendingEntry = {
+      id: 'entry-pending-role',
+      brands: 'acc',
+      role: 'retailer',
+      authorizationCertificateUrls: ['https://cdn.example.com/doc.png'],
+      supplyChainRegistrationStarted: true
+    };
+
+    render(
+      <SupplierSupplyChainEntriesEditor
+        profile={makeProfile([pendingEntry])}
+        setProfile={vi.fn()}
+        editing
+        sectionView="form"
+        selectionMode="all"
+        allowEntryManagement={false}
+        showAddEntry={false}
+        catalogBrands={CATALOG}
+        catalogBrandsLoading={false}
+        catalogBrandsError=""
+        onReloadCatalogBrands={vi.fn()}
+        supplierApprovedBrands={['acc']}
+        supplierBrandRequests={[]}
+        savedBaselineEntries={[pendingEntry]}
+        approvedBaselineEntries={[]}
+        filterBrandName="acc"
+        chainProfileApprovalStatus="pending"
+        onSaveEntry={vi.fn()}
+      />
+    );
+
+    expect(await screen.findByText(/Request submitted successfully and sent for approval/i)).toBeInTheDocument();
+    expect(screen.getByText(/Status: Pending approval/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Assigned supply-chain role/i)).toHaveValue('Retailer');
+    expect(screen.queryByRole('button', { name: /Change role/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Request Role Change/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Save entry/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId('docs-readonly')).toBeInTheDocument();
+    expect(screen.queryByTestId('docs-editable')).not.toBeInTheDocument();
+    expect(
+      screen.getByText(/Documents already submitted cannot be changed while this request is under processing/i)
+    ).toBeInTheDocument();
   });
 });

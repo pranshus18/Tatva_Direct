@@ -16,6 +16,16 @@ test('entryNeedsAdminReview is false when role already matches approved profile'
   );
 });
 
+test('entryNeedsAdminReview is true when role documents change', () => {
+  assert.equal(
+    entryNeedsAdminReview(
+      { role: 'retailer', brands: 'jaquar', authorizationCertificateUrls: ['https://cdn.example.com/a.png'] },
+      { role: 'retailer', brands: 'jaquar', authorizationCertificateUrls: ['https://cdn.example.com/b.png'] }
+    ),
+    true
+  );
+});
+
 test('entryNeedsAdminReview is true for role changes and new brand assignments', () => {
   assert.equal(
     entryNeedsAdminReview({ role: 'retailer', brands: 'acc' }, { role: 'dealer', brands: 'acc' }),

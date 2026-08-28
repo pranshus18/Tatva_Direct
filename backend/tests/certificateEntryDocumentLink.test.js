@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { upsertEntryDocument } from '../controllers/profile/routes/certificateRoutes.js';
+import { upsertEntryDocument, removeCertificateFromEntries, liveEntryHasApprovedRoleDocuments } from '../controllers/profile/routes/certificateRoutes.js';
 import {
   resolveBrandApprovalDocumentUrls,
   resolveAuthorizationCertificateUrls
@@ -57,4 +57,38 @@ test('upsertEntryDocument creates the first entry when the profile has none', ()
   assert.equal(entries.length, 1);
   assert.equal(entries[0].id, 'draft-entry');
   assert.deepEqual(resolveBrandApprovalDocumentUrls(entries[0]), ['https://files.test/b.pdf']);
+});
+
+test('removeCertificateFromEntries drops a role document from the matching entry', () => {
+  const withDoc = upsertEntryDocument([SAVED_ENTRY], 'entry-1', 'https://files.test/r.pdf', 'role_authorization');
+  const { entries, removed } = removeCertificateFromEntries(
+    withDoc,
+    'entry-1',
+    'https://files.test/r.pdf',
+    'role_authorization'
+  );
+
+  assert.equal(removed, true);
+  assert.deepEqual(resolveAuthorizationCertificateUrls(entries[0]), []);
+});
+
+test('removeCertificateFromEntries finds the row by document URL when entry ids differ', () => {
+  const withDoc = upsertEntryDocument([SAVED_ENTRY], 'entry-1', 'https://files.test/r.pdf', 'role_authorization');
+  const { entries, removed } = removeCertificateFromEntries(
+    withDoc,
+    'form-draft-id',
+    'https://files.test/r.pdf',
+    'role_authorization'
+  );
+
+  assert.equal(removed, true);
+  assert.equal(entries.length, 1);
+  assert.deepEqual(resolveAuthorizationCertificateUrls(entries[0]), []);
+});
+
+test('liveEntryHasApprovedRoleDocuments is true only when the saved role already has documents', () => {
+  const withDoc = upsertEntryDocument([SAVED_ENTRY], 'entry-1', 'https://files.test/r.pdf', 'role_authorization');
+  assert.equal(liveEntryHasApprovedRoleDocuments({ companyInfoEntries: withDoc }, 'entry-1'), true);
+  assert.equal(liveEntryHasApprovedRoleDocuments({ companyInfoEntries: [SAVED_ENTRY] }, 'entry-1'), false);
+  assert.equal(liveEntryHasApprovedRoleDocuments({ companyInfoEntries: withDoc }, 'missing'), false);
 });

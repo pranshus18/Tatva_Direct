@@ -1,7 +1,8 @@
 import { resolveRoleVerificationDocumentUrls } from './authorizationCertificateUrls';
 import {
   parseBrandsListForValidation,
-  validateUniqueBrandsAcrossEntries
+  validateUniqueBrandsAcrossEntries,
+  brandKeyForDuplicateCheck
 } from './supplierChainEntryValidation';
 import { matchCompanyInfoEntry } from './supplierSelectYourselfProfile';
 
@@ -17,8 +18,38 @@ export const SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE =
 export const SELECT_YOURSELF_MOV_REQUIRED_MESSAGE =
   'Enter a minimum order value (₹) for this role before saving.';
 
+export const SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE =
+  'Select a different supply-chain role before submitting this change request.';
+
+export const SELECT_YOURSELF_ROLE_CHANGE_DOCS_LOCKED_MESSAGE =
+  'Select a different supply-chain role before adding verification documents. Extra documents cannot be saved for your current approved role.';
+
+export const SELECT_YOURSELF_ROLE_CHANGE_FRESH_DOCS_MESSAGE =
+  'Upload verification documents for the new role. Documents from the current role are not carried over.';
+
 export const REQUEST_ROLE_CHANGE_LABEL = 'Request Role Change';
 export const CHANGE_ROLE_LABEL = 'Change role';
+
+export const SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE =
+  'Profile changes are not allowed while your onboarding request is under processing. Wait for admin approval before making changes.';
+
+export const SELECT_YOURSELF_REQUEST_SUBMITTED_TITLE =
+  'Request submitted successfully and sent for approval';
+
+export const SELECT_YOURSELF_PENDING_APPROVAL_LABEL = 'Pending approval';
+
+/** True when this brand's supply-chain onboarding request is submitted and waiting on admin. */
+export function isChainProfilePendingLocked(chainProfileApprovalStatus) {
+  return String(chainProfileApprovalStatus || '').trim().toLowerCase() === 'pending';
+}
+
+/** True when a role-change request is open but the selected role is still the approved one. */
+export function isRoleChangeSameAsApproved(entry, approvedRole, roleChangeRequestActive = false) {
+  if (!roleChangeRequestActive) return false;
+  const approved = String(approvedRole || '').trim();
+  const current = String(entry?.role || '').trim();
+  return !!approved && !!current && approved === current;
+}
 
 /** True when supply-chain onboarding for this entry is complete and the role should stay locked. */
 export function isEntrySupplyChainOnboardingComplete(
@@ -77,9 +108,8 @@ function entryRequiresSupplyChainCompletion(entry = {}) {
 export function buildChainEntrySaveSignature(entry = {}) {
   const roleDocs = resolveRoleVerificationDocumentUrls(entry);
   return JSON.stringify({
-    id: entry?.id || '',
     role: entry?.role || '',
-    brands: entry?.brands || '',
+    brands: String(entry?.brands || '').trim().toLowerCase(),
     gstin: entry?.gstin || '',
     companyName: entry?.companyName || '',
     brandApprovalDocumentUrl: entry?.brandApprovalDocumentUrl || '',
@@ -93,14 +123,17 @@ export function buildChainEntrySaveSignature(entry = {}) {
 }
 
 export function findSavedBaselineEntry(entry, savedBaselineEntries = []) {
-  return (
-    (Array.isArray(savedBaselineEntries) ? savedBaselineEntries : []).find((row) =>
-      matchCompanyInfoEntry(row, {
-        entryId: entry?.id,
-        brand: entry?.brands
-      })
-    ) || null
+  const rows = Array.isArray(savedBaselineEntries) ? savedBaselineEntries : [];
+  const byId = rows.find((row) =>
+    matchCompanyInfoEntry(row, {
+      entryId: entry?.id,
+      brand: entry?.brands
+    })
   );
+  if (byId) return byId;
+  const brandKey = brandKeyForDuplicateCheck(entry?.brands);
+  if (!brandKey) return null;
+  return rows.find((row) => brandKeyForDuplicateCheck(row?.brands) === brandKey) || null;
 }
 
 /** True when the entry matches the last saved profile snapshot for this row. */
@@ -203,7 +236,8 @@ export function getSelectYourselfEntrySaveState(
   entry = {},
   savedBaselineEntries = [],
   approvedBaselineEntries = [],
-  activeApprovedRole = ''
+  activeApprovedRole = '',
+  options = {}
 ) {
   const readiness = getSelectYourselfEntrySaveReadiness(entry);
   const hasChangesFromLastSave = !entryMatchesSavedBaseline(entry, savedBaselineEntries);
@@ -213,19 +247,36 @@ export function getSelectYourselfEntrySaveState(
   const currentRole = String(entry?.role || '').trim();
   const pendingApprovedRoleChange =
     !!approvedRole && !!currentRole && approvedRole !== currentRole;
+  const roleChangeRequestActive = options.roleChangeRequestActive === true;
+  const sameRoleAsApproved = isRoleChangeSameAsApproved(entry, approvedRole, roleChangeRequestActive);
   const alreadySaved = !hasChangesFromLastSave;
   const movOnlyChange =
     !pendingApprovedRoleChange &&
     entryMinimumOrderValueChanged(entry, savedBaselineEntries);
   // Enable Save whenever this entry differs from the last saved snapshot — including
   // approved-role changes that still need admin review. Field validation runs on click.
-  const enabled = hasChangesFromLastSave;
+  // A role-change request with the same approved role is never submittable.
+  const enabled = sameRoleAsApproved ? false : hasChangesFromLastSave;
+
+  if (sameRoleAsApproved) {
+    return {
+      ...readiness,
+      ok: false,
+      message: SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE,
+      field: 'role',
+      alreadySaved: false,
+      enabled: false,
+      pendingApprovedRoleChange: false,
+      sameRoleAsApproved: true
+    };
+  }
 
   return {
     ...readiness,
     alreadySaved: alreadySaved && readiness.ok,
     enabled,
-    pendingApprovedRoleChange
+    pendingApprovedRoleChange,
+    sameRoleAsApproved: false
   };
 }
 

@@ -9,7 +9,13 @@ import {
   getSelectYourselfEntrySaveState,
   validateSelectYourselfChainEntries,
   isEntrySupplyChainOnboardingComplete,
-  getActiveApprovedRoleForEntry
+  getActiveApprovedRoleForEntry,
+  isChainProfilePendingLocked,
+  SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE,
+  SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE,
+  SELECT_YOURSELF_ROLE_CHANGE_DOCS_LOCKED_MESSAGE,
+  SELECT_YOURSELF_ROLE_CHANGE_FRESH_DOCS_MESSAGE,
+  isRoleChangeSameAsApproved
 } from './supplierSelectYourselfValidation';
 
 describe('validateSelectYourselfChainEntries', () => {
@@ -186,6 +192,35 @@ describe('getSelectYourselfEntrySaveState', () => {
     expect(state.pendingApprovedRoleChange).toBe(true);
     expect(state.enabled).toBe(true);
   });
+
+  it('blocks a role-change request when the selected role is unchanged', () => {
+    const state = getSelectYourselfEntrySaveState(
+      {
+        id: 'e1',
+        brands: 'acc',
+        role: 'retailer',
+        authorizationCertificateUrls: ['https://cdn.example.com/new-doc.pdf']
+      },
+      savedBaselineEntries,
+      savedBaselineEntries,
+      'retailer',
+      { roleChangeRequestActive: true }
+    );
+
+    expect(state.enabled).toBe(false);
+    expect(state.sameRoleAsApproved).toBe(true);
+    expect(state.message).toBe(SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE);
+  });
+
+  it('treats an unchanged role-change request as the same approved role', () => {
+    expect(
+      isRoleChangeSameAsApproved({ role: 'retailer' }, 'retailer', true)
+    ).toBe(true);
+    expect(isRoleChangeSameAsApproved({ role: 'dealer' }, 'retailer', true)).toBe(false);
+    expect(isRoleChangeSameAsApproved({ role: 'retailer' }, 'retailer', false)).toBe(false);
+    expect(SELECT_YOURSELF_ROLE_CHANGE_DOCS_LOCKED_MESSAGE).toMatch(/current approved role/i);
+    expect(SELECT_YOURSELF_ROLE_CHANGE_FRESH_DOCS_MESSAGE).toMatch(/not carried over/i);
+  });
 });
 
 describe('completed onboarding role lock helpers', () => {
@@ -219,5 +254,32 @@ describe('completed onboarding role lock helpers', () => {
         baseline
       )
     ).toBe('retailer');
+  });
+
+  it('treats a submitted onboarding request as pending-locked until admin acts', () => {
+    expect(isChainProfilePendingLocked('pending')).toBe(true);
+    expect(isChainProfilePendingLocked('approved')).toBe(false);
+    expect(isChainProfilePendingLocked('draft')).toBe(false);
+    expect(isChainProfilePendingLocked('')).toBe(false);
+    expect(SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE).toMatch(/under processing/i);
+  });
+
+  it('treats two saved snapshots as equal when only the entry id differs', () => {
+    const saved = [
+      {
+        id: 'stub-1',
+        brands: 'Jaquar',
+        role: 'retailer',
+        authorizationCertificateUrls: ['https://cdn.example.com/doc.png']
+      }
+    ];
+    const displayed = {
+      id: 'form-row-9',
+      brands: 'Jaquar',
+      role: 'retailer',
+      authorizationCertificateUrls: ['https://cdn.example.com/doc.png']
+    };
+    expect(entryMatchesSavedBaseline(displayed, saved)).toBe(true);
+    expect(getSelectYourselfEntrySaveState(displayed, saved, saved).enabled).toBe(false);
   });
 });

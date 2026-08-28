@@ -1,5 +1,5 @@
 import { supabase } from '../config/supabase.js';
-import { resolveAuthorizationCertificateUrls } from '../utils/authorizationCertificateUrls.js';
+import { resolveAuthorizationCertificateUrls, resolveRoleVerificationDocumentUrls } from '../utils/authorizationCertificateUrls.js';
 import { catalogBrandDedupKey } from './supplyChainSharedService.js';
 import {
   baselineChainFromProfile,
@@ -33,7 +33,7 @@ function matchBaselineChainEntry(baselineEntries, entry) {
   return (baselineEntries || []).find((row) => catalogBrandDedupKey(row?.brands) === brandKey) || null;
 }
 
-/** True when this brand needs admin review (new role assignment or role change only). */
+/** True when this brand needs admin review (new role, role change, or new verification docs). */
 export function entryNeedsAdminReview(baselineEntry, pendingEntry) {
   const pendingRole = String(pendingEntry?.role || '').trim();
   const brand = String(pendingEntry?.brands || '').trim();
@@ -41,7 +41,13 @@ export function entryNeedsAdminReview(baselineEntry, pendingEntry) {
 
   const baselineRole = String(baselineEntry?.role || '').trim();
   if (!baselineRole) return true;
-  return pendingRole !== baselineRole;
+  if (pendingRole !== baselineRole) return true;
+
+  const baselineDocs = resolveRoleVerificationDocumentUrls(baselineEntry || {});
+  const pendingDocs = resolveRoleVerificationDocumentUrls(pendingEntry || {});
+  if (baselineDocs.length !== pendingDocs.length) return true;
+  const baselineSet = new Set(baselineDocs);
+  return pendingDocs.some((url) => !baselineSet.has(url));
 }
 
 /** Only entries that need review vs the supplier's currently approved profile. */

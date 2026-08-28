@@ -8,6 +8,7 @@ import {
   mergeSupplierBrandRequestsWithApprovedCatalog,
   mergeSupplierEditableEntrySave,
   normalizeCompanyInfoEntries,
+  pendingChainProfileLocksEntry,
   stripSubmittedPathBBrandDraftEntries,
   syncLegacyMinimumOrderValue
 } from '../services/supplierChainProfileService.js';
@@ -197,6 +198,34 @@ test('chainRequiresAdminApproval is false when only minimum order value changes'
   assert.equal(chainRequiresAdminApproval(baseline, incoming), false);
 });
 
+test('chainRequiresAdminApproval is true when role verification documents change', () => {
+  const baseline = {
+    supplierRole: 'retailer',
+    brands: 'Jaquar',
+    companyInfoEntries: [
+      {
+        id: 'e1',
+        role: 'retailer',
+        brands: 'Jaquar',
+        authorizationCertificateUrls: ['https://cdn.example.com/a.png']
+      }
+    ]
+  };
+  const incoming = {
+    supplierRole: 'retailer',
+    brands: 'Jaquar',
+    companyInfoEntries: [
+      {
+        id: 'e1',
+        role: 'retailer',
+        brands: 'Jaquar',
+        authorizationCertificateUrls: ['https://cdn.example.com/a.png', 'https://cdn.example.com/b.png']
+      }
+    ]
+  };
+  assert.equal(chainRequiresAdminApproval(baseline, incoming), true);
+});
+
 test('syncLegacyMinimumOrderValue copies saved entry MOV to legacy profile field', () => {
   const profileUpdate = {};
   syncLegacyMinimumOrderValue(
@@ -330,4 +359,36 @@ test('mergeSupplierBrandRequestsWithApprovedCatalog still merges declared catalo
   assert.equal(merged.length, 1);
   assert.equal(merged[0].name, 'samsung');
   assert.equal(merged[0].status, 'approved');
+});
+
+test('pendingChainProfileLocksEntry is false when there is no pending role submission', () => {
+  assert.equal(pendingChainProfileLocksEntry(null, { entryId: 'entry-1', brandName: 'acc' }), false);
+  assert.equal(
+    pendingChainProfileLocksEntry(
+      { payload: { companyInfoEntries: [{ id: 'entry-1', brands: 'acc', role: '' }] } },
+      { entryId: 'entry-1', brandName: 'acc' }
+    ),
+    false
+  );
+});
+
+test('pendingChainProfileLocksEntry locks the submitted brand until admin review', () => {
+  const pending = {
+    payload: {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'acc',
+          role: 'retailer',
+          authorizationCertificateUrls: ['https://cdn.example.com/doc.png']
+        }
+      ]
+    }
+  };
+
+  assert.equal(pendingChainProfileLocksEntry(pending, { entryId: 'entry-1' }), true);
+  assert.equal(pendingChainProfileLocksEntry(pending, { brandName: 'acc' }), true);
+  assert.equal(pendingChainProfileLocksEntry(pending, { brandName: 'samsung' }), false);
+  assert.equal(pendingChainProfileLocksEntry(pending, { entryId: 'other-entry' }), false);
+  assert.equal(pendingChainProfileLocksEntry(pending, {}), true);
 });

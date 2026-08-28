@@ -290,6 +290,12 @@
   border: 1px solid #e2e8f0;
 }
 
+.supplier-select-yourself-editor .chain-chip--pending {
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+}
+
 .supplier-select-yourself-editor .chain-entry-remove {
   display: inline-flex;
   align-items: center;

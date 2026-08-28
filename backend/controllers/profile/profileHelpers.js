@@ -16,7 +16,6 @@ import {
   normalizeCompanyInfoEntries,
   syncApprovedBrandsIntoUserProfile
 } from '../../services/supplierChainProfileService.js';
-import { resolveReviewPayloadForRequest } from '../../services/supplierChainAdminService.js';
 import {
   SUPPLY_CHAIN_ROLES_IN_ORDER,
   catalogBrandDedupKey,
@@ -603,15 +602,12 @@ export async function createProfileResponse(user) {
           companyInfoEntries: normalizeCompanyInfoEntries(pending.payload.companyInfoEntries || [])
         }
       : null;
-    const pendingReviewPayload = pending?.payload
-      ? resolveReviewPayloadForRequest(base, pending.payload)
-      : null;
-    const pendingRoleSubmissionCount = Array.isArray(pendingReviewPayload?.companyInfoEntries)
-      ? pendingReviewPayload.companyInfoEntries.filter(
+    const rawPendingRoleCount = Array.isArray(pendingChain?.companyInfoEntries)
+      ? pendingChain.companyInfoEntries.filter(
           (entry) => String(entry?.role || '').trim() && String(entry?.brands || '').trim()
         ).length
       : 0;
-    const hasPendingRoleSubmission = pendingRoleSubmissionCount > 0;
+    const hasPendingRoleSubmission = rawPendingRoleCount > 0;
     const activePendingChain = hasPendingRoleSubmission ? pendingChain : null;
 
     const mergedEntries = mergeChainEntriesForDisplay(

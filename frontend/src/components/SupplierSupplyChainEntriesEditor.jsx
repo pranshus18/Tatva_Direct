@@ -14,14 +14,23 @@ import {
   resolveSelectYourselfBrandStepStatus,
   isSelectYourselfBrandAlreadyApproved,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
-  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
+  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE,
+  stampEntryDocumentUpdate
 } from '../utils/supplierSelectYourselfProfile';
 import {
   getSelectYourselfEntrySaveState,
   SELECT_YOURSELF_DOCS_REQUIRED_MESSAGE,
   SELECT_YOURSELF_MOV_REQUIRED_MESSAGE,
+  SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE,
+  SELECT_YOURSELF_ROLE_CHANGE_DOCS_LOCKED_MESSAGE,
+  SELECT_YOURSELF_ROLE_CHANGE_FRESH_DOCS_MESSAGE,
   REQUEST_ROLE_CHANGE_LABEL,
   CHANGE_ROLE_LABEL,
+  SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE,
+  SELECT_YOURSELF_REQUEST_SUBMITTED_TITLE,
+  SELECT_YOURSELF_PENDING_APPROVAL_LABEL,
+  isChainProfilePendingLocked,
+  isRoleChangeSameAsApproved,
   isEntrySupplyChainOnboardingComplete,
   getActiveApprovedRoleForEntry,
   entryMinimumOrderValueChanged,
@@ -267,7 +276,9 @@ const CompanyInfoEntryCard = ({
   chainProfileApprovalStatus = '',
   roleChangeRequestActive = false,
   onRequestRoleChange = null,
-  onCancelRoleChangeRequest = null
+  onCancelRoleChangeRequest = null,
+  onBeginRoleChange = null,
+  onRestoreRoleChangeDocuments = null
 }) => {
   const selectedBrand = normalizeSingleBrand(entry.brands);
   const catalogBrandSelected =
@@ -516,7 +527,17 @@ const CompanyInfoEntryCard = ({
     !!(activeApprovedRole || approvedRole) &&
     !!entry.role &&
     String(entry.role).trim() !== String(activeApprovedRole || approvedRole).trim();
+  const sameRoleAsApproved = isRoleChangeSameAsApproved(
+    entry,
+    activeApprovedRole || approvedRole,
+    roleChangeRequestActive
+  );
+  const awaitingNewRoleSelection =
+    (roleChangeRequestActive && sameRoleAsApproved) ||
+    (roleSelectUnlocked && !roleChangeRequestActive);
   const movChanged = entryMinimumOrderValueChanged(entry, savedBaselineEntries);
+  const chainProfilePendingLocked =
+    isSupplyChainOnlyStep && isChainProfilePendingLocked(chainProfileApprovalStatus);
   const roleLocked =
     isSupplyChainOnlyStep &&
     isEntrySupplyChainOnboardingComplete(entry, { chainProfileApprovalStatus }, savedBaselineEntries) &&
@@ -524,6 +545,7 @@ const CompanyInfoEntryCard = ({
     !roleChangeRequestActive;
   const showRoleSelect =
     editing &&
+    !chainProfilePendingLocked &&
     (!hasChosenRole || roleSelectUnlocked || roleChangeRequestActive) &&
     !roleLocked;
   const showBrandNotApprovedStep2Message =
@@ -549,9 +571,14 @@ const CompanyInfoEntryCard = ({
     brandApprovalReadyForRole &&
     !supplyChainRolesLoading &&
     hasResolvedChainRoles &&
+    !chainProfilePendingLocked &&
     (!roleLocked || roleChangeRequestActive);
   const roleDocumentsEnabled =
-    editing && brandApprovalReadyForRole && (!roleLocked || roleChangeRequestActive);
+    editing &&
+    brandApprovalReadyForRole &&
+    !chainProfilePendingLocked &&
+    !awaitingNewRoleSelection &&
+    (!roleLocked || roleChangeRequestActive);
   const movOnlySavePending = roleLocked && !roleChangeRequestActive && movChanged;
   const showCustomBrandNameField =
     useBrandNameTextInput &&
@@ -568,15 +595,17 @@ const CompanyInfoEntryCard = ({
     !!onSaveEntry &&
     allowEntrySave &&
     brandApprovalReadyForRole &&
+    !chainProfilePendingLocked &&
     (!roleLocked || roleChangeRequestActive || movOnlySavePending);
   const entrySaveState = showEntrySave
     ? getSelectYourselfEntrySaveState(
         entry,
         savedBaselineEntries,
         approvedBaselineEntries,
-        activeApprovedRole || approvedRole
+        activeApprovedRole || approvedRole,
+        { roleChangeRequestActive }
       )
-    : { ok: true, message: '', field: '', missing: [], alreadySaved: false, enabled: true };
+    : { ok: true, message: '', field: '', missing: [], alreadySaved: false, enabled: true, sameRoleAsApproved: false };
   const entrySaveEnabled =
     (entrySaveState.enabled || movOnlySavePending) && !savingThisEntry;
   const entrySaveTitle = savingThisEntry
@@ -585,6 +614,8 @@ const CompanyInfoEntryCard = ({
       ? 'Save minimum order value'
       : entrySaveState.alreadySaved
       ? 'This entry is already saved'
+      : entrySaveState.sameRoleAsApproved
+        ? SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE
       : entrySaveState.enabled && !entrySaveState.ok
         ? entrySaveState.pendingApprovedRoleChange
           ? `${entrySaveState.message || 'Complete required fields, then save to submit this role change for admin approval.'}`
@@ -644,6 +675,9 @@ const CompanyInfoEntryCard = ({
                 {roleDocUrls.length > 0 ? `Role docs: ${roleDocUrls.length}` : 'Role docs pending'}
               </span>
             )}
+            {chainProfilePendingLocked ? (
+              <span className="chain-chip chain-chip--pending">{SELECT_YOURSELF_PENDING_APPROVAL_LABEL}</span>
+            ) : null}
           </div>
         </div>
         <div className="chain-entry-header__actions">
@@ -651,7 +685,9 @@ const CompanyInfoEntryCard = ({
             <button
               type="button"
               className="chain-entry-save"
-              onClick={() => onSaveEntry?.(entry.id, entryIndex - 1)}
+              onClick={() =>
+                onSaveEntry?.(entry.id, entryIndex - 1, { roleChangeRequest: roleChangeRequestActive })
+              }
               disabled={!entrySaveEnabled}
               title={entrySaveTitle}
               aria-disabled={!entrySaveEnabled}
@@ -1093,6 +1129,14 @@ const CompanyInfoEntryCard = ({
               {isSupplyChainOnlyStep ? 'Your position in supply chain' : 'Supply-chain role'}
             </h4>
             <div className="chain-section__panel">
+              {chainProfilePendingLocked ? (
+                <div className="chain-callout chain-callout--warning" role="status">
+                  <strong>{SELECT_YOURSELF_REQUEST_SUBMITTED_TITLE}</strong>
+                  <p>
+                    Status: {SELECT_YOURSELF_PENDING_APPROVAL_LABEL}. {SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE}
+                  </p>
+                </div>
+              ) : null}
               {roleLocked ? (
                 <div className="chain-callout chain-callout--success" role="status">
                   <strong>Active approved role: {approvedRoleLabel}</strong>
@@ -1151,12 +1195,15 @@ const CompanyInfoEntryCard = ({
                       disabled
                       aria-readonly="true"
                     />
-                    {editing && brandApprovalReadyForRole && !roleLocked ? (
+                    {editing && brandApprovalReadyForRole && !roleLocked && !chainProfilePendingLocked ? (
                       <div className="chain-role-lock-actions">
                         <button
                           type="button"
                           className="chain-entry-selector__link"
-                          onClick={() => setRoleSelectUnlocked(true)}
+                          onClick={() => {
+                            onBeginRoleChange?.(entry.id);
+                            setRoleSelectUnlocked(true);
+                          }}
                         >
                           {CHANGE_ROLE_LABEL}
                         </button>
@@ -1200,7 +1247,10 @@ const CompanyInfoEntryCard = ({
                     <button
                       type="button"
                       className="chain-entry-selector__link"
-                      onClick={() => setRoleSelectUnlocked(false)}
+                      onClick={() => {
+                        onRestoreRoleChangeDocuments?.(entry.id);
+                        setRoleSelectUnlocked(false);
+                      }}
                     >
                       Keep current role
                     </button>
@@ -1212,6 +1262,11 @@ const CompanyInfoEntryCard = ({
                     {pendingRoleChange
                       ? '. Changing role requires admin approval after you save.'
                       : ''}
+                  </p>
+                ) : null}
+                {roleChangeRequestActive && !pendingRoleChange ? (
+                  <p className="chain-field__error" role="alert">
+                    {SELECT_YOURSELF_ROLE_CHANGE_REQUIRED_MESSAGE}
                   </p>
                 ) : null}
                 {pendingRoleChange && !roleLocked && showRoleSelect ? (
@@ -1227,14 +1282,35 @@ const CompanyInfoEntryCard = ({
 
           <section className="chain-section">
             <h4 className="chain-section__title">
-              {roleLocked ? 'Approved role documents' : 'Supply-chain role documents'}
+              {roleLocked
+                ? 'Approved role documents'
+                : roleChangeRequestActive || roleSelectUnlocked
+                  ? 'New role verification documents'
+                  : 'Supply-chain role documents'}
             </h4>
             <div className="chain-section__panel">
               <div className="chain-field chain-field--full">
                 <label className="chain-field__label">
                   Role verification documents
-                  {!roleLocked ? <RequiredMark /> : null}
+                  {!roleLocked && !chainProfilePendingLocked && !awaitingNewRoleSelection ? (
+                    <RequiredMark />
+                  ) : null}
                 </label>
+                {chainProfilePendingLocked ? (
+                  <p className="chain-field__sublabel" role="status">
+                    Documents already submitted cannot be changed while this request is under processing.
+                  </p>
+                ) : null}
+                {roleChangeRequestActive || roleSelectUnlocked ? (
+                  <p className="chain-field__sublabel" role="status">
+                    {SELECT_YOURSELF_ROLE_CHANGE_FRESH_DOCS_MESSAGE}
+                  </p>
+                ) : null}
+                {sameRoleAsApproved ? (
+                  <p className="chain-field__sublabel" role="status">
+                    {SELECT_YOURSELF_ROLE_CHANGE_DOCS_LOCKED_MESSAGE}
+                  </p>
+                ) : null}
                 <BrandAuthorizationDocuments
                   entry={entry}
                   editing={roleDocumentsEnabled}
@@ -1270,7 +1346,7 @@ const CompanyInfoEntryCard = ({
                   className="chain-field__control"
                   value={entry.minimumOrderValue ?? ''}
                   onChange={(e) => onUpdate('minimumOrderValue', e.target.value)}
-                  disabled={!editing || !brandApprovalReadyForRole}
+                  disabled={!editing || !brandApprovalReadyForRole || chainProfilePendingLocked}
                   placeholder="e.g. 25000"
                   required={editing}
                   aria-required="true"
@@ -1351,6 +1427,7 @@ export default function SupplierSupplyChainEntriesEditor({
   const [highlightedEntryId, setHighlightedEntryId] = useState('');
   const profileRef = useRef(profile);
   profileRef.current = profile;
+  const roleChangeDocumentSnapshotsRef = useRef({});
 
   const protectLocalDraft = useCallback(
     (options = {}) => {
@@ -1359,9 +1436,70 @@ export default function SupplierSupplyChainEntriesEditor({
     [onProtectLocalDraft]
   );
 
+  const applyRoleDocumentsToEntry = useCallback((entryId, urls) => {
+    const targetId = String(entryId || '').trim();
+    if (!targetId || !profileRef.current) return;
+    const currentProfile = profileRef.current;
+    const displayEntries = getDisplayEntriesForProfile(currentProfile);
+    const baseEntries =
+      Array.isArray(currentProfile?.companyInfoEntries) && currentProfile.companyInfoEntries.length > 0
+        ? currentProfile.companyInfoEntries.map((entry) => ({ ...entry }))
+        : displayEntries.map((entry) => ({ ...entry }));
+    const nextEntries = baseEntries.map((entry) => {
+      if (String(entry?.id || '').trim() !== targetId) return entry;
+      return stampEntryDocumentUpdate(setAuthorizationCertificateUrls(entry, urls), 'role_authorization');
+    });
+    const nextProfile = syncProfileFromEntries(currentProfile, nextEntries);
+    setProfile(nextProfile);
+    profileRef.current = nextProfile;
+  }, [setProfile]);
+
+  const captureAndClearRoleDocuments = useCallback(
+    (entryId) => {
+      const targetId = String(entryId || '').trim();
+      const entry =
+        getDisplayEntriesForProfile(profileRef.current).find((row) => String(row?.id || '') === targetId) ||
+        null;
+      if (!roleChangeDocumentSnapshotsRef.current[targetId]) {
+        roleChangeDocumentSnapshotsRef.current[targetId] = resolveRoleVerificationDocumentUrls(entry);
+      }
+      applyRoleDocumentsToEntry(targetId, []);
+    },
+    [applyRoleDocumentsToEntry]
+  );
+
+  const restoreRoleDocumentSnapshot = useCallback(
+    (entryId) => {
+      const targetId = String(entryId || '').trim();
+      const snapshot = roleChangeDocumentSnapshotsRef.current[targetId];
+      const entry =
+        getDisplayEntriesForProfile(profileRef.current).find((row) => String(row?.id || '') === targetId) ||
+        null;
+      const saved =
+        findSavedBaselineEntry(entry, savedBaselineEntries) ||
+        findSavedBaselineEntry(entry, approvedBaselineEntries);
+      const urls =
+        snapshot ||
+        resolveRoleVerificationDocumentUrls(saved || {});
+      applyRoleDocumentsToEntry(targetId, urls);
+      delete roleChangeDocumentSnapshotsRef.current[targetId];
+    },
+    [applyRoleDocumentsToEntry, savedBaselineEntries, approvedBaselineEntries]
+  );
+
   const handleRequestRoleChange = useCallback((entryId) => {
-    setRoleChangeRequestEntryId(String(entryId || '').trim());
-  }, []);
+    const targetId = String(entryId || '').trim();
+    captureAndClearRoleDocuments(targetId);
+    setRoleChangeRequestEntryId(targetId);
+  }, [captureAndClearRoleDocuments]);
+
+  const handleBeginRoleChange = useCallback((entryId) => {
+    captureAndClearRoleDocuments(String(entryId || '').trim());
+  }, [captureAndClearRoleDocuments]);
+
+  const handleRestoreRoleChangeDocuments = useCallback((entryId) => {
+    restoreRoleDocumentSnapshot(String(entryId || '').trim());
+  }, [restoreRoleDocumentSnapshot]);
 
   const handleCancelRoleChangeRequest = useCallback(
     (entryId) => {
@@ -1374,18 +1512,26 @@ export default function SupplierSupplyChainEntriesEditor({
       const entry = entries.find((row) => String(row?.id || '') === targetId);
       const savedEntry = findSavedBaselineEntry(entry, savedBaselineEntries);
       if (savedEntry) {
+        delete roleChangeDocumentSnapshotsRef.current[targetId];
         setProfile(
           syncProfileFromEntries(
             profileRef.current,
             entries.map((row) =>
-              String(row?.id || '') === targetId ? { ...savedEntry, id: targetId } : row
+              String(row?.id || '') === targetId
+                ? stampEntryDocumentUpdate(
+                    { ...savedEntry, id: targetId },
+                    'role_authorization'
+                  )
+                : row
             )
           )
         );
+      } else {
+        restoreRoleDocumentSnapshot(targetId);
       }
       setRoleChangeRequestEntryId('');
     },
-    [savedBaselineEntries, setProfile]
+    [restoreRoleDocumentSnapshot, savedBaselineEntries, setProfile]
   );
 
   useEffect(() => {
@@ -1467,7 +1613,7 @@ export default function SupplierSupplyChainEntriesEditor({
       if (documentType === 'brand_approval' && mode !== 'remove') {
         certificateFields = stripBrandDocumentsFromRoleFields(certificateFields);
       }
-      const nextProfile =
+      const nextProfile = stampEntryDocumentUpdate(
         documentType === 'brand_approval'
           ? {
               ...stripBrandDocumentsFromRoleFields({
@@ -1484,7 +1630,9 @@ export default function SupplierSupplyChainEntriesEditor({
               authorizationCertificateUrl: certificateFields.authorizationCertificateUrl,
               authorizationCertificatePath:
                 certificateFields.authorizationCertificateUrl ? currentProfile?.authorizationCertificatePath : ''
-            };
+            },
+        documentType
+      );
       if (
         mode !== 'remove' &&
         !profileSnapshotIncludesDocument(nextProfile, entryId, url, documentType)
@@ -1505,15 +1653,25 @@ export default function SupplierSupplyChainEntriesEditor({
         : displayEntries.map((entry) => ({ ...entry }));
 
     let updatedOne = false;
+    const targetId = String(entryId || '').trim();
+    const hasIdMatch = baseEntries.some((entry) => String(entry?.id || '').trim() === targetId);
+    const targetBrandKey = brandKeyForDuplicateCheck(targetBrand);
     const entries = baseEntries.map((entry) => {
       if (updatedOne) return entry;
-      if (!matchCompanyInfoEntry(entry, { entryId, brand: targetBrand })) return entry;
+      const matches = hasIdMatch
+        ? String(entry?.id || '').trim() === targetId
+        : Boolean(
+            targetBrandKey && brandKeyForDuplicateCheck(entry?.brands) === targetBrandKey
+          );
+      if (!matches) return entry;
       updatedOne = true;
       const updated =
         mode === 'remove' ? removeDocument(entry, url) : appendDocument(entry, url);
-      return documentType === 'brand_approval' && mode !== 'remove'
-        ? stripBrandDocumentsFromRoleFields(updated)
-        : updated;
+      const nextEntry =
+        documentType === 'brand_approval' && mode !== 'remove'
+          ? stripBrandDocumentsFromRoleFields(updated)
+          : updated;
+      return stampEntryDocumentUpdate(nextEntry, documentType);
     });
     if (!updatedOne) {
       throw new Error('Could not attach the uploaded document to this role entry. Please try again.');
@@ -1842,6 +2000,14 @@ export default function SupplierSupplyChainEntriesEditor({
 
   const updateCompanyInfoEntry = (entryId, field, value) => {
     if (field === 'brands' && sectionView === 'form') return;
+    if (
+      sectionView === 'form' &&
+      isChainProfilePendingLocked(chainProfileApprovalStatus) &&
+      (field === 'role' || field === 'minimumOrderValue')
+    ) {
+      alert(SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE);
+      return;
+    }
 
     // Do not block brand typing with alerts. Duplicate detection is exact complete-name
     // matching only (H is not a duplicate of HP) and is surfaced inline after the value is set.
@@ -1892,6 +2058,13 @@ export default function SupplierSupplyChainEntriesEditor({
       if (field === 'role' && String(nextValue || '').trim()) {
         updated.supplyChainRegistrationStarted = true;
       }
+      if (field === 'role') {
+        const previousRole = String(e?.role || '').trim();
+        const nextRole = String(nextValue || '').trim();
+        if (previousRole && nextRole && previousRole !== nextRole) {
+          return stampEntryDocumentUpdate(setAuthorizationCertificateUrls(updated, []), 'role_authorization');
+        }
+      }
       return updated;
     });
     if (!updatedOne) return;
@@ -1910,6 +2083,27 @@ export default function SupplierSupplyChainEntriesEditor({
 
   const handleDocumentRemoveForEntry = async (entryId, url, documentType = 'role_authorization') => {
     if (!url) return;
+    if (
+      documentType === 'role_authorization' &&
+      sectionView === 'form' &&
+      isChainProfilePendingLocked(chainProfileApprovalStatus)
+    ) {
+      alert(SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE);
+      return;
+    }
+    if (documentType === 'role_authorization' && sectionView === 'form') {
+      const targetEntry = getDisplayEntries().find((entry) => entry.id === entryId) || null;
+      const approvedRole = getActiveApprovedRoleForEntry(
+        targetEntry,
+        { chainProfileApprovalStatus },
+        approvedBaselineEntries,
+        savedBaselineEntries
+      );
+      if (isRoleChangeSameAsApproved(targetEntry, approvedRole, roleChangeRequestEntryId === entryId)) {
+        alert(SELECT_YOURSELF_ROLE_CHANGE_DOCS_LOCKED_MESSAGE);
+        return;
+      }
+    }
     if (!window.confirm('Remove this document?')) {
       return;
     }
@@ -1998,7 +2192,21 @@ export default function SupplierSupplyChainEntriesEditor({
     if (!fileList.length) return;
 
     if (documentType === 'role_authorization' && sectionView === 'form') {
+      if (isChainProfilePendingLocked(chainProfileApprovalStatus)) {
+        alert(SELECT_YOURSELF_PENDING_PROFILE_LOCK_MESSAGE);
+        return;
+      }
       const targetEntry = getDisplayEntries().find((entry) => entry.id === entryId) || null;
+      const approvedRole = getActiveApprovedRoleForEntry(
+        targetEntry,
+        { chainProfileApprovalStatus },
+        approvedBaselineEntries,
+        savedBaselineEntries
+      );
+      if (isRoleChangeSameAsApproved(targetEntry, approvedRole, roleChangeRequestEntryId === entryId)) {
+        alert(SELECT_YOURSELF_ROLE_CHANGE_DOCS_LOCKED_MESSAGE);
+        return;
+      }
       const targetBrand = normalizeSingleBrand(targetEntry?.brands);
       const roleUi = entryRoleOptions[entryId] || {};
       if (
@@ -2596,6 +2804,8 @@ export default function SupplierSupplyChainEntriesEditor({
             roleChangeRequestActive={roleChangeRequestEntryId === entry.id}
             onRequestRoleChange={sectionView === 'form' ? handleRequestRoleChange : null}
             onCancelRoleChangeRequest={sectionView === 'form' ? handleCancelRoleChangeRequest : null}
+            onBeginRoleChange={sectionView === 'form' ? handleBeginRoleChange : null}
+            onRestoreRoleChangeDocuments={sectionView === 'form' ? handleRestoreRoleChangeDocuments : null}
             onToggleExpand={() =>
               setExpandedEntryIds((prev) =>
                 prev.includes(entry.id) ? prev.filter((id) => id !== entry.id) : [...prev, entry.id]

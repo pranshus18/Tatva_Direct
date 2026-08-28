@@ -898,6 +898,32 @@ describe('buildSupplyChainFormProfile', () => {
 
     expect(resolveRoleVerificationDocumentUrls(entry)).toEqual([]);
   });
+
+  it('does not restore approved role documents after the current row removed them', () => {
+    const formProfile = buildSupplyChainFormProfile(
+      {
+        companyInfoEntries: [
+          {
+            id: 'draft',
+            brands: 'Samsung',
+            role: 'dealer',
+            authorizationCertificateUrls: []
+          }
+        ]
+      },
+      [
+        {
+          id: 'approved',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: ['https://cdn.example.com/old.pdf']
+        }
+      ]
+    );
+
+    expect(formProfile.companyInfoEntries).toHaveLength(1);
+    expect(formProfile.companyInfoEntries[0].authorizationCertificateUrls).toEqual([]);
+  });
 });
 
 describe('buildSelectYourselfChainEntryRowsSignature', () => {
@@ -1013,6 +1039,90 @@ describe('mergeFormStepProfile', () => {
     const merged = mergeFormStepProfile(fullProfile, formProfile);
     expect(merged.companyInfoEntries[0].role).toBe('retailer');
   });
+
+  it('keeps a document removal from a stamped form snapshot', () => {
+    const kept = 'https://cdn.example.com/keep.pdf';
+    const removed = 'https://cdn.example.com/remove.pdf';
+    const fullProfile = {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: [kept, removed]
+        }
+      ]
+    };
+    const formProfile = {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: [kept],
+          roleDocsUpdatedAt: 2
+        }
+      ]
+    };
+
+    const merged = mergeFormStepProfile(fullProfile, formProfile);
+    expect(merged.companyInfoEntries[0].authorizationCertificateUrls).toEqual([kept]);
+  });
+
+  it('keeps an empty list when the last role document is removed', () => {
+    const fullProfile = {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: ['https://cdn.example.com/only.pdf']
+        }
+      ]
+    };
+    const formProfile = {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: [],
+          roleDocsUpdatedAt: 5
+        }
+      ]
+    };
+
+    const merged = mergeFormStepProfile(fullProfile, formProfile);
+    expect(merged.companyInfoEntries[0].authorizationCertificateUrls).toEqual([]);
+    expect(merged.companyInfoEntries[0].authorizationCertificateUrl).toBe('');
+  });
+
+  it('does not restore removed documents from a stale unstamped form snapshot', () => {
+    const fullProfile = {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: [],
+          roleDocsUpdatedAt: 10
+        }
+      ]
+    };
+    const staleFormProfile = {
+      companyInfoEntries: [
+        {
+          id: 'entry-1',
+          brands: 'Samsung',
+          role: 'dealer',
+          authorizationCertificateUrls: ['https://cdn.example.com/old.pdf']
+        }
+      ]
+    };
+
+    const merged = mergeFormStepProfile(fullProfile, staleFormProfile);
+    expect(merged.companyInfoEntries[0].authorizationCertificateUrls).toEqual([]);
+  });
 });
 
 describe('deduplicateCompanyInfoEntriesByBrand', () => {
@@ -1035,6 +1145,24 @@ describe('deduplicateCompanyInfoEntriesByBrand', () => {
 
     expect(merged).toHaveLength(1);
     expect(resolveRoleVerificationDocumentUrls(merged[0])).toEqual([]);
+  });
+
+  it('lets a later empty document list replace earlier brand-row documents', () => {
+    const merged = deduplicateCompanyInfoEntriesByBrand([
+      {
+        id: 'approved',
+        brands: 'Samsung',
+        authorizationCertificateUrls: ['https://cdn.example.com/old.pdf']
+      },
+      {
+        id: 'draft',
+        brands: 'Samsung',
+        authorizationCertificateUrls: []
+      }
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].authorizationCertificateUrls).toEqual([]);
   });
 });
 
@@ -1236,6 +1364,21 @@ describe('entryNeedsChainRoleAdminReview', () => {
     expect(entryNeedsChainRoleAdminReview(null, { brands: 'acc', role: '' })).toBe(false);
     expect(entryNeedsChainRoleAdminReview(null, { brands: 'acc', role: 'dealer' })).toBe(true);
   });
+
+  it('treats new verification documents as needing admin review', () => {
+    expect(
+      entryNeedsChainRoleAdminReview(
+        { brands: 'acc', role: 'retailer', authorizationCertificateUrls: ['https://cdn.example.com/a.png'] },
+        { brands: 'acc', role: 'retailer', authorizationCertificateUrls: ['https://cdn.example.com/b.png'] }
+      )
+    ).toBe(true);
+    expect(
+      entryNeedsChainRoleAdminReview(
+        { brands: 'acc', role: 'retailer', authorizationCertificateUrls: ['https://cdn.example.com/a.png'] },
+        { brands: 'acc', role: 'retailer', authorizationCertificateUrls: ['https://cdn.example.com/a.png'] }
+      )
+    ).toBe(false);
+  });
 });
 
 describe('dedupeSupplierBrandRequestsByLatest', () => {
@@ -1331,6 +1474,27 @@ describe('buildSupplierChainSavePayload', () => {
     });
     expect(payload.brands).toBe('');
     expect(payload.saveBrandApprovalOnly).toBe(true);
+  });
+
+  it('strips local document-update stamps from API payloads', () => {
+    const profile = {
+      companyInfoEntries: [
+        {
+          id: 'e1',
+          role: 'dealer',
+          brands: 'Milton',
+          authorizationCertificateUrls: ['https://cdn.example.com/a.pdf'],
+          roleDocsUpdatedAt: 99,
+          brandDocsUpdatedAt: 12
+        }
+      ]
+    };
+    const payload = buildSupplierChainSavePayload(profile, null, { forApi: true });
+    expect(payload.companyInfoEntries[0].roleDocsUpdatedAt).toBeUndefined();
+    expect(payload.companyInfoEntries[0].brandDocsUpdatedAt).toBeUndefined();
+    expect(payload.companyInfoEntries[0].authorizationCertificateUrls).toEqual([
+      'https://cdn.example.com/a.pdf'
+    ]);
   });
 });
 
