@@ -832,9 +832,187 @@ const SupplyChainPartnerCard = ({ partner }) => {
   );
 };
 
-const SupplierProfile = ({ profile, setProfile, editing, setEditing }) => {
+export function SupplierBillingAddressSection({ profile, setProfile, editing, setEditing }) {
   const [gstAddressLoading, setGstAddressLoading] = useState(false);
   const gstAutoFillRef = useRef('');
+
+  useEffect(() => {
+    const gstin = String(profile?.gstin || profile?.mainGstin || '')
+      .trim()
+      .toUpperCase()
+      .replace(/\s/g, '');
+    if (gstin.length !== 15 || !isRegisteredBillingIncomplete(profile?.address)) {
+      return undefined;
+    }
+    if (gstAutoFillRef.current === gstin) {
+      return undefined;
+    }
+    gstAutoFillRef.current = gstin;
+    let cancelled = false;
+
+    const hydrateFromGst = async () => {
+      setGstAddressLoading(true);
+      try {
+        const result = await verifyPmGst(gstin);
+        if (cancelled) return;
+        const nextAddress = mergeParsedShippingAddress(
+          result.address || { line1: result.businessAddress || '' }
+        );
+        setProfile((prev) => ({
+          ...prev,
+          gstin,
+          mainGstin: gstin,
+          companyName: result.companyName || prev?.companyName,
+          address: {
+            ...(prev?.address || {}),
+            ...nextAddress
+          }
+        }));
+      } catch {
+        gstAutoFillRef.current = '';
+      } finally {
+        if (!cancelled) setGstAddressLoading(false);
+      }
+    };
+
+    hydrateFromGst();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    profile?.gstin,
+    profile?.mainGstin,
+    profile?.address?.line1,
+    profile?.address?.city,
+    profile?.address?.state,
+    profile?.address?.pincode,
+    setProfile
+  ]);
+
+  const updateRegisteredAddress = (field, value) => {
+    setProfile({
+      ...profile,
+      address: {
+        ...(profile?.address || {}),
+        [field]: value
+      }
+    });
+  };
+
+  const splitRegisteredAddressLine = () => {
+    setProfile((prev) => ({
+      ...prev,
+      address: mergeParsedShippingAddress(prev?.address || {})
+    }));
+  };
+
+  const fetchBillingAddressFromGst = async () => {
+    const gstin = String(profile?.gstin || profile?.mainGstin || '').trim().toUpperCase().replace(/\s/g, '');
+    if (gstin.length !== 15) {
+      toast.error('Enter a valid 15-character GSTIN first.');
+      return;
+    }
+    setGstAddressLoading(true);
+    try {
+      const result = await verifyPmGst(gstin);
+      const nextAddress = mergeParsedShippingAddress(result.address || { line1: result.businessAddress || '' });
+      setProfile((prev) => ({
+        ...prev,
+        gstin,
+        mainGstin: gstin,
+        companyName: result.companyName || prev?.companyName,
+        address: {
+          ...(prev?.address || {}),
+          ...nextAddress
+        }
+      }));
+      gstAutoFillRef.current = gstin;
+      if (!editing && typeof setEditing === 'function') setEditing(true);
+      toast.success('Billing address filled from GST.');
+    } catch (error) {
+      toast.error(error.message || 'Could not fetch address from GST.');
+    } finally {
+      setGstAddressLoading(false);
+    }
+  };
+
+  return (
+    <div className="profile-section">
+      <div className="section-header">
+        <h2>
+          <FileText size={20} />
+          Billing / Registered Company Address
+        </h2>
+        <button
+          type="button"
+          className="btn-add"
+          onClick={fetchBillingAddressFromGst}
+          disabled={gstAddressLoading}
+        >
+          {gstAddressLoading ? 'Fetching…' : 'Fetch address from GST'}
+        </button>
+      </div>
+      <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
+        Single GST-registered company address used for billing on upstream orders and invoices.
+      </p>
+      <div className="form-grid">
+        <div className="form-group span-2">
+          <label>Address (Street / Area)</label>
+          <textarea
+            rows="2"
+            value={profile?.address?.line1 || ''}
+            onChange={(e) => updateRegisteredAddress('line1', e.target.value)}
+            onBlur={splitRegisteredAddressLine}
+            disabled={!editing}
+            placeholder="Registered office address"
+          />
+        </div>
+        <div className="form-group">
+          <label>City</label>
+          <input
+            type="text"
+            value={profile?.address?.city || ''}
+            onChange={(e) => updateRegisteredAddress('city', e.target.value)}
+            disabled={!editing}
+            placeholder="e.g. Pune"
+          />
+        </div>
+        <div className="form-group">
+          <label>State / Region</label>
+          <input
+            type="text"
+            value={profile?.address?.state || ''}
+            onChange={(e) => updateRegisteredAddress('state', e.target.value)}
+            disabled={!editing}
+            placeholder="e.g. Maharashtra"
+          />
+        </div>
+        <div className="form-group">
+          <label>PIN / ZIP Code</label>
+          <input
+            type="text"
+            value={profile?.address?.pincode || ''}
+            onChange={(e) => updateRegisteredAddress('pincode', e.target.value)}
+            disabled={!editing}
+            placeholder="e.g. 411026"
+          />
+        </div>
+        <div className="form-group">
+          <label>Country</label>
+          <input
+            type="text"
+            value={profile?.address?.country || ''}
+            onChange={(e) => updateRegisteredAddress('country', e.target.value)}
+            disabled={!editing}
+            placeholder="e.g. India"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SupplierProfile = ({ profile, setProfile, editing, setEditing }) => {
   const [supplyChainState, setSupplyChainState] = useState({
     loading: true,
     partnerGroups: [],
@@ -910,111 +1088,11 @@ const SupplierProfile = ({ profile, setProfile, editing, setEditing }) => {
     };
   }, [supplyChainRoleKey]);
 
-  useEffect(() => {
-    const gstin = String(profile?.gstin || profile?.mainGstin || '')
-      .trim()
-      .toUpperCase()
-      .replace(/\s/g, '');
-    if (gstin.length !== 15 || !isRegisteredBillingIncomplete(profile?.address)) {
-      return undefined;
-    }
-    if (gstAutoFillRef.current === gstin) {
-      return undefined;
-    }
-    gstAutoFillRef.current = gstin;
-    let cancelled = false;
-
-    const hydrateFromGst = async () => {
-      setGstAddressLoading(true);
-      try {
-        const result = await verifyPmGst(gstin);
-        if (cancelled) return;
-        const nextAddress = mergeParsedShippingAddress(
-          result.address || { line1: result.businessAddress || '' }
-        );
-        setProfile((prev) => ({
-          ...prev,
-          gstin,
-          mainGstin: gstin,
-          companyName: result.companyName || prev?.companyName,
-          address: {
-            ...(prev?.address || {}),
-            ...nextAddress
-          }
-        }));
-      } catch {
-        gstAutoFillRef.current = '';
-      } finally {
-        if (!cancelled) setGstAddressLoading(false);
-      }
-    };
-
-    hydrateFromGst();
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    profile?.gstin,
-    profile?.mainGstin,
-    profile?.address?.line1,
-    profile?.address?.city,
-    profile?.address?.state,
-    profile?.address?.pincode,
-    setProfile
-  ]);
-
   const handleComplianceFieldChange = (field, value) => {
     setProfile({
       ...profile,
       [field]: value
     });
-  };
-
-  const updateRegisteredAddress = (field, value) => {
-    setProfile({
-      ...profile,
-      address: {
-        ...(profile?.address || {}),
-        [field]: value
-      }
-    });
-  };
-
-  const splitRegisteredAddressLine = () => {
-    setProfile((prev) => ({
-      ...prev,
-      address: mergeParsedShippingAddress(prev?.address || {})
-    }));
-  };
-
-  const fetchBillingAddressFromGst = async () => {
-    const gstin = String(profile?.gstin || profile?.mainGstin || '').trim().toUpperCase().replace(/\s/g, '');
-    if (gstin.length !== 15) {
-      toast.error('Enter a valid 15-character GSTIN first.');
-      return;
-    }
-    setGstAddressLoading(true);
-    try {
-      const result = await verifyPmGst(gstin);
-      const nextAddress = mergeParsedShippingAddress(result.address || { line1: result.businessAddress || '' });
-      setProfile((prev) => ({
-        ...prev,
-        gstin,
-        mainGstin: gstin,
-        companyName: result.companyName || prev?.companyName,
-        address: {
-          ...(prev?.address || {}),
-          ...nextAddress
-        }
-      }));
-      gstAutoFillRef.current = gstin;
-      if (!editing && typeof setEditing === 'function') setEditing(true);
-      toast.success('Billing address filled from GST.');
-    } catch (error) {
-      toast.error(error.message || 'Could not fetch address from GST.');
-    } finally {
-      setGstAddressLoading(false);
-    }
   };
 
   return (
@@ -1129,78 +1207,12 @@ const SupplierProfile = ({ profile, setProfile, editing, setEditing }) => {
         </div>
       </div>
 
-      <div className="profile-section">
-        <div className="section-header">
-          <h2>
-            <FileText size={20} />
-            Billing / Registered Company Address
-          </h2>
-          <button
-            type="button"
-            className="btn-add"
-            onClick={fetchBillingAddressFromGst}
-            disabled={gstAddressLoading}
-          >
-            {gstAddressLoading ? 'Fetching…' : 'Fetch address from GST'}
-          </button>
-        </div>
-        <p style={{ color: '#64748b', fontSize: '0.9rem', marginTop: '-0.35rem', marginBottom: '1rem' }}>
-          Single GST-registered company address used for billing on upstream orders and invoices.
-        </p>
-        <div className="form-grid">
-          <div className="form-group span-2">
-            <label>Address (Street / Area)</label>
-            <textarea
-              rows="2"
-              value={profile?.address?.line1 || ''}
-              onChange={(e) => updateRegisteredAddress('line1', e.target.value)}
-              onBlur={splitRegisteredAddressLine}
-              disabled={!editing}
-              placeholder="Registered office address"
-            />
-          </div>
-          <div className="form-group">
-            <label>City</label>
-            <input
-              type="text"
-              value={profile?.address?.city || ''}
-              onChange={(e) => updateRegisteredAddress('city', e.target.value)}
-              disabled={!editing}
-              placeholder="e.g. Pune"
-            />
-          </div>
-          <div className="form-group">
-            <label>State / Region</label>
-            <input
-              type="text"
-              value={profile?.address?.state || ''}
-              onChange={(e) => updateRegisteredAddress('state', e.target.value)}
-              disabled={!editing}
-              placeholder="e.g. Maharashtra"
-            />
-          </div>
-          <div className="form-group">
-            <label>PIN / ZIP Code</label>
-            <input
-              type="text"
-              value={profile?.address?.pincode || ''}
-              onChange={(e) => updateRegisteredAddress('pincode', e.target.value)}
-              disabled={!editing}
-              placeholder="e.g. 411026"
-            />
-          </div>
-          <div className="form-group">
-            <label>Country</label>
-            <input
-              type="text"
-              value={profile?.address?.country || ''}
-              onChange={(e) => updateRegisteredAddress('country', e.target.value)}
-              disabled={!editing}
-              placeholder="e.g. India"
-            />
-          </div>
-        </div>
-      </div>
+      <SupplierBillingAddressSection
+        profile={profile}
+        setProfile={setProfile}
+        editing={editing}
+        setEditing={setEditing}
+      />
 
       <ProfileShippingAddressesSection
         profile={profile}

@@ -34,7 +34,23 @@ class ErrorBoundary extends React.Component {
           <button
             onClick={() => {
               this.setState({ hasError: false, error: null });
-              window.location.reload();
+              const reload = () => window.location.reload();
+              const clearAndReload = async () => {
+                try {
+                  if ('serviceWorker' in navigator) {
+                    const regs = await navigator.serviceWorker.getRegistrations();
+                    await Promise.all(regs.map((reg) => reg.unregister()));
+                  }
+                  if (window.caches?.keys) {
+                    const keys = await window.caches.keys();
+                    await Promise.all(keys.map((key) => window.caches.delete(key)));
+                  }
+                } catch {
+                  // Still reload even if cache cleanup fails.
+                }
+                reload();
+              };
+              clearAndReload();
             }}
             style={{
               padding: '10px 20px',

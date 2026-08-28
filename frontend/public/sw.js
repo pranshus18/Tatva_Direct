@@ -3,7 +3,7 @@
  * - Network-first for navigations, with offline fallback page
  */
 
-const SW_VERSION = 'v1';
+const SW_VERSION = 'v2-profile-gst';
 const STATIC_CACHE = `tatva-static-${SW_VERSION}`;
 const RUNTIME_CACHE = `tatva-runtime-${SW_VERSION}`;
 
@@ -79,11 +79,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Same-origin static assets: cache first
+  // JS/CSS: network first so deploys are not stuck on a stale Profile chunk.
+  // Images/fonts can stay cache-first.
   if (isStaticAssetRequest(request)) {
+    const url = new URL(request.url);
+    const isCodeAsset = url.pathname.endsWith('.js') || url.pathname.endsWith('.css');
     event.respondWith(
       (async () => {
         const cache = await caches.open(RUNTIME_CACHE);
+        if (isCodeAsset) {
+          try {
+            const response = await fetch(request);
+            cache.put(request, response.clone());
+            return response;
+          } catch {
+            const cached = await cache.match(request);
+            if (cached) return cached;
+            throw new Error('Failed to fetch asset');
+          }
+        }
         const cached = await cache.match(request);
         if (cached) return cached;
         const response = await fetch(request);
