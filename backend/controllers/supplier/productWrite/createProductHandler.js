@@ -54,6 +54,7 @@ import {
   formatVariantMrpMismatchMessage,
   roundVariantMrp
 } from '../../../services/variantMrpService.js';
+import { coalesceSameCatalogVariantIdentitiesForProduct } from '../../../services/coalesceCatalogVariantIdentityService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import {
   MIN_SUPPLIER_PRODUCT_PHOTOS,
@@ -475,7 +476,6 @@ export function buildSupplierProductCreateHandler(ctx) {
             })
           : false;
 
-      const computedVariantKey = String(variantIdentityBundle.variantKey || '').trim();
       const stableVariantIdentity = resolveStableVariantIdentityFromExistingOffers({
         parentAsin: catalogAsin || identityBundle.asinLikeId || parentProductForVariant?.asin || '',
         parentProduct: parentProductForVariant,
@@ -886,41 +886,6 @@ export function buildSupplierProductCreateHandler(ctx) {
             if (!supplierProductError) {
               existingSupplierProduct = racedOffer;
             }
-          } else if (
-            computedVariantKey &&
-            computedVariantKey !== String(resolvedVariantKey || '').trim()
-          ) {
-            // Reused catalog variant_key collided. Insert this as its own variant instead.
-            const retryAsin =
-              buildVariantAsinLikeId(
-                catalogAsin || identityBundle.asinLikeId || '',
-                computedVariantKey
-              ) || supplierProductData.variant_asin;
-            const retried = await supabase
-              .from('supplier_products')
-              .insert({
-                ...supplierProductData,
-                variant_key: computedVariantKey,
-                variant_asin: retryAsin
-              })
-              .select()
-              .single();
-            newSupplierProduct = retried.data;
-            supplierProductError = retried.error;
-            if (!supplierProductError) {
-              resolvedVariantKey = computedVariantKey;
-              variantAsin = retryAsin;
-            } else if (
-              isSupplierOfferUniqueViolation(supplierProductError) ||
-              isPgUniqueViolation(supplierProductError) ||
-              looksLikePostgresConstraintError(supplierProductError)
-            ) {
-              return res.status(400).json({
-                status: 'error',
-                code: 'duplicate_supplier_variant',
-                message: DUPLICATE_SUPPLIER_VARIANT_MESSAGE
-              });
-            }
           } else {
             console.warn(
               '[SupplierProductCreate] unique constraint on supplier_products:',
@@ -940,6 +905,23 @@ export function buildSupplierProductCreateHandler(ctx) {
           supplierProductError?.message || supplierProductError
         );
         return res.status(400).json(toSupplierOfferWriteErrorResponse(supplierProductError));
+      }
+
+      try {
+        const { applied } = await coalesceSameCatalogVariantIdentitiesForProduct(supabase, {
+          productId,
+          parentAsin: catalogAsin || identityBundle.asinLikeId || parentProductForVariant?.asin || '',
+          catalogSpecs: catalogSpecsForVariantReuse
+        });
+        const selfPatch = (applied || []).find((patch) => patch.id === newSupplierProduct?.id);
+        if (selfPatch?.to) {
+          newSupplierProduct = { ...newSupplierProduct, ...selfPatch.to };
+        }
+      } catch (coalesceError) {
+        console.warn(
+          '[variant coalesce] create-product unify failed:',
+          coalesceError?.message || coalesceError
+        );
       }
 
       void syncCatalogProductSnapshotFromOffers(supabase, productId).catch((syncError) => {

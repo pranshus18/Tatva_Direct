@@ -62,6 +62,21 @@ test('resolveStableVariantIdentityFromExistingOffers reuses catalog variant when
   assert.equal(stable.variantAsin, 'TSPCYY1JI');
 });
 
+test('buildSupplierVariantIdentity: empty offer inherits catalog specs so re-lists share one variant number', () => {
+  const catalogSpecs = { Color: 'White', Series: 'Continental', Weight: '17.5 kg' };
+  const parent = { specifications: catalogSpecs };
+  const emptyOffer = buildSupplierVariantIdentity({ specifications: {} }, parent);
+  const filledOffer = buildSupplierVariantIdentity({ specifications: catalogSpecs }, parent);
+  const otherSupplier = buildSupplierVariantIdentity(
+    { specifications: catalogSpecs, sku: 'LOKESH-1' },
+    parent
+  );
+  assert.equal(emptyOffer.variantKey, filledOffer.variantKey);
+  assert.equal(filledOffer.variantKey, otherSupplier.variantKey);
+  assert.equal(emptyOffer.variant.variantAttributes.color, 'white');
+  assert.equal(emptyOffer.variant.variantAttributes.series, 'continental');
+});
+
 test('buildSupplierVariantIdentity: catalog filled values do not change variant key vs offer-only', () => {
   const parent = { specifications: { weight: '1.5 kg', Color: 'Silver' } };
   const offerOnly = buildIdentityBundle({ specifications: { Color: 'Black' } });
@@ -71,12 +86,13 @@ test('buildSupplierVariantIdentity: catalog filled values do not change variant 
   assert.equal(merged.variant.variantAttributes.weight, undefined);
 });
 
-test('buildSupplierVariantIdentity: empty offer does not inherit catalog filled values into identity', () => {
-  const parent = { specifications: { weight: '1.5 kg' } };
-  const offerOnly = buildIdentityBundle({ specifications: {} });
-  const merged = buildSupplierVariantIdentity({ specifications: {} }, parent);
-  assert.equal(merged.variantKey, offerOnly.variantKey);
-  assert.equal(merged.variant.variantAttributes.weight, undefined);
+test('buildSupplierVariantIdentity: empty offer does not inherit catalog when offer specs already differ', () => {
+  const parent = { specifications: { Color: 'White', weight: '1.5 kg' } };
+  const black = buildSupplierVariantIdentity({ specifications: { Color: 'Black' } }, parent);
+  const offerOnly = buildIdentityBundle({ specifications: { Color: 'Black' } });
+  assert.equal(black.variantKey, offerOnly.variantKey);
+  assert.equal(black.variant.variantAttributes.color, 'black');
+  assert.equal(black.variant.variantAttributes.weight, undefined);
 });
 
 test('buildSupplierVariantIdentity: changed offer specs produce a different variant key', () => {

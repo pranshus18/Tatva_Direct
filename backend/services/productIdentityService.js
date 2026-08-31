@@ -1,9 +1,8 @@
 import crypto from 'crypto';
 import {
-  catalogSpecificationTemplateForVariantMerge,
-  mergeCatalogAndOfferSpecificationsForDisplay,
   parseSpecificationsObject,
-  parseSupplierOfferAttributes
+  parseSupplierOfferAttributes,
+  countMeaningfulSpecValues
 } from './supplierCatalogHelpersService.js';
 import { areSpecificationsEqual, submittedSpecsCompatibleWithExistingVariant, specsRepresentSameCatalogVariant } from '../utils/supplierProductApproval.js';
 
@@ -423,12 +422,26 @@ export function hasSupplierVariantSignals(item = {}, variantIdentity = null) {
 }
 
 /**
+ * Specs that determine the variant number.
+ * Same product + same spec values → same number.
+ * Empty offer specs inherit the catalog (add-from-database).
+ * A changed spec value (Color White → Black) is a new variant.
+ */
+export function resolveVariantIdentitySpecifications(offerSpecs = {}, catalogSpecs = {}) {
+  const offer = parseSpecificationsObject(offerSpecs) || {};
+  const catalog = parseSpecificationsObject(catalogSpecs) || {};
+  if (specsRepresentSameCatalogVariant(offer, catalog, catalog)) {
+    return countMeaningfulSpecValues(catalog) > 0 ? catalog : offer;
+  }
+  return offer;
+}
+
+/**
  * Variant identity for a supplier offer.
  *
- * Shared catalog rows may carry filled values from an older single-variant flow or another
- * offer. Those filled values must NOT enter the variant_key hash — only template keys — or
- * re-listing the same offer specs produces a new Variant TSIN whenever the catalog drifts.
- * Offer-filled values alone distinguish variants (COLOR/SIZE/etc.).
+ * Variant number is specs-only (not SKU, GTIN, or supplier). Catalog values are
+ * used when the supplier attaches the product unchanged; a spec edit hashes a
+ * new key so White vs Black cannot share a Variant TSIN.
  */
 export function buildSupplierVariantIdentity(offerInput = {}, parentProduct = null) {
   const catalogSpecs =
@@ -447,13 +460,16 @@ export function buildSupplierVariantIdentity(offerInput = {}, parentProduct = nu
           !Array.isArray(offerInput.variantAttributes)
         ? offerInput.variantAttributes
         : {};
-  const mergedSpecifications = mergeCatalogAndOfferSpecificationsForDisplay(
-    catalogSpecificationTemplateForVariantMerge(catalogSpecs),
-    offerSpecs
-  );
+  const identitySpecs = resolveVariantIdentitySpecifications(offerSpecs, catalogSpecs);
   return buildIdentityBundle({
     ...offerInput,
-    specifications: mergedSpecifications
+    brandModel: '',
+    gtin: '',
+    mpn: '',
+    sku: '',
+    unit: '',
+    packSize: '',
+    specifications: identitySpecs
   });
 }
 
@@ -788,6 +804,7 @@ export default {
   normalizeCatalogIdentity,
   normalizeVariantIdentity,
   normalizeVariantAttributes,
+  resolveVariantIdentitySpecifications,
   isPersistableProductBarcode,
   isVariantIdentityExcludedSpecKey,
   buildAsinLikeId,

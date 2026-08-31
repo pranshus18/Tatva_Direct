@@ -16,6 +16,7 @@ import { buildAdminPublishedDescriptionAttributes } from '../../utils/supplierPr
 import { propagateVariantMrpToAllOffers } from '../../services/variantMrpService.js';
 import { catalogOfferIdentityConflicts } from '../../utils/catalogProductAttach.js';
 import { resolveSupplierOfferDisplayCategory } from '../../services/supplierProductWriteService.js';
+import { coalesceSplitVariantIdentitiesForProducts } from '../../services/coalesceCatalogVariantIdentityService.js';
 
 function scoreSupplierOfferRow(row) {
   const rowStatus = row.status;
@@ -342,7 +343,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
       if (productIds.length > 0) {
         const { data: spRows, error: spRowsError } = await supabase
           .from('supplier_products')
-          .select('id, product_id, price, stock, min_order_quantity, location, status, is_active, supplier_id, attributes, igst_rate, cgst_rate, sgst_rate, updated_at, variant_key, variant_asin')
+          .select('id, product_id, price, stock, min_order_quantity, location, status, is_active, supplier_id, attributes, igst_rate, cgst_rate, sgst_rate, created_at, updated_at, variant_key, variant_asin, product_variant_id')
           .in('product_id', productIds);
 
         if (!spRowsError && spRows) {
@@ -360,6 +361,24 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
             if (!row?.product_id) continue;
             if (!rowsByProductId.has(row.product_id)) rowsByProductId.set(row.product_id, []);
             rowsByProductId.get(row.product_id).push(row);
+          }
+
+          try {
+            const coalesceSummary = await coalesceSplitVariantIdentitiesForProducts(
+              supabase,
+              allProducts,
+              rowsByProductId
+            );
+            if (coalesceSummary.patchedOffers > 0) {
+              console.log(
+                `[variant coalesce] admin catalog unified ${coalesceSummary.patchedOffers} offer(s) across ${coalesceSummary.products} product(s)`
+              );
+            }
+          } catch (coalesceError) {
+            console.warn(
+              '[variant coalesce] admin catalog unify failed:',
+              coalesceError?.message || coalesceError
+            );
           }
 
           const offerSupplierIds = [
