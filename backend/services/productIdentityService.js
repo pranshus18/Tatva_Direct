@@ -2,9 +2,10 @@ import crypto from 'crypto';
 import {
   parseSpecificationsObject,
   parseSupplierOfferAttributes,
-  countMeaningfulSpecValues
+  countMeaningfulSpecValues,
+  extractOfferSpecificationsFromRow
 } from './supplierCatalogHelpersService.js';
-import { areSpecificationsEqual, submittedSpecsCompatibleWithExistingVariant, specsRepresentSameCatalogVariant } from '../utils/supplierProductApproval.js';
+import { areSpecificationsEqual, submittedSpecsCompatibleWithExistingVariant, specsRepresentSameCatalogVariant, hasSupplierSpecificationChangesFromCatalog } from '../utils/supplierProductApproval.js';
 
 /**
  * Product Identity Service (Phase 1)
@@ -509,7 +510,9 @@ function offerInputFromSupplierProductRow(row = {}) {
 }
 
 function extractSpecsFromOfferRow(row = {}) {
-  return offerInputFromSupplierProductRow(row).specifications || {};
+  const nested = offerInputFromSupplierProductRow(row).specifications || {};
+  if (countMeaningfulSpecValues(nested) > 0) return nested;
+  return extractOfferSpecificationsFromRow(row) || {};
 }
 
 function extractSpecsFromProductVariantRow(row = {}) {
@@ -529,10 +532,11 @@ function extractSpecsFromProductVariantRow(row = {}) {
 
 function rankOfferForVariantReuse(row = {}) {
   const status = String(row?.status || '').toLowerCase();
-  if (status === 'approved' && row?.is_active !== false) return 0;
-  if (status === 'approved') return 1;
-  if (status === 'pending') return 2;
-  return 3;
+  const unpriced = Number(row?.price) > 0 ? 0 : 1;
+  if (status === 'approved' && row?.is_active !== false) return unpriced;
+  if (status === 'approved') return 2 + unpriced;
+  if (status === 'pending') return 4 + unpriced;
+  return 6 + unpriced;
 }
 
 function pickStableIdentityFromRow(row = {}, reason = 'reuse', parentAsin = '') {
@@ -616,6 +620,33 @@ export function resolveStableVariantIdentityFromExistingOffers({
     }
     const picked = pickStableIdentityFromRow(row, 'same_offer_specs', parentAsinForReuse);
     if (picked) return picked;
+  }
+
+  // 2b) Add-from-database with no spec value changes: reuse the catalog variant
+  //     even when leftover offers still have empty specs or older hashed keys.
+  if (
+    !hasSupplierSpecificationChangesFromCatalog({
+      catalogSpecs,
+      supplierSpecs: submittedSpecs
+    })
+  ) {
+    for (const row of rankedOffers) {
+      if (
+        !specsRepresentSameCatalogVariant(
+          catalogSpecs,
+          extractSpecsFromOfferRow(row),
+          catalogSpecs
+        )
+      ) {
+        continue;
+      }
+      const picked = pickStableIdentityFromRow(
+        row,
+        'catalog_product_unchanged',
+        parentAsinForReuse
+      );
+      if (picked) return picked;
+    }
   }
 
   // 3) Same specs as a canonical product_variants row already stored for this catalog product
@@ -797,6 +828,65 @@ function canReuseUnchangedCatalogRow(submittedSpecs = {}, existingSpecs = {}, ca
   return specsRepresentSameCatalogVariant(submittedSpecs, existingSpecs, catalogSpecs);
 }
 
+/**
+ * Add-from-database with no spec value changes: copy the stored variant number.
+ * Never hash a new 2-char suffix for the same catalog product + same specs.
+ */
+export function pickStoredCatalogVariantIdentityForUnchangedAttach({
+  parentAsin = '',
+  catalogSpecs = {},
+  submittedSpecs = {},
+  existingOffers = [],
+  existingProductVariants = []
+} = {}) {
+  if (
+    hasSupplierSpecificationChangesFromCatalog({
+      catalogSpecs,
+      supplierSpecs: submittedSpecs
+    })
+  ) {
+    return null;
+  }
+
+  const rankedOffers = [...(existingOffers || [])]
+    .filter((row) => String(row?.status || '').toLowerCase() !== 'rejected')
+    .sort((a, b) => rankOfferForVariantReuse(a) - rankOfferForVariantReuse(b));
+
+  for (const row of rankedOffers) {
+    const existingSpecs = extractSpecsFromOfferRow(row);
+    if (
+      !specsRepresentSameCatalogVariant(submittedSpecs, existingSpecs, catalogSpecs) &&
+      !specsRepresentSameCatalogVariant(catalogSpecs, existingSpecs, catalogSpecs)
+    ) {
+      continue;
+    }
+    const picked = pickStableIdentityFromRow(row, 'unchanged_catalog_attach', parentAsin);
+    if (picked) return picked;
+  }
+
+  const rankedVariants = [...(existingProductVariants || [])].filter((row) => {
+    const status = String(row?.status || '').toLowerCase();
+    return status !== 'rejected' && status !== 'retired';
+  });
+  for (const row of rankedVariants) {
+    const existingSpecs = extractSpecsFromProductVariantRow(row);
+    if (
+      !specsRepresentSameCatalogVariant(submittedSpecs, existingSpecs, catalogSpecs) &&
+      !specsRepresentSameCatalogVariant(catalogSpecs, existingSpecs, catalogSpecs)
+    ) {
+      continue;
+    }
+    const picked = pickStableIdentityFromRow(
+      row,
+      'unchanged_catalog_attach_product_variant',
+      parentAsin
+    );
+    if (picked) return picked;
+  }
+
+  return null;
+}
+
 export default {
   normalizeTextField,
   normalizeIdentifierField,
@@ -829,6 +919,7 @@ export default {
   buildSupplierVariantIdentity,
   syncOfferAttributesWithSpecifications,
   resolveStableVariantIdentityFromExistingOffers,
+  pickStoredCatalogVariantIdentityForUnchangedAttach,
   extractExplicitVariantKey,
   buildSupplierVariantIdentityFromPoItem,
   resolveSupplierVariantKeyForItem,

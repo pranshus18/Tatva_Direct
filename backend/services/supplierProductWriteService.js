@@ -206,8 +206,18 @@ export async function findExistingProductCandidate(
       .select('id, status, brand, gtin, barcode, name, category, asin, catalog_key, specifications')
       .eq('id', selectedCatalogProductId)
       .maybeSingle();
-    if (bySelectedId && !identityConflicts(bySelectedId)) {
-      return acceptCandidate(bySelectedId, 'explicit');
+    if (bySelectedId) {
+      const existingGtin = String(bySelectedId.gtin || '').trim();
+      const gtinExact = Boolean(candidateGtin && existingGtin && candidateGtin === existingGtin);
+      // The supplier picked this row in the dropdown. Keep it unless brand/category
+      // prove it is a different product. Exact title punctuation must not mint a new TSIN.
+      if (catalogBrandsConflict(candidateBrand, bySelectedId.brand)) {
+        // Fall through to identifier / name matchers.
+      } else if (!gtinExact && catalogCategoriesConflict(submittedCategory, bySelectedId.category)) {
+        // Fall through.
+      } else {
+        return { product: bySelectedId, matchStrength: 'explicit' };
+      }
     }
   }
 

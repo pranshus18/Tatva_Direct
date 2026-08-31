@@ -2290,6 +2290,7 @@ const ProductModal = ({
   const preserveSpecsOnNextCategoryLoadRef = useRef(false);
   const selectedSuggestionSpecsRef = useRef(null);
   const selectedCatalogAttachIdRef = useRef('');
+  const selectedCatalogAttachNameRef = useRef('');
   const [catalogBaselineSpecs, setCatalogBaselineSpecs] = useState({});
   const loadCategorySpecsRequestRef = useRef(0);
   
@@ -2685,17 +2686,30 @@ const ProductModal = ({
 
   const handleNameChange = (e) => {
     const value = e.target.value;
-    const wasCatalogAttach = Boolean(
-      String(formData.catalogProductId || '').trim() || selectedCatalogAttachIdRef.current
-    );
-    selectedCatalogAttachIdRef.current = '';
-    selectedSuggestionSpecsRef.current = null;
-    preserveSpecsOnNextCategoryLoadRef.current = false;
+    const attachedName = String(selectedCatalogAttachNameRef.current || '').trim();
+    const attachedId = String(
+      selectedCatalogAttachIdRef.current || formData.catalogProductId || ''
+    ).trim();
+    const stillSameCatalogAttach =
+      Boolean(attachedId) &&
+      Boolean(attachedName) &&
+      String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ') === attachedName.toLowerCase().replace(/\s+/g, ' ');
+
+    if (!stillSameCatalogAttach) {
+      selectedCatalogAttachIdRef.current = '';
+      selectedCatalogAttachNameRef.current = '';
+      selectedSuggestionSpecsRef.current = null;
+      preserveSpecsOnNextCategoryLoadRef.current = false;
+    }
+
     const inferredBrand = inferDeclaredBrandFromProductName(value, supplierBrandNames);
     setFormData((prev) => ({
       ...prev,
       name: value,
-      catalogProductId: '',
+      ...(stillSameCatalogAttach ? {} : { catalogProductId: '' }),
       ...(inferredBrand && String(prev.brand || '').trim() !== inferredBrand
         ? { brand: inferredBrand }
         : {})
@@ -2722,6 +2736,7 @@ const ProductModal = ({
   const handleSuggestionClick = async (suggestion) => {
     const selectedProductId = String(suggestion?.id || '').trim();
     selectedCatalogAttachIdRef.current = selectedProductId;
+    selectedCatalogAttachNameRef.current = String(suggestion?.name || '').trim();
     // Clear any previous product's specs immediately so nothing stale remains.
     setSpecifications({});
     setCatalogBaselineSpecs({});
@@ -2849,11 +2864,6 @@ const ProductModal = ({
           !data.found ||
           String(data.product?.id || '').trim() !== selectedProductId
         ) {
-          setFormData((prev) =>
-            String(prev.catalogProductId || '').trim() === selectedProductId
-              ? { ...prev, catalogProductId: '' }
-              : prev
-          );
           return;
         }
 
@@ -3214,6 +3224,15 @@ const ProductModal = ({
 
     // Include only specification keys the supplier actually filled in.
     const allSpecifications = specificationsWithMeaningfulValuesOnly(specifications);
+    const attachedCatalogId = String(formData.catalogProductId || '').trim();
+    const specsForSubmit =
+      attachedCatalogId &&
+      !catalogSpecChangesDetected &&
+      catalogBaselineSpecs &&
+      typeof catalogBaselineSpecs === 'object' &&
+      Object.keys(catalogBaselineSpecs).length > 0
+        ? specificationsWithMeaningfulValuesOnly(catalogBaselineSpecs)
+        : allSpecifications;
     
     const resolvedCreateImages = !product
       ? countSupplierProductPhotos(formData.images) >= MIN_AI_PRODUCT_IMAGES
@@ -3234,7 +3253,7 @@ const ProductModal = ({
       // Add flow: photos attached for listing, or staged uploads if supplier skipped the attach button.
       // Edit flow: only images currently in the form (offer photos, not catalog history).
       images: !product ? resolvedCreateImages : Array.isArray(formData.images) ? formData.images : [],
-      specifications: allSpecifications
+      specifications: specsForSubmit
     };
 
     // When adding a new product (Manage Products), include all fields including inventory

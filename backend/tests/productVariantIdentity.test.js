@@ -5,6 +5,7 @@ import {
   buildSupplierVariantIdentity,
   buildVariantAsinLikeId,
   resolveStableVariantIdentityFromExistingOffers,
+  pickStoredCatalogVariantIdentityForUnchangedAttach,
   resolveSupplierVariantKeyForItem,
   hasSupplierVariantSignals
 } from '../services/productIdentityService.js';
@@ -60,6 +61,82 @@ test('resolveStableVariantIdentityFromExistingOffers reuses catalog variant when
   assert.equal(stable.reused, true);
   assert.equal(stable.variantKey, 'stored-jaquar-wc');
   assert.equal(stable.variantAsin, 'TSPCYY1JI');
+});
+
+test('resolveStableVariantIdentityFromExistingOffers reuses priced leftover TSIN without the unchanged flag', () => {
+  const catalogSpecs = { Color: 'White', Series: 'Continental', Weight: '17.5 kg' };
+  const parent = { specifications: catalogSpecs, asin: 'TSPCYY1' };
+  const computed = buildSupplierVariantIdentity({ specifications: catalogSpecs }, parent);
+  const stable = resolveStableVariantIdentityFromExistingOffers({
+    parentAsin: 'TSPCYY1',
+    parentProduct: parent,
+    computedIdentity: computed,
+    offerSpecifications: catalogSpecs,
+    catalogSpecifications: catalogSpecs,
+    specsUnchangedFromCatalog: false,
+    existingOffers: [
+      {
+        status: 'approved',
+        is_active: true,
+        price: 0,
+        variant_key: 'key-yl',
+        variant_asin: 'TSPCYY1YL',
+        attributes: { specifications: {} }
+      },
+      {
+        status: 'approved',
+        is_active: true,
+        price: 10500,
+        variant_key: 'key-ji',
+        variant_asin: 'TSPCYY1JI',
+        attributes: { specifications: {} }
+      }
+    ]
+  });
+  assert.equal(stable.reused, true);
+  assert.equal(stable.variantAsin, 'TSPCYY1JI');
+  assert.equal(stable.variantKey, 'key-ji');
+});
+
+test('pickStoredCatalogVariantIdentityForUnchangedAttach copies the existing variant number', () => {
+  const catalogSpecs = { Color: 'White', Series: 'Continental', Weight: '17.5 kg' };
+  const picked = pickStoredCatalogVariantIdentityForUnchangedAttach({
+    parentAsin: 'TSPCYY1',
+    catalogSpecs,
+    submittedSpecs: catalogSpecs,
+    existingOffers: [
+      {
+        status: 'approved',
+        is_active: true,
+        price: 10500,
+        variant_key: 'stored-ey',
+        variant_asin: 'TSPCYY1EY',
+        attributes: { specifications: {} }
+      }
+    ]
+  });
+  assert.equal(picked?.reused, true);
+  assert.equal(picked.variantAsin, 'TSPCYY1EY');
+  assert.equal(picked.variantKey, 'stored-ey');
+});
+
+test('pickStoredCatalogVariantIdentityForUnchangedAttach does not reuse when a spec value changed', () => {
+  const picked = pickStoredCatalogVariantIdentityForUnchangedAttach({
+    parentAsin: 'TSPCYY1',
+    catalogSpecs: { Color: 'White' },
+    submittedSpecs: { Color: 'Black' },
+    existingOffers: [
+      {
+        status: 'approved',
+        is_active: true,
+        price: 10500,
+        variant_key: 'white-key',
+        variant_asin: 'TSPCYY1EY',
+        attributes: { specifications: { Color: 'White' } }
+      }
+    ]
+  });
+  assert.equal(picked, null);
 });
 
 test('buildSupplierVariantIdentity: empty offer inherits catalog specs so re-lists share one variant number', () => {

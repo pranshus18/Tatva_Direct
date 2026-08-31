@@ -158,6 +158,55 @@ test('findExistingProductCandidate ignores a stale catalog id from a different c
   assert.equal(result.matchStrength, 'none');
 });
 
+test('findExistingProductCandidate keeps explicit catalog id when title punctuation differs', async () => {
+  const query = {
+    select() {
+      return query;
+    },
+    eq() {
+      return query;
+    },
+    ilike() {
+      return Promise.resolve({ data: [], error: null });
+    },
+    async maybeSingle() {
+      return {
+        data: {
+          id: 'jaquar-1',
+          name: 'Jaquar Rimless Wall Hung WC With UF Soft Close, Continental, CNS-WHT-963UFSM',
+          category: 'sanitaryware',
+          brand: 'Jaquar'
+        },
+        error: null
+      };
+    }
+  };
+  const supabase = {
+    from() {
+      return query;
+    }
+  };
+
+  const result = await findExistingProductCandidate(supabase, {
+    selectedCatalogProductId: 'jaquar-1',
+    identityBundle: {
+      catalog: {
+        brand: 'Jaquar',
+        category: 'sanitaryware',
+        name: 'Jaquar Rimless Wall Hung WC With UF Soft Close, Continental, CNS-WHT-963UFSM.'
+      }
+    },
+    productName: 'jaquar rimless wall hung wc with uf soft close, continental, cns-wht-963ufsm.',
+    productNameRaw:
+      'Jaquar Rimless Wall Hung WC With UF Soft Close, Continental, CNS-WHT-963UFSM.',
+    categoryName: 'sanitaryware',
+    normalizeText: (value) => String(value || '').trim().toLowerCase()
+  });
+
+  assert.equal(result.product?.id, 'jaquar-1');
+  assert.equal(result.matchStrength, 'explicit');
+});
+
 test('findExistingProductCandidate ignores a leftover JBL catalog id for Nothing Power', async () => {
   const query = {
     select() {

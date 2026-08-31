@@ -28,7 +28,7 @@ import {
   specificationsWithMeaningfulValuesOnly
 } from '../supplierImports.js';
 import { sanitizeImageUrls, validateAndNormalizeTaxRates } from '../shared/productHelpers.js';
-import { catalogBrandsConflict, catalogOfferIdentityConflicts, resolveListingBrandIdentity } from '../../../utils/catalogProductAttach.js';
+import { catalogBrandsConflict, catalogCategoriesConflict, catalogOfferIdentityConflicts, resolveListingBrandIdentity } from '../../../utils/catalogProductAttach.js';
 import { getDeclaredBrandLabels } from '../../../services/supplierBrandGuardService.js';
 import { resolveSupplierOfferDisplayImages, syncCatalogProductImages } from '../../../services/productImageService.js';
 import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
@@ -43,6 +43,7 @@ import {
 import { resolveCatalogBaselineSpecifications, extractOfferSpecificationsFromRow } from '../../../services/supplierCatalogHelpersService.js';
 import {
   resolveStableVariantIdentityFromExistingOffers,
+  pickStoredCatalogVariantIdentityForUnchangedAttach,
   syncOfferAttributesWithSpecifications,
   isPersistableProductBarcode,
   buildVariantAsinLikeId,
@@ -317,6 +318,15 @@ export function buildSupplierProductCreateHandler(ctx) {
       let matchStrength = existingMatch?.matchStrength || 'none';
       if (
         existingProduct &&
+        String(matchStrength || '').toLowerCase() === 'explicit' &&
+        (catalogBrandsConflict(effectiveBrandInput, existingProduct.brand) ||
+          catalogCategoriesConflict(categoryName || category, existingProduct.category))
+      ) {
+        existingProduct = null;
+        matchStrength = 'none';
+      } else if (
+        existingProduct &&
+        String(matchStrength || '').toLowerCase() !== 'explicit' &&
         catalogOfferIdentityConflicts(existingProduct, {
           listingName: otherData.name,
           name: otherData.name,
@@ -397,6 +407,37 @@ export function buildSupplierProductCreateHandler(ctx) {
       }
       const { productId, catalogAsin, isNewProduct } = baseProductResult;
 
+      if (!existingProduct && productId && !isNewProduct) {
+        const { data: recoveredProduct } = await supabase
+          .from('products')
+          .select(
+            'id, status, brand, gtin, barcode, name, category, asin, catalog_key, specifications'
+          )
+          .eq('id', productId)
+          .maybeSingle();
+        if (recoveredProduct) {
+          existingProduct = recoveredProduct;
+          if (String(matchStrength || '').toLowerCase() === 'none') {
+            matchStrength =
+              selectedCatalogProductId && selectedCatalogProductId === recoveredProduct.id
+                ? 'explicit'
+                : 'strong';
+          }
+          const recoveredSpecs =
+            recoveredProduct.specifications &&
+            typeof recoveredProduct.specifications === 'object' &&
+            !Array.isArray(recoveredProduct.specifications)
+              ? recoveredProduct.specifications
+              : {};
+          if (Object.keys(recoveredSpecs).length > 0) {
+            normalizedSpecs = retainCatalogCompatibleSpecifications(
+              recoveredSpecs,
+              normalizedSpecs
+            );
+          }
+        }
+      }
+
       await reopenRejectedCatalogProductForResubmit(supabase, productId);
 
       let parentProductForVariant = existingProduct;
@@ -428,7 +469,7 @@ export function buildSupplierProductCreateHandler(ctx) {
         supabase
           .from('supplier_products')
           .select(
-            'id, supplier_id, location, outlet_id, status, is_active, variant_key, variant_asin, attributes'
+            'id, supplier_id, location, outlet_id, status, is_active, price, variant_key, variant_asin, attributes'
           )
           .eq('product_id', productId)
           .limit(200),
@@ -469,23 +510,36 @@ export function buildSupplierProductCreateHandler(ctx) {
         return String(value).trim() !== '';
       });
       const specsUnchangedFromCatalog =
-        !isNewProduct && Boolean(existingProduct) && catalogHasFilledSpecs
+        !isNewProduct && catalogHasFilledSpecs
           ? !hasSupplierSpecificationChangesFromCatalog({
               catalogSpecs: catalogSpecsForVariantReuse,
               supplierSpecs: normalizedSpecs
             })
           : false;
 
-      const stableVariantIdentity = resolveStableVariantIdentityFromExistingOffers({
-        parentAsin: catalogAsin || identityBundle.asinLikeId || parentProductForVariant?.asin || '',
-        parentProduct: parentProductForVariant,
-        computedIdentity: variantIdentityBundle,
-        existingOffers: existingOffersForProduct || [],
-        existingProductVariants,
-        offerSpecifications: normalizedSpecs,
-        catalogSpecifications: catalogSpecsForVariantReuse,
-        specsUnchangedFromCatalog
-      });
+      const parentAsinForVariant =
+        catalogAsin || identityBundle.asinLikeId || parentProductForVariant?.asin || '';
+      const storedUnchangedIdentity = !isNewProduct
+        ? pickStoredCatalogVariantIdentityForUnchangedAttach({
+            parentAsin: parentAsinForVariant,
+            catalogSpecs: catalogSpecsForVariantReuse,
+            submittedSpecs: normalizedSpecs,
+            existingOffers: existingOffersForProduct || [],
+            existingProductVariants
+          })
+        : null;
+      const stableVariantIdentity =
+        storedUnchangedIdentity ||
+        resolveStableVariantIdentityFromExistingOffers({
+          parentAsin: parentAsinForVariant,
+          parentProduct: parentProductForVariant,
+          computedIdentity: variantIdentityBundle,
+          existingOffers: existingOffersForProduct || [],
+          existingProductVariants,
+          offerSpecifications: normalizedSpecs,
+          catalogSpecifications: catalogSpecsForVariantReuse,
+          specsUnchangedFromCatalog
+        });
       const resolvedVariantKeyInitial =
         stableVariantIdentity.variantKey || variantIdentityBundle.variantKey;
       let resolvedVariantKey = resolvedVariantKeyInitial;

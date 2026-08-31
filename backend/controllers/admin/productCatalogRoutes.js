@@ -16,7 +16,7 @@ import { buildAdminPublishedDescriptionAttributes } from '../../utils/supplierPr
 import { propagateVariantMrpToAllOffers } from '../../services/variantMrpService.js';
 import { catalogOfferIdentityConflicts } from '../../utils/catalogProductAttach.js';
 import { resolveSupplierOfferDisplayCategory } from '../../services/supplierProductWriteService.js';
-import { coalesceSplitVariantIdentitiesForProducts } from '../../services/coalesceCatalogVariantIdentityService.js';
+import { coalesceSameCatalogVariantIdentitiesForProduct, coalesceSplitVariantIdentitiesForProducts } from '../../services/coalesceCatalogVariantIdentityService.js';
 
 function scoreSupplierOfferRow(row) {
   const rowStatus = row.status;
@@ -258,6 +258,46 @@ export function expandCatalogProductIntoAdminReviewRows(
 }
 
 export function registerAdminProductCatalogRoutes({ router, authenticateToken, isAdmin, supabase, console }) {
+router.post('/products/coalesce-duplicate-variants', authenticateToken, isAdmin, async (_req, res) => {
+  try {
+    const { data: products, error } = await supabase
+      .from('products')
+      .select('id, name, asin, specifications');
+    if (error) {
+      return res.status(500).json({
+        status: 'error',
+        message: error.message || 'Failed to load products'
+      });
+    }
+
+    let patchedProducts = 0;
+    let patchedOffers = 0;
+    for (const product of products || []) {
+      const { applied } = await coalesceSameCatalogVariantIdentitiesForProduct(supabase, {
+        productId: product.id,
+        parentAsin: product.asin || '',
+        catalogSpecs: product.specifications || {}
+      });
+      if (!applied.length) continue;
+      patchedProducts += 1;
+      patchedOffers += applied.length;
+    }
+
+    return res.json({
+      status: 'success',
+      patchedProducts,
+      patchedOffers,
+      message: `Unified ${patchedOffers} offer(s) across ${patchedProducts} product(s).`
+    });
+  } catch (error) {
+    console.error('Admin coalesce-duplicate-variants failed:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: 'Failed to unify variant numbers'
+    });
+  }
+});
+
 router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
   try {
     const { status } = req.query;
