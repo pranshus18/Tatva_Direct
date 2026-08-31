@@ -231,7 +231,7 @@ describe('SupplierSupplyChainEntriesEditor Path A / Path B exclusivity', () => {
     expect(screen.getByPlaceholderText(/Enter your brand name/i)).toBeInTheDocument();
   });
 
-  it('typing an already-approved brand on Path B switches to Path A and hides brand document upload', () => {
+  it('typing an already-approved brand on Path B stays editable until Use switches to Path A', () => {
     const onModeChange = vi.fn();
     const onBrandPicked = vi.fn();
 
@@ -270,6 +270,12 @@ describe('SupplierSupplyChainEntriesEditor Path A / Path B exclusivity', () => {
     fireEvent.change(screen.getByPlaceholderText(/Enter your brand name/i), {
       target: { value: 'acc' }
     });
+
+    expect(onModeChange).not.toHaveBeenCalledWith('pathA');
+    expect(screen.getByText(/Path B only/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/Enter your brand name/i)).toHaveValue('acc');
+
+    fireEvent.click(screen.getByRole('button', { name: /Use approved brand/i }));
 
     expect(onModeChange).toHaveBeenCalledWith('pathA');
     expect(onBrandPicked).toHaveBeenCalledWith('acc');

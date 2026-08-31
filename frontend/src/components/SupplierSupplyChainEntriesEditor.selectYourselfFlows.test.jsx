@@ -232,6 +232,58 @@ describe('Select yourself — Path B new brand request', () => {
     expect(screen.getByTestId('docs-editable')).toBeInTheDocument();
   });
 
+  it('starts a new Path B request with empty brand documents even when a leftover file is on the draft row', () => {
+    render(
+      <BrandStepHarness
+        initialEntries={[
+          {
+            id: 'entry-leftover',
+            brands: '',
+            role: '',
+            gstin: '',
+            companyName: '',
+            ownershipDetails: '',
+            minimumOrderValue: '',
+            brandApprovalDocumentUrl: 'https://files.test/old-brand.png',
+            brandApprovalDocumentUrls: ['https://files.test/old-brand.png']
+          },
+          { ...APPROVED_ROW, id: 'entry-existing', brands: 'acc' }
+        ]}
+      />
+    );
+    openPathB();
+
+    expect(screen.getByPlaceholderText(/Enter your brand name/i)).toHaveValue('');
+    expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+    expect(screen.getByText(/Brand docs: optional/i)).toBeInTheDocument();
+    expect(screen.getByTestId('docs-editable')).toBeInTheDocument();
+  });
+
+  it('does not reattach leftover documents after canceling Path B and starting a new request', () => {
+    render(
+      <BrandStepHarness
+        initialEntries={[
+          {
+            id: 'entry-leftover',
+            brands: '',
+            role: '',
+            brandApprovalDocumentUrl: 'https://files.test/old-brand.png',
+            brandApprovalDocumentUrls: ['https://files.test/old-brand.png']
+          }
+        ]}
+      />
+    );
+    openPathB();
+    expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Cancel setup/i }));
+    openPathB();
+
+    expect(screen.getByPlaceholderText(/Enter your brand name/i)).toHaveValue('');
+    expect(screen.queryByTestId('doc-url')).not.toBeInTheDocument();
+    expect(screen.getByText(/Brand docs: optional/i)).toBeInTheDocument();
+  });
+
   it('keeps the typed brand name on the draft row', () => {
     render(<BrandStepHarness />);
     openPathB();

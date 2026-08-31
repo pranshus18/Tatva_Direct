@@ -588,14 +588,14 @@ export function baselineChainFromProfile(profile) {
   const p = profile || {};
   let entries = normalizeCompanyInfoEntries(p.companyInfoEntries || []);
   if (entries.length === 0) {
+    const legacyBrand = typeof p.brands === 'string' ? p.brands : '';
+    const hasNamedBrand = Boolean(String(legacyBrand || '').trim());
     const legacyHasValues = Boolean(
       String(p.supplierRole || '').trim() ||
-      String(p.brands || '').trim() ||
+      hasNamedBrand ||
       String(p.gstin || '').trim() ||
       String(p.companyName || '').trim() ||
       String(p.ownershipDetails || '').trim() ||
-      String(p.brandApprovalDocumentUrl || '').trim() ||
-      (Array.isArray(p.brandApprovalDocumentUrls) && p.brandApprovalDocumentUrls.length > 0) ||
       String(p.authorizationCertificateUrl || '').trim() ||
       (Array.isArray(p.authorizationCertificateUrls) && p.authorizationCertificateUrls.length > 0) ||
       (p.minimumOrderValue !== '' && p.minimumOrderValue !== null && p.minimumOrderValue !== undefined)
@@ -604,14 +604,13 @@ export function baselineChainFromProfile(profile) {
       entries = normalizeCompanyInfoEntries([
         {
           role: String(p.supplierRole || '').trim(),
-          brands: typeof p.brands === 'string' ? p.brands : '',
+          brands: legacyBrand,
           gstin: String(p.gstin || '').trim(),
           companyName: String(p.companyName || '').trim(),
           ownershipDetails: String(p.ownershipDetails || '').trim(),
-          brandApprovalDocumentUrl: String(p.brandApprovalDocumentUrl || '').trim(),
-          brandApprovalDocumentUrls: Array.isArray(p.brandApprovalDocumentUrls)
-            ? p.brandApprovalDocumentUrls
-            : [],
+          brandApprovalDocumentUrl: hasNamedBrand ? String(p.brandApprovalDocumentUrl || '').trim() : '',
+          brandApprovalDocumentUrls:
+            hasNamedBrand && Array.isArray(p.brandApprovalDocumentUrls) ? p.brandApprovalDocumentUrls : [],
           authorizationCertificateUrl: String(p.authorizationCertificateUrl || '').trim(),
           authorizationCertificateUrls: Array.isArray(p.authorizationCertificateUrls)
             ? p.authorizationCertificateUrls

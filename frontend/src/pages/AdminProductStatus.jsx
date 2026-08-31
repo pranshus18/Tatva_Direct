@@ -71,6 +71,10 @@ const getDisplayDescription = (product) => getAdminBuyerFacingCatalogDescription
 const getAdminRowEffectiveStatus = (product = {}) =>
   String(product.displayStatus || product.offerStatus || product.status || 'pending').toLowerCase();
 
+const adminRowHasLiveSupplierOffer = (product = {}) =>
+  product?.hasSupplierOffer === true ||
+  Boolean(String(product?.supplier_product_id || product?.supplierProductId || '').trim());
+
 const AdminProductStatus = ({ user }) => {
   const [products, setProducts] = useState([]);
   const [filteredProducts, setFilteredProducts] = useState([]);
@@ -206,7 +210,7 @@ const AdminProductStatus = ({ user }) => {
   };
 
   const filterProducts = () => {
-    let filtered = [...products];
+    let filtered = products.filter(adminRowHasLiveSupplierOffer);
 
     // Backend already filters by status, so we only filter by search term here
     if (searchTerm.trim()) {
@@ -230,6 +234,14 @@ const AdminProductStatus = ({ user }) => {
   };
 
   const handleApprove = async (product) => {
+    if (!adminRowHasLiveSupplierOffer(product)) {
+      const blockedMessage = 'This product was deleted by the supplier and cannot be approved.';
+      setApproveError(blockedMessage);
+      alert(blockedMessage);
+      fetchProducts();
+      setSelectedProduct(null);
+      return;
+    }
     const isVariantReview =
       product?.pendingReviewType === 'variant_spec' &&
       !product?.identityConflictsWithCatalog;
@@ -592,7 +604,8 @@ const AdminProductStatus = ({ user }) => {
               const isVariantReview =
                 product?.pendingReviewType === 'variant_spec' && effectiveStatus === 'pending';
               const approvalReady = isVariantReview || isAdminProductReadyForApproval(product);
-              const needsAdminReview = effectiveStatus === 'pending';
+              const needsAdminReview =
+                effectiveStatus === 'pending' && adminRowHasLiveSupplierOffer(product);
 
               return (
                 <div
@@ -898,7 +911,8 @@ const ProductDetailModal = ({
     status: effectiveStatus
   });
   const canApproveProduct = (isVariantReview || approvalReadiness.ok) && !isEditing;
-  const needsAdminReview = getAdminRowEffectiveStatus(product) === 'pending';
+  const needsAdminReview =
+    getAdminRowEffectiveStatus(product) === 'pending' && adminRowHasLiveSupplierOffer(product);
 
   const mergeAdminSavedProduct = (savedProduct, draftProduct, sourceProduct) => {
     const savedDescription = String(savedProduct?.description || '').trim();

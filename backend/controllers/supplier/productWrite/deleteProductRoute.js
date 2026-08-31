@@ -1,6 +1,5 @@
 import { getContractErrorMessage, parseWithSchema, supplierProductDeleteSchema } from '../supplierImports.js';
-import { syncCatalogProductSnapshotFromOffers } from '../../../services/catalogOfferSnapshotService.js';
-import { deleteSupplierBcovLevelsIfNoRemainingOffer } from '../../../services/supplierBcovService.js';
+import { deleteCatalogOffer } from '../../../services/adminProductDeleteService.js';
 
 export function registerSupplierProductDeleteRoute(ctx) {
   const { router, authenticateToken, supabase } = ctx;
@@ -31,57 +30,16 @@ export function registerSupplierProductDeleteRoute(ctx) {
         });
       }
 
-      const productId = supplierProduct.product_id;
-      const variantKey = String(supplierProduct.variant_key || '').trim();
-      const { data: deletedRows, error: spError } = await supabase
-        .from('supplier_products')
-        .delete()
-        .eq('id', supplierProductId)
-        .eq('supplier_id', req.userId)
-        .select('id');
-
-      if (spError) {
-        return res.status(400).json({
-          status: 'error',
-          message: spError.message || 'Failed to delete supplier product'
+      try {
+        await deleteCatalogOffer(supabase, {
+          catalogProductId: supplierProduct.product_id,
+          supplierProductId
         });
-      }
-
-      if (!deletedRows || deletedRows.length === 0) {
-        return res.status(404).json({
+      } catch (deleteError) {
+        const statusCode = Number(deleteError?.statusCode) || 400;
+        return res.status(statusCode).json({
           status: 'error',
-          message: 'Product not found for this supplier'
-        });
-      }
-
-      // Product_COV is keyed by variant_key — remove orphaned rows so a re-list starts blank.
-      if (variantKey) {
-        try {
-          await deleteSupplierBcovLevelsIfNoRemainingOffer(supabase, {
-            supplierId: req.userId,
-            variantKey
-          });
-        } catch (bcovCleanupError) {
-          console.error(
-            '[Product_COV] failed to clear levels after supplier product delete:',
-            bcovCleanupError?.message || bcovCleanupError
-          );
-        }
-      }
-
-      const { count, error: countError } = await supabase
-        .from('supplier_products')
-        .select('id', { count: 'exact', head: true })
-        .eq('product_id', productId);
-
-      if (!countError && (count || 0) === 0) {
-        await supabase
-          .from('products')
-          .delete()
-          .eq('id', productId);
-      } else {
-        void syncCatalogProductSnapshotFromOffers(supabase, productId).catch((syncError) => {
-          console.error('[CatalogSnapshot] delete product sync failed:', syncError?.message || syncError);
+          message: deleteError.message || 'Failed to delete supplier product'
         });
       }
 

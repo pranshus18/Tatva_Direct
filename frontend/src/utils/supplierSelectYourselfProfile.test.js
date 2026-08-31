@@ -34,7 +34,11 @@ import {
   isSelectYourselfBrandAlreadyApproved,
   shouldShowChainProfileRejectionBanner,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
-  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE
+  SUPPLY_CHAIN_NOT_DEFINED_MESSAGE,
+  getCompanyInfoEntriesForSave,
+  resetBrandDocumentsForNewRequest,
+  entryHasBrandDocumentsWithoutBrand,
+  brandDocumentsFromProfileForLegacyEntry
 } from './supplierSelectYourselfProfile';
 import { resolveRoleVerificationDocumentUrls, entryIncludesDocumentUrl } from './authorizationCertificateUrls';
 import { brandKeyForDuplicateCheck } from './supplierChainEntryValidation';
@@ -1389,6 +1393,44 @@ describe('dedupeSupplierBrandRequestsByLatest', () => {
     ]);
     expect(rows).toHaveLength(1);
     expect(rows[0].status).toBe('rejected');
+  });
+});
+
+describe('Path B brand documents stay off unnamed drafts', () => {
+  it('does not copy profile-level brand files onto a legacy row with no brand name', () => {
+    const entries = getCompanyInfoEntriesForSave({
+      brands: '',
+      brandApprovalDocumentUrl: 'https://files.test/old-brand.png',
+      brandApprovalDocumentUrls: ['https://files.test/old-brand.png']
+    });
+    expect(entries).toEqual([]);
+    expect(brandDocumentsFromProfileForLegacyEntry({
+      brands: '',
+      brandApprovalDocumentUrl: 'https://files.test/old-brand.png'
+    })).toEqual([]);
+  });
+
+  it('keeps profile-level brand files only when the legacy row still has a brand name', () => {
+    expect(
+      brandDocumentsFromProfileForLegacyEntry({
+        brands: 'Milton',
+        brandApprovalDocumentUrl: 'https://files.test/milton.png'
+      })
+    ).toEqual(['https://files.test/milton.png']);
+  });
+
+  it('clears leftover documents from an unnamed Path B draft', () => {
+    const leftover = {
+      id: 'draft',
+      brands: '',
+      brandApprovalDocumentUrl: 'https://files.test/old-brand.png',
+      brandApprovalDocumentUrls: ['https://files.test/old-brand.png']
+    };
+    expect(entryHasBrandDocumentsWithoutBrand(leftover)).toBe(true);
+    const cleared = resetBrandDocumentsForNewRequest(leftover);
+    expect(entryHasBrandDocumentsWithoutBrand(cleared)).toBe(false);
+    expect(cleared.brandApprovalDocumentUrls).toEqual([]);
+    expect(cleared.brandApprovalDocumentUrl).toBe('');
   });
 });
 

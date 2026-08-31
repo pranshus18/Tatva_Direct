@@ -63,7 +63,8 @@ import {
   resolveChainProfileApprovalStatusForBrand,
   hasPendingChainRoleSubmissionForBrand,
   clearSubmittedPathBBrandDrafts,
-  normalizeSupplierBrandRequestsOnProfile
+  normalizeSupplierBrandRequestsOnProfile,
+  resetBrandDocumentsForNewRequest
 } from '../utils/supplierSelectYourselfProfile';
 import { resolveActiveBrandPath, shouldShowApprovedBrandPathBAlert, shouldShowMixedApprovedBrandPathBAlert } from '../utils/supplierSelectYourselfPaths';
 import { formatDateTimeIST } from '../utils/dateTime';
@@ -945,7 +946,7 @@ export default function SupplierSelectYourself() {
           };
         }
 
-        return {
+        return resetBrandDocumentsForNewRequest({
           ...entry,
           brands: '',
           role: '',
@@ -956,7 +957,7 @@ export default function SupplierSelectYourself() {
           authorizationCertificateUrl: '',
           authorizationCertificateUrls: [],
           supplyChainRegistrationStarted: false
-        };
+        });
       });
 
       const nextProfile = buildSupplierChainSavePayload(

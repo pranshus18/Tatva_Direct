@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, Plus, X } from 'lucide-react';
 import { getApiUrl, resolveApiPath } from '../config/api';
 import BrandAuthorizationDocuments from './BrandAuthorizationDocuments';
@@ -15,7 +15,10 @@ import {
   isSelectYourselfBrandAlreadyApproved,
   BRAND_NOT_APPROVED_SUPPLY_CHAIN_MESSAGE,
   SUPPLY_CHAIN_NOT_DEFINED_MESSAGE,
-  stampEntryDocumentUpdate
+  stampEntryDocumentUpdate,
+  resetBrandDocumentsForNewRequest,
+  entryHasBrandDocumentsWithoutBrand,
+  brandDocumentsFromProfileForLegacyEntry
 } from '../utils/supplierSelectYourselfProfile';
 import {
   getSelectYourselfEntrySaveState,
@@ -170,7 +173,10 @@ function syncProfileFromEntries(currentProfile, entries) {
 
   const first = nextEntries[0] || {};
   const roleCertificateFields = setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(first));
-  const brandCertificateFields = setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(first));
+  const brandCertificateFields = setBrandApprovalDocumentUrls(
+    {},
+    String(first.brands || '').trim() ? resolveBrandApprovalDocumentUrls(first) : []
+  );
   return {
     ...base,
     supplierRole: first.role ?? '',
@@ -197,7 +203,7 @@ function getDisplayEntriesForProfile(profileSnapshot) {
       gstin: profileSnapshot?.gstin || '',
       companyName: profileSnapshot?.companyName || '',
       ownershipDetails: profileSnapshot?.ownershipDetails || '',
-      ...setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(profileSnapshot || {})),
+      ...setBrandApprovalDocumentUrls({}, brandDocumentsFromProfileForLegacyEntry(profileSnapshot)),
       ...setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(profileSnapshot || {})),
       minimumOrderValue: profileSnapshot?.minimumOrderValue ?? ''
     }
@@ -1424,6 +1430,7 @@ export default function SupplierSupplyChainEntriesEditor({
   const [brandStepOtherExplicit, setBrandStepOtherExplicit] = useState(false);
   const [roleChangeRequestEntryId, setRoleChangeRequestEntryId] = useState('');
   const newBrandModeInitializedRef = useRef(false);
+  const pathBDraftDocsResetKeyRef = useRef('');
   const [highlightedEntryId, setHighlightedEntryId] = useState('');
   const profileRef = useRef(profile);
   profileRef.current = profile;
@@ -1435,6 +1442,30 @@ export default function SupplierSupplyChainEntriesEditor({
     },
     [onProtectLocalDraft]
   );
+
+  const applyClearedBrandDocumentsToEntry = useCallback((entryId) => {
+    const targetId = String(entryId || '').trim();
+    if (!targetId || !profileRef.current) return false;
+    const currentProfile = profileRef.current;
+    const displayEntries = getDisplayEntriesForProfile(currentProfile);
+    const baseEntries =
+      Array.isArray(currentProfile?.companyInfoEntries) && currentProfile.companyInfoEntries.length > 0
+        ? currentProfile.companyInfoEntries.map((entry) => ({ ...entry }))
+        : displayEntries.map((entry) => ({ ...entry }));
+    let changed = false;
+    const nextEntries = baseEntries.map((entry) => {
+      if (String(entry?.id || '').trim() !== targetId) return entry;
+      if (!entryHasBrandDocumentsWithoutBrand(entry)) return entry;
+      changed = true;
+      return resetBrandDocumentsForNewRequest(entry);
+    });
+    if (!changed) return false;
+    const nextProfile = syncProfileFromEntries(currentProfile, nextEntries);
+    setProfile(nextProfile);
+    profileRef.current = nextProfile;
+    protectLocalDraft({ blockMs: 8000 });
+    return true;
+  }, [protectLocalDraft, setProfile]);
 
   const applyRoleDocumentsToEntry = useCallback((entryId, urls) => {
     const targetId = String(entryId || '').trim();
@@ -1591,7 +1622,7 @@ export default function SupplierSupplyChainEntriesEditor({
         gstin: profile?.gstin || '',
         companyName: profile?.companyName || '',
         ownershipDetails: profile?.ownershipDetails || '',
-        ...setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(profile || {})),
+        ...setBrandApprovalDocumentUrls({}, brandDocumentsFromProfileForLegacyEntry(profile)),
         ...setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(profile || {})),
         minimumOrderValue: profile?.minimumOrderValue ?? ''
       }
@@ -1970,18 +2001,24 @@ export default function SupplierSupplyChainEntriesEditor({
     const activeEntry = currentEntries.find((entry) => entry.id === resolvedSelectedEntryId);
     const activeBrandEmpty = !normalizeSingleBrand(activeEntry?.brands);
 
+    const startPathBDraft = (entryId) => {
+      applyClearedBrandDocumentsToEntry(entryId);
+      pathBDraftDocsResetKeyRef.current = String(entryId || '');
+      focusBrandEntryForOtherInput(entryId);
+    };
+
     if (activeEntry && activeBrandEmpty) {
-      focusBrandEntryForOtherInput(activeEntry.id);
+      startPathBDraft(activeEntry.id);
       return;
     }
 
     const existingEmpty = currentEntries.find((entry) => !normalizeSingleBrand(entry?.brands));
     if (existingEmpty) {
-      focusBrandEntryForOtherInput(existingEmpty.id);
+      startPathBDraft(existingEmpty.id);
       return;
     }
 
-    focusBrandEntryForOtherInput(appendEmptyBrandEntry());
+    startPathBDraft(appendEmptyBrandEntry());
   };
 
   const addCompanyInfoEntry = () => {
@@ -2024,11 +2061,18 @@ export default function SupplierSupplyChainEntriesEditor({
         minimumOrderValue: profile?.minimumOrderValue ?? ''
       };
       const updated = { ...legacy, [field]: nextValue };
+      const nextBrandName = normalizeSingleBrand(updated.brands);
+      const legacyBrandDocs = nextBrandName
+        ? resolveBrandApprovalDocumentUrls({
+            ...updated,
+            brandApprovalDocumentUrl:
+              updated.brandApprovalDocumentUrl || profile?.brandApprovalDocumentUrl || ''
+          })
+        : resolveBrandApprovalDocumentUrls(updated);
       const legacyEntry = {
         id: genEntryId(),
         ...updated,
-        brandApprovalDocumentUrl:
-          updated.brandApprovalDocumentUrl || profile?.brandApprovalDocumentUrl || '',
+        ...setBrandApprovalDocumentUrls({}, legacyBrandDocs),
         authorizationCertificateUrl:
           updated.authorizationCertificateUrl || profile?.authorizationCertificateUrl || ''
       };
@@ -2272,9 +2316,15 @@ export default function SupplierSupplyChainEntriesEditor({
     setBrandStepOtherExplicit(false);
     onBrandPathModeChange?.(null);
 
-    // Always drop the local Path A draft. Previously the locked path returned before
-    // clearing, so leftover catalog brands immediately re-locked the chooser.
-    if (target && (normalizeSingleBrand(target?.brands) || String(target?.role || '').trim())) {
+    // Always drop the local Path A / Path B draft. Previously the locked path returned before
+    // clearing, so leftover catalog brands immediately re-locked the chooser. Brand files must
+    // also be cleared so the next Path B request does not inherit another brand's documents.
+    if (
+      target &&
+      (normalizeSingleBrand(target?.brands) ||
+        String(target?.role || '').trim() ||
+        resolveBrandApprovalDocumentUrls(target).length > 0)
+    ) {
       const targetBrand = normalizeSingleBrand(target?.brands);
       const baseEntries =
         Array.isArray(profile?.companyInfoEntries) && profile.companyInfoEntries.length > 0
@@ -2285,14 +2335,14 @@ export default function SupplierSupplyChainEntriesEditor({
         if (updatedOne) return entry;
         if (!matchCompanyInfoEntry(entry, { entryId: targetId, brand: targetBrand })) return entry;
         updatedOne = true;
-        return {
+        return resetBrandDocumentsForNewRequest({
           ...entry,
           brands: '',
           role: '',
           authorizationCertificateUrl: '',
           authorizationCertificateUrls: [],
           supplyChainRegistrationStarted: false
-        };
+        });
       });
       if (updatedOne) {
         setProfile(syncProfileFromEntries(profile, entries));
@@ -2464,6 +2514,33 @@ export default function SupplierSupplyChainEntriesEditor({
       setBrandStepOtherExplicit(false);
     }
   }, [isBrandStepPicker, brandPathMode, brandStepOtherExplicit, brandSetupLocked]);
+
+  // Path B new-brand drafts must start with an empty document list. Leftover files from a
+  // previous brand or cancelled request are stripped once per draft session; later uploads stay.
+  useLayoutEffect(() => {
+    if (!isBrandStepPicker || !editing || !pathBExclusive) {
+      if (!pathBExclusive) pathBDraftDocsResetKeyRef.current = '';
+      return;
+    }
+    const entryId = String(resolvedSelectedEntryId || '').trim();
+    if (!entryId) return;
+    if (pathBDraftDocsResetKeyRef.current === entryId) return;
+    const entry =
+      getDisplayEntriesForProfile(profileRef.current).find((row) => String(row?.id || '') === entryId) ||
+      null;
+    if (normalizeSingleBrand(entry?.brands)) {
+      pathBDraftDocsResetKeyRef.current = entryId;
+      return;
+    }
+    pathBDraftDocsResetKeyRef.current = entryId;
+    applyClearedBrandDocumentsToEntry(entryId);
+  }, [
+    isBrandStepPicker,
+    editing,
+    pathBExclusive,
+    resolvedSelectedEntryId,
+    applyClearedBrandDocumentsToEntry
+  ]);
 
   const activeEntryUsesCustomBrand =
     !!activeEntryBrandValue &&

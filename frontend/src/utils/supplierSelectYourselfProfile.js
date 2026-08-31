@@ -35,6 +35,22 @@ export function stripEntryDocumentUpdateStamps(entry) {
   return next;
 }
 
+/** Drop leftover Path B brand files so a new request never inherits another brand's documents. */
+export function resetBrandDocumentsForNewRequest(entry) {
+  return stampEntryDocumentUpdate(setBrandApprovalDocumentUrls(entry || {}, []), 'brand_approval');
+}
+
+export function entryHasBrandDocumentsWithoutBrand(entry) {
+  return !String(entry?.brands || '').trim() && resolveBrandApprovalDocumentUrls(entry).length > 0;
+}
+
+/** Profile-level brand files belong to a named brand only — never to an empty Path B draft. */
+export function brandDocumentsFromProfileForLegacyEntry(profile) {
+  const brandName = String(profile?.brands || '').trim();
+  if (!brandName) return [];
+  return resolveBrandApprovalDocumentUrls(profile || {});
+}
+
 function mergeDocumentFields(existingEntry, incomingEntry, documentType) {
   const resolve =
     documentType === 'brand_approval'
@@ -1619,14 +1635,15 @@ export function getCompanyInfoEntriesForSave(profile) {
     return entries.map((entry) => ({ ...(entry || {}) }));
   }
 
+  const hasNamedBrand = String(profile?.brands || '').trim();
   const hasLegacy =
     String(profile?.supplierRole || '').trim() ||
-    String(profile?.brands || '').trim() ||
+    hasNamedBrand ||
     String(profile?.gstin || '').trim() ||
     String(profile?.companyName || '').trim() ||
     String(profile?.ownershipDetails || '').trim() ||
     resolveAuthorizationCertificateUrls(profile || {}).length > 0 ||
-    resolveBrandApprovalDocumentUrls(profile || {}).length > 0;
+    (hasNamedBrand && resolveBrandApprovalDocumentUrls(profile || {}).length > 0);
 
   if (!hasLegacy) return [];
 
@@ -1638,7 +1655,7 @@ export function getCompanyInfoEntriesForSave(profile) {
       gstin: profile?.gstin || '',
       companyName: profile?.companyName || '',
       ownershipDetails: profile?.ownershipDetails || '',
-      ...setBrandApprovalDocumentUrls({}, resolveBrandApprovalDocumentUrls(profile || {})),
+      ...setBrandApprovalDocumentUrls({}, brandDocumentsFromProfileForLegacyEntry(profile)),
       ...setAuthorizationCertificateUrls({}, resolveAuthorizationCertificateUrls(profile || {})),
       minimumOrderValue: profile?.minimumOrderValue ?? ''
     }

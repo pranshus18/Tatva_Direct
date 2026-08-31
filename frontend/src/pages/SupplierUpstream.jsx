@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { getApiUrl, authFetch } from '../config/api';
@@ -43,6 +43,10 @@ import {
   SUPPLIER_UPSTREAM_CHECKOUT_HOLD_EXPIRED_KEY
 } from '../utils/upstreamCheckoutReservation';
 import { filterSupplierProductsForUpstream, normalizeSupplierProductKey } from '../utils/supplierProductRow';
+import {
+  collectUnavailableSourcingMineIds,
+  dropUnavailableFromSelection
+} from '../utils/upstreamSourcingAvailability';
 import {
   UPSTREAM_SOURCING_PATH,
   openUpstreamProductDetailInNewTab
@@ -248,6 +252,8 @@ const SupplierUpstream = ({ user }) => {
 
   // Selected mine items (supplier_products junction IDs) -> quantity desired
   const [selectedMine, setSelectedMine] = useState({});
+  // Listings that have no eligible upstream supplier after the last Find suppliers run.
+  const [unavailableMine, setUnavailableMine] = useState({});
   // Draft procurement qty on cards — not written to cart until Add to Cart is clicked.
   const [procurementQtyByMineId, setProcurementQtyByMineId] = useState({});
   // Quantities already saved in the upstream cart (mineId -> qty).
@@ -506,7 +512,6 @@ const SupplierUpstream = ({ user }) => {
     () => Object.keys(normalizeSelectionMap(selectedMine || {})),
     [selectedMine]
   );
-  const suggestedGroupCount = Array.isArray(suggestions) ? suggestions.length : 0;
 
   const refreshSyncedCartQuantities = async () => {
     try {
@@ -662,12 +667,43 @@ const SupplierUpstream = ({ user }) => {
     );
   }
 
-  function getCompatibleOffersForItem(item) {
+  const getCompatibleOffersForItem = useCallback((item) => {
     const mineKey = normalizeSupplierProductKey(item?.mineSupplierProductId);
-    const mine = resolveMineProduct(mineKey);
+    const mine = (products || []).find(
+      (p) => normalizeSupplierProductKey(p?.supplier_product_id) === mineKey
+    ) || null;
     const offers = Array.isArray(item?.upstreamOffers) ? item.upstreamOffers : [];
     return offers.filter((offer) => isSameVariantOfferForMine(mine, offer, mineKey, item));
-  }
+  }, [products]);
+
+  const sourcableSuggestions = useMemo(
+    () =>
+      Array.isArray(suggestions)
+        ? suggestions.filter((item) => getCompatibleOffersForItem(item).length > 0)
+        : [],
+    [suggestions, getCompatibleOffersForItem]
+  );
+  const blockedSuggestions = useMemo(
+    () =>
+      Array.isArray(suggestions)
+        ? suggestions.filter((item) => getCompatibleOffersForItem(item).length === 0)
+        : [],
+    [suggestions, getCompatibleOffersForItem]
+  );
+
+  useEffect(() => {
+    if (!Array.isArray(suggestions)) {
+      return;
+    }
+    const nextUnavailable = collectUnavailableSourcingMineIds(suggestions, (item) =>
+      getCompatibleOffersForItem(item).length
+    );
+    setUnavailableMine(nextUnavailable);
+    setSelectedMine((prev) => dropUnavailableFromSelection(normalizeSelectionMap(prev), nextUnavailable));
+    setSelectedUpstreamOffer((prev) =>
+      dropUnavailableFromSelection(normalizeSelectionMap(prev), nextUnavailable)
+    );
+  }, [suggestions, getCompatibleOffersForItem]);
 
   const resolveSuggestionShippingAddressId = () => {
     const activeProject = cartProjects.find(
@@ -698,13 +734,12 @@ const SupplierUpstream = ({ user }) => {
     () => Object.keys(normalizeSelectionMap(cartQtyByMineId || {})).length,
     [cartQtyByMineId]
   );
-  const sourcingConfigured = Boolean(
-    Array.isArray(suggestions) && suggestions.length > 0 && linesReadyToPlace > 0
-  );
+  const sourcingConfigured = Boolean(sourcableSuggestions.length > 0 && linesReadyToPlace > 0);
 
   const handleToggleMine = (mineId) => {
     const key = normalizeSupplierProductKey(mineId);
     if (!key) return;
+    if (unavailableMine[key]) return;
     setSelectedMine((prev) => {
       const next = { ...(prev || {}) };
       if (next[key]) {
@@ -956,6 +991,7 @@ const SupplierUpstream = ({ user }) => {
     }
     const selectedEntries = Object.entries(normalizeSelectionMap(selectedMine || {}))
       .map(([mineId, qtyRaw]) => {
+        if (unavailableMine[mineId]) return null;
         const quantity = parseSupplierStockQuantity(qtyRaw);
         if (!mineId || quantity == null || quantity <= 0) return null;
         const product = resolveMineProduct(mineId);
@@ -1822,8 +1858,8 @@ const SupplierUpstream = ({ user }) => {
           {selectedMineIds.length > 0 ? (
             <Badge className="ml-2" variant="secondary">{selectedMineIds.length} selected</Badge>
           ) : null}
-          {suggestedGroupCount > 0 ? (
-            <Badge className="ml-2" variant="outline">{suggestedGroupCount} suggested</Badge>
+          {sourcableSuggestions.length > 0 ? (
+            <Badge className="ml-2" variant="outline">{sourcableSuggestions.length} suggested</Badge>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
@@ -1853,6 +1889,8 @@ const SupplierUpstream = ({ user }) => {
             const mineId = normalizeSupplierProductKey(p.supplier_product_id);
             const minQty = Math.max(1, p.min_order_quantity ?? 1);
             const isSelected = !!selectedMine[mineId];
+            const unavailableReason = unavailableMine[mineId];
+            const isUnavailable = Boolean(unavailableReason);
             const isAddingToCart = !!addingCartByMineId[mineId];
             const imgs = getSelectedListingImages(p);
             const brandLabel = p.brandModel || p.brand || '';
@@ -1870,7 +1908,7 @@ const SupplierUpstream = ({ user }) => {
             return (
               <article
                 key={mineId}
-                className={`pd-card us-pd-card pd-card--clickable flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${isSelected ? 'us-pd-card--selected' : ''}`}
+                className={`pd-card us-pd-card pd-card--clickable flex flex-col overflow-hidden rounded-xl border bg-card shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${isSelected ? 'us-pd-card--selected' : ''}${isUnavailable ? ' us-pd-card--unavailable' : ''}`}
                 onClick={(event) => {
                   if (event.target.closest('button, a, input, label, .us-pd-card__qty-row')) return;
                   openProductDetails(p);
@@ -1895,9 +1933,19 @@ const SupplierUpstream = ({ user }) => {
                     type="checkbox"
                     checked={isSelected}
                     onChange={() => handleToggleMine(mineId)}
-                    aria-label={`Select ${p.name || 'product'}`}
+                    disabled={isUnavailable}
+                    aria-label={
+                      isUnavailable
+                        ? `${p.name || 'product'} unavailable for sourcing`
+                        : `Select ${p.name || 'product'}`
+                    }
                   />
                   {isSelected ? <span className="us-pd-card__selected-badge"><Check size={12} /></span> : null}
+                  {isUnavailable ? (
+                    <span className="us-pd-card__unavailable-badge" title="No eligible upstream supplier">
+                      <AlertTriangle size={12} />
+                    </span>
+                  ) : null}
                 </label>
 
                 <div className="pd-card__image us-pd-card__image" title="View full details">
@@ -1988,8 +2036,12 @@ const SupplierUpstream = ({ user }) => {
                 <div className="pd-card__footer">
                   <div className="pd-card__suppliers">
                     <span className="pd-card__view-hint">View details</span>
-                    <span className="us-pd-card__hint">
-                      {isSelected ? 'Selected for sourcing' : 'Select to source upstream'}
+                    <span className={`us-pd-card__hint${isUnavailable ? ' us-pd-card__hint--unavailable' : ''}`}>
+                      {isUnavailable
+                        ? 'Unavailable — no upstream supplier'
+                        : isSelected
+                          ? 'Selected for sourcing'
+                          : 'Select to source upstream'}
                     </span>
                   </div>
                   <button
@@ -2025,6 +2077,7 @@ const SupplierUpstream = ({ user }) => {
             variant="outline"
             onClick={() => {
               setSelectedMine({});
+              setUnavailableMine({});
               setSuggestions(null);
               setSuggestionMeta(null);
               setSelectedUpstreamOffer({});
@@ -2033,7 +2086,7 @@ const SupplierUpstream = ({ user }) => {
           >
             Clear selection
           </Button>
-          <Button onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading}>
+          <Button onClick={fetchUpstreamSuggestions} disabled={suggestionsLoading || selectedMineIds.length === 0}>
             {suggestionsLoading ? <Loader2 size={16} className="upstream-spin" /> : null}
             Find upstream suppliers
           </Button>
@@ -2060,15 +2113,30 @@ const SupplierUpstream = ({ user }) => {
               title="No upstream suggestions yet"
               description='Select your products above and click "Find upstream suppliers".'
             />
-          ) : suggestions && suggestions.length === 0 ? (
-            <SpEmptyState
-              icon={AlertTriangle}
-              title="No upstream offers found"
-              description="Try a different brand or select fewer products."
-            />
+          ) : suggestions && sourcableSuggestions.length === 0 ? (
+            <div className="upstream-blocked-sourcing-empty">
+              <SpEmptyState
+                icon={AlertTriangle}
+                title="No upstream offers found"
+                description="None of the selected products have an eligible upstream supplier. Those products were removed from sourcing and cannot be ordered."
+              />
+              {blockedSuggestions.length > 0 ? (
+                <ul className="upstream-blocked-sourcing__list">
+                  {blockedSuggestions.map((it) => {
+                    const mine = resolveMineProduct(it.mineSupplierProductId);
+                    return (
+                      <li key={it.mineSupplierProductId}>
+                        <strong>{mine?.name || 'Product'}</strong>
+                        {it.message ? ` — ${it.message}` : ' — no eligible upstream supplier'}
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </div>
           ) : (
             <div className="upstream-suggestions-list">
-              {(suggestions || []).map((it) => {
+              {sourcableSuggestions.map((it) => {
                 const mine = resolveMineProduct(it.mineSupplierProductId);
                 const mineKey = normalizeSupplierProductKey(it.mineSupplierProductId);
                 const mineSelectedQty = getProcurementQty(
@@ -2310,7 +2378,27 @@ const SupplierUpstream = ({ user }) => {
             </div>
           )}
 
-          {Array.isArray(suggestions) && suggestions.length > 0 ? (
+          {blockedSuggestions.length > 0 && sourcableSuggestions.length > 0 ? (
+            <div className="upstream-blocked-sourcing" role="status">
+              <p className="upstream-blocked-sourcing__title">
+                {blockedSuggestions.length} product{blockedSuggestions.length === 1 ? '' : 's'} cannot be sourced
+                and {blockedSuggestions.length === 1 ? 'was' : 'were'} removed from the selection.
+              </p>
+              <ul className="upstream-blocked-sourcing__list">
+                {blockedSuggestions.map((it) => {
+                  const mine = resolveMineProduct(it.mineSupplierProductId);
+                  return (
+                    <li key={it.mineSupplierProductId}>
+                      <strong>{mine?.name || 'Product'}</strong>
+                      {it.message ? ` — ${it.message}` : ' — no eligible upstream supplier'}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+
+          {sourcableSuggestions.length > 0 ? (
             <div
               className={`us-sourcing-next-steps${sourcingConfigured ? ' us-sourcing-next-steps--ready' : ''}`}
               role="region"

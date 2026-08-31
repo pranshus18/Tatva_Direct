@@ -32,6 +32,40 @@ test('pickSupplierOfferRowForAdmin prefers pending offer when requested', async 
   assert.equal(picked?.id, 'offer-pending');
 });
 
+test('expandCatalogProductIntoAdminReviewRows hides catalog products with no remaining supplier offers', async () => {
+  const { expandCatalogProductIntoAdminReviewRows, adminRowHasLiveSupplierOffer } = await import(
+    '../controllers/admin/productCatalogRoutes.js'
+  );
+  const rows = expandCatalogProductIntoAdminReviewRows(
+    {
+      id: 'prod-deleted',
+      name: 'Jaquar Rimless Wall Hung WC',
+      status: 'pending',
+      supplier_id: 'sparsha'
+    },
+    []
+  );
+
+  assert.deepEqual(rows, []);
+  assert.equal(
+    adminRowHasLiveSupplierOffer({
+      id: 'prod-deleted',
+      status: 'pending',
+      hasSupplierOffer: false
+    }),
+    false
+  );
+  assert.equal(
+    adminRowHasLiveSupplierOffer({
+      id: 'prod-live',
+      status: 'pending',
+      supplier_product_id: 'offer-1',
+      hasSupplierOffer: true
+    }),
+    true
+  );
+});
+
 test('expandCatalogProductIntoAdminReviewRows creates one admin row per supplier offer', async () => {
   const { expandCatalogProductIntoAdminReviewRows } = await import('../controllers/admin/productCatalogRoutes.js');
   const rows = expandCatalogProductIntoAdminReviewRows(

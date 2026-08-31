@@ -205,22 +205,23 @@ function buildAdminVariantLabel(offerSpecs = {}) {
   return parts.join(' · ');
 }
 
+/** True when this admin row still has a living supplier listing to review. */
+export function adminRowHasLiveSupplierOffer(row) {
+  if (!row || typeof row !== 'object') return false;
+  if (row.hasSupplierOffer === true) return true;
+  return Boolean(String(row.supplier_product_id || row.supplierProductId || '').trim());
+}
+
 /** Expand one catalog product into one admin row per supplier offer variant. */
 export function expandCatalogProductIntoAdminReviewRows(
   product,
   offerRows = [],
   suppliersById = {}
 ) {
+  // A catalog row with no remaining supplier listings is not reviewable — the
+  // supplier deleted it. Do not keep a ghost "Pending Approval" card for admin.
   if (!offerRows.length) {
-    return [
-      {
-        ...attachSupplierOfferFields(product, null, { hasSupplierOffer: false }),
-        adminRowKey: `${product.id}:catalog`,
-        catalogProductId: product.id,
-        displayStatus: String(product.status || 'pending').toLowerCase(),
-        isVariantRow: false
-      }
-    ];
+    return [];
   }
 
   return offerRows
@@ -377,7 +378,6 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
 
           allProducts = (allProducts || []).flatMap((p) => {
             const productRows = rowsByProductId.get(p.id) || [];
-            if (productRows.length === 0) return [p];
             return expandCatalogProductIntoAdminReviewRows(p, productRows, suppliersById);
           });
         } else {
@@ -497,6 +497,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
     if (status && status !== 'all') {
       if (status === 'pending') {
         products = (allProducts || []).filter((row) => {
+          if (!adminRowHasLiveSupplierOffer(row)) return false;
           const offerStatus = String(row.displayStatus || row.offerStatus || '').toLowerCase();
           const catalogStatus = String(row.status || '').toLowerCase();
           const isPendingCatalog =
@@ -505,7 +506,7 @@ router.get('/products/all', authenticateToken, isAdmin, async (req, res) => {
             catalogStatus === '' ||
             (catalogStatus !== 'approved' && catalogStatus !== 'rejected');
           if (offerStatus === 'pending') return true;
-          return isPendingCatalog && row.hasSupplierOffer !== false;
+          return isPendingCatalog;
         });
         console.log(`Filtered to ${products.length} pending admin review rows`);
       } else if (status === 'approved') {
@@ -592,6 +593,14 @@ router.get('/products/:id([0-9a-fA-F-]{36})', authenticateToken, isAdmin, async 
       .from('supplier_products')
       .select('id, product_id, price, stock, min_order_quantity, location, status, is_active, supplier_id, attributes, igst_rate, cgst_rate, sgst_rate')
       .eq('product_id', product.id);
+
+    if (!spRowsError && (!spRows || spRows.length === 0)) {
+      return res.status(404).json({
+        status: 'error',
+        code: 'product_deleted',
+        message: 'This product was deleted by the supplier and is no longer available for review.'
+      });
+    }
 
     if (!spRowsError && spRows && spRows.length > 0) {
       const bestRowByScore = pickSupplierOfferRowForAdmin(spRows, {

@@ -126,6 +126,37 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
 
       let existingProduct = existingProductRow;
 
+      const { data: liveOffers, error: liveOffersError } = await supabase
+        .from('supplier_products')
+        .select('id, status')
+        .eq('product_id', existingProduct.id);
+
+      if (liveOffersError) {
+        return res.status(400).json({
+          status: 'error',
+          message: liveOffersError.message || 'Failed to load supplier listings for this product'
+        });
+      }
+
+      if (!liveOffers || liveOffers.length === 0) {
+        return res.status(404).json({
+          status: 'error',
+          code: 'product_deleted',
+          message: 'This product was deleted by the supplier and cannot be approved.'
+        });
+      }
+
+      if (
+        targetSupplierProductId &&
+        !liveOffers.some((row) => String(row?.id || '') === targetSupplierProductId)
+      ) {
+        return res.status(404).json({
+          status: 'error',
+          code: 'product_deleted',
+          message: 'This supplier listing was deleted and cannot be approved.'
+        });
+      }
+
       const catalogAlreadyApproved =
         String(existingProduct.status || '').toLowerCase() === 'approved';
 
@@ -540,6 +571,19 @@ export function registerAdminProductModerationRoutes({ router, authenticateToken
         return res.status(404).json({
           status: 'error',
           message: 'Product not found'
+        });
+      }
+
+      const { data: liveRejectOffers } = await supabase
+        .from('supplier_products')
+        .select('id')
+        .eq('product_id', existingProduct.id);
+
+      if (!liveRejectOffers || liveRejectOffers.length === 0) {
+        return res.status(404).json({
+          status: 'error',
+          code: 'product_deleted',
+          message: 'This product was deleted by the supplier and is no longer available for review.'
         });
       }
 
