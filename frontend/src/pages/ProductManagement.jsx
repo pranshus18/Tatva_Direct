@@ -2493,7 +2493,7 @@ const ProductModal = ({
   const MIN_AI_PRODUCT_IMAGES = MIN_SUPPLIER_PRODUCT_PHOTOS;
   const MAX_AI_PRODUCT_IMAGES = 8;
 
-  // Multiple product photos for AI (minimum 3 required before analysis runs)
+  // Product photos for identification / optional AI (minimum 1 required)
   const [productAiImages, setProductAiImages] = useState([]);
   const [photosAttachedForProduct, setPhotosAttachedForProduct] = useState(false);
   const [analyzingImage, setAnalyzingImage] = useState(false);
@@ -3160,7 +3160,7 @@ const ProductModal = ({
   const analyzeImagesFromFiles = async (files) => {
     if (!files || files.length < MIN_AI_PRODUCT_IMAGES) {
       alert(
-        `Please add at least ${MIN_AI_PRODUCT_IMAGES} product photos (e.g. front, side, label) so AI can identify the product reliably.`
+        `Please add at least ${MIN_AI_PRODUCT_IMAGES} product photo${MIN_AI_PRODUCT_IMAGES === 1 ? '' : 's'} so AI can identify the product.`
       );
       return;
     }
@@ -4640,8 +4640,7 @@ const ProductModal = ({
                     }}
                   >
                     <p style={{ margin: 0, fontSize: '0.75rem', color: '#6b7280', flex: '1 1 200px' }}>
-                      Upload <strong>at least {MIN_AI_PRODUCT_IMAGES} photos</strong>, then either save them as
-                      product identification photos or run optional AI analysis to pre-fill product details.
+                      Upload <strong>at least {MIN_AI_PRODUCT_IMAGES} photo{MIN_AI_PRODUCT_IMAGES === 1 ? '' : 's'}</strong>, then save {MIN_AI_PRODUCT_IMAGES === 1 ? 'it as a product identification photo' : 'them as product identification photos'} or run optional AI analysis to pre-fill product details.
                     </p>
                     <span
                       style={{

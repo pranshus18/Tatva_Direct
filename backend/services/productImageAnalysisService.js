@@ -11,7 +11,7 @@ import {
   parseVisionModelJson
 } from './productImageAnalysisReview.js';
 
-export const MIN_PRODUCT_IMAGE_ANALYSIS_COUNT = 3;
+export const MIN_PRODUCT_IMAGE_ANALYSIS_COUNT = 1;
 
 function buildStableCategoryExamples(categories = []) {
   const names = (categories || [])
@@ -135,7 +135,7 @@ export async function analyzeSupplierProductImages({
   const normalizedInputs = parseVisionImagesFromRequest(images);
   if (normalizedInputs.length < MIN_PRODUCT_IMAGE_ANALYSIS_COUNT) {
     const err = new Error(
-      `Please upload at least ${MIN_PRODUCT_IMAGE_ANALYSIS_COUNT} product photos (different angles or details — e.g. front, side, label) so AI can identify the product reliably.`
+      `Please upload at least ${MIN_PRODUCT_IMAGE_ANALYSIS_COUNT} product photo${MIN_PRODUCT_IMAGE_ANALYSIS_COUNT === 1 ? '' : 's'} so AI can identify the product.`
     );
     err.statusCode = 400;
     throw err;

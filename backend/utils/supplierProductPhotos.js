@@ -1,6 +1,6 @@
 import { sanitizeImageUrls } from '../controllers/supplier/shared/productHelpers.js';
 
-export const MIN_SUPPLIER_PRODUCT_PHOTOS = 3;
+export const MIN_SUPPLIER_PRODUCT_PHOTOS = 1;
 
 export function countSupplierProductPhotos(images) {
   return sanitizeImageUrls(images).length;
@@ -30,8 +30,10 @@ export function validateMinSupplierProductPhotos(
     missingFields: ['images'],
     message:
       count === 0
-        ? `At least ${minPhotos} product photos are required before submitting. Please upload ${minPhotos} photos (for example front, side, and label).`
-        : `At least ${minPhotos} product photos are required. You currently have ${count}. Please upload ${stillNeeded} more photo${stillNeeded === 1 ? '' : 's'}.`
+        ? minPhotos === 1
+          ? 'At least 1 product photo is required before submitting. Please upload a product photo.'
+          : `At least ${minPhotos} product photos are required before submitting. Please upload ${minPhotos} photos (for example front, side, and label).`
+        : `At least ${minPhotos} product photo${minPhotos === 1 ? '' : 's'} ${minPhotos === 1 ? 'is' : 'are'} required. You currently have ${count}. Please upload ${stillNeeded} more photo${stillNeeded === 1 ? '' : 's'}.`
   };
 }
 

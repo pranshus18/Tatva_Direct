@@ -20,24 +20,16 @@ test('countSupplierProductPhotos counts unique http(s) urls only', () => {
   );
 });
 
-test('validateMinSupplierProductPhotos rejects fewer than 3 photos', () => {
-  const result = validateMinSupplierProductPhotos([
-    'https://cdn.example.com/a.jpg',
-    'https://cdn.example.com/b.jpg'
-  ]);
+test('validateMinSupplierProductPhotos rejects zero photos', () => {
+  const result = validateMinSupplierProductPhotos([]);
   assert.equal(result.ok, false);
-  assert.equal(result.count, 2);
+  assert.equal(result.count, 0);
   assert.deepEqual(result.missingFields, ['images']);
-  assert.match(result.message, /at least 3 product photos/i);
-  assert.match(result.message, /currently have 2/i);
+  assert.match(result.message, /at least 1 product photo/i);
 });
 
-test('validateMinSupplierProductPhotos accepts 3 or more photos', () => {
-  const result = validateMinSupplierProductPhotos([
-    'https://cdn.example.com/a.jpg',
-    'https://cdn.example.com/b.jpg',
-    'https://cdn.example.com/c.jpg'
-  ]);
+test('validateMinSupplierProductPhotos accepts 1 or more photos', () => {
+  const result = validateMinSupplierProductPhotos(['https://cdn.example.com/a.jpg']);
   assert.equal(result.ok, true);
   assert.equal(result.count, MIN_SUPPLIER_PRODUCT_PHOTOS);
   assert.equal(result.message, '');
@@ -46,5 +38,5 @@ test('validateMinSupplierProductPhotos accepts 3 or more photos', () => {
 test('validateMinSupplierProductPhotos uses a clear zero-photo message', () => {
   const result = validateMinSupplierProductPhotos([]);
   assert.equal(result.ok, false);
-  assert.match(result.message, /upload 3 photos/i);
+  assert.match(result.message, /upload a product photo/i);
 });

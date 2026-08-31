@@ -1,7 +1,7 @@
 import { parseSupplierStockQuantity } from './parseSupplierStockQuantity';
 import { SUPPLIER_CURRENT_STOCK_LABEL, SUPPLIER_MRP_LABEL } from './supplierStockLabel';
 
-export const MIN_SUPPLIER_PRODUCT_PHOTOS = 3;
+export const MIN_SUPPLIER_PRODUCT_PHOTOS = 1;
 
 /** Count only persisted http(s) image URLs (not local blob previews). */
 export function countSupplierProductPhotos(images) {
@@ -18,13 +18,19 @@ export function countSupplierProductPhotos(images) {
   return count;
 }
 
+function photoNoun(count) {
+  return Number(count) === 1 ? 'photo' : 'photos';
+}
+
 export function formatMissingProductPhotosMessage(photoCount = 0, minPhotos = MIN_SUPPLIER_PRODUCT_PHOTOS) {
   const count = Number(photoCount) || 0;
   const stillNeeded = Math.max(0, minPhotos - count);
   if (count <= 0) {
-    return `At least ${minPhotos} product photos are required before submitting. Please upload ${minPhotos} photos (for example front, side, and label).`;
+    return minPhotos === 1
+      ? 'At least 1 product photo is required before submitting. Please upload a product photo.'
+      : `At least ${minPhotos} product photos are required before submitting. Please upload ${minPhotos} photos (for example front, side, and label).`;
   }
-  return `At least ${minPhotos} product photos are required. You currently have ${count}. Please upload ${stillNeeded} more photo${stillNeeded === 1 ? '' : 's'}.`;
+  return `At least ${minPhotos} product ${photoNoun(minPhotos)} ${minPhotos === 1 ? 'is' : 'are'} required. You currently have ${count}. Please upload ${stillNeeded} more ${photoNoun(stillNeeded)}.`;
 }
 
 export function isMeaningfullyFilledSpecValue(value) {
@@ -164,7 +170,7 @@ export function getSupplierCatalogMandatoryMissingFields(formData = {}, options 
       : countSupplierProductPhotos(formData.images);
 
   if (requirePhotos && resolvedPhotoCount < minPhotos) {
-    missing.push(`At least ${minPhotos} product photos`);
+    missing.push(`At least ${minPhotos} product photo${minPhotos === 1 ? '' : 's'}`);
   }
 
   return missing;

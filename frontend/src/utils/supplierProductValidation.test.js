@@ -97,7 +97,7 @@ describe('supplierProductValidation', () => {
     ).toEqual(['Unit']);
   });
 
-  it('requires at least 3 uploaded product photos on create', () => {
+  it('requires at least 1 uploaded product photo on create', () => {
     expect(
       getSupplierCatalogMandatoryMissingFields(
         {
@@ -105,14 +105,14 @@ describe('supplierProductValidation', () => {
           brand: 'Acme',
           category: 'Tools',
           unit: 'pcs',
-          images: ['https://cdn.example.com/a.jpg', 'blob:http://localhost/x']
+          images: ['blob:http://localhost/x']
         },
         { isCreate: true, requirePhotos: true, minPhotos: MIN_SUPPLIER_PRODUCT_PHOTOS }
       )
-    ).toEqual(['At least 3 product photos']);
+    ).toEqual(['At least 1 product photo']);
   });
 
-  it('passes create validation when 3 http photos are present', () => {
+  it('passes create validation when 1 http photo is present', () => {
     expect(
       getSupplierCatalogMandatoryMissingFields(
         {
@@ -120,11 +120,7 @@ describe('supplierProductValidation', () => {
           brand: 'Acme',
           category: 'Tools',
           unit: 'pcs',
-          images: [
-            'https://cdn.example.com/a.jpg',
-            'https://cdn.example.com/b.jpg',
-            'https://cdn.example.com/c.jpg'
-          ]
+          images: ['https://cdn.example.com/a.jpg']
         },
         { isCreate: true, requirePhotos: true }
       )
@@ -186,7 +182,7 @@ describe('supplierProductValidation', () => {
   });
 
   it('formats photo and API error messages', () => {
-    expect(formatMissingProductPhotosMessage(1)).toMatch(/currently have 1/i);
+    expect(formatMissingProductPhotosMessage(0)).toMatch(/at least 1 product photo is required/i);
     expect(formatSupplierProductValidationMessage(['MRP', 'SGST'])).toBe(
       'Please complete: MRP, SGST.'
     );
@@ -198,9 +194,9 @@ describe('supplierProductValidation', () => {
     expect(
       getSupplierProductCreateErrorMessage({
         code: 'product_photos_required',
-        message: 'At least 3 product photos are required before submitting.'
+        message: 'At least 1 product photo is required before submitting.'
       })
-    ).toBe('At least 3 product photos are required before submitting.');
+    ).toBe('At least 1 product photo is required before submitting.');
     expect(
       getSupplierProductCreateErrorMessage({
         message:
