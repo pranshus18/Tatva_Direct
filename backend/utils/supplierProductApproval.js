@@ -159,10 +159,64 @@ export function retainCatalogCompatibleSpecifications(catalogSpecs = {}, submitt
 }
 
 /**
+ * True when two spec maps describe the same catalog variant.
+ * Empty offer specs inherit the catalog product (add-from-database).
+ * Extra template keys and reverse subsets still count as the same variant.
+ * Conflicting values (e.g. White vs Black) do not.
+ */
+export function specsRepresentSameCatalogVariant(
+  submittedSpecs = {},
+  existingSpecs = {},
+  catalogSpecs = {}
+) {
+  const submitted = submittedSpecs && typeof submittedSpecs === 'object' ? submittedSpecs : {};
+  const existing = existingSpecs && typeof existingSpecs === 'object' ? existingSpecs : {};
+  const catalog = catalogSpecs && typeof catalogSpecs === 'object' ? catalogSpecs : {};
+
+  if (areSpecificationsEqual(submitted, existing)) return true;
+  if (submittedSpecsCompatibleWithExistingVariant(submitted, existing)) return true;
+  if (submittedSpecsCompatibleWithExistingVariant(existing, submitted)) return true;
+
+  const submittedMap = buildNormalizedMeaningfulSpecMap(submitted);
+  const existingMap = buildNormalizedMeaningfulSpecMap(existing);
+  const catalogMap = buildNormalizedMeaningfulSpecMap(catalog);
+  const submittedEffective = submittedMap.size > 0 ? submitted : catalog;
+  const existingEffective = existingMap.size > 0 ? existing : catalog;
+
+  if (areSpecificationsEqual(submittedEffective, existingEffective)) return true;
+  if (submittedSpecsCompatibleWithExistingVariant(submittedEffective, existingEffective)) return true;
+  if (submittedSpecsCompatibleWithExistingVariant(existingEffective, submittedEffective)) return true;
+
+  if (catalogMap.size > 0) {
+    const submittedMatchesCatalog =
+      submittedMap.size === 0 ||
+      areSpecificationsEqual(submitted, catalog) ||
+      submittedSpecsCompatibleWithExistingVariant(submitted, catalog) ||
+      submittedSpecsCompatibleWithExistingVariant(catalog, submitted);
+    const existingMatchesCatalog =
+      existingMap.size === 0 ||
+      areSpecificationsEqual(existing, catalog) ||
+      submittedSpecsCompatibleWithExistingVariant(existing, catalog) ||
+      submittedSpecsCompatibleWithExistingVariant(catalog, existing);
+    if (
+      submittedMatchesCatalog &&
+      existingMatchesCatalog &&
+      (submittedMap.size === 0 ||
+        existingMap.size === 0 ||
+        specificationsAgreeOnOverlappingKeys(submitted, existing))
+    ) {
+      return true;
+    }
+  }
+
+  return specificationsAgreeOnOverlappingKeys(submittedEffective, existingEffective);
+}
+
+/**
  * Pick the approved offer whose specs best match the submission (no value conflicts).
  * Returns null when every candidate has at least one overlapping value conflict.
  */
-export function findBestMatchingApprovedOfferForSpecs(offers = [], submittedSpecs = {}) {
+export function findBestMatchingApprovedOfferForSpecs(offers = [], submittedSpecs = {}, catalogSpecs = {}) {
   let best = null;
   let bestScore = -1;
   const approvedRows = [];
@@ -193,12 +247,8 @@ export function findBestMatchingApprovedOfferForSpecs(offers = [], submittedSpec
       continue;
     }
 
-    if (
-      areSpecificationsEqual(submittedSpecs, existingSpecs) ||
-      submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs) ||
-      submittedSpecsCompatibleWithExistingVariant(existingSpecs, submittedSpecs)
-    ) {
-      const score = existingMap.size + 1000;
+    if (specsRepresentSameCatalogVariant(submittedSpecs, existingSpecs, catalogSpecs)) {
+      const score = Math.max(existingMap.size, 1) + 1000;
       if (score > bestScore) {
         bestScore = score;
         best = row;
@@ -348,6 +398,7 @@ export function shouldRecomputeSupplierVariantKeyOnUpdate({
 export default {
   areSpecificationsEqual,
   submittedSpecsCompatibleWithExistingVariant,
+  specsRepresentSameCatalogVariant,
   hasSupplierSpecificationChangesFromCatalog,
   shouldMoveToPendingForSpecChange,
   shouldAutoApproveSupplierOfferOnCreate,

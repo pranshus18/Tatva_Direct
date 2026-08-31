@@ -284,40 +284,13 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
     let canonicalMrp = null;
     let supplierCountWithMrp = 0;
     if (product?.id) {
-      if (variantKey) {
-        canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
-          productId: product.id,
-          variantKey
-        });
-        supplierCountWithMrp = canonicalMrp !== null ? 1 : 0;
-      } else {
-        const { data: supplierOffers, error: offersError } = await supabase
-          .from('supplier_products')
-          .select('price, variant_key, status')
-          .eq('product_id', product.id)
-          .neq('status', 'rejected')
-          .not('price', 'is', null)
-          .gt('price', 0);
-
-        if (offersError) {
-          console.error('Canonical MRP lookup error:', offersError);
-        } else {
-          const variantKeys = [
-            ...new Set(
-              (supplierOffers || [])
-                .map((row) => String(row?.variant_key || '').trim())
-                .filter(Boolean)
-            )
-          ];
-          if (variantKeys.length === 1) {
-            canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
-              productId: product.id,
-              variantKey: variantKeys[0]
-            });
-            supplierCountWithMrp = (supplierOffers || []).length;
-          }
-        }
-      }
+      canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
+        productId: product.id,
+        variantKey,
+        specifications: mergedSpecifications,
+        catalogSpecs: product.specifications
+      });
+      supplierCountWithMrp = canonicalMrp !== null ? 1 : 0;
     }
 
     const recommendedPrice = canonicalMrp;

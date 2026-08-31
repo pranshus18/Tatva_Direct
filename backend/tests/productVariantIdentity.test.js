@@ -14,6 +14,54 @@ import {
   ORDER_SNAPSHOT_META_KEYS
 } from '../services/supplierCatalogHelpersService.js';
 
+test('buildSupplierVariantIdentity: supplier SKU does not change the variant key', () => {
+  const parent = { specifications: { Color: 'White', Series: 'Continental', Weight: '17.5 kg' } };
+  const first = buildSupplierVariantIdentity(
+    { specifications: { Color: 'White', Series: 'Continental', Weight: '17.5 kg' }, sku: 'LOKESH-1' },
+    parent
+  );
+  const second = buildSupplierVariantIdentity(
+    { specifications: { Color: 'White', Series: 'Continental', Weight: '17.5 kg' }, sku: 'SPARSHA-9' },
+    parent
+  );
+  assert.equal(first.variantKey, second.variantKey);
+  assert.equal(
+    buildVariantAsinLikeId('TSPCYY1', first.variantKey),
+    buildVariantAsinLikeId('TSPCYY1', second.variantKey)
+  );
+});
+
+test('resolveStableVariantIdentityFromExistingOffers reuses catalog variant when offer specs are empty', () => {
+  const catalogSpecs = { Color: 'White', Series: 'Continental', Weight: '17.5 kg' };
+  const parent = { specifications: catalogSpecs, asin: 'TSPCYY1' };
+  const computed = buildSupplierVariantIdentity(
+    { specifications: catalogSpecs, sku: 'NEW-SUPPLIER' },
+    parent
+  );
+
+  const stable = resolveStableVariantIdentityFromExistingOffers({
+    parentAsin: 'TSPCYY1',
+    parentProduct: parent,
+    computedIdentity: computed,
+    offerSpecifications: catalogSpecs,
+    catalogSpecifications: catalogSpecs,
+    specsUnchangedFromCatalog: true,
+    existingOffers: [
+      {
+        status: 'approved',
+        is_active: true,
+        variant_key: 'stored-jaquar-wc',
+        variant_asin: 'TSPCYY1JI',
+        attributes: { sku: 'SPARSHA-SKU', specifications: {} }
+      }
+    ]
+  });
+
+  assert.equal(stable.reused, true);
+  assert.equal(stable.variantKey, 'stored-jaquar-wc');
+  assert.equal(stable.variantAsin, 'TSPCYY1JI');
+});
+
 test('buildSupplierVariantIdentity: catalog filled values do not change variant key vs offer-only', () => {
   const parent = { specifications: { weight: '1.5 kg', Color: 'Silver' } };
   const offerOnly = buildIdentityBundle({ specifications: { Color: 'Black' } });

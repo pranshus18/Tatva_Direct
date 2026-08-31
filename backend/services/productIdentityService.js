@@ -5,7 +5,7 @@ import {
   parseSpecificationsObject,
   parseSupplierOfferAttributes
 } from './supplierCatalogHelpersService.js';
-import { areSpecificationsEqual, submittedSpecsCompatibleWithExistingVariant } from '../utils/supplierProductApproval.js';
+import { areSpecificationsEqual, submittedSpecsCompatibleWithExistingVariant, specsRepresentSameCatalogVariant } from '../utils/supplierProductApproval.js';
 
 /**
  * Product Identity Service (Phase 1)
@@ -90,7 +90,15 @@ const VARIANT_IDENTITY_EXCLUDED_SPEC_KEYS = new Set([
   'images',
   'image',
   'category',
-  'brand'
+  'brand',
+  'sku',
+  'sku_no',
+  'skuno',
+  'gsku',
+  'msku',
+  'supplier_sku',
+  'suppliersku',
+  'tags'
 ]);
 
 export function isVariantIdentityExcludedSpecKey(key) {
@@ -337,7 +345,6 @@ export function buildVariantKey(variant = {}) {
     brandModel: variant.brandModel || '',
     gtin: variant.gtin || '',
     mpn: variant.mpn || '',
-    sku: variant.sku || '',
     unit: variant.unit || '',
     packSize: variant.packSize || '',
     variantAttributes: variant.variantAttributes || {}
@@ -584,14 +591,11 @@ export function resolveStableVariantIdentityFromExistingOffers({
     }
   }
 
-  // 2) Same meaningful offer specs as an existing supplier_products row
-  //    (submitted may include extra category-template keys; core variant values must match).
+  // 2) Same catalog variant as an existing supplier_products row
+  //    (SKU/inventory differences and extra template keys must not mint a new TSIN).
   for (const row of rankedOffers) {
     const existingSpecs = extractSpecsFromOfferRow(row);
-    if (
-      !areSpecificationsEqual(submittedSpecs, existingSpecs) &&
-      !submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
-    ) {
+    if (!specsRepresentSameCatalogVariant(submittedSpecs, existingSpecs, catalogSpecs)) {
       continue;
     }
     const picked = pickStableIdentityFromRow(row, 'same_offer_specs', parentAsinForReuse);
@@ -605,10 +609,7 @@ export function resolveStableVariantIdentityFromExistingOffers({
   });
   for (const row of rankedVariants) {
     const existingSpecs = extractSpecsFromProductVariantRow(row);
-    if (
-      !areSpecificationsEqual(submittedSpecs, existingSpecs) &&
-      !submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
-    ) {
+    if (!specsRepresentSameCatalogVariant(submittedSpecs, existingSpecs, catalogSpecs)) {
       continue;
     }
     const picked = pickStableIdentityFromRow(row, 'same_product_variant_specs', parentAsinForReuse);
@@ -777,23 +778,7 @@ function hasMeaningfulSpecs(specs = {}) {
  * that collision is what surfaces as supplier_products unique-constraint errors.
  */
 function canReuseUnchangedCatalogRow(submittedSpecs = {}, existingSpecs = {}, catalogSpecs = {}) {
-  if (
-    areSpecificationsEqual(submittedSpecs, existingSpecs) ||
-    submittedSpecsCompatibleWithExistingVariant(submittedSpecs, existingSpecs)
-  ) {
-    return true;
-  }
-  if (!hasMeaningfulSpecs(submittedSpecs)) {
-    return !hasMeaningfulSpecs(existingSpecs) || areSpecificationsEqual(existingSpecs, catalogSpecs);
-  }
-  if (!hasMeaningfulSpecs(existingSpecs)) {
-    return false;
-  }
-  return (
-    areSpecificationsEqual(existingSpecs, catalogSpecs) &&
-    (areSpecificationsEqual(submittedSpecs, catalogSpecs) ||
-      submittedSpecsCompatibleWithExistingVariant(submittedSpecs, catalogSpecs))
-  );
+  return specsRepresentSameCatalogVariant(submittedSpecs, existingSpecs, catalogSpecs);
 }
 
 export default {

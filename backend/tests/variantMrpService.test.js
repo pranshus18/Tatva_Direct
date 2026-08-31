@@ -4,7 +4,8 @@ import {
   roundVariantMrp,
   validateSupplierVariantMrpConsistency,
   buildVariantMrpMapKey,
-  formatVariantMrpMismatchMessage
+  formatVariantMrpMismatchMessage,
+  pickCanonicalVariantMrpFromOffers
 } from '../services/variantMrpService.js';
 
 test('roundVariantMrp normalizes currency to two decimals', () => {
@@ -44,3 +45,91 @@ test('validateSupplierVariantMrpConsistency allows matching canonical MRP', () =
 test('buildVariantMrpMapKey combines product and variant identifiers', () => {
   assert.equal(buildVariantMrpMapKey('prod-1', 'vk-a'), 'prod-1::vk-a');
 });
+
+const catalogWcSpecs = { Color: 'White', Series: 'Continental', Weight: '17.5 kg' };
+
+test('pickCanonicalVariantMrpFromOffers reuses MRP when leftover variant keys differ', () => {
+  const offers = [
+    {
+      variant_key: 'TSPCYY1YL',
+      price: 0,
+      status: 'approved',
+      is_active: true,
+      attributes: { specifications: {} }
+    },
+    {
+      variant_key: 'TSPCYY1JI',
+      price: 10500,
+      status: 'approved',
+      is_active: true,
+      updated_at: '2026-01-01T00:00:00.000Z',
+      attributes: { specifications: {} }
+    }
+  ];
+
+  assert.equal(
+    pickCanonicalVariantMrpFromOffers(offers, {
+      variantKey: 'computed-new-key',
+      specifications: catalogWcSpecs,
+      catalogSpecs: catalogWcSpecs
+    }),
+    10500
+  );
+  assert.equal(
+    pickCanonicalVariantMrpFromOffers(offers, {
+      variantKey: '',
+      specifications: catalogWcSpecs,
+      catalogSpecs: catalogWcSpecs
+    }),
+    10500
+  );
+});
+
+test('pickCanonicalVariantMrpFromOffers prefers the unique positive MRP on a product', () => {
+  assert.equal(
+    pickCanonicalVariantMrpFromOffers(
+      [
+        { variant_key: 'a', price: 0, status: 'pending' },
+        { variant_key: 'b', price: 10500, status: 'approved', is_active: true }
+      ],
+      { variantKey: 'brand-new' }
+    ),
+    10500
+  );
+});
+
+test('pickCanonicalVariantMrpFromOffers does not mix different catalog variants', () => {
+  const offers = [
+    {
+      variant_key: 'white',
+      price: 10500,
+      status: 'approved',
+      is_active: true,
+      attributes: { specifications: { Color: 'White' } }
+    },
+    {
+      variant_key: 'black',
+      price: 8000,
+      status: 'approved',
+      is_active: true,
+      attributes: { specifications: { Color: 'Black' } }
+    }
+  ];
+  assert.equal(
+    pickCanonicalVariantMrpFromOffers(offers, {
+      variantKey: 'new-white',
+      specifications: { Color: 'White' },
+      catalogSpecs: { Color: 'White' }
+    }),
+    10500
+  );
+  assert.equal(
+    pickCanonicalVariantMrpFromOffers(offers, {
+      variantKey: 'new-black',
+      specifications: { Color: 'Black' },
+      catalogSpecs: { Color: 'White' }
+    }),
+    8000
+  );
+});
+

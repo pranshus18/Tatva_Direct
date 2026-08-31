@@ -8,6 +8,7 @@ import {
   hasSupplierSpecificationChangesFromCatalog,
   shouldRecomputeSupplierVariantKeyOnUpdate,
   submittedSpecsCompatibleWithExistingVariant,
+  specsRepresentSameCatalogVariant,
   findBestMatchingApprovedOfferForSpecs,
   retainCatalogCompatibleSpecifications
 } from '../utils/supplierProductApproval.js';
@@ -103,6 +104,20 @@ test('findBestMatchingApprovedOfferForSpecs picks overlapping-agreeing offer amo
     { Color: 'Black', Material: 'Plastic' }
   );
   assert.equal(matched?.id, 'black');
+});
+
+test('specsRepresentSameCatalogVariant treats empty offer specs as the catalog product', () => {
+  const catalog = { Color: 'White', Series: 'Continental', Weight: '17.5 kg' };
+  assert.equal(specsRepresentSameCatalogVariant(catalog, {}, catalog), true);
+  assert.equal(specsRepresentSameCatalogVariant({}, catalog, catalog), true);
+  assert.equal(
+    specsRepresentSameCatalogVariant(
+      { Color: 'Black', Series: 'Continental', Weight: '17.5 kg' },
+      catalog,
+      catalog
+    ),
+    false
+  );
 });
 
 test('submittedSpecsCompatibleWithExistingVariant allows extra template fields', () => {

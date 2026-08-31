@@ -51,7 +51,8 @@ import {
 import {
   fetchCanonicalVariantMrp,
   validateSupplierVariantMrpConsistency,
-  formatVariantMrpMismatchMessage
+  formatVariantMrpMismatchMessage,
+  roundVariantMrp
 } from '../../../services/variantMrpService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import {
@@ -506,7 +507,8 @@ export function buildSupplierProductCreateHandler(ctx) {
               specifications: extractOfferSpecificationsFromRow(row)
             }
           })),
-          normalizedSpecs
+          normalizedSpecs,
+          catalogSpecsForVariantReuse
         ) || null;
       const sameVariantApprovedOffer = approvedVariantOffer || compatibleApprovedOffer || null;
       if (
@@ -567,13 +569,22 @@ export function buildSupplierProductCreateHandler(ctx) {
       const parsedStock = parseSupplierStockQuantity(otherData.stock);
       const parsedMinOrderQty = parseInt(otherData.min_order_quantity);
 
-      if (otherData.price !== undefined && resolvedVariantKey) {
-        const canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
-          productId,
-          variantKey: resolvedVariantKey
-        });
+      const canonicalMrp = productId
+        ? await fetchCanonicalVariantMrp(supabase, {
+            productId,
+            variantKey: resolvedVariantKey,
+            specifications: normalizedSpecs,
+            catalogSpecs: catalogSpecsForVariantReuse,
+            excludeOfferId: updatingExistingOffer ? existingSupplierProduct?.id : null
+          })
+        : null;
+      let offerPrice = Number.isFinite(parsedPrice) ? parsedPrice : 0;
+      if ((offerPrice <= 0 || !Number.isFinite(parsedPrice)) && canonicalMrp != null && canonicalMrp > 0) {
+        offerPrice = canonicalMrp;
+      }
+      if (canonicalMrp != null && canonicalMrp > 0 && offerPrice > 0) {
         const variantMrpValidation = validateSupplierVariantMrpConsistency({
-          body: { price: otherData.price },
+          body: { price: offerPrice },
           canonicalMrp
         });
         if (!variantMrpValidation.ok) {
@@ -689,7 +700,7 @@ export function buildSupplierProductCreateHandler(ctx) {
       const supplierProductData = {
         product_id: productId,
         supplier_id: req.userId,
-        price: isNaN(parsedPrice) ? 0 : parsedPrice,
+        price: offerPrice,
         stock: parsedStock == null ? 0 : parsedStock,
         min_order_quantity: isNaN(parsedMinOrderQty) || parsedMinOrderQty < 1 ? 1 : parsedMinOrderQty,
         location: currentLocation,
@@ -781,6 +792,17 @@ export function buildSupplierProductCreateHandler(ctx) {
       const catalogUpdatePayload = updatingExistingOffer
         ? preserveExistingInventoryOnCatalogUpdate(offerUpdatePayload, existingSupplierProduct)
         : offerUpdatePayload;
+      if (
+        updatingExistingOffer &&
+        !clientSentPrice &&
+        canonicalMrp != null &&
+        canonicalMrp > 0
+      ) {
+        const existingPrice = roundVariantMrp(existingSupplierProduct?.price);
+        if (existingPrice == null || existingPrice <= 0) {
+          catalogUpdatePayload.price = canonicalMrp;
+        }
+      }
       if (resubmittingRejectedOffer) {
         catalogUpdatePayload.approved_by = null;
         catalogUpdatePayload.approved_at = null;
@@ -837,6 +859,16 @@ export function buildSupplierProductCreateHandler(ctx) {
               },
               racedOffer
             );
+            if (
+              !clientSentPrice &&
+              canonicalMrp != null &&
+              canonicalMrp > 0
+            ) {
+              const racedPrice = roundVariantMrp(racedOffer?.price);
+              if (racedPrice == null || racedPrice <= 0) {
+                racedPayload.price = canonicalMrp;
+              }
+            }
             if (racedRejected) {
               racedPayload.approved_by = null;
               racedPayload.approved_at = null;

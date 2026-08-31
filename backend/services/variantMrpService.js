@@ -1,5 +1,8 @@
 /** Canonical MRP per catalog product + variant — shared by all suppliers. */
 
+import { extractOfferSpecificationsFromRow } from './supplierCatalogHelpersService.js';
+import { specsRepresentSameCatalogVariant } from '../utils/supplierProductApproval.js';
+
 export function roundVariantMrp(value) {
   if (value === undefined || value === null || value === '') return null;
   const parsed = Number(value);
@@ -35,22 +38,82 @@ function pickCanonicalFromOffers(offers = []) {
   return priced[0].price;
 }
 
+function uniquePositivePrices(offers = []) {
+  const seen = new Set();
+  for (const row of offers || []) {
+    const price = roundVariantMrp(row?.price);
+    if (price !== null && price > 0) seen.add(price);
+  }
+  return [...seen];
+}
+
+/**
+ * Pick the locked MRP for a catalog attach.
+ * Exact variant_key wins; otherwise reuse MRP from offers that are the same
+ * catalog variant (including empty offer specs that inherit the catalog).
+ */
+export function pickCanonicalVariantMrpFromOffers(
+  offers = [],
+  { variantKey = '', specifications = null, catalogSpecs = null } = {}
+) {
+  const rows = (offers || []).filter((row) => {
+    const price = roundVariantMrp(row?.price);
+    return price !== null && price > 0;
+  });
+  if (!rows.length) return null;
+
+  const vk = String(variantKey || '').trim();
+  if (vk) {
+    const exact = pickCanonicalFromOffers(
+      rows.filter((row) => String(row.variant_key || '').trim() === vk)
+    );
+    if (exact !== null) return exact;
+  }
+
+  const submitted =
+    specifications && typeof specifications === 'object' && !Array.isArray(specifications)
+      ? specifications
+      : {};
+  const catalog =
+    catalogSpecs && typeof catalogSpecs === 'object' && !Array.isArray(catalogSpecs)
+      ? catalogSpecs
+      : {};
+  const matchingSameVariant = rows.filter((row) => {
+    if (vk && String(row.variant_key || '').trim() === vk) return true;
+    const offerSpecs = extractOfferSpecificationsFromRow(row);
+    return specsRepresentSameCatalogVariant(submitted, offerSpecs, catalog);
+  });
+  if (matchingSameVariant.length) {
+    const matched = pickCanonicalFromOffers(matchingSameVariant);
+    if (matched !== null) return matched;
+  }
+
+  const prices = uniquePositivePrices(rows);
+  if (prices.length === 1) return prices[0];
+
+  const keys = [
+    ...new Set(rows.map((row) => String(row.variant_key || '').trim()).filter(Boolean))
+  ];
+  if (keys.length === 1) return pickCanonicalFromOffers(rows);
+
+  return null;
+}
+
 /**
  * Return the locked MRP for a catalog variant, if any supplier has set one.
+ * When variant_key is missing or new, still reuse MRP from the same catalog variant.
  */
 export async function fetchCanonicalVariantMrp(
   supabase,
-  { productId, variantKey, excludeOfferId = null } = {}
+  { productId, variantKey, excludeOfferId = null, specifications = null, catalogSpecs = null } = {}
 ) {
   const pid = String(productId || '').trim();
-  const vk = String(variantKey || '').trim();
-  if (!supabase || !pid || !vk) return null;
+  if (!supabase || !pid) return null;
 
   let query = supabase
     .from('supplier_products')
-    .select('id, price, status, is_active, updated_at, created_at')
+    .select('id, price, status, is_active, updated_at, created_at, variant_key, attributes')
     .eq('product_id', pid)
-    .eq('variant_key', vk)
     .neq('status', 'rejected')
     .not('price', 'is', null)
     .gt('price', 0);
@@ -59,13 +122,30 @@ export async function fetchCanonicalVariantMrp(
     query = query.neq('id', excludeOfferId);
   }
 
-  const { data, error } = await query;
+  let { data, error } = await query;
+  if (error) {
+    let fallback = supabase
+      .from('supplier_products')
+      .select('id, price, status, is_active, updated_at, created_at, variant_key')
+      .eq('product_id', pid)
+      .neq('status', 'rejected')
+      .not('price', 'is', null)
+      .gt('price', 0);
+    if (excludeOfferId) fallback = fallback.neq('id', excludeOfferId);
+    const retried = await fallback;
+    data = retried.data;
+    error = retried.error;
+  }
   if (error) {
     console.error('[variantMrp] fetchCanonicalVariantMrp error:', error);
     return null;
   }
 
-  return pickCanonicalFromOffers(data || []);
+  return pickCanonicalVariantMrpFromOffers(data || [], {
+    variantKey,
+    specifications,
+    catalogSpecs
+  });
 }
 
 export function buildVariantMrpMapKey(productId, variantKey) {
@@ -93,7 +173,7 @@ export async function fetchCanonicalMrpMapForVariants(supabase, pairs = []) {
 
   const { data, error } = await supabase
     .from('supplier_products')
-    .select('product_id, variant_key, price, status, is_active, updated_at, created_at')
+    .select('product_id, variant_key, price, status, is_active, updated_at, created_at, attributes')
     .in('product_id', [...productIds])
     .neq('status', 'rejected')
     .not('price', 'is', null)
@@ -104,16 +184,35 @@ export async function fetchCanonicalMrpMapForVariants(supabase, pairs = []) {
     return map;
   }
 
-  const grouped = new Map();
+  const { data: catalogRows, error: catalogError } = await supabase
+    .from('products')
+    .select('id, specifications')
+    .in('id', [...productIds]);
+  if (catalogError) {
+    console.warn('[variantMrp] catalog specs for MRP map failed:', catalogError);
+  }
+  const catalogById = new Map(
+    (catalogRows || []).map((row) => [String(row.id || '').trim(), row.specifications || {}])
+  );
+
+  const groupedByProduct = new Map();
   for (const row of data || []) {
-    const key = buildVariantMrpMapKey(row.product_id, row.variant_key);
-    if (!wanted.has(key)) continue;
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(row);
+    const pid = String(row.product_id || '').trim();
+    if (!pid) continue;
+    if (!groupedByProduct.has(pid)) groupedByProduct.set(pid, []);
+    groupedByProduct.get(pid).push(row);
   }
 
-  for (const [key, rows] of grouped.entries()) {
-    const canonical = pickCanonicalFromOffers(rows);
+  for (const pair of pairs || []) {
+    const productId = String(pair?.productId || '').trim();
+    const variantKey = String(pair?.variantKey || '').trim();
+    if (!productId || !variantKey) continue;
+    const key = buildVariantMrpMapKey(productId, variantKey);
+    if (!wanted.has(key) || map.has(key)) continue;
+    const canonical = pickCanonicalVariantMrpFromOffers(groupedByProduct.get(productId) || [], {
+      variantKey,
+      catalogSpecs: catalogById.get(productId) || {}
+    });
     if (canonical !== null) map.set(key, canonical);
   }
 

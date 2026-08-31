@@ -271,12 +271,11 @@ const SupplierProductSetup = ({ user }) => {
         ) {
           setSpecifications(data.specifications);
         }
+        const parsedLookupMrp = parseSupplierOfferPrice(
+          data.canonicalMrp ?? data.recommendedPrice
+        );
         const canonicalMrpFromLookup =
-          typeof data.canonicalMrp === 'number'
-            ? data.canonicalMrp
-            : typeof data.recommendedPrice === 'number'
-              ? data.recommendedPrice
-              : null;
+          parsedLookupMrp != null && parsedLookupMrp > 0 ? parsedLookupMrp : null;
         setRecommendedPrice(canonicalMrpFromLookup);
         setVariantMrpLocked(Boolean(data.variantMrpLocked) || canonicalMrpFromLookup != null);
         if (!priceTouched && canonicalMrpFromLookup != null) {

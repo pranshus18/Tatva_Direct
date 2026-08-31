@@ -2272,14 +2272,16 @@ const ProductModal = ({
   const unitSuggestionsRef = useRef(null);
 
   useEffect(() => {
-    const fixedMrp = getCanonicalVariantMrp(product);
+    const fixedMrp =
+      getCanonicalVariantMrp(product) ??
+      (typeof recommendedPrice === 'number' && recommendedPrice > 0 ? recommendedPrice : null);
     if (fixedMrp == null || mrpLocked || priceTouched) return;
     setFormData((prev) => {
       const currentPrice = parseSupplierOfferPrice(prev.price);
       if (currentPrice != null && currentPrice > 0) return prev;
       return { ...prev, price: String(Number(fixedMrp).toFixed(2)) };
     });
-  }, [product, mrpLocked, priceTouched]);
+  }, [product, mrpLocked, priceTouched, recommendedPrice]);
   
   // Track previous category to detect actual changes
   const previousCategoryRef = useRef(null);
@@ -2775,20 +2777,29 @@ const ProductModal = ({
         String(data.product?.id || '') === selectedProductId
       ) {
         applySelectedSpecs(data.specifications || {});
+        const parsedLookupMrp = parseSupplierOfferPrice(
+          data.canonicalMrp ?? data.recommendedPrice
+        );
+        const canonicalMrpFromLookup =
+          parsedLookupMrp != null && parsedLookupMrp > 0 ? parsedLookupMrp : null;
+        if (canonicalMrpFromLookup != null) {
+          setRecommendedPrice(canonicalMrpFromLookup);
+          setRecommendedPriceStats(data.priceStats || null);
+        }
         setFormData((prev) => {
           if (String(prev.catalogProductId || '') !== selectedProductId) return prev;
+          const currentPrice = parseSupplierOfferPrice(prev.price);
           return {
             ...prev,
             unit: String(prev.unit || '').trim() ? prev.unit : data.unit || prev.unit,
             brand: data.product?.brand || prev.brand || suggestion.brand || '',
             category: prev.category || data.product?.category || suggestion.category || '',
-            name: data.product?.name || prev.name
+            name: data.product?.name || prev.name,
+            ...(canonicalMrpFromLookup != null && (currentPrice === null || currentPrice <= 0)
+              ? { price: String(Number(canonicalMrpFromLookup).toFixed(2)) }
+              : {})
           };
         });
-        if (typeof data.canonicalMrp === 'number') {
-          setRecommendedPrice(data.canonicalMrp);
-          setRecommendedPriceStats(data.priceStats || null);
-        }
       } else if (
         suggestion?.specifications &&
         typeof suggestion.specifications === 'object' &&
@@ -2864,14 +2875,15 @@ const ProductModal = ({
           setSpecifications(nextSpecs);
         }
 
+        const parsedLookupMrp = parseSupplierOfferPrice(
+          data.canonicalMrp ?? data.recommendedPrice
+        );
         const canonicalMrpFromLookup =
-          typeof data.canonicalMrp === 'number'
-            ? data.canonicalMrp
-            : typeof data.recommendedPrice === 'number'
-              ? data.recommendedPrice
-              : null;
-        setRecommendedPrice(canonicalMrpFromLookup);
-        setRecommendedPriceStats(data.priceStats || null);
+          parsedLookupMrp != null && parsedLookupMrp > 0 ? parsedLookupMrp : null;
+        if (canonicalMrpFromLookup != null) {
+          setRecommendedPrice(canonicalMrpFromLookup);
+          setRecommendedPriceStats(data.priceStats || null);
+        }
         if (!product && !priceTouched && canonicalMrpFromLookup != null) {
           setFormData((prev) => {
             const currentPrice = parseSupplierOfferPrice(prev.price);
