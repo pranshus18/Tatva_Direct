@@ -33,6 +33,7 @@ import {
   assertProductHasSellableStock,
   PRODUCT_OUT_OF_STOCK_MESSAGE
 } from '../../services/cartStockGuardService.js';
+import { assertBuyerDoesNotOwnDiscoveryListing } from '../../services/catalogOfferSnapshotService.js';
 
 export function registerPoCartRoutes(ctx) {
   const {
@@ -245,6 +246,19 @@ router.post('/cart/discovery-item', authenticateToken, isServiceProvider, async 
     if (productError) throw productError;
     if (!product || String(product.status || '').toLowerCase() !== 'approved') {
       return res.status(404).json({ status: 'error', message: 'Product not found' });
+    }
+
+    const ownListingCheck = await assertBuyerDoesNotOwnDiscoveryListing(supabase, {
+      productId,
+      variantKey,
+      variantAsin: String(req.body?.variantAsin || '').trim(),
+      buyerUserId: req.userId
+    });
+    if (!ownListingCheck.ok) {
+      return res.status(ownListingCheck.status || 400).json({
+        status: 'error',
+        message: ownListingCheck.message
+      });
     }
 
     const { data: cartRow, error: cartError } = await supabase

@@ -347,6 +347,77 @@ export function mergeOwnedIntoDiscoverySuggestions(
   return sortDiscoverySuggestions([...byId.values()], { query });
 }
 
+const FAMILY_SIBLING_SELECT = `
+  id,
+  name,
+  category,
+  unit,
+  description,
+  brand,
+  gtin,
+  barcode,
+  specifications,
+  images,
+  price,
+  stock,
+  min_order_quantity,
+  average_rating,
+  total_reviews,
+  tags,
+  location,
+  status,
+  is_active,
+  updated_at,
+  family_id,
+  variant_id,
+  asin
+`;
+
+/**
+ * When a search hit is one variant of a family, include sibling catalog rows so a
+ * retailer who already sells Blue still sees Red on Product Discovery.
+ */
+export async function attachFamilySiblingProducts(supabase, products = []) {
+  const list = Array.isArray(products) ? products : [];
+  const familyIds = [...new Set(list.map((product) => product?.family_id).filter(Boolean))];
+  if (!familyIds.length) return list;
+
+  const { data: siblings, error } = await supabase
+    .from('products')
+    .select(FAMILY_SIBLING_SELECT)
+    .in('family_id', familyIds)
+    .eq('status', 'approved')
+    .or('is_active.eq.true,is_active.is.null');
+  if (error || !Array.isArray(siblings) || siblings.length === 0) {
+    if (error) {
+      console.error(
+        '[DiscoverySearch] family sibling lookup failed:',
+        error.message || error
+      );
+    }
+    return list;
+  }
+
+  const familyScore = new Map();
+  for (const product of list) {
+    if (!product?.family_id) continue;
+    familyScore.set(
+      product.family_id,
+      Math.max(familyScore.get(product.family_id) || 0, Number(product.matchScore) || 0)
+    );
+  }
+
+  const byId = new Map(list.map((product) => [product.id, product]));
+  for (const row of siblings) {
+    if (!row?.id || byId.has(row.id)) continue;
+    byId.set(row.id, {
+      ...row,
+      matchScore: familyScore.get(row.family_id) || 0
+    });
+  }
+  return [...byId.values()];
+}
+
 /**
  * Product Discovery search (listed approved products + supplier offers).
  *
@@ -501,7 +572,9 @@ export async function searchProductDiscoveryForUser(
     }
   }
 
-  const listedProducts = rawProducts || [];
+  const listedProducts = forCatalogAutocomplete
+    ? rawProducts || []
+    : await attachFamilySiblingProducts(supabase, rawProducts || []);
   const detectDiscoveryBrand = (product = {}) => {
     const specs =
       product?.specifications && typeof product.specifications === 'object' && !Array.isArray(product.specifications)
@@ -529,7 +602,7 @@ export async function searchProductDiscoveryForUser(
     const { data: offerRows } = await supabase
       .from('supplier_products')
       .select(
-        'id, product_id, supplier_id, price, stock, min_order_quantity, location, status, is_active, variant_key, attributes, supplier:users!supplier_products_supplier_id_fkey(id, profile)'
+        'id, product_id, supplier_id, price, stock, min_order_quantity, location, status, is_active, variant_key, variant_asin, attributes, supplier:users!supplier_products_supplier_id_fkey(id, profile)'
       )
       .in('product_id', productIds)
       .neq('status', 'rejected');

@@ -7,6 +7,7 @@ import {
   pickBetterListedOffer,
   reconcileDiscoveryProductFields
 } from '../services/catalogOfferSnapshotService.js';
+import { attachFamilySiblingProducts } from '../services/productDiscoverySearchService.js';
 
 test('aggregateListedSupplierOffers totals stock from approved active offers', () => {
   const aggregates = aggregateListedSupplierOffers([
@@ -208,4 +209,46 @@ test('pickBetterListedOffer prefers higher stock then lower price', () => {
     ),
     { _stock: 50, _price: 90 }
   );
+});
+
+test('attachFamilySiblingProducts adds other variants of the same family', async () => {
+  const hits = [
+    {
+      id: 'cement-black',
+      name: 'ACC cement black',
+      family_id: 'family-acc',
+      matchScore: 12
+    }
+  ];
+  const supabase = {
+    from(table) {
+      assert.equal(table, 'products');
+      return {
+        select() {
+          return this;
+        },
+        in() {
+          return this;
+        },
+        eq() {
+          return this;
+        },
+        or() {
+          return Promise.resolve({
+            data: [
+              { id: 'cement-black', name: 'ACC cement black', family_id: 'family-acc' },
+              { id: 'cement-grey', name: 'ACC cement grey', family_id: 'family-acc' }
+            ],
+            error: null
+          });
+        }
+      };
+    }
+  };
+
+  const merged = await attachFamilySiblingProducts(supabase, hits);
+  assert.equal(merged.length, 2);
+  const grey = merged.find((row) => row.id === 'cement-grey');
+  assert.equal(grey?.family_id, 'family-acc');
+  assert.equal(grey?.matchScore, 12);
 });

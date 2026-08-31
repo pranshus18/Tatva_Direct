@@ -240,8 +240,8 @@ export function isPoVendorSupplierUser(user) {
 }
 
 export function isSameUserId(left, right) {
-  const a = String(left || '').trim();
-  const b = String(right || '').trim();
+  const a = String(left || '').trim().toLowerCase();
+  const b = String(right || '').trim().toLowerCase();
   return Boolean(a && b && a === b);
 }
 

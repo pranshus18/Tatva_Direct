@@ -29,6 +29,7 @@ import {
   buildVariantMrpMapKey,
   fetchCanonicalMrpMapForVariants
 } from '../../services/variantMrpService.js';
+import { fetchCanonicalHsnGstMapForVariants } from '../../services/catalogOfferHsnGstService.js';
 
 export function registerSupplierProductListRoutes(ctx) {
   const {
@@ -252,12 +253,22 @@ router.get('/products', authenticateToken, async (req, res) => {
           variantKey: row.variantKey
         }));
       const mrpMap = await fetchCanonicalMrpMapForVariants(supabase, mrpPairs);
+      const hsnGstMap = await fetchCanonicalHsnGstMapForVariants(supabase, mrpPairs);
       for (const product of products) {
         if (!product?.variantKey || !product?.id) continue;
-        const canonicalMrp =
-          mrpMap.get(buildVariantMrpMapKey(product.id, product.variantKey)) ?? null;
+        const mapKey = buildVariantMrpMapKey(product.id, product.variantKey);
+        const canonicalMrp = mrpMap.get(mapKey) ?? null;
         product.canonicalMrp = canonicalMrp;
         product.variantMrpLocked = canonicalMrp !== null;
+        const canonicalHsnGst = hsnGstMap.get(mapKey) || null;
+        if (canonicalHsnGst) {
+          product.canonicalHsnCode = canonicalHsnGst.hsnCode;
+          product.canonicalIgstRate = canonicalHsnGst.igstRate;
+          product.canonicalCgstRate = canonicalHsnGst.cgstRate;
+          product.canonicalSgstRate = canonicalHsnGst.sgstRate;
+          product.variantHsnLocked = Boolean(canonicalHsnGst.hsnCode);
+          product.variantGstLocked = canonicalHsnGst.igstRate != null;
+        }
       }
     } catch (mrpError) {
       console.warn(

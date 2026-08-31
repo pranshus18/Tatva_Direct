@@ -55,6 +55,10 @@ import {
   formatVariantMrpMismatchMessage,
   roundVariantMrp
 } from '../../../services/variantMrpService.js';
+import {
+  fetchCanonicalHsnAndGst,
+  emptyCanonicalHsnGst
+} from '../../../services/catalogOfferHsnGstService.js';
 import { coalesceSameCatalogVariantIdentitiesForProduct } from '../../../services/coalesceCatalogVariantIdentityService.js';
 import { parseSupplierStockQuantity } from '../../../utils/parseSupplierStockQuantity.js';
 import {
@@ -247,11 +251,12 @@ export function buildSupplierProductCreateHandler(ctx) {
         otherData.sgst_rate,
         otherData.sgstRate
       ].some((value) => value !== undefined && value !== null && String(value).trim() !== '');
-      // Catalog-only create must not inherit category GST. Otherwise Product COV
-      // treats Inventory as complete before the supplier fills step 2.
-      const { igstRate, cgstRate, sgstRate } = clientSentTax
+      // Brand-new products must not inherit category GST. Attaching an existing
+      // catalog product copies HSN/GST from that product's offers after productId is known.
+      let { igstRate, cgstRate, sgstRate } = clientSentTax
         ? taxValidation.data
         : { igstRate: null, cgstRate: null, sgstRate: null };
+      let resolvedHsnCode = (hsnCode || '').toString().trim();
 
       const { categoryName, unitName } = await ensureCategoryAndUnit(supabase, {
         category,
@@ -632,6 +637,25 @@ export function buildSupplierProductCreateHandler(ctx) {
             excludeOfferId: updatingExistingOffer ? existingSupplierProduct?.id : null
           })
         : null;
+      const canonicalHsnGst =
+        productId && !isNewProduct
+          ? await fetchCanonicalHsnAndGst(supabase, {
+              productId,
+              variantKey: resolvedVariantKey,
+              specifications: normalizedSpecs,
+              catalogSpecs: catalogSpecsForVariantReuse,
+              excludeOfferId: updatingExistingOffer ? existingSupplierProduct?.id : null
+            })
+          : emptyCanonicalHsnGst();
+      if (canonicalHsnGst.hsnCode) {
+        resolvedHsnCode = canonicalHsnGst.hsnCode;
+      }
+      if (canonicalHsnGst.igstRate != null) {
+        igstRate = canonicalHsnGst.igstRate;
+        cgstRate = canonicalHsnGst.cgstRate;
+        sgstRate = canonicalHsnGst.sgstRate;
+      }
+      const inheritedProductTax = !clientSentTax && igstRate != null;
       let offerPrice = Number.isFinite(parsedPrice) ? parsedPrice : 0;
       if ((offerPrice <= 0 || !Number.isFinite(parsedPrice)) && canonicalMrp != null && canonicalMrp > 0) {
         offerPrice = canonicalMrp;
@@ -780,11 +804,11 @@ export function buildSupplierProductCreateHandler(ctx) {
           mpn: mpnInput,
           gtin: gtinInput,
           lsa: (lsa || '').toString().trim(),
-          hsnCode: (hsnCode || '').toString().trim(),
+          hsnCode: resolvedHsnCode,
           sku: (requestSpecs?.skuNo || requestSpecs?.sku || requestSpecs?.gsku || '').toString().trim(),
           packSize: (requestSpecs?.packSize || requestSpecs?.pack_size || '').toString().trim(),
           unit: (unit || '').toString().trim(),
-          ...(clientSentTax ? { igstRate, cgstRate, sgstRate } : {}),
+          ...(clientSentTax || inheritedProductTax ? { igstRate, cgstRate, sgstRate } : {}),
           tags: otherData.tags || [],
           images: normalizedImageUrls
         })
@@ -855,6 +879,28 @@ export function buildSupplierProductCreateHandler(ctx) {
         const existingPrice = roundVariantMrp(existingSupplierProduct?.price);
         if (existingPrice == null || existingPrice <= 0) {
           catalogUpdatePayload.price = canonicalMrp;
+        }
+      }
+      if (updatingExistingOffer && inheritedProductTax) {
+        const existingIgst = existingSupplierProduct?.igst_rate;
+        if (existingIgst === undefined || existingIgst === null || String(existingIgst).trim() === '') {
+          catalogUpdatePayload.igst_rate = igstRate;
+          catalogUpdatePayload.cgst_rate = cgstRate;
+          catalogUpdatePayload.sgst_rate = sgstRate;
+          const existingAttrs =
+            existingSupplierProduct?.attributes &&
+            typeof existingSupplierProduct.attributes === 'object' &&
+            !Array.isArray(existingSupplierProduct.attributes)
+              ? existingSupplierProduct.attributes
+              : {};
+          catalogUpdatePayload.attributes = {
+            ...existingAttrs,
+            ...(catalogUpdatePayload.attributes || {}),
+            igstRate,
+            cgstRate,
+            sgstRate,
+            ...(resolvedHsnCode ? { hsnCode: resolvedHsnCode } : {})
+          };
         }
       }
       if (resubmittingRejectedOffer) {

@@ -66,6 +66,7 @@ function makeSupabaseStub({
       if (table === 'category_supply_chains') return supplyChains;
       if (table === 'product_families') return [];
       if (table === 'product_variants') return [];
+      if (table === 'supplier_bcov_levels') return [];
       throw new Error(`Unexpected table ${table}`);
     };
 
@@ -422,4 +423,161 @@ test('service-provider detail shows only terminal-tier variants, not upstream of
     result.variants.some((v) => (v.images || []).some((url) => String(url).includes('laptop'))),
     false
   );
+});
+
+test('service-provider discovery hides a SKU the buyer already sells even when others list it', async () => {
+  const ownOffer = {
+    id: 'sp-own',
+    product_id: 'prod-1',
+    supplier_id: '54e4ec86-5de6-44fa-b8a8-2468e3af9df4',
+    price: 100,
+    stock: 10,
+    min_order_quantity: 1,
+    location: 'Pune',
+    variant_key: null,
+    variant_asin: null,
+    product_variant_id: null,
+    attributes: {},
+    status: 'approved',
+    is_active: true,
+    supplier: { id: '54e4ec86-5de6-44fa-b8a8-2468e3af9df4', profile: {} }
+  };
+  const peerOffer = {
+    ...ownOffer,
+    id: 'sp-peer',
+    supplier_id: 'other-retailer',
+    supplier: { id: 'other-retailer', profile: {} }
+  };
+
+  const { supabase } = makeSupabaseStub({
+    product: APPROVED_PRODUCT,
+    offerRows: [ownOffer, peerOffer]
+  });
+
+  const result = await getProductDiscoveryDetail(supabase, {
+    productId: 'prod-1',
+    audience: DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER,
+    buyerUserId: '54E4EC86-5DE6-44FA-B8A8-2468E3AF9DF4'
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.status, 404);
+  assert.match(String(result.message), /upstream partner/i);
+});
+
+test('service-provider discovery keeps sibling variants the buyer does not sell', async () => {
+  const { clearAdminBrandTerminalRoleMapCache } = await import('../utils/adminBrandSupplyChain.js');
+  clearAdminBrandTerminalRoleMapCache();
+
+  const retailerProfile = {
+    companyInfoEntries: [{ role: 'retailer', brands: 'acc' }]
+  };
+  const ownBlack = {
+    id: 'offer-own-black',
+    product_id: 'cement-black',
+    supplier_id: 'buyer-1',
+    price: 375,
+    stock: 10,
+    min_order_quantity: 1,
+    location: 'Delhi',
+    variant_key: 'black',
+    variant_asin: 'TS2FAXW',
+    product_variant_id: null,
+    attributes: { specifications: { color: 'black' } },
+    status: 'approved',
+    is_active: true,
+    supplier: { id: 'buyer-1', profile: retailerProfile }
+  };
+  const peerBlack = {
+    ...ownBlack,
+    id: 'offer-peer-black',
+    supplier_id: 'other-1',
+    supplier: { id: 'other-1', profile: retailerProfile }
+  };
+  const peerGrey = {
+    ...ownBlack,
+    id: 'offer-peer-grey',
+    product_id: 'cement-grey',
+    supplier_id: 'other-1',
+    variant_key: 'grey',
+    variant_asin: 'TS2FGREY',
+    attributes: { specifications: { color: 'Grey' } },
+    supplier: { id: 'other-1', profile: retailerProfile }
+  };
+  const cementBlack = {
+    ...APPROVED_PRODUCT,
+    id: 'cement-black',
+    name: 'ACC cement black',
+    brand: 'acc',
+    family_id: 'family-acc',
+    specifications: { color: 'black' }
+  };
+  const cementGrey = {
+    ...cementBlack,
+    id: 'cement-grey',
+    name: 'ACC cement grey',
+    specifications: { color: 'Grey' }
+  };
+
+  const { supabase } = makeSupabaseStub({
+    product: cementBlack,
+    familyProducts: [cementBlack, cementGrey],
+    offerRows: [ownBlack, peerBlack, peerGrey],
+    supplyChains: [
+      {
+        category_name: 'acc',
+        stages: [{ role: 'manufacturer' }, { role: 'distributor' }, { role: 'retailer' }]
+      }
+    ]
+  });
+
+  const result = await getProductDiscoveryDetail(supabase, {
+    productId: 'cement-black',
+    audience: DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER,
+    buyerUserId: 'buyer-1'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.variants.length, 1);
+  assert.equal(result.variants[0].productId, 'cement-grey');
+});
+
+test('upstream detail still shows a product the viewer already sells', async () => {
+  const ownOffer = {
+    id: 'sp-own',
+    product_id: 'prod-1',
+    supplier_id: 'supplier-1',
+    price: 100,
+    stock: 10,
+    min_order_quantity: 1,
+    location: 'Pune',
+    variant_key: null,
+    variant_asin: null,
+    product_variant_id: null,
+    attributes: {},
+    status: 'approved',
+    is_active: true,
+    supplier: { id: 'supplier-1', profile: {} }
+  };
+  const upstreamOffer = {
+    ...UPSTREAM_OFFER,
+    id: 'sp-up'
+  };
+
+  const { supabase } = makeSupabaseStub({
+    product: APPROVED_PRODUCT,
+    ownershipRows: [ownOffer],
+    offerRows: [ownOffer, upstreamOffer]
+  });
+
+  const result = await getProductDiscoveryDetail(supabase, {
+    productId: 'prod-1',
+    audience: DISCOVERY_DETAIL_AUDIENCES.SUPPLIER_UPSTREAM,
+    viewerSupplierId: 'supplier-1',
+    buyerUserId: 'supplier-1'
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.variants.length >= 1, true);
+  assert.equal(result.product.id, 'prod-1');
 });

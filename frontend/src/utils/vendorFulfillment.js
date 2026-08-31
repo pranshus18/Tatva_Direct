@@ -43,7 +43,7 @@ export function sanitizeVendorOffers(itemVendors, itemsList = [], excludeSupplie
     cleaned[itemId] = vendors
       .filter((v) => {
         if (!v || !v.id || !v.name) return false;
-        if (buyerId && String(v.id) === buyerId) return false;
+        if (buyerId && String(v.id || '').trim().toLowerCase() === buyerId.toLowerCase()) return false;
         if (!v.supplierProductId) return false;
         if (String(v.status || '').toLowerCase() !== 'approved') return false;
         return true;

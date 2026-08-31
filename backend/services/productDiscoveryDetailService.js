@@ -1,8 +1,12 @@
 import { resolveSellerOwnedListingImages } from './productImageService.js';
 import {
   aggregateEligibleDiscoveryOffers,
+  collectBuyerOwnedListingIndex,
   filterListedOffersForDiscoveryAudience,
   isListedSupplierOffer,
+  isBuyerOwnedDiscoveryProduct,
+  isBuyerOwnedDiscoveryVariant,
+  BUYER_OWNED_DISCOVERY_PURCHASE_MESSAGE,
   parseOfferPrice,
   reconcileDiscoveryProductFields
 } from './catalogOfferSnapshotService.js';
@@ -548,7 +552,7 @@ export async function enrichDiscoverySuggestionsWithVariantCounts(
     const { data: offerRows } = await supabase
       .from('supplier_products')
       .select(
-        'product_id, supplier_id, variant_key, status, is_active, supplier:users!supplier_products_supplier_id_fkey(id, profile)'
+        'product_id, supplier_id, variant_key, variant_asin, status, is_active, supplier:users!supplier_products_supplier_id_fkey(id, profile)'
       )
       .in('product_id', offerProductIds)
       .eq('status', 'approved')
@@ -799,8 +803,12 @@ export async function getProductDiscoveryDetail(
     audienceRules.audience === DISCOVERY_DETAIL_AUDIENCES.SERVICE_PROVIDER
       ? String(buyerUserId || '').trim() || null
       : null;
+  const ownedListingIndex = excludeSupplierId
+    ? collectBuyerOwnedListingIndex(offerRows || [], excludeSupplierId)
+    : null;
   // Buyer discovery variants must use the same terminal-tier offer set as stock/price —
   // otherwise upstream sellers appear as purchasable "variants" under the product.
+  // Also drop every seller's offer of a SKU/variant this buyer already lists.
   const listedOfferRows = filterListedOffersForDiscoveryAudience({
     offerRows: offerRows || [],
     productById,
@@ -808,7 +816,8 @@ export async function getProductDiscoveryDetail(
     terminalRoleByBrandMap,
     supplierMatchesBrandTerminalRoleFn: matchTerminalRole,
     enforceTerminalRole: audienceRules.enforceTerminalRole,
-    excludeSupplierId
+    excludeSupplierId,
+    ownedListingIndex
   });
 
   const applyBuyerBcov = Boolean(buyerUserId);
@@ -826,7 +835,8 @@ export async function getProductDiscoveryDetail(
     detectDiscoveryBrand,
     terminalRoleByBrandMap,
     supplierMatchesBrandTerminalRoleFn: matchTerminalRole,
-    excludeSupplierId
+    excludeSupplierId,
+    ownedListingIndex
   });
 
   const variantMetaByProductId = new Map();
@@ -997,6 +1007,26 @@ export async function getProductDiscoveryDetail(
       );
       if (variantCandidates.length > 0) break;
     }
+  }
+
+  if (ownedListingIndex) {
+    const remaining = variantCandidates.filter(
+      (variant) => !isBuyerOwnedDiscoveryVariant(variant, ownedListingIndex)
+    );
+    variantCandidates.length = 0;
+    variantCandidates.push(...remaining);
+  }
+
+  if (
+    audienceRules.requireEligibleOffers &&
+    variantCandidates.length === 0 &&
+    isBuyerOwnedDiscoveryProduct(baseProduct.id, ownedListingIndex)
+  ) {
+    return {
+      ok: false,
+      status: 404,
+      message: BUYER_OWNED_DISCOVERY_PURCHASE_MESSAGE
+    };
   }
 
   variantCandidates.sort((a, b) => {

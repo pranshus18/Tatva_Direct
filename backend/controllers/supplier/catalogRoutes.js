@@ -29,6 +29,9 @@ import {
   fetchCanonicalVariantMrp
 } from '../../services/variantMrpService.js';
 import {
+  fetchCanonicalHsnAndGst
+} from '../../services/catalogOfferHsnGstService.js';
+import {
   mergeSelectedCatalogProductSpecifications
 } from '../../services/supplierCatalogHelpersService.js';
 import { pickExactCatalogLookupProduct, catalogBrandsConflict } from '../../utils/catalogProductAttach.js';
@@ -280,9 +283,15 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       );
     }
 
-    // Canonical MRP for this catalog variant (same for every supplier).
+    // Canonical MRP / HSN / GST for this catalog variant (same for every supplier).
     let canonicalMrp = null;
     let supplierCountWithMrp = 0;
+    let canonicalHsnGst = {
+      hsnCode: null,
+      igstRate: null,
+      cgstRate: null,
+      sgstRate: null
+    };
     if (product?.id) {
       canonicalMrp = await fetchCanonicalVariantMrp(supabase, {
         productId: product.id,
@@ -291,6 +300,12 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
         catalogSpecs: product.specifications
       });
       supplierCountWithMrp = canonicalMrp !== null ? 1 : 0;
+      canonicalHsnGst = await fetchCanonicalHsnAndGst(supabase, {
+        productId: product.id,
+        variantKey,
+        specifications: mergedSpecifications,
+        catalogSpecs: product.specifications
+      });
     }
 
     const recommendedPrice = canonicalMrp;
@@ -312,6 +327,12 @@ router.get('/products/lookup', authenticateToken, async (req, res) => {
       canonicalMrp,
       recommendedPrice,
       variantMrpLocked: canonicalMrp !== null,
+      hsnCode: canonicalHsnGst.hsnCode,
+      igstRate: canonicalHsnGst.igstRate,
+      cgstRate: canonicalHsnGst.cgstRate,
+      sgstRate: canonicalHsnGst.sgstRate,
+      variantHsnLocked: Boolean(canonicalHsnGst.hsnCode),
+      variantGstLocked: canonicalHsnGst.igstRate != null,
       priceStats: {
         canonicalMrp,
         supplierCountWithMrp

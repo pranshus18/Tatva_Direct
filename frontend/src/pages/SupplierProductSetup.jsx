@@ -14,8 +14,11 @@ import {
   SUPPLIER_CURRENT_STOCK_LABEL,
   SUPPLIER_MRP_FIELD_LABEL,
   SUPPLIER_MRP_INCLUSIVE_HINT,
+  VARIANT_HSN_FIXED_MESSAGE,
+  VARIANT_GST_FIXED_MESSAGE,
   formatVariantMrpFixedMessage,
-  parseSupplierOfferPrice
+  parseSupplierOfferPrice,
+  mergeCatalogHsnGstIntoForm
 } from '../utils/supplierStockLabel';
 import RupeeInput from '../components/RupeeInput';
 import BrandSelect from '../components/BrandSelect';
@@ -59,6 +62,8 @@ const SupplierProductSetup = ({ user }) => {
   const [locations, setLocations] = useState([]);
   const [recommendedPrice, setRecommendedPrice] = useState(null);
   const [variantMrpLocked, setVariantMrpLocked] = useState(false);
+  const [variantHsnLocked, setVariantHsnLocked] = useState(false);
+  const [variantGstLocked, setVariantGstLocked] = useState(false);
   const [priceTouched, setPriceTouched] = useState(false);
   const [specifications, setSpecifications] = useState({});
   const [hasAdminSpecTemplate, setHasAdminSpecTemplate] = useState(false);
@@ -136,6 +141,15 @@ const SupplierProductSetup = ({ user }) => {
     if (e.target?.name === 'price') {
       if (variantMrpLocked) return;
       setPriceTouched(true);
+    }
+    if (e.target?.name === 'hsnCode' && variantHsnLocked) return;
+    if (
+      (e.target?.name === 'igst_rate' ||
+        e.target?.name === 'cgst_rate' ||
+        e.target?.name === 'sgst_rate') &&
+      variantGstLocked
+    ) {
+      return;
     }
     if (e.target?.name === 'igst_rate') {
       setFormData((prev) => applyIgstToTaxFields(prev, e.target.value));
@@ -260,9 +274,6 @@ const SupplierProductSetup = ({ user }) => {
         ) {
           return;
         }
-        if (data.unit) {
-          setFormData((prev) => ({ ...prev, unit: data.unit }));
-        }
         if (
           data.specifications &&
           typeof data.specifications === 'object' &&
@@ -278,15 +289,21 @@ const SupplierProductSetup = ({ user }) => {
           parsedLookupMrp != null && parsedLookupMrp > 0 ? parsedLookupMrp : null;
         setRecommendedPrice(canonicalMrpFromLookup);
         setVariantMrpLocked(Boolean(data.variantMrpLocked) || canonicalMrpFromLookup != null);
-        if (!priceTouched && canonicalMrpFromLookup != null) {
-          setFormData((prev) => {
-            const currentPrice = parseSupplierOfferPrice(prev.price);
+        setVariantHsnLocked(Boolean(data.variantHsnLocked) || Boolean(data.hsnCode));
+        setVariantGstLocked(Boolean(data.variantGstLocked) || data.igstRate != null);
+        setFormData((prev) => {
+          let next = prev;
+          if (data.unit) {
+            next = { ...next, unit: data.unit };
+          }
+          if (!priceTouched && canonicalMrpFromLookup != null) {
+            const currentPrice = parseSupplierOfferPrice(next.price);
             if ((currentPrice === null || currentPrice <= 0) && canonicalMrpFromLookup != null) {
-              return { ...prev, price: String(Number(canonicalMrpFromLookup).toFixed(2)) };
+              next = { ...next, price: String(Number(canonicalMrpFromLookup).toFixed(2)) };
             }
-            return prev;
-          });
-        }
+          }
+          return mergeCatalogHsnGstIntoForm(next, data);
+        });
       } catch (e) {
         // silent
       }
@@ -554,21 +571,27 @@ const SupplierProductSetup = ({ user }) => {
                   onChange={handleChange}
                   placeholder="e.g. 7214, 2523, 2505"
                   inputMode="numeric"
+                  disabled={variantHsnLocked}
                 />
               </div>
+              {variantHsnLocked ? (
+                <p className="field-hint" style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#64748b' }}>
+                  {VARIANT_HSN_FIXED_MESSAGE}
+                </p>
+              ) : null}
             </div>
-            <div className="form-group">
-              <label htmlFor="mpn">MPN / Model Number</label>
-              <div className="input-wrapper">
-                <input
-                  type="text"
-                  id="mpn"
-                  name="mpn"
-                  value={formData.mpn}
-                  onChange={handleChange}
-                  placeholder="Manufacturer part number"
-                />
-              </div>
+          </div>
+          <div className="form-group">
+            <label htmlFor="mpn">MPN / Model Number</label>
+            <div className="input-wrapper">
+              <input
+                type="text"
+                id="mpn"
+                name="mpn"
+                value={formData.mpn}
+                onChange={handleChange}
+                placeholder="Manufacturer part number"
+              />
             </div>
           </div>
 
@@ -728,6 +751,7 @@ const SupplierProductSetup = ({ user }) => {
                   onChange={handleChange}
                   required
                   className="select-input"
+                  disabled={variantGstLocked}
                 >
                   <option value="">Select SGST rate</option>
                   {CGST_SGST_OPTIONS.map((rate) => (
@@ -746,6 +770,7 @@ const SupplierProductSetup = ({ user }) => {
                   onChange={handleChange}
                   required
                   className="select-input"
+                  disabled={variantGstLocked}
                 >
                   <option value="">Select CGST rate</option>
                   {CGST_SGST_OPTIONS.map((rate) => (
@@ -764,6 +789,7 @@ const SupplierProductSetup = ({ user }) => {
                   onChange={handleChange}
                   required
                   className="select-input"
+                  disabled={variantGstLocked}
                 >
                   <option value="">Select IGST rate</option>
                   {IGST_OPTIONS.map((rate) => (
@@ -771,6 +797,11 @@ const SupplierProductSetup = ({ user }) => {
                   ))}
                 </select>
               </div>
+              {variantGstLocked ? (
+                <p className="field-hint" style={{ marginTop: '0.35rem', fontSize: '0.8rem', color: '#64748b' }}>
+                  {VARIANT_GST_FIXED_MESSAGE}
+                </p>
+              ) : null}
             </div>
           </div>
 

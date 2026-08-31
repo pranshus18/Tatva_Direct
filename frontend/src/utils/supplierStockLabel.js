@@ -130,6 +130,92 @@ function parseStoredHsnCode(product) {
   );
 }
 
+export function normalizeDisplayedHsnCode(raw) {
+  return String(raw || '').replace(/\D/g, '');
+}
+
+export function getCanonicalHsnCode(product) {
+  return (
+    normalizeDisplayedHsnCode(product?.canonicalHsnCode) ||
+    parseStoredHsnCode(product)
+  );
+}
+
+export function parseCanonicalGstRates(source = {}) {
+  const igst = parseStoredTaxRate(
+    source.igstRate ?? source.igst_rate ?? source.canonicalIgstRate
+  );
+  const cgst = parseStoredTaxRate(
+    source.cgstRate ?? source.cgst_rate ?? source.canonicalCgstRate
+  );
+  const sgst = parseStoredTaxRate(
+    source.sgstRate ?? source.sgst_rate ?? source.canonicalSgstRate
+  );
+  if (igst === null || cgst === null || sgst === null) return null;
+  return { igstRate: igst, cgstRate: cgst, sgstRate: sgst };
+}
+
+export function getCanonicalGstRates(product) {
+  const fromCanonical = parseCanonicalGstRates({
+    canonicalIgstRate: product?.canonicalIgstRate,
+    canonicalCgstRate: product?.canonicalCgstRate,
+    canonicalSgstRate: product?.canonicalSgstRate
+  });
+  if (fromCanonical) return fromCanonical;
+  if (hasStoredGstRates(product)) {
+    const attrs =
+      product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
+        ? product.attributes
+        : {};
+    return parseCanonicalGstRates({
+      igstRate: product?.igst_rate ?? product?.igstRate ?? attrs.igstRate,
+      cgstRate: product?.cgst_rate ?? product?.cgstRate ?? attrs.cgstRate,
+      sgstRate: product?.sgst_rate ?? product?.sgstRate ?? attrs.sgstRate
+    });
+  }
+  return null;
+}
+
+/** True when another supplier has already set HSN for this catalog product. */
+export function isVariantHsnEnforced(product) {
+  return Boolean(normalizeDisplayedHsnCode(product?.canonicalHsnCode));
+}
+
+/** True when another supplier has already set GST for this catalog product. */
+export function isVariantGstEnforced(product) {
+  return (
+    parseCanonicalGstRates({
+      canonicalIgstRate: product?.canonicalIgstRate,
+      canonicalCgstRate: product?.canonicalCgstRate,
+      canonicalSgstRate: product?.canonicalSgstRate
+    }) != null
+  );
+}
+
+export function isSupplierHsnInputDisabled(product) {
+  return isSupplierHsnLocked(product) || isVariantHsnEnforced(product);
+}
+
+export function isSupplierGstInputDisabled(product) {
+  return isSupplierGstLocked(product) || isVariantGstEnforced(product);
+}
+
+/** Fill empty HSN/GST from catalog lookup or list enrichment. Does not overwrite typed values. */
+export function mergeCatalogHsnGstIntoForm(formData = {}, source = {}) {
+  const next = { ...formData };
+  const incomingHsn = normalizeDisplayedHsnCode(source.hsnCode ?? source.canonicalHsnCode);
+  if (incomingHsn && !normalizeDisplayedHsnCode(next.hsnCode)) {
+    next.hsnCode = incomingHsn;
+  }
+  const gst = parseCanonicalGstRates(source);
+  if (gst && !String(next.igst_rate ?? '').trim()) {
+    next.igst_rate = String(gst.igstRate);
+    next.cgst_rate = String(gst.cgstRate);
+    next.sgst_rate = String(gst.sgstRate);
+  }
+  return next;
+}
+
 function parseStoredGtin(product) {
   const attrs =
     product?.attributes && typeof product.attributes === 'object' && !Array.isArray(product.attributes)
@@ -177,3 +263,7 @@ export const SUPPLIER_GST_LOCKED_MESSAGE =
   'GST rates are locked after approval. Contact admin if you need to change them.';
 export const SUPPLIER_GTIN_LOCKED_MESSAGE =
   'GTIN / UPC / EAN is locked after approval. Contact admin if you need to change it.';
+export const VARIANT_HSN_FIXED_MESSAGE =
+  'HSN code for this product is already set. Contact admin to change it.';
+export const VARIANT_GST_FIXED_MESSAGE =
+  'GST rates for this product are already set. Contact admin to change them.';

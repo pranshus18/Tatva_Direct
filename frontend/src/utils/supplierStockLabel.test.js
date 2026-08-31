@@ -10,8 +10,14 @@ import {
   isSupplierHsnLocked,
   isSupplierGstLocked,
   isSupplierGtinLocked,
-  getCanonicalVariantMrp,
+  isVariantHsnEnforced,
+  isVariantGstEnforced,
+  getCanonicalHsnCode,
+  parseCanonicalGstRates,
+  mergeCatalogHsnGstIntoForm,
   formatVariantMrpFixedMessage,
+  getCanonicalVariantMrp,
+  parseSupplierOfferPrice,
   parseSupplierLsaThreshold
 } from './supplierStockLabel';
 
@@ -84,6 +90,46 @@ describe('approved identity field locks', () => {
     expect(isSupplierHsnLocked({ status: 'approved', hsnCode: '' })).toBe(false);
     expect(isSupplierGstLocked({ status: 'approved', igst_rate: null })).toBe(false);
     expect(isSupplierGtinLocked({ status: 'approved', gtin: '' })).toBe(false);
+  });
+});
+
+describe('catalog HSN/GST reuse', () => {
+  it('reads canonical HSN/GST from another supplier offer', () => {
+    expect(getCanonicalHsnCode({ canonicalHsnCode: '6910' })).toBe('6910');
+    expect(parseCanonicalGstRates({ igstRate: 18, cgstRate: 9, sgstRate: 9 })).toEqual({
+      igstRate: 18,
+      cgstRate: 9,
+      sgstRate: 9
+    });
+    expect(isVariantHsnEnforced({ canonicalHsnCode: '6910' })).toBe(true);
+    expect(
+      isVariantGstEnforced({ canonicalIgstRate: 18, canonicalCgstRate: 9, canonicalSgstRate: 9 })
+    ).toBe(true);
+  });
+
+  it('fills empty form HSN and GST from lookup without overwriting typed values', () => {
+    expect(
+      mergeCatalogHsnGstIntoForm(
+        { hsnCode: '', igst_rate: '', cgst_rate: '', sgst_rate: '' },
+        { hsnCode: '6910', igstRate: 18, cgstRate: 9, sgstRate: 9 }
+      )
+    ).toEqual({
+      hsnCode: '6910',
+      igst_rate: '18',
+      cgst_rate: '9',
+      sgst_rate: '9'
+    });
+    expect(
+      mergeCatalogHsnGstIntoForm(
+        { hsnCode: '7324', igst_rate: '12', cgst_rate: '6', sgst_rate: '6' },
+        { hsnCode: '6910', igstRate: 18, cgstRate: 9, sgstRate: 9 }
+      )
+    ).toEqual({
+      hsnCode: '7324',
+      igst_rate: '12',
+      cgst_rate: '6',
+      sgst_rate: '6'
+    });
   });
 });
 

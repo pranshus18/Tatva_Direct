@@ -10,18 +10,173 @@ export function isListedSupplierOffer(row = {}) {
   return normalizedStatus === 'approved' && row?.is_active === true;
 }
 
+/** JWT / PostgREST UUID casing can differ between environments. */
+export function normalizeActorId(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 export function resolveOfferSupplierId(offer = {}) {
-  return String(offer?.supplier_id || offer?.supplier?.id || '').trim();
+  const nested = offer?.supplier;
+  const nestedId = Array.isArray(nested) ? nested[0]?.id : nested?.id;
+  return String(offer?.supplier_id || nestedId || '').trim();
 }
 
 export const BUYER_OWN_LISTING_PURCHASE_MESSAGE =
   'You cannot buy this product from your own supplier listing. Choose another supplier of the same product or variant.';
 
+export const BUYER_OWNED_DISCOVERY_PURCHASE_MESSAGE =
+  'You already sell this product or variant. Source it from your upstream partner instead of Product Discovery.';
+
 /** Dual-role buyers must not purchase from their own supplier listing. */
 export function isExcludedBuyerSupplierOffer(offer, excludeSupplierId) {
-  const excluded = String(excludeSupplierId || '').trim();
+  const excluded = normalizeActorId(excludeSupplierId);
   if (!excluded) return false;
-  return resolveOfferSupplierId(offer) === excluded;
+  return normalizeActorId(resolveOfferSupplierId(offer)) === excluded;
+}
+
+function emptyBuyerOwnedListingIndex() {
+  return {
+    productIds: new Set(),
+    productIdsWithoutVariant: new Set(),
+    variantKeysByProductId: new Map(),
+    variantAsins: new Set()
+  };
+}
+
+export function isBuyerOwnedCatalogOffer(offer, buyerSupplierId) {
+  if (!isExcludedBuyerSupplierOffer(offer, buyerSupplierId)) return false;
+  return String(offer?.status || '').trim().toLowerCase() !== 'rejected';
+}
+
+/**
+ * Index of catalog rows / variants the buyer already sells.
+ * Used so Product Discovery hides those SKUs even when other retailers list them.
+ * Upstream sourcing does not pass excludeSupplierId, so it stays visible there.
+ */
+export function collectBuyerOwnedListingIndex(offerRows = [], buyerSupplierId) {
+  const index = emptyBuyerOwnedListingIndex();
+  if (!normalizeActorId(buyerSupplierId)) return index;
+
+  for (const offer of offerRows || []) {
+    if (!isBuyerOwnedCatalogOffer(offer, buyerSupplierId)) continue;
+    const productId = normalizeActorId(offer?.product_id);
+    const variantKey = String(offer?.variant_key || '').trim().toLowerCase();
+    const variantAsin = String(offer?.variant_asin || '').trim().toLowerCase();
+    if (productId) index.productIds.add(productId);
+    if (variantAsin) index.variantAsins.add(variantAsin);
+    if (variantKey && productId) {
+      if (!index.variantKeysByProductId.has(productId)) {
+        index.variantKeysByProductId.set(productId, new Set());
+      }
+      index.variantKeysByProductId.get(productId).add(variantKey);
+    } else if (productId && !variantAsin) {
+      index.productIdsWithoutVariant.add(productId);
+    }
+  }
+  return index;
+}
+
+export function isBuyerOwnedDiscoveryVariant(listing = {}, ownedIndex = null) {
+  if (!ownedIndex) return false;
+  const productId = normalizeActorId(
+    listing?.productId || listing?.product_id || listing?.id
+  );
+  const variantKey = String(listing?.variantKey || listing?.variant_key || '')
+    .trim()
+    .toLowerCase();
+  const variantAsin = String(listing?.variantAsin || listing?.variant_asin || '')
+    .trim()
+    .toLowerCase();
+
+  if (variantAsin && ownedIndex.variantAsins.has(variantAsin)) return true;
+
+  // An explicit variant identity must match that variant only. Owning Blue must
+  // never hide Red of the same catalog product, even if the buyer's own row
+  // was saved without a variant_key (common in production).
+  if (variantKey) {
+    if (!productId) return false;
+    const keys = ownedIndex.variantKeysByProductId.get(productId);
+    return Boolean(keys?.has(variantKey));
+  }
+
+  if (productId && ownedIndex.productIds.has(productId)) {
+    return true;
+  }
+  return false;
+}
+
+export function isBuyerOwnedDiscoveryProduct(productId, ownedIndex = null) {
+  if (!ownedIndex) return false;
+  return ownedIndex.productIds.has(normalizeActorId(productId));
+}
+
+/** True when this offer is the same SKU/variant the buyer already sells (any seller). */
+export function offerMatchesBuyerOwnedListing(offer, ownedIndex) {
+  if (!ownedIndex) return false;
+  return isBuyerOwnedDiscoveryVariant(
+    {
+      productId: offer?.product_id,
+      variantKey: offer?.variant_key,
+      variantAsin: offer?.variant_asin
+    },
+    ownedIndex
+  );
+}
+
+function resolveOwnedListingIndex({
+  offerRows = [],
+  excludeSupplierId = null,
+  ownedListingIndex = null
+} = {}) {
+  if (ownedListingIndex) return ownedListingIndex;
+  if (!normalizeActorId(excludeSupplierId)) return null;
+  return collectBuyerOwnedListingIndex(offerRows, excludeSupplierId);
+}
+
+export async function assertBuyerDoesNotOwnDiscoveryListing(
+  supabase,
+  { productId, variantKey = '', variantAsin = '', buyerUserId = null } = {}
+) {
+  const buyerId = String(buyerUserId || '').trim();
+  const pid = String(productId || '').trim();
+  if (!buyerId || !pid) return { ok: true };
+
+  const { data, error } = await supabase
+    .from('supplier_products')
+    .select('id, product_id, supplier_id, variant_key, variant_asin, status, is_active')
+    .eq('product_id', pid)
+    .neq('status', 'rejected')
+    .limit(200);
+  if (error) throw error;
+
+  const ownedIndex = collectBuyerOwnedListingIndex(data || [], buyerId);
+  if (variantKey || variantAsin) {
+    if (
+      isBuyerOwnedDiscoveryVariant(
+        { productId: pid, variantKey, variantAsin },
+        ownedIndex
+      )
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        message: BUYER_OWNED_DISCOVERY_PURCHASE_MESSAGE
+      };
+    }
+    return { ok: true };
+  }
+
+  const remainingUnownedVariant = (data || []).some(
+    (row) =>
+      isListedSupplierOffer(row) && !offerMatchesBuyerOwnedListing(row, ownedIndex)
+  );
+  if (remainingUnownedVariant) return { ok: true };
+  if (!isBuyerOwnedDiscoveryProduct(pid, ownedIndex)) return { ok: true };
+  return {
+    ok: false,
+    status: 400,
+    message: BUYER_OWNED_DISCOVERY_PURCHASE_MESSAGE
+  };
 }
 
 /** Prefer higher stock; tie-break on lower positive price. */
@@ -102,8 +257,14 @@ export function aggregateEligibleDiscoveryOffers({
   detectDiscoveryBrand,
   terminalRoleByBrandMap,
   supplierMatchesBrandTerminalRoleFn,
-  excludeSupplierId = null
+  excludeSupplierId = null,
+  ownedListingIndex = null
 }) {
+  const resolvedOwnedIndex = resolveOwnedListingIndex({
+    offerRows,
+    excludeSupplierId,
+    ownedListingIndex
+  });
   const eligibleSupplierCountByProduct = new Map();
   const totalStockByProduct = new Map();
   const bestOfferByProduct = new Map();
@@ -119,7 +280,8 @@ export function aggregateEligibleDiscoveryOffers({
         terminalRoleByBrandMap,
         supplierMatchesBrandTerminalRoleFn,
         enforceTerminalRole: true,
-        excludeSupplierId
+        excludeSupplierId,
+        ownedListingIndex: resolvedOwnedIndex
       })
     ) {
       continue;
@@ -158,10 +320,12 @@ export function isOfferEligibleForDiscoveryAudience({
   terminalRoleByBrandMap,
   supplierMatchesBrandTerminalRoleFn = () => true,
   enforceTerminalRole = false,
-  excludeSupplierId = null
+  excludeSupplierId = null,
+  ownedListingIndex = null
 } = {}) {
   if (!isListedSupplierOffer(offer)) return false;
   if (isExcludedBuyerSupplierOffer(offer, excludeSupplierId)) return false;
+  if (offerMatchesBuyerOwnedListing(offer, ownedListingIndex)) return false;
   if (!enforceTerminalRole) return true;
   const brandLabel =
     typeof detectDiscoveryBrand === 'function' ? detectDiscoveryBrand(product) : '';
@@ -181,8 +345,14 @@ export function filterListedOffersForDiscoveryAudience({
   terminalRoleByBrandMap,
   supplierMatchesBrandTerminalRoleFn = () => true,
   enforceTerminalRole = false,
-  excludeSupplierId = null
+  excludeSupplierId = null,
+  ownedListingIndex = null
 } = {}) {
+  const resolvedOwnedIndex = resolveOwnedListingIndex({
+    offerRows,
+    excludeSupplierId,
+    ownedListingIndex
+  });
   return (offerRows || []).filter((offer) =>
     isOfferEligibleForDiscoveryAudience({
       offer,
@@ -191,7 +361,8 @@ export function filterListedOffersForDiscoveryAudience({
       terminalRoleByBrandMap,
       supplierMatchesBrandTerminalRoleFn,
       enforceTerminalRole,
-      excludeSupplierId
+      excludeSupplierId,
+      ownedListingIndex: resolvedOwnedIndex
     })
   );
 }

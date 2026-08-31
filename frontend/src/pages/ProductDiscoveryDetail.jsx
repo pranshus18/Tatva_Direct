@@ -998,9 +998,10 @@ export default function ProductDiscoveryDetail({ portal = 'service_provider' }) 
           icon={Package}
           title="Product not found"
           description={
-            isUpstreamPortal
+            error ||
+            (isUpstreamPortal
               ? 'This product may have been removed or is no longer available in the catalog.'
-              : 'This product may have been removed or is not available for discovery.'
+              : 'This product may have been removed or is not available for discovery.')
           }
           action={
             <Button type="button" onClick={handleBackToList}>

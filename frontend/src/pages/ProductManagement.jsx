@@ -66,6 +66,8 @@ import {
   SUPPLIER_HSN_LOCKED_MESSAGE,
   SUPPLIER_GST_LOCKED_MESSAGE,
   SUPPLIER_GTIN_LOCKED_MESSAGE,
+  VARIANT_HSN_FIXED_MESSAGE,
+  VARIANT_GST_FIXED_MESSAGE,
   formatSupplierStockAvailability,
   getSupplierStockHealth,
   isSupplierInventoryConfigured,
@@ -73,8 +75,13 @@ import {
   isSupplierHsnLocked,
   isSupplierGstLocked,
   isSupplierGtinLocked,
+  isVariantHsnEnforced,
+  isVariantGstEnforced,
   formatVariantMrpFixedMessage,
   getCanonicalVariantMrp,
+  getCanonicalHsnCode,
+  getCanonicalGstRates,
+  mergeCatalogHsnGstIntoForm,
   parseSupplierOfferPrice
 } from '../utils/supplierStockLabel';
 import { formatRupee, formatRupeePerUnit } from '../utils/formatRupee';
@@ -2197,8 +2204,16 @@ const ProductModal = ({
   declaredBrandNames = null
 }) => {
   const mrpLocked = Boolean(product && isSupplierMrpLocked(product));
-  const hsnLocked = Boolean(product && isSupplierHsnLocked(product));
-  const gstLocked = Boolean(product && isSupplierGstLocked(product));
+  const [lookupHsnLocked, setLookupHsnLocked] = useState(
+    Boolean(product && (isVariantHsnEnforced(product) || product?.variantHsnLocked))
+  );
+  const [lookupGstLocked, setLookupGstLocked] = useState(
+    Boolean(product && (isVariantGstEnforced(product) || product?.variantGstLocked))
+  );
+  const hsnLocked =
+    Boolean(product && isSupplierHsnLocked(product)) || lookupHsnLocked;
+  const gstLocked =
+    Boolean(product && isSupplierGstLocked(product)) || lookupGstLocked;
   const gtinLocked = Boolean(product && isSupplierGtinLocked(product));
   const [recommendedPrice, setRecommendedPrice] = useState(
     getCanonicalVariantMrp(product) ?? null
@@ -2210,6 +2225,7 @@ const ProductModal = ({
     (typeof recommendedPrice === 'number' ? recommendedPrice : null);
   const variantMrpEnforced = Boolean(canonicalMrp != null && canonicalMrp > 0 && !mrpLocked);
   const mrpInputDisabled = mrpLocked || variantMrpEnforced;
+  const initialCanonicalGst = getCanonicalGstRates(product);
   const { brandNames: fetchedSupplierBrandNames } = useSupplierBrands({
     source: 'profile',
     enabled: !Array.isArray(declaredBrandNames)
@@ -2222,15 +2238,30 @@ const ProductModal = ({
     name: product?.name || '',
     brand: product?.brand || '',
     gtin: product?.gtin || '',
-    hsnCode: product?.hsnCode || product?.hsn_code || '',
+    hsnCode: product?.hsnCode || product?.hsn_code || getCanonicalHsnCode(product) || '',
     lsa: product?.lsa || product?.attributes?.lsa || '',
     category: product?.category || '',
     price: product?.price || '',
     unit: product?.unit || '',
     stock: product?.stock != null && product?.stock !== '' ? String(product.stock) : '',
-    igst_rate: product?.igst_rate != null ? String(product.igst_rate) : '',
-    cgst_rate: product?.cgst_rate != null ? String(product.cgst_rate) : '',
-    sgst_rate: product?.sgst_rate != null ? String(product.sgst_rate) : '',
+    igst_rate:
+      product?.igst_rate != null && product?.igst_rate !== ''
+        ? String(product.igst_rate)
+        : initialCanonicalGst?.igstRate != null
+          ? String(initialCanonicalGst.igstRate)
+          : '',
+    cgst_rate:
+      product?.cgst_rate != null && product?.cgst_rate !== ''
+        ? String(product.cgst_rate)
+        : initialCanonicalGst?.cgstRate != null
+          ? String(initialCanonicalGst.cgstRate)
+          : '',
+    sgst_rate:
+      product?.sgst_rate != null && product?.sgst_rate !== ''
+        ? String(product.sgst_rate)
+        : initialCanonicalGst?.sgstRate != null
+          ? String(initialCanonicalGst.sgstRate)
+          : '',
     description: product?.supplierDescription || product?.description || '',
     images: getSupplierOfferImagesForForm(product)
   });
@@ -2282,6 +2313,25 @@ const ProductModal = ({
       return { ...prev, price: String(Number(fixedMrp).toFixed(2)) };
     });
   }, [product, mrpLocked, priceTouched, recommendedPrice]);
+
+  useEffect(() => {
+    const source = {
+      hsnCode: product?.canonicalHsnCode,
+      igstRate: product?.canonicalIgstRate,
+      cgstRate: product?.canonicalCgstRate,
+      sgstRate: product?.canonicalSgstRate
+    };
+    if (product?.canonicalHsnCode) setLookupHsnLocked(true);
+    if (product?.canonicalIgstRate != null && product?.canonicalIgstRate !== '') {
+      setLookupGstLocked(true);
+    }
+    setFormData((prev) => mergeCatalogHsnGstIntoForm(prev, source));
+  }, [
+    product?.canonicalHsnCode,
+    product?.canonicalIgstRate,
+    product?.canonicalCgstRate,
+    product?.canonicalSgstRate
+  ]);
   
   // Track previous category to detect actual changes
   const previousCategoryRef = useRef(null);
@@ -2801,19 +2851,24 @@ const ProductModal = ({
           setRecommendedPrice(canonicalMrpFromLookup);
           setRecommendedPriceStats(data.priceStats || null);
         }
+        if (data.variantHsnLocked || data.hsnCode) setLookupHsnLocked(true);
+        if (data.variantGstLocked || data.igstRate != null) setLookupGstLocked(true);
         setFormData((prev) => {
           if (String(prev.catalogProductId || '') !== selectedProductId) return prev;
           const currentPrice = parseSupplierOfferPrice(prev.price);
-          return {
-            ...prev,
-            unit: String(prev.unit || '').trim() ? prev.unit : data.unit || prev.unit,
-            brand: data.product?.brand || prev.brand || suggestion.brand || '',
-            category: prev.category || data.product?.category || suggestion.category || '',
-            name: data.product?.name || prev.name,
-            ...(canonicalMrpFromLookup != null && (currentPrice === null || currentPrice <= 0)
-              ? { price: String(Number(canonicalMrpFromLookup).toFixed(2)) }
-              : {})
-          };
+          return mergeCatalogHsnGstIntoForm(
+            {
+              ...prev,
+              unit: String(prev.unit || '').trim() ? prev.unit : data.unit || prev.unit,
+              brand: data.product?.brand || prev.brand || suggestion.brand || '',
+              category: prev.category || data.product?.category || suggestion.category || '',
+              name: data.product?.name || prev.name,
+              ...(canonicalMrpFromLookup != null && (currentPrice === null || currentPrice <= 0)
+                ? { price: String(Number(canonicalMrpFromLookup).toFixed(2)) }
+                : {})
+            },
+            data
+          );
         });
       } else if (
         suggestion?.specifications &&
@@ -2867,12 +2922,6 @@ const ProductModal = ({
           return;
         }
 
-        if (data.unit) {
-          setFormData((prev) =>
-            String(prev.unit || '').trim() ? prev : { ...prev, unit: data.unit }
-          );
-        }
-
         if (
           data.specifications &&
           typeof data.specifications === 'object' &&
@@ -2894,15 +2943,21 @@ const ProductModal = ({
           setRecommendedPrice(canonicalMrpFromLookup);
           setRecommendedPriceStats(data.priceStats || null);
         }
-        if (!product && !priceTouched && canonicalMrpFromLookup != null) {
-          setFormData((prev) => {
-            const currentPrice = parseSupplierOfferPrice(prev.price);
+        if (data.variantHsnLocked || data.hsnCode) setLookupHsnLocked(true);
+        if (data.variantGstLocked || data.igstRate != null) setLookupGstLocked(true);
+        setFormData((prev) => {
+          let next = prev;
+          if (data.unit && !String(prev.unit || '').trim()) {
+            next = { ...next, unit: data.unit };
+          }
+          if (!product && !priceTouched && canonicalMrpFromLookup != null) {
+            const currentPrice = parseSupplierOfferPrice(next.price);
             if (currentPrice === null || currentPrice <= 0) {
-              return { ...prev, price: String(Number(canonicalMrpFromLookup).toFixed(2)) };
+              next = { ...next, price: String(Number(canonicalMrpFromLookup).toFixed(2)) };
             }
-            return prev;
-          });
-        }
+          }
+          return mergeCatalogHsnGstIntoForm(next, data);
+        });
       } catch (e) {
         // Silent fail: keep the specs already shown for this selected product.
       }
@@ -3273,9 +3328,12 @@ const ProductModal = ({
       delete productData.price;
       delete productData.stock;
       delete productData.location;
-      delete productData.igst_rate;
-      delete productData.cgst_rate;
-      delete productData.sgst_rate;
+      const attachingExistingCatalog = Boolean(String(formData.catalogProductId || '').trim());
+      if (!attachingExistingCatalog) {
+        delete productData.igst_rate;
+        delete productData.cgst_rate;
+        delete productData.sgst_rate;
+      }
       delete productData.lsa;
       if (!approvedNeedsSpecFill && !categorySpecFillRequired && !String(formData.catalogProductId || '').trim()) {
         const keepSpecsOnCreate =
@@ -5364,7 +5422,9 @@ const ProductModal = ({
                   />
                   {hsnLocked ? (
                     <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
-                      {SUPPLIER_HSN_LOCKED_MESSAGE}
+                      {product && isSupplierHsnLocked(product)
+                        ? SUPPLIER_HSN_LOCKED_MESSAGE
+                        : VARIANT_HSN_FIXED_MESSAGE}
                     </p>
                   ) : null}
                 </div>
@@ -5429,7 +5489,9 @@ const ProductModal = ({
                   </select>
                   {gstLocked ? (
                     <p className="pm-category-hint" style={{ marginTop: '0.35rem', color: '#64748b' }}>
-                      {SUPPLIER_GST_LOCKED_MESSAGE}
+                      {product && isSupplierGstLocked(product)
+                        ? SUPPLIER_GST_LOCKED_MESSAGE
+                        : VARIANT_GST_FIXED_MESSAGE}
                     </p>
                   ) : null}
                 </div>
