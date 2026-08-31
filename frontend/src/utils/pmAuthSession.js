@@ -68,6 +68,28 @@ export function setPmCustomerCredentials({ accessToken = null, refreshToken = nu
   }
 }
 
+export function applyPmVaultCredentials(pmVault) {
+  if (!pmVault || typeof pmVault !== 'object') return getPmCustomerCredentials();
+  setPmCustomerCredentials(pmVault);
+  return getPmCustomerCredentials();
+}
+
+/** Persist rotated PM tokens returned on Tatva API responses. */
+export function applyPmAuthFromResponse(response) {
+  if (!response?.headers || typeof response.headers.get !== 'function') {
+    return getPmCustomerCredentials();
+  }
+  const accessToken =
+    response.headers.get('X-PM-Access-Token') || response.headers.get('x-pm-access-token');
+  const refreshToken =
+    response.headers.get('X-PM-Refresh-Token') || response.headers.get('x-pm-refresh-token');
+  const pmUserId = response.headers.get('X-PM-User-Id') || response.headers.get('x-pm-user-id');
+  if (accessToken || refreshToken || pmUserId) {
+    setPmCustomerCredentials({ accessToken, refreshToken, pmUserId });
+  }
+  return getPmCustomerCredentials();
+}
+
 export function getPmCustomerCredentials() {
   return {
     accessToken: readStorageItem(PM_ACCESS_TOKEN_KEY),

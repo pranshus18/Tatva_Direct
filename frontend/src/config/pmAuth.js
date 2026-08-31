@@ -28,6 +28,7 @@ export function buildPmApiCatalog(usersHost, paymentHost, paymentCompleteHost = 
     usersMe: `${users}/api/users/me`,
     sendOtp: `${users}/api/auth/send-otp`,
     verifyOtp: `${users}/api/auth/verify-otp`,
+    refresh: `${users}/api/auth/refresh`,
     vault: `${users}/api/vault`,
     vaultTransactions: `${users}/api/vault/transactions`,
     vaultAddMoney: `${users}/api/vault/add-money`,
@@ -164,6 +165,7 @@ const activePmApis = buildPmApiCatalog(
 
 export const PM_SEND_OTP_URL = activePmApis.sendOtp;
 export const PM_VERIFY_OTP_URL = activePmApis.verifyOtp;
+export const PM_REFRESH_URL = activePmApis.refresh;
 export const PM_VENDOR_LEADS_URL = activePmApis.vendorLeads;
 export const PM_VERIFY_GST_URL = activePmApis.verifyGst;
 export const PM_USERS_URL = activePmApis.users;
@@ -185,6 +187,31 @@ export const PM_VENDOR_LEAD_VENDOR_FLAG = 'supplier';
 /** Platform tenant flag — sent on all PM vault/payment APIs for DB filtering. */
 export const PM_PLATFORM_FLAG = 'tatvadirect';
 export const PM_VENDOR_LEAD_FLAG = PM_PLATFORM_FLAG;
+
+const FOREIGN_PM_PLATFORM_FLAGS = new Set(['tatvavision', 'tatvaops']);
+
+function platformFlagKey(flag) {
+  return String(flag || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+export function isForeignPmPlatformFlag(flag) {
+  return FOREIGN_PM_PLATFORM_FLAGS.has(platformFlagKey(flag));
+}
+
+export function normalizePmStoredUserFlag(flag, fallback = PM_PLATFORM_FLAG) {
+  const raw = String(flag || '').trim();
+  if (!raw || isForeignPmPlatformFlag(raw)) {
+    return String(fallback || PM_PLATFORM_FLAG || 'tatvadirect').trim() || 'tatvadirect';
+  }
+  return raw;
+}
+
+export function resolvePmDisplayPlatformFlag() {
+  return String(PM_PLATFORM_FLAG || 'tatvadirect').trim() || 'tatvadirect';
+}
 
 export function withPmPlatformFlagQuery(url, flag = PM_PLATFORM_FLAG) {
   const base = String(url || '').trim();

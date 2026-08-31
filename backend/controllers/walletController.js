@@ -38,6 +38,7 @@ import {
   usesPlatformVault
 } from '../services/pmVaultService.js';
 import { rememberPmVaultPlatformAttribution } from '../services/pmVaultPlatformAttribution.js';
+import { applyPmAuthToHttpResponse } from '../services/pmUserService.js';
 import { PM_PLATFORM_FLAG, pmUrl } from '../config/pmApi.js';
 function normalizeUserType(value) {
   return String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
@@ -287,7 +288,10 @@ walletRouter.post('/topup/create', authenticateToken, requirePlatformVaultUser, 
     }
 
     const credentials = readPmCredentialsFromRequest(req);
-    const { pmUserId, accessToken } = await ensurePmVaultAuth(req.user, credentials);
+    const { pmUserId, accessToken } = applyPmAuthToHttpResponse(
+      res,
+      await ensurePmVaultAuth(req.user, credentials)
+    );
     const paymentIntent = await initiatePmVaultTopup({
       pmUserId,
       amountInRupees: amount,
@@ -351,7 +355,10 @@ walletRouter.post(
       }
 
       const credentials = readPmCredentialsFromRequest(req);
-      const { pmUserId, accessToken } = await ensurePmVaultAuth(req.user, credentials);
+      const { pmUserId, accessToken } = applyPmAuthToHttpResponse(
+        res,
+        await ensurePmVaultAuth(req.user, credentials)
+      );
       const result = await addPmVaultOfflineMoney({
         pmUserId,
         accessToken,
@@ -403,7 +410,10 @@ walletRouter.post('/topup/confirm', authenticateToken, requirePlatformVaultUser,
     const payload = parseWithSchema(walletTopupConfirmSchema, req.body || {});
     const { razorpayOrderId, razorpayPaymentId, razorpaySignature } = payload;
     const credentials = readPmCredentialsFromRequest(req);
-    const { accessToken } = await ensurePmVaultAuth(req.user, credentials);
+    const { accessToken } = applyPmAuthToHttpResponse(
+      res,
+      await ensurePmVaultAuth(req.user, credentials)
+    );
 
     const completion = await completePmVaultTopup({
       razorpayOrderId,

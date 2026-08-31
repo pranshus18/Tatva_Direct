@@ -40,7 +40,12 @@ import {
   resolveSupplierProfileShippingAddresses,
   validateShippingAddressEntries
 } from '../profileHelpers.js';
-import { syncPmCustomerProfileForUser, resolvePmPortalFlag } from '../../../services/pmUserService.js';
+import {
+  applyPmAuthToHttpResponse,
+  resolvePmPortalFlag,
+  syncPmCustomerProfileForUser,
+  toPmVaultPayload
+} from '../../../services/pmUserService.js';
 import { mergeParsedShippingAddress } from '../../../utils/parseStructuredShippingAddress.js';
 import { isAddressComplete } from '../../po/shared/poHelpers.js';
 import {
@@ -50,6 +55,7 @@ import {
 } from '../../../services/pmAddressService.js';
 import { readPmCredentialsFromRequest } from '../../../services/pmVaultService.js';
 import { catalogBrandDedupKey } from '../../../services/supplyChainSharedService.js';
+import { normalizePmStoredUserFlag } from '../../../config/pmApi.js';
 
 export function registerProfileUpdateRoutes(router) {
   router.put('/', authenticateToken, async (req, res) => {
@@ -207,7 +213,10 @@ export function registerProfileUpdateRoutes(router) {
             phoneNumber: phoneNumber || currentProfile.pmCustomerProfile?.phoneNumber || '',
             status: currentProfile.pmCustomerProfile?.status || 'active',
             isEmailVerified: currentProfile.pmCustomerProfile?.isEmailVerified === true,
-            flag: resolvePmPortalFlag(currentUser) || currentProfile.pmCustomerProfile?.flag || ''
+            flag:
+              resolvePmPortalFlag(currentUser) ||
+              normalizePmStoredUserFlag(currentProfile.pmCustomerProfile?.flag) ||
+              ''
           };
         }
       } else if (profileData.userType === 'supplier') {
@@ -1085,12 +1094,14 @@ export function registerProfileUpdateRoutes(router) {
 
       const isPmFormat = Boolean(String(payload.building || '').trim() || String(payload.zip || '').trim());
       let pmSaved = null;
+      let addressAuth = null;
       try {
         const credentials = readPmCredentialsFromRequest(req);
-        const auth = await resolvePmAddressAuth(currentUser, credentials, { requireToken: true });
+        addressAuth = await resolvePmAddressAuth(currentUser, credentials, { requireToken: true });
+        applyPmAuthToHttpResponse(res, addressAuth);
         pmSaved = await createPmShippingAddress({
-          pmUserId: auth.pmUserId,
-          accessToken: auth.accessToken,
+          pmUserId: addressAuth.pmUserId,
+          accessToken: addressAuth.accessToken,
           input: {
             ...payload,
             ...mapped,
@@ -1144,13 +1155,15 @@ export function registerProfileUpdateRoutes(router) {
 
       if (updateError) throw updateError;
 
+      const pmVault = toPmVaultPayload(addressAuth);
       return res.json({
         status: 'success',
         message: pmSaved
           ? 'Shipping address saved to the PM platform'
           : 'Shipping address saved to profile',
         shippingAddress: newEntry,
-        shippingAddresses: nextShippingAddresses
+        shippingAddresses: nextShippingAddresses,
+        ...(pmVault ? { pmVault } : {})
       });
     } catch (error) {
       if (String(error?.name || '') === 'ZodError') {

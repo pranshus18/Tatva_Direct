@@ -2,7 +2,8 @@ import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { Toaster } from 'sonner';
 import ProtectedRoute from './components/ProtectedRoute';
-import { clearPmAuthSession } from './utils/pmAuthSession';
+import { applyPmVaultCredentials, clearPmAuthSession } from './utils/pmAuthSession';
+import { restorePmVaultSession } from './services/pmAuthService';
 import { clearCachedProfilePhotoUrl } from './utils/profilePhoto';
 import ServiceProviderRoute from './components/ServiceProviderRoute';
 import SupplierRoute from './components/SupplierRoute';
@@ -328,6 +329,16 @@ function App() {
     }
     setUser(normalizedUser);
     setIsAuthenticated(true);
+
+    if (userData?.pmVault) {
+      applyPmVaultCredentials(userData.pmVault);
+    } else if (token) {
+      try {
+        await restorePmVaultSession();
+      } catch {
+        // Address/vault calls refresh again if this restore fails.
+      }
+    }
     
     // Check supplier setup status if user is a supplier
     if (normalizeUserType(normalizedUser.userType) === 'supplier') {

@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isForeignPmPlatformFlag,
+  normalizePmStoredUserFlag,
+  resolvePmDisplayPlatformFlag,
+  PM_PLATFORM_FLAG,
   resolvePmApiEnv,
   remapPmUrlToEnv,
   resolvePmBaseUrl,
@@ -139,6 +143,7 @@ test('every PM API exists for both development and production', () => {
     'usersMe',
     'sendOtp',
     'verifyOtp',
+    'refresh',
     'vault',
     'vaultTransactions',
     'vaultAddMoney',
@@ -197,6 +202,10 @@ test('every PM API exists for both development and production', () => {
     'https://opsapi.withtatva.ai/users/api/auth/verify-otp'
   );
   assert.equal(
+    PM_API_CATALOG.production.refresh,
+    'https://opsapi.withtatva.ai/users/api/auth/refresh'
+  );
+  assert.equal(
     PM_API_CATALOG.production.usersMe,
     'https://opsapi.withtatva.ai/users/api/users/me'
   );
@@ -243,4 +252,15 @@ test('active exported PM URLs all live on the resolved env hosts', async () => {
     assert.ok(String(url).includes(expectedMarker), `${name} must use ${expectedMarker}`);
     assert.equal(String(url).includes(wrongMarker), false, `${name} must not use ${wrongMarker}`);
   }
+});
+
+test('normalizePmStoredUserFlag replaces other Tatva product tenants with tatvadirect', () => {
+  assert.equal(isForeignPmPlatformFlag('tatvavision'), true);
+  assert.equal(isForeignPmPlatformFlag('tatvaops'), true);
+  assert.equal(isForeignPmPlatformFlag('tatvadirect'), false);
+  assert.equal(normalizePmStoredUserFlag('tatvavision'), 'tatvadirect');
+  assert.equal(normalizePmStoredUserFlag('tatva-vision'), 'tatvadirect');
+  assert.equal(normalizePmStoredUserFlag('service_provider'), 'service_provider');
+  assert.equal(normalizePmStoredUserFlag(''), PM_PLATFORM_FLAG);
+  assert.equal(resolvePmDisplayPlatformFlag(), 'tatvadirect');
 });

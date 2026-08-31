@@ -687,8 +687,11 @@ export async function createProfileResponse(user) {
           ? 'rejected'
           : 'approved';
 
+    const pmDisplay = resolveServiceProviderDisplayFromPm(user);
+
     return {
       ...baseProfile,
+      pmCustomerAccount: pmDisplay.pmCustomerAccount,
       businessType: base.businessType || '',
       categories: base.categories || [],
       shippingAddresses: deriveShippingAddressesFromProfile(user),

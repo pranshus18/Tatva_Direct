@@ -2,9 +2,13 @@ import { supabase } from '../config/supabase.js';
 import {
   buildPmUserUrl,
   buildPmPlatformHeaders,
+  PM_PLATFORM_FLAG,
   PM_USER_FLAG_SERVICE_PROVIDER,
   PM_USER_FLAG_SUPPLIER,
+  normalizePmStoredUserFlag,
   pmUrl,
+  resolvePmDisplayPlatformFlag,
+  withPmPlatformFlagBody,
   withPmPlatformFlagQuery
 } from '../config/pmApi.js';
 
@@ -50,7 +54,8 @@ export function mapPmUserToCustomerProfile(pmUser) {
     phoneNumber: normalizeIndianMobile(pmUser.phoneNumber || pmUser.phone),
     status: String(pmUser.status || 'active').trim() || 'active',
     isEmailVerified: pmUser.isEmailVerified === true,
-    flag: String(pmUser.flag || '').trim(),
+    flag: normalizePmStoredUserFlag(pmUser.flag),
+    platformFlag: resolvePmDisplayPlatformFlag(),
     role: String(pmUser.role || 'user').trim() || 'user',
     profileImageUrl: String(pmUser.profileImage?.url || '').trim()
   };
@@ -96,9 +101,206 @@ export function getPmAuthFromUser(user) {
   const accessToken = String(auth.accessToken || '').trim() || null;
   const refreshToken = String(auth.refreshToken || '').trim() || null;
 
-  if (!pmUserId && !accessToken) return null;
+  if (!pmUserId && !accessToken && !refreshToken) return null;
 
   return { pmUserId, accessToken, refreshToken };
+}
+
+function uniqueNonEmpty(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values) {
+    const cleaned = String(value || '').trim();
+    if (!cleaned || seen.has(cleaned)) continue;
+    seen.add(cleaned);
+    out.push(cleaned);
+  }
+  return out;
+}
+
+/** Parse access/refresh tokens from PM verify-otp and refresh responses. */
+export function extractPmAuthTokens(payload) {
+  if (!payload || typeof payload !== 'object') {
+    return { accessToken: null, refreshToken: null, pmUserId: null };
+  }
+
+  const root = payload.data && typeof payload.data === 'object' ? payload.data : payload;
+  const tokens = root.tokens || root.tokenPair || root.token || {};
+  const tokenObj = tokens && typeof tokens === 'object' && !Array.isArray(tokens) ? tokens : {};
+  const accessToken =
+    String(
+      tokenObj.accessToken || tokenObj.access_token || root.accessToken || root.access_token || ''
+    ).trim() || null;
+  const refreshToken =
+    String(
+      tokenObj.refreshToken ||
+        tokenObj.refresh_token ||
+        root.refreshToken ||
+        root.refresh_token ||
+        ''
+    ).trim() || null;
+  const user = root.user && typeof root.user === 'object' ? root.user : {};
+  const pmUserId = String(user._id || user.id || root.pmUserId || '').trim() || null;
+  return { accessToken, refreshToken, pmUserId };
+}
+
+export function toPmVaultPayload(auth) {
+  if (!auth || (!auth.accessToken && !auth.refreshToken)) return null;
+  return {
+    pmUserId: auth.pmUserId || null,
+    accessToken: auth.accessToken || null,
+    refreshToken: auth.refreshToken || null
+  };
+}
+
+export function applyPmAuthToHttpResponse(res, auth) {
+  if (!res || !auth) return auth;
+  const accessToken = String(auth.accessToken || '').trim();
+  const refreshToken = String(auth.refreshToken || '').trim();
+  const pmUserId = String(auth.pmUserId || '').trim();
+  if (accessToken) res.setHeader('X-PM-Access-Token', accessToken);
+  if (refreshToken) res.setHeader('X-PM-Refresh-Token', refreshToken);
+  if (pmUserId) res.setHeader('X-PM-User-Id', pmUserId);
+  return auth;
+}
+
+function pmRefreshFallbackUrls() {
+  const urls = [];
+  try {
+    urls.push(pmUrl('refresh'));
+  } catch {
+    /* catalog may be older in tests */
+  }
+  try {
+    urls.push(`${pmUrl('usersBase')}/api/auth/refresh-token`);
+  } catch {
+    /* ignore */
+  }
+  return uniqueNonEmpty(urls);
+}
+
+/**
+ * Exchange a PM refresh token for a new access token.
+ * Tries /api/auth/refresh then /api/auth/refresh-token (PM hosts use both names).
+ */
+export async function refreshPmAccessToken(refreshToken) {
+  const token = String(refreshToken || '').trim();
+  if (!token) return null;
+
+  for (const url of pmRefreshFallbackUrls()) {
+    try {
+      const response = await fetch(withPmPlatformFlagQuery(url), {
+        method: 'POST',
+        headers: buildPmPlatformHeaders({ json: true, accessToken: token }),
+        body: JSON.stringify(
+          withPmPlatformFlagBody({
+            refreshToken: token,
+            refresh_token: token
+          })
+        )
+      });
+
+      let payload = {};
+      try {
+        payload = await response.json();
+      } catch {
+        payload = {};
+      }
+
+      if (response.status === 404) continue;
+      if (!response.ok || payload.success === false) continue;
+
+      const extracted = extractPmAuthTokens(payload);
+      if (extracted.accessToken) {
+        return {
+          accessToken: extracted.accessToken,
+          refreshToken: extracted.refreshToken || token,
+          pmUserId: extracted.pmUserId
+        };
+      }
+    } catch (error) {
+      console.warn('[PM auth] refresh request failed:', error?.message || error);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Validate the PM access token; when it is stale, mint a new one from the refresh token.
+ * Persists rotated tokens on the Tatva user so the next request does not depend on OTP.
+ */
+export async function ensureFreshPmAuth(user, credentials = {}) {
+  const stored = getPmAuthFromUser(user) || {};
+  const accessCandidates = uniqueNonEmpty([
+    credentials.pmAccessToken,
+    credentials.accessToken,
+    stored.accessToken
+  ]);
+  const refreshCandidates = uniqueNonEmpty([
+    credentials.pmRefreshToken,
+    credentials.refreshToken,
+    stored.refreshToken
+  ]);
+
+  let accessToken = '';
+  let refreshToken = refreshCandidates[0] || '';
+  let pmUserId = String(
+    stored.pmUserId || user?.profile?.pmCustomerProfile?.pmUserId || credentials.pmUserId || ''
+  ).trim();
+  let pmUser = null;
+  let refreshed = false;
+
+  for (const candidate of accessCandidates) {
+    pmUser = await fetchPmCurrentUser(candidate);
+    if (pmUser) {
+      accessToken = candidate;
+      pmUserId = String(pmUser._id || pmUser.id || '').trim() || pmUserId;
+      break;
+    }
+  }
+
+  if (!accessToken && refreshCandidates.length > 0) {
+    for (const candidate of refreshCandidates) {
+      const next = await refreshPmAccessToken(candidate);
+      if (!next?.accessToken) continue;
+      accessToken = next.accessToken;
+      refreshToken = next.refreshToken || candidate;
+      pmUserId = next.pmUserId || pmUserId;
+      refreshed = true;
+      pmUser = await fetchPmCurrentUser(accessToken);
+      if (pmUser) {
+        pmUserId = String(pmUser._id || pmUser.id || '').trim() || pmUserId;
+      }
+      break;
+    }
+  }
+
+  const storedAccess = String(stored.accessToken || '').trim();
+  const storedRefresh = String(stored.refreshToken || '').trim();
+  const shouldPersist =
+    user?.id &&
+    (refreshed ||
+      (pmUserId && pmUserId !== String(stored.pmUserId || '').trim()) ||
+      (accessToken && accessToken !== storedAccess) ||
+      (refreshToken && refreshToken !== storedRefresh));
+
+  if (shouldPersist) {
+    await persistPmAuthCredentials(user, {
+      pmUserId,
+      accessToken,
+      refreshToken
+    });
+  }
+
+  return {
+    pmUserId: pmUserId || null,
+    accessToken: accessToken || null,
+    refreshToken: refreshToken || null,
+    pmUser,
+    refreshed,
+    hadAnyToken: accessCandidates.length > 0 || refreshCandidates.length > 0
+  };
 }
 
 export function isTatvaCustomerProfileEstablished(user, localFields = null) {
@@ -131,7 +333,12 @@ function resolveLocalCustomerFields(user, localCustomerFields = null) {
       localCustomerFields?.phoneNumber || pmStored.phoneNumber || user?.phone
     ),
     status: String(localCustomerFields?.status || pmStored.status || 'active').trim() || 'active',
-    flag: String(localCustomerFields?.flag || portalFlag || pmStored.flag || '').trim(),
+    flag: String(
+      localCustomerFields?.flag ||
+        portalFlag ||
+        normalizePmStoredUserFlag(pmStored.flag) ||
+        ''
+    ).trim(),
     pmUserId: String(
       localCustomerFields?.pmUserId || pmStored.pmUserId || getPmAuthFromUser(user)?.pmUserId || ''
     ).trim()
@@ -573,6 +780,10 @@ export function resolveServiceProviderDisplayFromPm(user) {
     contactPerson: pmCustomer.fullName || user?.name || '',
     email: pmCustomer.email || (isPmPlaceholderEmail(user?.email) ? '' : user?.email || ''),
     phone: pmCustomer.phoneNumber || normalizeIndianMobile(user?.phone) || '',
-    pmCustomerAccount: pmCustomer
+    pmCustomerAccount: {
+      ...pmCustomer,
+      flag: resolvePmDisplayPlatformFlag(),
+      platformFlag: resolvePmDisplayPlatformFlag()
+    }
   };
 }

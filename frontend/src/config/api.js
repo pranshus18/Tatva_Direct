@@ -1,5 +1,5 @@
 // API Base URL - automatically detects local development vs production.
-import { getPmCustomerCredentials } from '../utils/pmAuthSession';
+import { applyPmAuthFromResponse, getPmCustomerCredentials } from '../utils/pmAuthSession';
 // Priority: 1. Valid environment variable, 2. Local development (localhost), 3. Production URL fallback.
 // Canonical Render service for this repo is tatva-direct (hyphen). The older tatvadirect host
 // is missing newer routes such as POST /api/po/transport/confirm.
@@ -152,6 +152,8 @@ export const authFetch = async (endpoint, options = {}) => {
       headers,
       signal
     });
+
+    applyPmAuthFromResponse(response);
 
     if (response.status === 401) {
       localStorage.removeItem('token');

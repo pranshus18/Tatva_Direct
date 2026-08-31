@@ -5,7 +5,7 @@ import {
 } from '../config/pmApi.js';
 import { supabase } from '../config/supabase.js';
 import {
-  fetchPmCurrentUser,
+  ensureFreshPmAuth,
   fetchPmUserByPhone,
   getPmAuthFromUser,
   persistPmAuthCredentials
@@ -393,28 +393,10 @@ export function mergeLocalAndPmShippingAddresses(localAddresses = [], pmAddresse
 
 export async function resolvePmAddressAuth(user, credentials = {}, options = {}) {
   const requireToken = options.requireToken === true;
-  const stored = getPmAuthFromUser(user) || {};
-  let accessToken = clean(
-    credentials?.pmAccessToken || credentials?.accessToken || stored.accessToken
-  );
-  let pmUserId = clean(
-    stored.pmUserId ||
-      user?.profile?.pmCustomerProfile?.pmUserId ||
-      credentials?.pmUserId
-  );
-
-  if (accessToken) {
-    const pmUserFromToken = await fetchPmCurrentUser(accessToken);
-    if (pmUserFromToken) {
-      pmUserId = clean(pmUserFromToken._id || pmUserFromToken.id) || pmUserId;
-    } else if (requireToken) {
-      const error = new Error('PM session expired. Sign in again with phone OTP.');
-      error.code = 'PM_AUTH_REQUIRED';
-      throw error;
-    } else {
-      accessToken = '';
-    }
-  }
+  const auth = await ensureFreshPmAuth(user, credentials);
+  let accessToken = clean(auth.accessToken);
+  let pmUserId = clean(auth.pmUserId);
+  const refreshToken = clean(auth.refreshToken);
 
   if (!pmUserId) {
     const phone = normalizeIndianMobile(
@@ -436,16 +418,7 @@ export async function resolvePmAddressAuth(user, credentials = {}, options = {})
     throw error;
   }
 
-  const refreshToken = clean(
-    credentials?.pmRefreshToken || credentials?.refreshToken || stored.refreshToken
-  );
-
-  if (
-    user?.id &&
-    (pmUserId !== stored.pmUserId ||
-      (accessToken && accessToken !== stored.accessToken) ||
-      (!stored.pmUserId && pmUserId))
-  ) {
+  if (user?.id && pmUserId && pmUserId !== clean(auth.pmUserId)) {
     await persistPmAuthCredentials(user, {
       pmUserId,
       ...(accessToken ? { accessToken } : {}),
@@ -455,13 +428,20 @@ export async function resolvePmAddressAuth(user, credentials = {}, options = {})
 
   if (requireToken && !accessToken) {
     const error = new Error(
-      'Sign in with phone OTP to sync shipping addresses with the PM platform.'
+      auth.hadAnyToken
+        ? 'PM session expired. Sign in again with phone OTP.'
+        : 'Sign in with phone OTP to sync shipping addresses with the PM platform.'
     );
     error.code = 'PM_AUTH_REQUIRED';
     throw error;
   }
 
-  return { pmUserId, accessToken: accessToken || null };
+  return {
+    pmUserId,
+    accessToken: accessToken || null,
+    refreshToken: refreshToken || null,
+    refreshed: auth.refreshed === true
+  };
 }
 
 /** Pull PM shipping addresses for a phone-linked account and persist merged profile rows. */

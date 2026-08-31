@@ -4,6 +4,8 @@ import {
   remapPmUrlToEnv,
   resolvePmBaseUrl,
   withPmPlatformFlagQuery,
+  normalizePmStoredUserFlag,
+  resolvePmDisplayPlatformFlag,
   PM_USERS_HOST_BY_ENV,
   PM_API_CATALOG,
   PM_SEND_OTP_URL,
@@ -98,5 +100,10 @@ describe('PM catalog and active URLs', () => {
     expect(withPmPlatformFlagQuery('https://opsapi.withtatva.ai/users/api/users/verify-gst')).toContain(
       'flag=tatvadirect'
     );
+  });
+
+  it('does not display tatvavision as this app platform', () => {
+    expect(normalizePmStoredUserFlag('tatvavision')).toBe('tatvadirect');
+    expect(resolvePmDisplayPlatformFlag('tatvavision')).toBe('tatvadirect');
   });
 });

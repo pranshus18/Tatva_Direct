@@ -70,6 +70,7 @@ export function createCorsOptions() {
       'X-PM-Refresh-Token',
       // Sent by vault reconciliation to overlay Tatva Direct platform attribution.
       'X-Vault-Attribution-Keys'
-    ]
+    ],
+    exposedHeaders: ['X-PM-Access-Token', 'X-PM-Refresh-Token', 'X-PM-User-Id']
   };
 }

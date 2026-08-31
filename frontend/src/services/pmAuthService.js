@@ -1,8 +1,9 @@
 import { PM_PLATFORM_FLAG } from '../config/pmAuth';
 import { resolveApiPath } from '../config/api';
 import {
-  getPmCustomerCredentials,
-  setPmCustomerCredentials
+  applyPmAuthFromResponse,
+  applyPmVaultCredentials,
+  getPmCustomerCredentials
 } from '../utils/pmAuthSession';
 
 const normalizePhone = (phoneNumber) => String(phoneNumber || '').replace(/\D/g, '');
@@ -106,21 +107,28 @@ export async function completePmAuth(phoneNumber, pmProfile = null, pmAccessToke
   return data;
 }
 
-/** Restore PM tokens from Tatva backend when local storage was cleared after OTP login. */
+/**
+ * Restore and refresh PM tokens from the Tatva backend.
+ * Always asks the server — local access tokens go stale while the Tatva session is still valid.
+ */
 export async function restorePmVaultSession() {
   const existing = getPmCustomerCredentials();
-  if (existing.accessToken) return existing;
-
   const token = localStorage.getItem('token');
   if (!token) return existing;
 
   const response = await fetch(resolveApiPath('/api/auth/pm-vault-session'), {
-    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      ...(existing.accessToken ? { 'X-PM-Access-Token': existing.accessToken } : {}),
+      ...(existing.refreshToken ? { 'X-PM-Refresh-Token': existing.refreshToken } : {})
+    }
   });
   const data = await parseJsonResponse(response);
-  if (response.ok && data.status === 'success' && data.pmVault?.accessToken) {
-    setPmCustomerCredentials(data.pmVault);
+  applyPmAuthFromResponse(response);
+  if (response.ok && data.status === 'success' && (data.pmVault?.accessToken || data.pmVault?.refreshToken)) {
+    applyPmVaultCredentials(data.pmVault);
     return getPmCustomerCredentials();
   }
-  return existing;
+  return getPmCustomerCredentials();
 }

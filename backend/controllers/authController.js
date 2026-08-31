@@ -28,10 +28,14 @@ import {
 } from '../utils/portalRoles.js';
 import { submitPmVendorLeadForSupplierUpgrade } from '../services/pmVendorLeadService.js';
 import {
+  applyPmAuthToHttpResponse,
+  ensureFreshPmAuth,
   getPmAuthFromUser,
   persistPmAuthAndSyncCustomerProfile,
-  syncPmCustomerProfileForUser
+  syncPmCustomerProfileForUser,
+  toPmVaultPayload
 } from '../services/pmUserService.js';
+import { readPmCredentialsFromRequest } from '../services/pmVaultService.js';
 import { syncPmShippingAddressesOnProfile } from '../services/pmAddressService.js';
 import { buildRegisteredBillingAddress } from '../utils/parseStructuredShippingAddress.js';
 import {
@@ -88,12 +92,9 @@ const createSendToken = (user, statusCode, res) => {
     }
   };
 
-  if (pmAuth?.accessToken) {
-    payload.pmVault = {
-      pmUserId: pmAuth.pmUserId || null,
-      accessToken: pmAuth.accessToken,
-      refreshToken: pmAuth.refreshToken || null
-    };
+  const pmVault = toPmVaultPayload(pmAuth);
+  if (pmVault) {
+    payload.pmVault = pmVault;
   }
 
   res.status(statusCode).json(payload);
@@ -825,23 +826,24 @@ router.post('/pm-signup', async (req, res) => {
 // Restore PM vault session tokens for the logged-in service provider (same device).
 router.get('/pm-vault-session', authenticateToken, async (req, res) => {
   try {
-    const pmAuth = getPmAuthFromUser(req.user);
-    if (!pmAuth?.accessToken) {
-      return res.status(404).json({
+    const credentials = readPmCredentialsFromRequest(req);
+    const auth = await ensureFreshPmAuth(req.user, credentials);
+    const pmVault = toPmVaultPayload(auth);
+
+    if (!auth.accessToken) {
+      return res.status(auth.hadAnyToken ? 401 : 404).json({
         status: 'error',
         code: 'PM_AUTH_REQUIRED',
-        message:
-          'Vault session not linked. Sign out and sign in again with phone OTP to view your shared vault.'
+        message: auth.hadAnyToken
+          ? 'PM session expired. Sign in again with phone OTP.'
+          : 'Vault session not linked. Sign out and sign in again with phone OTP to view your shared vault.'
       });
     }
 
+    applyPmAuthToHttpResponse(res, auth);
     return res.json({
       status: 'success',
-      pmVault: {
-        pmUserId: pmAuth.pmUserId || null,
-        accessToken: pmAuth.accessToken,
-        refreshToken: pmAuth.refreshToken || null
-      }
+      pmVault
     });
   } catch (error) {
     console.error('PM vault session error:', error);

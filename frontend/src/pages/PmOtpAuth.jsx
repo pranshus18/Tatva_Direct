@@ -87,7 +87,7 @@ const PmOtpAuth = ({ onLogin }) => {
 
     if (authResult.token && authResult.user) {
       localStorage.setItem('token', authResult.token);
-      if (authResult.pmVault?.accessToken) {
+      if (authResult.pmVault?.accessToken || authResult.pmVault?.refreshToken) {
         setPmCustomerCredentials(authResult.pmVault);
       }
       let normalizedUser = normalizeUser(authResult.user);

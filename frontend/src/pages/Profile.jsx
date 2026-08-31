@@ -20,6 +20,7 @@ import { formatDateTimeIST } from '../utils/dateTime';
 import { sanitizeSignupPlaceholderAddress } from '../utils/addressPlaceholders';
 import { mergeParsedShippingAddress } from '../utils/parseStructuredShippingAddress';
 import { verifyPmGst } from '../services/pmGstService';
+import { resolvePmDisplayPlatformFlag } from '../config/pmAuth';
 import { shouldShowChainProfileRejectionBanner, listPendingChainRoleSubmissions } from '../utils/supplierSelectYourselfProfile';
 import './Profile.css';
 
@@ -679,10 +680,7 @@ const ServiceProviderProfile = ({ profile, setProfile, editing, isAdmin = false 
                 <label>Portal Flag (PM)</label>
                 <input
                   type="text"
-                  value={
-                    profile.pmCustomerAccount.flag ||
-                    (profile.userType === 'supplier' ? 'supplier' : 'service_provider')
-                  }
+                  value={resolvePmDisplayPlatformFlag(profile.pmCustomerAccount.flag)}
                   readOnly
                 />
               </div>

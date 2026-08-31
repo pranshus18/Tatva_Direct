@@ -33,6 +33,7 @@ export function buildPmApiCatalog(usersHost, paymentHost, paymentCompleteHost = 
     usersMe: `${users}/api/users/me`,
     sendOtp: `${users}/api/auth/send-otp`,
     verifyOtp: `${users}/api/auth/verify-otp`,
+    refresh: `${users}/api/auth/refresh`,
     vault: `${users}/api/vault`,
     vaultTransactions: `${users}/api/vault/transactions`,
     vaultAddMoney: `${users}/api/vault/add-money`,
@@ -267,6 +268,7 @@ export function getActivePmApiSnapshot() {
     endpoints: {
       sendOtp: catalog.sendOtp,
       verifyOtp: catalog.verifyOtp,
+      refresh: catalog.refresh,
       verifyGst: catalog.verifyGst,
       vendorLeads: catalog.vendorLeads,
       users: catalog.users,
@@ -293,6 +295,37 @@ export const PM_PLATFORM_FLAG =
 
 /** @deprecated use PM_PLATFORM_FLAG — same value for vendor leads and vault/payment APIs. */
 export const PM_VENDOR_LEAD_FLAG = PM_PLATFORM_FLAG;
+
+const FOREIGN_PM_PLATFORM_FLAGS = new Set(['tatvavision', 'tatvaops']);
+
+function platformFlagKey(flag) {
+  return String(flag || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]+/g, '');
+}
+
+/** True when PM stamped another Tatva product tenant (Vision / Ops) on the user. */
+export function isForeignPmPlatformFlag(flag) {
+  return FOREIGN_PM_PLATFORM_FLAGS.has(platformFlagKey(flag));
+}
+
+/**
+ * Tatva Direct must not inherit tatvavision/tatvaops from a shared PM user record.
+ * Role flags (supplier / service_provider) are left unchanged for PM writes.
+ */
+export function normalizePmStoredUserFlag(flag, fallback = PM_PLATFORM_FLAG) {
+  const raw = String(flag || '').trim();
+  if (!raw || isForeignPmPlatformFlag(raw)) {
+    return String(fallback || PM_PLATFORM_FLAG || 'tatvadirect').trim() || 'tatvadirect';
+  }
+  return raw;
+}
+
+/** Profile UI always shows this app's platform, never another product's tenant or a role. */
+export function resolvePmDisplayPlatformFlag() {
+  return String(PM_PLATFORM_FLAG || 'tatvadirect').trim() || 'tatvadirect';
+}
 
 /**
  * Append `flag=tatvadirect` (or configured PM_PLATFORM_FLAG) to a PM URL for DB filtering.

@@ -7,7 +7,7 @@ import {
   withPmPlatformFlagQuery
 } from '../config/pmApi.js';
 import {
-  fetchPmCurrentUser,
+  ensureFreshPmAuth,
   fetchPmUserByPhone,
   getPmAuthFromUser,
   persistPmAuthCredentials
@@ -245,30 +245,28 @@ export function usesPlatformVault(user) {
 
 export async function ensurePmVaultAuth(user, credentials = {}) {
   const stored = getPmAuthFromUser(user) || {};
-  const accessToken = String(
-    credentials.pmAccessToken || credentials.accessToken || stored.accessToken || ''
-  ).trim();
-  const refreshToken = String(
-    credentials.pmRefreshToken || credentials.refreshToken || stored.refreshToken || ''
-  ).trim();
+  const auth = await ensureFreshPmAuth(user, credentials);
+  const accessToken = String(auth.accessToken || '').trim();
+  const refreshToken = String(auth.refreshToken || '').trim();
 
   if (!accessToken) {
     const error = new Error(
-      'Sign in with phone OTP to access your shared vault balance on Tatva Direct.'
+      auth.hadAnyToken
+        ? 'PM session expired. Sign in again with phone OTP.'
+        : 'Sign in with phone OTP to access your shared vault balance on Tatva Direct.'
     );
     error.code = 'PM_AUTH_REQUIRED';
     throw error;
   }
 
-  const pmUserFromToken = await fetchPmCurrentUser(accessToken, { throwOnUnauthorized: true });
-  const phone = normalizeIndianMobile(user?.phone || pmUserFromToken?.phoneNumber);
-  const pmUserFromPhone =
-    !pmUserFromToken && phone ? await fetchPmUserByPhone(phone) : null;
-  const pmUser = pmUserFromToken || pmUserFromPhone;
+  const phone = normalizeIndianMobile(user?.phone || auth.pmUser?.phoneNumber);
+  const pmUserFromPhone = !auth.pmUser && phone ? await fetchPmUserByPhone(phone) : null;
+  const pmUser = auth.pmUser || pmUserFromPhone;
 
   const pmUserId = normalizePmObjectId(
     pmUser?._id ||
       pmUser?.id ||
+      auth.pmUserId ||
       user?.profile?.pmCustomerProfile?.pmUserId ||
       stored.pmUserId ||
       ''
@@ -290,7 +288,12 @@ export async function ensurePmVaultAuth(user, credentials = {}) {
     });
   }
 
-  return { pmUserId, accessToken, refreshToken: refreshToken || null };
+  return {
+    pmUserId,
+    accessToken,
+    refreshToken: refreshToken || null,
+    refreshed: auth.refreshed === true
+  };
 }
 
 /** @deprecated use usesPlatformVault + ensurePmVaultAuth */

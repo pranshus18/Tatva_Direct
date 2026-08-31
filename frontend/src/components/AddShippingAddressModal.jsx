@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Briefcase, Check, Home, MapPin, Navigation, X } from 'lucide-react';
 import { authFetch } from '../config/api';
+import { applyPmVaultCredentials } from '../utils/pmAuthSession';
 import {
   getGeolocationErrorMessage,
   resolveAddressFromCurrentLocation
@@ -118,6 +119,7 @@ export default function AddShippingAddressModal({ open, onClose, onSaved }) {
         timeoutMs: 20000
       });
       const data = await res.json().catch(() => ({}));
+      if (data.pmVault) applyPmVaultCredentials(data.pmVault);
       if (!res.ok || data.status !== 'success') {
         alert(data.message || 'Failed to save shipping address to the PM platform.');
         return;
