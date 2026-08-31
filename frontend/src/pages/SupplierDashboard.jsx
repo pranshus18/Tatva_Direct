@@ -820,7 +820,7 @@ const SupplierDashboard = ({ user }) => {
             <div>
               <div className="supplier-dashboard-restock-title">Restock suggestions</div>
               <div className="supplier-dashboard-restock-subtitle">
-                Items with {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} at or below each product’s
+                Items with {SUPPLIER_CURRENT_STOCK_LABEL.toLowerCase()} below each product’s
                 Low Stock Alert (LSA)
               </div>
             </div>
@@ -886,7 +886,7 @@ const SupplierDashboard = ({ user }) => {
             </div>
           ) : (
             <div className="supplier-dashboard-restock-empty supplier-dashboard-restock-empty--panel">
-              No low-stock items right now. Nothing is at or below its Low Stock Alert (LSA).
+              No low-stock items right now. Nothing is below its Low Stock Alert (LSA).
             </div>
           )}
         </CardContent>

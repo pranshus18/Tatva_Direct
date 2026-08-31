@@ -1,51 +1,19 @@
 import { getContractErrorMessage, parseWithSchema, supplierProductDeleteSchema } from '../supplierImports.js';
-import { deleteCatalogOffer } from '../../../services/adminProductDeleteService.js';
+
+export const SUPPLIER_CANNOT_DELETE_PRODUCT_MESSAGE =
+  'Once a product is added, only an admin can delete it. Contact admin to remove this listing.';
 
 export function registerSupplierProductDeleteRoute(ctx) {
-  const { router, authenticateToken, supabase } = ctx;
+  const { router, authenticateToken } = ctx;
 
-  // Delete product (supplier-specific entry, supports multiple locations)
+  // Suppliers may not delete their own listings — admin owns catalog removal.
   router.delete('/products/:id', authenticateToken, async (req, res) => {
     try {
       parseWithSchema(supplierProductDeleteSchema, req.body || {});
-      const supplierProductId = req.params.id;
-
-      const { data: supplierProduct, error: fetchError } = await supabase
-        .from('supplier_products')
-        .select('id, product_id, supplier_id, variant_key')
-        .eq('id', supplierProductId)
-        .single();
-
-      if (fetchError || !supplierProduct) {
-        return res.status(404).json({
-          status: 'error',
-          message: 'Product not found for this supplier'
-        });
-      }
-
-      if (supplierProduct.supplier_id !== req.userId) {
-        return res.status(403).json({
-          status: 'error',
-          message: 'You do not have permission to delete this product entry'
-        });
-      }
-
-      try {
-        await deleteCatalogOffer(supabase, {
-          catalogProductId: supplierProduct.product_id,
-          supplierProductId
-        });
-      } catch (deleteError) {
-        const statusCode = Number(deleteError?.statusCode) || 400;
-        return res.status(statusCode).json({
-          status: 'error',
-          message: deleteError.message || 'Failed to delete supplier product'
-        });
-      }
-
-      return res.json({
-        status: 'success',
-        message: 'Product deleted successfully'
+      return res.status(403).json({
+        status: 'error',
+        code: 'supplier_delete_forbidden',
+        message: SUPPLIER_CANNOT_DELETE_PRODUCT_MESSAGE
       });
     } catch (error) {
       if (String(error?.name || '') === 'ZodError') {

@@ -19,12 +19,12 @@ export function parseLsaThreshold(raw) {
   return Number.isFinite(lsa) && lsa > 0 ? lsa : null;
 }
 
-/** True when on-hand stock is at or below the variant's configured LSA. */
-export function isStockAtOrBelowLsa({ stock, lsa } = {}) {
+/** True when on-hand stock is strictly below the variant's configured LSA. */
+export function isStockBelowLsa({ stock, lsa } = {}) {
   const lsaThreshold = parseLsaThreshold(lsa);
   if (lsaThreshold == null) return false;
   const qty = Math.max(0, parseInt(stock, 10) || 0);
-  return qty <= lsaThreshold;
+  return qty < lsaThreshold;
 }
 
 export function crossedLsaThreshold({ previousStock, newStock, lsaThreshold }) {
@@ -32,7 +32,7 @@ export function crossedLsaThreshold({ previousStock, newStock, lsaThreshold }) {
   const next = Math.max(0, parseInt(newStock, 10) || 0);
   const lsa = parseLsaThreshold(lsaThreshold);
   if (lsa == null) return false;
-  return prev > lsa && next <= lsa;
+  return prev >= lsa && next < lsa;
 }
 
 /**
@@ -55,8 +55,8 @@ export function resolveLsaThreshold(attributes = {}, product = {}) {
 }
 
 /**
- * Notify when stock crosses into LSA, decreases while already at/below LSA,
- * or when LSA is newly set/raised so current stock now hits it.
+ * Notify when stock crosses below LSA, decreases while already below LSA,
+ * or when LSA is newly set/raised so current stock is now below it.
  */
 export function shouldNotifyLsaHit({
   previousStock,
@@ -67,7 +67,7 @@ export function shouldNotifyLsaHit({
   const next = Math.max(0, parseInt(newStock, 10) || 0);
   const lsa = parseLsaThreshold(lsaThreshold);
   if (lsa == null) return false;
-  if (!isStockAtOrBelowLsa({ stock: next, lsa })) return false;
+  if (!isStockBelowLsa({ stock: next, lsa })) return false;
 
   if (crossedLsaThreshold({ previousStock, newStock: next, lsaThreshold: lsa })) {
     return true;
@@ -76,7 +76,7 @@ export function shouldNotifyLsaHit({
   if (previousLsaThreshold !== undefined) {
     const oldLsa = parseLsaThreshold(previousLsaThreshold);
     if (oldLsa == null) return true;
-    return !isStockAtOrBelowLsa({ stock: next, lsa: oldLsa });
+    return !isStockBelowLsa({ stock: next, lsa: oldLsa });
   }
 
   const prev = Math.max(0, parseInt(previousStock, 10) || 0);
@@ -98,8 +98,8 @@ export function buildLsaNotificationPayload({
   const payload = {
     user_id: supplierId,
     type: 'system',
-    title: 'Low stock alert: inventory reached LSA',
-    message: `Your inventory of "${name}" is at ${qty} unit${qty === 1 ? '' : 's'}, which is at or below your Low Stock Alert (${lsa}). Please restock.`,
+    title: 'Low stock alert: inventory below LSA',
+    message: `Your inventory of "${name}" is at ${qty} unit${qty === 1 ? '' : 's'}, which is below your Low Stock Alert (${lsa}). Please restock.`,
     is_read: false,
     metadata: {
       source: 'low_inventory',
@@ -164,7 +164,7 @@ async function hasUnreadLsaNotification(supplierId, supplierProductId) {
 /**
  * When stock decreases, notify the supplier if inventory value (stock × unit price)
  * crosses from at/above their profile minimum order value (MOV) to strictly below it.
- * Also notifies when on-hand stock hits the variant Low Stock Alert (LSA).
+ * Also notifies when on-hand stock falls below the variant Low Stock Alert (LSA).
  */
 export async function maybeNotifyInventoryBelowMov({
   supplierId,

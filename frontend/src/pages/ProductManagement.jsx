@@ -9,7 +9,6 @@ import {
   Eye,
   Save,
   X,
-  Trash2,
   CheckCircle,
   Ban,
   Sparkles,
@@ -54,7 +53,12 @@ import {
 import {
   applyExtractResultToSpecs,
   buildSpecExtractionSourceKey,
-  extractSpecificationsFromDescription
+  extractSpecificationsFromDescription,
+  formatSpecExtractSuccessMessage,
+  SPEC_EXTRACT_CATEGORY_REQUIRED,
+  SPEC_EXTRACT_EMPTY_DESCRIPTION,
+  SPEC_EXTRACT_FAILED,
+  SPEC_EXTRACT_NO_VALUES
 } from '../utils/extractSpecificationsApi';
 import {
   SUPPLIER_CURRENT_STOCK_LABEL,
@@ -123,6 +127,12 @@ import {
   isMeaningfullyFilledSpecValue,
   MIN_SUPPLIER_PRODUCT_PHOTOS
 } from '../utils/supplierProductValidation';
+import {
+  buildSupplierProductEditBaseline,
+  buildSupplierProductFormSnapshot,
+  diffSupplierProductForm,
+  pickChangedSupplierProductFields
+} from '../utils/supplierProductFormChanges';
 import {
   getPreferredUnitsForProduct,
   validateProductUnitCompatibility
@@ -648,55 +658,78 @@ const ProductManagement = ({ user }) => {
   };
 
   const buildInventoryUpdatePayload = (item, data) => {
-    const missing = getSupplierInventoryUpdateMissingFields(data);
-    if (missing.length > 0) {
-      return {
-        error: formatSupplierProductValidationMessage(missing),
-        missingFields: missing
-      };
+    const payload = {};
+
+    if (data.stock !== undefined) {
+      const stock = parseSupplierStockQuantity(data.stock);
+      if (stock === null) {
+        return {
+          error: formatSupplierProductValidationMessage([SUPPLIER_CURRENT_STOCK_LABEL]),
+          missingFields: [SUPPLIER_CURRENT_STOCK_LABEL]
+        };
+      }
+      payload.stock = stock;
     }
 
-    const stock = parseSupplierStockQuantity(data.stock);
-    const price = isSupplierMrpLocked(item)
-      ? parseSupplierOfferPrice(item.price)
-      : parseFloat(data.price);
-    const payload = {
-      stock,
-      price,
-      unit: data.unit,
-      igst_rate: data.igst_rate,
-      cgst_rate: data.cgst_rate,
-      sgst_rate: data.sgst_rate,
-      hsnCode: data.hsnCode || data.hsn_code,
-      lsa: data.lsa != null ? String(data.lsa).trim() : ''
-    };
-    // Persist product photos uploaded in the inventory edit modal.
+    if (data.price !== undefined) {
+      const price = isSupplierMrpLocked(item)
+        ? parseSupplierOfferPrice(item.price)
+        : parseFloat(data.price);
+      if (!Number.isFinite(price) || price < 0) {
+        return {
+          error: formatSupplierProductValidationMessage([SUPPLIER_MRP_LABEL]),
+          missingFields: [SUPPLIER_MRP_LABEL]
+        };
+      }
+      if (!isSupplierMrpLocked(item)) {
+        payload.price = price;
+      }
+    }
+
+    if (data.unit !== undefined) payload.unit = data.unit;
+    if (data.igst_rate !== undefined) payload.igst_rate = data.igst_rate;
+    if (data.cgst_rate !== undefined) payload.cgst_rate = data.cgst_rate;
+    if (data.sgst_rate !== undefined) payload.sgst_rate = data.sgst_rate;
+    if (data.hsnCode !== undefined || data.hsn_code !== undefined) {
+      payload.hsnCode = data.hsnCode || data.hsn_code;
+    }
+    if (data.lsa !== undefined) {
+      payload.lsa = data.lsa != null ? String(data.lsa).trim() : '';
+    }
     if (Array.isArray(data.images)) {
       payload.images = data.images;
     }
-    // Only send brand fields when we have a real value. Sending "" triggers
-    // "Brand is required because you have selected brands in your profile."
-    const brandValue = String(
-      resolveListingBrandIdentity({
-        selectedBrand:
-          data.brand ||
-          item?.brand ||
-          item?.brandModel ||
-          item?.attributes?.brand ||
-          item?.attributes?.brandModel ||
-          '',
-        productName: data.name || item?.name || '',
-        declaredLabels: supplierDeclaredBrandNames
-      })
-    ).trim();
-    if (brandValue) {
-      payload.brand = brandValue;
-      payload.brandModel = brandValue;
+    if (data.brand !== undefined) {
+      const brandValue = String(
+        resolveListingBrandIdentity({
+          selectedBrand:
+            data.brand ||
+            item?.brand ||
+            item?.brandModel ||
+            item?.attributes?.brand ||
+            item?.attributes?.brandModel ||
+            '',
+          productName: data.name || item?.name || '',
+          declaredLabels: supplierDeclaredBrandNames
+        })
+      ).trim();
+      if (brandValue) {
+        payload.brand = brandValue;
+        payload.brandModel = brandValue;
+      }
     }
-    const mpn = String(data.mpn || item?.mpn || '').trim();
-    if (mpn) payload.mpn = mpn;
-    const gtin = String(data.gtin || item?.gtin || '').trim();
-    if (gtin) payload.gtin = gtin;
+    if (data.mpn !== undefined) {
+      const mpn = String(data.mpn || '').trim();
+      if (mpn) payload.mpn = mpn;
+    }
+    if (data.gtin !== undefined) {
+      const gtin = String(data.gtin || '').trim();
+      if (gtin) payload.gtin = gtin;
+    }
+
+    if (Object.keys(payload).length === 0) {
+      return { error: 'Make at least one change before updating this product.' };
+    }
     return { payload };
   };
 
@@ -880,49 +913,6 @@ const ProductManagement = ({ user }) => {
       },
       { closeEditModal: false, refreshProducts: true }
     );
-  };
-
-  const handleDeleteProduct = async (supplierProductId, options = {}) => {
-    const product = products.find((p) => matchSupplierOfferRow(p, supplierProductId));
-    const productName = product?.name || 'this product';
-    const isRejectedCatalogRemove =
-      options.fromRejectedCatalog === true ||
-      (!isInventoryView && getSupplierOfferApprovalStatus(product) === 'rejected');
-
-    const confirmMessage = isRejectedCatalogRemove
-      ? `Remove "${productName}" from your catalog?\n\nThis rejected product will be permanently deleted from your catalog. This cannot be undone.`
-      : `Are you sure you want to delete "${productName}"? This action cannot be undone.`;
-
-    if (!window.confirm(confirmMessage)) {
-      return false;
-    }
-
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(getApiUrl(`/api/supplier/products/${supplierProductId}`), {
-        method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      const data = await response.json();
-      if (data.status === 'success') {
-        setProducts((prev) => prev.filter((p) => !matchSupplierOfferRow(p, supplierProductId)));
-        alert(
-          isRejectedCatalogRemove
-            ? 'Rejected product removed from your catalog.'
-            : 'Product deleted successfully'
-        );
-        return true;
-      }
-      alert(data.message || 'Failed to delete product');
-      return false;
-    } catch (error) {
-      console.error('Failed to delete product:', error);
-      alert('Failed to delete product. Please try again.');
-      return false;
-    }
   };
 
   const filteredProducts = products.filter((product) => {
@@ -1367,18 +1357,6 @@ const ProductManagement = ({ user }) => {
                           >
                             <Edit size={15} />
                           </button>
-                          <button
-                            type="button"
-                            className="pm-card__action-btn pm-card__action-btn--danger"
-                            onClick={() =>
-                              handleDeleteProduct(
-                                getSupplierOfferRowId(product) || product.id || product._id
-                              )
-                            }
-                            title="Delete"
-                          >
-                            <Trash2 size={15} />
-                          </button>
                         </>
                       ) : (
                         <>
@@ -1402,22 +1380,6 @@ const ProductManagement = ({ user }) => {
                           >
                             <Eye size={15} />
                           </button>
-                          {productStatus === 'rejected' ? (
-                            <button
-                              type="button"
-                              className="pm-card__action-btn pm-card__action-btn--danger"
-                              onClick={() =>
-                                handleDeleteProduct(
-                                  getSupplierOfferRowId(product) || product.id || product._id,
-                                  { fromRejectedCatalog: true }
-                                )
-                              }
-                              title="Remove rejected product from catalog"
-                              aria-label={`Remove ${product.name || 'rejected product'} from catalog`}
-                            >
-                              <Trash2 size={15} />
-                            </button>
-                          ) : null}
                         </>
                       )}
                     </div>
@@ -1499,35 +1461,30 @@ const ProductManagement = ({ user }) => {
               });
               return;
             }
-            // Catalog edit: identity + images/specs. Brand is mandatory.
-            // Title-leading declared brand wins over a leftover catalog brand (JBL vs Nothing Power).
-            const brandValue = String(
-              resolveListingBrandIdentity({
-                selectedBrand:
-                  data.brand ||
-                  editingItem?.brand ||
-                  editingItem?.brandModel ||
-                  editingItem?.attributes?.brand ||
-                  '',
-                productName: data.name || editingItem?.name || '',
-                declaredLabels: supplierDeclaredBrandNames
-              })
-            ).trim();
-            const catalogPayload = {
-              name: data.name,
-              description: data.description,
-              category: data.category,
-              brand: brandValue,
-              unit: data.unit,
-              gtin: data.gtin
-            };
-            const resolvedImages = Array.isArray(data.images)
-              ? data.images
-              : Array.isArray(editingItem?.images)
-                ? editingItem.images
-                : undefined;
-            if (resolvedImages !== undefined) {
-              catalogPayload.images = resolvedImages;
+            // Catalog edit: send only fields the modal marked as changed.
+            const catalogPayload = {};
+            if (data.name !== undefined) catalogPayload.name = data.name;
+            if (data.description !== undefined) catalogPayload.description = data.description;
+            if (data.category !== undefined) catalogPayload.category = data.category;
+            if (data.unit !== undefined) catalogPayload.unit = data.unit;
+            if (data.gtin !== undefined) catalogPayload.gtin = data.gtin;
+            if (data.brand !== undefined || data.name !== undefined) {
+              const brandValue = String(
+                resolveListingBrandIdentity({
+                  selectedBrand:
+                    data.brand ||
+                    editingItem?.brand ||
+                    editingItem?.brandModel ||
+                    editingItem?.attributes?.brand ||
+                    '',
+                  productName: data.name || editingItem?.name || '',
+                  declaredLabels: supplierDeclaredBrandNames
+                })
+              ).trim();
+              if (brandValue) catalogPayload.brand = brandValue;
+            }
+            if (Array.isArray(data.images)) {
+              catalogPayload.images = data.images;
             }
             const isApprovedSpecFill = supplierOfferNeedsPostApprovalSpecFill(editingItem);
             const isPendingCategorySpecFill =
@@ -1535,15 +1492,29 @@ const ProductManagement = ({ user }) => {
               data.specifications &&
               typeof data.specifications === 'object' &&
               Object.keys(data.specifications).length > 0;
-            if (isApprovedSpecFill || isPendingCategorySpecFill) {
+            if (
+              data.specifications !== undefined &&
+              (isApprovedSpecFill || isPendingCategorySpecFill)
+            ) {
               catalogPayload.specifications = data.specifications;
             }
-            const catalogMissing = getSupplierCatalogMandatoryMissingFields(catalogPayload, {
-              isCreate: false,
-              requireUnit: true
-            });
+            const catalogMissing = getSupplierCatalogMandatoryMissingFields(
+              {
+                name: data.name ?? editingItem?.name,
+                brand: catalogPayload.brand ?? editingItem?.brand,
+                category: data.category ?? editingItem?.category,
+                unit: data.unit ?? editingItem?.unit
+              },
+              {
+                isCreate: false,
+                requireUnit: true
+              }
+            );
             if (catalogMissing.length > 0) {
               alert(formatSupplierProductValidationMessage(catalogMissing));
+              return;
+            }
+            if (Object.keys(catalogPayload).length === 0) {
               return;
             }
             await handleUpdateProduct(productId, catalogPayload, {
@@ -1584,21 +1555,39 @@ const ProductManagement = ({ user }) => {
                 }
               : undefined
           }
-          onRemoveRejected={
-            !isInventoryView && getSupplierOfferApprovalStatus(viewingItem) === 'rejected'
-              ? async (item) => {
-                  const offerId = getSupplierOfferRowId(item) || item.id || item._id;
-                  if (!offerId) return;
-                  const removed = await handleDeleteProduct(offerId, { fromRejectedCatalog: true });
-                  if (removed) setViewingItem(null);
-                }
-              : undefined
-          }
         />
       )}
     </div>
   );
 };
+
+function SpecExtractFeedbackBanner({ feedback }) {
+  if (!feedback?.text) return null;
+  const palette = {
+    success: { background: '#f0fdf4', border: '#bbf7d0', color: '#166534' },
+    info: { background: '#fffbeb', border: '#fde68a', color: '#92400e' },
+    error: { background: '#fef2f2', border: '#fecaca', color: '#991b1c' }
+  };
+  const colors = palette[feedback.type] || palette.info;
+  return (
+    <p
+      role="status"
+      style={{
+        width: '100%',
+        margin: '0.5rem 0 0',
+        padding: '0.55rem 0.7rem',
+        borderRadius: 6,
+        fontSize: '0.8125rem',
+        lineHeight: 1.45,
+        background: colors.background,
+        border: `1px solid ${colors.border}`,
+        color: colors.color
+      }}
+    >
+      {feedback.text}
+    </p>
+  );
+}
 
 const ProductDetailsModal = ({
   product,
@@ -1607,7 +1596,6 @@ const ProductDetailsModal = ({
   specificationsReadOnly = false,
   onClose,
   onEdit,
-  onRemoveRejected,
   onSaveSpecifications
 }) => {
   const detailsNavigate = useNavigate();
@@ -1621,6 +1609,7 @@ const ProductDetailsModal = ({
     resolveSupplierPortalDisplayDescription(product)
   );
   const [extractingSpecs, setExtractingSpecs] = useState(false);
+  const [extractFeedback, setExtractFeedback] = useState(null);
   const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
   const productSyncKey = useMemo(() => {
     const offerId = getSupplierOfferRowId(product) || String(product?.id || '');
@@ -1773,11 +1762,11 @@ const ProductDetailsModal = ({
   const handleExtractSpecificationsInDetails = async () => {
     const category = String(product?.category || '').trim();
     if (!descriptionDraft.trim()) {
-      alert('Please enter a product description with specification details first.');
+      setExtractFeedback({ type: 'error', text: SPEC_EXTRACT_EMPTY_DESCRIPTION });
       return;
     }
     if (!category) {
-      alert('Product category is required for AI extraction.');
+      setExtractFeedback({ type: 'error', text: SPEC_EXTRACT_CATEGORY_REQUIRED });
       return;
     }
 
@@ -1798,6 +1787,7 @@ const ProductDetailsModal = ({
     const templateForExtract = buildSpecificationTemplateState();
 
     setExtractingSpecs(true);
+    setExtractFeedback(null);
     try {
       const { response, data } = await extractSpecificationsFromDescription({
         description: descriptionDraft,
@@ -1812,11 +1802,11 @@ const ProductDetailsModal = ({
 
       const result = applyExtractResultToSpecs(templateForExtract, data);
       if (!result.ok) {
-        alert(`⚠️ ${result.warning || result.error}`);
+        setExtractFeedback({
+          type: 'error',
+          text: result.warning || result.error || SPEC_EXTRACT_FAILED
+        });
         return;
-      }
-      if (result.categoryMismatchWarning) {
-        alert(`⚠️ ${result.categoryMismatchWarning}`);
       }
 
       const merged = mergeExtractedValuesOntoSpecificationTemplate(templateForExtract, result.merged);
@@ -1829,18 +1819,26 @@ const ProductDetailsModal = ({
 
       if (filledCount > 0) {
         setLastSuccessfulExtractionSourceKey(sourceKey);
-        window.setTimeout(() => {
-          alert(
-            `Specifications extracted successfully. ${filledCount} field${
-              filledCount > 1 ? 's were' : ' was'
-            } filled. Review the values below and click Save.`
-          );
-        }, 0);
+        setExtractFeedback({
+          type: 'success',
+          text: `${formatSpecExtractSuccessMessage(filledCount)} Review the values below and click Save.`
+        });
       } else {
-        alert('No values could be matched to the admin specification keys. Enter values manually or update the description.');
+        setExtractFeedback({ type: 'info', text: SPEC_EXTRACT_NO_VALUES });
+      }
+      if (result.categoryMismatchWarning) {
+        setExtractFeedback((prev) => ({
+          type: prev?.type === 'success' ? 'success' : 'info',
+          text: prev?.text
+            ? `${prev.text} ${result.categoryMismatchWarning}`
+            : result.categoryMismatchWarning
+        }));
       }
     } catch (error) {
-      alert('Failed to extract specifications. Please try again.');
+      setExtractFeedback({
+        type: 'error',
+        text: error.message || SPEC_EXTRACT_FAILED
+      });
     } finally {
       setExtractingSpecs(false);
     }
@@ -1899,17 +1897,6 @@ const ProductDetailsModal = ({
               >
                 <Edit size={16} />
                 Edit Inventory
-              </button>
-            ) : null}
-            {onRemoveRejected ? (
-              <button
-                type="button"
-                className="btn-secondary"
-                onClick={() => onRemoveRejected(product)}
-                style={{ color: '#b91c1c', borderColor: '#fecaca' }}
-              >
-                <Trash2 size={16} />
-                Remove from catalog
               </button>
             ) : null}
             <button type="button" className="btn-icon" onClick={onClose}>
@@ -2102,9 +2089,12 @@ const ProductDetailsModal = ({
                   </label>
                   <textarea
                     value={descriptionDraft}
-                    onChange={(e) => setDescriptionDraft(e.target.value)}
+                    onChange={(e) => {
+                      setExtractFeedback(null);
+                      setDescriptionDraft(e.target.value);
+                    }}
                     rows={3}
-                    placeholder='e.g. Finish: Matt, Volume: 20L, Sheen: Low, Coverage: 140 sq ft/L'
+                    placeholder="Describe the product in normal sentences, or use lines like Finish: Matt. Extraction works with either."
                     style={{
                       width: '100%',
                       padding: '0.5rem 0.65rem',
@@ -2114,30 +2104,33 @@ const ProductDetailsModal = ({
                       resize: 'vertical'
                     }}
                   />
-                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.5rem', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
-                    {detailsSpecsAlreadyExtracted ? (
-                      <span style={{ fontSize: '0.75rem', color: '#047857', fontStyle: 'italic' }}>
-                        Specifications extracted for the current description. Values are ready below — click Save when done, or edit the description to extract again.
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn-secondary"
-                        onClick={handleExtractSpecificationsInDetails}
-                        disabled={extractingSpecs || !descriptionDraft.trim()}
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.35rem',
-                          background: extractingSpecs ? '#9ca3af' : '#10b981',
-                          color: '#fff',
-                          border: 'none'
-                        }}
-                      >
-                        <Sparkles size={14} />
-                        {extractingSpecs ? 'Extracting…' : 'Extract from description'}
-                      </button>
-                    )}
+                  <div style={{ marginTop: '0.5rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'flex-end', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center' }}>
+                      {detailsSpecsAlreadyExtracted ? (
+                        <span style={{ fontSize: '0.75rem', color: '#047857', fontStyle: 'italic' }}>
+                          Specifications extracted for the current description. Values are ready below — click Save when done, or edit the description to extract again.
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn-secondary"
+                          onClick={handleExtractSpecificationsInDetails}
+                          disabled={extractingSpecs || !descriptionDraft.trim()}
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.35rem',
+                            background: extractingSpecs ? '#9ca3af' : '#10b981',
+                            color: '#fff',
+                            border: 'none'
+                          }}
+                        >
+                          <Sparkles size={14} />
+                          {extractingSpecs ? 'Extracting…' : 'Extract from description'}
+                        </button>
+                      )}
+                    </div>
+                    <SpecExtractFeedbackBanner feedback={extractFeedback} />
                   </div>
                 </div>
               ) : null}
@@ -2346,6 +2339,7 @@ const ProductModal = ({
   
   // Extract Specifications state
   const [extracting, setExtracting] = useState(false); // For extracting specs from description
+  const [extractFeedback, setExtractFeedback] = useState(null);
   const [lastSuccessfulExtractionSourceKey, setLastSuccessfulExtractionSourceKey] = useState(null);
   const [loadingSpecs, setLoadingSpecs] = useState(false);
   const [hasAdminSpecTemplate, setHasAdminSpecTemplate] = useState(false);
@@ -3097,6 +3091,34 @@ const ProductModal = ({
   const isAddOrInventorySubmitBlocked =
     missingMandatoryFields.length > 0 || brandApprovalBlocksSubmit;
 
+  const productEditBaseline = useMemo(
+    () =>
+      product
+        ? buildSupplierProductEditBaseline(product, {
+            showInventoryFields,
+            declaredBrandNames: supplierBrandNames
+          })
+        : null,
+    [product, showInventoryFields, supplierBrandNames]
+  );
+  const productEditCurrent = useMemo(
+    () =>
+      buildSupplierProductFormSnapshot({
+        formData,
+        specifications,
+        showInventoryFields,
+        declaredBrandNames: supplierBrandNames
+      }),
+    [formData, specifications, showInventoryFields, supplierBrandNames]
+  );
+  const productFormDiff = useMemo(
+    () => (product ? diffSupplierProductForm(productEditCurrent, productEditBaseline) : { hasChanges: false, changedKeys: [] }),
+    [product, productEditCurrent, productEditBaseline]
+  );
+  const hasValidProductEdits = Boolean(product) && productFormDiff.hasChanges;
+  const isUpdateSubmitBlocked = Boolean(product) && !hasValidProductEdits;
+  const isSubmitBlocked = isAddOrInventorySubmitBlocked || isUpdateSubmitBlocked;
+
   useEffect(() => {
     if (!isAddOrInventorySubmitBlocked) {
       setFormValidationError('');
@@ -3210,6 +3232,7 @@ const ProductModal = ({
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (isSaving) return;
+    if (product && !hasValidProductEdits) return;
     setSuggestions([]);
     setShowSuggestions(false);
 
@@ -3346,9 +3369,17 @@ const ProductModal = ({
       // Keep unit on create and edit so incompatible units (e.g. bags for a mouse) can be corrected.
     }
 
+    const payloadToSave = product
+      ? pickChangedSupplierProductFields(productData, productEditCurrent, productEditBaseline)
+      : productData;
+
+    if (product && Object.keys(payloadToSave).length === 0) {
+      return;
+    }
+
     setIsSaving(true);
     try {
-      await Promise.resolve(onSave(productData));
+      await Promise.resolve(onSave(payloadToSave));
     } finally {
       setIsSaving(false);
     }
@@ -4251,12 +4282,12 @@ const ProductModal = ({
 
   const handleExtractSpecifications = async () => {
     if (!formData.description || !formData.description.trim()) {
-      alert('Please enter a description with specification details first');
+      setExtractFeedback({ type: 'error', text: SPEC_EXTRACT_EMPTY_DESCRIPTION });
       return;
     }
 
     if (!formData.category || !formData.category.trim()) {
-      alert('Please select a category first. Category is required to extract specifications.');
+      setExtractFeedback({ type: 'error', text: SPEC_EXTRACT_CATEGORY_REQUIRED });
       return;
     }
 
@@ -4271,6 +4302,7 @@ const ProductModal = ({
     }
 
     setExtracting(true);
+    setExtractFeedback(null);
     try {
       const templateKeys =
         adminSpecTemplateKeys.length > 0
@@ -4292,33 +4324,42 @@ const ProductModal = ({
         throw new Error(data?.message || `HTTP error! status: ${response.status}`);
       }
 
-      const result = applyExtractResultToSpecs(templateForExtract, data);
+      const result = applyExtractResultToSpecs(templateForExtract, data, {
+        preserveFilled: supplierSpecValuesLocked
+      });
       if (!result.ok) {
-        alert(`⚠️ ${result.warning || result.error}`);
+        setExtractFeedback({
+          type: 'error',
+          text: result.warning || result.error || SPEC_EXTRACT_FAILED
+        });
         return;
-      }
-
-      if (result.categoryMismatchWarning) {
-        alert(`⚠️ ${result.categoryMismatchWarning}`);
       }
 
       setSpecifications(result.merged);
 
       if (result.filledCount > 0) {
         setLastSuccessfulExtractionSourceKey(sourceKey);
-        alert(
-          result.filledCount === 1
-            ? 'Specifications extracted successfully. 1 value was filled from the description.'
-            : `Specifications extracted successfully. ${result.filledCount} values were filled from the description.`
-        );
+        setExtractFeedback({
+          type: 'success',
+          text: formatSpecExtractSuccessMessage(result.filledCount)
+        });
       } else {
-        alert(
-          'No specification values were found in the description. Try lines like "Finish: Matt" or "Volume: 20L".'
-        );
+        setExtractFeedback({ type: 'info', text: SPEC_EXTRACT_NO_VALUES });
+      }
+      if (result.categoryMismatchWarning) {
+        setExtractFeedback((prev) => ({
+          type: prev?.type === 'success' ? 'success' : 'info',
+          text: prev?.text
+            ? `${prev.text} ${result.categoryMismatchWarning}`
+            : result.categoryMismatchWarning
+        }));
       }
     } catch (error) {
       console.error('Extract specifications error:', error);
-      alert('Failed to extract specifications. Please try again.');
+      setExtractFeedback({
+        type: 'error',
+        text: error.message || SPEC_EXTRACT_FAILED
+      });
     } finally {
       setExtracting(false);
     }
@@ -5525,60 +5566,66 @@ const ProductModal = ({
                   </label>
                   <textarea
                     value={formData.description}
-                    onChange={(e) => setFormData({...formData, description: e.target.value})}
+                    onChange={(e) => {
+                      setExtractFeedback(null);
+                      setFormData({ ...formData, description: e.target.value });
+                    }}
                     rows="3"
-                    placeholder="Describe the product in your own words (grammar does not need to be perfect). An admin will review and publish a polished version for buyers. You can include specs inline, e.g. Grade: OPC 53, Compressive Strength: 53 MPa."
+                    placeholder="Describe the product in your own words (grammar does not need to be perfect). Mention details such as colour, material, size, or weight — extraction works with normal sentences, not only key: value lines."
                   />
                   <p className="pm-description-hint">
                     Your description is sent to admin for review. Buyers see the admin-published version after approval.
                   </p>
                   {/* Extract Specifications Button */}
                   {formData.description && formData.description.trim() && (
-                    <div style={{ marginTop: '0.5rem', display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      {specsAlreadyExtractedForCurrentSource ? (
-                        <span style={{ fontSize: '0.75rem', color: '#047857', fontStyle: 'italic' }}>
-                          Specifications extracted for the current product details. Edit name, brand, category, or description to extract again.
-                        </span>
-                      ) : (!formData.category || !formData.category.trim()) ? (
-                        <span style={{ fontSize: '0.75rem', color: '#dc2626', fontStyle: 'italic' }}>
-                          ⚠️ Category required for extraction
-                        </span>
-                      ) : null}
-                      {!specsAlreadyExtractedForCurrentSource ? (
-                        <button
-                          type="button"
-                          onClick={handleExtractSpecifications}
-                          disabled={
-                            extracting ||
-                            !formData.description ||
-                            !formData.description.trim() ||
-                            !formData.category ||
-                            !formData.category.trim()
-                          }
-                          style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            padding: '0.375rem 0.75rem',
-                            background: extracting ? '#9ca3af' : (!formData.category || !formData.category.trim()) ? '#9ca3af' : '#10b981',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '6px',
-                            fontSize: '0.875rem',
-                            fontWeight: '500',
-                            cursor: extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim() ? 'not-allowed' : 'pointer',
-                            opacity: extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim() ? 0.6 : 1,
-                            transition: 'all 0.2s ease',
-                            whiteSpace: 'nowrap'
-                          }}
-                          title={(!formData.category || !formData.category.trim())
-                            ? "Please select a category first to extract specifications"
-                            : "Extract specification key-value pairs from the description above using AI. Category and description must match."}
-                        >
-                          <Sparkles size={14} />
-                          <span>{extracting ? 'Extracting...' : 'Extract Specifications'}</span>
-                        </button>
-                      ) : null}
+                    <div style={{ marginTop: '0.5rem' }}>
+                      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        {specsAlreadyExtractedForCurrentSource ? (
+                          <span style={{ fontSize: '0.75rem', color: '#047857', fontStyle: 'italic' }}>
+                            Specifications extracted for the current product details. Edit name, brand, category, or description to extract again.
+                          </span>
+                        ) : (!formData.category || !formData.category.trim()) ? (
+                          <span style={{ fontSize: '0.75rem', color: '#dc2626', fontStyle: 'italic' }}>
+                            ⚠️ Category required for extraction
+                          </span>
+                        ) : null}
+                        {!specsAlreadyExtractedForCurrentSource ? (
+                          <button
+                            type="button"
+                            onClick={handleExtractSpecifications}
+                            disabled={
+                              extracting ||
+                              !formData.description ||
+                              !formData.description.trim() ||
+                              !formData.category ||
+                              !formData.category.trim()
+                            }
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.5rem',
+                              padding: '0.375rem 0.75rem',
+                              background: extracting ? '#9ca3af' : (!formData.category || !formData.category.trim()) ? '#9ca3af' : '#10b981',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: '6px',
+                              fontSize: '0.875rem',
+                              fontWeight: '500',
+                              cursor: extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim() ? 'not-allowed' : 'pointer',
+                              opacity: extracting || !formData.description || !formData.description.trim() || !formData.category || !formData.category.trim() ? 0.6 : 1,
+                              transition: 'all 0.2s ease',
+                              whiteSpace: 'nowrap'
+                            }}
+                            title={(!formData.category || !formData.category.trim())
+                              ? "Please select a category first to extract specifications"
+                              : "Extract specification values from the product description. Works with normal sentences or key: value lines."}
+                          >
+                            <Sparkles size={14} />
+                            <span>{extracting ? 'Extracting...' : 'Extract Specifications'}</span>
+                          </button>
+                        ) : null}
+                      </div>
+                      <SpecExtractFeedbackBanner feedback={extractFeedback} />
                     </div>
                   )}
                 </div>
@@ -5964,6 +6011,10 @@ const ProductModal = ({
                       ...(brandApprovalBlocksSubmit ? brandPrerequisiteLabels : [])
                     ].join(', ')}.`)}
             </div>
+          ) : isUpdateSubmitBlocked ? (
+            <div className="pm-form-validation-hint" role="status">
+              Make at least one change to enable Update Product.
+            </div>
           ) : null}
           <div className="modal-actions">
             <button type="button" className="btn-secondary" onClick={onClose} disabled={isSaving}>
@@ -5972,12 +6023,14 @@ const ProductModal = ({
             <button
               type="submit"
               className="btn-primary"
-              disabled={isSaving || isAddOrInventorySubmitBlocked}
-              aria-disabled={isSaving || isAddOrInventorySubmitBlocked}
+              disabled={isSaving || isSubmitBlocked}
+              aria-disabled={isSaving || isSubmitBlocked}
               title={
                 isAddOrInventorySubmitBlocked
                   ? `Required: ${missingMandatoryFields.join(', ')}`
-                  : undefined
+                  : isUpdateSubmitBlocked
+                    ? 'Make at least one change before updating this product'
+                    : undefined
               }
             >
               <Save size={16} />

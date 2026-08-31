@@ -96,7 +96,6 @@ export default function SupplierSelectYourself() {
   const [brandSubmissionNotice, setBrandSubmissionNotice] = useState(null);
   const [brandApprovalSubmittedSignature, setBrandApprovalSubmittedSignature] = useState('');
   const [chainConfigNotice, setChainConfigNotice] = useState(null);
-  const [requestingChainConfigBrand, setRequestingChainConfigBrand] = useState('');
   const [acknowledgedRejectionKey, setAcknowledgedRejectionKey] = useState(() =>
     readAcknowledgedChainProfileRejectionKey()
   );
@@ -828,37 +827,6 @@ export default function SupplierSelectYourself() {
     },
     [catalogBrands, supplyChainSummaryRows]
   );
-
-  const requestChainConfigurationForBrand = useCallback(async (brandName) => {
-    const brand = String(brandName || '').trim();
-    if (!brand) return { ok: false, message: 'Brand name is required' };
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch(resolveApiPath('/api/profile/supplier/request-chain-configuration'), {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
-        body: JSON.stringify({ brand })
-      });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok || data.status !== 'success') {
-        return {
-          ok: false,
-          message: data.message || 'Failed to notify admin. Please try again.'
-        };
-      }
-      return {
-        ok: true,
-        message:
-          data.message ||
-          'Admin has been notified to configure supply-chain roles for this brand.'
-      };
-    } catch (_err) {
-      return { ok: false, message: 'Failed to notify admin. Please try again.' };
-    }
-  }, []);
 
   const navigateToAddRole = useCallback(
     (rowOrBrand) => {
@@ -1852,25 +1820,6 @@ export default function SupplierSelectYourself() {
                     <div className="supplier-select-alert supplier-select-alert--pending" role="status">
                       <strong>No supply-chain roles configured</strong>
                       <p>{SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}</p>
-                      <button
-                        type="button"
-                        className="supplier-select-alert__dismiss"
-                        disabled={requestingChainConfigBrand === selectedAssignment.brand}
-                        onClick={async () => {
-                          setRequestingChainConfigBrand(selectedAssignment.brand);
-                          const result = await requestChainConfigurationForBrand(selectedAssignment.brand);
-                          setRequestingChainConfigBrand('');
-                          setChainConfigNotice({
-                            brand: selectedAssignment.brand,
-                            tone: result.ok ? 'success' : 'warning',
-                            message: result.message
-                          });
-                        }}
-                      >
-                        {requestingChainConfigBrand === selectedAssignment.brand
-                          ? 'Notifying admin…'
-                          : 'Request Role Configuration'}
-                      </button>
                     </div>
                   ) : null}
                 </div>
@@ -2274,7 +2223,6 @@ export default function SupplierSelectYourself() {
               catalogBrandsLoading={catalogBrandsLoading}
               catalogBrandsError={catalogBrandsError}
               onReloadCatalogBrands={reloadCatalogBrands}
-              onRequestChainConfiguration={requestChainConfigurationForBrand}
               onProtectLocalDraft={markLocalDraftEdit}
               chainProfileApprovalStatus={selectedBrandChainApprovalStatus}
             />

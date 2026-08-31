@@ -4,7 +4,7 @@ import {
   buildLsaNotificationPayload,
   crossedInventoryBelowMov,
   crossedLsaThreshold,
-  isStockAtOrBelowLsa,
+  isStockBelowLsa,
   parseLsaThreshold,
   resolveLsaThreshold,
   shouldNotifyLsaHit
@@ -23,39 +23,42 @@ test('parseLsaThreshold accepts positive whole units only', () => {
   assert.equal(parseLsaThreshold(null), null);
 });
 
-test('isStockAtOrBelowLsa uses each variant LSA (no hardcoded threshold)', () => {
-  assert.equal(isStockAtOrBelowLsa({ stock: 8, lsa: 10 }), true);
-  assert.equal(isStockAtOrBelowLsa({ stock: 8, lsa: 5 }), false);
-  assert.equal(isStockAtOrBelowLsa({ stock: 5, lsa: 5 }), true);
-  assert.equal(isStockAtOrBelowLsa({ stock: 0, lsa: 3 }), true);
-  assert.equal(isStockAtOrBelowLsa({ stock: 0, lsa: null }), false);
-  assert.equal(isStockAtOrBelowLsa({ stock: 2, lsa: '' }), false);
+test('isStockBelowLsa uses each variant LSA (no hardcoded threshold)', () => {
+  assert.equal(isStockBelowLsa({ stock: 8, lsa: 10 }), true);
+  assert.equal(isStockBelowLsa({ stock: 8, lsa: 5 }), false);
+  assert.equal(isStockBelowLsa({ stock: 5, lsa: 5 }), false);
+  assert.equal(isStockBelowLsa({ stock: 4, lsa: 5 }), true);
+  assert.equal(isStockBelowLsa({ stock: 0, lsa: 3 }), true);
+  assert.equal(isStockBelowLsa({ stock: 0, lsa: null }), false);
+  assert.equal(isStockBelowLsa({ stock: 2, lsa: '' }), false);
 });
 
-test('crossedLsaThreshold triggers only on above-to-below/equal crossing', () => {
-  assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 10, lsaThreshold: 10 }), true);
-  assert.equal(crossedLsaThreshold({ previousStock: 10, newStock: 9, lsaThreshold: 10 }), false);
+test('crossedLsaThreshold triggers only on above/equal-to-below crossing', () => {
+  assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 10, lsaThreshold: 10 }), false);
+  assert.equal(crossedLsaThreshold({ previousStock: 10, newStock: 9, lsaThreshold: 10 }), true);
   assert.equal(crossedLsaThreshold({ previousStock: 25, newStock: 16, lsaThreshold: 10 }), false);
   assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 10, lsaThreshold: 0 }), false);
 });
 
 test('crossedLsaThreshold edge cases', () => {
-  // Lands exactly on LSA
-  assert.equal(crossedLsaThreshold({ previousStock: 11, newStock: 10, lsaThreshold: 10 }), true);
+  // Lands exactly on LSA — not low stock
+  assert.equal(crossedLsaThreshold({ previousStock: 11, newStock: 10, lsaThreshold: 10 }), false);
+  // Drops from LSA to below it
+  assert.equal(crossedLsaThreshold({ previousStock: 10, newStock: 9, lsaThreshold: 10 }), true);
   // Drops through LSA to zero
   assert.equal(crossedLsaThreshold({ previousStock: 5, newStock: 0, lsaThreshold: 3 }), true);
   // Stock increase never counts as a crossing
   assert.equal(crossedLsaThreshold({ previousStock: 5, newStock: 15, lsaThreshold: 10 }), false);
-  // Already at/below LSA, further decrease
+  // Already below LSA, further decrease
   assert.equal(crossedLsaThreshold({ previousStock: 8, newStock: 5, lsaThreshold: 10 }), false);
-  // Stays above LSA after decrease
+  // Stays at or above LSA after decrease
   assert.equal(crossedLsaThreshold({ previousStock: 50, newStock: 40, lsaThreshold: 10 }), false);
   // Invalid or missing LSA
   assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 5, lsaThreshold: 'abc' }), false);
   assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 5, lsaThreshold: null }), false);
   assert.equal(crossedLsaThreshold({ previousStock: 20, newStock: 5, lsaThreshold: undefined }), false);
   // Coerces numeric strings
-  assert.equal(crossedLsaThreshold({ previousStock: '20', newStock: '10', lsaThreshold: '10' }), true);
+  assert.equal(crossedLsaThreshold({ previousStock: '20', newStock: '9', lsaThreshold: '10' }), true);
   // Negative stock inputs clamp to 0
   assert.equal(crossedLsaThreshold({ previousStock: 4, newStock: -2, lsaThreshold: 2 }), true);
 });
@@ -70,9 +73,13 @@ test('resolveLsaThreshold reads LSA from JSON-string attributes and nested specs
   assert.equal(resolveLsaThreshold({}), null);
 });
 
-test('shouldNotifyLsaHit covers crossing, already-below decrease, and newly set LSA', () => {
+test('shouldNotifyLsaHit covers crossing below LSA, already-below decrease, and newly set LSA', () => {
   assert.equal(
     shouldNotifyLsaHit({ previousStock: 20, newStock: 10, lsaThreshold: 10 }),
+    false
+  );
+  assert.equal(
+    shouldNotifyLsaHit({ previousStock: 10, newStock: 9, lsaThreshold: 10 }),
     true
   );
   assert.equal(
@@ -87,6 +94,15 @@ test('shouldNotifyLsaHit covers crossing, already-below decrease, and newly set 
       previousLsaThreshold: null
     }),
     true
+  );
+  assert.equal(
+    shouldNotifyLsaHit({
+      previousStock: 10,
+      newStock: 10,
+      lsaThreshold: 10,
+      previousLsaThreshold: null
+    }),
+    false
   );
   assert.equal(
     shouldNotifyLsaHit({

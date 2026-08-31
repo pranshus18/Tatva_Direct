@@ -100,7 +100,7 @@ test('filterNotificationsForRole recomputes unread for SP inbox', () => {
 test('keeps supplier LSA low-stock system notifications and hides them from SPs', () => {
   const notification = {
     type: 'system',
-    title: 'Low stock alert: inventory reached LSA',
+    title: 'Low stock alert: inventory below LSA',
     metadata: { source: 'low_inventory', kind: 'inventory_below_lsa' },
     is_read: false
   };

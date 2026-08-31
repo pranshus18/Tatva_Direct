@@ -32,7 +32,7 @@ export function isLowStockAlertNotification(notification) {
     return true;
   }
   const title = String(notification?.title || '').toLowerCase();
-  return title.includes('low stock alert') || title.includes('reached lsa');
+  return title.includes('low stock alert') || title.includes('below lsa') || title.includes('reached lsa');
 }
 
 export function getSupplierNotificationTargetPath(notification) {

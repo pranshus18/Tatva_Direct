@@ -153,11 +153,9 @@ describe('getSupplierStockHealth', () => {
     expect(getSupplierStockHealth({ stock: null, lsa: 10 })).toBe('out');
   });
 
-  it('uses supplier LSA instead of a fixed threshold', () => {
-    expect(getSupplierStockHealth({ stock: 10, lsa: 1 })).toBe('ok');
-    expect(getSupplierStockHealth({ stock: 1, lsa: 1 })).toBe('low');
-    expect(getSupplierStockHealth({ stock: 10, lsa: 10 })).toBe('low');
-    expect(getSupplierStockHealth({ stock: 9, lsa: 10 })).toBe('low');
+  it('does not flag low stock when quantity equals LSA', () => {
+    expect(getSupplierStockHealth({ stock: 5, lsa: 5 })).toBe('ok');
+    expect(getSupplierStockHealth({ stock: '10', lsa: '10' })).toBe('ok');
   });
 
   it('does not flag low stock when LSA is unset', () => {

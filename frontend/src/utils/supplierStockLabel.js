@@ -58,14 +58,15 @@ export function parseSupplierLsaThreshold(raw) {
 
 /**
  * Stock health for supplier catalog cards: out / low / ok.
- * "Low" uses the variant LSA when set; no LSA means stock above zero is ok.
+ * "Low" is only when on-hand stock is strictly below the variant LSA.
+ * Stock equal to LSA is still ok. No LSA means stock above zero is ok.
  */
 export function getSupplierStockHealth({ stock, lsa } = {}) {
   const quantity = parseSupplierStockQuantity(stock);
   if (quantity === null || quantity <= 0) return 'out';
 
   const lsaThreshold = parseSupplierLsaThreshold(lsa);
-  if (lsaThreshold != null && quantity <= lsaThreshold) return 'low';
+  if (lsaThreshold != null && quantity < lsaThreshold) return 'low';
 
   return 'ok';
 }

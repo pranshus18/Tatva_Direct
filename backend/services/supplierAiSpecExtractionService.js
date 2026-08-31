@@ -2,6 +2,12 @@ import logger from '../utils/logger.js';
 import { detectCategoryMismatch } from '../utils/categoryMismatch.js';
 import { parseSpecificationsObject, sanitizeSpecifications } from './supplierCatalogHelpersService.js';
 import { generateGeminiJsonText, parseJsonFromAiText } from './geminiGenerateService.js';
+import {
+  extractSpecsFromNarrativeDescription,
+  isFilledSpecValue,
+  mapSpecsOntoTemplateKeys,
+  mergeMappedSpecs
+} from '../utils/narrativeSpecExtraction.js';
 
 async function getFetch() {
   if (typeof globalThis.fetch === 'function') return globalThis.fetch;
@@ -118,13 +124,11 @@ async function callAiProvider({ provider, systemPrompt, userPrompt, keys }) {
 
   const parsed = parseJsonFromAiText(aiText);
   const specs = parseSpecificationsObject(parsed?.specifications) || {};
-  const allowedKeys = new Set(keys);
-  const filtered = {};
-  Object.entries(specs).forEach(([key, value]) => {
-    if (!allowedKeys.has(key)) return;
-    filtered[key] = value;
-  });
-  return { specifications: filtered, provider: picked.provider };
+  const { mapped, extras } = mapSpecsOntoTemplateKeys(specs, keys);
+  return {
+    specifications: mergeMappedSpecs(mapped, extras),
+    provider: picked.provider
+  };
 }
 
 /**
@@ -164,38 +168,61 @@ export async function extractSpecificationValuesFromDescription({
     };
   }
 
-  const systemPrompt = `You extract product specification VALUES from descriptions for an ecommerce catalog.
-Return ONLY valid JSON in this shape:
-{ "specifications": { "<exact key>": "<value or null>" } }
+  const systemPrompt = `You extract product specification VALUES from ecommerce descriptions.
+Return ONLY valid JSON:
+{ "specifications": { "<key>": "<value or null>" } }
+
+The description may be marketing prose OR explicit "Key: Value" lines. Both are valid.
+Examples of prose you MUST parse:
+- "Jaquar Continental vitreous china basin in white, 17.5 kg" → Brand, Series, Material, Color, Weight
+- "Matt finish 20L emulsion covering 140 sq ft/L" → Finish, Volume/Capacity, Coverage
+
 Rules:
-1) Use ONLY the specification keys provided by the user (exact spelling).
-2) Parse explicit key:value lines and implied attributes from the description.
-3) Use null when a key is not mentioned.
-4) Values must be concise strings (or null), not nested objects unless unavoidable.
-5) No markdown, no commentary.`;
+1) Prefer the specification keys provided by the user (same meaning even if spelling/case differs: COLOR vs colour).
+2) Infer clearly stated or strongly implied attributes (brand, color, series, material, weight, size, dimensions, capacity, finish).
+3) Also include extra identifiable attributes that do not match a provided key.
+4) Use null when a provided key is not supported by the text. Never invent facts.
+5) Values must be concise strings. No markdown or commentary.`;
 
   const userPrompt = `Product name: ${productName || 'Not specified'}
 Category: ${category || 'Not specified'}
 
-Specification keys to fill (use these exact keys):
+Specification keys to fill:
 ${JSON.stringify(templateKeys, null, 2)}
 
 Description:
 ${descriptionText}
 
-Return JSON with filled values for the keys listed above.`;
+Return JSON with values for the keys above and any other identifiable product details.`;
+
+  const localSpecifications = extractSpecsFromNarrativeDescription({
+    description: descriptionText,
+    productName,
+    templateKeys
+  });
+
+  const picked = pickProvider(provider);
+  if (picked.error) {
+    const filledCount = Object.values(localSpecifications).filter(isFilledSpecValue).length;
+    return {
+      status: 'success',
+      specifications: localSpecifications,
+      extractedCount: filledCount,
+      provider: 'narrative',
+      categoryMismatchWarning: categoryMismatchWarning || null
+    };
+  }
 
   try {
-    const { specifications, provider: usedProvider } = await callAiProvider({
+    const { specifications: aiSpecifications, provider: usedProvider } = await callAiProvider({
       provider,
       systemPrompt,
       userPrompt,
       keys: templateKeys
     });
 
-    const filledCount = Object.values(specifications).filter(
-      (v) => v !== null && v !== undefined && String(v).trim() !== ''
-    ).length;
+    const specifications = mergeMappedSpecs(localSpecifications, aiSpecifications);
+    const filledCount = Object.values(specifications).filter(isFilledSpecValue).length;
 
     return {
       status: 'success',
@@ -206,9 +233,14 @@ Return JSON with filled values for the keys listed above.`;
     };
   } catch (error) {
     logger.error('extractSpecificationValuesFromDescription failed:', error);
+    const filledCount = Object.values(localSpecifications).filter(isFilledSpecValue).length;
+    // Local narrative parse always runs; empty result is a valid "nothing found" outcome.
     return {
-      status: 'error',
-      message: error.message || 'Failed to extract specifications from description'
+      status: 'success',
+      specifications: localSpecifications,
+      extractedCount: filledCount,
+      provider: 'narrative',
+      categoryMismatchWarning: categoryMismatchWarning || null
     };
   }
 }
@@ -233,19 +265,37 @@ export async function extractSpecificationPairsFromDescription({
     productName
   );
   const systemPrompt = `You extract product specification key-value pairs from descriptions.
+The text may be normal product copy (sentences) or "Key: Value" lines.
 Return ONLY valid JSON:
 { "specifications": { "Key Name": "value" } }
-Use professional ecommerce specification key names relevant to the category.`;
+Use professional ecommerce specification names (Brand, Color, Material, Weight, Size, Capacity, Finish, Series, Dimensions).
+Only include facts supported by the description. Do not invent values.`;
 
   const userPrompt = `Product name: ${productName || 'Not specified'}
 Category: ${category || 'Not specified'}
 Description:
 ${descriptionText}`;
 
-  try {
-    const picked = pickProvider(provider);
-    if (picked.error) throw new Error(picked.error);
+  const localSpecifications = extractSpecsFromNarrativeDescription({
+    description: descriptionText,
+    productName
+  });
 
+  const picked = pickProvider(provider);
+  if (picked.error) {
+    const filledCount = Object.keys(localSpecifications).filter((key) =>
+      isFilledSpecValue(localSpecifications[key])
+    ).length;
+    return {
+      status: 'success',
+      specifications: sanitizeSpecifications(localSpecifications),
+      extractedCount: filledCount,
+      provider: 'narrative',
+      categoryMismatchWarning: categoryMismatchWarning || null
+    };
+  }
+
+  try {
     let aiText = '';
     if (picked.provider === 'gemini') {
       aiText = await callGemini({ systemPrompt, userPrompt, geminiApiKey: picked.geminiApiKey });
@@ -256,8 +306,15 @@ ${descriptionText}`;
     }
 
     const parsed = parseJsonFromAiText(aiText);
-    const specifications = sanitizeSpecifications(parseSpecificationsObject(parsed?.specifications) || {});
-    const filledCount = Object.keys(specifications).length;
+    const aiSpecifications = sanitizeSpecifications(
+      parseSpecificationsObject(parsed?.specifications) || {}
+    );
+    const specifications = sanitizeSpecifications(
+      mergeMappedSpecs(localSpecifications, aiSpecifications)
+    );
+    const filledCount = Object.keys(specifications).filter((key) =>
+      isFilledSpecValue(specifications[key])
+    ).length;
 
     return {
       status: 'success',
@@ -268,9 +325,15 @@ ${descriptionText}`;
     };
   } catch (error) {
     logger.error('extractSpecificationPairsFromDescription failed:', error);
+    const filledCount = Object.keys(localSpecifications).filter((key) =>
+      isFilledSpecValue(localSpecifications[key])
+    ).length;
     return {
-      status: 'error',
-      message: error.message || 'Failed to extract specifications from description'
+      status: 'success',
+      specifications: sanitizeSpecifications(localSpecifications),
+      extractedCount: filledCount,
+      provider: 'narrative',
+      categoryMismatchWarning: categoryMismatchWarning || null
     };
   }
 }

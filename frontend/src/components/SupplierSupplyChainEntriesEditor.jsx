@@ -278,7 +278,6 @@ const CompanyInfoEntryCard = ({
   supplierBrandRequests = [],
   extraPendingBrandNames = [],
   highlighted = false,
-  onRequestChainConfiguration = null,
   chainProfileApprovalStatus = '',
   roleChangeRequestActive = false,
   onRequestRoleChange = null,
@@ -358,8 +357,6 @@ const CompanyInfoEntryCard = ({
     if (brandNameFieldFocused) return;
     setTypedBrandName(selectedBrand);
   }, [selectedBrand, brandNameFieldFocused]);
-  const [requestingChainConfig, setRequestingChainConfig] = useState(false);
-  const [chainConfigRequestFeedback, setChainConfigRequestFeedback] = useState('');
   const [roleSelectUnlocked, setRoleSelectUnlocked] = useState(false);
   useEffect(() => {
     if (roleChangeRequestActive) {
@@ -368,22 +365,6 @@ const CompanyInfoEntryCard = ({
     }
     setRoleSelectUnlocked(false);
   }, [roleChangeRequestActive]);
-  const handleRequestChainConfiguration = async () => {
-    if (typeof onRequestChainConfiguration !== 'function' || !selectedBrand || requestingChainConfig) return;
-    setRequestingChainConfig(true);
-    setChainConfigRequestFeedback('');
-    try {
-      const result = await onRequestChainConfiguration(selectedBrand);
-      setChainConfigRequestFeedback(
-        result?.message ||
-          (result?.ok
-            ? 'Admin has been notified to configure supply-chain roles for this brand.'
-            : 'Failed to notify admin. Please try again.')
-      );
-    } finally {
-      setRequestingChainConfig(false);
-    }
-  };
   const roleLabel = SUPPLY_CHAIN_ROLE_OPTIONS.find((o) => o.value === entry.role)?.label || null;
   const brandDocUrls = resolveBrandApprovalDocumentUrls(entry);
   const roleDocUrls = resolveRoleVerificationDocumentUrls(entry);
@@ -1083,37 +1064,10 @@ const CompanyInfoEntryCard = ({
               ) : showChainNotDefinedStep2Message ? (
                 <div className="chain-callout chain-callout--warning" role="alert">
                   <p>{SUPPLY_CHAIN_NOT_DEFINED_MESSAGE}</p>
-                  {typeof onRequestChainConfiguration === 'function' ? (
-                    <button
-                      type="button"
-                      className="chain-entry-selector__link"
-                      disabled={requestingChainConfig}
-                      onClick={handleRequestChainConfiguration}
-                    >
-                      {requestingChainConfig ? 'Notifying admin…' : 'Request Role Configuration'}
-                    </button>
-                  ) : null}
-                  {chainConfigRequestFeedback ? (
-                    <p className="chain-field__sublabel">{chainConfigRequestFeedback}</p>
-                  ) : null}
                 </div>
               ) : roleOptionsMessage && !approvedRole && !hasResolvedChainRoles && !supplyChainRolesLoading ? (
                 <div className="chain-callout chain-callout--warning">
                   <p>{roleOptionsMessage}</p>
-                  {roleOptionsMessage === SUPPLY_CHAIN_NOT_DEFINED_MESSAGE &&
-                  typeof onRequestChainConfiguration === 'function' ? (
-                    <button
-                      type="button"
-                      className="chain-entry-selector__link"
-                      disabled={requestingChainConfig}
-                      onClick={handleRequestChainConfiguration}
-                    >
-                      {requestingChainConfig ? 'Notifying admin…' : 'Request Role Configuration'}
-                    </button>
-                  ) : null}
-                  {chainConfigRequestFeedback ? (
-                    <p className="chain-field__sublabel">{chainConfigRequestFeedback}</p>
-                  ) : null}
                 </div>
               ) : adminChainPathText ? (
                 <p className="chain-callout chain-callout--info">{adminChainPathText}</p>
@@ -1405,7 +1359,6 @@ export default function SupplierSupplyChainEntriesEditor({
   catalogBrandsLoading = null,
   catalogBrandsError = '',
   onReloadCatalogBrands = null,
-  onRequestChainConfiguration = null,
   onBrandSelectionCleared = null,
   /** When set, Path A brand selection is locked to this brand until Change/Cancel. */
   lockedBrandName = '',
@@ -2876,7 +2829,6 @@ export default function SupplierSupplyChainEntriesEditor({
             supplierBrandRequests={supplierBrandRequests}
             extraPendingBrandNames={extraPendingBrandNames}
             highlighted={highlightedEntryId === entry.id}
-            onRequestChainConfiguration={onRequestChainConfiguration}
             chainProfileApprovalStatus={chainProfileApprovalStatus}
             roleChangeRequestActive={roleChangeRequestEntryId === entry.id}
             onRequestRoleChange={sectionView === 'form' ? handleRequestRoleChange : null}

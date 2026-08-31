@@ -753,6 +753,54 @@ describe('Select yourself — role setup step', () => {
     expect(screen.queryByText(/No supply-chain roles are currently configured/i)).not.toBeInTheDocument();
   });
 
+  it('shows no-roles status without a role-configuration request action', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        roles: [],
+        brands: [
+          {
+            brand: 'acc',
+            supplierHasAccess: true,
+            hasSupplyChainDefinition: false,
+            canSelectRoles: false,
+            approvalStatus: 'approved'
+          }
+        ]
+      })
+    });
+
+    const catalogWithoutChain = [{ name: 'acc', status: 'approved', hasAdminSupplyChain: false }];
+
+    render(
+      <SupplierSupplyChainEntriesEditor
+        profile={makeProfile([{ ...APPROVED_ROW, brands: 'acc' }])}
+        setProfile={vi.fn()}
+        editing
+        sectionView="form"
+        selectionMode="all"
+        allowEntryManagement={false}
+        showAddEntry={false}
+        catalogBrands={catalogWithoutChain}
+        catalogBrandsLoading={false}
+        catalogBrandsError=""
+        onReloadCatalogBrands={vi.fn()}
+        supplierApprovedBrands={['acc']}
+        supplierBrandRequests={[]}
+        savedBaselineEntries={[]}
+        filterBrandName="acc"
+      />
+    );
+
+    expect(
+      await screen.findByText(/No supply-chain roles are currently configured/i)
+    ).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Request Role Configuration/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Request Role Change/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/No roles configured by admin/i)).toBeInTheDocument();
+  });
+
   it('shows loading instead of no-supply-chain while catalog brands are loading', () => {
     render(
       <SupplierSupplyChainEntriesEditor

@@ -5,7 +5,11 @@ import { Package, MapPin, Box, Save, ArrowRight, Sparkles } from 'lucide-react';
 import {
   applyExtractResultToSpecs,
   buildSpecExtractionSourceKey,
-  extractSpecificationsFromDescription
+  extractSpecificationsFromDescription,
+  SPEC_EXTRACT_CATEGORY_REQUIRED,
+  SPEC_EXTRACT_EMPTY_DESCRIPTION,
+  SPEC_EXTRACT_FAILED,
+  SPEC_EXTRACT_NO_VALUES
 } from '../utils/extractSpecificationsApi';
 import { parseSpecInputToValue, specValueToInput, specificationsWithMeaningfulValuesOnly } from '../utils/specifications';
 import tatvaLogo from '../images/tatva_d.png';
@@ -76,11 +80,11 @@ const SupplierProductSetup = ({ user }) => {
 
   const handleExtractSpecifications = async () => {
     if (!formData.description?.trim()) {
-      setError('Enter a description with specification details first (e.g. Finish: Matt, Volume: 20L).');
+      setError(SPEC_EXTRACT_EMPTY_DESCRIPTION);
       return;
     }
     if (!formData.category?.trim()) {
-      setError('Select a category before extracting specifications.');
+      setError(SPEC_EXTRACT_CATEGORY_REQUIRED);
       return;
     }
 
@@ -116,12 +120,13 @@ const SupplierProductSetup = ({ user }) => {
 
       setSpecifications(result.merged);
       if (result.filledCount === 0) {
-        setError('No values found in description. Use key: value lines.');
+        setError(SPEC_EXTRACT_NO_VALUES);
       } else {
         setLastSuccessfulExtractionSourceKey(sourceKey);
+        setError('');
       }
     } catch (err) {
-      setError(err.message || 'Failed to extract specifications from description.');
+      setError(err.message || SPEC_EXTRACT_FAILED);
     } finally {
       setExtractingSpecs(false);
     }
@@ -859,7 +864,7 @@ const SupplierProductSetup = ({ user }) => {
                 name="description"
                 value={formData.description}
                 onChange={handleChange}
-                placeholder="Add product details. Use key: value lines (e.g. Finish: Matt, Volume: 20L) then click Extract Specifications."
+                placeholder="Describe the product in normal sentences (for example colour, material, size, or weight). You can also use key: value lines. Then click Extract Specifications."
                 rows="3"
                 className="textarea-input"
               />

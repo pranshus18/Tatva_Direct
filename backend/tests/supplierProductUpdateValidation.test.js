@@ -70,14 +70,21 @@ test('catalog update allows image-only payload', () => {
   assert.equal(result.ok, true);
 });
 
-test('product update request blocks incomplete inventory payload', () => {
+test('product update request allows a stock-only partial inventory payload', () => {
   const result = validateSupplierProductUpdateRequest({
     stock: 0,
     location: ''
   });
+  assert.equal(result.ok, true);
+});
+
+test('product update request still rejects invalid stock on a partial payload', () => {
+  const result = validateSupplierProductUpdateRequest({
+    stock: 'abc'
+  });
   assert.equal(result.ok, false);
   assert.equal(result.code, 'inventory_validation_error');
-  assert.ok(result.missingFields.includes('price'));
+  assert.ok(result.missingFields.includes('stock'));
 });
 
 test('isSupplierMrpLocked is true when saved MRP is greater than zero', () => {

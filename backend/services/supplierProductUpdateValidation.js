@@ -118,9 +118,11 @@ function validateRequiredTaxRates(body = {}) {
 }
 
 /**
- * Validate Manage Inventory updates: MRP, stock, and GST rates are mandatory together.
+ * Validate Manage Inventory updates: MRP, stock, and GST rates are mandatory together
+ * for a full inventory save. Partial updates only validate the fields that were sent.
  */
-export function validateSupplierInventoryUpdateFields(body = {}) {
+export function validateSupplierInventoryUpdateFields(body = {}, options = {}) {
+  const partial = options.partial === true;
   const result = {
     ok: true,
     missingFields: [],
@@ -128,34 +130,50 @@ export function validateSupplierInventoryUpdateFields(body = {}) {
     message: ''
   };
 
-  if (body.stock === undefined) {
-    pushError(
-      result,
-      'stock',
-      'Current stock with you is required and must be a whole number (0 or greater).'
-    );
-  } else {
-    const stock = parseSupplierStockQuantity(body.stock);
-    if (stock === null) {
+  const stockProvided = body.stock !== undefined;
+  if (!partial || stockProvided) {
+    if (body.stock === undefined) {
       pushError(
         result,
         'stock',
         'Current stock with you is required and must be a whole number (0 or greater).'
       );
+    } else {
+      const stock = parseSupplierStockQuantity(body.stock);
+      if (stock === null) {
+        pushError(
+          result,
+          'stock',
+          'Current stock with you is required and must be a whole number (0 or greater).'
+        );
+      }
     }
   }
 
-  const priceRaw = body.price;
-  const priceEmpty = priceRaw === undefined || priceRaw === null || String(priceRaw).trim() === '';
-  const priceNum = Number(priceRaw);
-  if (priceEmpty || !Number.isFinite(priceNum) || priceNum < 0) {
-    pushError(result, 'price', 'MRP is required and must be a valid amount (0 or greater).');
+  const priceProvided = body.price !== undefined;
+  if (!partial || priceProvided) {
+    const priceRaw = body.price;
+    const priceEmpty = priceRaw === undefined || priceRaw === null || String(priceRaw).trim() === '';
+    const priceNum = Number(priceRaw);
+    if (priceEmpty || !Number.isFinite(priceNum) || priceNum < 0) {
+      pushError(result, 'price', 'MRP is required and must be a valid amount (0 or greater).');
+    }
   }
 
-  const taxValidation = validateRequiredTaxRates(body);
-  if (!taxValidation.ok) {
-    pushError(result, taxValidation.missingFields?.[0] || 'igst_rate', taxValidation.message);
-    (taxValidation.missingFields || []).slice(1).forEach((field) => result.missingFields.push(field));
+  const taxProvided = [
+    'igst_rate',
+    'igstRate',
+    'cgst_rate',
+    'cgstRate',
+    'sgst_rate',
+    'sgstRate'
+  ].some((key) => body?.[key] !== undefined);
+  if (!partial || taxProvided) {
+    const taxValidation = validateRequiredTaxRates(body);
+    if (!taxValidation.ok) {
+      pushError(result, taxValidation.missingFields?.[0] || 'igst_rate', taxValidation.message);
+      (taxValidation.missingFields || []).slice(1).forEach((field) => result.missingFields.push(field));
+    }
   }
 
   result.missingFields = [...new Set(result.missingFields.filter(Boolean))];
@@ -291,7 +309,7 @@ export function validateSupplierProductUpdateRequest(body = {}) {
   const hasCatalog = bodyHasCatalogUpdateFields(body);
 
   if (hasInventory) {
-    const inventoryResult = validateSupplierInventoryUpdateFields(body);
+    const inventoryResult = validateSupplierInventoryUpdateFields(body, { partial: true });
     if (!inventoryResult.ok) {
       return {
         ...inventoryResult,

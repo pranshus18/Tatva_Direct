@@ -17,7 +17,7 @@ import {
 } from './supplierImports.js';
 import { expireStaleReservations } from '../../services/checkoutInventoryReservationService.js';
 import {
-  isStockAtOrBelowLsa,
+  isStockBelowLsa,
   resolveLsaThreshold
 } from '../../services/lowInventoryMovAlertService.js';
 
@@ -108,7 +108,7 @@ router.get('/inventory/summary', authenticateToken, async (req, res) => {
   }
 });
 
-// Restock suggestions: variants at/below their own LSA, with nearest upstream suppliers.
+// Restock suggestions: variants strictly below their own LSA, with nearest upstream suppliers.
 router.get('/inventory/restock-suggestions', authenticateToken, async (req, res) => {
   try {
     if (req.user?.user_type !== 'supplier') {
@@ -117,7 +117,7 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
 
     const limitPerItem = Math.min(5, Math.max(1, parseInt(req.query.limit, 10) || 3));
 
-    // Load my active offers, then keep only those at/below each variant's configured LSA.
+    // Load my active offers, then keep only those strictly below each variant's configured LSA.
     const { data: myRows, error: myErr } = await supabase
       .from('supplier_products')
       .select('id, product_id, stock, outlet_id, location, attributes, product:products(id, name, brand)')
@@ -132,7 +132,7 @@ router.get('/inventory/restock-suggestions', authenticateToken, async (req, res)
         const lsa = resolveLsaThreshold(r?.attributes, r?.product);
         return { ...r, lsa };
       })
-      .filter((r) => isStockAtOrBelowLsa({ stock: r.stock, lsa: r.lsa }))
+      .filter((r) => isStockBelowLsa({ stock: r.stock, lsa: r.lsa }))
       .sort((a, b) => {
         const stockA = Math.max(0, parseInt(a.stock, 10) || 0);
         const stockB = Math.max(0, parseInt(b.stock, 10) || 0);
