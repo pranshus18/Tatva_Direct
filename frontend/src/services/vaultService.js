@@ -153,7 +153,7 @@ export async function addVaultOfflineMoney({
   details,
   documents
 }) {
-  await restorePmVaultSession();
+  await restorePmVaultSession({ force: true });
   const form = new FormData();
   form.append('amount', String(amount));
   form.append('subPaymentMethod', String(subPaymentMethod || 'cash_on_hand'));
@@ -187,7 +187,7 @@ export async function addVaultOfflineMoney({
 /** Tatva backend — order checkout escrow. */
 export async function payOrderFromVault(orderId, { idempotencyKey, skipSessionRestore = false } = {}) {
   if (!skipSessionRestore) {
-    await restorePmVaultSession();
+    await restorePmVaultSession({ force: true });
   }
   const response = await fetch(getApiUrl(`/api/vault/orders/${orderId}/pay`), {
     method: 'POST',

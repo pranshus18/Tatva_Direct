@@ -1206,7 +1206,7 @@ const CreatePO = ({ selectedVendors, substitutions, boqId, boqProject, items }) 
           vaultSettlement.paidOrders.length > 0;
 
         if (!allPaidServerSide) {
-          await restorePmVaultSession();
+          await restorePmVaultSession({ force: true });
           for (const order of activeOrders.filter((row) => row?.id)) {
             try {
               const payData = await payOrderFromVault(order.id, {

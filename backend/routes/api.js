@@ -26,6 +26,7 @@ import { authRateLimiter } from '../middleware/rateLimits.js';
 
 const apiRouter = express.Router();
 
+/** Login/signup/OTP share a brute-force limiter; session routes skip it. */
 apiRouter.use('/auth', authRateLimiter, authRouter);
 apiRouter.use('/profile', profileRouter);
 apiRouter.use('/geo', geoRouter);

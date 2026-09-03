@@ -107,28 +107,58 @@ export async function completePmAuth(phoneNumber, pmProfile = null, pmAccessToke
   return data;
 }
 
+const VAULT_SESSION_TTL_MS = 90_000;
+let vaultSessionInFlight = null;
+let vaultSessionCachedAt = 0;
+
 /**
  * Restore and refresh PM tokens from the Tatva backend.
- * Always asks the server — local access tokens go stale while the Tatva session is still valid.
+ * Header balance polls every 30s; reuse a recent restore instead of hitting /api/auth on every tick.
  */
-export async function restorePmVaultSession() {
+export async function restorePmVaultSession({ force = false } = {}) {
   const existing = getPmCustomerCredentials();
   const token = localStorage.getItem('token');
-  if (!token) return existing;
-
-  const response = await fetch(resolveApiPath('/api/auth/pm-vault-session'), {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: 'application/json',
-      ...(existing.accessToken ? { 'X-PM-Access-Token': existing.accessToken } : {}),
-      ...(existing.refreshToken ? { 'X-PM-Refresh-Token': existing.refreshToken } : {})
-    }
-  });
-  const data = await parseJsonResponse(response);
-  applyPmAuthFromResponse(response);
-  if (response.ok && data.status === 'success' && (data.pmVault?.accessToken || data.pmVault?.refreshToken)) {
-    applyPmVaultCredentials(data.pmVault);
-    return getPmCustomerCredentials();
+  if (!token) {
+    vaultSessionCachedAt = 0;
+    vaultSessionInFlight = null;
+    return existing;
   }
-  return getPmCustomerCredentials();
+
+  const now = Date.now();
+  if (!force && vaultSessionInFlight) {
+    return vaultSessionInFlight;
+  }
+  if (!force && existing.accessToken && now - vaultSessionCachedAt < VAULT_SESSION_TTL_MS) {
+    return existing;
+  }
+
+  const request = (async () => {
+    const current = getPmCustomerCredentials();
+    const response = await fetch(resolveApiPath('/api/auth/pm-vault-session'), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        ...(current.accessToken ? { 'X-PM-Access-Token': current.accessToken } : {}),
+        ...(current.refreshToken ? { 'X-PM-Refresh-Token': current.refreshToken } : {})
+      }
+    });
+    const data = await parseJsonResponse(response);
+    applyPmAuthFromResponse(response);
+    if (response.ok && data.status === 'success' && (data.pmVault?.accessToken || data.pmVault?.refreshToken)) {
+      applyPmVaultCredentials(data.pmVault);
+    }
+    if (response.ok) {
+      vaultSessionCachedAt = Date.now();
+    }
+    return getPmCustomerCredentials();
+  })();
+
+  vaultSessionInFlight = request;
+  try {
+    return await request;
+  } finally {
+    if (vaultSessionInFlight === request) {
+      vaultSessionInFlight = null;
+    }
+  }
 }

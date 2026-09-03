@@ -992,7 +992,7 @@ const SupplierPlaceOrder = () => {
       const useVault = isVaultPaymentMethod(paymentMethod);
 
       // Warm vault session while the order create request is in flight.
-      const vaultSessionPromise = useVault ? restorePmVaultSession() : Promise.resolve(null);
+      const vaultSessionPromise = useVault ? restorePmVaultSession({ force: true }) : Promise.resolve(null);
 
       const createPromise = fetch(getApiUrl('/api/supplier/upstream/orders'), {
         method: 'POST',

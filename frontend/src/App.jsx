@@ -334,7 +334,7 @@ function App() {
       applyPmVaultCredentials(userData.pmVault);
     } else if (token) {
       try {
-        await restorePmVaultSession();
+        await restorePmVaultSession({ force: true });
       } catch {
         // Address/vault calls refresh again if this restore fails.
       }

@@ -91,7 +91,7 @@ function getStoredBuyerUserId() {
 
 function formatInsufficientStockMessage(item, vendor) {
   const name = item?.normalizedName || item?.rawName || item?.name || 'this item';
-  const supplierName = vendor?.name ? ` from ${vendor.name}` : '';
+  const supplierName = vendor?.company ? ` from ${vendor.company}` : '';
   const requested = getItemRequestedQty(item);
   const available = getVendorAvailableStock(vendor);
   const unit = vendor?.unit || item?.unit || 'units';
@@ -1300,7 +1300,7 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                     <div className="vendor-header">
                       <div>
                         <div className="vendor-name" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                          {vendor.name}
+                          {vendor.company || 'Supplier'}
                           {vendor.status === 'pending' && (
                             <span style={{ 
                               fontSize: '0.7rem', 
@@ -1314,11 +1314,6 @@ const VendorSelect = ({ items = [], boqId = null, boqProject = null, onComplete 
                             </span>
                           )}
                         </div>
-                        {vendor.company && (
-                          <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: '0.25rem' }}>
-                            {vendor.company}
-                          </div>
-                        )}
                         {vendor.location && (
                           <div style={{ fontSize: '0.8rem', color: '#64748b', marginTop: '0.15rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}>
                             📍 {vendor.location}

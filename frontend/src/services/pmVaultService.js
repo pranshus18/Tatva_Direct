@@ -21,7 +21,7 @@ async function parseJsonResponse(response) {
 }
 
 export async function ensurePmVaultCredentials() {
-  await restorePmVaultSession();
+  await restorePmVaultSession({ force: true });
   const { accessToken, pmUserId } = getPmCustomerCredentials();
   if (!accessToken) {
     const error = new Error('PM vault session missing. Sign in again with phone OTP.');
